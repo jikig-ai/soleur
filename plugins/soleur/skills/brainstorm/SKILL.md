@@ -62,37 +62,19 @@ If one-shot is selected, pass the original feature description (including any is
 
 ### Phase 0.1: User-Impact Framing
 
-Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every brainstorm MUST surface the framing question before any domain leader is spawned. The point is to force the user-impact lens onto every decision — even ones that look purely technical at first glance.
+Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every brainstorm is **unconditionally treated as user-brand-critical** before any domain leader is spawned. Per #5175 (operator decision from the #5085 brainstorm): the operator always answered the prior framing question with "all of them," so prompting added friction without ever changing the posture. The user-impact lens is now forced onto every decision by default — there is no question to ask.
 
-**Step 1 — Ask the framing question.** Use the **AskUserQuestion** tool to present:
+**Step 1 — Set the flag unconditionally (no prompt, no parse).** Set `USER_BRAND_CRITICAL=true` for the rest of the brainstorm session. Do NOT present an `AskUserQuestion`; do NOT scan the request for trigger keywords. The always-on posture is intentional — it over-protects (fail-safe direction) rather than risk under-protecting a feature whose impact looks purely technical at first glance.
 
-- **Header:** "User impact"
-- **Question:** "If this decision ships as designed, what is the worst outcome the target user experiences? If it silently fails, what do they see? If it leaks, what data of theirs is exposed? (Answer even if the request seems purely technical — the framing is the point.)"
-- **Multi-select:** false. Use a single free-text answer (the operator may type into the `other` escape if no preset option fits).
-- **Options:** the AskUserQuestion tool caps `options` at 4 (`maxItems: 4`), and "Other" is auto-appended by the runtime — do NOT include "Other" in your options list, it wastes a slot. Pick the 3 presets most likely to fit the feature being brainstormed from this menu and let auto-"Other" carry the long tail: "User data exposure", "Credential leak / auth bypass", "Billing surprise / payment error", "Data loss / corruption", "Trust breach / cross-tenant read", "No direct user impact". The free-text answer is what drives Step 2 — presets are scaffolding, not exhaustive.
+**Step 2 — Synthesize the `## User-Brand Impact` block.** Capture a `## User-Brand Impact` block so Phase 3.5 can persist it into the brainstorm document for plan-time carry-forward:
 
-**Step 2 — Parse the answer for trigger keywords.** Scan the case-insensitive concatenation of (a) the free-text answer and (b) the **endorsed option labels and descriptions** (when the operator picks a preset, multi-options shorthand like "All of them", or any other selection) for any of:
+- **Artifact:** the feature's named surface — derive it dynamically from the feature description / `$ARGUMENTS` (the concrete thing being built, e.g. "the X endpoint", "the Y skill"). This MUST be the real surface, never a static literal — a concrete artifact keeps plan-time carry-forward and the `user-impact-reviewer` honest, preventing the always-on default from degrading into a rubber stamp.
+- **Vector:** a single generic exposure-vector sentence (worst-case data exposure / silent failure / trust breach for the named artifact).
+- **Threshold:** `single-user incident`.
 
-User-data + auth lens:
+Then announce: "Tagged as **user-brand-critical** (auto, per #5175). CPO + CLO + CTO will be spawned in parallel at Phase 0.5 before other specialists. The plan derived from this brainstorm will inherit `Brand-survival threshold: single-user incident` unless overridden."
 
-`data loss` | `trust breach` | `credential exposure` | `credential leak` | `billing surprise` | `user data` | `credentials` | `payment` | `auth` | `session` | `pii` | `private` | `cross-tenant` | `RLS` | `secret` | `secrets` | `token` | `api key` | `api keys` | `webhook`
-
-Infrastructure / data-store lens (covers the #2887 vocabulary the user-data lens alone misses — every term here has a corresponding sensitive-path glob in preflight Check 6):
-
-`migration` | `doppler` | `infra` | `infrastructure` | `terraform` | `firewall` | `dev/prd` | `dev to prd` | `supabase` | `service token` | `service-token` | `rotation` | `rotate` | `byok`
-
-If any keyword matches:
-
-1. Set `USER_BRAND_CRITICAL=true` for the rest of the brainstorm session.
-2. Capture a `## User-Brand Impact` block from the answer (artifact named, vector named, threshold inferred — defaulting to `single-user incident` when keywords match) so Phase 3.5 can persist it into the brainstorm document for plan-time carry-forward.
-3. Announce: "Tagged as **user-brand-critical**. CPO + CLO + CTO will be spawned in parallel at Phase 0.5 before other specialists. The plan derived from this brainstorm will inherit `Brand-survival threshold: single-user incident` unless overridden."
-
-If no keyword matches:
-
-1. Set `USER_BRAND_CRITICAL=false`.
-2. Proceed silently to Phase 0.25.
-
-**Step 3 — Emit telemetry on match.** When `USER_BRAND_CRITICAL=true`, emit rule-application telemetry so the weekly aggregator records that the brainstorm enforcement layer fired (see AGENTS.md `hr-weigh-every-decision-against-target-user-impact`):
+**Step 3 — Emit telemetry.** Emit rule-application telemetry so the weekly aggregator records that the brainstorm enforcement layer fired (see AGENTS.md `hr-weigh-every-decision-against-target-user-impact`):
 
 ```bash
 source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
@@ -100,17 +82,17 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "Every plan/PR touching credentials, auth, data, paym"
 ```
 
-Do NOT emit telemetry when `USER_BRAND_CRITICAL=false` — the gate only records when it activates. The aggregate ratio of "fired vs. asked" is itself a signal worth tracking.
+The gate now fires on every brainstorm by design (per #5175), so this emit records every application of the rule. Accepted tradeoff: the "fired vs. asked" ratio is now constant (always fired) — that diagnostic signal was deliberately traded away for zero operator friction. Do NOT delete the emit; the per-application record is still consumed by the weekly aggregator.
 
-**Step 4 — Persist the framing into the brainstorm document.** When `USER_BRAND_CRITICAL=true`, the brainstorm capture in Phase 3.5 MUST include a `## User-Brand Impact` section reflecting the operator's answer (artifact, vector, threshold). The plan skill's Phase 2.6 carries this section forward into the plan, so re-authoring at plan time is unnecessary and risks drift.
+**Step 4 — Persist the framing into the brainstorm document.** The brainstorm capture in Phase 3.5 MUST include a `## User-Brand Impact` section reflecting the synthesized framing (artifact = the feature's named surface, vector = generic, threshold = single-user incident). The plan skill's Phase 2.6 carries this section forward into the plan, so re-authoring at plan time is unnecessary and risks drift.
 
-**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped because every prior gate weighed the decision on technical and convenience axes only, and no gate asked what one user's data breach would cost the brand. This is the earliest layer of enforcement for the workflow gate; it pairs with plan Phase 2.6 (template), deepen-plan Phase 4.6 (halt), preflight Check 6 (ship gate), and the `user-impact-reviewer` conditional agent to close the loop.
+**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped because every prior gate weighed the decision on technical and convenience axes only, and no gate asked what one user's data breach would cost the brand. This is the earliest layer of enforcement for the workflow gate; it pairs with plan Phase 2.6 (template), deepen-plan Phase 4.6 (halt), preflight Check 6 (ship gate), and the `user-impact-reviewer` conditional agent to close the loop. #5175 made the gate unconditional — the operator's standing "all of them" answer is encoded as an always-on default, removing the per-brainstorm prompt while preserving (and strengthening) the always-protective posture.
 
 ### Phase 0.4: Lane Auto-Detect and Selection
 
 Select an orchestration lane that describes the Phase 0.5 domain-leader breadth. Canonical vocabulary: `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## Lane Inference`. Written to spec.md frontmatter at Phase 3.6.
 
-**Skip if** `USER_BRAND_CRITICAL=true` from Phase 0.1 — set `LANE=cross-domain` and proceed to Phase 0.25 without prompting. The framing question was already answered; avoid double-prompting.
+**Skip if** `USER_BRAND_CRITICAL=true` from Phase 0.1 — set `LANE=cross-domain` and proceed to Phase 0.25 without prompting. Phase 0.1 now sets this unconditionally (per #5175), so the lane is always fixed to `cross-domain` here; there is no framing prompt to double up on.
 
 **Otherwise:**
 
