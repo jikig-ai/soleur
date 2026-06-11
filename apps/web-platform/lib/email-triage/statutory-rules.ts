@@ -257,9 +257,21 @@ function decodeNumericEntity(_match: string, decimal?: string, hex?: string): st
  * hyphens, and tag-interleaving cannot split statutory keywords.
  */
 export function normalizeEmailHtml(html: string): string {
-  let text = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
+  // Strip <script>/<style> BLOCKS (tag + content) so JS/CSS source cannot
+  // pollute the keyword pass. The closing-tag pattern uses `[^>]*>` (not
+  // `\s*>`) so malformed closers like `</script foo>` are still matched
+  // (CodeQL js/bad-tag-filter), and the removal loops until stable so a
+  // single pass cannot be defeated by nested/partial tags such as
+  // `<scr<script>ipt>` (CodeQL js/incomplete-multi-character-sanitization).
+  let text = html;
+  const BLOCK_ELEMENT = /<(script|style)\b[^>]*>[\s\S]*?<\/\1[^>]*>/gi;
+  let prev: string;
+  do {
+    prev = text;
+    text = text.replace(BLOCK_ELEMENT, " ");
+  } while (text !== prev);
+
+  text = text
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(BLOCK_TAG_PATTERN, " ")
     .replace(/<[^>]+>/g, "");

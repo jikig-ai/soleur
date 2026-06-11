@@ -179,6 +179,22 @@ describe("normalizeEmailHtml — HTML-only body positive", () => {
     expect(text).toContain("zerowidthjoiners");
     expect(text).toContain("soft hyphens");
   });
+
+  it("strips script blocks with malformed closing tags and nested partials (CodeQL js/bad-tag-filter + incomplete-multi-char-sanitization)", () => {
+    // Closing tag with junk after the name (browsers tolerate `</script foo>`).
+    const malformedClose = normalizeEmailHtml(
+      "<p>before</p><script>evil()</script\t\n bar><p>data subject access request</p>",
+    );
+    expect(malformedClose).not.toContain("evil");
+    expect(malformedClose).not.toContain("<script");
+    expect(matchStatutoryBody(malformedClose)?.statutoryClass).toBe("dsar");
+
+    // Nested/partial tag that defeats a single-pass strip: the inner removal
+    // reveals an outer <script>...</script> the loop must catch.
+    const nested = normalizeEmailHtml("<scr<script>nope</script>ipt>alert(1)</script><p>ok</p>");
+    expect(nested).not.toContain("<script");
+    expect(nested).not.toContain("nope");
+  });
 });
 
 describe("matchStatutoryMetadata — attachment filename pass", () => {
