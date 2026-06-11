@@ -195,12 +195,24 @@ resolve_env_file() {
 # Returns 1 if the server never became reachable, OR became reachable but the
 # scheduler has no cron-triggered function (H9 — "healthy process, cron
 # de-planned"; the /health check alone cannot distinguish this from healthy).
+# The two probes carry SEPARATE budgets: /health keeps the fast default
+# (a dead process should still fail in ~30s); the cron-plan loop owns the
+# wider cron_max_attempts budget below (#5145).
 # Uses `|| true` after curl instead of set +e/-e toggle — toggling set -e
 # inside a function re-enables it globally and causes the caller's non-zero
 # capture (`VERIFY_RC=$?`) to never execute.
 verify_inngest_health() {
   local max_attempts="${1:-10}"
   local interval="${2:-3}"
+  # #5145: the cron-plan loop needs its own, wider budget. The server runs
+  # with --poll-interval 60 (inngest-bootstrap.sh ExecStart, asserted by
+  # inngest.test.sh); when the immediate post-restart SDK sync races the
+  # web-platform container, the registry only populates on the NEXT 60s poll
+  # — structurally beyond the old shared ~30s budget. 40 x 3s = 120s nominal
+  # covers two full poll cycles. Plain constant, NOT a positional default —
+  # the call sites must stay arg-less (ci-deploy.test.sh wiring grep), so a
+  # third parameter would be a knob nobody is allowed to turn.
+  local cron_max_attempts=40
   local response=""
   local healthy=0
 
@@ -230,18 +242,18 @@ verify_inngest_health() {
   # bare `"cron"` — every function slug is `cron-*`, so bare `"cron"` would
   # false-pass on the slug alone even with zero planned cron triggers.
   local functions_body=""
-  for i in $(seq 1 "$max_attempts"); do
+  for i in $(seq 1 "$cron_max_attempts"); do
     functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
 
     if [[ "$functions_body" == *'"cron":'* ]]; then
-      logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$max_attempts)"
+      logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$cron_max_attempts)"
       return 0
     fi
-    logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: attempt $i/$max_attempts — no cron trigger present in registry yet"
+    logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: attempt $i/$cron_max_attempts — no cron trigger present in registry yet"
     sleep "$interval"
   done
 
-  logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: failed — no cron-triggered function in registry after $max_attempts attempts"
+  logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: failed — no cron-triggered function in registry after $cron_max_attempts attempts"
   return 1
 }
 
@@ -860,9 +872,13 @@ case "$COMPONENT" in
     # `deploy inngest` path could report success on a server that came back up
     # with an empty/unplanned registry (the H9b class #4650 chased) — the
     # restart action already gates on this (see verify_inngest_health call on
-    # the `restart` action), the deploy path did not. The post-restart SDK
-    # sync populates the registry immediately (not waiting for the 60s poll),
-    # so the existing ~30s retry budget covers the window.
+    # the `restart` action), the deploy path did not. The immediate
+    # post-restart SDK sync can RACE the web-platform container, in which case
+    # the registry only populates on the next 60s poll cycle; the cron-plan
+    # loop's own budget (120s nominal, two cycles) covers that window (#5145).
+    # The gate is deliberately weak-form — ">=1 cron-triggered function
+    # registered" — full all-crons/execution coverage is owned by the Sentry
+    # cron monitors (infra/sentry/cron-monitors.tf).
     set +e
     verify_inngest_health
     VERIFY_RC=$?
