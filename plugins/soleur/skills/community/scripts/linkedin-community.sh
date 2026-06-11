@@ -213,6 +213,47 @@ post_request() {
   fi
 }
 
+# --- LinkedIn "Little Text Format" handling ---
+#
+# The Posts API commentary field is "Little Text Format": the characters
+# \ | { } [ ] ( ) < > * ~ are reserved, and LinkedIn silently TRUNCATES the
+# post at the first unescaped occurrence (observed 2026-06-10: nine org posts
+# cut mid-sentence at the first "(", which also dropped the trailing article
+# links). '#' and '@' stay unescaped so hashtags and mentions keep their
+# linking behavior; '_' stays unescaped because escaping it corrupts URLs
+# (utm_source=...) and it does not trigger the truncation failure class.
+
+sanitize_commentary() {
+  # Markdown-source artifacts that must not reach LinkedIn verbatim: strip
+  # whole-line HTML comments (e.g. markdownlint directives), unwrap
+  # <https://...> autolinks (angle brackets are reserved characters), and
+  # drop trailing horizontal rules / blank lines.
+  sed -e '/^[[:space:]]*<!--.*-->[[:space:]]*$/d' \
+      -e 's/<\(https\{0,1\}:\/\/[^>]*\)>/\1/g' |
+    awk '{ lines[++n] = $0 }
+         END {
+           while (n > 0 && (lines[n] ~ /^[[:space:]]*$/ || lines[n] ~ /^[[:space:]]*-{3,}[[:space:]]*$/)) n--
+           for (i = 1; i <= n; i++) print lines[i]
+         }'
+}
+
+escape_little_text() {
+  local t="$1"
+  t="${t//\\/\\\\}"
+  t="${t//|/\\|}"
+  t="${t//\{/\\\{}"
+  t="${t//\}/\\\}}"
+  t="${t//\[/\\[}"
+  t="${t//\]/\\]}"
+  t="${t//(/\\(}"
+  t="${t//)/\\)}"
+  t="${t//</\\<}"
+  t="${t//>/\\>}"
+  t="${t//\*/\\*}"
+  t="${t//\~/\\~}"
+  printf '%s' "$t"
+}
+
 # --- Commands ---
 
 cmd_post_content() {
@@ -258,10 +299,18 @@ cmd_post_content() {
     exit 1
   fi
 
+  # Strip markdown-source artifacts before the length check (the limit
+  # applies to visible characters; Little Text escape backslashes added
+  # below do not count toward it).
+  text=$(printf '%s\n' "$text" | sanitize_commentary)
+
   if (( ${#text} > LINKEDIN_POST_MAX_LENGTH )); then
     echo "Error: Post text is ${#text} characters, exceeds LinkedIn's ${LINKEDIN_POST_MAX_LENGTH}-character limit." >&2
     exit 1
   fi
+
+  local escaped_text
+  escaped_text=$(escape_little_text "$text")
 
   # Build request body (--author overrides default LINKEDIN_PERSON_URN)
   local author="${author_override:-${LINKEDIN_PERSON_URN:-}}"
@@ -289,7 +338,7 @@ cmd_post_content() {
   local json_body
   json_body=$(jq -n \
     --arg author "$author" \
-    --arg text "$text" \
+    --arg text "$escaped_text" \
     '{
       author: $author,
       commentary: $text,

@@ -127,3 +127,10 @@ metadata on out-of-region sources, or mint a second connection. Also note:
 metric events shipped through the generic HTTP sink count against the LOGS
 ingestion quota (3 GB/mo free tier), so quota math must include host metrics
 (see knowledge-base/project/learnings/2026-06-10-betterstack-quota-diagnosis-host-metrics-dominate-generic-http-sink.md).
+
+Nested-tag extraction (#5110 second-pass session): metric rows store tags as a
+nested JSON object — `JSONExtractString(raw, 'tags.mountpoint')` (dotted
+single-arg path) silently returns empty strings. Use the multi-key form
+`JSONExtractString(raw, 'tags', 'mountpoint')` to descend into the `tags`
+object. When a tag extraction unexpectedly groups everything under one empty
+key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
