@@ -31,7 +31,7 @@
 // functions/agent-on-spawn-requested.ts: `leaderModule.model` is typed
 // `AnthropicModelId` (the 2-value sonnet|haiku union from
 // leader-prompts/constants.ts), and that is the only value that flows
-// through the `MODEL_PRICING[leaderModule.model]` lookup at :474. Opus
+// through the `MODEL_PRICING[leaderModule.model]` lookup. Opus
 // never reaches the pricing path, so the parity test (model-tiers.test.ts)
 // is scoped to the consumed values. If a future PR makes opus reachable
 // through that lookup, add the opus pricing entry and widen the test then.

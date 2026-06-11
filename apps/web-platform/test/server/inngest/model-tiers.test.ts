@@ -46,16 +46,24 @@ const FUNCTIONS_DIR = join(__dirname, "../../../server/inngest/functions");
 const RAW_MODEL_LITERAL = /"claude-sonnet-4-6"|"claude-opus-4-7"/;
 
 /**
- * Strip comments so the verbatim `--model claude-…` GHA-mirror comments are
- * not flagged. Removes block comments wholesale, then `//`-to-EOL on each
- * line. The model literals we guard never appear after a `//` in code, so a
- * naive split is safe and matches the plan's comment-exclusion intent.
+ * Blank out comment lines so the verbatim `--model claude-…` GHA-mirror
+ * comments are not flagged. Removes block comments wholesale, then blanks any
+ * line whose first non-whitespace content begins a comment (`//` or a `*`
+ * jsdoc/block continuation). Comment lines are mapped to "" (not filtered) so
+ * the surviving line indices still match the real file line numbers in the
+ * offender report. Code lines are left intact — never truncated at `//` — so a
+ * raw literal preceded by a string containing `//` cannot slip through as a
+ * false-negative (fail-safe: an over-strict match is preferable to a missed
+ * literal in a drift guard).
  */
 function stripComments(src: string): string {
   const noBlock = src.replace(/\/\*[\s\S]*?\*\//g, "");
   return noBlock
     .split("\n")
-    .map((line) => line.split("//")[0])
+    .map((line) => {
+      const trimmed = line.trimStart();
+      return trimmed.startsWith("//") || trimmed.startsWith("*") ? "" : line;
+    })
     .join("\n");
 }
 
@@ -88,6 +96,10 @@ describe("model-tiers registry — #5106", () => {
   it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-4-7", () => {
     expect(EXECUTION_MODEL).toBe(SONNET_MODEL);
     expect(EXECUTION_MODEL).toBe("claude-sonnet-4-6");
+    // Intentional model-bump tripwire: AUDIT_MODEL has no SSOT constant to
+    // alias (opus is not an AnthropicModelId member), so it is pinned to the
+    // literal here. A deliberate re-tier (e.g. opus-4-7 → opus-4-8, a separate
+    // model-bump PR per ADR-053) must update this assertion in lockstep.
     expect(AUDIT_MODEL).toBe("claude-opus-4-7");
   });
 });
