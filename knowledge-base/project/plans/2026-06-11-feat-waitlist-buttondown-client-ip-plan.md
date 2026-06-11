@@ -9,6 +9,22 @@ lane: cross-domain
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed; no `knowledge-base/project/specs/feat-one-shot-waitlist-buttondown-client-ip/spec.md` exists).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-11 (inline pass — one-shot pipeline subagent, no Task fan-out available)
+**Gates run:** 4.5 network-outage deep-dive (telemetry emitted), 4.6 User-Brand Impact (pass — `aggregate pattern`), 4.7 Observability (pass — 5/5 fields, no placeholder, no ssh), 4.8 PAT halt (pass — no matches), 4.9 UI wireframe (pass — no UI surface)
+
+### Key Improvements
+
+1. **Empirical validation of the prescribed `plausiblePublicIp` shape** — the exact regex + `node:net` `isIP` logic from Proposed Solution was live-executed on node v24.15.0 against 26 fixture cases (public v4/v6, `"unknown"`, garbage, empty/undefined, all private/reserved v4 ranges incl. CGNAT boundaries 100.64.0.1/100.127.255.255 reject + 100.128.0.1 accept and 172.31 vs 172.32, v6 loopback/unspecified/link-local/ULA, v4-mapped-v6 both public and private, leading/trailing whitespace): **ALL 26 PASS**. The /work phase implements a verified shape, not a hypothesis.
+2. **Verify-the-negative pass** — every negative claim in the plan checked against current source: status-only logging confirmed (`waitlist.ts:115` logs `{status}` only; `route.ts:76` mirrors `{feature, op}` only); no `runtime = "edge"` export on the route (Node runtime, `node:net` available); `node:` builtin import precedent confirmed (`server/workspace-invitations.ts:1`); `bypass-firewall` token absent from `apps/**`.
+3. **All cited AGENTS.md rule IDs verified active** (`cq-test-fixtures-synthesized-only`, `cq-write-failing-tests-before` — both in AGENTS.md index); all cited KB file paths Glob-verified (sole intentional exception: the spec.md the lane note declares absent).
+
+### New Considerations Discovered
+
+- Whitespace handling: `plausiblePublicIp` must `trim()` its input (empirically confirmed `" 1.2.3.4 "` → `"1.2.3.4"`); the route's extraction already trims, so this is defense-in-depth for direct callers.
+- The rate-limit key and the forwarded IP intentionally share one extraction (`route.ts:41`) — do not fork them during implementation; a divergence would let the throttle and the Buttondown scoring disagree about who the visitor is.
+
 ## Overview
 
 Prod waitlist signups failed with `subscriber_blocked` 400 from Buttondown (Sentry WEB-PLATFORM-2F, resolved 2026-06-11) because Buttondown's account-level Firewall was in `aggressive` auditing mode (blocks risk ≥ 0.5) and API-sourced subscribes from the Hetzner server IP score 0.6. The operator already remediated prod by PATCHing the newsletter's `auditing_mode` to `enabled` (blocks ≥ 1.0); prod `POST /api/waitlist` returns 200 end-to-end. **Root cause is diagnosed and closed — this plan does NOT re-litigate it.**
@@ -48,6 +64,19 @@ No GitHub issue/PR cited by number in the feature description. All referenced ar
 2. **L3 — DNS/routing.** Opt-out with artifact: prod `POST /api/waitlist` returned 200 and created the subscriber end-to-end on 2026-06-11 (operator-verified) — packets reach `api.buttondown.com`.
 3. **L7 — TLS/proxy.** Same artifact as (2): live 200 through the full CF → origin → Buttondown chain. Not causal.
 4. **L7 — application (Buttondown account firewall).** Root cause, already diagnosed AND remediated: account Firewall `auditing_mode` was `aggressive` (blocks ≥ 0.5); server-IP-sourced subscribes score 0.6 → `subscriber_blocked` 400. Operator PATCHed `auditing_mode` to `enabled` (blocks ≥ 1.0). **Residual risk:** Buttondown attack mode can auto-revert to `aggressive`; this PR's `ip_address` proxying makes signups survive that state.
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Layer-by-layer verification status (checklist: `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md`; telemetry emitted at both plan Phase 1.4 and deepen Phase 4.5):
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 egress firewall | verified | `cron-egress-allowlist.txt:37` (`api.buttondown.com`) + `cron-egress-firewall.test.sh:200` |
+| L3 DNS/routing | opt-out w/ artifact | live prod 200 end-to-end on 2026-06-11 (operator-verified subscriber creation) |
+| L7 TLS/proxy | opt-out w/ artifact | same live-200 artifact through CF → origin → Buttondown |
+| L7 application | root cause, remediated | Buttondown `auditing_mode` PATCH `aggressive`→`enabled`; Sentry WEB-PLATFORM-2F resolved |
+
+No open outage; no service-layer hypothesis precedes an unverified lower layer. Gap to close before implementation: none.
 
 ## Proposed Solution
 
@@ -252,6 +281,29 @@ None.
 - Egress allowlist: `apps/web-platform/infra/cron-egress-allowlist.txt:37` (+ `cron-egress-firewall.test.sh:200`); learning `knowledge-base/project/learnings/2026-06-10-terraform-remote-exec-gating-and-container-scoped-egress-allowlist.md`.
 - Buttondown GDPR transfer mechanism: `knowledge-base/project/learnings/2026-03-18-buttondown-gdpr-transfer-mechanism-sccs-only.md`.
 - Waitlist pattern provenance: `knowledge-base/project/learnings/2026-03-25-waitlist-form-reuse-newsletter-pattern.md`.
+
+## Research Insights (deepen-plan)
+
+**Empirical validation (live-executed 2026-06-11, node v24.15.0):** the exact `plausiblePublicIp` implementation from Proposed Solution passed all 26 fixture cases:
+
+```text
+ALL 26 CASES PASS (node v24.15.0)
+# accepts: 203.0.113.7, 2001:db8::1, 8.8.8.8, 172.32.0.1, 100.128.0.1, 2606:4700::1111, "::ffff:8.8.8.8"→8.8.8.8, " 1.2.3.4 "→1.2.3.4
+# rejects: unknown, not-an-ip, "", undefined, 10.0.0.1, 172.16.5.5, 192.168.1.1, 127.0.0.1,
+#          169.254.1.1, 100.64.0.1, 100.127.255.255, 0.1.2.3, ::1, ::, fe80::1, fd12::1, fc00::1, ::ffff:10.0.0.1
+```
+
+**Best practices applied:**
+
+- Buttondown's own guidance is the load-bearing contract (verified WebFetch 2026-06-11): proxy the IP "directly from the request you receive" — no enrichment, no fallback to XFF.
+- Fail-safe asymmetry: a false-negative (public IP wrongly omitted) costs only fallback-to-server-IP scoring (today's behavior); a false-positive (garbage forwarded) risks an undocumented Buttondown 400 on a real signup. The validator is therefore deliberately reject-biased.
+- Single extraction point: throttle key and forwarded IP must come from the same `route.ts:41` variable so abuse-control and risk-scoring agree on visitor identity.
+
+**Anti-patterns avoided:**
+
+- `X-Buttondown-Bypass-Firewall` header (5/hr/newsletter rate limit; disables spam protection wholesale).
+- XFF fallback for the forwarded IP (client-controllable; would reintroduce the amplification vector the rate-limit design explicitly closed — see anti-amplification test at `test/api-waitlist-subscribe.test.ts:232`).
+- Logging rejected IPs (timestamp correlation with the email in adjacent log lines would reconstruct the IP+email pair this plan forbids).
 
 ## Sharp Edges
 
