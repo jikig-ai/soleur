@@ -31,6 +31,18 @@ vi.mock("@/server/inngest/client", () => ({
   inngest: { createFunction: vi.fn(), send: vi.fn() },
 }));
 
+// Hermeticity: the kept-real postSentryHeartbeat ok-branch writes
+// /var/lib/inngest/cron-fires/<slug>.json best-effort — neutralize so no test
+// touches the host filesystem (test-design review P2).
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    mkdir: vi.fn().mockResolvedValue(undefined),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 // Partial mock: keep every real export (postSentryHeartbeat, postDiscordWebhook,
 // HandlerArgs types) but stub the Octokit-backed token mint. The handler's own
 // relative `./_cron-shared` import resolves to the same module id.
@@ -47,9 +59,11 @@ import {
   buildCuratePrompt,
   computeWindow,
   deterministicFallback,
+  escapeDiscordMarkup,
   isHighlightEligible,
   renderDigest,
   sanitizeReleases,
+  stripUrls,
   cronWeeklyReleaseDigestHandler,
 } from "@/server/inngest/functions/cron-weekly-release-digest";
 import { readFileSync } from "node:fs";
@@ -104,6 +118,7 @@ const DISCORD_URL = "https://discord.com/api/webhooks/1234567890/test-webhook-to
 // URL-dispatching fetch mock state, reconfigured per test.
 let fetchBehavior: {
   releases: GhRelease[];
+  releasePages: GhRelease[][] | null; // page-aware fixture for pagination tests
   anthropic: (() => Promise<Response>) | null; // null = valid highlights response
   discordStatus: number;
 };
@@ -127,7 +142,13 @@ function installFetchMock() {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("api.github.com") && url.includes("/releases")) {
-        return new Response(JSON.stringify(fetchBehavior.releases), { status: 200 });
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        const body = fetchBehavior.releasePages
+          ? (fetchBehavior.releasePages[page - 1] ?? [])
+          : page === 1
+            ? fetchBehavior.releases
+            : [];
+        return new Response(JSON.stringify(body), { status: 200 });
       }
       if (url.includes("api.anthropic.com")) {
         if (fetchBehavior.anthropic) return fetchBehavior.anthropic();
@@ -153,13 +174,16 @@ async function runHandler() {
   const step = makeStep();
   const result = (await cronWeeklyReleaseDigestHandler({ step, logger })) as {
     ok: boolean;
+    weekKey?: string;
+    highlights?: number;
+    fallback?: boolean;
   };
   return { step, result };
 }
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW_TUESDAY });
-  fetchBehavior = { releases: [], anthropic: null, discordStatus: 204 };
+  fetchBehavior = { releases: [], releasePages: null, anthropic: null, discordStatus: 204 };
   sentryCheckins.length = 0;
   discordPosts.length = 0;
   installFetchMock();
@@ -234,6 +258,23 @@ describe("sanitizeReleases + buildCuratePrompt", () => {
     expect(prompt).not.toContain("octocat");
   });
 
+  it("strips @handles from TITLES too (the fallback path renders titles verbatim)", () => {
+    const raw = mkRelease({ name: "fix: race reported by @octocat" });
+    const sanitized = sanitizeReleases([raw]);
+    expect(sanitized[0].title).not.toContain("@octocat");
+    expect(deterministicFallback(sanitized)[0].why).not.toContain("octocat");
+  });
+
+  it("does NOT down-detail releases merely mentioning 'source' (word-boundary, perf note)", () => {
+    const raw = mkRelease({
+      name: "feat: open source the resource loader",
+      body: "## Changelog\n- enforce resource limits in the source tree",
+    });
+    const sanitized = sanitizeReleases([raw]);
+    expect(sanitized[0].securitySensitive).toBe(false);
+    expect(sanitized[0].body).toContain("resource limits");
+  });
+
   it("renders security-class releases title-only — body withheld from LLM input (AC5)", () => {
     const withheld = "exploit detail: overflow in the parser at offset 42";
     const sec = mkRelease({
@@ -248,6 +289,7 @@ describe("sanitizeReleases + buildCuratePrompt", () => {
     });
     // Non-vacuous: raw fixtures contain the bodies.
     expect(sec.body).toContain(withheld);
+    expect(xss.body).toContain("xss vector detail here");
 
     const prompt = buildCuratePrompt(sanitizeReleases([sec, xss]));
     expect(prompt).toContain("fix(security): patch CVE-2026-1234 parser overflow");
@@ -283,21 +325,88 @@ describe("RELEASE_DIGEST_RULES brand-guide lockstep", () => {
 // --- Scenario 4: curate + fallback ---------------------------------------------
 
 describe("deterministicFallback", () => {
-  it("ranks feat > fix > chore with verbatim titles", () => {
+  it("ranks feat > fix > other > chore with verbatim titles", () => {
     const releases = sanitizeReleases([
       mkRelease({ tag_name: "v1.0.1", name: "chore: bump deps" }),
       mkRelease({ tag_name: "v1.0.2", name: "fix: cart total rounding" }),
+      mkRelease({ tag_name: "v1.0.4", name: "docs: update readme" }),
       mkRelease({ tag_name: "v1.0.3", name: "feat: csv export" }),
     ]);
     const highlights = deterministicFallback(releases);
-    expect(highlights[0].title).toBe("feat: csv export");
-    expect(highlights[1].title).toBe("fix: cart total rounding");
-    expect(highlights[2].title).toBe("chore: bump deps");
-    expect(highlights.length).toBeLessThanOrEqual(5);
+    expect(highlights.map((h) => h.title)).toEqual([
+      "feat: csv export",
+      "fix: cart total rounding",
+      "docs: update readme",
+      "chore: bump deps",
+    ]);
+  });
+
+  it("caps at 5 highlights (non-vacuous: 7 inputs)", () => {
+    const releases = sanitizeReleases(
+      Array.from({ length: 7 }, (_, i) =>
+        mkRelease({ tag_name: `v1.0.${i}`, name: `feat: thing ${i}` }),
+      ),
+    );
+    expect(deterministicFallback(releases).length).toBe(5);
+  });
+});
+
+describe("escapeDiscordMarkup + stripUrls (security P2-1/P2-2)", () => {
+  it("backslash-prefixed mention cannot un-escape itself", () => {
+    // Attacker writes `\<@123>` hoping our `<` escape produces `\\<@123>`
+    // (literal backslash + LIVE mention). Backslash-first escaping yields
+    // `\\\<@123>` — escaped backslash THEN escaped `<`.
+    expect(escapeDiscordMarkup("\\<@123>")).toBe("\\\\\\<@123>");
+  });
+
+  it("masked links are broken by [ escaping", () => {
+    expect(escapeDiscordMarkup("[click me](https://evil.example)")).toContain("\\[");
+  });
+
+  it("bare URLs in free text are defanged", () => {
+    expect(stripUrls("see https://evil.example/phish now")).toBe("see ‹link› now");
+    expect(stripUrls("no links here")).toBe("no links here");
+  });
+
+  it("renderDigest applies URL strip to why text (end-to-end)", () => {
+    const out = renderDigest({
+      highlights: [{ tag: "v1.0.0", title: "t", why: "Claim credits at https://evil.example" }],
+      remainder: { count: 0, fromTag: "", toTag: "" },
+      weekKey: "2026-06-05",
+    });
+    expect(out).not.toContain("https://evil.example");
+    expect(out).toContain("‹link›");
   });
 });
 
 describe("curate step (via handler)", () => {
+  it("happy path: curated `why` posts, fallback:false, NO silent-fallback event (test-design P1)", async () => {
+    fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
+    // default anthropic mock returns one valid highlight
+    const { result } = await runHandler();
+    expect(result.ok).toBe(true);
+    expect(result.fallback).toBe(false);
+    expect(result.highlights).toBe(1);
+    expect(result.weekKey).toBe("2026-06-05");
+    expect(String(discordPosts[0].body.content)).toContain(
+      "Workflow runs now pick the right model tier per call site.",
+    );
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("dedupes repeated valid tags from the LLM (one bullet per release)", async () => {
+    fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
+    fetchBehavior.anthropic = async () =>
+      validAnthropicResponse([
+        { tag: "v3.154.0", title: "t", why: "First mention." },
+        { tag: "v3.154.0", title: "t", why: "Duplicate mention." },
+      ]);
+    const { result } = await runHandler();
+    expect(result.highlights).toBe(1);
+    expect(String(discordPosts[0].body.content)).toContain("First mention.");
+    expect(String(discordPosts[0].body.content)).not.toContain("Duplicate mention.");
+  });
+
   it("LLM failure -> deterministic fallback still posts; heartbeat ok (AC7 first half)", async () => {
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () => new Response("upstream error", { status: 500 });
@@ -422,6 +531,54 @@ describe("post-discord step", () => {
     expect(discordPosts.length).toBe(0);
     expect(reportSilentFallbackSpy).toHaveBeenCalled();
     expect(sentryCheckins.some((u) => u.includes("status=error"))).toBe(true);
+  });
+
+  it("malformed secret -> shape guard fails BEFORE fetch; secret never reaches an error message (cq P2-1)", async () => {
+    vi.stubEnv("DISCORD_RELEASES_WEBHOOK_URL", "hooks.example/not-discord/sekret-token-value");
+    fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
+    const { result } = await runHandler();
+    expect(result.ok).toBe(false);
+    expect(discordPosts.length).toBe(0);
+    // The secret value must not appear in any Sentry-bound message.
+    for (const call of reportSilentFallbackSpy.mock.calls) {
+      expect(String(call[0])).not.toContain("sekret-token-value");
+      expect(JSON.stringify(call[1] ?? {})).not.toContain("sekret-token-value");
+    }
+    expect(sentryCheckins.some((u) => u.includes("status=error"))).toBe(true);
+  });
+});
+
+// --- Pagination (git-history P2: ~100 releases/week measured live) --------------
+
+describe("release pagination", () => {
+  it("fetches page 2 when page 1 is full and still inside the window", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) =>
+      mkRelease({ tag_name: `v9.0.${i}`, name: `feat: item ${i}`, published_at: IN_WINDOW }),
+    );
+    const page2 = [
+      mkRelease({ tag_name: "v8.9.9", name: "feat: from page two", published_at: IN_WINDOW }),
+    ];
+    fetchBehavior.releasePages = [fullPage, page2];
+    const { result } = await runHandler();
+    expect(result.ok).toBe(true);
+    // totalCount spans both pages (101 in-window); default anthropic mock's
+    // tag is outside this window -> deterministic fallback (5 highlights).
+    expect(String(discordPosts[0].body.content)).toContain("plus 96 more releases");
+  });
+
+  it("warns loudly when the page cap still truncates the window", async () => {
+    const fullPage = (tagPrefix: string) =>
+      Array.from({ length: 100 }, (_, i) =>
+        mkRelease({ tag_name: `${tagPrefix}.${i}`, name: "feat: x", published_at: IN_WINDOW }),
+      );
+    fetchBehavior.releasePages = [fullPage("v9.1"), fullPage("v9.2"), fullPage("v9.3")];
+    const { result } = await runHandler();
+    expect(result.ok).toBe(true);
+    expect(
+      reportSilentFallbackSpy.mock.calls.some((c) =>
+        String(c[0]).includes("release window truncated"),
+      ),
+    ).toBe(true);
   });
 });
 

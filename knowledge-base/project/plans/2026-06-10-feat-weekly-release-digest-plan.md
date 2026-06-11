@@ -68,13 +68,21 @@ at :423, `withTimeout` at :211, `stop_reason` check at :437–440).
 CPO sign-off: covered by brainstorm-phase CPO assessment (carry-forward;
 `requires_cpo_signoff: true` in frontmatter). `user-impact-reviewer` runs at review time.
 
-**Named residual (architecture review):** this is the first unattended LLM-output→public-post
-path; neither containment layer inspects content, and the "closed input set" (published
-release bodies) derives from PR bodies that external contributors can influence — i.e.,
-prompt-injection-shaped text can reach the curate prompt. The rails (JSON-schema
-validation, verbatim-or-less, `allowed_mentions: {parse: []}`, 2000-char cap,
-deterministic fallback) bound the blast radius to plain text in #releases — accepted at
-the stated threshold, named here explicitly.
+**Named residuals (architecture + post-implementation review — the canonical
+accepted-residual ledger):**
+
+1. Prompt injection: the "closed input set" (published release bodies) derives from PR
+   bodies external contributors can influence. Rails: JSON-schema validation,
+   verbatim-or-less tag allowlist + dedupe, `allowed_mentions: {parse: []}`, backslash-
+   first markup escaping, URL stripping in free-text fields, 2000-char cap, deterministic
+   fallback. Blast radius: plain non-clickable text in #releases.
+2. Fallback-verbatim titles: the deterministic fallback renders release titles verbatim
+   by contract — brand-banned vocabulary in a PR title would post as-is. Mitigant outside
+   the diff: brand-guide GitHub rule keeps PR titles technical. Accepted.
+3. Plain contributor names: PII-strip removes @handles/emails/Co-Authored-By; a free-text
+   name in already-published release notes passes through. Already-public data; accepted.
+4. Infra-only weeks post the quiet-week line (excluded-stream releases are not
+   enumerated) — by design per AC8; brand-guide quiet-week rule amended to match.
 
 ## Implementation Phases
 

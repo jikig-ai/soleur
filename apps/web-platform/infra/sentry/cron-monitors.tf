@@ -577,7 +577,8 @@ resource "sentry_cron_monitor" "cron_egress_resolve" {
 # Closest sibling: scheduled_strategy_review (pure-TS Inngest-fired cohort —
 # 30-min margin, NOT the 55-min claude-eval cohort). The handler's catch
 # shape always sends a check-in (ok or error); the margin is the backstop
-# for the Sentry-env-unset skip path only. Single-miss alert
+# for the skip/heartbeat-failure paths (Sentry env unset, or the check-in
+# POST itself failing — swallowed best-effort). Single-miss alert
 # (failure_issue_threshold=1): one missed Friday is noteworthy on a weekly
 # cadence — the digest IS the channel's only content source.
 resource "sentry_cron_monitor" "cron_weekly_release_digest" {

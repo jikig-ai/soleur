@@ -29,6 +29,7 @@ import {
   mintInstallationToken,
   postDiscordWebhook,
   postSentryHeartbeat,
+  redactToken,
   type HandlerArgs,
 } from "./_cron-shared";
 
@@ -44,8 +45,20 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_MAX_TOKENS = 2048;
 const ANTHROPIC_TIMEOUT_MS = 60_000;
+// Raw bodies are bounded BEFORE the PII regexes run: EMAIL_RE is O(n²) and a
+// 125k-char body (GitHub's ceiling) measures ~17s of synchronous regex —
+// inside the shared Next.js process that is an event-loop stall for the whole
+// app (review perf P1). 10k preserves sanitize-then-truncate semantics.
+const MAX_RAW_BODY_CHARS = 10_000;
 const MAX_RELEASE_BODY_CHARS = 1500;
+const MAX_HIGHLIGHTS = 5;
 const DISCORD_CONTENT_MAX = 2000;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// The repo measures ~100 releases/week live — a single per_page=100 page has
+// ZERO headroom (review git-history P2). Paginate up to 3 pages and warn
+// loudly if the window is still truncated.
+const RELEASES_PER_PAGE = 100;
+const RELEASES_MAX_PAGES = 3;
 
 // Operational prompt rules. AUTHORITATIVE COPY — knowledge-base/ is NOT in
 // the container image (docker_context is apps/web-platform), so a runtime
@@ -61,7 +74,7 @@ Automated weekly post to #releases (Fridays). These are operational rules for un
 - **Selection rubric:** rank candidate releases by (1) founder impact — something a user can now do, stop doing, or stop worrying about; (2) breadth — affects most users, not one niche config; (3) novelty — new capability beats fix beats chore. Never rank by commit count, diff size, or release frequency.
 - **Tone:** declarative, concrete, builder-to-builder. Lead each bullet with the outcome, not the component name. State only what shipped — no roadmap promises, no hype adjectives ("game-changing," "massive"), no "just/simply," no "AI-powered." Use a number only if it appears verbatim in the source release notes. Structural emoji (arrows, checkmarks) sparingly; decorative emoji never.
 - **Example highlight:** "Release notifications now land in Slack instead of Discord DMs — your team sees ships where they already work."
-- **Quiet week (zero releases):** post one line only, e.g. "Quiet week at the forge — heads-down on the next release. See you next Friday." Never pad with filler highlights or restate old releases as new.`;
+- **Quiet week (zero user-facing releases — internal-infra-only weeks count as quiet):** post one line only, e.g. "Quiet week at the forge — heads-down on the next release. See you next Friday." Never pad with filler highlights or restate old releases as new.`;
 
 // --- Pure helpers (exported for unit tests) ---------------------------------
 
@@ -81,7 +94,7 @@ export function computeWindow(now: Date): DigestWindow {
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i, 15, 0, 0),
     );
     if (candidate.getUTCDay() === 5 && candidate.getTime() <= now.getTime()) {
-      const start = new Date(candidate.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const start = new Date(candidate.getTime() - WEEK_MS);
       return { start, end: candidate, weekKey: candidate.toISOString().slice(0, 10) };
     }
   }
@@ -98,7 +111,10 @@ export function isHighlightEligible(tag: string): boolean {
   return /^v\d/.test(tag) || /^web-v\d/.test(tag);
 }
 
-const SECURITY_DOWN_DETAIL_RE = /security|vulnerab|CVE-\d|xss|rce|injection|privilege escalation/i;
+// Word-boundaried: bare `rce` matches "sou-rce-" as a substring and would
+// silently down-detail every release mentioning "source" (review perf note).
+const SECURITY_DOWN_DETAIL_RE =
+  /\bsecurity\b|vulnerab|\bcve\b|\bxss\b|\brce\b|\bssrf\b|\bcsrf\b|\binjection\b|privilege escalation|auth bypass|\bexploit\b|\b0day\b|deserializ|path traversal|prototype pollution|sandbox escape/i;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const HANDLE_RE = /@[A-Za-z0-9][A-Za-z0-9-]*/g;
 const CO_AUTHORED_RE = /^\s*co-authored-by:.*$/gim;
@@ -132,7 +148,8 @@ function stripPii(s: string): string {
 export function sanitizeReleases(releases: RawGithubRelease[]): SanitizedRelease[] {
   return releases.map((r) => {
     const title = stripPii(r.name || r.tag_name).trim();
-    const rawBody = r.body ?? "";
+    // Pre-bound BEFORE regexing — see MAX_RAW_BODY_CHARS rationale.
+    const rawBody = (r.body ?? "").slice(0, MAX_RAW_BODY_CHARS);
     const securitySensitive = SECURITY_DOWN_DETAIL_RE.test(`${r.name ?? ""}\n${rawBody}`);
     const body = securitySensitive
       ? ""
@@ -188,16 +205,28 @@ function rankOf(title: string): number {
 export function deterministicFallback(releases: SanitizedRelease[]): Highlight[] {
   return [...releases]
     .sort((a, b) => rankOf(a.title) - rankOf(b.title))
-    .slice(0, 5)
+    .slice(0, MAX_HIGHLIGHTS)
     .map((r) => ({ tag: r.tag, title: r.title, why: r.title }));
 }
 
-// Suppress Discord markup specials in untrusted text (<@id>, <#id>,
-// <https://…> disguised links). Mention PINGS are already impossible
-// (allowed_mentions parse:[] at the API layer); this prevents silent
-// mention/link RENDERING from release-note text.
-function escapeDiscordMarkup(s: string): string {
-  return s.replace(/</g, "\\<");
+// Suppress Discord-active markup in untrusted text. Order is load-bearing
+// (formatTailForIssue precedent): backslash FIRST, else attacker-supplied
+// `\<@id>` becomes `\\<@id>` and the literal-backslash consumes our escape,
+// rendering the mention chip live (review security P2-1). `[` is escaped to
+// break masked-link syntax `[text](url)` (P2-2). Mention PINGS are already
+// impossible (allowed_mentions parse:[] at the API layer); this prevents
+// silent mention/link RENDERING.
+export function escapeDiscordMarkup(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/</g, "\\<").replace(/\[/g, "\\[");
+}
+
+// Free-text fields (LLM `why`, fallback titles) must not carry clickable
+// URLs into a public brand-voice post — Discord autolinks bare URLs, and a
+// phishing link in Soleur's voice is materially worse than plain text
+// (review security P2-2 / user-impact F1). Tags and the static quiet-week
+// line never carry URLs by construction.
+export function stripUrls(s: string): string {
+  return s.replace(/https?:\/\/\S+/gi, "‹link›");
 }
 
 export interface DigestRender {
@@ -219,7 +248,7 @@ export function renderDigest(input: DigestRender): string {
   const lines = [
     `**Soleur this week** (week of ${input.weekKey})`,
     "",
-    ...input.highlights.map((h) => `• ${escapeDiscordMarkup(h.why)}`),
+    ...input.highlights.map((h) => `• ${escapeDiscordMarkup(stripUrls(h.why))}`),
   ];
   if (input.remainder.count > 0) {
     lines.push(
@@ -229,15 +258,18 @@ export function renderDigest(input: DigestRender): string {
   }
   const content = lines.join("\n");
   if (content.length <= DISCORD_CONTENT_MAX) return content;
-  return `${content.slice(0, DISCORD_CONTENT_MAX - 1)}…`;
+  // Truncation-safe: never cut between an escape backslash and its target,
+  // or mid-surrogate-pair (review git-history P3).
+  const truncated = content
+    .slice(0, DISCORD_CONTENT_MAX - 1)
+    .replace(/\\+$/, "")
+    .replace(/[\uD800-\uDBFF]$/, "");
+  return `${truncated}…`;
 }
 
 // --- Anthropic curation ------------------------------------------------------
 
-async function curateViaAnthropic(
-  releases: SanitizedRelease[],
-  logger: HandlerArgs["logger"],
-): Promise<Highlight[]> {
+async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlight[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -262,7 +294,7 @@ async function curateViaAnthropic(
     stop_reason?: string;
   };
   if (data.stop_reason === "max_tokens") {
-    logger.warn({ fn: FUNCTION_NAME }, "anthropic-response-truncated");
+    // The curate step's catch mirrors this to Sentry — no duplicate warn.
     throw new Error("anthropic response truncated");
   }
   const text = data.content?.[0]?.text;
@@ -273,17 +305,23 @@ async function curateViaAnthropic(
     throw new Error("anthropic response shape invalid");
   }
   // Verbatim-or-less (spec TR3): tags must come from the window's API data —
-  // hallucinated tags are discarded; zero valid highlights falls back.
+  // hallucinated tags are discarded, repeats deduped (a model echoing one
+  // valid tag N times must not render N duplicate bullets); zero valid
+  // highlights falls back.
   const eligibleTags = new Set(releases.map((r) => r.tag));
-  const valid = (parsed.highlights as Array<Record<string, unknown>>)
-    .filter(
-      (h) =>
-        typeof h?.tag === "string" &&
-        eligibleTags.has(h.tag) &&
-        typeof h?.title === "string" &&
-        typeof h?.why === "string",
-    )
-    .slice(0, 5) as unknown as Highlight[];
+  const seenTags = new Set<string>();
+  const isHighlight = (h: Record<string, unknown>): h is Record<string, string> =>
+    typeof h?.tag === "string" &&
+    eligibleTags.has(h.tag) &&
+    typeof h?.title === "string" &&
+    typeof h?.why === "string";
+  const valid: Highlight[] = [];
+  for (const h of parsed.highlights as Array<Record<string, unknown>>) {
+    if (!isHighlight(h) || seenTags.has(h.tag)) continue;
+    seenTags.add(h.tag);
+    valid.push({ tag: h.tag, title: h.title, why: h.why });
+    if (valid.length >= MAX_HIGHLIGHTS) break;
+  }
   if (valid.length === 0) throw new Error("no valid highlights in anthropic response");
   return valid;
 }
@@ -292,10 +330,21 @@ async function curateViaAnthropic(
 
 export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
   const { step, logger } = args;
+  // Hoisted so the handler-level catch can redact it from error messages
+  // (cron-weekly-analytics tail precedent). Stays "" on memoized replays —
+  // a token can only appear in errors thrown by the invocation that minted it.
+  let installationToken = "";
   try {
-    const window = computeWindow(new Date());
-
     const fetched = await step.run("fetch-releases", async () => {
+      // Clock read lives INSIDE the step so the window is memoized with the
+      // data: Inngest re-executes the handler body per step boundary, and a
+      // run straddling Friday 15:00 UTC must not flip windows between steps
+      // (review data-integrity P2; 4 agents concurred). ISO strings only —
+      // step outputs round-trip through JSON.
+      const window = computeWindow(new Date());
+      const startMs = window.start.getTime();
+      const endMs = window.end.getTime();
+
       const token = await mintInstallationToken({
         tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
         // Least-privilege (hr-github-app-auth-not-pat): releases read needs
@@ -303,27 +352,51 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
         permissions: { contents: "read" },
         repositories: [REPO_NAME],
       });
-      const resp = await fetch(
-        `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=100`,
-        {
-          headers: {
-            authorization: `Bearer ${token}`,
-            accept: "application/vnd.github+json",
+      installationToken = token;
+
+      // ~100 releases/week measured live — paginate until the page is short,
+      // the oldest entry predates the window, or the page cap is hit.
+      // /releases orders by created_at desc (window filters on published_at —
+      // a long-draft release can still slip past the cap; warned below).
+      const all: RawGithubRelease[] = [];
+      let truncated = false;
+      for (let page = 1; page <= RELEASES_MAX_PAGES; page++) {
+        const resp = await fetch(
+          `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+          {
+            headers: {
+              authorization: `Bearer ${token}`,
+              accept: "application/vnd.github+json",
+            },
           },
-        },
-      );
-      if (!resp.ok) throw new Error(`GitHub releases API ${resp.status}`);
-      const all = (await resp.json()) as RawGithubRelease[];
-      const startMs = window.start.getTime();
-      const endMs = window.end.getTime();
+        );
+        if (!resp.ok) throw new Error(`GitHub releases API ${resp.status}`);
+        const batch = (await resp.json()) as RawGithubRelease[];
+        all.push(...batch);
+        if (batch.length < RELEASES_PER_PAGE) break;
+        const oldest = batch[batch.length - 1];
+        if (oldest && new Date(oldest.published_at).getTime() <= startMs) break;
+        if (page === RELEASES_MAX_PAGES) truncated = true;
+      }
+      if (truncated) {
+        reportSilentFallback(new Error("release window truncated at page cap"), {
+          feature: FUNCTION_NAME,
+          op: "fetch-releases",
+          message: "More in-window releases exist than the page cap fetched — digest undercounts",
+          extra: { fn: FUNCTION_NAME, pages: RELEASES_MAX_PAGES },
+        });
+      }
+
       const inWindow = all.filter((r) => {
         if (r.draft || r.prerelease) return false;
         const t = new Date(r.published_at).getTime();
         return t > startMs && t <= endMs;
       });
-      // /releases orders by created_at desc -> first = newest. The range
-      // line reads oldest -> newest.
-      const tags = inWindow.map((r) => r.tag_name);
+      // Range line reads oldest -> newest by published_at (created_at API
+      // ordering can misplace long-drafted releases — review DI P3).
+      const byPublished = [...inWindow].sort(
+        (a, b) => new Date(a.published_at).getTime() - new Date(b.published_at).getTime(),
+      );
       const eligible = sanitizeReleases(inWindow.filter((r) => isHighlightEligible(r.tag_name)));
       logger.info(
         { fn: FUNCTION_NAME, weekKey: window.weekKey, total: inWindow.length, eligible: eligible.length },
@@ -332,8 +405,9 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
       return {
         eligible,
         totalCount: inWindow.length,
-        fromTag: tags[tags.length - 1] ?? "",
-        toTag: tags[0] ?? "",
+        fromTag: byPublished[0]?.tag_name ?? "",
+        toTag: byPublished[byPublished.length - 1]?.tag_name ?? "",
+        weekKey: window.weekKey,
       };
     });
 
@@ -345,7 +419,7 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
       // transient LLM error never consumes the function retry — the
       // deterministic fallback posts the week regardless (spec FR4).
       try {
-        const highlights = await curateViaAnthropic(fetched.eligible, logger);
+        const highlights = await curateViaAnthropic(fetched.eligible);
         return { highlights, fallback: false };
       } catch (err) {
         reportSilentFallback(err as Error, {
@@ -359,16 +433,14 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
     });
 
     await step.run("post-discord", async () => {
-      // No #general fallback (spec FR6) — missing/empty secret is a failure.
+      // No #general fallback (spec FR6) — missing/empty/malformed secret is a
+      // failure. The shape guard also prevents undici's "Failed to parse URL
+      // from <url>" TypeError from embedding the secret in an error message
+      // that the tail ships to Sentry (review code-quality P2-1). Single
+      // Sentry report via the handler-level catch — no in-step duplicate.
       const url = process.env.DISCORD_RELEASES_WEBHOOK_URL;
-      if (!url || url.trim() === "") {
-        reportSilentFallback(new Error("DISCORD_RELEASES_WEBHOOK_URL missing or empty"), {
-          feature: FUNCTION_NAME,
-          op: "post-discord",
-          message: "#releases webhook secret missing — digest NOT posted (no fallback by design)",
-          extra: { fn: FUNCTION_NAME },
-        });
-        throw new Error("DISCORD_RELEASES_WEBHOOK_URL missing or empty");
+      if (!url || !url.startsWith("https://discord.com/api/webhooks/")) {
+        throw new Error("DISCORD_RELEASES_WEBHOOK_URL missing, empty, or malformed");
       }
       const content = renderDigest({
         highlights: curated.highlights,
@@ -377,7 +449,7 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
           fromTag: fetched.fromTag,
           toTag: fetched.toTag,
         },
-        weekKey: window.weekKey,
+        weekKey: fetched.weekKey,
       });
       // THROW on non-2xx so Inngest's retries:1 grants one step retry on a
       // transient failure; the handler-level catch below converts the
@@ -400,7 +472,7 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
     );
     return {
       ok: true,
-      weekKey: window.weekKey,
+      weekKey: fetched.weekKey,
       highlights: curated.highlights.length,
       fallback: curated.fallback,
     };
@@ -410,10 +482,11 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
     // direct best-effort call (not step.run: steps may be unavailable after a
     // StepError, and a failed heartbeat must not mask the original error).
     const e = err as Error;
-    reportSilentFallback(e, {
+    const redactedMsg = redactToken(e.message ?? "weekly release digest failed", installationToken);
+    reportSilentFallback(new Error(redactedMsg), {
       feature: FUNCTION_NAME,
       op: "handler-top-level",
-      message: e.message ?? "weekly release digest failed",
+      message: redactedMsg,
     });
     try {
       await postSentryHeartbeat({
