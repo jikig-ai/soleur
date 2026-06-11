@@ -14,6 +14,10 @@ on:
       - "apps/*/infra/**"
       - "infra/**"
       - ".github/workflows/infra-validation.yml"
+      # ci-deploy.test.sh cross-file drift guard (#5145) reads the restart
+      # workflow's poll budget; without this path the guard never fires on
+      # client-side edits (deploy-script-tests job is ungated).
+      - ".github/workflows/restart-inngest-server.yml"
   workflow_dispatch:
 
 permissions:

@@ -61,6 +61,7 @@ The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract au
 | `canary_sandbox_failed` | 1 | bwrap verification failed on canary | SSH -> `journalctl -u webhook` for bwrap stderr |
 | `canary_failed` | 1 | Canary health-check failed 10x | Roll back; inspect canary container logs |
 | `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
+| `inngest_health_failed` | 1 | `/health` unreachable OR no cron-triggered function in registry after the cron-plan budget (`verify_inngest_health`) | If the Sentry cron monitors are green this is the #5145 slow-resync signature (registry populated after the budget) — re-dispatch `restart-inngest-server.yml` after confirming host delivery; if monitors are missing check-ins, treat as a real H9b de-planned registry |
 | `no_handler` | 1 | Component has no case handler in ci-deploy.sh | Add handler (code change) |
 | `unhandled` | 1 | EXIT trap fired; specific reason not instrumented | Check journalctl; consider adding explicit final_write_state call |
 | `timeout` | 124 | Wall-clock cap (`ci-deploy-wrapper.sh` 900s) sent SIGTERM and `ci-deploy.sh`'s TERM trap fired before bash exited (#3704) | SSH and run `journalctl -u webhook -t ci-deploy --since '-15m'` for the last successful step before silence; likely culprit is hung `docker pull`, `docker exec bwrap`, or canary probe. |

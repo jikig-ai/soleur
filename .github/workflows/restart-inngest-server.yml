@@ -2,6 +2,9 @@
 # Sends `restart inngest _ latest` to ci-deploy.sh and polls deploy-status
 # for completion. Use when inngest-server desyncs after rapid deploy churn
 # (H9 in cloud-scheduled-tasks.md runbook).
+# The verify poll window (MAX_POLLS x POLL_INTERVAL) must exceed ci-deploy.sh's
+# verify_inngest_health worst case (incl. the unit's TimeoutStopSec hung-stop
+# that can precede the verify) — drift-guarded by ci-deploy.test.sh (#5145).
 name: Restart Inngest Server
 
 on:
@@ -47,6 +50,12 @@ jobs:
             echo "::error::Restart webhook rejected (HTTP $HTTP_CODE)"
             exit 1
           fi
+          # Freshness anchor for the verify step (#5145): deploy-state is a
+          # single slot, so the first poll after the 202 can read the PREVIOUS
+          # green inngest state before this run's webhook exec writes
+          # "running". The verify loop only honors terminal states whose
+          # start_ts is at or after this trigger (minus clock-skew tolerance).
+          echo "TRIGGER_TS=$(date +%s)" >> "$GITHUB_ENV"
           echo "Restart initiated (HTTP 202), polling status..."
 
       - name: Verify restart completion
@@ -57,7 +66,16 @@ jobs:
         run: |
           set -euo pipefail
           SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-          for i in $(seq 1 30); do
+          # Client window must exceed ci-deploy.sh's server-side verify worst
+          # case (#5145): verify tail-case ~400s (50 attempts x (3s sleep + up
+          # to 5s curl --max-time)) + TimeoutStopSec=180 hung-stop that can
+          # precede the verify + 60s margin = 640s required; 140 x 5s = 700s.
+          # Drift-guarded by ci-deploy.test.sh — retune both sides together.
+          MAX_POLLS=140
+          POLL_INTERVAL=5
+          for i in $(seq 1 "$MAX_POLLS"); do
+            # shellcheck disable=SC2034 # capture exists to keep curl's -w
+            # status code off stdout; the loop branches on BODY, not the code
             HTTP_CODE=$(curl -s --max-time 10 \
               -o /tmp/status-body \
               -w '%{http_code}' \
@@ -68,41 +86,58 @@ jobs:
               "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
             BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
             if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
-              echo "Attempt $i/30: non-JSON or empty body — retrying"
-              sleep 5
+              echo "Attempt $i/$MAX_POLLS: non-JSON or empty body — retrying"
+              sleep "$POLL_INTERVAL"
               continue
             fi
             EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
             REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
             COMPONENT=$(echo "$BODY" | jq -r '.component // "unknown"')
+            # Freshness guard (#5145): deploy-state is a single slot; the
+            # first poll after the 202 can read the PREVIOUS green inngest
+            # state before this run's webhook exec writes "running". Only
+            # honor terminal states written at/after TRIGGER_TS (60s
+            # clock-skew tolerance — the host writes start_ts with its own
+            # clock; field is schema-stable, ci-deploy.sh write_state).
+            START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
             case "$EXIT_CODE" in
               0)
                 if [ "$COMPONENT" = "inngest" ]; then
-                  echo "::notice::Inngest restart completed successfully (reason=$REASON)"
-                  echo "$BODY" | jq .
-                  exit 0
+                  if [ "$START_TS" -lt "$((TRIGGER_TS - 60))" ]; then
+                    echo "Attempt $i/$MAX_POLLS: state predates this trigger — waiting"
+                  else
+                    echo "::notice::Inngest restart completed successfully (reason=$REASON)"
+                    echo "$BODY" | jq .
+                    exit 0
+                  fi
+                else
+                  echo "Attempt $i/$MAX_POLLS: last operation was for $COMPONENT, not inngest"
                 fi
-                echo "Attempt $i/30: last operation was for $COMPONENT, not inngest"
                 ;;
               -1)
-                echo "Attempt $i/30: restart still running (reason=$REASON)"
+                echo "Attempt $i/$MAX_POLLS: restart still running (reason=$REASON)"
                 ;;
               -2)
-                echo "Attempt $i/30: no prior deploy/restart recorded"
+                echo "Attempt $i/$MAX_POLLS: no prior deploy/restart recorded"
                 ;;
               -3)
-                echo "Attempt $i/30: corrupt state read, retrying"
+                echo "Attempt $i/$MAX_POLLS: corrupt state read, retrying"
                 ;;
               *)
                 if [ "$COMPONENT" = "inngest" ]; then
-                  echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
-                  echo "$BODY" | jq .
-                  exit 1
+                  if [ "$START_TS" -lt "$((TRIGGER_TS - 60))" ]; then
+                    echo "Attempt $i/$MAX_POLLS: state predates this trigger — waiting"
+                  else
+                    echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
+                    echo "$BODY" | jq .
+                    exit 1
+                  fi
+                else
+                  echo "Attempt $i/$MAX_POLLS: last state is for $COMPONENT (exit_code=$EXIT_CODE), waiting for inngest"
                 fi
-                echo "Attempt $i/30: last state is for $COMPONENT (exit_code=$EXIT_CODE), waiting for inngest"
                 ;;
             esac
-            sleep 5
+            sleep "$POLL_INTERVAL"
           done
-          echo "::error::Restart did not complete within 150s"
+          echo "::error::Restart did not complete within $((MAX_POLLS * POLL_INTERVAL))s"
           exit 1

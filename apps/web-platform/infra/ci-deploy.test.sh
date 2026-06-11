@@ -2038,6 +2038,103 @@ else
   echo "  FAIL: docker pull/prune must close FD-200 via '200>&-' (#5062) — an orphaned pull would hold the deploy lock"
 fi
 
+# #5145: the cron-plan loop must own a WIDER budget than the /health loop.
+# inngest-server runs with --poll-interval 60 (inngest-bootstrap.sh); when the
+# immediate post-restart SDK sync races the web-platform container, the
+# registry only populates on the next 60s poll — structurally beyond the old
+# shared ~30s budget, so healthy deploys recorded inngest_health_failed.
+# Budget VALUES are runtime-untestable here: create_mock_seq collapses every
+# loop to one iteration (that mock is what keeps this suite inside
+# infra-validation.yml's 5-min job timeout — do not weaken it), so these are
+# static source pins. Regression classes guarded:
+#   - shared-budget collapse (cron loop reverting to $max_attempts)
+#   - silent down-tuning (40 quietly lowered back toward 10)
+#   - loop swap (the cron budget driving the FIRST loop instead of the second)
+#   - curl-tail retune (--max-time 5 is the source of the drift guard's +5
+#     term below; retuning it silently invalidates that arithmetic)
+# The `seq` FORM pin is itself load-bearing: a C-style for ((...)) refactor
+# would escape the seq mock and blow the 5-min CI timeout.
+echo ""
+echo "--- verify_inngest_health cron-plan budget (#5145) ---"
+TOTAL=$((TOTAL + 1))
+CRON_PIN_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=40\b' "$DEPLOY_SCRIPT" || true)
+CRON_SEQ_COUNT=$(grep -cE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" || true)
+HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 http://127\.0\.0\.1:8288/v1/functions' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+# Probe pin scoped to the function region — line :674 has a third
+# `curl -sf --max-time 5` outside verify_inngest_health.
+VERIFY_FN_MAXTIME=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -c 'curl -sf --max-time 5' || true)
+if [[ "$CRON_PIN_COUNT" -ge 1 && "$CRON_SEQ_COUNT" -ge 1 \
+      && -n "$HEALTH_SEQ_LINE" && -n "$CRON_SEQ_LINE" && -n "$FUNCTIONS_CURL_LINE" \
+      && "$HEALTH_SEQ_LINE" -lt "$CRON_SEQ_LINE" && "$CRON_SEQ_LINE" -lt "$FUNCTIONS_CURL_LINE" \
+      && "$VERIFY_FN_MAXTIME" -eq 2 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: cron-plan loop owns its pinned budget (cron_max_attempts=40 drives the second loop; both probes --max-time 5) — #5145"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: cron-budget pin (#5145) (pin=$CRON_PIN_COUNT seq_form=$CRON_SEQ_COUNT health_seq_line=$HEALTH_SEQ_LINE cron_seq_line=$CRON_SEQ_LINE functions_curl_line=$FUNCTIONS_CURL_LINE fn_maxtime=$VERIFY_FN_MAXTIME)"
+fi
+
+# #5145 cross-file drift guard: the restart workflow's client-side poll window
+# must exceed ci-deploy.sh's server-side verify worst case, or the workflow
+# times out on exactly the slow-resync case the wider budget tolerates.
+# Values are extracted generically BY SHAPE (not pinned literals) so a
+# legitimate retune re-runs the inequality with the new numbers instead of
+# dying as "unparseable" — exact-value pinning is the assertion above's job.
+# Server worst case (right side of the inequality):
+#   (health_attempts + cron_attempts) * (interval + 5)
+#     +5 = per-attempt `curl --max-time 5` tail (source: the --max-time pin
+#          above; sleep-only arithmetic undercounts the true worst case ~2.6x)
+#   +180 = TimeoutStopSec=180 hung-stop budget the systemd restart can consume
+#          BEFORE the verify starts (inngest-bootstrap.sh)
+#   +60  = webhook handoff/flock/client-curl margin
+# Same invariant class as web-platform-release.yml's STATUS_POLL ==
+# IN_FLIGHT_CEILING_S runtime assert.
+TOTAL=$((TOTAL + 1))
+RESTART_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/restart-inngest-server.yml"
+# tail -1 on the digit runs: "${1:-10}" tokenizes to "1" then "10" — the
+# DEFAULT is the last run, not the first.
+DG_HEALTH=$(grep -oE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
+DG_INTERVAL=$(grep -oE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
+DG_CRON=$(grep -oE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+DG_MAX_POLLS_COUNT=$(grep -cE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" || true)
+DG_POLL_INTERVAL_COUNT=$(grep -cE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" || true)
+DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+DG_OK=1
+DG_WHY=""
+# Validate BEFORE arithmetic: bash $((v * 5)) on an empty string evaluates to
+# 0 silently and the inequality would pass for the wrong reason.
+for v in "$DG_HEALTH" "$DG_INTERVAL" "$DG_CRON" "$DG_MAX_POLLS" "$DG_POLL_INTERVAL"; do
+  if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+    DG_OK=0
+    DG_WHY="non-integer extraction"
+  fi
+done
+# A duplicate assignment would make the head -1 extraction silently ambiguous.
+if [[ "$DG_OK" -eq 1 && ( "$DG_MAX_POLLS_COUNT" -ne 1 || "$DG_POLL_INTERVAL_COUNT" -ne 1 ) ]]; then
+  DG_OK=0
+  DG_WHY="expected exactly one MAX_POLLS=/POLL_INTERVAL= assignment in the workflow (got $DG_MAX_POLLS_COUNT/$DG_POLL_INTERVAL_COUNT)"
+fi
+DG_LEFT=""
+DG_RIGHT=""
+if [[ "$DG_OK" -eq 1 ]]; then
+  DG_LEFT=$((DG_MAX_POLLS * DG_POLL_INTERVAL))
+  DG_RIGHT=$(((DG_HEALTH + DG_CRON) * (DG_INTERVAL + 5) + 180 + 60))
+  if [[ "$DG_LEFT" -lt "$DG_RIGHT" ]]; then
+    DG_OK=0
+    DG_WHY="client window ${DG_LEFT}s < server worst case ${DG_RIGHT}s"
+  fi
+fi
+if [[ "$DG_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: restart workflow client window (${DG_LEFT}s) covers verify worst case (${DG_RIGHT}s) — #5145 drift guard"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: client/server budget drift guard (#5145): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, .github/workflows/restart-inngest-server.yml)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
