@@ -31,7 +31,6 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
-import { extractModelJson } from "@/server/model-json";
 import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
@@ -69,6 +68,52 @@ const BRANCH_SHAPE_RE =
 
 export const ANTHROPIC_MODEL = EXECUTION_MODEL;
 export const ANTHROPIC_MAX_TOKENS = 16384;
+// Structured-output schema (#5186): the model returns clusters wrapped in an
+// object (structured-output roots are objects, not top-level arrays). Every
+// object needs `additionalProperties: false`; numeric/array constraints are
+// NOT supported by the API — the slice(0, remaining) cap stays a post-parse TS
+// slice. The prompt and the parse-site read are kept in lockstep with this wrapper.
+const CLUSTER_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["clusters"],
+  properties: {
+    clusters: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "cluster_hash",
+          "tier",
+          "target_path",
+          "source_learnings",
+          "proposed_diff_unified",
+          "rationale",
+          "byte_impact",
+        ],
+        properties: {
+          cluster_hash: { type: "string" },
+          tier: { type: "string", enum: ["skill", "agents-core"] },
+          target_path: { type: "string" },
+          source_learnings: { type: "array", items: { type: "string" } },
+          proposed_diff_unified: { type: "string" },
+          rationale: { type: "string" },
+          byte_impact: {
+            type: "object",
+            additionalProperties: false,
+            required: ["before", "after", "delta"],
+            properties: {
+              before: { type: "integer" },
+              after: { type: "integer" },
+              delta: { type: "integer" },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
 
 // Byte-for-byte port of scripts/compound-promote.sh:75 PII_REGEX.
 // Unit-tested for parity (AC8).
@@ -382,12 +427,12 @@ export async function cronCompoundPromoteHandler({
       if (existsSync(agentsCorePath)) alwaysLoadedNow += (await readFile(agentsCorePath)).length;
 
       const prompt = [
-        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=5 source learnings) as a JSON array.`,
-        `Schema: [{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}].`,
+        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=5 source learnings).`,
+        `Schema: {clusters:[{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}]}.`,
         `Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.core.md.`,
         `Current always-loaded payload (AGENTS.md + AGENTS.core.md) is ${alwaysLoadedNow} bytes; the warn cap is ${MAX_ALWAYS_LOADED_BYTES} bytes.`,
         `target_path MUST be one of: AGENTS.core.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).`,
-        `Output ONLY the JSON array, nothing else.`,
+        `Output ONLY a JSON object with a "clusters" key, nothing else.`,
       ].join("\n");
 
       const { text, stopReason } = await postAnthropicMessage({
@@ -395,6 +440,7 @@ export async function cronCompoundPromoteHandler({
         model: ANTHROPIC_MODEL,
         maxTokens: ANTHROPIC_MAX_TOKENS,
         messages: [{ role: "user", content: prompt + "\n\nCorpus:\n" + JSON.stringify(corpus.entries) }],
+        outputConfig: { format: { type: "json_schema", schema: CLUSTER_OUTPUT_SCHEMA } },
       });
 
       if (stopReason === "max_tokens") {
@@ -411,9 +457,10 @@ export async function cronCompoundPromoteHandler({
         return { clusters: [] as Cluster[], truncated: false };
       }
 
-      let parsed: unknown;
+      // Structured output guarantees schema-valid JSON — parse directly, no fence strip.
+      let parsed: { clusters?: unknown };
       try {
-        parsed = JSON.parse(extractModelJson(text));
+        parsed = JSON.parse(text) as { clusters?: unknown };
       } catch {
         reportSilentFallback(new Error("Malformed Anthropic JSON"), {
           feature: "cron-compound-promote",
@@ -423,16 +470,16 @@ export async function cronCompoundPromoteHandler({
         return { clusters: [] as Cluster[], truncated: false };
       }
 
-      if (!Array.isArray(parsed)) {
+      if (!Array.isArray(parsed.clusters)) {
         reportSilentFallback(new Error("Anthropic response is not array"), {
           feature: "cron-compound-promote",
           op: "anthropic-cluster-shape-invalid",
-          message: "Anthropic response is not a JSON array",
+          message: "Anthropic response has no clusters array",
         });
         return { clusters: [] as Cluster[], truncated: false };
       }
 
-      return { clusters: (parsed as Cluster[]).slice(0, weekCapResult.remaining), truncated: false };
+      return { clusters: (parsed.clusters as Cluster[]).slice(0, weekCapResult.remaining), truncated: false };
     }, MAX_RUN_DURATION_MS));
 
     if (clusterResult.clusters.length === 0 || clusterResult.truncated) {

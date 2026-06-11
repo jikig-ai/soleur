@@ -22,7 +22,6 @@
 // a fallback would keep the monitor green while #releases stays dead.
 
 import { inngest } from "@/server/inngest/client";
-import { extractModelJson } from "@/server/model-json";
 import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
@@ -48,6 +47,31 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 const ANTHROPIC_MODEL = EXECUTION_MODEL;
 const ANTHROPIC_MAX_TOKENS = 2048;
 const ANTHROPIC_TIMEOUT_MS = 60_000;
+// Structured-output schema (#5186): guarantees schema-valid JSON so the response
+// needs no fence-stripping. `additionalProperties: false` is REQUIRED on every
+// object; numeric/array constraints (maxItems) are NOT supported by the API —
+// the MAX_HIGHLIGHTS cap stays a post-parse TS slice below, and the eligible-tag
+// filter stays load-bearing (the model can still emit an out-of-window tag).
+const CURATE_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["highlights"],
+  properties: {
+    highlights: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tag", "title", "why"],
+        properties: {
+          tag: { type: "string" },
+          title: { type: "string" },
+          why: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
 // Raw bodies are bounded BEFORE the PII regexes run: EMAIL_RE is O(n²) and a
 // 125k-char body (GitHub's ceiling) measures ~17s of synchronous regex —
 // inside the shared Next.js process that is an event-loop stall for the whole
@@ -307,6 +331,7 @@ async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlig
     maxTokens: ANTHROPIC_MAX_TOKENS,
     messages: [{ role: "user", content: buildCuratePrompt(releases) }],
     timeoutMs: ANTHROPIC_TIMEOUT_MS,
+    outputConfig: { format: { type: "json_schema", schema: CURATE_OUTPUT_SCHEMA } },
   });
   if (stopReason === "max_tokens") {
     // The curate step's catch mirrors this to Sentry — no duplicate warn.
@@ -314,7 +339,8 @@ async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlig
   }
   if (!text) throw new Error("empty anthropic response");
 
-  const parsed = JSON.parse(extractModelJson(text)) as { highlights?: unknown };
+  // Structured output guarantees schema-valid JSON — parse directly, no fence strip.
+  const parsed = JSON.parse(text) as { highlights?: unknown };
   if (!parsed || !Array.isArray(parsed.highlights)) {
     throw new Error("anthropic response shape invalid");
   }

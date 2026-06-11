@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { parseAtMentions, routeMessage } from "@/server/domain-router";
 
 describe("parseAtMentions", () => {
@@ -98,5 +98,81 @@ describe("routeMessage", () => {
       "fake-api-key",
     );
     expect(result).toEqual({ leaders: ["cto"], source: "mention" });
+  });
+});
+
+// #5186: the classify (auto) path had ZERO coverage — parseAtMentions and the
+// mention-override branch both return before classifyMessage's fetch is reached.
+// These fetch-mock tests pin the structured-output migration: the request body
+// carries output_config with the json_schema, parsed.leaders is extracted +
+// validIds-filtered + sliced, and the ["cpo"] fallback fires on failure.
+describe("routeMessage classify (auto) path", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  function anthropicResponse(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), { status });
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("sends output_config json_schema and extracts + filters parsed.leaders", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [{ type: "text", text: '{"leaders":["cmo","not-a-leader"]}' }],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("What is our marketing strategy?", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cmo"], source: "auto" });
+    // The request body carries the structured-output schema.
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string);
+    expect(sent.output_config?.format?.type).toBe("json_schema");
+    expect(sent.output_config.format.schema.properties).toHaveProperty("leaders");
+  });
+
+  test("caps extracted leaders at MAX_LEADERS_PER_MESSAGE", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [{ type: "text", text: '{"leaders":["cmo","cto","clo","cfo"]}' }],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("Plan the next quarter", "fake-api-key");
+
+    expect(result.source).toBe("auto");
+    expect(result.leaders).toHaveLength(3);
+    expect(result.leaders).toEqual(["cmo", "cto", "clo"]);
+  });
+
+  test("falls back to [cpo] on a non-ok response", async () => {
+    fetchSpy.mockResolvedValue(anthropicResponse({}, 500));
+
+    const result = await routeMessage("Help me with something", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cpo"], source: "auto" });
+  });
+
+  test("falls back to [cpo] when the model returns unparseable text", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [{ type: "text", text: "not json at all" }],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("Help me with something", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cpo"], source: "auto" });
   });
 });
