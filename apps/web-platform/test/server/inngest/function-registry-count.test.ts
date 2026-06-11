@@ -215,4 +215,22 @@ describe("Inngest function registry — drift guards", () => {
     const phantomTargets = [...wfTargets].filter((t) => !tfResources.has(t)).sort();
     expect(phantomTargets).toEqual([]);
   });
+
+  // #5159: serve() must pin serveHost to the canonical public origin so EVERY
+  // registration (boot, --poll-interval sync, loopback re-register PUT) reports
+  // the public serve URL. Without this, a loopback PUT registers
+  // http://127.0.0.1:3000 — accepted (HTTP 200) but never cron-planned (the
+  // 2026-06-11 AC15 failure, surfaced by #5178's inngest_register_http=200 +
+  // inngest_crons:{} diagnostic). serveHost MUST track NEXT_PUBLIC_APP_URL (the
+  // canonical origin), NOT a hardcoded host, and MUST pair with servePath.
+  it("(g) route.ts pins serveHost from NEXT_PUBLIC_APP_URL + servePath (#5159)", () => {
+    expect(routeSrc).toMatch(
+      /const SERVE_HOST\s*=\s*process\.env\.NEXT_PUBLIC_APP_URL/,
+    );
+    expect(routeSrc).toMatch(/serveHost:\s*SERVE_HOST/);
+    expect(routeSrc).toMatch(/servePath:\s*["']\/api\/inngest["']/);
+    // No hardcoded production host literal in the serve config — it must follow
+    // the env so a domain change does not silently desync.
+    expect(routeSrc).not.toMatch(/serveHost:\s*["']https?:\/\//);
+  });
 });
