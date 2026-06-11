@@ -53,10 +53,18 @@ jobs:
           OUT="$(bash plugins/soleur/skills/model-launch-review/scripts/audit-models.sh --detect 2>&1)"
           RC=$?
           set -e
-          if [ "$RC" -ne 10 ]; then
-            echo "No model drift (rc=$RC)."
+          if [ "$RC" -eq 0 ]; then
+            echo "No model drift."
             exit 0
+          elif [ "$RC" -ne 10 ]; then
+            echo "audit-models.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
           fi
+          # rc=10 → drift; file/update one idempotent model-drift issue.
+          gh label create model-drift --color FBCA04 \
+            --description "Stale model IDs / pin / pricing drift (model-launch-review)" \
+            --force >/dev/null 2>&1 || true
           {
             echo "Stale Anthropic model IDs were detected in config-class files."
             echo
@@ -68,15 +76,15 @@ jobs:
             echo "model-ID swaps into a CI-gated PR and flag pin/pricing/tier-map items."
             echo
             echo "_Filed automatically by rule-audit.yml model-drift detection (#5100)._"
-          } > /tmp/model-drift-body.md
+          } > "$RUNNER_TEMP/model-drift-body.md"
           EXISTING="$(gh issue list --label model-drift --state open --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body-file /tmp/model-drift-body.md
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/model-drift-body.md"
             echo "Updated existing model-drift issue #$EXISTING."
           else
             gh issue create --label model-drift \
               --title "model-drift: stale Anthropic model IDs in config" \
-              --body-file /tmp/model-drift-body.md
+              --body-file "$RUNNER_TEMP/model-drift-body.md"
           fi
 
       - name: Email notification (failure)

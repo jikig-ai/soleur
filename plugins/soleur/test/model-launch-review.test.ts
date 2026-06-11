@@ -135,7 +135,7 @@ describe("model-launch-review --detect mode (AC11 cron signal)", () => {
   test("exits non-zero with drift, zero when clean", () => {
     const dirty = makeFixtureRoot();
     const rDirty = run(["--detect"], dirty);
-    expect(rDirty.status).not.toBe(0);
+    expect(rDirty.status).toBe(10); // contract: exit 10 = drift (rule-audit.yml depends on it)
     rmSync(dirty, { recursive: true, force: true });
 
     const clean = mkdtempSync(join(tmpdir(), "mlr-clean2-"));

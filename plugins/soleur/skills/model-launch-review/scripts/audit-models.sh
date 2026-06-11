@@ -30,6 +30,7 @@ done
 if [[ -z "$ROOT" ]]; then
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 fi
+ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
 
 # --- current landscape (2026-06) — update at each model launch ---
 # Auto-fixable stale IDs map to a current same-tier ID (mechanical, same-tier bump).
@@ -50,6 +51,7 @@ collect_config_hits() {
   grep -rEl "$re" "$ROOT" \
     --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next \
     --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive \
+    --exclude-dir=community \
     --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null \
     | grep -vE "$EXCLUDE_RE" || true
 }
@@ -76,7 +78,9 @@ if [[ "$MODE" == "fix" ]]; then
     tmp="$(mktemp)"
     cp "$f" "$tmp"
     for from in "${AUTOFIX_FROM[@]}"; do
-      sed -i "s/${from}/${AUTOFIX_TO}/g" "$f"
+      # anchored: preserve the trailing char so a longer/dated variant
+      # (e.g. claude-opus-4-7-20260101) is NOT corrupted by a prefix swap.
+      sed -i -E "s/${from}([^0-9A-Za-z-]|\$)/${AUTOFIX_TO}\1/g" "$f"
     done
     after=$(wc -l < "$f")
     # deletion guard: a 1-for-1 ID swap must not change line count materially.
