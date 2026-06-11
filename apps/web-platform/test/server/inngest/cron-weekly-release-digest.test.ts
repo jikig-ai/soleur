@@ -268,6 +268,39 @@ describe("sanitizeReleases + buildCuratePrompt", () => {
     expect(deterministicFallback(sanitized)[0].why).not.toContain("octocat");
   });
 
+  it("derives titles from the first changelog line when the release name is a bare version", () => {
+    // Live failure class (operator report 2026-06-11): plugin releases are
+    // named by their tag, so the fallback digest posted bare version strings.
+    const raw = mkRelease({
+      tag_name: "v3.148.0",
+      name: "v3.148.0",
+      body: "## Changelog\n- feat: model-tier optimization via workflow call-site tiering (#5096)\n- internal detail",
+    });
+    const sanitized = sanitizeReleases([raw]);
+    expect(sanitized[0].title).toBe(
+      "feat: model-tier optimization via workflow call-site tiering (#5096)",
+    );
+    // Rank improves too: the derived feat: title sorts first in the fallback.
+    expect(deterministicFallback(sanitized)[0].why).toContain("model-tier optimization");
+  });
+
+  it("keeps the version title when the body is empty (nothing better to derive)", () => {
+    const raw = mkRelease({ tag_name: "v3.148.1", name: "v3.148.1", body: "" });
+    expect(sanitizeReleases([raw])[0].title).toBe("v3.148.1");
+  });
+
+  it("does NOT mine security-sensitive bodies for titles (down-detail holds)", () => {
+    const raw = mkRelease({
+      tag_name: "v3.148.2",
+      name: "v3.148.2",
+      body: "## Changelog\n- fix: patch xss exploit detail at parser offset 42",
+    });
+    const sanitized = sanitizeReleases([raw]);
+    expect(sanitized[0].securitySensitive).toBe(true);
+    expect(sanitized[0].title).toBe("v3.148.2");
+    expect(sanitized[0].title).not.toContain("exploit");
+  });
+
   it("does NOT down-detail releases merely mentioning 'source' (word-boundary, perf note)", () => {
     const raw = mkRelease({
       name: "feat: open source the resource loader",

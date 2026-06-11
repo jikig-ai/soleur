@@ -142,17 +142,42 @@ function stripPii(s: string): string {
   return s.replace(CO_AUTHORED_RE, "").replace(EMAIL_RE, "").replace(HANDLE_RE, "");
 }
 
+// Release names for plugin/web releases are usually just the version tag
+// (gh release create defaults the title to the tag), so a bare-version name
+// carries zero reader value — the fallback digest would post "• v3.148.0"
+// (the 2026-06-11 operator report). When the name is version-shaped, the
+// first changelog line (the squashed PR title) is the real content.
+const VERSION_ONLY_TITLE_RE = /^[a-z-]*v?\d[\w.-]*$/i;
+const MAX_DERIVED_TITLE_CHARS = 150;
+
+function deriveTitle(base: string, body: string): string {
+  if (!VERSION_ONLY_TITLE_RE.test(base)) return base;
+  for (const raw of body.split("\n")) {
+    const line = raw.trim().replace(/^[-*]\s+/, "");
+    if (!line || line.startsWith("#")) continue;
+    // Strip BEFORE slicing — truncation could bisect an email and leave a
+    // local-part fragment the regexes no longer match (stripPii is
+    // idempotent, so the caller's wrapper strip is harmless). A line that
+    // strips to empty (pure Co-Authored-By) falls back to the version.
+    const derived = stripPii(line).trim().slice(0, MAX_DERIVED_TITLE_CHARS);
+    return derived || base;
+  }
+  return base;
+}
+
 // PII-strip (spec TR4: author dropped; @handles, emails, Co-Authored-By
 // lines removed — release bodies derive from PR-body Changelogs which embed
 // both) + security down-detail (spec TR2: matching releases render
 // title-only; the body is withheld from the LLM input so generated prose
-// cannot widen an exploit window) + per-release truncation.
+// cannot widen an exploit window — so security bodies are NEVER mined for
+// titles either) + per-release truncation.
 export function sanitizeReleases(releases: RawGithubRelease[]): SanitizedRelease[] {
   return releases.map((r) => {
-    const title = stripPii(r.name || r.tag_name).trim();
     // Pre-bound BEFORE regexing — see MAX_RAW_BODY_CHARS rationale.
     const rawBody = (r.body ?? "").slice(0, MAX_RAW_BODY_CHARS);
     const securitySensitive = SECURITY_DOWN_DETAIL_RE.test(`${r.name ?? ""}\n${rawBody}`);
+    const base = (r.name || r.tag_name).trim();
+    const title = stripPii(securitySensitive ? base : deriveTitle(base, rawBody)).trim();
     const body = securitySensitive
       ? ""
       : stripPii(rawBody).slice(0, MAX_RELEASE_BODY_CHARS);
