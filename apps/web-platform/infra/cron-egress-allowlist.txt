@@ -9,7 +9,8 @@
 # Grep-enumerated from runtime code, NOT intuited (sweep-class discipline).
 # Evidence per host:
 #
-# claude eval + BYOK validation (token-validators.ts:13)
+# claude eval + BYOK validation (token-validators.ts:13); direct Messages API
+# calls (cron-compound-promote.ts; cron-weekly-release-digest.ts curate step)
 api.anthropic.com
 # git clone/push over https (buildAuthenticatedCloneUrl, _cron-shared.ts:107)
 github.com
@@ -25,7 +26,8 @@ api.x.com
 api.linkedin.com
 # social writes + BYOK validation (token-validators.ts:54)
 bsky.social
-# community webhooks (discord notify; weekly-analytics POST)
+# community webhooks (discord notify; weekly-analytics POST;
+# cron-weekly-release-digest.ts #releases digest via postDiscordWebhook)
 discord.com
 # analytics fetch (scripts/weekly-analytics.sh:25; token-validators.ts:26)
 plausible.io

@@ -216,6 +216,43 @@ export async function postSentryHeartbeat(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Discord webhook write boundary (#5080 — hr-write-boundary-sentinel-sweep)
+// ---------------------------------------------------------------------------
+// Shared helper for Discord write sites: mentions are suppressed at the
+// API level by construction (allowed_mentions parse:[] — sed-stripping is
+// bypassable, see 2026-03-05 learning), and the webhook URL is never logged
+// or interpolated into errors (fetch rejections are rethrown redacted).
+// All in-repo cron Discord writes route through here (weekly-analytics
+// notify-kpi-miss migrated in #5122).
+const DISCORD_WEBHOOK_TIMEOUT_MS = 10_000;
+
+export async function postDiscordWebhook(args: {
+  webhookUrl: string;
+  content: string;
+  username?: string;
+}): Promise<{ ok: boolean; status: number }> {
+  try {
+    const resp = await fetch(args.webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: args.content,
+        ...(args.username ? { username: args.username } : {}),
+        allowed_mentions: { parse: [] },
+      }),
+      signal: AbortSignal.timeout(DISCORD_WEBHOOK_TIMEOUT_MS),
+    });
+    return { ok: resp.ok, status: resp.status };
+  } catch (err) {
+    // Rethrow redacted: undici's URL-parse/network TypeErrors embed the full
+    // webhook URL (a write credential) in e.message — never let it reach a
+    // logger or Sentry payload (the "never logged" guarantee above).
+    const e = err as Error;
+    throw new Error(`Discord webhook fetch failed (${e.name})`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tier-2 deferral guard (#5018 — hook-primary cron containment, D6)
 // ---------------------------------------------------------------------------
 // These claude-spawning crons need Bash that cannot be expressed as a finite

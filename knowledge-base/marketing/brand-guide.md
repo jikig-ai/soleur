@@ -282,6 +282,16 @@ Scope-aware typography: the **marketing surface** (Eleventy site at `plugins/sol
 - Example announcement: "New: SEO + AEO for your docs site. One skill, three sub-commands. Ship it."
 - Example reply: "Good question. The compound skill handles that -- docs here: [link]"
 
+#### Release Digest
+
+Automated weekly post to #releases (Fridays). These are operational rules for unattended generation — follow exactly:
+
+- **Format:** 3-5 highlight bullets, each one sentence in the shape "what shipped + why it matters to a founder." Close with exactly one remainder line: "…plus N more releases, vA → vB." Total post ≤2000 characters. No @-mentions, no contributor names, no commit hashes, no links unless they appear in the release notes.
+- **Selection rubric:** rank candidate releases by (1) founder impact — something a user can now do, stop doing, or stop worrying about; (2) breadth — affects most users, not one niche config; (3) novelty — new capability beats fix beats chore. Never rank by commit count, diff size, or release frequency.
+- **Tone:** declarative, concrete, builder-to-builder. Lead each bullet with the outcome, not the component name. State only what shipped — no roadmap promises, no hype adjectives ("game-changing," "massive"), no "just/simply," no "AI-powered." Use a number only if it appears verbatim in the source release notes. Structural emoji (arrows, checkmarks) sparingly; decorative emoji never.
+- **Example highlight:** "Release notifications now land in Slack instead of Discord DMs — your team sees ships where they already work."
+- **Quiet week (zero user-facing releases — internal-infra-only weeks count as quiet):** post one line only, e.g. "Quiet week at the forge — heads-down on the next release. See you next Friday." Never pad with filler highlights or restate old releases as new.
+
 ### GitHub
 
 - Maximum technical precision. No marketing language in issues or PRs.
