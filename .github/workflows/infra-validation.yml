@@ -162,6 +162,9 @@ jobs:
       - name: Run cron-egress firewall drift-guard
         run: bash apps/web-platform/infra/cron-egress-firewall.test.sh
 
+      - name: Run server.tf remote-exec set -e drift-guard
+        run: bash apps/web-platform/infra/server-tf-set-e.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:

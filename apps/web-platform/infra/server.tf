@@ -96,6 +96,7 @@ resource "terraform_data" "disk_monitor_install" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "chmod +x /usr/local/bin/disk-monitor.sh",
       "printf 'RESEND_API_KEY=%s\\n' '${var.resend_api_key}' > /etc/default/disk-monitor",
       "chmod 600 /etc/default/disk-monitor",
@@ -135,6 +136,7 @@ resource "terraform_data" "resource_monitor_install" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "chmod +x /usr/local/bin/resource-monitor.sh",
       "printf 'RESEND_API_KEY=%s\\n' '${var.resend_api_key}' > /etc/default/resource-monitor",
       "chmod 600 /etc/default/resource-monitor",
@@ -174,6 +176,7 @@ resource "terraform_data" "fail2ban_tuning" {
   # cloud-init provisioning) the install branch is skipped.
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "dpkg -s fail2ban >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq fail2ban; }",
       # Positive post-install re-verification mirrors the cloud-init audit
       # (see runcmd in cloud-init.yml). Catches the rare case where apt
@@ -194,6 +197,7 @@ resource "terraform_data" "fail2ban_tuning" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "chown root:root /etc/fail2ban/jail.d/soleur-sshd.local",
       "chmod 0644 /etc/fail2ban/jail.d/soleur-sshd.local",
       # Reload picks up jail.d drop-ins without dropping active bans; fall back
@@ -251,6 +255,7 @@ resource "terraform_data" "journald_persistent" {
   # fail2ban_tuning pre-`file` remote-exec that guarantees its target dir exists.
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "mkdir -p /etc/systemd/journald.conf.d",
     ]
   }
@@ -262,6 +267,7 @@ resource "terraform_data" "journald_persistent" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "chown root:root /etc/systemd/journald.conf.d/00-soleur.conf",
       "chmod 0644 /etc/systemd/journald.conf.d/00-soleur.conf",
       # Create the persistent journal dir with journald's expected ownership +
@@ -443,6 +449,7 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       # Render hooks.json from the secret-bearing local value (base64 so the
       # interpolated content survives the inline string; sensitive interpolation
       # in remote-exec is the same mechanism disk_monitor_install uses for
@@ -603,6 +610,7 @@ resource "terraform_data" "docker_seccomp_config" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "mkdir -p /etc/docker/seccomp-profiles",
     ]
   }
@@ -614,6 +622,7 @@ resource "terraform_data" "docker_seccomp_config" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       # Ubuntu 24.04 kernel restricts uid_map writes inside unprivileged user
       # namespaces even with apparmor=unconfined. Without this sysctl, bwrap
       # (the Claude Code Bash sandbox) cannot mount /proc and EVERY Bash tool
@@ -657,6 +666,7 @@ resource "terraform_data" "apparmor_bwrap_profile" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "apparmor_parser -r /etc/apparmor.d/soleur-bwrap",
       "echo 'AppArmor profile soleur-bwrap loaded'",
     ]
@@ -685,6 +695,7 @@ resource "terraform_data" "orphan_reaper_install" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "chmod +x /usr/local/bin/orphan-reaper.sh",
       "cat > /etc/systemd/system/orphan-reaper.service << 'UNITEOF'\n[Unit]\nDescription=Orphaned workspace directory reaper\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/orphan-reaper.sh\nUNITEOF",
       "cat > /etc/systemd/system/orphan-reaper.timer << 'TIMEREOF'\n[Unit]\nDescription=Run orphan reaper every 6 hours\n\n[Timer]\nOnBootSec=10min\nOnUnitActiveSec=6h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\nTIMEREOF",

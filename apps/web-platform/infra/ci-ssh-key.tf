@@ -77,6 +77,7 @@ resource "terraform_data" "root_authorized_keys" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "mkdir -p /root/.ssh",
       "chmod 700 /root/.ssh",
       "touch /root/.ssh/authorized_keys",
