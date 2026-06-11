@@ -1,5 +1,6 @@
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { createChildLogger } from "./logger";
+import { extractModelJson } from "./model-json";
 
 const log = createChildLogger("domain");
 
@@ -155,7 +156,7 @@ Respond with ONLY a JSON array like ["cmo","clo"]. No explanation.`,
       content: Array<{ type: string; text?: string }>;
     };
     const text = data.content[0]?.type === "text" ? (data.content[0].text ?? "") : "";
-    const parsed = JSON.parse(text.trim()) as string[];
+    const parsed = JSON.parse(extractModelJson(text)) as string[];
 
     // Validate that returned IDs are actual leaders
     const validIds = new Set<string>(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
