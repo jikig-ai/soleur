@@ -226,8 +226,9 @@ logs:
   where: pino structured logs (logger.info/warn) mirrored to Sentry breadcrumbs; fn="cron-stale-deferred-scope-outs"
   retention: per existing Sentry/pino-mirror retention (unchanged)
 discoverability_test:
-  command: "Inngest dashboard: send event cron/stale-deferred-scope-outs.manual-trigger with { data: { dry_run: true } }; confirm clean heartbeat in Sentry Crons monitor scheduled-stale-deferred-scope-outs (NO ssh)"
-  expected_output: "monitor shows an ok check-in; no new error event for issue 448a4173… on a transient-blip run"
+  command: curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: "401"
+  note: "401 (signing-gated) proves the Inngest serve route hosting cron-stale-deferred-scope-outs is deployed and DNS-reachable without SSH; a DNS failure (curl 6) or 404 would mean the function surface is absent. End-to-end resilience is confirmed post-merge by the next daily cron fire (0 12 * * *) producing a clean Sentry Crons heartbeat with no recurrence of issue 448a4173."
 ```
 
 ## Domain Review
