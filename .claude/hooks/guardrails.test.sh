@@ -24,10 +24,20 @@ mk_payload() {
 }
 
 # Returns the permissionDecision or "<none>" when the hook emits no JSON (allow).
+# Runs the hook from the non-git $tmp CWD (not the test process CWD). This
+# isolates the require-milestone / block-stash gates under test from the
+# ORTHOGONAL, branch-dependent block-commit-on-main gate: a `git commit`-based
+# fixture (AC1/AC3/AC4) resolves its branch from the hook's CWD, so on the
+# `main` branch (post-merge CI) block-commit-on-main denies the commit and masks
+# the gate the fixture is actually exercising. A non-git CWD makes branch
+# resolution empty → block-commit-on-main no-ops → the fixture is branch- and
+# environment-independent (passes identically on a feature branch and on main).
+# See #5192 — these fixtures passed on a feature-branch worktree but failed on
+# main-CI until this isolation landed.
 decision_of() {
   local cmd="$1" tmp; tmp="$(mktemp -d)"
   local out
-  out="$(mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
+  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
   rm -rf "$tmp"
   # An allow is empty hook output (no JSON emitted); normalize to "<none>".
   if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
