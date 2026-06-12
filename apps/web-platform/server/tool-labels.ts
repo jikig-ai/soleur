@@ -278,3 +278,30 @@ export function buildToolUseWSMessage(args: {
     label: buildToolLabel(args.name, args.input, args.workspacePath),
   };
 }
+
+/**
+ * #5214 — build the canonical `tool_progress` heartbeat WS message for the
+ * cc-dispatcher's `onToolProgress` forward. Shared in `tool-labels.ts` for the
+ * same reason as {@link buildToolUseWSMessage} (#3235): a future schema change
+ * to the `tool_progress` wire shape flows through one edit. Pins the #2138
+ * invariant — the raw SDK `toolName` is routed through `buildToolLabel` (human
+ * label only) and is intentionally NOT placed on the wire (information-
+ * disclosure mitigation, see PR #2115). `SDKToolProgressMessage` carries no
+ * `tool_input`, so `buildToolLabel(toolName, undefined, …)` falls to
+ * `FALLBACK_LABELS` — a fine heartbeat label (mirrors `agent-runner.ts:1944`).
+ */
+export function buildToolProgressWSMessage(args: {
+  toolName: string;
+  elapsedSeconds: number;
+  toolUseId: string;
+  workspacePath: string | undefined;
+  leaderId: DomainLeaderId;
+}): WSMessage {
+  return {
+    type: "tool_progress",
+    leaderId: args.leaderId,
+    toolUseId: args.toolUseId,
+    toolName: buildToolLabel(args.toolName, undefined, args.workspacePath),
+    elapsedSeconds: args.elapsedSeconds,
+  };
+}

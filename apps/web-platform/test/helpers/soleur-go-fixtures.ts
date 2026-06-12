@@ -402,17 +402,33 @@ export function createMockQueryLean(sessionId = "sess-1") {
 export function makeRecordingEvents(): DispatchEvents & {
   _ended: WorkflowEnd[];
   _tools: Array<{ name: string; input: Record<string, unknown> }>;
+  _progress: Array<{
+    toolUseId: string;
+    toolName: string;
+    elapsedSeconds: number;
+  }>;
 } {
   const ended: WorkflowEnd[] = [];
   const tools: Array<{ name: string; input: Record<string, unknown> }> = [];
+  // #5214 — captures `onToolProgress` heartbeat emits (raw, un-debounced at
+  // the runner boundary). Call sites that ignore progress simply never read
+  // `_progress`; the optional `onToolProgress` field keeps existing recorders
+  // behavior-neutral.
+  const progress: Array<{
+    toolUseId: string;
+    toolName: string;
+    elapsedSeconds: number;
+  }> = [];
   return {
     onText: () => {},
     onToolUse: (b) => tools.push(b),
+    onToolProgress: (b) => progress.push(b),
     onWorkflowDetected: () => {},
     onWorkflowEnded: (e) => ended.push(e),
     onResult: () => {},
     _ended: ended,
     _tools: tools,
+    _progress: progress,
   };
 }
 

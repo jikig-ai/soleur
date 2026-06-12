@@ -141,7 +141,7 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 // (the only verified sandbox-readable allowWrite dir); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
-import { buildToolUseWSMessage } from "./tool-labels";
+import { buildToolProgressWSMessage, buildToolUseWSMessage } from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -2445,6 +2445,14 @@ export async function dispatchSoleurGo(
     }
   }
 
+  // #5214 — per-`toolUseId` debounce for the `tool_progress` forward. The SDK
+  // emits heartbeats every few seconds; the client only needs one per 5s to
+  // reset its 45s watchdog. Scoped to THIS dispatch (per-call cleanup model —
+  // no module-level cache, so no eviction concern) and keyed by `toolUseId` so
+  // separate tools don't share a window. Mirrors `agent-runner.ts:1864-1865`.
+  const TOOL_PROGRESS_DEBOUNCE_MS = 5_000;
+  const toolProgressLastSentAt = new Map<string, number>();
+
   const events: DispatchEvents = {
     onText: (text) => {
       // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
@@ -2469,6 +2477,38 @@ export async function dispatchSoleurGo(
         conversationId,
         send: (frame) => sendToClient(userId, frame),
       });
+    },
+    onToolProgress: (block) => {
+      // #5214 — forward the runner's mid-tool heartbeat to the client so the
+      // client-side stuck-watchdog (STUCK_TIMEOUT_MS, 45s) is fed during a
+      // long single-tool execution. Without this, a >90s tool flips the
+      // cc_router bubble to a terminal `error` state. Mirrors the legacy
+      // agent-runner forward (agent-runner.ts:1928-1946).
+      //
+      // Debounce per `toolUseId`: the first heartbeat for a tool always
+      // forwards; subsequent heartbeats wait for the 5s window to elapse.
+      const now = Date.now();
+      const last = toolProgressLastSentAt.get(block.toolUseId);
+      if (last === undefined || now - last >= TOOL_PROGRESS_DEBOUNCE_MS) {
+        toolProgressLastSentAt.set(block.toolUseId, now);
+        // `buildToolProgressWSMessage` pins the #2138 invariant: the raw SDK
+        // tool name is routed through `buildToolLabel` (human label only) and
+        // never placed on the wire. Shared with the `tool_use` forward shape.
+        sendToClient(
+          userId,
+          buildToolProgressWSMessage({
+            toolName: block.toolName,
+            elapsedSeconds: block.elapsedSeconds,
+            toolUseId: block.toolUseId,
+            workspacePath,
+            leaderId: CC_ROUTER_LEADER_ID,
+          }),
+        );
+      }
+      // NO debug-event emit for `tool_progress`: it is a heartbeat with no
+      // displayable payload, and `debugEventSchema.kind` has no `tool_progress`
+      // variant (ws-zod-schemas.ts). Parity with agent-runner, which also does
+      // not mirror heartbeats to the debug panel. Do not "fix" this omission.
     },
     onToolUse: (block) => {
       // #2909 FR2 — silent-failure mirror for unregistered platform tools.
