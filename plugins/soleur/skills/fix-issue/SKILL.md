@@ -224,30 +224,45 @@ Note: The auto-merge gate in `scheduled-bug-fixer.yml` independently re-checks f
 
 If any phase fails or a constraint is violated:
 
-1. Comment on the issue explaining what was attempted and why it failed:
+1. Comment on the issue explaining what was attempted and why it failed. The
+   comment body is multi-line, and the containment hook denies multiline
+   `--body` strings, so write the body to a file with the Write tool then pass
+   it via `--body-file` (mirroring the Phase 5 PR-body pattern). Use a
+   **relative path inside the clone** (e.g. `fix-attempt.md`) — the hook's
+   argument-injection guard rejects a `--body-file` path containing `@`, `..`,
+   `/proc`, `/etc`, `/root`, `/home`, `.git`, or `.env`, so a plain relative
+   filename is the safe form. Substitute the concrete `$ISSUE_NUMBER` integer
+   before emitting (the hook tokenizer needs a literal, not a shell variable):
 
 ```bash
-gh issue comment $ISSUE_NUMBER --body "**Bot Fix Attempted**
-
-Attempted an automated fix but could not complete it.
-
-**Reason:** <why the fix failed>
-
-This issue may need a human developer. The bot will not retry this issue."
+# 1. Write fix-attempt.md (relative path inside the worktree) with the Write tool:
+#
+#    **Bot Fix Attempted**
+#
+#    Attempted an automated fix but could not complete it.
+#
+#    **Reason:** <why the fix failed>
+#
+#    This issue may need a human developer. The bot will not retry this issue.
+#
+# 2. Then post it (use the real issue number, e.g. 4321 — not `$ISSUE_NUMBER`):
+gh issue comment <N> --body-file fix-attempt.md
 ```
 
 2. Add the `bot-fix/attempted` label to prevent retry:
 
 ```bash
-gh issue edit $ISSUE_NUMBER --add-label "bot-fix/attempted"
+gh issue edit <N> --add-label "bot-fix/attempted"
 ```
 
-3. If a worktree was created, clean up:
+3. If a worktree was created, clean up. Emit literal worktree/branch paths (the
+   hook denies bare `cd` and `2>/dev/null` redirects; `git worktree`/`git
+   branch` operate on the explicit paths, so neither is needed — the substrate
+   bounds and ships stderr):
 
 ```bash
-cd /path/to/bare/repo/root
-git worktree remove .worktrees/bot-fix-<ISSUE_NUMBER>-<SLUG> --force 2>/dev/null
-git branch -D bot-fix-<ISSUE_NUMBER>-<SLUG> 2>/dev/null
+git worktree remove .worktrees/bot-fix-<N>-<SLUG> --force
+git branch -D bot-fix-<N>-<SLUG>
 ```
 
 4. Exit without creating a PR.
