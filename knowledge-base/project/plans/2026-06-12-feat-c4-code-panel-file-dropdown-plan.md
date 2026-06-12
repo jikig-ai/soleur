@@ -115,43 +115,43 @@ owns; no new data-movement, no external API, no regulated surface.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — No wrap.** `C4CodePanel`'s header root no longer uses `flex-wrap`. Grep:
+- [x] **AC1 — No wrap.** `C4CodePanel`'s header root no longer uses `flex-wrap`. Grep:
   `grep -n "flex-wrap" apps/web-platform/components/kb/c4-shared.tsx` returns **zero** matches
   inside the `C4CodePanel` header (the only current occurrence is the header row at `:445`).
-- [ ] **AC2 — Dropdown file selector.** The file tabs are replaced by a single selector
+- [x] **AC2 — Dropdown file selector.** The file tabs are replaced by a single selector
   control. The control exposes an accessible name (`aria-label="Select C4 source file"` or a
   `<label>`-associated native `<select>`), lists every entry in `data.sources` keys, shows
   the active file, and selecting an entry sets `activeFile` (and loads `data.sources[file]`
   into the editor draft). Verified by a vitest test that renders the panel, asserts the
   selector lists all source keys, fires a selection change, and asserts the editor `value`
   prop updates to the newly-selected source.
-- [ ] **AC3 — Default-file selection preserved.** On mount the panel still defaults to
+- [x] **AC3 — Default-file selection preserved.** On mount the panel still defaults to
   `model.c4` when present, else the first source key (current behavior at `:388-395`). Test
   asserts the selector's initial value is `model.c4` for a fixture containing it.
-- [ ] **AC4 — Font-size + Save unchanged.** The `A−` / `12px` (reset) / `A+` controls and
+- [x] **AC4 — Font-size + Save unchanged.** The `A−` / `12px` (reset) / `A+` controls and
   the **Save** button remain, with the same aria-labels and clamp behavior. The existing
   `c4-code-panel.test.tsx` zoom/save suites (AC1/AC2/AC3/AC7 in that file) continue to pass
   **unmodified** except where they assert the *file-tab* markup (those assertions, if any, are
   updated to the dropdown shape — current test file does NOT assert file tabs, so likely zero
   edits there).
-- [ ] **AC5 — Editor wiring intact.** CodeMirror still receives `[c4SyntaxExtensions,
+- [x] **AC5 — Editor wiring intact.** CodeMirror still receives `[c4SyntaxExtensions,
   codeFontTheme(zoom)]` for `.c4` files; the existing AC4/AC6 editor-wiring tests in
   `c4-code-panel.test.tsx` pass.
-- [ ] **AC6 — README surfaced (owner path).** `app/api/kb/c4/project/route.ts` includes
+- [x] **AC6 — README surfaced (owner path).** `app/api/kb/c4/project/route.ts` includes
   **exactly `README.md`** (`file === "README.md"`, NOT a blanket `.endsWith(".md")` — that would
   also surface the `c4-model.md` view-embed page and any future `.md`) in `sources` in addition
   to `.c4`. The dropdown lists `README.md`. Tested at the route level (which also proves the
   `isPathInWorkspace` + `O_NOFOLLOW` guards stay wired for the `.md` read — a pure-predicate unit
   test would miss that). AC2's `fakeProject()` fixture containing `README.md` also proves the
   dropdown surfaces it.
-- [ ] **AC7 — README rendered read-only via `MarkdownRenderer`.** When the selected file is
+- [x] **AC7 — README rendered read-only via `MarkdownRenderer`.** When the selected file is
   `README.md`, the panel renders it through the existing `components/ui/markdown-renderer.tsx`
   (`MarkdownRenderer`) as a clean early-return branch — **no CodeMirror editor, no Save button,
   no PUT wired** for the `.md`. (Deepen simplicity review: simpler — no conditional
   syntax-strip/Save-disable threaded through the editor — and better UX than a monospace
   line-numbered read-only editor for a directory index.) Test asserts: selecting `README.md` →
   no Save button present, the CodeMirror mock is NOT rendered, README content is rendered.
-- [ ] **AC8 — Typecheck + tests green.** `cd apps/web-platform && ./node_modules/.bin/tsc
+- [x] **AC8 — Typecheck + tests green.** `cd apps/web-platform && ./node_modules/.bin/tsc
   --noEmit` passes, and `./node_modules/.bin/vitest run test/c4-code-panel.test.tsx` passes.
 
 > Folded (deepen-plan simplicity review): the former **AC8 (public-path zero-diff)** is now a
