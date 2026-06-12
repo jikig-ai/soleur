@@ -3,14 +3,15 @@ title: "How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secre
 type: engineering-deep-dive
 publish_date: ""
 channels: blog, hackernews, x, linkedin-personal
-status: draft
+status: parked
 pr_reference: "#5089"
 issue_reference: "#5104"
 ---
 
-<!-- To publish: set BOTH publish_date AND status: scheduled. -->
-<!-- TIMING GATE: nothing publishes before PR #5089 is merged (DONE 2026-06-10) AND /soleur:postmerge is green. Confirm deploy applied the egress provisioner before posting. -->
-<!-- Blog draft: plugins/soleur/docs/blog/2026-06-12-ai-agents-cron-without-exfiltrating-secrets.md (fact-checked SHIP, 2026-06-12). -->
+<!-- PARKED 2026-06-12 (operator decision): not distributing — too technical for the current audience. The blog post was UNPUBLISHED from the docs site (moved out of plugins/soleur/docs/blog/ so it no longer renders at /blog/). Draft retained for later revival. -->
+<!-- To revive: move the blog draft back to plugins/soleur/docs/blog/ to republish, then set BOTH publish_date AND status: scheduled here. -->
+<!-- TIMING GATE (still applies if revived): nothing publishes before PR #5089 is merged (DONE 2026-06-10) AND /soleur:postmerge is green (DONE 2026-06-12). -->
+<!-- Blog draft (UNPUBLISHED, parked): knowledge-base/marketing/blog-drafts/2026-06-12-ai-agents-cron-without-exfiltrating-secrets.md (fact-checked SHIP, 2026-06-12). -->
 
 ## P1 — Primary piece (engineering deep-dive)
 
