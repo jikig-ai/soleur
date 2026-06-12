@@ -22,6 +22,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -163,7 +165,11 @@ export async function cronCampaignCalendarHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

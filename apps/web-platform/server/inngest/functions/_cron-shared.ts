@@ -332,26 +332,19 @@ export async function postAnthropicMessage(args: {
 // session-secret read-deny (see CRON_MCP_ALLOWLISTS / cron-bash-allowlist-hook).
 // Each restored cron carries a finite CRON_BASH_ALLOWLISTS entry and mints a
 // narrowed token (issue-creators mint ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).
-// The remaining EIGHT stay deferred, ALL gated on #5138 (stale ci/* bot-PR
-// watchdog — still OPEN/unbuilt): the seven `mergeMode:"auto"` crons
+// #5199 (this PR) restored the SEVEN `mergeMode:"auto"` PR-flow crons
 // (campaign-calendar, competitive-analysis, growth-audit, seo-aeo-audit,
-// content-generator, growth-execution, community-monitor) rely on
-// enablePullRequestAutoMerge, which silently disarms on conflict — #5138 MUST
-// land before they restore (community-monitor is NOT firewall-dependent; it is
-// in #5138's literal gated list). cron-bug-fixer fires the same
-// enablePullRequestAutoMerge primitive on bot-fix/* branches, so it carries the
-// identical silent-stale risk despite falling outside #5138's literal ci/* scan.
-// The six PR-flow crons additionally need per-construct Bash-allowlist
-// refinement (evidence-gated — NOT a blanket metachar drop).
+// content-generator, growth-execution, community-monitor) — the PR-5200
+// stale-bot-PR watchdog (issue #5138) landed, removing the gate. Each carries a
+// finite, evidence-gated CRON_BASH_ALLOWLISTS entry and mints
+// DEFAULT_CRON_TOKEN_PERMISSIONS (contents/issues/pull_requests:write — they
+// push + open PRs via safeCommitAndPr) scoped to [REPO_NAME].
+// Only cron-bug-fixer remains deferred: its `bot-fix/*` head pattern is OUTSIDE
+// the #5138/#5200 watchdog's `ci/*` + `self-healing/auto-*` scan, so the
+// silent-auto-merge-disarm class is not yet covered for it (extending that scan
+// is OUT OF SCOPE — keep bug-fixer deferred).
 export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
   "cron-bug-fixer",
-  "cron-campaign-calendar",
-  "cron-community-monitor",
-  "cron-competitive-analysis",
-  "cron-content-generator",
-  "cron-growth-audit",
-  "cron-growth-execution",
-  "cron-seo-aeo-audit",
 ]);
 
 export async function deferIfTier2Cron(args: {

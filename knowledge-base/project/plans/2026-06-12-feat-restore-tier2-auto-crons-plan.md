@@ -258,18 +258,18 @@ Test runner: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] All 7 crons removed from `TIER2_DEFERRED_CRONS`; only `cron-bug-fixer` remains (grep: the Set has exactly 1 member).
-- [ ] All 7 crons present in `CRON_BASH_ALLOWLISTS` with finite, evidence-gated entries; no entry contains `git add`/`git commit`/`git push`/`gh pr create`/`gh pr merge`/`gh api`.
-- [ ] All 7 handlers mint `DEFAULT_CRON_TOKEN_PERMISSIONS` + `repositories: [REPO_NAME]`.
-- [ ] `deferIfTier2Cron` guard retained in all 7 handlers (no-op once out of the set).
-- [ ] `cron-growth-audit.ts` prompt no longer contains `$(date` (substitution removed).
-- [ ] `cron-community-monitor.ts` prompt no longer contains `gh api` (rewritten to `gh issue list --json updatedAt,number` ONLY — no `gh pr list`).
-- [ ] Cross-check: every `gh` verb each rewritten prompt emits appears in that cron's `CRON_BASH_ALLOWLISTS` entry (not just absence-of-`gh api`).
-- [ ] `hn.algolia.com` added to `cron-egress-allowlist.txt` with evidence comment.
-- [ ] Decision A applied consistently: NO allowlist entry contains `npx @11ty/eleventy` or `bash …/validate-seo.sh`/`validate-csp.sh`; `cron-growth-execution` + `cron-seo-aeo-audit` collapse to `ISSUE_CREATOR_BASH_ALLOWLIST`; `registry.npmjs.org` NOT added to the egress allowlist; seo-aeo/growth prompts hardened to defer the build to CI.
-- [ ] New parity + token tests RED before edits, GREEN after.
-- [ ] `cron-safe-commit-parity.test.ts` stays green; full vitest suite for `test/server/inngest/` green; `tsc --noEmit` clean.
-- [ ] `TIER2_DEFERRED_CRONS` block comment + `cloud-scheduled-tasks.md` runbook updated (only bug-fixer deferred).
+- [x] All 7 crons removed from `TIER2_DEFERRED_CRONS`; only `cron-bug-fixer` remains (grep: the Set has exactly 1 member).
+- [x] All 7 crons present in `CRON_BASH_ALLOWLISTS` with finite, evidence-gated entries; no entry contains `git add`/`git commit`/`git push`/`gh pr create`/`gh pr merge`/`gh api`.
+- [x] All 7 handlers mint `DEFAULT_CRON_TOKEN_PERMISSIONS` + `repositories: [REPO_NAME]`.
+- [x] `deferIfTier2Cron` guard retained in all 7 handlers (no-op once out of the set).
+- [x] `cron-growth-audit.ts` prompt no longer contains `$(date` (substitution removed).
+- [x] `cron-community-monitor.ts` prompt no longer contains `gh api` (rewritten to `gh issue list --json updatedAt,number` ONLY — no `gh pr list`).
+- [x] Cross-check: every `gh` verb each rewritten prompt emits appears in that cron's `CRON_BASH_ALLOWLISTS` entry (not just absence-of-`gh api`).
+- [x] `hn.algolia.com` added to `cron-egress-allowlist.txt` with evidence comment.
+- [x] Decision A applied consistently: NO allowlist entry contains `npx @11ty/eleventy` or `bash …/validate-seo.sh`/`validate-csp.sh`; `cron-growth-execution` + `cron-seo-aeo-audit` collapse to `ISSUE_CREATOR_BASH_ALLOWLIST`; `registry.npmjs.org` NOT added to the egress allowlist; seo-aeo/growth prompts hardened to defer the build to CI.
+- [x] New parity + token tests RED before edits, GREEN after.
+- [x] `cron-safe-commit-parity.test.ts` stays green; full vitest suite for `test/server/inngest/` green; `tsc --noEmit` clean.
+- [x] `TIER2_DEFERRED_CRONS` block comment + `cloud-scheduled-tasks.md` runbook updated (only bug-fixer deferred).
 - [ ] PR body uses **Ref #5199** (NOT Closes — bug-fixer remains).
 
 ### Post-merge (operator-automatable via /soleur:ship + /soleur:trigger-cron)
