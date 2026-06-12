@@ -178,6 +178,43 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   // prompts instruct pipe-free cap checks and --body-file (not env vars).
   "cron-agent-native-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
   "cron-legal-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // #5199 — cron-ux-audit's bash surface is issue-creator only. The
+  // /soleur:ux-audit SKILL emits `gh issue list`/`gh issue create`/`gh label`
+  // (verified at Phase 0). It also documents a `gh api … -f body=…` screenshot
+  // attach (SKILL.md §7) — DELIBERATELY EXCLUDED here (same F4a rationale as the
+  // two audit crons above: arbitrary-method `gh api` defeats the exfil defense).
+  // The cron uploads screenshots to the Supabase ux-audit-artifacts bucket
+  // separately (uploadFindings), so the attach is redundant; the issue still
+  // files via `gh issue create --body-file`. The Playwright tools ux-audit needs
+  // are mcp__* (NOT bash) — see CRON_MCP_ALLOWLISTS.
+  "cron-ux-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+};
+
+// #5199 — per-cron mcp__* allowance for the containment hook. The relax-minimal
+// hook denies every mcp__* tool by default (its catch-all); a cron listed here
+// gets EXACTLY the named mcp__* tools, delivered via the same per-cron
+// `cron-allow.txt` file (the hook never sees cronName — see
+// cron-bash-allowlist-hook.mjs `parseAllowlist`). `navigateOriginEnv` names the
+// env var whose URL origin is the ONLY origin `mcp__playwright__browser_navigate`
+// may load (the hook's URL-origin guard) — the load-bearing close on the
+// secret-in-querystring-to-an-allowlisted-host exfil leg the content-blind
+// egress firewall cannot see. A cron ABSENT from this map gets no mcp__* tools
+// (the 2 issue-creator audit crons + roadmap-review stay fully mcp-denied).
+export const CRON_MCP_ALLOWLISTS: Record<
+  string,
+  { tools: string[]; navigateOriginEnv?: string }
+> = {
+  // The 5 Playwright tools declared in cron-ux-audit.ts CLAUDE_CODE_FLAGS.
+  "cron-ux-audit": {
+    tools: [
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_close",
+      "mcp__playwright__browser_wait_for",
+    ],
+    navigateOriginEnv: "NEXT_PUBLIC_APP_URL",
+  },
 };
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
@@ -242,8 +279,15 @@ export function runHookSelfTest(args: {
   spawnCwd: string;
   cronName: string;
   allow: string[];
+  // #5199 — the per-cron mcp__* policy (empty for every cron except ux-audit).
+  // Passed explicitly (not parsed from the file) so the probes cross-check that
+  // the file ACTUALLY delivered the directives: a positive app-origin navigate
+  // probe that the file failed to enable would deny → throw, exactly like the
+  // bash allow[0] probe verifies bash delivery.
+  mcpAllow?: string[];
+  navigateOrigin?: string | null;
 }): void {
-  const { spawnCwd, cronName, allow } = args;
+  const { spawnCwd, cronName, allow, mcpAllow = [], navigateOrigin = null } = args;
   const nodeBin = resolveNodeBin();
   const hookAbs = join(spawnCwd, HOOK_REL_PATH);
   const allowlistAbs = join(spawnCwd, ALLOWLIST_REL_PATH);
@@ -350,6 +394,69 @@ export function runHookSelfTest(args: {
         `tool calls would be unhooked (fail-open per probe D-new-1). Aborting cron.`,
     );
   }
+
+  // #5199 — egress / mcp containment probes. WebFetch is ALWAYS denied (no cron
+  // gets raw web egress). browser_navigate is denied UNLESS this cron pins an
+  // mcp-allow + navigate-origin, in which case the app-origin navigate must
+  // ALLOW (proves the directives were delivered) while an off-origin navigate
+  // and an off-list mcp tool must DENY (proves the relax did not go global —
+  // the cross-cron-negative property, enforced per spawn).
+  const webFetchDenied = run({
+    tool_name: "WebFetch",
+    tool_input: { url: "https://example.com/" },
+  });
+  if (!webFetchDenied.includes('"permissionDecision":"deny"')) {
+    throw new Error(
+      `[${cronName}] containment hook self-test FAILED: WebFetch was NOT denied ` +
+        `(raw egress surface — the hook must deny it for every cron). Aborting cron.`,
+    );
+  }
+  if (mcpAllow.length === 0) {
+    // No mcp relaxation for this cron → browser_navigate must be denied.
+    const navDenied = run({
+      tool_name: "mcp__playwright__browser_navigate",
+      tool_input: { url: navigateOrigin ?? "https://app.soleur.ai/" },
+    });
+    if (!navDenied.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: mcp browser_navigate was ` +
+          `NOT denied for a cron with no mcp-allow section (relax leaked globally). Aborting cron.`,
+      );
+    }
+  } else {
+    if (navigateOrigin) {
+      const navAllowed = run({
+        tool_name: "mcp__playwright__browser_navigate",
+        tool_input: { url: `${navigateOrigin}/` },
+      });
+      if (!navAllowed.includes('"permissionDecision":"allow"')) {
+        throw new Error(
+          `[${cronName}] containment hook self-test FAILED: app-origin browser_navigate ` +
+            `was NOT allowed (mcp-allow/navigate-origin not delivered in this clone). Aborting cron.`,
+        );
+      }
+      const navOffOrigin = run({
+        tool_name: "mcp__playwright__browser_navigate",
+        tool_input: { url: "https://exfil.example.test/collect?x=1" },
+      });
+      if (!navOffOrigin.includes('"permissionDecision":"deny"')) {
+        throw new Error(
+          `[${cronName}] containment hook self-test FAILED: off-origin browser_navigate ` +
+            `was NOT denied (URL-origin guard missing — exfil leg open). Aborting cron.`,
+        );
+      }
+    }
+    const offListMcp = run({
+      tool_name: "mcp__playwright__browser_run_code_unsafe",
+      tool_input: {},
+    });
+    if (!offListMcp.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: an mcp tool outside the ` +
+          `mcp-allow set was NOT denied (relax over-broad). Aborting cron.`,
+      );
+    }
+  }
 }
 
 export async function setupEphemeralWorkspace(args: {
@@ -401,9 +508,37 @@ export async function setupEphemeralWorkspace(args: {
   // cron fail-closes and self-reports FAILED; Tier-2 restores it). Read by the
   // hook from disk; the hook also denies any tool from READING `.claude/`.
   const allow = CRON_BASH_ALLOWLISTS[cronName] ?? [];
+  // #5199 — append the per-cron mcp__* policy as directive lines the hook's
+  // parseAllowlist understands (`mcp-allow <tool>`, `navigate-origin <origin>`).
+  // The origin is resolved from env HERE (not baked) and pinned in the file so
+  // the agent — which cannot read .claude/ — cannot tamper with it.
+  const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
+  let navigateOrigin: string | null = null;
+  const allowlistLines = [...allow];
+  if (mcpEntry) {
+    for (const tool of mcpEntry.tools) allowlistLines.push(`mcp-allow ${tool}`);
+    if (mcpEntry.navigateOriginEnv) {
+      const raw = process.env[mcpEntry.navigateOriginEnv];
+      try {
+        navigateOrigin = raw ? new URL(raw).origin : null;
+      } catch {
+        navigateOrigin = null;
+      }
+      if (!navigateOrigin) {
+        // Refuse to relax browser_navigate without a resolvable origin pin — the
+        // unguarded form is the exfil vector this whole mechanism exists to close.
+        throw new Error(
+          `[${cronName}] cannot resolve navigate-origin from env ` +
+            `${mcpEntry.navigateOriginEnv} (value: ${raw ?? "<unset>"}) — refusing ` +
+            `to relax mcp browser_navigate without an origin pin. Aborting cron.`,
+        );
+      }
+      allowlistLines.push(`navigate-origin ${navigateOrigin}`);
+    }
+  }
   await writeFile(
     join(claudeDir, "cron-allow.txt"),
-    allow.length ? allow.join("\n") + "\n" : "",
+    allowlistLines.length ? allowlistLines.join("\n") + "\n" : "",
     "utf-8",
   );
   await writeFile(
@@ -423,7 +558,13 @@ export async function setupEphemeralWorkspace(args: {
   // canonical exfil payload (and allows this cron's first verb) BEFORE any agent
   // spawns. A throw here aborts the cron → FAILED self-report, never an
   // unprotected run.
-  runHookSelfTest({ spawnCwd, cronName, allow });
+  runHookSelfTest({
+    spawnCwd,
+    cronName,
+    allow,
+    mcpAllow: mcpEntry?.tools ?? [],
+    navigateOrigin,
+  });
 
   return { ephemeralRoot, spawnCwd };
 }

@@ -327,13 +327,22 @@ export async function postAnthropicMessage(args: {
 // #5046 PR-2 restored cron-agent-native-audit + cron-legal-audit: the
 // relax-minimal hook (Task/Skill allow, every Bash layer intact) unblocks
 // exactly the two crons whose ONLY denied construct was the Task catch-all.
-// Each restored cron carries a finite CRON_BASH_ALLOWLISTS entry and mints the
-// narrowed DEFAULT_CRON_TOKEN_PERMISSIONS token. The remaining nine stay
-// deferred: six PR-flow crons (campaign-calendar, competitive-analysis,
-// growth-audit, seo-aeo-audit, content-generator, growth-execution) need
-// per-construct Bash-allowlist refinement (evidence-gated future work — NOT a
-// blanket metachar drop); bug-fixer / community-monitor / ux-audit stay
-// firewall-dependent for non-GitHub egress.
+// #5199 restored cron-ux-audit: the FIRST cron with an mcp__* allowance — a
+// file-driven per-cron `mcp__playwright__*` relaxation + URL-origin guard +
+// session-secret read-deny (see CRON_MCP_ALLOWLISTS / cron-bash-allowlist-hook).
+// Each restored cron carries a finite CRON_BASH_ALLOWLISTS entry and mints a
+// narrowed token (issue-creators mint ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).
+// The remaining EIGHT stay deferred, ALL gated on #5138 (stale ci/* bot-PR
+// watchdog — still OPEN/unbuilt): the seven `mergeMode:"auto"` crons
+// (campaign-calendar, competitive-analysis, growth-audit, seo-aeo-audit,
+// content-generator, growth-execution, community-monitor) rely on
+// enablePullRequestAutoMerge, which silently disarms on conflict — #5138 MUST
+// land before they restore (community-monitor is NOT firewall-dependent; it is
+// in #5138's literal gated list). cron-bug-fixer fires the same
+// enablePullRequestAutoMerge primitive on bot-fix/* branches, so it carries the
+// identical silent-stale risk despite falling outside #5138's literal ci/* scan.
+// The six PR-flow crons additionally need per-construct Bash-allowlist
+// refinement (evidence-gated — NOT a blanket metachar drop).
 export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
   "cron-bug-fixer",
   "cron-campaign-calendar",
@@ -343,7 +352,6 @@ export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
   "cron-growth-audit",
   "cron-growth-execution",
   "cron-seo-aeo-audit",
-  "cron-ux-audit",
 ]);
 
 export async function deferIfTier2Cron(args: {

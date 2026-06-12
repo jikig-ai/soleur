@@ -88,6 +88,15 @@ const SECRET_PATH_PATTERNS = [
   /(^|\/)hosts\.ya?ml$/,
   /(^|\/)run\/secrets(\/|$)/,
   /\.npmrc$/,
+  // #5199 — cron-ux-audit's bot signs in and writes live Supabase access/
+  // refresh tokens to storage-state.json (loaded into the browser context);
+  // tmp/ux-audit/ holds findings + screenshots; the playwright-mcp-profile is
+  // the browser-resident session store. None must be readable by any tool —
+  // else the relaxed cron could Read the session then encode it into an
+  // allowlisted `gh`/`browser_navigate` egress call.
+  /(^|\/)storage-state\.json$/,
+  /(^|\/)tmp\/ux-audit(\/|$)/,
+  /(^|\/)playwright-mcp-profile(\/|$)/,
 ];
 
 // Write/Edit-protected paths: a model rewriting the hook, its allowlist, or the
@@ -311,6 +320,90 @@ function segmentMatchesAllowlist(segment, allowPrefixes) {
   );
 }
 
+// ---- per-cron policy parsing (#5199 — file-driven mcp__* relaxation) --------
+//
+// The hook never receives cronName (its only input is the allowlist FILE path),
+// so per-cron MCP policy MUST be encoded IN the allowlist file. Two directive
+// line shapes extend the bash-prefix format (the rest are bash prefixes):
+//   `mcp-allow <tool-name>`   → that exact mcp__* tool is permitted for this cron
+//   `navigate-origin <origin>`→ the ONLY origin browser_navigate may load
+// A cron whose file carries NO directive lines (every existing cron today) gets
+// an empty mcpAllow set + null navigateOrigin → every mcp__* stays catch-all
+// denied (the cross-cron negative test asserts this). Directives are NOT bash
+// prefixes — they never enter the bash allowlist.
+export function parseAllowlist(lines) {
+  const bash = [];
+  const mcpAllow = new Set();
+  let navigateOrigin = null;
+  for (const line of lines) {
+    const mcpMatch = /^mcp-allow\s+(\S+)$/.exec(line);
+    if (mcpMatch) {
+      mcpAllow.add(mcpMatch[1]);
+      continue;
+    }
+    const originMatch = /^navigate-origin\s+(\S+)$/.exec(line);
+    if (originMatch) {
+      navigateOrigin = originMatch[1];
+      continue;
+    }
+    bash.push(line);
+  }
+  return { bash, mcpAllow, navigateOrigin };
+}
+
+// PREFIX-SHAPED token secrets that must never ride a same-origin URL to the
+// allowlisted origin (defense-in-depth atop the secret-read denials — a
+// secret-in-URL exfil to app.soleur.ai is the residual leg the content-blind
+// egress firewall cannot see). The origin guard below is the load-bearing
+// close; this is a best-effort second layer for the allowed origin.
+// SCOPE/LIMITS: browserNavigateReason scans the path + search + hash (and
+// rejects any userinfo outright), but only matches secrets with a recognizable
+// prefix. Notably it does NOT catch a Supabase REFRESH token, which is an
+// opaque high-entropy string with no fixed prefix; the JWT pattern below
+// catches the Supabase ACCESS token (a JWT) but not the refresh token. The
+// storage-state.json read-deny (SECRET_PATH_PATTERNS) is the primary control
+// keeping both tokens out of the agent's context in the first place; these
+// patterns are not a substitute for it.
+const SECRET_QUERY_PATTERNS = [
+  /eyJ[A-Za-z0-9_-]{16,}/, // JWT / base64url-JSON header (e.g. Supabase ACCESS token; opaque refresh tokens are NOT matchable)
+  /gh[posru]_[A-Za-z0-9]{20,}/, // GitHub PAT / installation / OAuth tokens
+  /github_pat_[A-Za-z0-9_]{20,}/,
+  /sk-ant-[A-Za-z0-9_-]{16,}/, // Anthropic API key
+  /sbp_[A-Za-z0-9]{20,}/, // Supabase access token
+  /sk_(live|test)_[A-Za-z0-9]{16,}/, // Stripe secret key
+  /xox[bapr]-[A-Za-z0-9-]{10,}/, // Slack tokens
+];
+
+// browser_navigate is the only mcp tool that takes an arbitrary URL, so it is
+// the only mcp egress vector. Enforce: a navigate-origin MUST be pinned, the
+// URL MUST parse, carry NO userinfo, its origin MUST equal the pin, and no
+// secret may ride the path / query / fragment. Returns a deny reason, or null
+// when the navigation is safe.
+function browserNavigateReason(toolInput, navigateOrigin) {
+  if (!navigateOrigin)
+    return "browser_navigate denied (no navigate-origin pinned for this cron)";
+  const url = typeof toolInput.url === "string" ? toolInput.url : "";
+  if (!url) return "browser_navigate without a URL";
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "browser_navigate with an unparseable URL";
+  }
+  // Userinfo (`https://<secret>@app.soleur.ai/`) is a same-origin exfil channel
+  // a legit audit navigation never needs — deny outright.
+  if (parsed.username || parsed.password)
+    return "browser_navigate with embedded userinfo (credentials-in-URL)";
+  if (parsed.origin !== navigateOrigin)
+    return `browser_navigate off-origin (${parsed.origin.slice(0, 60)} != pinned origin)`;
+  // Scan path + query + fragment — a secret can ride a path segment to the
+  // allowed origin just as easily as a query param.
+  const scanTarget = parsed.pathname + parsed.search + parsed.hash;
+  if (SECRET_QUERY_PATTERNS.some((re) => re.test(scanTarget)))
+    return "browser_navigate with a secret-bearing URL (path/query/fragment)";
+  return null;
+}
+
 // ---- the decision function (pure; unit-tested) -----------------------------
 
 export function decide(input, allowPrefixes) {
@@ -328,6 +421,11 @@ export function decide(input, allowPrefixes) {
 
   // Deny-all when the allowlist could not be loaded (fail-closed).
   if (allowPrefixes === null) return denyDecision("no allowlist (fail-closed)");
+
+  // Split the file into bash prefixes + the per-cron mcp policy (#5199). A file
+  // with no directive lines yields an empty mcpAllow set → mcp__* stays denied.
+  const { bash: bashPrefixes, mcpAllow, navigateOrigin } =
+    parseAllowlist(allowPrefixes);
 
   switch (tool) {
     case "Bash": {
@@ -348,7 +446,7 @@ export function decide(input, allowPrefixes) {
         // Match the allowlist against the TOKENIZED (dequoted) command, not the
         // raw segment — otherwise a quoted arg like `gh api 'repos/...'` fails
         // the prefix match against `gh api repos/...` (AC4b single-quote fix).
-        if (!segmentMatchesAllowlist(tokens.join(" "), allowPrefixes))
+        if (!segmentMatchesAllowlist(tokens.join(" "), bashPrefixes))
           return denyDecision(`not allowlisted: ${seg.slice(0, 60)}`);
       }
       return allowDecision();
@@ -394,12 +492,26 @@ export function decide(input, allowPrefixes) {
       // tool class still falls through to the deny below). WebFetch/WebSearch/
       // mcp__* remain denied: no restored cron needs them; pure egress surface.
       return allowDecision();
-    default:
-      // Catch-all: WebFetch, WebSearch, any mcp__* tool, anything new.
-      // No restored cron needs these; egress classes stay denied (the L3
-      // firewall is content-blind — this hook remains the secret-in-context
-      // severance per the threat model above).
+    default: {
+      // #5199 — file-driven per-cron mcp__* relaxation. A cron whose allowlist
+      // file lists `mcp-allow <tool>` may use exactly those mcp__* tools; every
+      // OTHER mcp__* tool, plus WebFetch/WebSearch (never mcp-prefixed) and any
+      // new tool class, stays denied. browser_navigate additionally passes the
+      // URL-origin + secret-query guard. A file with no mcp-allow lines (every
+      // existing cron) has an empty set → this whole branch denies, preserving
+      // the original catch-all (the cross-cron negative test asserts this).
+      if (typeof tool === "string" && tool.startsWith("mcp__") && mcpAllow.has(tool)) {
+        if (tool === "mcp__playwright__browser_navigate") {
+          const navReason = browserNavigateReason(ti, navigateOrigin);
+          if (navReason) return denyDecision(navReason);
+        }
+        return allowDecision();
+      }
+      // Catch-all: WebFetch, WebSearch, non-allowlisted mcp__*, anything new.
+      // Egress classes stay denied (the L3 firewall is content-blind — this
+      // hook remains the secret-in-context severance per the threat model).
       return denyDecision(`tool class not permitted: ${tool || "<unknown>"}`);
+    }
   }
 }
 
