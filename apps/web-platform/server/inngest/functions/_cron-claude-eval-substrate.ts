@@ -250,6 +250,38 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "gh label list",
     "gh label create",
   ],
+  // #5199 (final) — cron-bug-fixer, the LAST Tier-2-deferred cron and the widest
+  // bash surface. UNLIKE the 7 auto-crons above, bug-fixer's commit lives in the
+  // fix-issue SKILL (NOT safeCommitAndPr), so this entry legitimately INCLUDES
+  // git/gh-pr PERSISTENCE verbs (cron-safe-commit-parity invariant 3 exempts it —
+  // it sits in EXEMPT, not MIGRATED_ALL). Each verb is evidence-gated to the
+  // EXACT form fix-issue/SKILL.md emits (re-verified at /work); LITERAL forms
+  // only (the SKILL was rewritten in Phase 3.5 to drop eval/$VAR/$(...)/pipe).
+  // allow[0] MUST be a bare-prefix verb (`gh issue view`) — runHookSelfTest runs
+  // it through the real hook and REQUIRES allow before the agent spawns.
+  // EXCLUDED: `gh api` (F4a — arbitrary-method API defeats the exfil defense);
+  // `gh pr merge` (auto-merge is armed node-side via runAutoMergeGate's GraphQL
+  // mutation, a PERSISTENCE_PREFIX forbidden form); `eval`/`node -e`/raw curl
+  // (interpreters/egress the hook denies by design — the rewritten SKILL emits a
+  // literal `./node_modules/.bin/vitest run` instead). `git config`/`git remote`/
+  // `git ls-remote` are NOT here — gitVerbReason denies them unconditionally
+  // (token-bearing remote URL).
+  "cron-bug-fixer": [
+    "gh issue view", // SKILL Phase 1 — gh issue view <N> --json …
+    "gh issue comment", // SKILL Phase 6 — failure-handler comment
+    "gh issue edit", // SKILL Phase 6 — gh issue edit <N> --add-label bot-fix/attempted
+    "gh pr create", // SKILL Phase 5 — gh pr create --title … --body-file <path>
+    "gh pr edit", // SKILL Phase 5.5 — gh pr edit <N> --add-label …
+    "git status", // SKILL Phase 5 — git status --porcelain
+    "git add", // SKILL Phase 5 — git add -- <literal-path> (blanket forms hook-denied)
+    "git commit", // SKILL Phase 5 — git commit -m …
+    "git checkout", // SKILL Phase 3 — worktree-add fallback path
+    "git worktree", // SKILL Phase 3/6 — git worktree add … / remove …
+    "git branch", // SKILL Phase 6 — git branch -D … (cleanup)
+    "git push", // SKILL Phase 5 — git push -u origin … (origin-only via gitVerbReason)
+    "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", // SKILL Phase 3
+    "./node_modules/.bin/vitest run", // SKILL Phase 2/4 — LITERAL test verb (Phase 3.5 rewrite)
+  ],
 };
 
 // #5199 — per-cron mcp__* allowance for the containment hook. The relax-minimal

@@ -56,6 +56,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -633,7 +634,16 @@ export async function cronBugFixerHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      // #5199 — narrow the mint to a least-privilege, repo-scoped token. bug-fixer
+      // pushes + opens PRs (via the fix-issue SKILL), so it needs the WRITE-capable
+      // DEFAULT_CRON_TOKEN_PERMISSIONS (contents/issues/pull_requests:write) — the
+      // issue-creator read-only preset would 403 the push. Scoping to [REPO_NAME]
+      // bounds a leaked token to a single-user incident.
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

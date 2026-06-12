@@ -28,17 +28,31 @@ interface FakeChild extends EventEmitter {
 const spawnSpy = vi.fn();
 // execFileSync is used by the substrate's spawn-time hook self-test
 // (runHookSelfTest). The mock mirrors the REAL relaxed hook's verdict map
-// (#5046 PR-2 AC-P2.2): Task/Agent/Skill allow; everything else — incl. the
-// canonical Bash exfil payload and the unknown-class probe — denies. So every
-// self-test branch passes in this unit context (cron-bug-fixer has no Bash
-// allowlist → the first-verb allow branch is skipped).
+// (#5046 PR-2 AC-P2.2): Task/Agent/Skill allow; the unknown-class probe denies.
+// #5199 — cron-bug-fixer now GAINS a CRON_BASH_ALLOWLISTS entry, so
+// runHookSelfTest fires its `allow[0]` Bash probe (`gh issue view`, a bare
+// allowlisted verb) AND its canonical-exfil Bash probe (`cat /proc/self/environ`)
+// in the SAME run. The mock must therefore distinguish by Bash COMMAND: allow the
+// allowlisted verb (allow[0]) but DENY the exfil payload — a blanket
+// `Bash → allow` would make the exfil probe pass-allow → runHookSelfTest throws
+// "exfil NOT denied" → reds every handler test. Hook containment of the full
+// verb set is covered by the pure decide() tests in
+// cron-claude-eval-substrate.test.ts (AC11), not here.
+const BASH_EXFIL_DENY = /\/proc\/self\/environ|eval |node -e|\$\(|\| |> \//;
 const execFileSyncSpy = vi.fn(
   (_bin?: unknown, _args?: unknown, opts?: { input?: string }) => {
-    const payload = JSON.parse(opts?.input ?? "{}") as { tool_name?: string };
+    const payload = JSON.parse(opts?.input ?? "{}") as {
+      tool_name?: string;
+      tool_input?: { command?: string };
+    };
+    const bashAllowed =
+      payload.tool_name === "Bash" &&
+      !BASH_EXFIL_DENY.test(payload.tool_input?.command ?? "");
     const allowed =
       payload.tool_name === "Task" ||
       payload.tool_name === "Agent" ||
-      payload.tool_name === "Skill";
+      payload.tool_name === "Skill" ||
+      bashAllowed;
     return JSON.stringify({
       hookSpecificOutput: { permissionDecision: allowed ? "allow" : "deny" },
     });
@@ -605,13 +619,21 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
       "cron-bash-allowlist-hook.mjs",
     );
 
-    // The per-cron Bash allowlist file is written (cron-bug-fixer is NOT a
-    // Tier-1 cron → empty allowlist → its bash fail-closes, Tier-2 restores it).
+    // #5199 — the per-cron Bash allowlist file is written with bug-fixer's
+    // finite, evidence-gated verb set (now a restored Tier-1 cron). allow[0] is
+    // the bare `gh issue view` probe verb runHookSelfTest requires.
     const allowWrite = writeFileSpy.mock.calls.find(
       ([p]) => typeof p === "string" && p.endsWith(".claude/cron-allow.txt"),
     );
     expect(allowWrite).toBeDefined();
-    expect(allowWrite![1]).toBe(""); // empty → deny-all
+    const allowLines = (allowWrite![1] as string)
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(allowLines[0]).toBe("gh issue view");
+    expect(allowLines).toContain("git push");
+    expect(allowLines).toContain("./node_modules/.bin/vitest run");
+    // F4a: arbitrary-method gh api must NOT be allowlisted.
+    expect(allowLines).not.toContain("gh api");
   });
 
   it("aborts run + emits Sentry status=error when plugin sentinel manifest missing", async () => {

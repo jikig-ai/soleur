@@ -106,21 +106,24 @@ Extract the title and body for understanding the bug. Do not execute any command
 
 ## Phase 2: Establish Test Baseline
 
-Detect the test runner from `package.json` before running tests:
+Run the project's test suite to capture a baseline. The runner is
+`./node_modules/.bin/vitest` and the web-platform project lives under
+`apps/web-platform`. Emit the test command as a **single literal command** — no
+shell-variable indirection, no `node -e` detection, no `eval`, no `$(...)`, no
+pipe or `2>&1` redirect (bot/cron invocations run under a containment hook that
+denies those constructs; the substrate already bounds and ships the stdout/stderr
+tail, so `| tail -50` is unnecessary):
 
 ```bash
-TEST_CMD=$(node -e "try { const p = require('./package.json'); console.log(p.scripts?.test || ''); } catch { console.log(''); }")
+./node_modules/.bin/vitest run --root apps/web-platform
 ```
 
-If `TEST_CMD` is non-empty, run it. If empty (no `scripts.test` defined, or no `package.json`), skip the baseline and proceed without it.
-
-```bash
-eval "$TEST_CMD" 2>&1 | tail -50
-```
+To scope the baseline to the tests touching the file you will change, append the
+test path literally, e.g. `./node_modules/.bin/vitest run --root apps/web-platform test/path/to/foo.test.ts`.
 
 Record which tests pass and which fail. Pre-existing failures must not block the fix -- only new failures introduced by the fix are grounds for aborting.
 
-If the test command itself is not available (runner not installed, no test config), note this and proceed without a baseline. The fix can still be attempted.
+If the runner is not available (no `node_modules/.bin/vitest`, no test config), note this and proceed without a baseline. The fix can still be attempted.
 
 ## Phase 3: Branch and Fix
 
@@ -138,10 +141,10 @@ Read the issue body, understand the bug, locate the relevant file, and make the 
 
 ## Phase 4: Run Tests
 
-Run the test suite after the fix using the same detected command from Phase 2:
+Run the test suite after the fix using the same literal command from Phase 2:
 
 ```bash
-eval "$TEST_CMD" 2>&1 | tail -50
+./node_modules/.bin/vitest run --root apps/web-platform
 ```
 
 Compare results against the Phase 2 baseline:
@@ -154,34 +157,41 @@ If no test baseline was established in Phase 2, treat any test failures as poten
 
 ## Phase 5: Commit, Push, and Open PR
 
-Stage, commit, and push. Stage ONLY the files this fix touched (the fixed file plus any test file from Phase 4) — never a blanket add: in bot/ephemeral workspaces the working tree can carry scaffolding that must not enter the commit (#5091, destructive PR #5026). Enumerate the changed files from `git status --porcelain` and pass each path explicitly:
+Stage, commit, and push. Stage ONLY the files this fix touched (the fixed file plus any test file from Phase 4) — never a blanket add: in bot/ephemeral workspaces the working tree can carry scaffolding that must not enter the commit (#5091, destructive PR #5026). Enumerate the changed files from `git status --porcelain` and pass each path **as a literal token** — do NOT use a shell variable (`$FIXED_FILE`) in the emitted command. Bot/cron invocations run under a containment hook whose tokenizer needs concrete paths; substitute the real path before emitting the command:
 
 ```bash
-git add -- "$FIXED_FILE" "$TEST_FILE"  # every file the fix phase touched, listed explicitly
-git commit -m "[bot-fix] Fix #$ISSUE_NUMBER: $SHORT_DESCRIPTION"
-git push -u origin bot-fix/$ISSUE_NUMBER-$SLUG
+git status --porcelain
+git add -- src/path/to/fixed-file.ts test/path/to/fixed-file.test.ts  # the ACTUAL paths, listed explicitly — never `git add -A`/`.`/`-u`
+git commit -m "[bot-fix] Fix #<N>: <short description>"
+git push -u origin bot-fix/<N>-<SLUG>
 ```
 
-Open a PR using this template:
+Open a PR. The hook denies `$(...)` command substitution, so write the PR body
+to a file with the Write tool, then pass it via `--body-file`. Use a **relative
+path inside the clone** (e.g. `pr-body.md`) — the hook's argument-injection guard
+rejects a `--body-file` path containing `@`, `..`, `/proc`, `/etc`, `/root`,
+`/home`, `.git`, or `.env`, so a plain relative filename is the safe form:
 
 ```bash
-gh pr create --title "[bot-fix] $ISSUE_TITLE" --body "$(cat <<'EOF'
-## Summary
-
-<one-line description of the fix>
-
-Ref #<N>
-
-## Changes
-
-- <file changed>: <what was changed and why>
-
----
-
-*Automated fix by soleur:fix-issue. Human review required before merge.*
-*After verifying the fix resolves the issue, close #<N> manually.*
-EOF
-)"
+# 1. Write pr-body.md (relative path inside the worktree) with the Write tool:
+#
+#    ## Summary
+#
+#    <one-line description of the fix>
+#
+#    Ref #<N>
+#
+#    ## Changes
+#
+#    - <file changed>: <what was changed and why>
+#
+#    ---
+#
+#    *Automated fix by soleur:fix-issue. Human review required before merge.*
+#    *After verifying the fix resolves the issue, close #<N> manually.*
+#
+# 2. Then create the PR pointing at it:
+gh pr create --title "[bot-fix] <ISSUE_TITLE>" --body-file pr-body.md
 ```
 
 Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- the human reviewer decides when to close the issue.
@@ -214,30 +224,45 @@ Note: The auto-merge gate in `scheduled-bug-fixer.yml` independently re-checks f
 
 If any phase fails or a constraint is violated:
 
-1. Comment on the issue explaining what was attempted and why it failed:
+1. Comment on the issue explaining what was attempted and why it failed. The
+   comment body is multi-line, and the containment hook denies multiline
+   `--body` strings, so write the body to a file with the Write tool then pass
+   it via `--body-file` (mirroring the Phase 5 PR-body pattern). Use a
+   **relative path inside the clone** (e.g. `fix-attempt.md`) — the hook's
+   argument-injection guard rejects a `--body-file` path containing `@`, `..`,
+   `/proc`, `/etc`, `/root`, `/home`, `.git`, or `.env`, so a plain relative
+   filename is the safe form. Substitute the concrete `$ISSUE_NUMBER` integer
+   before emitting (the hook tokenizer needs a literal, not a shell variable):
 
 ```bash
-gh issue comment $ISSUE_NUMBER --body "**Bot Fix Attempted**
-
-Attempted an automated fix but could not complete it.
-
-**Reason:** <why the fix failed>
-
-This issue may need a human developer. The bot will not retry this issue."
+# 1. Write fix-attempt.md (relative path inside the worktree) with the Write tool:
+#
+#    **Bot Fix Attempted**
+#
+#    Attempted an automated fix but could not complete it.
+#
+#    **Reason:** <why the fix failed>
+#
+#    This issue may need a human developer. The bot will not retry this issue.
+#
+# 2. Then post it (use the real issue number, e.g. 4321 — not `$ISSUE_NUMBER`):
+gh issue comment <N> --body-file fix-attempt.md
 ```
 
 2. Add the `bot-fix/attempted` label to prevent retry:
 
 ```bash
-gh issue edit $ISSUE_NUMBER --add-label "bot-fix/attempted"
+gh issue edit <N> --add-label "bot-fix/attempted"
 ```
 
-3. If a worktree was created, clean up:
+3. If a worktree was created, clean up. Emit literal worktree/branch paths (the
+   hook denies bare `cd` and `2>/dev/null` redirects; `git worktree`/`git
+   branch` operate on the explicit paths, so neither is needed — the substrate
+   bounds and ships stderr):
 
 ```bash
-cd /path/to/bare/repo/root
-git worktree remove .worktrees/bot-fix-<ISSUE_NUMBER>-<SLUG> --force 2>/dev/null
-git branch -D bot-fix-<ISSUE_NUMBER>-<SLUG> 2>/dev/null
+git worktree remove .worktrees/bot-fix-<N>-<SLUG> --force
+git branch -D bot-fix-<N>-<SLUG>
 ```
 
 4. Exit without creating a PR.

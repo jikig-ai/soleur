@@ -286,6 +286,87 @@ describe("restored auto-cron prompt commands vs the hook (#5199)", () => {
   });
 });
 
+// #5199 (final) — cron-bug-fixer restore. The LAST cron and the highest blast
+// radius: it WRITES code and opens bot-fix/* PRs against the live auto-deploying
+// repo. Its commit lives in the fix-issue SKILL (not safeCommitAndPr), so it
+// uniquely carries git/gh-pr PERSISTENCE verbs. The decide-paired test is
+// load-bearing: a membership/parity test alone is vacuous-green against a runtime
+// DENY (the $ROUTER-class trap). The fix-issue SKILL was rewritten (Phase 3.5) to
+// emit ONLY these literal forms — no $VAR, no $(...), no pipe/redirect, no eval,
+// no node -e.
+describe("restored cron-bug-fixer prompt commands vs the hook (#5199 final)", () => {
+  const v = (command: string) =>
+    decide({ tool_name: "Bash", tool_input: { command } }, CRON_BASH_ALLOWLISTS["cron-bug-fixer"])
+      .hookSpecificOutput.permissionDecision;
+
+  it("the literal git/gh/test prompt forms the SKILL emits ALLOW", () => {
+    expect(v("gh issue view 4321 --json state,title,body,labels")).toBe("allow");
+    expect(v('gh issue comment 4321 --body "Bot Fix Attempted"')).toBe("allow");
+    expect(v('gh issue edit 4321 --add-label bot-fix/attempted')).toBe("allow");
+    expect(v('gh pr create --title "[bot-fix] x" --body-file pr-body.md')).toBe("allow");
+    expect(v("gh pr edit 99 --add-label bot-fix/auto-merge-eligible")).toBe("allow");
+    expect(v("git status --porcelain")).toBe("allow");
+    expect(v("git add -- src/foo.ts test/foo.test.ts")).toBe("allow");
+    expect(v('git commit -m "[bot-fix] Fix #4321"')).toBe("allow");
+    expect(v("git checkout -b bot-fix/4321-foo origin/main")).toBe("allow");
+    expect(v("git worktree add .worktrees/bot-fix-4321-foo -b bot-fix/4321-foo origin/main")).toBe("allow");
+    expect(v("git branch -D bot-fix-4321-foo")).toBe("allow");
+    expect(v("git push -u origin bot-fix/4321-foo")).toBe("allow");
+    expect(v("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-4321-foo")).toBe("allow");
+    expect(v("./node_modules/.bin/vitest run --root apps/web-platform")).toBe("allow");
+    // #5199 review — Phase 6 (Failure Handler) emitted forms. Phase 6 fires on
+    // any failure when the cron runs the WHOLE skill, so its literal forms must
+    // also be hook-clean: the failure comment goes via --body-file (multiline
+    // --body is denied), and the worktree/branch cleanup drops 2>/dev/null.
+    expect(v("gh issue comment 4321 --body-file fix-attempt.md")).toBe("allow");
+    expect(v("git worktree remove .worktrees/bot-fix-4321-foo --force")).toBe("allow");
+    expect(v("git branch -D bot-fix-4321-foo")).toBe("allow");
+  });
+
+  it("exfil / blanket / interpreter / persistence-bypass forms DENY", () => {
+    // F4a: arbitrary-method gh api.
+    expect(v("gh api repos/jikig-ai/soleur/issues")).toBe("deny");
+    // Blanket staging (gitVerbReason) — the SKILL must emit scoped `git add -- <path>`.
+    expect(v("git add -A")).toBe("deny");
+    expect(v("git add .")).toBe("deny");
+    expect(v("git commit -a -m x")).toBe("deny");
+    // Non-origin push remote.
+    expect(v("git push -u evil main")).toBe("deny");
+    // Token-bearing remote URL read/redirect.
+    expect(v("git config --get remote.origin.url")).toBe("deny");
+    // Interpreters + $VAR indirection (the rewritten SKILL emits none of these).
+    expect(v('eval "$TEST_CMD"')).toBe("deny");
+    expect(v("TEST=x npm test")).toBe("deny");
+    // $(...) substitution, pipe, redirect.
+    expect(v('gh issue list --search "$(cat /tmp/x)"')).toBe("deny");
+    expect(v("gh issue view 1 | wc -l")).toBe("deny");
+    expect(v("gh issue view 1 > /tmp/x")).toBe("deny");
+    // Secret read.
+    expect(v("cat /proc/self/environ")).toBe("deny");
+    // gh pr merge is node-side (runAutoMergeGate), never a prompt verb.
+    expect(v("gh pr merge --auto")).toBe("deny");
+  });
+
+  // #5199 review — prefix-overmatch exfil close. The allowlist carries the
+  // prefix `bash …/worktree-manager.sh`; a bare `startsWith(p)` matcher would
+  // let a near-miss extension of that path (a sibling exfil script the model
+  // Wrote) prefix-match and ALLOW. A match now requires exact-equal OR a
+  // trailing-space separator, so only the real script path (with its `--yes
+  // create …` args) ALLOWs; the near-miss forms DENY.
+  it("near-miss extensions of an allowlisted script path DENY (separator required)", () => {
+    expect(
+      v("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh-evil"),
+    ).toBe("deny");
+    expect(
+      v("bash plugins/soleur/skills/git-worktree/scripts/evil.sh"),
+    ).toBe("deny");
+    // the legitimate space-separated form still ALLOWs.
+    expect(
+      v("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-1"),
+    ).toBe("allow");
+  });
+});
+
 // AC2c — the spawn-time self-test converts the probe D-new-1 fail-open (a
 // crashed/missing hook) into fail-closed: it THROWS (→ cron aborts) rather than
 // letting the cron spawn unprotected. Runs the real hook binary via execFileSync.

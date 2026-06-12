@@ -341,20 +341,25 @@ export async function postAnthropicMessage(args: {
 // session-secret read-deny (see CRON_MCP_ALLOWLISTS / cron-bash-allowlist-hook).
 // Each restored cron carries a finite CRON_BASH_ALLOWLISTS entry and mints a
 // narrowed token (issue-creators mint ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).
-// #5199 (this PR) restored the SEVEN `mergeMode:"auto"` PR-flow crons
+// #5199 restored the SEVEN `mergeMode:"auto"` PR-flow crons
 // (campaign-calendar, competitive-analysis, growth-audit, seo-aeo-audit,
 // content-generator, growth-execution, community-monitor) — the PR-5200
 // stale-bot-PR watchdog (issue #5138) landed, removing the gate. Each carries a
 // finite, evidence-gated CRON_BASH_ALLOWLISTS entry and mints
 // DEFAULT_CRON_TOKEN_PERMISSIONS (contents/issues/pull_requests:write — they
 // push + open PRs via safeCommitAndPr) scoped to [REPO_NAME].
-// Only cron-bug-fixer remains deferred: its `bot-fix/*` head pattern is OUTSIDE
-// the #5138/#5200 watchdog's `ci/*` + `self-healing/auto-*` scan, so the
-// silent-auto-merge-disarm class is not yet covered for it (extending that scan
-// is OUT OF SCOPE — keep bug-fixer deferred).
-export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
-  "cron-bug-fixer",
-]);
+// #5199 (this PR — the FINAL restore) restored cron-bug-fixer, the last cron in
+// this set. Its blocker was that its `bot-fix/*` head pattern was OUTSIDE the
+// #5138/#5200 watchdog's scan; this PR added `bot-fix/*` to BOT_PR_HEAD_PREFIXES
+// (atomic — watchdog FIRST, then un-defer) so the silent-auto-merge-disarm class
+// is now covered. bug-fixer's commit lives in the fix-issue SKILL (not
+// safeCommitAndPr), so its CRON_BASH_ALLOWLISTS entry carries git/gh-pr
+// persistence verbs and it mints DEFAULT_CRON_TOKEN_PERMISSIONS scoped to
+// [REPO_NAME].
+// **TIER2_DEFERRED_CRONS is now EMPTY — the Tier-2 boundary is fully restored
+// and #5199 is closed.** deferIfTier2Cron stays as a defensive no-op (an empty
+// set short-circuits has() to false), so the handler call sites need no edit.
+export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([]);
 
 export async function deferIfTier2Cron(args: {
   cronName: string;
