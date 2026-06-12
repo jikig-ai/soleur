@@ -372,6 +372,21 @@ export function C4CodePanel({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Optimistic apply (F-A1): content the user has SUCCESSFULLY saved this
+  // session, keyed by file. On a 200 PUT the GitHub commit is the source of
+  // truth, but GET /project reads the on-disk workspace clone, which can lag —
+  // a diverged/un-fast-forwardable clone (self-heal aborts to preserve un-pushed
+  // session work) or Contents-API→fetch replica propagation lag returns the
+  // PRE-edit text. Without this, the `[data, activeFile]` re-seed below clobbers
+  // the editor back to the stale source and the save silently reverts. We keep
+  // the just-saved content as the editor value until the reloaded source catches
+  // up to it. Diagram staleness (the dump half) is surfaced honestly by the
+  // existing Layer-1 banner (#4963) — this only fixes the source revert.
+  // The marker self-clears once `incoming === optimistic` (clone caught up). For
+  // a PERMANENTLY-diverged clone (the H1 liveness gap, tracked in #5221) it
+  // persists for the session, masking external edits to that file until remount —
+  // an accepted trade vs. the silent revert; the next local save re-pins it.
+  const savedContentRef = useRef<Record<string, string>>({});
   // Per-editor font zoom (0 = default 12px), clamped to [10px, 24px]. Drives a
   // CodeMirror theme extension so content + gutter scale together — scoped to
   // this editor, independent of browser page zoom.
@@ -394,14 +409,34 @@ export function C4CodePanel({
     );
   }, [files]);
   useEffect(() => {
-    if (activeFile) setDraft(data.sources[activeFile] ?? "");
+    if (!activeFile) return;
+    const incoming = data.sources[activeFile] ?? "";
+    const optimistic = savedContentRef.current[activeFile];
+    if (optimistic !== undefined && incoming !== optimistic) {
+      // The reloaded clone has not caught up to our just-saved content yet —
+      // keep showing the saved text instead of reverting to the stale source.
+      setDraft(optimistic);
+      return;
+    }
+    // Clone caught up (incoming === optimistic) or no pending save — clear the
+    // marker so future external edits to this file apply normally, then sync.
+    if (optimistic !== undefined) delete savedContentRef.current[activeFile];
+    setDraft(incoming);
   }, [data, activeFile]);
 
   const isDark =
     typeof document !== "undefined" &&
     document.documentElement.getAttribute("data-theme") !== "light";
 
-  const dirty = activeFile ? draft !== (data.sources[activeFile] ?? "") : false;
+  // Compare against the optimistically-saved content (if any) so a just-saved
+  // file is not shown as "dirty" while the clone catches up; falls back to the
+  // server source for files with no pending save. `dirty` already guards on
+  // activeFile, so the baseline lookup needs no second guard (a "" key is a
+  // harmless miss).
+  const dirty = activeFile
+    ? draft !==
+      (savedContentRef.current[activeFile] ?? data.sources[activeFile] ?? "")
+    : false;
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -414,6 +449,10 @@ export function C4CodePanel({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error || `Save failed (${res.status})`);
+      // F-A1: the commit landed on origin (200). Pin the saved content as the
+      // optimistic editor value BEFORE onSaved triggers the parent reload(), so
+      // a stale-clone GET /project cannot revert the editor to the pre-edit text.
+      savedContentRef.current[activeFile] = draft;
       // Layer 2 (#4964): the server re-renders the diagram after a .c4 save.
       // `rerendered` reports whether that succeeded. On success the reloaded
       // dump is the fresh geometry; on failure the diagram stays stale and the
