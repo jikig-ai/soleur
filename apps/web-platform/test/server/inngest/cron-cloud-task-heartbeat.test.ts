@@ -48,6 +48,7 @@ vi.mock("@/server/inngest/functions/_cron-shared", () => ({
 }));
 
 import {
+  BOT_PR_HEAD_PREFIXES,
   cronCloudTaskHeartbeat,
   cronCloudTaskHeartbeatHandler,
   isStaleBotPr,
@@ -472,6 +473,32 @@ describe("isStaleBotPr", () => {
     expect(
       isStaleBotPr(botPr({ number: 6, created_at: "not-a-date" }), NOW),
     ).toBe(false);
+  });
+
+  // #5199 — bug-fixer restore: its `bot-fix/*` PRs are now in the watchdog scan.
+  it("bot-fix/* prefix is covered by BOT_PR_HEAD_PREFIXES (#5199)", () => {
+    expect(BOT_PR_HEAD_PREFIXES).toContain("bot-fix/");
+  });
+
+  it("49h-old bot-fix/* non-draft PR IS stale (#5199)", () => {
+    expect(
+      isStaleBotPr(
+        botPr({
+          number: 7,
+          head: { ref: "bot-fix/4321-foo" },
+          draft: false,
+          labels: [],
+          created_at: ago(49),
+        }),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("a stale bot-fix/* head routes Sentry-only (no reverse-derived label)", () => {
+    // bug-fixer files no scheduled-<cron> issue, so scheduledLabelFromHead
+    // returns null and the watchdog warns Sentry-only (!pr.scheduledLabel path).
+    expect(scheduledLabelFromHead("bot-fix/4321-foo")).toBeNull();
   });
 });
 
