@@ -110,3 +110,41 @@
 .soleur-c4 {
   background: var(--soleur-bg-base);
 }
+
+/*
+ * 4. Light-theme readability. Once c4-shared.tsx binds the diagram's
+ *    `data-mantine-color-scheme` to Soleur's `resolvedTheme` (Lever 1, the seam
+ *    fix), the library's light-branch rules fire in phase with the app theme.
+ *    Two light-only symptoms then remain, both addressed here and scoped to
+ *    `[data-mantine-color-scheme="light"]` so dark theme (which works today) is
+ *    byte-identical:
+ *
+ *    (a) Node-vs-canvas blend. The three Soleur light creams — bg-base #fbf7ee
+ *        (the canvas, §3), surface-1 #f4eedf, and surface-2 #ede4cc (the §2b
+ *        node fill) — sit within ~6% luminance, so element nodes nearly vanish
+ *        against the canvas. Nudge the light-theme fill WARMER/deeper (mix the
+ *        §2b surface-2 tan toward
+ *        border-default) so nodes read as raised warm cards while keeping the
+ *        Soleur cream identity (Sharp Edge: don't push to stark white). Title
+ *        (#1a1612) + description (#5c5043) stay high-contrast on the deeper tan.
+ *
+ *    (b) Edge-label pills wash to grey. In its light branch the library lightens
+ *        the label text (`--xy-edge-label-color: oklch(... l + .05 ...)`) AND
+ *        drops the pill background to 60% opacity
+ *        (`--xy-edge-label-background-color: oklch(... / 60%)`). Darkening the
+ *        relation-label token toward `--soleur-text-primary` lifts head-room so
+ *        the +0.05 L lift still clears AA, and re-pointing the library's own
+ *        `--xy-edge-label-background-color` consumption var to an opaque Soleur
+ *        surface restores pill legibility. Both light-scoped, theme-token-driven.
+ */
+[data-mantine-color-scheme="light"] .soleur-c4 :is([data-likec4-color]) {
+  --likec4-palette-fill: color-mix(
+    in oklab,
+    var(--soleur-bg-surface-2),
+    var(--soleur-border-default) 25%
+  ) !important;
+  --likec4-palette-relation-label: var(--soleur-text-primary) !important;
+}
+[data-mantine-color-scheme="light"] .soleur-c4 .likec4-edge-label {
+  --xy-edge-label-background-color: var(--soleur-bg-surface-1) !important;
+}

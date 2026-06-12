@@ -22,6 +22,21 @@ vi.mock("@codemirror/theme-one-dark", () => ({ oneDark: {} }));
 vi.mock("@uiw/react-codemirror", () => ({
   default: () => <textarea data-testid="cm" />,
 }));
+// C4Canvas binds the diagram's Mantine color scheme to Soleur's resolvedTheme
+// (Lever 1, the readability seam fix). Stub the theme hook so this fullscreen-
+// behavior test does not need a real <ThemeProvider>, and pass MantineProvider
+// through as a no-op wrapper (its color-scheme side effects are exercised by the
+// running-viewer Playwright check, not jsdom).
+vi.mock("@/components/theme/theme-provider", () => ({
+  useTheme: () => ({ resolvedTheme: "dark", theme: "dark", setTheme: () => {} }),
+}));
+vi.mock("@mantine/core", () => ({
+  MantineProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="mantine-provider">{children}</div>
+  ),
+  // c4-shared builds a module-level theme via createTheme(); pass-through is fine.
+  createTheme: (t: unknown) => t,
+}));
 
 import { C4Canvas } from "@/components/kb/c4-shared";
 
