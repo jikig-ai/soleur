@@ -65,24 +65,128 @@ const KNOWN_DIRECT_SPAWN_CRONS: ReadonlySet<string> = new Set([
 type ContainmentClass = "substrate-contained" | "direct-spawn" | "pure-TS";
 
 /**
- * Strip JS/TS comments so a prose mention of `spawn(` /
- * `_cron-claude-eval-substrate` (e.g. cron-workspace-gc:5) cannot be mistaken
- * for executable code. Block comments first, then line comments — guarding `//`
- * preceded by `:` so `https://` inside a string literal is not truncated.
+ * Return `src` with all comments and string/template-literal CONTENTS blanked,
+ * so only executable code remains for the class regexes to scan. A regex-only
+ * stripper is unsound here: a block-comment matcher anchored on bare
+ * open/close tokens will treat a block-open token inside a line comment as a
+ * real OPEN and lazily consume through to a block-close token inside a
+ * cron-schedule string like "0 (slash)4 * * *" (the asterisk-slash sequence),
+ * swallowing real code in between (observed collapsing ~96% of
+ * cron-inngest-cron-watchdog.ts). A single-pass char scanner that tracks
+ * string/template/comment state is the only correct way to neutralise those
+ * tokens without bridging across string literals. Line numbers are preserved
+ * (newlines kept) so a future move to line-reporting stays cheap.
+ *
+ * Fail direction: blanking string/template contents can only REMOVE a `spawn(`
+ * token that lived inside a literal (a false-positive source), never hide one
+ * that lived in real code — so the scanner fails CLOSED for the gate's purpose.
+ * The one residual is a spawn/exec call placed entirely inside a template
+ * interpolation (contents are blanked); no cron does this and it is a contrived
+ * shape, noted here for completeness.
  */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/([^:])\/\/.*$/gm, "$1");
+function stripComments(src: string, blankStrings: boolean): string {
+  let out = "";
+  let state:
+    | "code"
+    | "line"
+    | "block"
+    | "single"
+    | "double"
+    | "template" = "code";
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src[i];
+    const c2 = src[i + 1];
+    if (state === "code") {
+      if (c === "/" && c2 === "/") {
+        state = "line";
+        i += 1;
+      } else if (c === "/" && c2 === "*") {
+        state = "block";
+        i += 1;
+      } else if (c === "'") {
+        state = "single";
+        if (!blankStrings) out += c;
+      } else if (c === '"') {
+        state = "double";
+        if (!blankStrings) out += c;
+      } else if (c === "`") {
+        state = "template";
+        if (!blankStrings) out += c;
+      } else {
+        out += c;
+      }
+      continue;
+    }
+    if (state === "line") {
+      if (c === "\n") {
+        state = "code";
+        out += c;
+      }
+      continue;
+    }
+    if (state === "block") {
+      if (c === "*" && c2 === "/") {
+        state = "code";
+        i += 1;
+      } else if (c === "\n") {
+        out += c;
+      }
+      continue;
+    }
+    // string / template states — honour backslash escapes; emit contents only
+    // when keeping strings (needed to see a `child_process` import specifier).
+    if (c === "\\") {
+      if (!blankStrings) out += c + (src[i + 1] ?? "");
+      i += 1; // skip the escaped char
+      continue;
+    }
+    const closes =
+      (state === "single" && c === "'") ||
+      (state === "double" && c === '"') ||
+      (state === "template" && c === "`");
+    if (closes) {
+      state = "code";
+      if (!blankStrings) out += c;
+    } else if (!blankStrings || c === "\n") {
+      out += c;
+    }
+  }
+  return out;
 }
 
+// A cron reaches an unbounded shell/network surface through ANY of these, not
+// just `spawn(`: the exec family (real CALL tokens), and any acquisition of
+// `child_process` (static `import … from "node:child_process"` or dynamic
+// `await import("node:child_process")`). Bare `exec(`/`fork(` are deliberately
+// EXCLUDED — `RegExp.prototype.exec` and stray `.fork(` would false-positive a
+// pure-TS cron into a (failing) gate.
+//
+// Two scan surfaces, because the two signals live in different lexical places:
+//   • CALL tokens (`spawn(`, `execSync(`, …) are CODE → scan strings-blanked,
+//     so a `spawn(` inside a STRING literal does not false-trigger.
+//   • the `child_process` module specifier is intrinsically a STRING → scan
+//     comments-stripped-but-strings-kept, so the dynamic/aliased-import and
+//     exec-only shapes (which a `spawn(`-only regex misses — e.g. the substrate's
+//     own `_cron-safe-commit` git path uses dynamic-import + execFile) are still
+//     caught, while a comment-only mention (cron-skill-freshness) is not.
+//
+// KNOWN LIMITATION (single-file scope): egress reached through a NEW shared
+// helper that itself wraps spawn/exec (e.g. a cron whose only shell access is a
+// `setupEphemeralWorkspace()` clone or a `safeCommitAndPr()` call) is NOT
+// visible to this per-file scanner and classifies pure-TS. Today every such
+// helper (the substrate clone, _cron-safe-commit) is shared, fixed-argv,
+// already-contained infrastructure, so this is acceptable; if a future helper
+// introduces unbounded per-cron egress, add its symbol to the direct-spawn
+// regex or maintain a helper deny-list.
+const DIRECT_CALL_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(/;
+
 function classify(src: string): ContainmentClass {
-  const code = stripComments(src);
-  if (/\b(?:spawnClaudeEval|runClaudeEval)\s*\(/.test(code)) {
+  const codeBlankStrings = stripComments(src, true);
+  if (/\bspawnClaudeEval\s*\(/.test(codeBlankStrings)) {
     return "substrate-contained";
   }
-  if (/\bspawn\s*\(/.test(code)) {
+  const codeKeepStrings = stripComments(src, false);
+  if (DIRECT_CALL_RE.test(codeBlankStrings) || /child_process/.test(codeKeepStrings)) {
     return "direct-spawn";
   }
   return "pure-TS";
@@ -208,6 +312,37 @@ describe("cron containment classification gate (#5072)", () => {
     }
   });
 
+  // Non-degenerate-distribution guard: if stripNonCode ever collapsed every file
+  // to "" (the failure mode the regex stripper had), every cron would classify
+  // pure-TS and the GREEN gate above would pass VACUOUSLY for any future
+  // uncontained cron. Pin that the live tree still produces a real mix.
+  it("the live tree yields a non-degenerate class distribution (guards vacuous pass)", () => {
+    const counts = { "substrate-contained": 0, "direct-spawn": 0, "pure-TS": 0 };
+    for (const file of cronFiles()) {
+      counts[classify(readFileSync(resolve(FUNCTIONS_DIR, file), "utf8"))] += 1;
+    }
+    expect(counts["substrate-contained"]).toBeGreaterThan(0);
+    expect(counts["direct-spawn"]).toBeGreaterThan(0);
+    expect(counts["pure-TS"]).toBeGreaterThan(0);
+  });
+
+  // Grandfather-integrity: every KNOWN_DIRECT_SPAWN_CRONS entry must map to a
+  // file that still classifies direct-spawn. Catches an orphaned entry left
+  // behind when a grandfathered cron is deleted or refactored to pure-TS (the
+  // per-file stray-entry check cannot see a deleted file).
+  it("every KNOWN_DIRECT_SPAWN_CRONS entry maps to a still-direct-spawn file", () => {
+    const live = new Set(cronFiles().map((f) => f.replace(/\.ts$/, "")));
+    for (const cron of KNOWN_DIRECT_SPAWN_CRONS) {
+      expect(live.has(cron), `${cron} is grandfathered but no longer exists`).toBe(
+        true,
+      );
+      expect(
+        classify(readFileSync(resolve(FUNCTIONS_DIR, `${cron}.ts`), "utf8")),
+        `${cron} is grandfathered but no longer classifies direct-spawn`,
+      ).toBe("direct-spawn");
+    }
+  });
+
   it("classifies the canonical members of each class as expected", () => {
     const read = (name: string) =>
       readFileSync(resolve(FUNCTIONS_DIR, `${name}.ts`), "utf8");
@@ -217,6 +352,33 @@ describe("cron containment classification gate (#5072)", () => {
     expect(classify(read("cron-content-publisher"))).toBe("direct-spawn");
     // cron-workspace-gc mentions the substrate only in a comment → pure-TS.
     expect(classify(read("cron-workspace-gc"))).toBe("pure-TS");
+  });
+
+  // Adversarial stripper coverage — the one function with real fail-open risk.
+  // Each case is RED against a naive regex stripper and GREEN with stripNonCode.
+  it("stripNonCode does not let comments/strings hide or fake a spawn", () => {
+    // A `/*` in a comment + a `*/` inside a cron-schedule string must NOT bridge
+    // into a block comment that swallows the real spawn between them (the
+    // cron-inngest-cron-watchdog.ts collapse). A naive regex returns pure-TS.
+    expect(classify('const s = "/*"; const c = spawn("git"); const e = "*/";')).toBe(
+      "direct-spawn",
+    );
+    // A real spawn after a `"...*/..."` cron literal on a later line stays visible.
+    expect(
+      classify('const cron = "0 */4 * * *";\nconst c = spawn("bash", []);'),
+    ).toBe("direct-spawn");
+    // A `spawn(` that lives ONLY inside a string literal is not real egress →
+    // must NOT force a (failing) direct-spawn classification.
+    expect(classify('const doc = "call spawn(x) somewhere"; export const y = 1;')).toBe(
+      "pure-TS",
+    );
+    // Exec-family + dynamic child_process acquisition are direct-spawn, not pure-TS.
+    expect(
+      classify('const { execFile } = await import("node:child_process");'),
+    ).toBe("direct-spawn");
+    expect(classify('execSync("git status");')).toBe("direct-spawn");
+    // `.exec(` (RegExp) and `spawnCwd` (identifier) must NOT trip detection.
+    expect(classify("const m = /x/.exec(s); let spawnCwd = null;")).toBe("pure-TS");
   });
 
   // Failure-message contract (the #5072 deliverable): each message must name the
