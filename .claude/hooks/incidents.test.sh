@@ -195,6 +195,69 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 7: strip_command_bodies blanks commit bodies/heredocs (#5192)
+# ------------------------------------------------------------------------
+# The helper is the shared pre-detection strip extracted from
+# pre-merge-rebase.sh:64-65 (the #4600 canonical). It blanks quoted -m/-F
+# message bodies and heredoc bodies BEFORE a phrase-detection grep so a commit
+# whose MESSAGE documents a trigger phrase (`gh issue create`, `gh pr merge`,
+# `git stash`) is not mistaken for the real command. Covers AC5 (a)-(d):
+#   (a) quoted -m "…" body blanked
+#   (b) bare heredoc body blanked
+#   (c) content AFTER a heredoc terminator preserved (real chained cmd visible)
+#   (d) a command with no quotes/heredoc passes through unchanged
+echo "Test 7: strip_command_bodies blanks bodies/heredocs, preserves structure"
+STRIP_RC=0
+(
+  # shellcheck source=/dev/null
+  source "$LIB"
+  # (a) quoted -m body: the trigger phrase inside double quotes is blanked.
+  a_in=$'git add . && git commit -m "doc\ngh issue create must include --milestone\n"'
+  a_out=$(strip_command_bodies "$a_in")
+  if echo "$a_out" | grep -qE '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+issue[[:space:]]+create'; then
+    echo "  (a) quoted -m body NOT blanked"; exit 11
+  fi
+  # (b) bare heredoc body (`-F - <<EOF … EOF`) blanked.
+  b_in=$'git commit -F - <<EOF\ngh issue create no milestone\nEOF\n'
+  b_out=$(strip_command_bodies "$b_in")
+  if echo "$b_out" | grep -qE '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+issue[[:space:]]+create'; then
+    echo "  (b) heredoc body NOT blanked"; exit 12
+  fi
+  # (c) a real chained command AFTER the closing heredoc terminator survives.
+  c_in=$'git commit -F - <<EOF\nbody text\nEOF\n && gh pr merge 7 --squash'
+  c_out=$(strip_command_bodies "$c_in")
+  if ! echo "$c_out" | grep -qE '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge'; then
+    echo "  (c) post-terminator chained cmd was lost"; exit 13
+  fi
+  # (d) a command with no quotes/heredoc is unchanged.
+  d_in='gh issue create --title x --milestone y'
+  d_out=$(strip_command_bodies "$d_in")
+  if [[ "$d_out" != "$d_in" ]]; then
+    echo "  (d) passthrough mutated: '$d_out'"; exit 14
+  fi
+  exit 0
+) || STRIP_RC=$?
+if [[ "$STRIP_RC" -eq 0 ]]; then
+  pass "strip: (a) quoted + (b) heredoc blanked, (c) post-terminator preserved, (d) passthrough"
+else
+  fail "strip_command_bodies sub-case failed (rc=$STRIP_RC)"
+fi
+
+# ------------------------------------------------------------------------
+# Test 8: strip_command_bodies keeps the fail-toward-firing fallback (AC9)
+# ------------------------------------------------------------------------
+# The helper ends in `|| printf '%s' "$cmd"` so a perl error returns the raw
+# command (over-detect), never a silent bypass. Assert the clause is present
+# rather than engineering a brittle perl-absent execution test — the perl
+# one-liner is already shipped + proven on #4600.
+echo "Test 8: strip_command_bodies retains '|| printf' fail-toward-firing fallback"
+if grep -F '|| printf' "$LIB" >/dev/null 2>&1; then
+  pass "helper retains '|| printf' raw-command fallback"
+else
+  fail "helper missing '|| printf' fail-toward-firing fallback"
+fi
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

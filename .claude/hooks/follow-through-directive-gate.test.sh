@@ -273,6 +273,32 @@ run "T14: label superset 'follow-through-meta' — fail open" "$INPUT"
 assert_pass
 rm -rf "$TMP"
 
+# === T15 (#5192): commit-body documenting `gh issue create --label
+# follow-through` must NOT fire — the strip blanks the -m message body before
+# the trigger grep. The body carries `--label follow-through` AND a `--body`
+# value so the test reaches the strip path rather than the unrelated `:54`
+# label early-exit: WITHOUT the strip this denies (directive-missing), WITH it
+# the body is blanked and the hook fails open. See deepen finding D-P1-A. ===
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+FP_CMD=$'git add . && git commit -m \'doc: gate needs\ngh issue create --label follow-through --body "x"\nend\''
+INPUT=$(make_input "$FP_CMD" "$TMP")
+run "T15 (#5192): commit-body gh issue create --label follow-through — fail open" "$INPUT"
+assert_pass
+rm -rf "$TMP"
+
+# === T16: inline --body (not --body-file) carrying a VALID directive must PASS.
+# Regression guard for the `print 2` → `print $2` typo in the BODY_INLINE perl
+# extractor: pre-fix, BODY_INLINE was the literal "2" so EVERY inline-body
+# create was wrongly denied (directive-missing). ===
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+DIRECTIVE='<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->'
+INPUT=$(make_input "gh issue create --label follow-through --title t --body \"$DIRECTIVE\"" "$TMP")
+run "T16: inline --body with valid directive — pass" "$INPUT"
+assert_pass
+rm -rf "$TMP"
+
 # === Summary ===
 printf '\n=== Results: %d/%d passed, %d failed ===\n' "$PASS" "$TOTAL" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

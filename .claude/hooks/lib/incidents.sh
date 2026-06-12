@@ -334,3 +334,31 @@ resolve_command_cwd() {
   fi
   echo "$dir"
 }
+
+# --- strip_command_bodies <command> ---------------------------------------
+# Blanks git-commit message bodies (quoted `-m`/`-F` values) and heredoc
+# bodies from a command string BEFORE a phrase-detection grep, so a commit
+# whose MESSAGE merely documents a trigger phrase (`gh issue create`,
+# `gh pr merge`, `git stash`) is not mistaken for the real command (#5192).
+#
+# Body is the canonical perl -0777 pipeline extracted VERBATIM from
+# pre-merge-rebase.sh:64-65 (the #4600 implementation; do NOT re-derive — the
+# regex encodes heredoc-marker preservation + escape-aware quote-strip). It
+# slurps the whole (possibly multi-line) command and, in order:
+#   1. heredoc bodies — `<<[-]['"]?DELIM['"]? … \nDELIM` — blanking only the
+#      body between the opening line and the closing delimiter; the markers AND
+#      everything AFTER the closing delimiter (where a real chained trigger
+#      command can live) are preserved ($5).
+#   2. double- and single-quoted spans (escape-aware) — covers `-m "…"`.
+# Everything OUTSIDE quotes/heredocs is left intact, where a real chained
+# trigger command lives.
+#
+# Fail-toward-firing: on perl failure (absent/error) returns the raw command
+# verbatim (`|| printf`) so the caller OVER-detects, never silently bypasses.
+# Reads $1 if given, else stdin.
+strip_command_bodies() {
+  local cmd
+  if [[ $# -gt 0 ]]; then cmd="$1"; else cmd="$(cat)"; fi
+  printf '%s' "$cmd" | perl -0777 -pe \
+    's/(<<-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs; s/"(?:[^"\\]|\\.)*"/ /gs; s/'\''(?:[^'\''\\]|\\.)*'\''/ /gs;' 2>/dev/null || printf '%s' "$cmd"
+}
