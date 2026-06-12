@@ -84,8 +84,8 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     const step = makeStep();
     const logger = makeLogger();
     const deferred = await deferIfTier2Cron({
-      cronName: "cron-growth-audit",
-      sentryMonitorSlug: "scheduled-growth-audit",
+      cronName: "cron-bug-fixer",
+      sentryMonitorSlug: "scheduled-bug-fixer",
       step: step as unknown as Parameters<typeof deferIfTier2Cron>[0]["step"],
       logger,
     });
@@ -110,17 +110,16 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(step.run).not.toHaveBeenCalled();
   });
 
-  it("roadmap-review (#5004, Tier-1) is NOT in the deferred set; bug-fixer/growth-audit ARE", () => {
+  it("roadmap-review (#5004, Tier-1) is NOT in the deferred set; bug-fixer IS (#5199 restored growth-audit)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-roadmap-review")).toBe(false);
-    expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(true);
+    // #5199 restored the 7 mergeMode:"auto" crons — growth-audit included.
+    expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(false);
     expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
   });
 
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
-  // allow) unblocks EXACTLY the two crons whose only denied construct was the
-  // Task catch-all. The other nine stay deferred: six PR-flow crons need
-  // per-construct Bash-allowlist refinement (evidence-gated future work);
-  // bug-fixer/community-monitor/ux-audit stay firewall-dependent.
+  // allow) unblocks the two audit crons whose only denied construct was the
+  // Task catch-all.
   it("agent-native-audit + legal-audit are RESTORED (out of the deferred set) — #5046 PR-2", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-agent-native-audit")).toBe(false);
     expect(TIER2_DEFERRED_CRONS.has("cron-legal-audit")).toBe(false);
@@ -137,9 +136,11 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS.contents).not.toBe("write");
   });
 
-  it("the other eight stay deferred (#5199 restored ux-audit; rest gated on #5138)", () => {
+  it("ONLY cron-bug-fixer stays deferred (#5199 restored the 7 mergeMode:auto crons)", () => {
+    // #5199: the PR-5200 stale-bot-PR watchdog landed, removing the gate on the
+    // 7 PR-flow crons. Only bug-fixer's bot-fix/* head pattern is outside the
+    // watchdog's ci/* + self-healing/auto-* scan, so it stays deferred.
     for (const cron of [
-      "cron-bug-fixer",
       "cron-campaign-calendar",
       "cron-community-monitor",
       "cron-competitive-analysis",
@@ -148,9 +149,10 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
       "cron-growth-execution",
       "cron-seo-aeo-audit",
     ]) {
-      expect(TIER2_DEFERRED_CRONS.has(cron)).toBe(true);
+      expect(TIER2_DEFERRED_CRONS.has(cron)).toBe(false);
     }
-    expect(TIER2_DEFERRED_CRONS.size).toBe(8);
+    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
+    expect(TIER2_DEFERRED_CRONS.size).toBe(1);
   });
 
   it("cron-ux-audit is RESTORED — no longer Tier-2 deferred (#5199)", () => {

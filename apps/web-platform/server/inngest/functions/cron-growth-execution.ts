@@ -41,9 +41,12 @@
 // See #4993 / #4987.
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
-// installation discovery → generateInstallationToken(installation.id).
-// Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh pr create`, `gh pr merge`, `git push`.
+// installation discovery → generateInstallationToken(installation.id), narrowed
+// to DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (#5199).
+// Injected as GH_TOKEN so the spawned claude can run the allowlisted
+// `gh issue create` + `gh label` verbs (persistence runs handler-side via
+// safeCommitAndPr — #5111; the prompt forbids git/gh-pr verbs and the
+// containment hook denies `gh api`).
 
 import {
   redactToken,
@@ -52,6 +55,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -117,11 +122,9 @@ Read knowledge-base/marketing/seo-refresh-queue.md and identify Priority 1 ("Upd
 
 For each stale page found, run /soleur:growth fix <page-path> to apply keyword injection, meta description rewrites, and FAQ section additions.
 
-After fixing all stale pages, validate the changes:
-npx @11ty/eleventy
-bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
+VALIDATION runs in CI (do NOT build locally): this ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build and the validate-seo.sh script cannot run here. Validation happens on the PR the platform opens from your changes after the run: CI runs the eleventy build and SEO validation, and the PR only auto-merges once those required checks pass. Do NOT attempt a local build or run the validation scripts yourself.
 
-Then create a GitHub issue titled "[Scheduled] Growth Execution - <today>" with the label "scheduled-growth-execution" summarizing which pages were optimized, what changes were made, and build validation results.
+Then create a GitHub issue titled "[Scheduled] Growth Execution - <today>" with the label "scheduled-growth-execution" summarizing which pages were optimized and what changes were made.
 
 If no stale pages are found, create the issue noting "No stale pages found — all Priority 1 items are up to date."
 
@@ -189,7 +192,11 @@ export async function cronGrowthExecutionHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 
