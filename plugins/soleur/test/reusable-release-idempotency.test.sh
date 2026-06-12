@@ -280,21 +280,30 @@ STUB
   chmod +x "$GH_STUB_DIR/curl"
 
   NOTES="$TMP/notes.md"
+  # Fixture mixes (a) injection-bait (<Suspense>, &, <!channel>) and (b) GFM
+  # formatting (**bold**, [docs](url)) so T7 asserts BOTH the escape guarantee
+  # AND the GFM->mrkdwn conversion the converter now performs.
   printf -- '- fix: handle <Suspense> boundary & retries <!channel>\n' > "$NOTES"
+  printf -- 'Some **bold** text and a [docs](https://x.io) link.\n' >> "$NOTES"
 
   run_slack() {
     local webhook="$1"
     : > "$TMP/curl-trace"
-    SLACK_RELEASES_WEBHOOK_URL="$webhook" \
-    TAG="web-v1.2.3" \
-    VERSION="1.2.3" \
-    COMPONENT_DISPLAY="Web Platform" \
-    RELEASE_NOTES_FILE="$NOTES" \
-    GITHUB_SERVER_URL="https://github.com" \
-    GITHUB_REPOSITORY="jikig-ai/soleur" \
-    CURL_TRACE="$TMP/curl-trace" \
-    PATH="$GH_STUB_DIR:$PATH" \
-      bash "$SLACK_BLOCK" >/dev/null 2>&1
+    # cd to REPO_ROOT so the step's repo-root-relative `node
+    # scripts/md-to-mrkdwn.mjs` resolves exactly as it does in CI (run: blocks
+    # execute from $GITHUB_WORKSPACE = repo root). Trace/notes paths are
+    # absolute, so the cd is safe.
+    ( cd "$REPO_ROOT" && \
+      SLACK_RELEASES_WEBHOOK_URL="$webhook" \
+      TAG="web-v1.2.3" \
+      VERSION="1.2.3" \
+      COMPONENT_DISPLAY="Web Platform" \
+      RELEASE_NOTES_FILE="$NOTES" \
+      GITHUB_SERVER_URL="https://github.com" \
+      GITHUB_REPOSITORY="jikig-ai/soleur" \
+      CURL_TRACE="$TMP/curl-trace" \
+      PATH="$GH_STUB_DIR:$PATH" \
+        bash "$SLACK_BLOCK" >/dev/null 2>&1 )
   }
 
   # (a) empty webhook -> skip, curl never invoked
@@ -329,6 +338,66 @@ STUB
     *"Full release notes: https://github.com/jikig-ai/soleur/releases/tag/web-v1.2.3"*) pass "release URL present and last" ;;
     *) fail "release URL missing from message tail" ;;
   esac
+
+  # (c2) GFM -> mrkdwn conversion: the changelog body is converted, not just
+  # escaped. **bold** -> *bold*, [docs](url) -> <url|docs>, and the literal
+  # GFM markers must NOT survive in the payload.
+  if [[ "$text" == *"Some *bold* text"* ]]; then
+    pass "GFM **bold** converted to *bold* in payload"
+  else
+    fail "GFM **bold** must convert to *bold* (got: $text)"
+  fi
+  if [[ "$text" == *"<https://x.io|docs>"* ]]; then
+    pass "GFM [docs](url) converted to <url|docs> in payload"
+  else
+    fail "GFM link must convert to <url|label> (got: $text)"
+  fi
+  case "$text" in
+    *"**bold**"*) fail "literal GFM **bold** must not survive conversion" ;;
+    *) pass "no literal GFM bold markers in payload" ;;
+  esac
+
+  # (c3) Keystone fail-closed invariant on the FULL payload .text: regardless
+  # of how a mention was crafted, the converted output contains zero
+  # <! / <@ / <# / <subteam^ sequences (the single backstop against every
+  # injection-smuggling path). [P1-C]
+  case "$text" in
+    *"<!"*|*"<@"*|*"<#"*|*"<subteam^"*)
+      fail "keystone: payload must contain no <! <@ <# <subteam^ (got: $text)" ;;
+    *) pass "keystone: payload free of smuggled-mention sequences" ;;
+  esac
+
+  # (d) AC5: converter crash -> fallback to the sed-escaped plain body, step
+  # stays green. Stub `node` to exit non-zero and run the block under
+  # `bash -eo pipefail` (errexit, as CI does) to prove the `if ! BODY=$(...)`
+  # form does NOT mask the failure — a bare `BODY=$(node ...)` assignment
+  # would abort the step under -e and the fallback would never fire.
+  cat > "$GH_STUB_DIR/node" <<'NODESTUB'
+#!/usr/bin/env bash
+exit 1
+NODESTUB
+  chmod +x "$GH_STUB_DIR/node"
+  : > "$TMP/curl-trace"
+  ( cd "$REPO_ROOT" && \
+    SLACK_RELEASES_WEBHOOK_URL="https://hooks.example.invalid/stub" \
+    TAG="web-v1.2.3" \
+    VERSION="1.2.3" \
+    COMPONENT_DISPLAY="Web Platform" \
+    RELEASE_NOTES_FILE="$NOTES" \
+    GITHUB_SERVER_URL="https://github.com" \
+    GITHUB_REPOSITORY="jikig-ai/soleur" \
+    CURL_TRACE="$TMP/curl-trace" \
+    PATH="$GH_STUB_DIR:$PATH" \
+      bash -eo pipefail "$SLACK_BLOCK" >/dev/null 2>&1 )
+  fallback_rc=$?
+  rm -f "$GH_STUB_DIR/node"
+  assert_eq "AC5: converter crash keeps release step green (exit 0)" "$fallback_rc" "0"
+  fallback_text=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace")")
+  if [[ "$fallback_text" == *"&lt;!channel&gt;"* ]]; then
+    pass "AC5: fallback sed-escaped body remains injection-safe"
+  else
+    fail "AC5: fallback body must be sed-escaped (got: $fallback_text)"
+  fi
 fi
 
 echo ""
