@@ -120,6 +120,45 @@ describe("validate-seo.sh", () => {
     expect(stdout).toContain("canonical host matches sitemap host");
   });
 
+  test("fails when a SECOND rogue canonical tag points at a different host", async () => {
+    setupSite();
+    // The page declares the correct apex canonical first, then a rogue www one — the
+    // exact duplicate-canonical failure mode. Checking only the first tag would let
+    // this through; the gate must inspect EVERY canonical host.
+    writeFileSync(
+      `${TMP_DIR}/pages/double.html`,
+      validHtml.replace(
+        '<link rel="canonical" href="https://example.com/">',
+        '<link rel="canonical" href="https://example.com/double/">\n<link rel="canonical" href="https://www.example.com/double/">',
+      ),
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("differs from sitemap canonical host");
+  });
+
+  test("a relative-only canonical href is skipped (no pipefail abort, later pages still validated)", async () => {
+    setupSite();
+    // A relative canonical has no absolute host to compare. Under `set -euo pipefail`
+    // an unguarded extraction would abort the whole run; the gate must skip cleanly so
+    // this page and every subsequent page still get their other checks.
+    writeFileSync(
+      `${TMP_DIR}/pages/relative.html`,
+      validHtml.replace(
+        '<link rel="canonical" href="https://example.com/">',
+        '<link rel="canonical" href="/relative/">',
+      ),
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(0);
+    // The matching-host pages still emit their PASS line — proves the run was not aborted.
+    expect(stdout).toContain("canonical host matches sitemap host");
+  });
+
   test("fails when sitemap has no lastmod", async () => {
     setupSite();
     writeFileSync(`${TMP_DIR}/sitemap.xml`, '<urlset><url><loc>https://example.com/</loc></url></urlset>');
