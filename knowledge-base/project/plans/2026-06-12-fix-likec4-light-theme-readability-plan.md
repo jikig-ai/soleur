@@ -11,6 +11,65 @@ brand_survival_threshold: none
 
 # 🐛 fix: LikeC4 light-theme readability — node fills + edge-label contrast
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-12
+**Sections enhanced:** Overview (Lever-1 mechanism resolved), Acceptance Criteria
+(AC1), Implementation Phases (Phase 0.3 + Phase 1), Files to Edit, Alternative
+Approaches, Sharp Edges.
+**Research used:** installed-library inspection (`@mantine/core` MantineProvider /
+`use-provider-color-scheme.cjs` / `MantineProvider.d.ts`; `@likec4/diagram@1.50.0`
+`EnsureMantine.js`, `DefaultMantineProvider.js`, bundled `styles.css2.js`); Soleur
+theme surface (`components/theme/theme-provider.tsx` `useTheme()`/`resolvedTheme`,
+`components/theme/no-fouc-script.tsx`); verify-the-negative pass (6/6 plan premises
+confirmed); precedent grep (no existing `MantineProvider`/`forceColorScheme`).
+
+### Key Improvements (from deepen)
+
+1. **Lever-1 mechanism RESOLVED → approach 1a (MantineProvider + `forceColorScheme`),
+   and 1b is eliminated.** Mantine writes `data-mantine-color-scheme` onto the element
+   returned by `getRootElement()` — **default `document.documentElement` (`<html>`)**
+   (`@mantine/core/cjs/core/MantineProvider/use-mantine-color-scheme/use-provider-color-scheme.cjs:10`
+   `getRootElement()?.setAttribute("data-mantine-color-scheme", computedColorScheme)`).
+   The library's light/dark CSS variables AND Mantine's own baseline rules are gated on
+   the attribute being on the **root**, not on an arbitrary ancestor div — so setting
+   `data-mantine-color-scheme` on the `.soleur-c4` wrapper (1b) does **not** reliably
+   flip the diagram's scheme. **1a is the only viable mechanism.**
+2. **1a adds NO new npm dependency.** `@mantine/core` is hoisted at the top of
+   `apps/web-platform/node_modules` and `require.resolve("@mantine/core")` succeeds —
+   the wrapper imports `MantineProvider` from the existing transitive copy. (The plan
+   still RECOMMENDS adding `@mantine/core` as an explicit direct dep for robustness —
+   see Sharp Edges: relying on a hoisted transitive is brittle under a stricter
+   installer; the cost is zero install-size since it's already in the tree.)
+3. **`EnsureMantine` defers to our provider (verified).** `EnsureMantine.js:13` returns
+   a `Fragment` when a `MantineContext` already exists, so wrapping `<LikeC4Diagram>` in
+   OUR `<MantineProvider forceColorScheme={…}>` makes the library use our scheme and
+   skip its own `defaultColorScheme:"auto"` provider. No double-provider conflict.
+4. **`forceColorScheme?: 'light' | 'dark'` confirmed** (`MantineProvider.d.ts:16`) and
+   maps cleanly from Soleur's `useTheme().resolvedTheme` (`theme-provider.tsx:343`,
+   `ResolvedTheme = "light" | "dark"` — `system` is already resolved upstream). Setting
+   it overrides OS `prefers-color-scheme` unconditionally — exactly the seam fix.
+5. **All 6 negative premises confirmed** by a verify-the-negative pass (no Soleur
+   `MantineProvider`/`@mantine/core` import; `@mantine/core` absent from
+   `package.json`; `globals.css` not edited; no light-scheme transform on
+   `--likec4-palette-fill`; existing `c4-theme.css` rules are scheme-unscoped so a new
+   light-scoped rule cannot regress dark; `c4-shared.tsx:402` reads `data-theme`).
+
+### New Considerations Discovered
+
+- **Soleur already has a `resolvedTheme` source of truth** — `useTheme()` from
+  `components/theme/theme-provider.tsx` (and `no-fouc-script.tsx` sets
+  `html.style.colorScheme` + `html.dataset.theme` at boot). The wrapper should consume
+  `useTheme().resolvedTheme` directly rather than re-reading `data-theme` off the DOM,
+  so it stays reactive through React state (the existing `c4-shared.tsx:402` raw DOM
+  read is for the CodeMirror editor and is NOT reactive — do not copy that pattern for
+  the provider).
+- **`forceColorScheme` is a 2-value union** (`'light' | 'dark'`) — pass
+  `resolvedTheme` (already 2-valued), never the 3-valued `theme` (`light|dark|system`).
+- This is the **first** `MantineProvider` in the Soleur app (novel precedent) — keep it
+  scoped to the C4 canvas (the `.soleur-c4` choke point in `c4-shared.tsx`), do not
+  hoist it to the app root (it would wrap the whole app in Mantine's CSS reset).
+
 ## Overview
 
 In the Soleur-themed LikeC4 C4 visualizer (`apps/web-platform/components/kb/c4-shared.tsx`
@@ -84,25 +143,23 @@ This plan adopts **Approach B** (fix the seam, then tune tokens) over a token-on
 patch, because the broken seam (A) means a token-only change is unreliable across
 the OS-mismatch population. Two levers:
 
-- **Lever 1 — bind Mantine's color scheme to Soleur's `data-theme`** so the
-  diagram's internal light/dark rules fire in phase with the app theme. Two candidate
-  mechanisms (the plan recommends the simpler; deepen-plan + plan-review pick):
-  - **(1a) Wrap `<LikeC4Diagram>` in a Soleur `<MantineProvider forceColorScheme=…>`**
-    in `c4-shared.tsx`, reading `data-theme` (and `prefers-color-scheme` for
-    `system`). Because `EnsureMantine` defers to an existing context, this makes the
-    library use **our** scheme. Cost: makes `@mantine/core` a **direct** dependency
-    (today it is transitive only — see Sharp Edges).
-  - **(1b) Set `data-mantine-color-scheme` on the `.soleur-c4` wrapper element**
-    (and keep it in sync with `data-theme` via the existing no-FOUC theme script or
-    a small effect). Mantine's CSS selectors are attribute-based
-    (`[data-mantine-color-scheme=light] …`), so the attribute alone gates the rules
-    without adding a dep. Cost: relies on Mantine reading the attribute off an
-    ancestor rather than its provider state (verify at deepen-plan).
-  - The plan **recommends (1b)** as the minimal change (no new direct dep, no
-    provider nesting) **pending the deepen-plan verification** that Mantine's
-    bundled `[data-mantine-color-scheme=…]` rules resolve off a wrapper attribute
-    and not exclusively off provider-injected `:root`/`html`. If (1b) does not gate
-    the rules, fall back to (1a).
+- **Lever 1 — bind Mantine's color scheme to Soleur's `resolvedTheme`** so the
+  diagram's internal light/dark rules fire in phase with the app theme. **Mechanism
+  resolved at deepen-plan: approach 1a (wrap in `MantineProvider`).**
+  - **(1a — CHOSEN) Wrap `<LikeC4Diagram>` in a Soleur
+    `<MantineProvider forceColorScheme={resolvedTheme}>`** at the `.soleur-c4` choke
+    point in `c4-shared.tsx`, where `resolvedTheme` comes from Soleur's
+    `useTheme()` (`components/theme/theme-provider.tsx:343` → `"light" | "dark"`).
+    Because `EnsureMantine.js:13` defers to an existing `MantineContext`, the library
+    uses **our** scheme and skips its `defaultColorScheme:"auto"` provider.
+    `forceColorScheme` overrides OS `prefers-color-scheme` unconditionally, fixing the
+    seam. **Adds no new dependency** — `@mantine/core` is hoisted and resolvable today
+    (the plan still recommends declaring it directly for robustness; see Sharp Edges).
+  - **(1b — REJECTED) Set `data-mantine-color-scheme` on the `.soleur-c4` wrapper.**
+    Deepen-plan verified Mantine writes the attribute onto `getRootElement()` =
+    `document.documentElement` (`<html>`), and the library's CSS-variable flips +
+    Mantine's baseline rules are gated on the **root** attribute — an ancestor-div
+    attribute does not reliably flip the scheme. 1b is not viable.
 - **Lever 2 — tune the light-theme Soleur tokens** so that, once the light branch
   fires correctly, nodes separate from the canvas and label pills read cleanly:
   - **Node separation:** give element fills a token that sits a notch away from the
@@ -138,7 +195,8 @@ C4 theme work (PR #4938, person-shape plan 2026-06-05).
 | Fix is "light-theme color tokens" | **Necessary but not sufficient.** Tokens are mostly fine; the **Mantine color-scheme seam** (`defaultColorScheme:"auto"` ignoring `data-theme`) is the load-bearing root cause that makes any token tweak unreliable. | Plan elevates seam fix to Lever 1; tokens are Lever 2. |
 | Cream/tan fills + grey pills "hard to read" (screenshot) | **Confirmed** as the two symptoms above. | Both levers, light-scoped, both-theme visual verification. |
 | Library renders in light DOM; `.soleur-c4` overrides reach it | **Confirmed** (PR #4938, person-shape plan): `<LikeC4Diagram>` uses `RootContainer`, not a ShadowRoot. | CSS overrides under `.soleur-c4` are valid. |
-| `@mantine/core` available to wrap a provider | **Transitive only** — not in `apps/web-platform/package.json` deps (it ships under `@likec4/diagram`). | Approach (1b) avoids a new direct dep; (1a) would add one. |
+| `@mantine/core` available to wrap a provider | **Transitive, but hoisted + resolvable** — absent from `package.json` deps, yet `require.resolve("@mantine/core")` succeeds. `forceColorScheme?: 'light'\|'dark'` confirmed (`MantineProvider.d.ts:16`); `EnsureMantine.js:13` defers to our provider. | Approach **1a** (provider) chosen; add `@mantine/core` as a direct dep for robustness (no install-size delta). |
+| Lever-1 could be a wrapper-attribute sync (1b) avoiding a provider | **False (verified at deepen-plan).** Mantine writes `data-mantine-color-scheme` to `getRootElement()` = `<html>`; CSS-var flips + baseline rules gate on the root attr. An ancestor-div attr does not flip the scheme. | 1a (provider) is required; 1b eliminated. |
 
 ## User-Brand Impact
 
@@ -163,15 +221,16 @@ schema/auth/API/data surface touched.`)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Mantine color scheme tracks Soleur theme (the seam fix).** When
-  `<html data-theme="light">`, the LikeC4 diagram subtree resolves
-  `data-mantine-color-scheme=light` (and `=dark` for dark theme; `system` follows
-  `prefers-color-scheme`) **regardless of OS `prefers-color-scheme`**. Verify in the
-  running viewer via Playwright: set Soleur Light, then assert
-  `document.querySelector('.soleur-c4 [data-mantine-color-scheme]')` (or the diagram
-  root) reports `light`. (If approach 1a: a Soleur `<MantineProvider>` wraps
-  `<LikeC4Diagram>` with `forceColorScheme` derived from `data-theme`. If 1b: the
-  `.soleur-c4` wrapper carries `data-mantine-color-scheme` synced to `data-theme`.)
+- [ ] **AC1 — Mantine color scheme tracks Soleur theme (the seam fix).** When the app
+  resolves to Light (`resolvedTheme === "light"`), the diagram resolves
+  `data-mantine-color-scheme=light` (and `=dark` for Dark) **regardless of OS
+  `prefers-color-scheme`**, because `c4-shared.tsx` wraps `<LikeC4Diagram>` in
+  `<MantineProvider forceColorScheme={resolvedTheme}>` (approach 1a). Mantine writes
+  the attribute onto `<html>` (`getRootElement()` default). Verify in the running
+  viewer via Playwright: with `prefers-color-scheme: dark` emulated AND Soleur set to
+  Light, assert `document.documentElement.getAttribute('data-mantine-color-scheme')`
+  reports `light`. Source-side: `c4-shared.tsx` imports `MantineProvider` and passes
+  `forceColorScheme={resolvedTheme}` from `useTheme()`.
 - [ ] **AC2 — Node separation in light theme.** In the running viewer, light theme,
   element nodes are visually distinguishable from the canvas (a visible
   fill-vs-canvas delta and/or a visible node border). The fix is **scoped to light
@@ -200,8 +259,8 @@ schema/auth/API/data surface touched.`)
   / `.react-flow__edge-text` — so a bump that renames either hook fails CI loudly
   instead of silently un-fixing the labels. (Pairs the vacuous "our CSS contains
   selector X" source-grep with a guard reading the installed library — PR #4938
-  vendored-CSS Sharp Edge.) If approach 1a, also assert `c4-shared.tsx` wraps
-  `<LikeC4Diagram>` in a `MantineProvider`.
+  vendored-CSS Sharp Edge.) Also assert `c4-shared.tsx` wraps `<LikeC4Diagram>` in a
+  `MantineProvider` with `forceColorScheme` (the seam fix, approach 1a).
 - [ ] **AC7 — Existing theme test still green.**
   `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-theme.test.ts`
   passes (all prior assertions — logo hide, palette override, person silhouette — plus
@@ -233,33 +292,45 @@ schema/auth/API/data surface touched.`)
 2. **Confirm the light-branch edge-label rule + DOM hooks** still present:
    `grep -o '\[data-mantine-color-scheme=light\][^}]*xy-edge-label[^}]*}' apps/web-platform/node_modules/@likec4/diagram/dist/styles.css2.js`
    and `grep -o '\.likec4-edge-label{[^}]*}' …` → `color: var(--xy-edge-label-color)` + `background: var(--xy-edge-label-background-color)`.
-3. **Decide Lever-1 mechanism (1a vs 1b).** Verify whether Mantine's
-   `[data-mantine-color-scheme=light]` bundled rules resolve when the attribute is set
-   on the `.soleur-c4` **wrapper** (ancestor) vs requiring it on the provider-injected
-   root. If a wrapper attribute gates the rules → **1b** (no new dep). If not → **1a**
-   (wrap in `<MantineProvider forceColorScheme>`, add `@mantine/core` as a direct dep,
-   reconcile with any "no new dependencies" intent). Record the determination in the
-   PR body. (deepen-plan Phase 4.4 precedent-diff handles this.)
-4. Confirm `@mantine/core` resolves (transitive) for 1a feasibility:
-   `node -e "require('@mantine/core/package.json')"` from `apps/web-platform`.
+3. **Lever-1 mechanism is decided (1a) — re-confirm the supporting facts at /work:**
+   - `grep -n 'getRootElement\|data-mantine-color-scheme' apps/web-platform/node_modules/@mantine/core/cjs/core/MantineProvider/use-mantine-color-scheme/use-provider-color-scheme.cjs`
+     → attribute is written to `getRootElement()` (default `document.documentElement`),
+     confirming 1b (ancestor-div attribute) is not viable.
+   - `grep -n 'forceColorScheme' apps/web-platform/node_modules/@mantine/core/lib/core/MantineProvider/MantineProvider.d.ts`
+     → `forceColorScheme?: 'light' | 'dark'` (line 16).
+   - `grep -n 'MantineContext\|Fragment' apps/web-platform/node_modules/@likec4/diagram/dist/context/EnsureMantine.js`
+     → library defers to an existing provider (so our wrapper wins).
+4. **Confirm `@mantine/core` resolves without a package.json add:**
+   `cd apps/web-platform && node -e "console.log(require.resolve('@mantine/core'))"`
+   → resolves to `…/@mantine/core/cjs/index.cjs` (hoisted transitive). Get the version
+   to pin via a **file read**, NOT `require('@mantine/core/package.json')` — Mantine's
+   `exports` map blocks the `./package.json` subpath (`ERR_PACKAGE_PATH_NOT_EXPORTED`):
+   `grep '"version"' node_modules/@mantine/core/package.json` → `8.3.15` (the version
+   `@likec4/diagram` itself pins). Add `"@mantine/core": "8.3.15"` to deps.
+5. Confirm Soleur's theme hook surface:
+   `grep -n 'export function useTheme\|resolvedTheme' apps/web-platform/components/theme/theme-provider.tsx`
+   → `useTheme()` returns `{ resolvedTheme: "light" | "dark", ... }`.
 
 ### Phase 1 — Lever 1: bind color scheme to `data-theme`
 
-Implement the mechanism chosen in Phase 0.3.
+Implement approach **1a** (resolved at deepen-plan).
 
-- **1b (recommended, no new dep):** sync `data-mantine-color-scheme` onto the
-  `.soleur-c4` wrapper (owned by `C4Canvas` in `c4-shared.tsx`) from `data-theme`. The
-  existing no-FOUC theme script in `app/layout.tsx` already writes `data-theme`; mirror
-  it with a small effect or derive `colorScheme` in `c4-shared.tsx` (it already reads
-  `data-theme` at `c4-shared.tsx:402` for the editor — reuse the same read) and set the
-  attribute on the wrapper. Keep it reactive to theme changes (effect on a
-  theme-change signal / `MutationObserver` on `<html data-theme>`), consistent with how
-  the app flips theme live.
-- **1a (fallback):** wrap `<LikeC4Diagram>` (both the inline embed and the fullscreen
-  portal — the `.soleur-c4` choke point) in `<MantineProvider forceColorScheme={scheme}>`
-  where `scheme` is derived from `data-theme` (+ `prefers-color-scheme` for `system`).
-  Import `MantineProvider` from `@mantine/core` (add to `package.json` deps). Because
-  `EnsureMantine` defers to an existing context, the library uses our scheme.
+- Wrap `<LikeC4Diagram>` at the `.soleur-c4` choke point (owned by `C4Canvas` in
+  `c4-shared.tsx`, covering both the inline embed and the fullscreen portal) in
+  `<MantineProvider forceColorScheme={resolvedTheme}>`:
+  - Import `MantineProvider` from `@mantine/core` (already resolvable; add to
+    `package.json` deps for robustness — pin to the version already in the tree).
+  - `const { resolvedTheme } = useTheme();` (from
+    `components/theme/theme-provider.tsx`) → `resolvedTheme` is `"light" | "dark"`,
+    the exact `forceColorScheme` union. Do NOT read `data-theme` off the DOM (the
+    `c4-shared.tsx:402` raw read is non-reactive and editor-only); the hook keeps the
+    provider reactive to live theme flips.
+  - `EnsureMantine.js:13` returns a `Fragment` when a `MantineContext` exists, so the
+    library uses our provider and skips its `defaultColorScheme:"auto"` injection.
+  - Keep the provider scoped to the C4 canvas — do NOT hoist to the app root (it would
+    apply Mantine's global CSS reset to the whole app). Mantine still writes
+    `data-mantine-color-scheme` to `<html>` (its `getRootElement()` default), which is
+    what the diagram's bundled rules require — that is correct and intended.
 
 > Phase-order note: Lever 1 (seam) ships **before/with** Lever 2 (tokens) because the
 > token tuning's correctness depends on the right scheme branch firing
@@ -297,13 +368,18 @@ visual check within the AC bounds; the form above is the starting point.)
 
 #### Research Insights
 
-**Precedent diff (Phase 4.4):** `c4-theme.css` already establishes the convention
-this extends — scoped `.soleur-c4` ancestor + intrinsic `[data-likec4-*]` /
-`--likec4-palette-*` hook + `!important` to beat the library's runtime rule (§2a/2b/2c).
-The light-scoped `[data-mantine-color-scheme="light"]` prefix is **novel** for this
-file but is the library's own scheme-gating idiom (mirrors how the bundle scopes its
-light rules). No `MantineProvider` precedent exists in `apps/web-platform` — Lever-1
-(1a) would be the first; (1b) is a plain attribute sync (no precedent needed).
+**Precedent diff (Phase 4.4, verified at deepen-plan):** `c4-theme.css` already
+establishes the CSS convention this extends — scoped `.soleur-c4` ancestor + intrinsic
+`[data-likec4-*]` / `--likec4-palette-*` hook + `!important` to beat the library's
+runtime rule (§2a/2b/2c). The light-scoped `[data-mantine-color-scheme="light"]`
+prefix is **novel** for this file but is the library's own scheme-gating idiom. For
+Lever 1: a grep of `apps/web-platform/{app,components,lib}` for `MantineProvider` /
+`forceColorScheme` / `data-mantine-color-scheme` returned **zero** — this is the
+**first `MantineProvider` in the Soleur app (no precedent; pattern is novel)**. The
+closest precedent is Soleur's own theme infrastructure (`theme-provider.tsx`
+`useTheme()`/`resolvedTheme`, `no-fouc-script.tsx` writing `html.dataset.theme` +
+`html.style.colorScheme` at boot) — the new provider consumes `resolvedTheme` from
+that source of truth rather than introducing a parallel theme read.
 
 **Contrast math (verified, sRGB WCAG):** light-theme token contrasts are individually
 fine — node title 14.2:1, description 6.2:1, edge-label token 6.8:1. The failure is
@@ -321,13 +397,16 @@ Run the vitest gate, then visually verify the System Context view in **both** th
 
 - `apps/web-platform/components/kb/c4-theme.css` — add §4 light-theme readability
   block (node separation + edge-label pill opacity/contrast), light-scoped (Phase 2).
-- `apps/web-platform/components/kb/c4-shared.tsx` — Lever 1: sync
-  `data-mantine-color-scheme` to `data-theme` on the `.soleur-c4` wrapper (1b) OR wrap
-  `<LikeC4Diagram>` in `<MantineProvider forceColorScheme>` (1a) (Phase 1).
+- `apps/web-platform/components/kb/c4-shared.tsx` — Lever 1 (approach 1a): wrap
+  `<LikeC4Diagram>` in `<MantineProvider forceColorScheme={resolvedTheme}>` (from
+  `useTheme()`) at the `.soleur-c4` choke point (Phase 1).
 - `apps/web-platform/test/c4-theme.test.ts` — add the seam-hook + edge-label-hook
-  installed-library guards and the new CSS-rule presence assertions (AC6).
-- `apps/web-platform/package.json` — **only if approach 1a is chosen**: add
-  `@mantine/core` as a direct dependency (today transitive). Skip for 1b.
+  installed-library guards, the new CSS-rule presence assertions, and the
+  `MantineProvider`/`forceColorScheme` source assertion on `c4-shared.tsx` (AC6).
+- `apps/web-platform/package.json` — add `"@mantine/core": "8.3.15"` (the version
+  `@likec4/diagram@1.50.0` pins) as a direct dependency. It resolves today as a hoisted
+  transitive but a stricter installer could un-hoist it. Run the workspace install +
+  re-run the lockfile-sync gate per `cq-before-pushing-package-json-changes`.
 
 ## Files to Create
 
@@ -343,9 +422,11 @@ Run the vitest gate, then visually verify the System Context view in **both** th
   `--soleur-bg-surface-2` cream is genuinely too close to the canvas for ALL surfaces
   (not just the diagram), that is a separate brand-token decision — file as a
   follow-up, do not widen scope here.
-- `app/layout.tsx` no-FOUC theme script — referenced by Lever 1 (1b mirrors its
-  `data-theme` write); edited only if 1b needs the attribute written at SSR time to
-  avoid a flash (deepen-plan to confirm whether a client effect suffices).
+- `components/theme/no-fouc-script.tsx` / `theme-provider.tsx` — the source of truth
+  for `resolvedTheme` (boot-time `html.dataset.theme` + `html.style.colorScheme`; the
+  `useTheme()` hook). Lever 1 *consumes* `resolvedTheme` from here; it does **not**
+  edit these. (The C4 diagram renders client-side via `next/dynamic({ssr:false})`, so
+  there is no SSR flash to guard for the diagram's mantine attribute.)
 
 ## Open Code-Review Overlap
 
@@ -361,7 +442,8 @@ code-review --state open`).
 | Approach | Why not chosen |
 | --- | --- |
 | **Token-only (Approach A): tweak light-theme `relation-label` / fill in `globals.css`, no seam fix** | Unreliable: the broken Mantine seam means the library may paint dark-scheme label rules under a light canvas for any dark-OS user who picks Light, so a token tweak fixes only the light-OS subset. Also a global `globals.css` token change blasts every Soleur surface, not just the diagram. The seam fix (Lever 1) is the load-bearing root cause. |
-| **Patch the library to set `defaultColorScheme` from `data-theme`** | A library patch (brief + prior C4 work disprefer it); brittle across bumps. Wrapping our own provider / attribute is the supported integration seam (`EnsureMantine` is explicitly designed to defer to a parent provider). |
+| **Patch the library to set `defaultColorScheme` from `data-theme`** | A library patch (brief + prior C4 work disprefer it); brittle across bumps. Wrapping our own provider is the supported integration seam (`EnsureMantine.js:13` is explicitly designed to defer to a parent provider). |
+| **Lever-1 via wrapper attribute (1b): set `data-mantine-color-scheme` on `.soleur-c4`** | **Rejected at deepen-plan.** Mantine writes the attribute to `getRootElement()` = `<html>` and gates its CSS-variable flips + baseline rules on the root attribute; an ancestor-div attribute does not reliably flip the diagram's scheme. 1a (provider) is required and adds no dependency. |
 | **Force the diagram always light (or always dark)** | Breaks the working dark theme or breaks light; the diagram must follow the app theme. |
 | **Re-author all three Soleur light creams for more separation globally** | Out of scope — that is a brand-guide token decision affecting every surface, not a diagram readability fix. If warranted, file a follow-up against the brand tokens. |
 
@@ -399,18 +481,18 @@ warm Soleur cream identity; keep the gold accent on strokes/relationships.
 
 Skipped — pure presentation + a client-only theme-binding change. The only
 Files-to-Edit are a CSS file, a client React component (`"use client"`
-`c4-shared.tsx`, no server/route/infra surface), a source-level test, and (1a only)
-`package.json`. No new `apps/*/server/`, `apps/*/src/` runtime path, `apps/*/infra/`,
-or `plugins/*/scripts/` surface; no new logs, failure modes, or runtime process to
-instrument. (Per Phase 2.9 skip rule: pure-presentation / no new code-or-infra
-runtime surface.)
+`c4-shared.tsx`, no server/route/infra surface), a source-level test, and
+`package.json` (declare an already-resolvable dep). No new `apps/*/server/`,
+`apps/*/src/` runtime path, `apps/*/infra/`, or `plugins/*/scripts/` surface; no new
+logs, failure modes, or runtime process to instrument. (Per Phase 2.9 skip rule:
+pure-presentation / no new code-or-infra runtime surface.)
 
 ## Infrastructure (IaC)
 
 Skipped — no new server, service, secret, vendor, cron, DNS, cert, or persistent
 runtime process. Pure client code change against an already-provisioned surface
 (`apps/web-platform/components/**`). (Per Phase 2.8 skip rule.) The `@mantine/core`
-direct-dependency add (1a only) is an npm-package change, not infrastructure.
+direct-dependency add is an npm-package change, not infrastructure.
 
 ## Test Scenarios
 
@@ -421,8 +503,9 @@ direct-dependency add (1a only) is an npm-package change, not infrastructure.
    - Asserts: new light-theme rules present (light-scoped, theme-aware var,
      `!important`); installed `styles.css2.js` still gates on
      `[data-mantine-color-scheme=light]` and consumes `--xy-edge-label-*` on
-     `.likec4-edge-label` / `.react-flow__edge-text`; (1a) `c4-shared.tsx` wraps
-     `<LikeC4Diagram>` in `MantineProvider`; all prior theme assertions still green.
+     `.likec4-edge-label` / `.react-flow__edge-text`; `c4-shared.tsx` wraps
+     `<LikeC4Diagram>` in `<MantineProvider forceColorScheme=…>`; all prior theme
+     assertions still green.
 
 2. **Visual — running viewer, both themes + OS-mismatch (Playwright MCP).**
    - Start the dev viewer (`npm run dev` in `apps/web-platform/`), open the C4
@@ -441,11 +524,20 @@ direct-dependency add (1a only) is an npm-package change, not infrastructure.
   Lever 1.** A token-only change leaves the OS-mismatch (dark-OS + Soleur-Light)
   population with dark-scheme label rules on a light canvas. Phase order: seam first.
 - **`@mantine/core` is a transitive dep today (not in `package.json`).** Approach 1a
-  makes it a **direct** dep — add it explicitly and reconcile with any "no new
-  dependency" intent; do NOT import from `@mantine/core` while relying on it being
-  hoisted (it may not be at the top level under a strict installer). Approach 1b
-  avoids this entirely — prefer it unless Phase 0.3 proves the attribute does not gate
-  the rules.
+  imports `MantineProvider` from it. It resolves today via hoisting
+  (`require.resolve("@mantine/core")` succeeds), but importing a package you don't
+  declare is brittle under a stricter installer that un-hoists it. **Add it as a direct
+  dep** pinned to the version already in the tree (zero install-size delta), and re-run
+  the lockfile-sync gate (`cq-before-pushing-package-json-changes`).
+- **`<MantineProvider forceColorScheme>` writes `data-mantine-color-scheme` to
+  `<html>` (a global attribute), not to the wrapper.** This is required (the diagram's
+  bundled rules need the root attribute) and harmless here because the forced value
+  always equals Soleur's own `resolvedTheme` — but it means the attribute appears on
+  `<html>` only while the C4 canvas is mounted. Confirm at the visual check that
+  mounting/unmounting the diagram does not flicker the global attribute in a way that
+  affects other surfaces (it should not — no other Soleur surface reads
+  `data-mantine-color-scheme`). Keep the provider scoped to `.soleur-c4`; never hoist
+  it to the app root.
 - **Light-scope every Lever-2 rule.** Dark theme works today; an un-scoped token flip
   would regress it. Use `[data-mantine-color-scheme="light"]` (or
   `:root[data-theme="light"]`) under `.soleur-c4`. AC2 requires dark-theme screenshots

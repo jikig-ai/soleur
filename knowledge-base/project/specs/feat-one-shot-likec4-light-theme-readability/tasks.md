@@ -21,26 +21,29 @@ bearing), (2) light-scoped node-separation + edge-label contrast tuning.
   `[data-mantine-color-scheme=light] … --xy-edge-label-color/-background-color`, and
   `.likec4-edge-label { color/background: var(--xy-edge-label-*) }` +
   `.react-flow__edge-text { fill: var(--xy-edge-label-color) }`.
-- [ ] 0.3 **Decide Lever-1 mechanism (1a vs 1b).** Verify whether Mantine's
-  `[data-mantine-color-scheme=light]` bundled rules resolve off the `.soleur-c4`
-  wrapper attribute (→ **1b**, no new dep) or require the provider-injected root
-  (→ **1a**, wrap `MantineProvider` + add `@mantine/core` dep). Record in PR body.
-- [ ] 0.4 Confirm `@mantine/core` resolves (transitive) for 1a feasibility.
-- [ ] 0.5 Confirm `c4-visualizer` flag ON for dev + viewer route reachable (MEMORY).
+- [ ] 0.3 **Lever-1 mechanism = 1a (resolved at deepen-plan; re-confirm facts).**
+  `use-provider-color-scheme.cjs:10` writes `data-mantine-color-scheme` to
+  `getRootElement()` = `<html>` (so 1b wrapper-attr is NOT viable);
+  `MantineProvider.d.ts:16` has `forceColorScheme?: 'light'|'dark'`;
+  `EnsureMantine.js:13` defers to our provider.
+- [ ] 0.4 Confirm `@mantine/core` resolves: `node -e "require.resolve('@mantine/core')"`
+  and capture the in-tree version for the package.json pin.
+- [ ] 0.5 Confirm Soleur theme hook: `useTheme()` → `resolvedTheme: "light"|"dark"`
+  (`components/theme/theme-provider.tsx:343`).
+- [ ] 0.6 Confirm `c4-visualizer` flag ON for dev + viewer route reachable (MEMORY).
 
-## Phase 1 — Lever 1: bind color scheme to `data-theme` (seam fix)
+## Phase 1 — Lever 1: bind color scheme to `resolvedTheme` (seam fix, approach 1a)
 
-- [ ] 1.1 Implement the Phase-0.3 choice in `components/kb/c4-shared.tsx`:
-  - **1b (preferred):** sync `data-mantine-color-scheme` onto the `.soleur-c4`
-    wrapper from `data-theme` (reuse the existing `data-theme` read at
-    `c4-shared.tsx:402`); keep reactive to live theme changes (effect /
-    `MutationObserver` on `<html data-theme>`). Covers both the inline embed and the
-    fullscreen portal (the `.soleur-c4` choke point).
-  - **1a (fallback):** wrap `<LikeC4Diagram>` in `<MantineProvider forceColorScheme>`
-    derived from `data-theme` (+ `prefers-color-scheme` for `system`); add
-    `@mantine/core` to `package.json` deps.
-- [ ] 1.2 (1a only) Add `@mantine/core` direct dependency; reconcile with any "no new
-  dep" intent; do not rely on transitive hoisting.
+- [ ] 1.1 In `components/kb/c4-shared.tsx`, wrap `<LikeC4Diagram>` at the `.soleur-c4`
+  choke point (covers inline embed + fullscreen portal) in
+  `<MantineProvider forceColorScheme={resolvedTheme}>`, where
+  `const { resolvedTheme } = useTheme()` (from `components/theme/theme-provider.tsx`).
+  Import `MantineProvider` from `@mantine/core`. Do NOT read `data-theme` off the DOM
+  (non-reactive). Keep the provider scoped to the canvas (do not hoist to app root).
+- [ ] 1.2 Add `"@mantine/core": "8.3.15"` (the version `@likec4/diagram@1.50.0` pins)
+  to `apps/web-platform/package.json` deps — robustness (resolves via hoisting today
+  but a stricter installer could un-hoist). Run the workspace install + lockfile-sync
+  gate (`cq-before-pushing-package-json-changes`).
 
 > Phase order: Lever 1 lands before/with Lever 2 (token correctness depends on the
 > right scheme branch firing).
@@ -67,7 +70,8 @@ bearing), (2) light-scoped node-separation + edge-label contrast tuning.
   - Installed-library seam guard: `styles.css2.js` still gates light rules on
     `[data-mantine-color-scheme=light]` and consumes `--xy-edge-label-color` /
     `--xy-edge-label-background-color` on `.likec4-edge-label` / `.react-flow__edge-text`.
-  - (1a only) assert `c4-shared.tsx` wraps `<LikeC4Diagram>` in `MantineProvider`.
+  - Assert `c4-shared.tsx` wraps `<LikeC4Diagram>` in `<MantineProvider>` with
+    `forceColorScheme`.
 - [ ] 3.2 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-theme.test.ts`
   → green (all prior + new). NOT `bun test`.
 - [ ] 3.3 **Visual verification (Playwright MCP, post-merge AC8):** open "Soleur
