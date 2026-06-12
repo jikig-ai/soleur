@@ -1798,20 +1798,29 @@
   margin: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-4);
+  align-items: center;
+  gap: var(--space-2);
 }
 .author-card-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 4px;
   font-size: 0.8125rem;
   color: var(--color-text-secondary);
   text-decoration: none;
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: 2px;
-  transition: color 0.15s, border-color 0.15s;
+  border-radius: var(--radius-md, 8px);
+  transition: color 0.15s, background-color 0.15s;
+}
+.author-card-links a svg {
+  display: block;
 }
 .author-card-links a:hover,
 .author-card-links a:focus {
   color: var(--color-accent);
-  border-bottom-color: var(--color-accent);
+  background: var(--color-bg-tertiary);
 }
 @media (max-width: 480px) {
   .author-card {
