@@ -10,6 +10,34 @@ created: 2026-06-12
 
 # ✨ feat: Copy-all-to-clipboard button for the debug stream panel
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-12
+**Sections enhanced:** Domain Review (wireframe gate), Implementation (precedent-verified), Research Insights (new)
+
+### Key Improvements
+
+1. **Wireframe gate (4.9) satisfied** by referencing the existing committed
+   `knowledge-base/product/design/debug-mode/debug-mode-stream.pen` — the canonical
+   wireframe for this exact panel — with a design note for the Copy control's
+   placement (left of the "Hide/Show · not saved" label).
+2. **Clipboard pattern precedent-verified** against `share-popover.tsx:133-142`
+   (live read): the plan's `writeText` + transient 2s `copied` + try/catch matches
+   the precedent; the plan's `navigator.clipboard?.writeText` guard + textarea
+   fallback is a deliberate superset (the precedent silently swallows failure).
+3. **Test-runner reality pinned:** vitest jsdom `include` is `test/**/*.test.tsx`
+   (`vitest.config.ts:60`); bun test blocked (`bunfig.toml:11`). The existing
+   `test/components/debug-stream-panel.test.tsx` is tracked → EXTEND, not create.
+
+### New Considerations Discovered
+
+- The redaction marker `[redacted-key]` is the verified output of `API_KEY_RE` at
+  `redaction-allowlist.ts:173`; the existing render test (`debug-stream-panel.test.tsx:45`)
+  already asserts it for an `sk-ant-…` key, so T1 can reuse the same fixture + marker.
+- All deepen-plan halt gates pass: 4.6 (User-Brand Impact, threshold `single-user
+  incident`), 4.7 (Observability skip-declared, client-only), 4.8 (no PAT), 4.9
+  (committed `.pen` referenced).
+
 ## Overview
 
 Add a single "Copy" control to the header row of the debug stream panel
@@ -163,6 +191,10 @@ const copyAll = useCallback(async () => {
 
 ### Phase 3 — Render the Copy control as a header-row SIBLING
 
+Design reference: `knowledge-base/product/design/debug-mode/debug-mode-stream.pen`
+(committed wireframe; Copy sits left of the "Hide/Show · not saved" label per the
+Domain Review design note).
+
 The header is currently a single `<button>` (lines 129–154) whose `onClick`
 toggles expand. A `<button>` inside a `<button>` is invalid HTML and clicking the
 inner one would also toggle expand. **Resolution:** restructure the header row into
@@ -289,6 +321,48 @@ beforeEach(() => {
   Skip if happy-dom does not implement `execCommand` cleanly — the guard's correctness
   is covered structurally; do not block the PR on this.
 
+## Research Insights
+
+**Precedent (clipboard write) — `apps/web-platform/components/kb/share-popover.tsx:133-142`:**
+
+```tsx
+// share-popover.tsx — the canonical in-repo clipboard pattern
+const copyLink = useCallback(async () => {
+  if (!state.url) return;
+  try {
+    await navigator.clipboard.writeText(state.url);
+    setState((s) => ({ ...s, copied: true }));
+    setTimeout(() => setState((s) => ({ ...s, copied: false })), 2000);
+  } catch {
+    // Fallback for browsers where clipboard API fails.
+  }
+}, [state.url]);
+```
+
+This plan follows the same shape and ADDS: (a) a `navigator.clipboard?.writeText`
+presence guard (insecure-context / older-browser safety), (b) a hidden-textarea +
+`execCommand("copy")` fallback when the guard fails or the promise rejects, and
+(c) a `clearTimeout` on a ref'd timer + unmount cleanup (the panel unmounts when
+`available` flips false; `share-popover` never unmounts mid-timer so it omits this).
+
+**Redaction marker (verified):** `redactCommandForDisplay` routes `sk-ant-…` /
+`sk-…` / `ghp_…` shapes through `API_KEY_RE.replace(…, "[redacted-key]")`
+(`redaction-allowlist.ts:173`). The existing render test asserts `[redacted-key]`
+for the `ANTHROPIC` fixture at `debug-stream-panel.test.tsx:45` — T1 reuses both.
+
+**Edge cases:**
+
+- Empty body (`result` event with no body): `redactCommandForDisplay` returns `""`;
+  the `body ? … : header` guard emits header-only, mirroring the render path's
+  `{body && …}`. No dangling blank line.
+- happy-dom may not define `navigator.clipboard`; the test MUST install the mock
+  before render, and the component's optional-chaining guard is what makes the
+  fallback path reachable.
+- `execCommand` is deprecated but remains the only synchronous clipboard fallback
+  for insecure contexts; it is the documented graceful-degradation path, gated
+  behind the `navigator.clipboard?.writeText` presence check so it never runs when
+  the modern API is available.
+
 ## Files to Edit
 
 - `apps/web-platform/components/chat/debug-stream-panel.tsx` — add
@@ -321,16 +395,29 @@ skill's Phase 1.7.5.)
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** none (pipeline auto-accept)
 **Skipped specialists:** none
-**Pencil available:** N/A — no NEW user-facing surface
+**Pencil available:** yes (existing committed wireframe extended by reference)
+**Wireframe:** `knowledge-base/product/design/debug-mode/debug-mode-stream.pen`
+(committed; the canonical wireframe for this exact panel from feat-debug-mode-stream).
 
 This modifies an EXISTING component (`debug-stream-panel.tsx`) by adding one
 control to an existing header row. It creates no new page, no new component file,
 no new flow. The mechanical UI-surface override fires (edits a `components/**/*.tsx`
-file) → Product is forced relevant, but the change is ADVISORY tier: a convenience
-button on an existing, team-only, dev-cohort-gated diagnostic panel. No new
-`components/**` FILE is created (the escalation-to-BLOCKING trigger), so no `.pen`
-wireframe is required. The control reuses the existing header's tokens and scale;
-no new visual language. Pipeline context → auto-accepted.
+file) → Product is forced relevant, ADVISORY tier: a convenience button on an
+existing, team-only, dev-cohort-gated diagnostic panel. No new `components/**`
+FILE is created (the escalation-to-BLOCKING trigger). The wireframe gate
+(`wg-ui-feature-requires-pen-wireframe`) is satisfied by the existing committed
+`debug-mode-stream.pen` — the panel this feature extends. The Copy control reuses
+that wireframe's header-row layout and the existing header tokens/scale; it adds
+one trailing control sibling to the toggle, no new visual language. Pipeline
+context → auto-accepted.
+
+**Design note (Copy control placement vs. the committed wireframe):** the
+wireframe's header row shows the title + count chip + "Hide/Show · not saved"
+label. This feature inserts a "Copy" button as a sibling immediately left of the
+"Hide/Show · not saved" label (same `text-[10px]` / `font-mono` / `soleur-*`
+token scale as the kind-label chip), and splits the single header `<button>` into
+a flex container with two sibling buttons (toggle + Copy) so they are independent
+controls. No other wireframe region changes.
 
 #### Findings
 
