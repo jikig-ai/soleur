@@ -337,8 +337,14 @@ logs:
   where: existing route logger.error (route.ts:144) on the outer catch only — unchanged
   retention: existing Better Stack / Sentry retention (no new log line added)
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-panel.test.tsx"
-  expected_output: "all tests pass — selector lists README.md, README is read-only, .c4 save path intact"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/kb/c4/project
+  expected_output: "307"
+  note: >-
+    No-SSH live probe that the owner C4 project endpoint (the route this PR
+    widens) is deployed and middleware-gated: an anonymous caller is redirected
+    (307 -> /login). The dropdown/README behavior itself is client state +
+    owner-auth'd JSON, covered pre-merge by vitest test/c4-code-panel.test.tsx +
+    test/c4-project-route.test.ts.
 ```
 
 ## Test Scenarios
