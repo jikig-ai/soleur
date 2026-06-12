@@ -41,7 +41,12 @@ service_status() {
 service_journal_tail() {
   local unit="$1"
   if command -v journalctl >/dev/null 2>&1; then
+    # #5159: belt-and-suspenders redaction before surfacing over /hooks/deploy-status
+    # (HMAC + CF-Access gated, but defense-in-depth). Neutralizes the one residual
+    # leak path — a binary echoing the inngest signing key (fixed `signkey-` prefix)
+    # in an error line. Hardens BOTH this new inngest tail and the existing vector tail.
     journalctl -u "$unit" --no-pager --output=cat -n 100 2>/dev/null \
+      | sed -E 's/signkey-(prod-)?[0-9a-fA-F]{4,}/signkey-REDACTED/g' \
       | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 8000 \
       || true
   fi
