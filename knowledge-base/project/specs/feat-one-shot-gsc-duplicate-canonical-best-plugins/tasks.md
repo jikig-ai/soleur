@@ -72,4 +72,5 @@ deferred.
 - [ ] 4.2 After ~2-4 weeks (validation window ≈ early July 2026), re-inspect via GSC
   URL Inspection; expect www → "Alternate page with proper canonical" and apex indexed
   as canonical. Re-open/investigate only if the **apex** itself is flagged (would
-  indicate a genuine new regression). Tracked for `/schedule`.
+  indicate a genuine new regression). Tracked in **#5211** (deferred-automation,
+  re-eval ~2026-07-10).
