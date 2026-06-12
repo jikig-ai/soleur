@@ -68,6 +68,7 @@ echo "--- cron-egress firewall drift-guard ---"
 
 echo "-- artifacts exist + parse --"
 for f in "$LOADER" "$RESOLVER" "$ALARM" "$ALLOWLIST" \
+  "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt" \
   "$SCRIPT_DIR/cron-egress-firewall.service" \
   "$SCRIPT_DIR/cron-egress-resolve.service" \
   "$SCRIPT_DIR/cron-egress-resolve.timer" \
@@ -81,7 +82,7 @@ assert_cmd "alarm parses (bash -n)" bash -n "$ALARM"
 echo "-- server.tf delivery (anchored on the file-provisioner construct) --"
 assert_grep "resource exists" 'resource "terraform_data" "cron_egress_firewall"' "$SERVER_TF"
 for f in cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
-  cron-egress-allowlist.txt cron-egress-firewall.service \
+  cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt cron-egress-firewall.service \
   cron-egress-resolve.service cron-egress-resolve.timer; do
   assert_grep "delivers $f (source=)" "source += +\"\\\$\\{path\\.module\\}/$f\"" "$SERVER_TF"
   assert_grep "trigger folds $f hash" "file\\(\"\\\$\\{path\\.module\\}/$f\"\\)" "$SERVER_TF"
@@ -134,6 +135,13 @@ assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect brid
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
 assert_grep "jump rule scoped to the bridge interface" 'iifname "\$BRIDGE_IF" counter jump SOLEUR-EGRESS' "$LOADER"
 assert_not_grep "never flushes the shared DOCKER-USER chain" 'flush chain ip filter DOCKER-USER' "$LOADER"
+
+# GitHub LB-range fix: a static interval CIDR set parallel to the single-IP set.
+assert_grep "declares interval CIDR set" 'set soleur_egress_allow_cidr' "$LOADER"
+assert_grep "CIDR set uses flags interval" 'flags interval' "$LOADER"
+assert_grep "CIDR allowlist accept rule present" 'ip daddr @soleur_egress_allow_cidr accept' "$LOADER"
+assert_grep "loader reads the CIDR allowlist file" 'cron-egress-allowlist-cidr.txt' "$LOADER"
+assert_grep "CIDR file carries GitHub git /20" '140.82.112.0/20' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
 
 echo "-- resolver safety invariants --"
 # Anchored on the executable form (`flush set ip filter …`), not the bare
@@ -210,11 +218,15 @@ for host in api.anthropic.com github.com api.github.com api.doppler.com \
 done
 # Exact-set guard: a NEW host (the firewall's entire attack-surface dial)
 # must force a deliberate edit here carrying its evidence.
+# Count is 23 since #5199 (restore 7 Tier-2 crons) grew the allowlist with
+# evidence-gated hosts (e.g. hn.algolia.com, plausible.io) but did not bump
+# this guard — drift fixed here. The CIDR ranges live in a SEPARATE interval
+# set/file (cron-egress-allowlist-cidr.txt) and are NOT counted here.
 HOST_COUNT="$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$ALLOWLIST")"
-if [[ "$HOST_COUNT" -eq 22 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: allowlist host count is exactly 22"
+if [[ "$HOST_COUNT" -eq 23 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: allowlist host count is exactly 23"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: allowlist host count is $HOST_COUNT (expected 22 — update BOTH the allowlist and this test with evidence)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: allowlist host count is $HOST_COUNT (expected 23 — update BOTH the allowlist and this test with evidence)"
 fi
 assert_not_grep "Better Stack is HOST egress (must not be in the container allowlist)" '^(logs\.)?(betterstack|betteruptime)' "$ALLOWLIST"
 assert_not_grep "GHCR is HOST egress (must not be in the container allowlist)" '^ghcr\.io$' "$ALLOWLIST"
