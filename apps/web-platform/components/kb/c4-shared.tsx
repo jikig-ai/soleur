@@ -22,6 +22,8 @@ import {
   useLikeC4ViewModel,
   type OnNavigateTo,
 } from "@likec4/diagram";
+import { MantineProvider } from "@mantine/core";
+import { useTheme } from "@/components/theme/theme-provider";
 import { LikeC4Model } from "@likec4/core/model";
 import type { LayoutedLikeC4ModelData } from "@likec4/core/types";
 import "@likec4/diagram/styles.css";
@@ -162,6 +164,16 @@ export function C4Canvas({
   onViewChange?: (viewId: string) => void;
 }) {
   const [currentView, setCurrentView] = useState(initialViewId);
+  // Lever 1 — bind the diagram's Mantine color scheme to Soleur's theme. The
+  // library wraps <LikeC4Diagram> in its OWN provider (hard-coded
+  // defaultColorScheme:"auto", i.e. OS prefers-color-scheme) only when no
+  // MantineContext is in scope; our <MantineProvider forceColorScheme> below
+  // supplies that context, so the diagram follows Soleur's chosen theme instead
+  // of the OS — fixing the OS-mismatch seam (dark-OS + Soleur-Light painting
+  // dark-scheme label rules over a light canvas). resolvedTheme is "light"|"dark"
+  // (already resolved from system upstream), the exact forceColorScheme union;
+  // read it from the reactive hook, NOT a raw data-theme DOM read (non-reactive).
+  const { resolvedTheme } = useTheme();
   // Fullscreen/expand toggle. The diagram subtree is re-parented into a
   // document.body portal when expanded (escapes the inline embed's h-[600px]
   // + overflow-hidden clip). Drill-down state (`currentView`) is lifted here
@@ -235,12 +247,14 @@ export function C4Canvas({
   // both — they are mutually exclusive branches), so there is no second
   // LikeC4Diagram instance forking drill-down state.
   const canvas = (
-    <LikeC4ModelProvider likec4model={model}>
-      <ViewCanvas
-        viewId={currentView}
-        onNavigate={(to) => setCurrentView(String(to))}
-      />
-    </LikeC4ModelProvider>
+    <MantineProvider forceColorScheme={resolvedTheme}>
+      <LikeC4ModelProvider likec4model={model}>
+        <ViewCanvas
+          viewId={currentView}
+          onNavigate={(to) => setCurrentView(String(to))}
+        />
+      </LikeC4ModelProvider>
+    </MantineProvider>
   );
 
   // .soleur-c4 anchors the scoped Soleur re-theme (c4-theme.css). It is applied

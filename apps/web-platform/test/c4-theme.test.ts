@@ -43,6 +43,39 @@ const LIKEC4_ELEMENT_CONTAINER = join(
   LIKEC4_ELEMENT_DIR,
   "ElementNodeContainer.js",
 );
+// Light-theme readability (§4) depends on the library's own light-scheme branch
+// firing in phase with Soleur's theme. Two installed-library files are the
+// load-bearing hooks the §4 CSS + the c4-shared.tsx seam fix ride on:
+//   - styles.css2.js: gates light-branch edge-label vars on
+//     `[data-mantine-color-scheme=light]` and consumes `--xy-edge-label-*`.
+//   - EnsureMantine.js / DefaultMantineProvider.js: the seam — the library only
+//     injects its own `defaultColorScheme:"auto"` provider when NO MantineContext
+//     is in scope, so wrapping <LikeC4Diagram> in our <MantineProvider
+//     forceColorScheme> makes the diagram follow Soleur's resolvedTheme instead
+//     of the OS `prefers-color-scheme`.
+const LIKEC4_CONTEXT_DIR = join(
+  __dirname,
+  "..",
+  "node_modules",
+  "@likec4",
+  "diagram",
+  "dist",
+  "context",
+);
+const LIKEC4_STYLES = join(
+  __dirname,
+  "..",
+  "node_modules",
+  "@likec4",
+  "diagram",
+  "dist",
+  "styles.css2.js",
+);
+const LIKEC4_ENSURE_MANTINE = join(LIKEC4_CONTEXT_DIR, "EnsureMantine.js");
+const LIKEC4_DEFAULT_PROVIDER = join(
+  LIKEC4_CONTEXT_DIR,
+  "DefaultMantineProvider.js",
+);
 
 describe("C4 visualizer Soleur re-theme", () => {
   it("removes the literal 'LikeC4 ·' chrome label from our components (AC2)", () => {
@@ -136,5 +169,100 @@ describe("C4 visualizer Soleur re-theme", () => {
     // The whole CSS approach depends on the light-DOM <LikeC4Diagram> (not the
     // ShadowRoot ReactLikeC4/LikeC4View variants). Guard the component choice.
     expect(shared).toContain("<LikeC4Diagram");
+  });
+
+  // --- Light-theme readability (§4) + the Mantine color-scheme seam fix ---
+
+  it("adds a light-scoped node-separation rule that beats the library, theme-aware (AC2/AC4/AC5)", () => {
+    const css = read("c4-theme.css");
+    // The §4 node rule must be scoped to BOTH the light scheme AND .soleur-c4 so
+    // dark theme is untouched (AC2 requires dark byte-identical).
+    expect(css).toMatch(
+      /\[data-mantine-color-scheme="light"\]\s+\.soleur-c4 :is\(\[data-likec4-color\]\)/,
+    );
+    // Capture the light-scoped node rule body; it must re-point the fill via a
+    // Soleur token (not hex) and carry !important.
+    const nodeBody = css.match(
+      /\[data-mantine-color-scheme="light"\]\s+\.soleur-c4 :is\(\[data-likec4-color\]\)\s*\{([\s\S]*?)\}/,
+    );
+    expect(nodeBody).not.toBeNull();
+    const node = nodeBody![1];
+    expect(node).toMatch(/--likec4-palette-fill:[^;]*var\(--soleur-[^;]*!important/);
+    // The relation-label token is darkened toward primary so the library's
+    // +0.05 L light-branch lift still clears AA.
+    expect(node).toMatch(
+      /--likec4-palette-relation-label:\s*var\(--soleur-text-primary\)[^;]*!important/,
+    );
+  });
+
+  it("restores the edge-label pill opacity in light theme via the library's own --xy hook (AC3/AC5)", () => {
+    const css = read("c4-theme.css");
+    // The library lowers the pill bg to 60% opacity in its light branch; we
+    // override the SAME consumption var on .likec4-edge-label, light-scoped.
+    expect(css).toMatch(
+      /\[data-mantine-color-scheme="light"\]\s+\.soleur-c4 \.likec4-edge-label/,
+    );
+    const pillBody = css.match(
+      /\[data-mantine-color-scheme="light"\]\s+\.soleur-c4 \.likec4-edge-label\s*\{([\s\S]*?)\}/,
+    );
+    expect(pillBody).not.toBeNull();
+    expect(pillBody![1]).toMatch(
+      /--xy-edge-label-background-color:[^;]*var\(--soleur-[^;]*!important/,
+    );
+  });
+
+  it("keeps every §4 rule light-scoped so dark theme is untouched (AC2)", () => {
+    const css = read("c4-theme.css");
+    // Neither §4 hook may appear unscoped — the only occurrences of these
+    // light-only selectors must sit behind [data-mantine-color-scheme="light"].
+    for (const m of css.matchAll(/\.soleur-c4 \.likec4-edge-label/g)) {
+      const before = css.slice(0, m.index);
+      expect(before.endsWith('[data-mantine-color-scheme="light"] ')).toBe(true);
+    }
+  });
+
+  it("guards the library's light-branch edge-label hooks in the installed @likec4/diagram (AC6)", () => {
+    // Source-grep CSS tests are vacuous alone; this reads the INSTALLED library
+    // so a bump that renames the scheme gate or the --xy hook fails CI loudly
+    // instead of silently un-fixing the labels (vendored-CSS Sharp Edge, #4938).
+    const styles = readFileSync(LIKEC4_STYLES, "utf8");
+    // The light branch is gated on the mantine scheme attribute...
+    expect(styles).toContain("[data-mantine-color-scheme=light]");
+    // ...and sets the two label vars our §4 rule (and the library) consume.
+    expect(styles).toContain("--xy-edge-label-color");
+    expect(styles).toContain("--xy-edge-label-background-color");
+    // The pill element consumes the background var; the SVG text consumes color.
+    expect(styles).toMatch(
+      /\.likec4-edge-label\{[^}]*background:var\(--xy-edge-label-background-color\)/,
+    );
+    expect(styles).toMatch(
+      /\.react-flow__edge-text\{fill:var\(--xy-edge-label-color/,
+    );
+  });
+
+  it("guards the Mantine color-scheme seam in the installed @likec4/diagram (AC6)", () => {
+    // The seam: the library injects its OWN provider (hard-coded
+    // defaultColorScheme:"auto", i.e. OS prefers-color-scheme) ONLY when no
+    // MantineContext is in scope. Our wrapper provides that context, so the
+    // diagram follows Soleur's resolvedTheme. If a bump removes either fact, the
+    // forceColorScheme wrap stops being the seam and this fails loudly.
+    expect(readFileSync(LIKEC4_DEFAULT_PROVIDER, "utf8")).toContain(
+      'defaultColorScheme: "auto"',
+    );
+    const ensure = readFileSync(LIKEC4_ENSURE_MANTINE, "utf8");
+    expect(ensure).toContain("MantineContext");
+    expect(ensure).toContain("DefaultMantineProvider");
+  });
+
+  it("wraps <LikeC4Diagram> in a MantineProvider bound to Soleur's resolvedTheme (AC1/AC6)", () => {
+    const shared = read("c4-shared.tsx");
+    // Lever 1 (the seam fix): a Soleur-owned MantineProvider whose color scheme
+    // is forced to Soleur's resolvedTheme overrides the OS prefers-color-scheme.
+    expect(shared).toMatch(/import\s*\{[^}]*MantineProvider[^}]*\}\s*from\s*"@mantine\/core"/);
+    expect(shared).toMatch(/<MantineProvider[^>]*forceColorScheme=\{resolvedTheme\}/);
+    // resolvedTheme must come from Soleur's reactive theme hook, NOT a raw DOM
+    // read of data-theme (the c4-shared.tsx CodeMirror read is non-reactive).
+    expect(shared).toMatch(/const\s*\{\s*resolvedTheme\s*\}\s*=\s*useTheme\(\)/);
+    expect(shared).toMatch(/from\s*"@\/components\/theme\/theme-provider"/);
   });
 });

@@ -221,7 +221,7 @@ schema/auth/API/data surface touched.`)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Mantine color scheme tracks Soleur theme (the seam fix).** When the app
+- [x] **AC1 — Mantine color scheme tracks Soleur theme (the seam fix).** When the app
   resolves to Light (`resolvedTheme === "light"`), the diagram resolves
   `data-mantine-color-scheme=light` (and `=dark` for Dark) **regardless of OS
   `prefers-color-scheme`**, because `c4-shared.tsx` wraps `<LikeC4Diagram>` in
@@ -231,28 +231,28 @@ schema/auth/API/data surface touched.`)
   Light, assert `document.documentElement.getAttribute('data-mantine-color-scheme')`
   reports `light`. Source-side: `c4-shared.tsx` imports `MantineProvider` and passes
   `forceColorScheme={resolvedTheme}` from `useTheme()`.
-- [ ] **AC2 — Node separation in light theme.** In the running viewer, light theme,
+- [x] **AC2 — Node separation in light theme.** In the running viewer, light theme,
   element nodes are visually distinguishable from the canvas (a visible
   fill-vs-canvas delta and/or a visible node border). The fix is **scoped to light
   theme** — a `[data-mantine-color-scheme="light"]`/`:root[data-theme="light"]`
   selector under `.soleur-c4`, leaving the dark-theme node rendering byte-identical.
   Verify: `c4-theme.css` contains the light-scoped node rule and dark-theme
   screenshots are unchanged from `main`.
-- [ ] **AC3 — Edge-label pills legible in light theme.** Relationship labels read
+- [x] **AC3 — Edge-label pills legible in light theme.** Relationship labels read
   clearly in light theme (label text ≥ 4.5:1 against the *rendered* pill, accounting
   for the library's +0.05 L lift and pill opacity). Achieved by darkening the
   light-theme `relation-label` token toward `--soleur-text-primary` and/or raising
   `--xy-edge-label-background-color` opacity under `.soleur-c4 .likec4-edge-label`.
   Theme-scoped to light.
-- [ ] **AC4 — Theme-aware, no hard-coded hex regression.** All new rules reference
+- [x] **AC4 — Theme-aware, no hard-coded hex regression.** All new rules reference
   Soleur/LikeC4 palette **vars** (`var(--soleur-*)` / `var(--likec4-palette-*)`), not
   literal hex; `c4-theme.css` still contains **no** `#3b82f6` (upstream blue) and the
   dark-theme path still resolves to the existing dark tokens. Verify by grep.
-- [ ] **AC5 — `!important` carried where it must beat the library.** Any per-node /
+- [x] **AC5 — `!important` carried where it must beat the library.** Any per-node /
   per-`--xy-*` override carries `!important` (mirrors the §2b/§2c convention — needed
   to beat the library's runtime ID-specificity + bundled-CSS rules). Verify the new
   rule blocks match `!important`.
-- [ ] **AC6 — Seam-hook guard against a library bump.** `c4-theme.test.ts` asserts
+- [x] **AC6 — Seam-hook guard against a library bump.** `c4-theme.test.ts` asserts
   the installed library still (a) gates light rules on `data-mantine-color-scheme`
   (grep `styles.css2.js` for `[data-mantine-color-scheme=light]`) and (b) consumes
   `--xy-edge-label-color` / `--xy-edge-label-background-color` on `.likec4-edge-label`
@@ -261,7 +261,7 @@ schema/auth/API/data surface touched.`)
   selector X" source-grep with a guard reading the installed library — PR #4938
   vendored-CSS Sharp Edge.) Also assert `c4-shared.tsx` wraps `<LikeC4Diagram>` in a
   `MantineProvider` with `forceColorScheme` (the seam fix, approach 1a).
-- [ ] **AC7 — Existing theme test still green.**
+- [x] **AC7 — Existing theme test still green.**
   `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-theme.test.ts`
   passes (all prior assertions — logo hide, palette override, person silhouette — plus
   the new ones). NOT `bun test` (`bunfig.toml:11` `pathIgnorePatterns=["**"]` blocks
