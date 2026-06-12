@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactCodeMirrorProps } from "@uiw/react-codemirror";
 
 // Capture the props the editor is mounted with so we can assert wiring
@@ -176,5 +182,99 @@ describe("C4CodePanel — save path unchanged (AC7)", () => {
       target: { value: "model { changed }" },
     });
     expect(save.disabled).toBe(false);
+  });
+});
+
+const OLD_SOURCE = "model {\n  // a note\n  user = element\n}";
+const NEW_SOURCE = "model {\n  // a note\n  user = element TEST\n}";
+
+function mockFetchOnce(status: number, body: Record<string, unknown>) {
+  return vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  } as Response);
+}
+
+// F-A1 + F-B: a successful Save must NOT be reverted by a subsequent stale
+// reload(), and a failed Save must surface honestly without discarding the edit.
+// The revert mechanism is the [data, activeFile] effect re-seeding `draft` from
+// `data.sources` — when the on-disk clone GET /project reads is stale (diverged
+// clone / Contents-API→fetch replica lag), that source is the PRE-edit text.
+describe("C4CodePanel — save persistence (F-A1 / F-B)", () => {
+  it("F-A1: a 200 save survives a stale reload() (no silent revert)", async () => {
+    const fetchMock = mockFetchOnce(200, { rerendered: true, commitSha: "abc" });
+    // The parent re-fetches after onSaved; simulate a STALE clone by returning a
+    // fresh object whose source is still the PRE-edit text.
+    const stale = (): ProjectResponse => ({
+      dir: "knowledge-base/diagrams",
+      sources: { "model.c4": OLD_SOURCE },
+      dump: null,
+      viewIds: [],
+      diagnostics: [],
+    });
+    const { rerender } = render(
+      <C4CodePanel
+        data={stale()}
+        dirPath="knowledge-base/diagrams"
+        onSaved={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: NEW_SOURCE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await screen.findByText(/Saved/);
+    // Parent reload returns the stale clone (new object ref, old content).
+    rerender(
+      <C4CodePanel
+        data={stale()}
+        dirPath="knowledge-base/diagrams"
+        onSaved={vi.fn()}
+      />,
+    );
+    // The editor must still show the saved text, not snap back to OLD_SOURCE.
+    expect((screen.getByTestId("cm") as HTMLTextAreaElement).value).toBe(
+      NEW_SOURCE,
+    );
+    // And the just-saved content is no longer "dirty" — Save re-disables.
+    expect(
+      (screen.getByRole("button", { name: /save/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    fetchMock.mockRestore();
+  });
+
+  it("F-B: a 500 SYNC_FAILED shows the error and keeps the edited draft", async () => {
+    const fetchMock = mockFetchOnce(500, {
+      error: "Workspace sync failed",
+      code: "SYNC_FAILED",
+    });
+    const onSaved = vi.fn();
+    render(
+      <C4CodePanel
+        data={{
+          dir: "knowledge-base/diagrams",
+          sources: { "model.c4": OLD_SOURCE },
+          dump: null,
+          viewIds: [],
+          diagnostics: [],
+        }}
+        dirPath="knowledge-base/diagrams"
+        onSaved={onSaved}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: NEW_SOURCE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await screen.findByText(/Workspace sync failed/);
+    // The edited draft is retained (no revert) and onSaved (which triggers the
+    // reload) is never called on a non-2xx.
+    expect((screen.getByTestId("cm") as HTMLTextAreaElement).value).toBe(
+      NEW_SOURCE,
+    );
+    await waitFor(() => expect(onSaved).not.toHaveBeenCalled());
+    fetchMock.mockRestore();
   });
 });
