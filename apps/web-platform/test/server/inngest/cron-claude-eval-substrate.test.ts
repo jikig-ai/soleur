@@ -314,6 +314,13 @@ describe("restored cron-bug-fixer prompt commands vs the hook (#5199 final)", ()
     expect(v("git push -u origin bot-fix/4321-foo")).toBe("allow");
     expect(v("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-4321-foo")).toBe("allow");
     expect(v("./node_modules/.bin/vitest run --root apps/web-platform")).toBe("allow");
+    // #5199 review — Phase 6 (Failure Handler) emitted forms. Phase 6 fires on
+    // any failure when the cron runs the WHOLE skill, so its literal forms must
+    // also be hook-clean: the failure comment goes via --body-file (multiline
+    // --body is denied), and the worktree/branch cleanup drops 2>/dev/null.
+    expect(v("gh issue comment 4321 --body-file fix-attempt.md")).toBe("allow");
+    expect(v("git worktree remove .worktrees/bot-fix-4321-foo --force")).toBe("allow");
+    expect(v("git branch -D bot-fix-4321-foo")).toBe("allow");
   });
 
   it("exfil / blanket / interpreter / persistence-bypass forms DENY", () => {
@@ -338,6 +345,25 @@ describe("restored cron-bug-fixer prompt commands vs the hook (#5199 final)", ()
     expect(v("cat /proc/self/environ")).toBe("deny");
     // gh pr merge is node-side (runAutoMergeGate), never a prompt verb.
     expect(v("gh pr merge --auto")).toBe("deny");
+  });
+
+  // #5199 review — prefix-overmatch exfil close. The allowlist carries the
+  // prefix `bash …/worktree-manager.sh`; a bare `startsWith(p)` matcher would
+  // let a near-miss extension of that path (a sibling exfil script the model
+  // Wrote) prefix-match and ALLOW. A match now requires exact-equal OR a
+  // trailing-space separator, so only the real script path (with its `--yes
+  // create …` args) ALLOWs; the near-miss forms DENY.
+  it("near-miss extensions of an allowlisted script path DENY (separator required)", () => {
+    expect(
+      v("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh-evil"),
+    ).toBe("deny");
+    expect(
+      v("bash plugins/soleur/skills/git-worktree/scripts/evil.sh"),
+    ).toBe("deny");
+    // the legitimate space-separated form still ALLOWs.
+    expect(
+      v("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-1"),
+    ).toBe("allow");
   });
 });
 

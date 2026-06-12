@@ -315,8 +315,25 @@ function loadAllowlist(path) {
 function segmentMatchesAllowlist(segment, allowPrefixes) {
   // normalize internal whitespace for prefix comparison
   const norm = segment.replace(/\s+/g, " ").trim();
+  // A match requires a SEPARATOR after the allowlisted prefix — never a bare
+  // continuation of the prefix's final token. The bare `startsWith(p)` clause
+  // that was here let `bash …/worktree-manager.sh-pwn` prefix-match the
+  // allowlisted `bash …/worktree-manager.sh`, so a prompt-injected model could
+  // Write a sibling exfil script then bash it → ALLOW. (Ref #5199 review)
+  //
+  // The accepted separators are:
+  //   - exact equality (a bare allowlisted verb, e.g. `git status`);
+  //   - a following SPACE (`verb <space> args`, the common form);
+  //   - the prefix itself ENDING in `/` (a path-boundary separator) — this
+  //     keeps directory-scoped prefixes like `gh api repos/jikig-ai/soleur/`
+  //     matching `gh api repos/jikig-ai/soleur/milestones?…` (a new path
+  //     segment under the allowed dir), while STILL denying `.sh-pwn` (the
+  //     `.sh` prefix ends in `h`, not `/`, so no bare continuation is allowed).
   return allowPrefixes.some(
-    (p) => norm === p || norm.startsWith(p + " ") || norm.startsWith(p),
+    (p) =>
+      norm === p ||
+      norm.startsWith(p + " ") ||
+      (p.endsWith("/") && norm.startsWith(p)),
   );
 }
 
