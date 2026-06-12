@@ -42,7 +42,17 @@ eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(
 # Match either `gh pr ready` or `gh pr merge` with --auto flag. The chained-
 # operator clause catches `gh pr ready && gh pr merge --squash --auto` and
 # similar. Word-boundary-anchored to avoid false positives on quoted strings.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting `gh pr ready` is not mistaken for one (#5192).
+# incidents.sh is SOFT-sourced above (`2>/dev/null || true`); under `set -e` a
+# bare `strip_command_bodies` call would abort + fail-OPEN if the lib failed to
+# load, so guard on the helper and fall back to raw $CMD (fail-toward-firing).
+if command -v strip_command_bodies >/dev/null 2>&1; then
+  SCAN=$(strip_command_bodies "$CMD")
+else
+  SCAN="$CMD"
+fi
+if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
   exit 0
 fi
 

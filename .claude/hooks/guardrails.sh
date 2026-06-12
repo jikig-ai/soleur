@@ -29,6 +29,14 @@ eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NA
 : "${COMMAND:=}"
 : "${TOOL_NAME:=}"
 
+# Derive a quote/heredoc-stripped view of the command ONCE (one perl fork per
+# Bash invocation, alongside the existing jq + grep overhead). PHRASE-detecting
+# gates (require-milestone, block-stash) scan $SCAN so a commit whose MESSAGE
+# documents `gh issue create` / `git stash` is not mistaken for the real
+# command (#5192). Gates that fire on `git commit` itself keep scanning
+# $COMMAND — a commit that mentions "git commit" in its body still IS a commit.
+SCAN=$(strip_command_bodies "$COMMAND")
+
 # Bypass preflight — records (does NOT block) when a known bypass flag is used.
 # Scope: --no-verify, -c core.hooksPath=…, HUSKY=0, --no-gpg-sign,
 # -c commit.gpgsign=false, LEFTHOOK=0. See detect_bypass in lib/incidents.sh.
@@ -40,6 +48,8 @@ fi
 # guardrails:block-commit-on-main — Block git commit on main branch
 # Match git commit at start of string OR after chain operators (&&, ||, ;)
 # so chained commands like "git add && git commit" are caught.
+# Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
+# mentioning "git commit" still IS a commit — no false-positive class here.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
   # Resolve the branch from the command's working directory, not the hook's CWD.
   # resolve_command_cwd (lib/incidents.sh) covers: "cd /worktree && ...",
@@ -79,7 +89,10 @@ if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[
 fi
 
 # guardrails:block-delete-branch — Block gh pr merge --delete-branch when worktrees exist
-if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting `gh pr merge --delete-branch` is not mistaken for
+# one (#5192 sweep — same phrase-class FP as require-milestone).
+if echo "$SCAN" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
   WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l)
   if [ "$WORKTREE_COUNT" -gt 1 ]; then
     emit_incident "guardrails-block-delete-branch" "deny" "Never use --delete-branch with gh pr merge" "$COMMAND"
@@ -98,6 +111,7 @@ fi
 # Allows optional -C <path> between git and commit/merge.
 # Checks only added lines (^\+) to avoid blocking removal of markers.
 # CWD resolution mirrors guardrails:block-commit-on-main via resolve_command_cwd.
+# Scans $COMMAND (NOT $SCAN): gates the REAL commit / merge --continue.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)'; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
@@ -118,7 +132,12 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge
 fi
 
 # guardrails:require-milestone — Block gh issue create without --milestone
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting `gh issue create` is not mistaken for one (#5192).
+# The --repo/--milestone flag checks below intentionally read $COMMAND: on a
+# real create those flags live OUTSIDE quotes and survive the strip, and on a
+# commit-body FP this `if` never fires so they are never reached.
+if echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
   # owner is not our org). The constitution backlog-hygiene rule applies only to
   # OUR issues; external/vendor repos (e.g. upstream bug reports) have their own
@@ -165,7 +184,9 @@ fi
 # CWD is a worktree but no explicit "cd" prefix appears in the command. Blocking
 # git stash everywhere is safe — AGENTS.md requires "commit WIP first" and there
 # is no legitimate automated use case for git stash in this repo.
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting "never git stash" is not mistaken for one (#5192).
+if echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
   emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {

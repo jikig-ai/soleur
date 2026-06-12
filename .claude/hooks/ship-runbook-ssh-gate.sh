@@ -20,12 +20,19 @@
 
 set -eo pipefail
 
+# shellcheck source=lib/incidents.sh
+# Sourced for strip_command_bodies (this hook emits no incidents itself).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+
 INPUT=$(cat)
 eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(.cwd // "")"' 2>/dev/null || echo 'CMD="" WORK_DIR=""')"
 : "${CMD:=}"
 : "${WORK_DIR:=}"
 
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting `gh pr ready` is not mistaken for one (#5192).
+SCAN=$(strip_command_bodies "$CMD")
+if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
   exit 0
 fi
 if [[ "$WORK_DIR" != /* ]] || [[ ! -d "$WORK_DIR" ]]; then exit 0; fi

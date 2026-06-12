@@ -44,7 +44,13 @@ eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(
 
 # Match `gh issue create` (anchored at start of pipeline OR after &&/||/;).
 # The same word-boundary form used by ship-unpushed-commits-gate.sh.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create(\s|$)'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting `gh issue create` is not mistaken for one (#5192).
+# Only the TRIGGER grep moves to $SCAN; the --body/--body-file extraction below
+# stays on $CMD so a REAL create's quoted body is still read (its flags live
+# outside the stripped span).
+SCAN=$(strip_command_bodies "$CMD")
+if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create(\s|$)'; then
   exit 0
 fi
 
@@ -62,7 +68,10 @@ fi
 
 # Extract the body. /ship's Phase 7 Step 3.5 always uses --body-file with a
 # /tmp path; older inline-call sites may use --body "<heredoc>". Handle both.
-BODY_FILE=$(echo "$CMD" | grep -oE -- '--body-file[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $2}')
+# `|| true`: under `set -eo pipefail` a no-match grep exits non-zero and would
+# abort the hook (fail-open) for any inline-`--body` create. Mirrors the
+# BODY_INLINE guard below.
+BODY_FILE=$(echo "$CMD" | grep -oE -- '--body-file[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $2}' || true)
 BODY_INLINE=""
 if [[ -z "$BODY_FILE" ]]; then
   # --body "<string>" or --body '<string>' or --body $'<string>'. Pull
@@ -70,7 +79,7 @@ if [[ -z "$BODY_FILE" ]]; then
   # caller's shell has already collapsed whitespace, so we work with the
   # exact bytes the hook received from jq @sh.
   # Use perl for greedy regex; sed -E can't do non-greedy across newlines.
-  BODY_INLINE=$(echo "$CMD" | perl -0777 -ne 'if (/--body[[:space:]]+(["'"'"'])(.+?)(?<!\\)\1/s) { print 2; }' || true)
+  BODY_INLINE=$(echo "$CMD" | perl -0777 -ne 'if (/--body[[:space:]]+(["'"'"'])(.+?)(?<!\\)\1/s) { print $2; }' || true)
 fi
 
 # Resolve to a real file we can read.
