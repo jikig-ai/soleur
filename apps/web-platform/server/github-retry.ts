@@ -40,3 +40,73 @@ export function isRetryable(err: unknown): boolean {
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ---------------------------------------------------------------------------
+// Shared transient-retry budget.
+//
+// 3 total attempts with exponential backoff (1 s, 2 s), imported by both
+// fetchWithRetry (github-api.ts) and withGithubRetry. Sibling retry sites
+// (createProbeOctokit's 401 path, github-app token/member probes) intentionally
+// keep their own local budgets — see their headers — and are NOT consumers of
+// these constants; do not assume parity is enforced for them here.
+// ---------------------------------------------------------------------------
+export const MAX_RETRIES = 2; // 3 total attempts
+export const BASE_DELAY_MS = 1_000;
+
+// Max cause-chain depth walked by isRetryableGithubError. Bounds the walk
+// against a self-referential `.cause` cycle; octokit's real chain is 3 links
+// (RequestError → TypeError "fetch failed" → { code: UND_ERR_CONNECT_TIMEOUT }).
+const MAX_CAUSE_DEPTH = 5;
+
+/**
+ * Cause-chain-aware transient classifier. octokit.request() wraps a connect
+ * timeout in a RequestError (name "HttpError", status 500) whose `.cause` is
+ * the raw `TypeError: fetch failed`, whose own `.cause` carries
+ * `{ code: "UND_ERR_CONNECT_TIMEOUT" }`. Top-level `isRetryable` MISSES that
+ * wrapper (not a TypeError, no top-level `.code`, a non-retryable-looking
+ * status of 500). Walk the cause chain so the undici code / "fetch failed" is
+ * found wherever octokit buried it. Bounded depth (5) guards against a
+ * self-referential cause cycle.
+ *
+ * NOTE: do NOT add a "status >= 500" arm — octokit ALSO surfaces genuine
+ * GitHub 5xx as RequestError with the real status, so a status-based arm would
+ * over-retry real server errors. The cause-chain walk is precise: it retries
+ * only when a real undici/timeout code (or "fetch failed" TypeError) is present
+ * in the chain.
+ */
+export function isRetryableGithubError(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && cur != null; depth++) {
+    if (isRetryable(cur)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Run `fn`, retrying ONLY on transient network errors (isRetryableGithubError)
+ * with exponential backoff (reuses the canonical MAX_RETRIES / BASE_DELAY_MS
+ * budget). Non-retryable errors (4xx auth, shape, a genuine GitHub 5xx with no
+ * transient cause) and the final attempt's error rethrow immediately. Wrap
+ * octokit.request() calls in crons so a single api.github.com connect-timeout
+ * does not escalate to Sentry.
+ *
+ * Logger-free by design: callers own observability via their existing catch +
+ * reportSilentFallback. This preserves the leaf's no-dependency / no-cycle
+ * property.
+ */
+export async function withGithubRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt < MAX_RETRIES && isRetryableGithubError(err)) {
+        await delay(BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      throw err;
+    }
+  }
+  // TypeScript exhaustiveness guard — loop always returns or rethrows above.
+  throw new Error("withGithubRetry: unreachable");
+}

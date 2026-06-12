@@ -97,6 +97,15 @@ export interface HandlerArgs {
     warn: (...a: unknown[]) => void;
     error: (...a: unknown[]) => void;
   };
+  // Inngest's zero-indexed retry attempt and (optional) max attempt count from
+  // the function context (BaseContext.attempt / .maxAttempts). Optional so every
+  // other cron handler — and the existing tests — that pass neither keep
+  // compiling and behave as before (attempt=0/maxAttempts=1 → final attempt).
+  // Read by retry-aware handlers (e.g. cron-stale-deferred-scope-outs) to gate
+  // the Sentry error heartbeat on the FINAL attempt rather than paging on a
+  // transient that the retry recovers.
+  attempt?: number;
+  maxAttempts?: number;
 }
 
 export function redactToken(s: string, token: string): string {

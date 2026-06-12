@@ -168,13 +168,14 @@ Report: "Article written to `<path>`. Review and commit when ready."
 
 ## Phase 4.5: OG Image Generation
 
-Every blog post must have a unique OG image for social sharing differentiation. After writing the article:
+Every blog post must have an `ogImage` for social sharing differentiation. This is **mandatory, not optional** — `plugins/soleur/test/seo-aeo-drift-guard.test.ts` (#4753) FAILS CI for any post without an `ogImage` frontmatter field. A post that reaches CI without it red-lights the build. After writing the article:
 
 1. **Check for existing `ogImage`** in the frontmatter. If already set, skip.
 2. **Generate a unique OG image** (1200x630px) using the `gemini-imagegen` skill or Pillow fallback:
    - Brand colors: dark background `#1a1a1a`, gold accent `#c4a35a`
    - Abstract/thematic visual matching the article topic -- no text in the image (og:title provides text)
    - Save to `plugins/soleur/docs/images/blog/og-<slug>.png`
+   - **Fallback if generation is unavailable (never omit the field):** reuse the closest on-theme existing card — `ls plugins/soleur/docs/images/blog/og-*.png` and pick the nearest topical match (precedent: `2026-06-01-claude-code-plugin-vs-skill-vs-mcp.md` reuses `og-best-claude-code-plugins-2026.png`). A reused on-theme card beats a missing field (CI red) or the site default (the #4753 guard rejects the default for a bespoke-image post).
 3. **Add `ogImage` to frontmatter**: `ogImage: "blog/og-<slug>.png"`
 4. The base template resolves this as `/images/{{ ogImage }}` for og:image meta tags
 
