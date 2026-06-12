@@ -50,7 +50,11 @@ vi.mock("@/server/inngest/functions/_cron-shared", () => ({
 import {
   cronCloudTaskHeartbeat,
   cronCloudTaskHeartbeatHandler,
+  isStaleBotPr,
+  scheduledLabelFromHead,
+  STALE_BOT_PR_WARN_OP,
   TASK_INVENTORY,
+  type BotPrLite,
 } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
 
 // =============================================================================
@@ -189,19 +193,46 @@ const OLD_ISSUE = () => ({
   created_at: new Date(Date.now() - 100 * 86400 * 1000).toISOString(),
 });
 
-type LabelSpec = { issues?: Array<{ created_at: string }>; throw?: boolean };
+type LabelSpec = {
+  issues?: Array<{ created_at: string; number?: number }>;
+  throw?: boolean;
+};
+
+/**
+ * Optional bot-PR-watchdog overlays for the dispatcher. `pulls` is the
+ * `GET …/pulls` page-1 payload (page ≥ 2 returns empty, matching the handler's
+ * `length < per_page` break); `comments` maps an issue number to its existing
+ * comment list for the dedup check; `pullsThrow` simulates a list-API failure.
+ * Default (omitted) → no open bot PRs, so the watchdog steps no-op and existing
+ * silence tests are unaffected.
+ */
+type WatchdogOpts = {
+  pulls?: BotPrLite[];
+  comments?: Record<number, Array<{ body?: string }>>;
+  pullsThrow?: boolean;
+};
 
 /**
  * Build an Octokit `.request` dispatcher. `perLabel` overrides the issues
  * returned for specific `scheduled-<task>` labels; any label not listed returns
  * a single fresh issue (silent:false, not pending). `/search/issues` returns no
- * existing silence issue unless `existing` is provided.
+ * existing silence issue unless `existing` is provided. `opts` overlays the
+ * bot-PR-watchdog routes (`…/pulls`, `…/comments`).
  */
 function dispatcher(
   perLabel: Record<string, LabelSpec>,
   existing?: { number: number; matchTask: string },
+  opts: WatchdogOpts = {},
 ) {
   return async (route: string, params: Record<string, unknown> = {}) => {
+    if (route === "GET /repos/{owner}/{repo}/pulls") {
+      if (opts.pullsThrow) throw new Error("GitHub 502 — simulated pulls list error");
+      const page = (params.page as number | undefined) ?? 1;
+      return { data: page === 1 ? (opts.pulls ?? []) : [] };
+    }
+    if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+      return { data: opts.comments?.[params.issue_number as number] ?? [] };
+    }
     if (route === "GET /repos/{owner}/{repo}/issues") {
       const spec = perLabel[params.labels as string] ?? { issues: [RECENT_ISSUE()] };
       if (spec.throw) throw new Error("GitHub 502 — simulated API error");
@@ -220,6 +251,19 @@ function dispatcher(
     }
     // comment POSTs + PATCH close
     return { data: {} };
+  };
+}
+
+/** Build a minimal open-PR payload for watchdog tests. */
+function botPr(over: Partial<BotPrLite> & { number: number }): BotPrLite {
+  return {
+    number: over.number,
+    head: over.head ?? { ref: `ci/content-publisher-2026-05-19-164226` },
+    created_at:
+      over.created_at ?? new Date(Date.now() - 100 * 3600 * 1000).toISOString(),
+    draft: over.draft ?? false,
+    labels: over.labels ?? [],
+    html_url: over.html_url ?? `https://github.com/jikig-ai/soleur/pull/${over.number}`,
   };
 }
 
@@ -345,5 +389,252 @@ describe("cronCloudTaskHeartbeatHandler — never-produced grace", () => {
     // the NaN-parse path is NOT the zero-rows grace and NOT an API error
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// Stale bot-PR watchdog (#5138) — pure helpers
+// =============================================================================
+
+describe("scheduledLabelFromHead", () => {
+  it.each([
+    ["ci/content-publisher-2026-05-19-164226", "scheduled-content-publisher"],
+    ["ci/rule-prune-2026-06-01-093000", "scheduled-rule-prune"],
+    // digit/hyphen cron names survive the $-anchored timestamp strip
+    ["ci/nag-4216-readiness-2026-06-01-120000", "scheduled-nag-4216-readiness"],
+    // no timestamp suffix → whole rest becomes the label (Sentry-only fallback)
+    ["ci/manual-rename", "scheduled-manual-rename"],
+  ])("maps %s → %s", (head, label) => {
+    expect(scheduledLabelFromHead(head)).toBe(label);
+  });
+
+  it.each([
+    ["self-healing/auto-abc123-2026-06-01"],
+    ["feature-foo"],
+    ["bot-fix/123-something"],
+  ])("returns null for non-ci head %s", (head) => {
+    expect(scheduledLabelFromHead(head)).toBeNull();
+  });
+});
+
+describe("isStaleBotPr", () => {
+  const NOW = Date.UTC(2026, 5, 12, 0, 0, 0); // fixed clock
+  const ago = (hours: number) => new Date(NOW - hours * 3600 * 1000).toISOString();
+
+  it("47h59m-old ci/* PR is NOT stale (strict > 48h)", () => {
+    expect(isStaleBotPr(botPr({ number: 1, created_at: ago(47.983) }), NOW)).toBe(false);
+  });
+
+  it("48h01m-old ci/* PR IS stale", () => {
+    expect(isStaleBotPr(botPr({ number: 2, created_at: ago(48.017) }), NOW)).toBe(true);
+  });
+
+  it("non-bot head is never stale regardless of age", () => {
+    expect(
+      isStaleBotPr(
+        botPr({ number: 3, head: { ref: "feature-foo" }, created_at: ago(100) }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("draft self-healing/auto PR is EXCLUDED (compound-promote human review)", () => {
+    expect(
+      isStaleBotPr(
+        botPr({
+          number: 4,
+          head: { ref: "self-healing/auto-abc-2026-06-01" },
+          draft: true,
+          labels: [{ name: "self-healing/auto" }],
+          created_at: ago(72),
+        }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("NON-draft self-healing/auto PR IS stale (exclusion is draft AND label)", () => {
+    expect(
+      isStaleBotPr(
+        botPr({
+          number: 5,
+          head: { ref: "self-healing/auto-abc-2026-06-01" },
+          draft: false,
+          labels: [{ name: "self-healing/auto" }],
+          created_at: ago(72),
+        }),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("malformed created_at → not stale, does not throw", () => {
+    expect(
+      isStaleBotPr(botPr({ number: 6, created_at: "not-a-date" }), NOW),
+    ).toBe(false);
+  });
+});
+
+// =============================================================================
+// Stale bot-PR watchdog (#5138) — handler behavior
+// =============================================================================
+
+describe("cronCloudTaskHeartbeatHandler — stale bot-PR watchdog", () => {
+  beforeEach(() => {
+    octokitRequestSpy.mockReset();
+    reportSilentFallbackSpy.mockReset();
+    warnSilentFallbackSpy.mockReset();
+  });
+
+  const stalePr = (over: Partial<BotPrLite> & { number: number }) =>
+    botPr({ created_at: new Date(Date.now() - 100 * 3600 * 1000).toISOString(), ...over });
+
+  it("a stale ci/* PR emits exactly one warn at op stale-bot-pr", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher({}, undefined, {
+        pulls: [stalePr({ number: 4242, head: { ref: "ci/content-publisher-2026-05-19-164226" } })],
+        // owning issue lookup returns none → Sentry-only, no comment POST
+      }),
+    );
+
+    await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    const warnCalls = warnSilentFallbackSpy.mock.calls.filter(
+      (c) => c[1].op === STALE_BOT_PR_WARN_OP,
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0][1].extra.pr_number).toBe(4242);
+  });
+
+  it("comments on the owning scheduled issue, deduped by marker", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher(
+        { "scheduled-content-publisher": { issues: [{ created_at: RECENT_ISSUE().created_at, number: 777 }] } },
+        undefined,
+        {
+          pulls: [stalePr({ number: 88, head: { ref: "ci/content-publisher-2026-05-19-164226" } })],
+          comments: { 777: [] }, // no existing marker → one comment posted
+        },
+      ),
+    );
+
+    await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    const comment = octokitRequestSpy.mock.calls.find(
+      (c) =>
+        c[0] === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments" &&
+        (c[1] as { issue_number?: number }).issue_number === 777,
+    );
+    expect(comment).toBeDefined();
+    expect((comment![1] as { body: string }).body).toContain("<!-- stale-bot-pr:88 -->");
+  });
+
+  it("skips the comment when the marker already exists (dedup)", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher(
+        { "scheduled-content-publisher": { issues: [{ created_at: RECENT_ISSUE().created_at, number: 777 }] } },
+        undefined,
+        {
+          pulls: [stalePr({ number: 88, head: { ref: "ci/content-publisher-2026-05-19-164226" } })],
+          comments: { 777: [{ body: "earlier\n<!-- stale-bot-pr:88 -->\n" }] },
+        },
+      ),
+    );
+
+    await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    const posted = octokitRequestSpy.mock.calls.filter(
+      (c) => c[0] === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    // only the existing-silence recovery path could post; none for the watchdog
+    expect(
+      posted.some((c) => (c[1] as { issue_number?: number }).issue_number === 777),
+    ).toBe(false);
+    // warn still fired (Sentry is the primary signal)
+    expect(
+      warnSilentFallbackSpy.mock.calls.some((c) => c[1].op === STALE_BOT_PR_WARN_OP),
+    ).toBe(true);
+  });
+
+  it("no open labeled issue → Sentry-only, no comment, no throw", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher({ "scheduled-content-publisher": { issues: [] } }, undefined, {
+        pulls: [stalePr({ number: 91, head: { ref: "ci/content-publisher-2026-05-19-164226" } })],
+      }),
+    );
+
+    await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    expect(
+      warnSilentFallbackSpy.mock.calls.some((c) => c[1].op === STALE_BOT_PR_WARN_OP),
+    ).toBe(true);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("pulls-list API error → reportSilentFallback(stale-bot-pr-scan-failed), no throw, ok unaffected", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher({}, undefined, { pullsThrow: true }),
+    );
+
+    const out = await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    const scanFail = reportSilentFallbackSpy.mock.calls.filter(
+      (c) => c[1].op === "stale-bot-pr-scan-failed",
+    );
+    expect(scanFail).toHaveLength(1);
+    // heartbeat orthogonality: no silent tasks → ok stays true
+    expect(out.ok).toBe(true);
+    expect(out.silentCount).toBe(0);
+  });
+
+  it("stale bot PR does NOT flip ok/silentCount (orthogonal to the monitor)", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher({}, undefined, {
+        pulls: [stalePr({ number: 5, head: { ref: "ci/rule-prune-2026-06-01-093000" } })],
+      }),
+    );
+
+    const out = await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    expect(out.ok).toBe(true);
+    expect(out.silentCount).toBe(0);
+  });
+
+  it("early-exits pagination once a PR newer than the threshold is seen", async () => {
+    // page 1 is full (100 entries) and ends with a fresh PR → page 2 must NOT be fetched.
+    const page1: BotPrLite[] = Array.from({ length: 100 }, (_, i) =>
+      i < 99
+        ? stalePr({ number: 1000 + i, head: { ref: "feature-human" } }) // non-bot, old
+        : stalePr({
+            number: 2000,
+            head: { ref: "feature-human" },
+            created_at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), // 1h old → fresh
+          }),
+    );
+    octokitRequestSpy.mockImplementation(dispatcher({}, undefined, { pulls: page1 }));
+
+    await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    const pullPages = octokitRequestSpy.mock.calls.filter(
+      (c) => c[0] === "GET /repos/{owner}/{repo}/pulls",
+    );
+    expect(pullPages).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// Stale bot-PR watchdog (#5138) — source-shape anchors
+// =============================================================================
+
+describe("stale bot-PR watchdog source-shape anchors", () => {
+  it.each([
+    ["STALE_BOT_PR_THRESHOLD_MS", "48h threshold constant"],
+    ['op: STALE_BOT_PR_WARN_OP', "warn op routed to the Sentry alert"],
+    ['"check-stale-bot-prs"', "scan step id"],
+    ['"stale-bot-pr-handling"', "handling step id"],
+    ["stale-bot-pr-scan-failed", "scan-failure op"],
+    ["stale-bot-pr-comment-failed", "comment-failure op"],
+  ])("source contains %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toContain(anchor);
   });
 });

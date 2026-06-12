@@ -329,10 +329,14 @@ jobs:
   test-scripts:
     runs-on: ubuntu-latest
     # No setup-bun, no setup-node, no install — bash + python3 ship on
-    # ubuntu-latest by default and the scripts group needs neither runtime.
-    # Verified at plan time: `grep -l '^bun ' plugins/soleur/test/*.test.sh`
-    # returned zero matches. If a future .test.sh adds a `bun` invocation,
-    # add `setup-bun` here (still no install needed).
+    # ubuntu-latest by default, and the one `node --test` entry in the scripts
+    # group (scripts/md-to-mrkdwn.test.mjs) runs on the stock ubuntu-latest
+    # node — no version pin needed (same bare-`node` precedent as
+    # secret-scan.yml; node --test ships in Node >=18). No `bun` in the
+    # scripts group: verified at plan time `grep -l '^bun '
+    # plugins/soleur/test/*.test.sh` returned zero matches. If a future
+    # .test.sh adds a `bun` invocation, add `setup-bun` here (still no
+    # install needed).
     #
     # gitleaks is installed because plugins/soleur/skills/code-to-prd/test/
     # (#2726) preflights `command -v gitleaks` and aborts exit 2 if absent.

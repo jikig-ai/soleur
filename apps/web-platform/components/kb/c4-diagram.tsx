@@ -35,7 +35,6 @@ export default function C4Diagram({
     fetchUrl ? { url: fetchUrl } : undefined,
   );
   const [tab, setTab] = useState<"diagram" | "code">("diagram");
-  const [currentView, setCurrentView] = useState(viewId);
   // See c4-workspace.tsx: stale flips true only when the server's post-save
   // re-render (#4964) failed; on success the reloaded dump is fresh.
   const [stale, setStale] = useState(false);
@@ -59,9 +58,6 @@ export default function C4Diagram({
               {t}
             </button>
           ))}
-        <span className="ml-auto pr-1 text-[11px] text-soleur-text-muted">
-          Architecture · {currentView}
-        </span>
       </div>
 
       {loading && <Spinner />}
@@ -78,11 +74,7 @@ export default function C4Diagram({
           />
           {tab === "diagram" && (
             <div className="relative h-[600px] w-full">
-              <C4Canvas
-                dump={data.dump}
-                initialViewId={viewId}
-                onViewChange={setCurrentView}
-              />
+              <C4Canvas dump={data.dump} initialViewId={viewId} />
             </div>
           )}
           {!readOnly && tab === "code" && (
