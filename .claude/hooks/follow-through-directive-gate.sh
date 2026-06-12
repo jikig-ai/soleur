@@ -79,7 +79,7 @@ if [[ -z "$BODY_FILE" ]]; then
   # caller's shell has already collapsed whitespace, so we work with the
   # exact bytes the hook received from jq @sh.
   # Use perl for greedy regex; sed -E can't do non-greedy across newlines.
-  BODY_INLINE=$(echo "$CMD" | perl -0777 -ne 'if (/--body[[:space:]]+(["'"'"'])(.+?)(?<!\\)\1/s) { print 2; }' || true)
+  BODY_INLINE=$(echo "$CMD" | perl -0777 -ne 'if (/--body[[:space:]]+(["'"'"'])(.+?)(?<!\\)\1/s) { print $2; }' || true)
 fi
 
 # Resolve to a real file we can read.
