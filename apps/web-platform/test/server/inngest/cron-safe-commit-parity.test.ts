@@ -243,8 +243,47 @@ describe("#5199 — restored auto-crons: parity (allowlisted AND not deferred)",
     },
   );
 
-  it("only cron-bug-fixer remains Tier-2-deferred", () => {
-    expect([...TIER2_DEFERRED_CRONS]).toEqual(["cron-bug-fixer"]);
+  it("TIER2_DEFERRED_CRONS is EMPTY — all Tier-2 crons restored (#5199)", () => {
+    expect([...TIER2_DEFERRED_CRONS]).toEqual([]);
+  });
+});
+
+// #5199 (final) — restore cron-bug-fixer, the LAST Tier-2-deferred cron. Unlike
+// the 7 auto-crons above, bug-fixer's commit step lives in the fix-issue SKILL
+// (NOT safeCommitAndPr), so it stays in EXEMPT and its CRON_BASH_ALLOWLISTS entry
+// legitimately carries git/gh-pr persistence verbs. It mints
+// DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (a write-capable token —
+// ISSUE_CREATOR's contents:read would 403 the push).
+describe("#5199 — restored cron-bug-fixer: parity (allowlisted AND not deferred)", () => {
+  it("cron-bug-fixer IS a CRON_BASH_ALLOWLISTS key AND ABSENT from TIER2_DEFERRED_CRONS", () => {
+    expect(Object.keys(CRON_BASH_ALLOWLISTS)).toContain("cron-bug-fixer");
+    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(false);
+  });
+
+  it("cron-bug-fixer.ts mints DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (not ISSUE_CREATOR)", () => {
+    const src = readFileSync(join(FUNCTIONS_DIR, "cron-bug-fixer.ts"), "utf-8");
+    expect(src).toContain("permissions: DEFAULT_CRON_TOKEN_PERMISSIONS");
+    expect(src).toMatch(/repositories:\s*\[REPO_NAME\]/);
+    // bug-fixer pushes + opens PRs via the SKILL — it must NOT use the
+    // issue-creator preset (contents:read), which would 403 the push.
+    expect(src).not.toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+  });
+
+  it("cron-bug-fixer.ts stays in EXEMPT (SKILL owns the commit, not safeCommitAndPr)", () => {
+    expect(EXEMPT["cron-bug-fixer.ts"]).toBeDefined();
+    expect(MIGRATED_ALL).not.toContain("cron-bug-fixer.ts");
+  });
+
+  it("cron-bug-fixer allowlist contains no entry beginning with 'gh api' (F4a)", () => {
+    const allowlist = CRON_BASH_ALLOWLISTS["cron-bug-fixer"];
+    expect(allowlist).toBeDefined();
+    const offending = (allowlist ?? []).filter((entry) =>
+      entry.startsWith("gh api"),
+    );
+    expect(
+      offending,
+      "cron-bug-fixer: arbitrary-method 'gh api' defeats the exfil defense (F4a)",
+    ).toEqual([]);
   });
 });
 
