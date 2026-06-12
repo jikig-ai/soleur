@@ -3,7 +3,7 @@ title: "Loop Engineering for Your Whole Company, Not Just Your Codebase"
 type: pillar
 publish_date: 2026-06-12
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord
