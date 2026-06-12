@@ -46,6 +46,22 @@ Inngest path also reuses `createProbeOctokit()` (installation-token auth, no PAT
 GH-Actions cron would re-implement JWT minting in inline shell (a known
 silent-failure-trap class).
 
+## A sixth lockstep dimension: containment class (#5072)
+
+Beyond the five registries above, a new cron must ALSO land in exactly one
+**containment class**, enforced by `cron-containment-classify.test.ts` (same
+directory, same source-scan idiom). The three classes are observable from
+source: **substrate-contained** (the cron *calls* `spawnClaudeEval()` — must be
+in `CRON_BASH_ALLOWLISTS` XOR `TIER2_DEFERRED_CRONS`), **direct-spawn** (a real
+`spawn(` not via the wrapper — must be enumerated in the test's
+`KNOWN_DIRECT_SPAWN_CRONS` grandfather set, or moved to an ephemeral GHA runner
+per #5073), and **pure-TS** (no spawn — must carry no containment entry).
+Detection is by **call site**, not import: `cron-daily-triage` imports substrate
+*helpers* (`resolveClaudeBin`, `KILL_ESCALATION_MS`) yet spawns claude on its own
+path, so it is direct-spawn, not substrate-contained — an import-based regex
+mis-classifies it. The gate fails closed on any new uncontained spawn surface and
+emits the class + the literal map line to add.
+
 ## Session Errors
 
 - **Planning subagent could not spawn nested Task subagents** (plan/review
