@@ -84,6 +84,42 @@ describe("validate-seo.sh", () => {
     expect(stdout).toContain("missing canonical URL");
   });
 
+  // Per-page canonical-host gate (2026-06-12 GSC duplicate-canonical plan) — extends
+  // the sitemap host-consistency invariant to each page's <link rel="canonical"> href.
+  // A page whose canonical points at a different host than the sitemap (e.g. a www
+  // variant while the sitemap/apex is canonical) 301-redirects in prod and induces the
+  // GSC "Duplicate, Google chose different canonical than user" cluster. The expected
+  // host is DERIVED from the sitemap's single <loc> host (no second literal pin to
+  // drift), so the invariant is "every page canonical host == sitemap canonical host".
+
+  test("fails when a page canonical host differs from the sitemap host", async () => {
+    setupSite(); // sitemap + default pages all on example.com
+    // Add a page whose canonical points at the www variant — otherwise fully valid,
+    // so the host mismatch is the sole failure (single sitemap host keeps every
+    // other check green).
+    writeFileSync(
+      `${TMP_DIR}/pages/rogue.html`,
+      validHtml.replace(
+        '<link rel="canonical" href="https://example.com/">',
+        '<link rel="canonical" href="https://www.example.com/rogue/">',
+      ),
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("differs from sitemap canonical host");
+  });
+
+  test("passes when all page canonical hosts match the sitemap host", async () => {
+    setupSite();
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("canonical host matches sitemap host");
+  });
+
   test("fails when sitemap has no lastmod", async () => {
     setupSite();
     writeFileSync(`${TMP_DIR}/sitemap.xml`, '<urlset><url><loc>https://example.com/</loc></url></urlset>');

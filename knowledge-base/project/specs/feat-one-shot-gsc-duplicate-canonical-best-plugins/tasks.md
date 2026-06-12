@@ -14,32 +14,40 @@ deferred.
 
 ## Phase 0 — Preconditions (verify only)
 
-- [ ] 0.1 Re-run live checks (re-verify at /work time; values captured 2026-06-12):
-  - `curl -sI https://www.soleur.ai/blog/best-claude-code-plugins-2026/` → expect `301`, `location: https://soleur.ai/blog/best-claude-code-plugins-2026/`
-  - `curl -sI https://soleur.ai/blog/best-claude-code-plugins-2026/` → expect `200`
-  - `curl -s https://soleur.ai/blog/best-claude-code-plugins-2026/ | grep -oiE '<link rel="canonical"[^>]*>'` → expect apex href
-- [ ] 0.2 Confirm `site.url == "https://soleur.ai"` (apex) in `plugins/soleur/docs/_data/site.json`.
-- [ ] 0.3 Confirm PR #4729 hardening intact: `validate-seo.sh` retains the
-  redirect-stub gate (~line 76) and canonical-host gate (~line 81+).
+- [x] 0.1 Re-run live checks (re-verified at /work time 2026-06-12 — drift-clean):
+  - `curl -sI https://www.soleur.ai/blog/best-claude-code-plugins-2026/` → **301**, `location: https://soleur.ai/blog/best-claude-code-plugins-2026/` ✓
+  - `curl -sI https://soleur.ai/blog/best-claude-code-plugins-2026/` → **200** ✓
+  - apex canonical → `https://soleur.ai/blog/best-claude-code-plugins-2026/` (apex) ✓
+- [x] 0.2 Confirmed `site.url == "https://soleur.ai"` (apex) in `_data/site.json`. ✓
+- [x] 0.3 Confirmed PR #4729 hardening intact: `validate-seo.sh` retains the
+  redirect-stub gate + sitemap canonical-host gate; AC5 (`_site/sitemap.xml`
+  redirecting-loc count) = 0. ✓
 
 ## Phase 1 — Outcome decision (no code)
 
-- [ ] 1.1 Record the conclusion (benign `www→apex` consolidation; no code fix) in
-  the tracking issue + this spec. This is the load-bearing deliverable.
+- [x] 1.1 Conclusion recorded (benign `www→apex` consolidation; no site code fix —
+  resolution is operator VALIDATE-FIX + wait). Captured in session-state.md + the
+  tracking issue (filed at ship).
 
-## Phase 2 — OPTIONAL CI regression-hardening (fold-in OR defer)
+## Phase 2 — OPTIONAL CI regression-hardening (FOLDED IN)
 
-- [ ] 2.1 **Decide:** fold-in (cheap, prevents future host-flip regression) vs.
-  defer (scope discipline; file a tracking issue, ship zero code).
-- [ ] 2.2 *(if fold-in)* Edit `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`:
-  after the per-page `rel="canonical"` presence check (~line 141), add a host-value
-  assertion — fail if the canonical href host ≠ apex `soleur.ai`. Comment it as
-  `mirror of _data/site.json site.url host`.
-- [ ] 2.3 *(if fold-in)* RED/GREEN: run the gate on a www-canonical fixture (expect
-  **fail**) and an apex fixture (expect **pass**).
-- [ ] 2.4 *(if fold-in)* No-regression: `cd plugins/soleur/docs && npx @11ty/eleventy && bash ../skills/seo-aeo/scripts/validate-seo.sh _site` → all pass.
-- [ ] 2.5 *(if defer)* File a `validate-seo` canonical-host-gate tracking issue with
-  re-eval criteria ("after this GSC report validates green"); PR carries zero code.
+- [x] 2.1 **Decided: FOLD IN.** ~16 added lines; directly extends the existing
+  sitemap host-consistency invariant to the per-page canonical axis; precedent =
+  2026-06-01 benign-finding→defense-in-depth hardening. Produces a testable,
+  shippable gate vs. a docs-only PR.
+- [x] 2.2 Edited `validate-seo.sh`: after the per-page `rel="canonical"` presence
+  check, added a host assertion. **Design refinement over the plan snippet:** the
+  expected host is **DERIVED from the sitemap's single `<loc>` host**
+  (`CANONICAL_HOST_EXPECTED`), NOT a second `soleur.ai` literal — eliminates the
+  two-place drift the plan's Sharp Edges flagged, keeps the generic plugin skill
+  free of a site-specific literal, and breaks zero `example.com` test fixtures.
+  Uniform `site.url`→www flip remains covered by `sentry_uptime_monitor.soleur_www`.
+- [x] 2.3 RED/GREEN: www-canonical fixture → **fail** ("differs from sitemap
+  canonical host"); apex/matching fixture → **pass**. `validate-seo.test.ts`
+  19 pass / 0 fail (2 new tests).
+- [x] 2.4 No-regression: built `_site` (103 files) → `validate-seo.sh _site` exit 0;
+  58 pages all confirm apex canonical host. ✓
+- [ ] 2.5 *(defer path — N/A, folded in)*
 
 ## Phase 3 — Tracking + ship
 

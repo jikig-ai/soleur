@@ -130,26 +130,22 @@ no schema/auth/API/migration surface.
 
 ## Acceptance Criteria
 
-### Pre-merge (PR) — only if the optional Phase 2 hardening is folded in
+### Pre-merge (PR) — Phase 2 hardening FOLDED IN
 
-- [ ] **AC1 (no false fix):** `git diff origin/main -- plugins/soleur/docs/_data/site.json`
-  returns empty — `site.url` remains `https://soleur.ai` (apex). The plan does
-  **not** change the canonical host.
-- [ ] **AC2 (no chasing):** No new code targets an "external syndicated copy"
-  (no dev.to/Medium/Hashnode canonical-back artifacts created) — confirmed by the
-  reconciliation table above; nothing to verify in code.
-- [ ] **AC3 (optional hardening, if folded in):** `validate-seo.sh` asserts the
-  per-page `<link rel="canonical">` **href host** equals the apex
-  (`https://soleur.ai`), failing if a page emits a `www.` or other-host canonical.
-  Verify: run `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh <built _site>`
-  on a fixture whose canonical href is `https://www.soleur.ai/...` and confirm it
-  **fails**; on the apex fixture confirm it **passes**.
-- [ ] **AC4 (no regression):** `validate-seo.sh` still passes on the real built
-  `_site/` (apex canonical everywhere). Run the Eleventy build then the script:
-  `cd plugins/soleur/docs && npx @11ty/eleventy && bash ../skills/seo-aeo/scripts/validate-seo.sh _site`.
-- [ ] **AC5 (out-of-scope confirmed clean):** `grep -E '(\.html$|/pages/)'` over
-  `_site/sitemap.xml` returns zero (the PR #4729 "Page with redirect" hardening is
-  intact — confirm no regression, per brief out-of-scope instruction).
+- [x] **AC1 (no false fix):** `git diff origin/main -- plugins/soleur/docs/_data/site.json`
+  returns empty — `site.url` remains `https://soleur.ai` (apex). The canonical host
+  is **not** changed. ✓
+- [x] **AC2 (no chasing):** No code targets an "external syndicated copy" (no
+  dev.to/Medium/Hashnode canonical-back artifacts) — the reconciliation table stands;
+  nothing in code. ✓
+- [x] **AC3 (hardening folded in):** `validate-seo.sh` asserts the per-page
+  `<link rel="canonical">` href host matches the sitemap's single canonical host
+  (derived, not a second literal). www-canonical fixture → **fail**; apex/matching →
+  **pass** (`validate-seo.test.ts` 19 pass / 0 fail; 2 new tests). ✓
+- [x] **AC4 (no regression):** Built `_site/` (103 files) → `validate-seo.sh _site`
+  exit 0; 58 pages all confirm apex canonical host. ✓
+- [x] **AC5 (out-of-scope confirmed clean):** `grep -E '(\.html$|/pages/)'` over
+  `_site/sitemap.xml` returns **0** — PR #4729 "Page with redirect" hardening intact. ✓
 
 ### Post-merge (operator) — the actual resolution path
 

@@ -7,6 +7,12 @@ set -euo pipefail
 
 SITE_DIR="${1:?Usage: validate-seo.sh <site-dir>}"
 FAILURES=0
+# Bare host (no scheme) the per-page canonical-href gate expects. DERIVED from the
+# sitemap's single <loc> host once it is validated below — there is no second literal
+# pin to drift from _data/site.json. Empty until the sitemap host is established (or
+# if the sitemap is missing/multi-host, in which case the per-page host check is
+# skipped — those failures are already reported by the sitemap gates).
+CANONICAL_HOST_EXPECTED=""
 
 fail() {
   echo "FAIL: $1"
@@ -96,6 +102,9 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
     fail "sitemap.xml mixes multiple hosts: $(echo "$SITEMAP_HOSTS" | tr '\n' ' ')"
   else
     pass "sitemap.xml uses a single canonical host: $SITEMAP_HOSTS"
+    # Establish the per-page canonical-href host expectation from this single,
+    # validated sitemap host (strip the scheme to a bare host for comparison).
+    CANONICAL_HOST_EXPECTED=$(echo "$SITEMAP_HOSTS" | sed -E 's|^https?://||' | head -1)
     # Closing branch is below this if-fi block — the host comparison only
     # runs when robots.txt exists AND has a `Sitemap:` line. Fixtures that
     # omit the Sitemap line still pass the sitemap-internal consistency
@@ -142,6 +151,24 @@ for f in "${html_files[@]}"; do
     pass "$page has canonical URL"
   else
     fail "$page missing canonical URL"
+  fi
+
+  # Canonical-href host gate (2026-06-12 GSC duplicate-canonical plan): the per-page
+  # <link rel="canonical"> href host MUST match the sitemap's single canonical host
+  # (CANONICAL_HOST_EXPECTED, derived above). A page emitting a different host (e.g. a
+  # www variant while the sitemap/apex is canonical) 301-redirects in prod and induces
+  # the GSC "Duplicate, Google chose different canonical than user" cluster — the
+  # per-page sibling of the sitemap host-axis gate above. Only an ABSOLUTE-host
+  # canonical is checked; a relative href (no host) leaves canon_host empty and is
+  # skipped (the presence check above already covers absence).
+  if [[ -n "$CANONICAL_HOST_EXPECTED" ]]; then
+    canon_host=$(grep -oiE '<link[^>]+rel="canonical"[^>]*>' "$f" \
+      | grep -oiE 'href="https?://[^/"]+' | sed -E 's|.*href="https?://||' | head -1)
+    if [[ -n "$canon_host" && "$canon_host" != "$CANONICAL_HOST_EXPECTED" ]]; then
+      fail "$page canonical host '$canon_host' differs from sitemap canonical host '$CANONICAL_HOST_EXPECTED' — a redirecting/other-host canonical induces GSC 'Google chose different canonical than user'"
+    elif [[ -n "$canon_host" ]]; then
+      pass "$page canonical host matches sitemap host ($CANONICAL_HOST_EXPECTED)"
+    fi
   fi
 
   # JSON-LD
