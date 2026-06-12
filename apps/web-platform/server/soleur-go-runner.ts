@@ -889,6 +889,12 @@ export interface DispatchEvents {
    * its own inline forward) and existing tests ignore it; the runner's
    * `try/catch` around the invocation routes throws to Sentry rather than
    * blocking the stream.
+   *
+   * **Load-bearing precondition:** these heartbeats only reach `consumeStream`
+   * because `includePartialMessages: true` is set in the shared query options
+   * (`agent-runner-query-options.ts`). A flip there silently stops every
+   * `tool_progress` (and thus this callback) for BOTH surfaces — grep-anchor
+   * for the cadence-invariant risk.
    */
   onToolProgress?: (block: {
     toolUseId: string;
