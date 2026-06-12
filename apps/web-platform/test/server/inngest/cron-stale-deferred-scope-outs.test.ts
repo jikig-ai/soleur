@@ -26,6 +26,23 @@ vi.mock("@/server/github/probe-octokit", async () => ({
   PROBE_ISSUE_REPO: "soleur",
 }));
 
+// Partial mock of _cron-shared so the Sentry heartbeat is spyable WITHOUT
+// nuking the module's siblings (importActual spread preserves HandlerArgs et al).
+// Asserting on this spy's `ok` arg is the only reliable signal: a `fetch` spy
+// records zero calls (the real postSentryHeartbeat short-circuits on unset Sentry
+// env in test), and makeStep().calls carries no `ok` (the heartbeat step returns
+// void). See the heartbeat-gating plan §Phase 1.
+const postSentryHeartbeatSpy = vi.fn();
+vi.mock(
+  "@/server/inngest/functions/_cron-shared",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/server/inngest/functions/_cron-shared")
+    >()),
+    postSentryHeartbeat: postSentryHeartbeatSpy,
+  }),
+);
+
 // --- Helpers --------------------------------------------------------------
 
 interface MockStep {
@@ -74,9 +91,27 @@ function makeIssue(args: {
   };
 }
 
+/**
+ * octokit's REAL thrown shape for an undici connect timeout: a RequestError
+ * (name "HttpError", status 500) whose `.cause` is the raw TypeError, whose
+ * own `.cause` carries the undici code. NEVER a bare TypeError — that would
+ * let the test pass while isRetryableGithubError still misses the real wrapper
+ * (plan AC4 rationale).
+ */
+function wrappedConnectTimeout(): Error {
+  return Object.assign(new Error("fetch failed"), {
+    name: "HttpError",
+    status: 500,
+    cause: Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_CONNECT_TIMEOUT" },
+    }),
+  });
+}
+
 beforeEach(() => {
   vi.resetModules();
   reportSilentFallbackSpy.mockReset();
+  postSentryHeartbeatSpy.mockReset();
   octokitRequestSpy.mockReset();
   createProbeOctokitSpy.mockReset();
   createProbeOctokitSpy.mockImplementation(async () => ({
@@ -234,6 +269,333 @@ describe("cronStaleDeferredScopeOuts — kill-switch label", () => {
       state: "closed",
       state_reason: "not_planned",
     });
+  });
+});
+
+// --------------------------------------------------------------------------
+// (d) Retry-aware heartbeat gating — the "page before retry" fix.
+//
+// Sentry incident 5468023: a single transient GitHub fault flipped the monitor
+// to error because the handler posted the status=error heartbeat on Inngest
+// attempt 0, BEFORE the retries:1 retry that would have recovered. The fix gates
+// the error heartbeat on the FINAL Inngest attempt. attempt is zero-indexed;
+// retries:1 → maxAttempts:2 → final attempt is 1.
+// --------------------------------------------------------------------------
+
+describe("cronStaleDeferredScopeOuts — retry-aware heartbeat gating", () => {
+  // A bare `{ status: 500 }` on the search call: NOT a retryable undici/timeout
+  // shape (isRetryableGithubError only retries cause-chain network codes — see
+  // #5227's github-retry), so withGithubRetry passes it straight through and the
+  // sweep throws → flips sweepFailed=true. This exercises the heartbeat-gating
+  // path independently of the in-step connect-timeout retry.
+  function mockSearchThrows() {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        throw Object.assign(new Error("boom"), { status: 500 });
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+  }
+
+  // A clean sweep (empty search result) — sweepFailed stays false.
+  function mockSearchEmpty() {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return { data: { items: [] } };
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+  }
+
+  it("A1: non-final attempt throw does NOT post a heartbeat, still rethrows + reports", async () => {
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await expect(
+      cronStaleDeferredScopeOutsHandler({
+        step,
+        logger,
+        attempt: 0,
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(/sweep failed/);
+
+    // The page is suppressed on a non-final attempt — no heartbeat POST at all
+    // (posting `ok` would mask a persistent failure; posting `error` is the bug).
+    expect(postSentryHeartbeatSpy).not.toHaveBeenCalled();
+    // Forensic breadcrumb is still emitted so the burned attempt is visible.
+    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+  });
+
+  it("A2: final attempt throw DOES post an error heartbeat and rethrows", async () => {
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await expect(
+      cronStaleDeferredScopeOutsHandler({
+        step,
+        logger,
+        attempt: 1,
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(/sweep failed/);
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
+  });
+
+  it("A3: legacy no-attempt call shape pages on failure (backward-compat)", async () => {
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    // No attempt/maxAttempts → attempt=0, maxAttempts=1 → isFinalAttempt=true →
+    // behaves exactly as before (error heartbeat on failure).
+    await expect(
+      cronStaleDeferredScopeOutsHandler({ step, logger }),
+    ).rejects.toThrow(/sweep failed/);
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
+    // Distinct fingerprint vs A2 (which shares the ok:false assertion): the
+    // legacy shape reads attempt=0, so it must never emit the recovered-flap warn.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ recovered_after_attempts: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it("A6: attempt set but maxAttempts undefined defaults to final (fail-safe paging)", async () => {
+    // maxAttempts is OPTIONAL on Inngest's BaseContext. If a fire ever delivers
+    // attempt without maxAttempts, isFinalAttempt = attempt >= ((undefined ?? 1)-1)
+    // = attempt >= 0 = always true → the cron treats the attempt as final and
+    // pages on failure rather than silently suppressing. Lock that safe default.
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await expect(
+      cronStaleDeferredScopeOutsHandler({ step, logger, attempt: 1 }),
+    ).rejects.toThrow(/sweep failed/);
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
+  });
+
+  it("A4: success on a non-final attempt still posts an ok heartbeat", async () => {
+    mockSearchEmpty();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    const result = await cronStaleDeferredScopeOutsHandler({
+      step,
+      logger,
+      attempt: 0,
+      maxAttempts: 2,
+    });
+
+    expect(result.total).toBe(0);
+    // Gating must NOT over-reach: a successful non-final check-in still posts ok.
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true }),
+    );
+    // attempt 0 success is a clean run — no recovered-flap warn.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ recovered_after_attempts: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it("A5: success on a retry emits the recovered-after-attempts flap signal", async () => {
+    mockSearchEmpty();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await cronStaleDeferredScopeOutsHandler({
+      step,
+      logger,
+      attempt: 1,
+      maxAttempts: 2,
+    });
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true }),
+    );
+    // A recovered transient is queryable as a trend instead of looking identical
+    // to a clean attempt-0 run.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ recovered_after_attempts: 1 }),
+      expect.anything(),
+    );
+  });
+});
+
+// --------------------------------------------------------------------------
+// (e) Transient connect-timeout resilience (Sentry 448a4173…)
+// --------------------------------------------------------------------------
+
+describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
+  it("recovers from a transient search connect timeout without escalating (AC4)", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchAttempts = 0;
+      octokitRequestSpy.mockImplementation(async (route: string) => {
+        if (route === "GET /search/issues") {
+          searchAttempts += 1;
+          // First attempt: octokit's real wrapped connect-timeout shape.
+          if (searchAttempts === 1) throw wrappedConnectTimeout();
+          return {
+            data: {
+              items: [makeIssue({ number: 300, labels: ["deferred-scope-out"] })],
+            },
+          };
+        }
+        // comment + close succeed.
+        return { data: {} };
+      });
+
+      const { cronStaleDeferredScopeOutsHandler } = await importModule();
+      const step = makeStep();
+      const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      await vi.runAllTimersAsync();
+      const result = await p;
+
+      // (a) sweep completes successfully (handler did NOT throw)
+      expect(result.total).toBe(1);
+      expect(result.closed).toBe(1);
+      // (b) the transient was absorbed — no error-level mirror
+      expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+      // (c) the candidate list reflects the SECOND (recovered) response
+      expect(searchAttempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT retry a genuine 403 on the comment path; surfaces issue_write_403 (AC5)", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return {
+          data: {
+            items: [makeIssue({ number: 400, labels: ["deferred-scope-out"] })],
+          },
+        };
+      }
+      if (
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // Non-retryable: a genuine issues:write-missing 403.
+        throw Object.assign(new Error("Forbidden"), {
+          name: "HttpError",
+          status: 403,
+        });
+      }
+      return { data: {} };
+    });
+
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+    const result = await cronStaleDeferredScopeOutsHandler({ step, logger });
+
+    // Sweep continues (per-issue catch is the terminal net); nothing closed.
+    expect(result.total).toBe(1);
+    expect(result.closed).toBe(0);
+
+    // The comment was attempted exactly ONCE (403 is non-retryable → rethrown
+    // on attempt 1 straight into the existing per-issue catch).
+    const commentCalls = octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    expect(commentCalls).toHaveLength(1);
+
+    // The issue_write_403 discriminator still fires.
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
+      op: "issue_write_403",
+    });
+  });
+
+  it("retries a transient timeout on the comment POST and still closes (AC3 wrapper proof)", async () => {
+    vi.useFakeTimers();
+    try {
+      let commentAttempts = 0;
+      octokitRequestSpy.mockImplementation(async (route: string) => {
+        if (route === "GET /search/issues") {
+          return {
+            data: {
+              items: [makeIssue({ number: 500, labels: ["deferred-scope-out"] })],
+            },
+          };
+        }
+        if (
+          route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
+        ) {
+          commentAttempts += 1;
+          // Transient on the FIRST comment attempt, succeed on the second.
+          if (commentAttempts === 1) throw wrappedConnectTimeout();
+          return { data: {} };
+        }
+        return { data: {} };
+      });
+
+      const { cronStaleDeferredScopeOutsHandler } = await importModule();
+      const step = makeStep();
+      const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      await vi.runAllTimersAsync();
+      const result = await p;
+
+      // The comment was retried (proving the comment POST is wrapped, not just
+      // the search) and the issue still closed; no error-level mirror.
+      expect(commentAttempts).toBe(2);
+      expect(result.closed).toBe(1);
+      expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-escalates a SUSTAINED search outage to the handler net (AC6)", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchAttempts = 0;
+      octokitRequestSpy.mockImplementation(async (route: string) => {
+        if (route === "GET /search/issues") {
+          searchAttempts += 1;
+          throw wrappedConnectTimeout(); // every attempt fails
+        }
+        return { data: {} };
+      });
+
+      const { cronStaleDeferredScopeOutsHandler } = await importModule();
+      const step = makeStep();
+      const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      // Attach the rejection assertion BEFORE advancing timers — the handler
+      // rejects DURING runAllTimersAsync, so a late .rejects would surface as
+      // an unhandled rejection.
+      const rejection = expect(p).rejects.toThrow(/sweep failed/);
+      await vi.runAllTimersAsync();
+      await rejection;
+
+      // 3 attempts (1 + MAX_RETRIES) before exhaustion.
+      expect(searchAttempts).toBe(3);
+
+      // The sweep-level mirror fired with op:"sweep".
+      expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+      expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
+        op: "sweep",
+      });
+
+      // Heartbeat posted ok:false (the sentry-heartbeat step ran before rethrow).
+      expect(step.calls.some((c) => c.name === "sentry-heartbeat")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

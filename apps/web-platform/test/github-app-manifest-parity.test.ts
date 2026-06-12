@@ -121,6 +121,16 @@ describe("github-app-manifest.json symbol parity", () => {
     expect(m.default_permissions?.issues).toBe("write");
   });
 
+  test("default_permissions.checks === 'write' (synthetic check-run POST requires it)", () => {
+    // _cron-safe-commit.ts:683 POSTs /repos/{owner}/{repo}/check-runs for the
+    // syntheticChecks path shared by 5 crons; checks:read 403s with
+    // "Resource not accessible by integration" (Sentry 17933ec4…). The
+    // exact-key-set test only checks keys, not values, so lock the value here
+    // so a regress to read fails CI, not production.
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
+    expect(m.default_permissions?.checks).toBe("write");
+  });
+
   test("public === false", () => {
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
     expect(m.public).toBe(false);
