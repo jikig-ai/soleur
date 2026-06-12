@@ -397,33 +397,60 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 
 **Restore (H9):**
 
-**Primary (no action — polling self-heals):** With `--poll-interval 60` the
-server re-syncs/re-plans a dropped (H9a) or de-planned (H9b) function from the
-app's `/api/inngest` manifest within ≤60s automatically. **To confirm recovery
-WITHOUT host access (`hr-no-dashboard-eyeball`/no-SSH):** watch the
-`scheduled-inngest-cron-watchdog` Sentry monitor flip back to `ok` on its next
-4h tick (query the Sentry Crons monitor-list API), or re-run the watchdog via
-`gh workflow run`. The loopback re-query
-`curl -s http://127.0.0.1:8288/v1/functions | jq '[.[]|select(.triggers[]?.cron)]|length'`
-(>=1 with the affected cron present) is an **on-host** confirmation aid only.
-A restart is only needed when polling itself is broken (see the backstop below).
+> **#5159 reframe — a standalone inngest restart DE-PLANS crons.** Restarting
+> `inngest-server.service` on its own wipes the cron scheduler plan; the SDK does
+> NOT re-push on a restart (it synced once at its own boot and the server's
+> persisted SQLite still lists the app registration, so a loopback
+> `PUT /api/inngest` returns `modified:false` and re-arms nothing — proven #5159,
+> live-confirmed `inngest_register_http:200, inngest_register_modified:false,
+> inngest_crons:{}`). Crons re-arm ONLY via (a) **restarting the web-platform
+> container** (a redeploy, or `docker restart soleur-web-platform`) — the app's
+> disconnect+reconnect makes the inngest-server re-discover it on the next poll
+> and re-arm the cron schedule (this is reconnection-driven; the SDK sets no
+> `appVersion`, so it is NOT a version bump — it is the fresh app boot the server
+> treats as a new registration, which is why the old `docker restart` step
+> worked), or (b) the server's `--poll-interval` self-heal (~minutes, automatic).
+> So do NOT reach for `restart-inngest-server.yml` to recover de-planned crons —
+> it cannot re-arm them.
 
-**Automated backstop (if polling is broken):** Run the restart workflow from any machine with `gh` auth:
+**Primary (immediate) — redeploy / restart web-platform.** Restarting the
+web-platform container makes the freshly-booted app reconnect; the inngest-server
+re-discovers it and re-arms the cron scheduler at once (reconnection-driven — the
+app sets no `appVersion`). From any machine with `gh` auth (no SSH), re-run the
+latest release (it restarts the container):
 
 ```bash
-gh workflow run restart-inngest-server.yml
+# Re-run the latest web-platform release — restarting the app container is what
+# forces the inngest-server to re-discover the app and re-arm crons. Then watch
+# deploy-status. (SSH fallback if the workflow is unavailable: `docker restart
+# soleur-web-platform`.)
+gh run rerun "$(gh run list --workflow=web-platform-release.yml -L1 --json databaseId -q '.[0].databaseId')"
 ```
 
-This sends `restart inngest _ latest` to `ci-deploy.sh`, which restarts `inngest-server.service`, waits for health at `127.0.0.1:8288`, and verifies the registry has >=1 cron-triggered function (#4650; cron-plan loop budget 120s nominal per #5145). **Post-#5159 the restart arm self-registers:** `verify_inngest_health`'s cron-plan loop fires a loopback `PUT /api/inngest` against the web-platform SDK each iteration, forcing the SDK manifest re-registration that re-plans cron triggers — so a standalone restart no longer leaves the registry empty until an external app-side push. The workflow polls deploy-status for completion and reports success/failure via GHA annotations; a `reason=success` terminal state means the crons are already re-planned. **No follow-up web-platform container restart is required** (it was, pre-#5159, the only way to force the manifest sync).
+**Secondary (automatic, ~minutes) — wait for the `--poll-interval` self-heal.**
+With `--poll-interval 60` the server re-syncs/re-plans a dropped (H9a) or
+de-planned (H9b) function from the app's `/api/inngest` manifest on its next poll
+with no action. **To confirm recovery WITHOUT host access
+(`hr-no-dashboard-eyeball`/no-SSH):** watch the affected `scheduled-*` Sentry
+cron monitor flip back to `ok` (query the Sentry Crons monitor-list API). The
+on-host loopback re-query
+`curl -s http://127.0.0.1:8288/v1/functions | jq '[.[]|select(.triggers[]?.cron)]|length'`
+(>=1 with the affected cron present) is an on-host confirmation aid only.
 
-**Manual fallback (SSH required — only if the no-SSH workflow above is itself unavailable):**
+> **Note on `restart-inngest-server.yml`:** the workflow restarts
+> `inngest-server.service` and gates on `/health` (process liveness); its
+> cron-plan check is **advisory** (#5159) — it polls `/v1/functions` best-effort
+> and reports success even if no cron is re-armed yet, because a standalone
+> restart cannot re-arm crons. Use it to recover a *dead* `inngest-server`
+> process, NOT to recover de-planned crons (redeploy or wait-for-poll, above).
 
-1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service`
-2. Wait 30s for SQLite reinitialisation
-3. Force the SDK re-registration (post-#5159 the restart arm does this automatically; this is the manual equivalent): `curl -sf --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest` (expect `{"message":"Successfully registered","modified":true}`)
-4. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 41)
-5. Manual trigger to confirm end-to-end: `curl -X POST http://127.0.0.1:8288/e/<event-name> -H "Content-Type: application/json" -d '{"name":"<event-name>","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`
-6. Verify Sentry check-in: wait for the next natural fire or check manually via Sentry API
+**Manual fallback (SSH required — only if the no-SSH paths above are themselves unavailable):**
+
+1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service` (NOTE: this de-plans crons; it only recovers a wedged process — crons re-arm via the redeploy or poll below, NOT via this restart)
+2. Wait 30s for SQLite reinitialisation, then restart the web-platform container (`docker restart soleur-web-platform`, or the redeploy above) — the app's reconnect makes the inngest-server re-discover it and re-arm crons. A loopback `PUT /api/inngest` against the still-running app will NOT (it returns `modified:false`, #5159)
+3. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 41)
+4. Manual trigger to confirm end-to-end: `curl -X POST http://127.0.0.1:8288/e/<event-name> -H "Content-Type: application/json" -d '{"name":"<event-name>","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`
+5. Verify Sentry check-in: wait for the next natural fire or check manually via Sentry API
 
 **Reference incident:** 2026-05-27 `scheduled-community-monitor` missed
 check-in (Sentry incident #5010688). Last successful check-in

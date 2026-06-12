@@ -93,5 +93,15 @@ assert "references the prior week's issue"       'prior week|last week'
 # --- Negative: the agent must not be told to create issues itself ---
 refute "agent is not instructed to 'gh issue create'" 'gh issue create'
 
+# --- Regression guard: data reads must use the List API, never --search. GitHub's Search API
+# returns EMPTY for a cross-repo query under the in-action App-installation token (#3403 class),
+# which would silently render "Nothing shipped" / "first digest" every week. Comment lines that
+# document "NOT --search" are allowed; an actual `gh pr/issue list ... --search` command is not. ---
+if grep -E 'gh (pr|issue) list' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -q -- '--search'; then
+  fail=$((fail+1)); echo "FAIL: a 'gh pr/issue list' command uses --search (breaks cross-repo under the in-action token)" >&2
+else
+  pass=$((pass+1))
+fi
+
 echo "=== operator-digest-skill: ${pass} passed, ${fail} failed ===" >&2
 [[ "$fail" == 0 ]]
