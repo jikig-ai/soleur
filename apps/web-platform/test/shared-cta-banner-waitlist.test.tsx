@@ -8,13 +8,17 @@ import {
 } from "@testing-library/react";
 import { CtaBanner } from "@/components/shared/cta-banner";
 
+const JOINED_KEY = "soleur:shared:waitlist-joined";
+
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
 });
 
 afterEach(() => {
   cleanup();
   sessionStorage.clear();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -104,5 +108,81 @@ describe("CtaBanner waitlist form", () => {
 
     resolveFetch(new Response("", { status: 200 }));
     await waitFor(() => expect(screen.getByText(/you're on the list/i)).toBeTruthy());
+  });
+});
+
+describe("CtaBanner remembers an already-joined visitor (localStorage)", () => {
+  // TST1 / AC1 — a returning visitor whose browser carries the joined flag is
+  // shown NO banner at all (wireframe State C): the component returns null.
+  it("renders nothing when the joined flag is seeded before mount", () => {
+    localStorage.setItem(JOINED_KEY, "1");
+    render(<CtaBanner />);
+    // The whole component short-circuited to null — form AND brand header gone.
+    expect(screen.queryByPlaceholderText(/you@company.com/i)).toBeNull();
+    expect(screen.queryByText(/built with/i)).toBeNull();
+  });
+
+  // TST2a / AC2 — a confirmed 2xx join writes the durable flag exactly once,
+  // with the boolean "1" value (never the email — AC7).
+  it("writes the joined flag on a successful (2xx) submit", async () => {
+    const setItemSpy = vi.spyOn(localStorage, "setItem");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 200 })),
+    );
+    render(<CtaBanner />);
+    typeEmail();
+    fireEvent.click(joinButton());
+    await waitFor(() =>
+      expect(screen.getByText(/you're on the list/i)).toBeTruthy(),
+    );
+    expect(setItemSpy).toHaveBeenCalledWith(JOINED_KEY, "1");
+    // AC7 — the entered email is never persisted to storage.
+    expect(setItemSpy).not.toHaveBeenCalledWith(
+      JOINED_KEY,
+      expect.stringContaining("@"),
+    );
+  });
+
+  // TST2b / AC3 (load-bearing) — a non-2xx (429) submit must NOT write the flag.
+  // Response.ok is false for every non-2xx, so 429 represents the whole class.
+  it("does NOT write the joined flag on a non-2xx (429) submit", async () => {
+    const setItemSpy = vi.spyOn(localStorage, "setItem");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 429 })),
+    );
+    render(<CtaBanner />);
+    typeEmail();
+    fireEvent.click(joinButton());
+    await waitFor(() =>
+      expect(screen.getByText(/something went wrong/i)).toBeTruthy(),
+    );
+    expect(setItemSpy).not.toHaveBeenCalledWith(JOINED_KEY, expect.anything());
+  });
+
+  // TST2b / AC3 (load-bearing) — a fetch rejection (offline) must NOT write the
+  // flag (the catch branch). A flag on a failed signup is the lost-lead incident.
+  it("does NOT write the joined flag on a fetch rejection (offline)", async () => {
+    const setItemSpy = vi.spyOn(localStorage, "setItem");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<CtaBanner />);
+    typeEmail();
+    fireEvent.click(joinButton());
+    await waitFor(() =>
+      expect(screen.getByText(/something went wrong/i)).toBeTruthy(),
+    );
+    expect(setItemSpy).not.toHaveBeenCalledWith(JOINED_KEY, expect.anything());
+  });
+
+  // TST2c / AC6 — a thrown read falls back to "show the banner" (the safe
+  // direction). A read-throw that hid the banner would be a distinct
+  // single-user incident, so this pins the fallback direction.
+  it("still shows the banner when localStorage.getItem throws", () => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    render(<CtaBanner />);
+    expect(screen.queryByPlaceholderText(/you@company.com/i)).toBeTruthy();
   });
 });
