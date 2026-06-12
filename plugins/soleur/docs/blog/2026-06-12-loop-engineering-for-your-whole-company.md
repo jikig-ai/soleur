@@ -3,6 +3,7 @@ title: "Loop Engineering for Your Whole Company, Not Just Your Codebase"
 seoTitle: "Loop Engineering Beyond Code: Run a Whole Company on Agent Loops"
 date: 2026-06-12
 description: "Addy Osmani coined loop engineering for code. Soleur applies the same architecture — automations, skills, connectors, memory — across every department."
+ogImage: "blog/og-run-every-department.png"
 tags:
   - loop-engineering
   - agentic-engineering
