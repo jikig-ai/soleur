@@ -56,6 +56,11 @@ STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 # the code; this marker makes the no-op visible (000=unreachable, 4xx/5xx=rejected,
 # 2xx=registered-but-unplanned). Overridable for testing.
 INNGEST_REGISTER_HTTP_FILE="${CI_DEPLOY_INNGEST_REGISTER_HTTP:-/var/lock/inngest-register-http}"
+# #5159 follow-up 2: the re-register PUT's response `modified` flag (true/false
+# /unknown). Distinguishes a sync-dedup no-op (false) from a real push (true) —
+# the datum that the serveHost theory (#5188) refutation left open. Surfaced by
+# cat-deploy-state.sh in /hooks/deploy-status (no SSH). Overridable for testing.
+INNGEST_REGISTER_MODIFIED_FILE="${CI_DEPLOY_INNGEST_REGISTER_MODIFIED:-/var/lock/inngest-register-modified}"
 START_TS=$(date +%s)
 # These are populated as the script parses SSH_ORIGINAL_COMMAND; surfaced in state.
 COMPONENT=""
@@ -250,6 +255,8 @@ verify_inngest_health() {
   # false-pass on the slug alone even with zero planned cron triggers.
   local functions_body=""
   local inngest_register_http=""
+  local inngest_reg_out=""
+  local inngest_register_modified=""
   for i in $(seq 1 "$cron_max_attempts"); do
     # #5159: active push-and-poll — re-register on EACH iteration. The
     # inngest-server cannot self-sync its function manifest post-restart; only an
@@ -277,10 +284,25 @@ verify_inngest_health() {
     # cat-deploy-state.sh to surface in /hooks/deploy-status (no-SSH diagnosis).
     # --max-time 10 (not 5) keeps the #5145 VERIFY_FN_MAXTIME==2 pin intact and is
     # counted in the cross-file drift guard.
-    inngest_register_http=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest 2>/dev/null) || inngest_register_http="000"
+    # #5159 follow-up 2: also capture the response BODY's `modified` flag. The
+    # serveHost fix (#5188) was refuted — even registering the public origin the
+    # loopback PUT still returned 200 + inngest_crons:{}. The remaining unknown is
+    # whether the PUT is a sync-dedup no-op (`modified:false` — SDK thinks it is
+    # already synced, never re-pushes to the restart-wiped server) vs a real push
+    # the server drops (`modified:true`). `-w '\n%{http_code}'` (no `-o /dev/null`)
+    # appends a newline + the code AFTER the JSON body, so `tail -n1`=code and the
+    # body precedes it. Both are logged + persisted for cat-deploy-state.sh to
+    # surface (with the inngest-server journal tail) in /hooks/deploy-status —
+    # no-SSH. --max-time 10 still satisfies the #5145 drift guard + the
+    # VERIFY_FN_MAXTIME==2 pin (curl -s, not -sf; time 10, not 5).
+    inngest_reg_out=$(curl -s -w '\n%{http_code}' --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest 2>/dev/null) || inngest_reg_out=$'\n000'
+    inngest_register_http=$(printf '%s' "$inngest_reg_out" | tail -n1)
+    inngest_register_modified=$(printf '%s' "$inngest_reg_out" | grep -oE '"modified"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE '(true|false)' | head -n1)
     [[ -z "$inngest_register_http" ]] && inngest_register_http="000"
-    logger -t "$LOG_TAG" "INNGEST_REREGISTER: loopback PUT -> HTTP $inngest_register_http (attempt $i/$cron_max_attempts)"
+    [[ -z "$inngest_register_modified" ]] && inngest_register_modified="unknown"
+    logger -t "$LOG_TAG" "INNGEST_REREGISTER: loopback PUT -> HTTP $inngest_register_http modified=$inngest_register_modified (attempt $i/$cron_max_attempts)"
     printf '%s' "$inngest_register_http" > "$INNGEST_REGISTER_HTTP_FILE" 2>/dev/null || true
+    printf '%s' "$inngest_register_modified" > "$INNGEST_REGISTER_MODIFIED_FILE" 2>/dev/null || true
     functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
 
     if [[ "$functions_body" == *'"cron":'* ]]; then

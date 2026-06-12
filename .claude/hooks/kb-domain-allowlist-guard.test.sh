@@ -24,6 +24,11 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 invoke_write() { printf '{"tool_input":{"file_path":"%s"}}' "$1" | bash "$HOOK"; }
 invoke_bash()  { printf '%s' "$1" | jq -Rs '{tool_input: {command: .}}' | bash "$HOOK"; }
+# Explicit-tool_name variants: the invoke_bash/invoke_write helpers above omit
+# tool_name, exercising the fail-open-by-shape discriminator path. These inject
+# tool_name so at least one case per class exercises the explicit-tool_name path.
+invoke_bash_named()  { printf '%s' "$1" | jq -Rs '{tool_name: "Bash", tool_input: {command: .}}' | bash "$HOOK"; }
+invoke_write_named() { jq -nc --arg f "$1" '{tool_name: "Write", tool_input: {file_path: $f}}' | bash "$HOOK"; }
 decision_of()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // empty'; }
 
 # T1 — NEW unsanctioned top-level dir (relative path) → ask.
@@ -98,6 +103,98 @@ git add knowledge-base/project/plans/ knowledge-base/project/specs/x/tasks.md')
 echo "T12: grep pattern knowledge-base/[A-Za-z0-9/_.-]+ → pass-through"
 out=$(invoke_bash "grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\\.md' \"\$PLAN\"")
 [[ -z "$(decision_of "$out")" ]] && pass "no decision (grep regex pattern, not a write)" || fail "out=$out"
+
+# --- Read-vs-write distinction for the Bash class (write-target gate) ----------
+# T13-T15 are the reported false-positive: read-only Bash commands that merely
+# MENTION a kb path (via `git show <ref>:path`, `grep`) must pass cleanly. They
+# carry no write verb and no kb-targeted redirect, so the write-target gate
+# short-circuits them before the advisory `ask`.
+
+# T13 — the exact reported repro: a multi-statement read-only command containing
+# `git show main:knowledge-base/.gitkeep >/dev/null 2>&1`. The `>/dev/null` must
+# NOT be read as a kb-targeted redirect. Also exercises the `[^|;&]*` segment
+# boundary (multiple `;`/`&&`/`||`-joined statements + a pipe to `head`).
+echo "T13: exact repro (read-only multi-statement) → pass-through"
+out=$(invoke_bash 'git branch --show-current; echo "---kb---"; git show main:knowledge-base/.gitkeep >/dev/null 2>&1 && echo "kb-tracked" || git ls-tree main knowledge-base >/dev/null 2>&1 && echo "kb-exists-on-main" || echo "no-kb"; echo "---5085---"; gh issue view 5085 --json state,title 2>/dev/null | head; echo "---ledger---"; git ls-tree -r --name-only main | grep -iE "expense|ledger|cost" | head -30')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (read-only repro command)" || fail "out=$out"
+
+# T14 — standalone `git show <ref>:knowledge-base/...` read.
+echo "T14: 'git show main:knowledge-base/.gitkeep' → pass-through"
+out=$(invoke_bash 'git show main:knowledge-base/.gitkeep')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (git show read reference)" || fail "out=$out"
+
+# T15 — `grep -r knowledge-base/foo .` read (no write verb, no kb redirect).
+echo "T15: 'grep -r knowledge-base/foo .' → pass-through"
+out=$(invoke_bash 'grep -r knowledge-base/foo .')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (grep read reference)" || fail "out=$out"
+
+# T15b — repro command via explicit tool_name:"Bash" (exercises the tool_name path,
+# not just the fail-open-by-shape path that invoke_bash uses).
+echo "T15b: repro command via invoke_bash_named (explicit tool_name) → pass-through"
+out=$(invoke_bash_named 'git show main:knowledge-base/.gitkeep >/dev/null 2>&1')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (explicit tool_name read)" || fail "out=$out"
+
+# T16 — genuine new-domain write via `mkdir` → still ask (regression guard: the
+# gate must NOT swallow real writes).
+echo "T16: 'mkdir knowledge-base/newdomain' → ask (regression guard)"
+out=$(invoke_bash 'mkdir knowledge-base/newdomain')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Bash mkdir new domain" || fail "out=$out"
+
+# T17 — genuine new-domain write via redirect → still ask.
+echo "T17: 'echo x > knowledge-base/newdomain/file.md' → ask (regression guard)"
+out=$(invoke_bash 'echo x > knowledge-base/newdomain/file.md')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Bash redirect into new domain" || fail "out=$out"
+
+# T18 — genuine new-domain write via `git add` → still ask.
+echo "T18: 'git add knowledge-base/newdomain/file.md' → ask (regression guard)"
+out=$(invoke_bash 'git add knowledge-base/newdomain/file.md')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Bash git add new domain" || fail "out=$out"
+
+# T18b — genuine new-domain write via `tee` → still ask. `tee` is the only verb
+# in KB_WRITE_VERB_RE not otherwise exercised (T16=mkdir, T17=redirect,
+# T18=git add); this locks it so a future verb-regex narrowing cannot drop `tee`
+# silently behind a green suite.
+echo "T18b: 'echo x | tee knowledge-base/newdomain/file.md' → ask (regression guard)"
+out=$(invoke_bash 'echo x | tee knowledge-base/newdomain/file.md')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Bash tee into new domain" || fail "out=$out"
+
+# T19 — write into a SANCTIONED domain via mkdir → pass-through.
+echo "T19: 'mkdir knowledge-base/engineering/x' → pass-through (sanctioned)"
+out=$(invoke_bash 'mkdir knowledge-base/engineering/x')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (sanctioned domain write)" || fail "out=$out"
+
+# T20 — file-tool write to a new unsanctioned domain → still ask (unaffected by
+# the Bash-only gate; file_path is unambiguously a write target).
+echo "T20: file-tool write to knowledge-base/newdomain/x.md → ask (unaffected)"
+out=$(invoke_write "knowledge-base/newdomain/x.md")
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on file-tool write new domain" || fail "out=$out"
+
+# T20b — same, with explicit tool_name:"Write".
+echo "T20b: file-tool write via invoke_write_named → ask (unaffected, explicit tool_name)"
+out=$(invoke_write_named "knowledge-base/newdomain/x.md")
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on explicit-tool_name file write" || fail "out=$out"
+
+# T21 — documented-acceptable string-literal false positive (Sharp-Edge Finding 1).
+# The redirect regex is not quote-aware: `> knowledge-base/y` inside a quoted
+# argument matches even though the real redirect target is /tmp/notes.txt. This
+# locks the behavior so a future regex edit cannot silently "fix" it and regress
+# the genuine `echo x > knowledge-base/...` write detection (T17).
+echo "T21: quoted '> knowledge-base/' inside an arg → ask (documented-acceptable)"
+out=$(invoke_bash 'echo "cp x > knowledge-base/y is the move cmd" > /tmp/notes.txt')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask (known-acceptable quoted-string match)" || fail "out=$out"
+
+# T22 — read-only `sed` (no `-i`) over a sanctioned kb path → pass-through. The
+# verb regex anchors on `sed[[:space:]]+-i`, so a read-only sed is not a write.
+echo "T22: read-only 'sed' (no -i) over kb path → pass-through"
+out=$(invoke_bash 'sed "s/a/b/" knowledge-base/engineering/x.md')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (read-only sed)" || fail "out=$out"
+
+# T23 — `mv` with kb as the SOURCE (sanctioned segment) → pass-through. The verb
+# regex matches, but SEGMENT=project is sanctioned so the sanctioned-dir check
+# passes it. Locks kb-as-source behavior against a future verb-regex narrowing.
+echo "T23: 'mv knowledge-base/project/foo.md /tmp/' (kb source, sanctioned) → pass-through"
+out=$(invoke_bash 'mv knowledge-base/project/foo.md /tmp/')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (kb-as-source, sanctioned segment)" || fail "out=$out"
 
 echo
 echo "Results: $PASS passed, $FAIL failed"

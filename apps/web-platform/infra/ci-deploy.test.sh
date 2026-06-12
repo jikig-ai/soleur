@@ -290,16 +290,22 @@ case "$URL" in
     ;;
   *":3000/api/inngest"*)
     # #5159: loopback SDK re-registration PUT fired inside verify_inngest_health's
-    # cron-plan loop. The SUT (#5159 follow-up) captures the HTTP code via
-    # `-o /dev/null -w '%{http_code}'`, so this arm echoes a 3-digit code on
-    # stdout (WANT_HTTP_CODE set by the -w parse above). MOCK_CURL_INNGEST_PUT_FAIL=1
-    # simulates connection-refused (curl exit 7 → the SUT's `|| =000` maps it to
-    # 000). MOCK_CURL_INNGEST_PUT_HTTP overrides the returned code (default 200) to
-    # exercise the reachable-but-rejected path (e.g. 404/502) the diagnostic surfaces.
+    # cron-plan loop. The SUT (#5159 follow-up 2) captures BOTH the body and the
+    # HTTP code via `curl -s -w '\n%{http_code}'` (no -o), so this arm emits the
+    # JSON body (carrying the `modified` flag the SUT greps) THEN a newline + the
+    # code — exactly mirroring curl's -w append. MOCK_CURL_INNGEST_PUT_FAIL=1
+    # simulates connection-refused (curl exit 7 → SUT maps to 000/unknown).
+    # MOCK_CURL_INNGEST_PUT_HTTP overrides the code (default 200);
+    # MOCK_CURL_INNGEST_PUT_MODIFIED overrides the body's modified flag (default true).
     if [[ "${MOCK_CURL_INNGEST_PUT_FAIL:-}" == "1" ]]; then
       exit 7
     fi
-    if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "${MOCK_CURL_INNGEST_PUT_HTTP:-200}"; fi
+    _put_body="{\"message\":\"Successfully registered\",\"modified\":${MOCK_CURL_INNGEST_PUT_MODIFIED:-true}}"
+    if [[ "$WANT_HTTP_CODE" == "1" ]]; then
+      printf '%s\n%s' "$_put_body" "${MOCK_CURL_INNGEST_PUT_HTTP:-200}"
+    else
+      printf '%s' "$_put_body"
+    fi
     exit 0
     ;;
   *"/health"*)
@@ -2067,27 +2073,37 @@ else
   echo "  FAIL: re-register PUT wiring (#5159) (count=$PUT_COUNT put_line=$PUT_LINE cron_for=$CRON_FOR_LINE functions_line=$PUT_FUNCTIONS_LINE fn_start=$VERIFY_FN_START fn_end=$VERIFY_FN_END)"
 fi
 
-# #5159 follow-up: the re-register PUT must CAPTURE its HTTP code (no silent
-# no-op) and persist it for no-SSH diagnosis. Assert, within verify_inngest_health:
-#   (a) the PUT uses the code-capturing form (`-w '%{http_code}'`), NOT a bare
-#       `curl -sf ... || true` that discards the code;
-#   (b) a logger line records INNGEST_REREGISTER with the code;
-#   (c) the code is written to $INNGEST_REGISTER_HTTP_FILE (cat-deploy-state.sh
-#       surfaces it in /hooks/deploy-status).
+# #5159 follow-up 2: the re-register PUT must CAPTURE its HTTP code AND response
+# `modified` flag (no silent no-op) and persist both for no-SSH diagnosis. Assert,
+# within verify_inngest_health:
+#   (a) the PUT uses the body+code-capturing form (`-w '\n%{http_code}'`, no
+#       `-o /dev/null`), NOT a bare `curl -sf ... || true` that discards everything;
+#   (b) the `modified` flag is extracted from the body;
+#   (c) a logger line records INNGEST_REREGISTER with the code AND modified;
+#   (d) both the code and modified flag are written to their marker files;
+#   (e) cat-deploy-state.sh surfaces inngest_register_http, inngest_register_modified,
+#       AND the inngest-server journal tail in /hooks/deploy-status.
 echo ""
-echo "--- verify_inngest_health re-register PUT diagnostic capture (#5159 follow-up) ---"
+echo "--- verify_inngest_health re-register PUT diagnostic capture (#5159 follow-up 2) ---"
 TOTAL=$((TOTAL + 1))
 FN_BODY=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
-CAP_OK=$(printf '%s\n' "$FN_BODY" | grep -cE "inngest_register_http=\\\$\(curl -s -o /dev/null -w '%\\{http_code\\}' --max-time 10 -X PUT" || true)
-LOG_OK=$(printf '%s\n' "$FN_BODY" | grep -cE 'logger -t "\$LOG_TAG" "INNGEST_REREGISTER:' || true)
+CAP_OK=$(printf '%s\n' "$FN_BODY" | grep -cE "inngest_reg_out=\\\$\(curl -s -w .* --max-time 10 -X PUT http" || true)
+MOD_OK=$(printf '%s\n' "$FN_BODY" | grep -cE "inngest_register_modified=.*grep -oE '\"modified\"" || true)
+LOG_OK=$(printf '%s\n' "$FN_BODY" | grep -cE 'logger -t "\$LOG_TAG" "INNGEST_REREGISTER:.*modified=' || true)
 MARK_OK=$(printf '%s\n' "$FN_BODY" | grep -cE 'printf .* > "\$INNGEST_REGISTER_HTTP_FILE"' || true)
-SURFACE_OK=$(grep -cE 'inngest_register_http:' "$SCRIPT_DIR/cat-deploy-state.sh" || true)
-if [[ "$CAP_OK" -ge 1 && "$LOG_OK" -ge 1 && "$MARK_OK" -ge 1 && "$SURFACE_OK" -ge 1 ]]; then
+MARK_MOD_OK=$(printf '%s\n' "$FN_BODY" | grep -cE 'printf .* > "\$INNGEST_REGISTER_MODIFIED_FILE"' || true)
+CDS="$SCRIPT_DIR/cat-deploy-state.sh"
+SURFACE_OK=$(grep -cE 'inngest_register_http:' "$CDS" || true)
+SURFACE_MOD_OK=$(grep -cE 'inngest_register_modified:' "$CDS" || true)
+SURFACE_JRNL_OK=$(grep -cE 'inngest_journal_tail:.*\$ij|service_journal_tail inngest-server\.service' "$CDS" || true)
+if [[ "$CAP_OK" -ge 1 && "$MOD_OK" -ge 1 && "$LOG_OK" -ge 1 && "$MARK_OK" -ge 1 \
+      && "$MARK_MOD_OK" -ge 1 && "$SURFACE_OK" -ge 1 && "$SURFACE_MOD_OK" -ge 1 \
+      && "$SURFACE_JRNL_OK" -ge 1 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: PUT captures HTTP code + logs + persists marker, surfaced by cat-deploy-state.sh — #5159 follow-up"
+  echo "  PASS: PUT captures HTTP code + modified flag + logs + persists both markers; cat-deploy-state surfaces http/modified/inngest-journal — #5159 follow-up 2"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: re-register diagnostic capture (#5159 follow-up) (capture=$CAP_OK logger=$LOG_OK marker=$MARK_OK surface=$SURFACE_OK)"
+  echo "  FAIL: re-register diagnostic capture (#5159 follow-up 2) (cap=$CAP_OK mod=$MOD_OK log=$LOG_OK markH=$MARK_OK markM=$MARK_MOD_OK surfH=$SURFACE_OK surfM=$SURFACE_MOD_OK surfJ=$SURFACE_JRNL_OK)"
 fi
 
 # #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
