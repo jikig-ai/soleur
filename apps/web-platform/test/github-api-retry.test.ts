@@ -1,10 +1,12 @@
 /**
- * GitHub API Retry Wrapper Tests
+ * GitHub API Retry Tests
  *
- * Tests the fetchWithRetry helper that adds timeout + retry logic to
- * GitHub API calls. Covers: success, retry on timeout, retry on 5xx,
- * no retry on 4xx, max retries exhausted, body drain on 5xx retry,
- * and undici-specific error codes.
+ * Two suites:
+ *  1. fetchWithRetry (github-api.ts) — success, retry on timeout, retry on 5xx,
+ *     no retry on 4xx, max retries exhausted, body drain on 5xx retry, and
+ *     undici-specific error codes.
+ *  2. isRetryableGithubError + withGithubRetry (github-retry.ts) — the
+ *     cause-chain classifier and the octokit-call retry wrapper.
  */
 import { generateKeyPairSync } from "crypto";
 
@@ -34,6 +36,10 @@ afterAll(() => {
 
 // Import AFTER env and fetch mocking
 import { githubApiGet, githubApiPost, githubApiGetText } from "../server/github-api";
+import {
+  isRetryableGithubError,
+  withGithubRetry,
+} from "../server/github-retry";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -278,5 +284,117 @@ describe("github-api fetchWithRetry", () => {
       const apiCallArgs = mockFetch.mock.calls[1];
       expect(apiCallArgs[1]).toHaveProperty("signal");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cause-chain classifier + octokit-call retry wrapper
+//
+// octokit.request() wraps an undici connect timeout in a RequestError
+// (name "HttpError", status 500) whose `.cause` is the raw
+// `TypeError: fetch failed`, whose own `.cause` carries
+// `{ code: "UND_ERR_CONNECT_TIMEOUT" }`. Top-level `isRetryable` MISSES that
+// wrapper, so `isRetryableGithubError` walks the cause chain. Seeds use
+// octokit's REAL thrown shape, never a bare TypeError (see plan AC4).
+// ---------------------------------------------------------------------------
+
+/** octokit's real wrapped shape for an undici connect timeout. */
+function wrappedConnectTimeout(): Error {
+  return Object.assign(new Error("fetch failed"), {
+    name: "HttpError",
+    status: 500,
+    cause: Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_CONNECT_TIMEOUT" },
+    }),
+  });
+}
+
+/** A genuine non-transient GitHub 403 (RequestError-like, no transient cause). */
+function wrapped403(): Error {
+  return Object.assign(new Error("Forbidden"), {
+    name: "HttpError",
+    status: 403,
+  });
+}
+
+describe("isRetryableGithubError (cause-chain walk)", () => {
+  test("RequestError-wrapped UND_ERR_CONNECT_TIMEOUT → true (depth walk)", () => {
+    expect(isRetryableGithubError(wrappedConnectTimeout())).toBe(true);
+  });
+
+  test("bare RequestError{status:403} → false (no transient cause)", () => {
+    expect(isRetryableGithubError(wrapped403())).toBe(false);
+  });
+
+  test("self-referential .cause cycle → false, no hang (depth bound)", () => {
+    const cyclic = Object.assign(new Error("loop"), {
+      name: "HttpError",
+      status: 500,
+    }) as Error & { cause?: unknown };
+    cyclic.cause = cyclic;
+    expect(isRetryableGithubError(cyclic)).toBe(false);
+  });
+
+  test("deep non-cyclic chain of non-retryable causes → false (pins depth bound)", () => {
+    // A 6-link linear chain (deeper than MAX_CAUSE_DEPTH=5) of non-retryable
+    // errors stays false — proves the walk terminates on depth, not just on
+    // cycles, and never finds a transient cause that isn't there.
+    let chain: Error & { cause?: unknown } = Object.assign(new Error("leaf"), {
+      name: "HttpError",
+      status: 500,
+    });
+    for (let i = 0; i < 6; i++) {
+      chain = Object.assign(new Error(`link-${i}`), {
+        name: "HttpError",
+        status: 500,
+        cause: chain,
+      });
+    }
+    expect(isRetryableGithubError(chain)).toBe(false);
+  });
+
+  test("undefined / null → false", () => {
+    expect(isRetryableGithubError(undefined)).toBe(false);
+    expect(isRetryableGithubError(null)).toBe(false);
+  });
+});
+
+describe("withGithubRetry", () => {
+  test("retryable-then-success resolves with the 2nd value", async () => {
+    vi.useFakeTimers();
+    try {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(wrappedConnectTimeout())
+        .mockResolvedValueOnce("ok");
+      const p = withGithubRetry(fn);
+      await vi.runAllTimersAsync();
+      await expect(p).resolves.toBe("ok");
+      expect(fn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("non-retryable error rethrows immediately (1 attempt, 0 backoff)", async () => {
+    const err = wrapped403();
+    const fn = vi.fn().mockRejectedValue(err);
+    await expect(withGithubRetry(fn)).rejects.toBe(err);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  test("exhaust 3 attempts then rethrow the final error", async () => {
+    vi.useFakeTimers();
+    try {
+      const err = wrappedConnectTimeout();
+      const fn = vi.fn().mockRejectedValue(err);
+      const p = withGithubRetry(fn);
+      const assertion = expect(p).rejects.toBe(err);
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(fn).toHaveBeenCalledTimes(3); // 1 + MAX_RETRIES(2)
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
