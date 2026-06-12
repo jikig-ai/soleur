@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
 
@@ -27,6 +27,11 @@ import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
 // probe. Duplicated as a prefix check (not imported) because the source lives
 // in `@/server/debug-event` and this client component must not pull `@/server/*`.
 const WITHHELD_PREFIX = "[input withheld";
+
+// Sticky-autoscroll bottom tolerance: distance (px) from the bottom within
+// which the list still counts as "pinned". Absorbs sub-pixel rounding plus the
+// height of a partially-visible last row.
+const STICK_TO_BOTTOM_THRESHOLD_PX = 32;
 
 const KIND_LABEL: Record<ChatDebugEventMessage["debugKind"], string> = {
   tool_use: "tool",
@@ -88,6 +93,27 @@ export function DebugStreamPanel({
   hadCompletedTurn = false,
 }: DebugStreamPanelProps) {
   const [expanded, setExpanded] = useState(false);
+
+  // Sticky autoscroll-to-bottom. The list is a nested `overflow-y-auto`, so we
+  // scroll the `<ul>` directly (`scrollTop = scrollHeight`) rather than
+  // `scrollIntoView` — the latter would also scroll ancestor containers and
+  // yank the whole page to surface the last row. `stickToBottom` is a ref (NOT
+  // state) so a scroll event never re-renders and the effect always reads the
+  // latest value without a stale closure.
+  const listRef = useRef<HTMLUListElement>(null);
+  const stickToBottom = useRef(true);
+
+  // Re-pin to the newest entry only when the operator is already at the bottom.
+  // Keyed on `events.length` so it fires on each new arrival, not on body edits;
+  // also keyed on `expanded` so opening a pre-populated panel lands at the
+  // newest entry rather than scrolled to the top (the `<ul>` only mounts while
+  // expanded, so the ref is fresh on that transition).
+  useEffect(() => {
+    const ul = listRef.current;
+    if (ul && stickToBottom.current) {
+      ul.scrollTop = ul.scrollHeight;
+    }
+  }, [events.length, expanded]);
 
   // Visibility gate: non-dev (or flag-off) cohort never sees the panel.
   if (!available) return null;
@@ -153,7 +179,16 @@ export function DebugStreamPanel({
                 : "No harness events yet."}
             </p>
           ) : (
-            <ul className="max-h-72 overflow-y-auto">
+            <ul
+              ref={listRef}
+              onScroll={(e) => {
+                const ul = e.currentTarget;
+                stickToBottom.current =
+                  ul.scrollHeight - ul.scrollTop - ul.clientHeight <
+                  STICK_TO_BOTTOM_THRESHOLD_PX;
+              }}
+              className="max-h-72 overflow-y-auto"
+            >
               {events.map((event) => (
                 <DebugEventRow key={event.id} event={event} />
               ))}

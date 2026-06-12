@@ -11,6 +11,7 @@ import {
   createMockQueryScripted as createMockQuery,
   makeAssistant,
   makeResult,
+  makeToolProgress,
   makeRecordingEvents as makeEvents,
   flushMicrotasks,
 } from "./helpers/soleur-go-fixtures";
@@ -808,5 +809,155 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     expect(end!.lastBlockKind).toBe("tool_use");
     expect(end!.lastBlockToolName).toBe("Read");
     expect(end!.reason).toBe("idle_window");
+  });
+});
+
+// Tests for plan 2026-06-12-fix-concierge-stream-timeout-debug-scroll-plan.md
+// — the SDK's mid-tool `tool_progress` heartbeat re-arms `state.runaway`.
+//
+// A single long tool execution (large `Read`, slow Anthropic round-trip)
+// emits no assistant block and no `tool_use_result` for tens of seconds,
+// but the SDK DOES yield `SDKToolProgressMessage` (type: "tool_progress")
+// every few seconds while the tool is alive and progressing. The runner
+// must treat that as forward progress and re-arm the per-block idle window
+// (`state.runaway` ONLY — never `state.turnHardCap`). A genuinely HUNG tool
+// emits NO `tool_progress`, so it still trips `idle_window` (AC2b).
+describe("soleur-go-runner runaway window reset (tool_progress heartbeat)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockReportSilentFallback.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("AC1: tool_use + N tool_progress < window apart spanning > window does NOT fire runaway (heartbeat re-arms state.runaway)", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-progress-reset",
+      userId: "u1",
+      userMessage: "read big file",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Single tool_use at t=0 arms the 10s window. No second block, no result.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/big.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // Emit a tool_progress heartbeat every 7s for ~28s total (well past the
+    // 10s window). Each heartbeat must re-arm the window. Under the OLD
+    // semantic (no tool_progress reset) runaway would fire at t=10s.
+    for (let i = 1; i <= 4; i++) {
+      vi.advanceTimersByTime(7_000);
+      await flushMicrotasks();
+      expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+      mock.emit(makeToolProgress("t1", i * 7));
+      await flushMicrotasks();
+    }
+
+    // Total elapsed > 28s with no block/result — but each heartbeat kept the
+    // window fresh, so runaway must NOT have fired.
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+  });
+
+  it("AC2b (merge-blocking): tool_use then SDK SILENCE (no tool_progress, no result) > window STILL fires runner_runaway reason=idle_window — the heartbeat reset must NOT blind the watchdog to a genuinely hung tool", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-hung-tool",
+      userId: "u1",
+      userMessage: "read hung file",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Single tool_use at t=0, then total silence — a genuinely HUNG tool
+    // emits NO tool_progress and NO result.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/hung" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    vi.advanceTimersByTime(10_001);
+    await flushMicrotasks();
+
+    const end = events._ended.find((e) => e.status === "runner_runaway") as
+      | (WorkflowEnd & { status: "runner_runaway"; reason?: unknown })
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.reason).toBe("idle_window");
+  });
+
+  it("AC3: tool_progress heartbeats re-arm state.runaway but NEVER state.turnHardCap — the 10-min absolute ceiling still fires reason=max_turn_duration even when heartbeats keep arriving", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      // Idle window (20s) larger than the heartbeat gap (5s) so it never
+      // fires; the hard cap (30s) is what must stop a forever-progressing tool.
+      wallClockTriggerMs: 20_000,
+      maxTurnDurationMs: 30_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-progress-hardcap",
+      userId: "u1",
+      userMessage: "read forever",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // First block at t=0 arms both timers.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/x" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // Heartbeat every 5s — the idle window (20s) keeps resetting, but the
+    // hard cap (30s anchor) must fire INDEPENDENTLY.
+    for (let i = 1; i <= 7; i++) {
+      vi.advanceTimersByTime(5_000);
+      if (i * 5_000 < 30_000) {
+        expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+      }
+      mock.emit(makeToolProgress("t1", i * 5));
+      await flushMicrotasks();
+    }
+
+    const end = events._ended.find((e) => e.status === "runner_runaway") as
+      | (WorkflowEnd & { status: "runner_runaway"; reason?: unknown })
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.reason).toBe("max_turn_duration");
   });
 });
