@@ -341,6 +341,30 @@ describe("cronStaleDeferredScopeOuts — retry-aware heartbeat gating", () => {
     expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
     );
+    // Distinct fingerprint vs A2 (which shares the ok:false assertion): the
+    // legacy shape reads attempt=0, so it must never emit the recovered-flap warn.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ recovered_after_attempts: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it("A6: attempt set but maxAttempts undefined defaults to final (fail-safe paging)", async () => {
+    // maxAttempts is OPTIONAL on Inngest's BaseContext. If a fire ever delivers
+    // attempt without maxAttempts, isFinalAttempt = attempt >= ((undefined ?? 1)-1)
+    // = attempt >= 0 = always true → the cron treats the attempt as final and
+    // pages on failure rather than silently suppressing. Lock that safe default.
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await expect(
+      cronStaleDeferredScopeOutsHandler({ step, logger, attempt: 1 }),
+    ).rejects.toThrow(/sweep failed/);
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
   });
 
   it("A4: success on a non-final attempt still posts an ok heartbeat", async () => {

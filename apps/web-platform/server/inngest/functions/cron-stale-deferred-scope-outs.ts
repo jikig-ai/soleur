@@ -296,6 +296,10 @@ export async function cronStaleDeferredScopeOutsHandler({
   // (retries:1 → 2 attempts, 0 and 1 → maxAttempts 2; final attempt is index 1).
   // Callers/tests passing neither (legacy shape) read attempt=0/maxAttempts=1 →
   // isFinalAttempt=true → identical to the pre-fix behavior (error on failure).
+  // Fail-safe direction: `maxAttempts` is OPTIONAL on Inngest's BaseContext, so
+  // if a fire ever omits it the `?? 1` collapses isFinalAttempt to always-true →
+  // every failed attempt pages. That degrades to OVER-paging (the original bug),
+  // never to masking a real failure with a false `ok` — the safe way to fail.
   const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
 
   let result: SweepResult = {
@@ -344,10 +348,11 @@ export async function cronStaleDeferredScopeOutsHandler({
     // skip the heartbeat step ENTIRELY (not just the POST) — a completed
     // step.run is memoized across the retry, so an executed-but-silent step would
     // replay and never emit the recovered `ok`. Forensics are preserved by the
-    // reportSilentFallback above (Layer 2: pino→Sentry warning event); if the
-    // retry never runs at all, the absent check-in trips the Sentry missed-
-    // check-in alert within the 30-min schedule-anchored margin (Layer 1). Rethrow
-    // to trigger the retry.
+    // reportSilentFallback above (Layer 2: pino→Sentry error-level event — it
+    // captures at error level, but it is NOT a monitor check-in, so it does not
+    // page); if the retry never runs at all, the absent check-in trips the Sentry
+    // missed-check-in alert within the 30-min schedule-anchored margin (Layer 1).
+    // Rethrow to trigger the retry.
     throw new Error(
       "stale-deferred-scope-out sweep failed on a non-final attempt; retrying",
     );
