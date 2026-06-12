@@ -137,7 +137,7 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS.contents).not.toBe("write");
   });
 
-  it("the other nine stay deferred (honest restore scope — no over-promise)", () => {
+  it("the other eight stay deferred (#5199 restored ux-audit; rest gated on #5138)", () => {
     for (const cron of [
       "cron-bug-fixer",
       "cron-campaign-calendar",
@@ -147,11 +147,14 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
       "cron-growth-audit",
       "cron-growth-execution",
       "cron-seo-aeo-audit",
-      "cron-ux-audit",
     ]) {
       expect(TIER2_DEFERRED_CRONS.has(cron)).toBe(true);
     }
-    expect(TIER2_DEFERRED_CRONS.size).toBe(9);
+    expect(TIER2_DEFERRED_CRONS.size).toBe(8);
+  });
+
+  it("cron-ux-audit is RESTORED — no longer Tier-2 deferred (#5199)", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-ux-audit")).toBe(false);
   });
 });
 

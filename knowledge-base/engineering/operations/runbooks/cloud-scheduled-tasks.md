@@ -81,7 +81,7 @@ quiet cycles or mask genuine multi-cycle silence. They were removed deliberately
 | Task | Why it is not a reliable producer |
 |------|---------------------------------------------|
 | daily-triage | Labels existing issues only; its prompt forbids `gh issue create`. |
-| ux-audit | Runs `UX_AUDIT_DRY_RUN=true` → writes findings to Supabase/stdout, no issue. |
+| ux-audit | **Conditional/best-effort producer (#5199, restored live):** files capped `scheduled-ux-audit` issues when it finds UX decay, but a clean run legitimately files zero (caps + dedup). Heartbeat is liveness-not-success (mirrors bug-fixer #4727), so issue-presence is the wrong silence signal. |
 | bug-fixer | Opens `bot-fix/*` PRs; never attaches a `scheduled-bug-fixer` label to an issue. |
 | strategy-review | **Conditional/idempotent producer (#4874):** opens an issue ONLY per knowledge-base file needing review (title-dedup, skips `up_to_date`), so a quiet week with everything up-to-date legitimately yields zero issues. Issue-presence is the wrong silence signal. |
 
@@ -651,21 +651,30 @@ unhooked tool class / crashed hook fails OPEN. So:
 ### Tier-1 vs Tier-2
 
 - **Tier-1** (hook-contained, scheduled): crons whose entire command surface is a finite
-  allowlist — currently `cron-roadmap-review` (#5004) plus the two #5046 PR-2 restores
+  allowlist — currently `cron-roadmap-review` (#5004); the two #5046 PR-2 restores
   `cron-agent-native-audit` and `cron-legal-audit` (issue-creator allowlists; the hook's
-  catch-all now allows `Task`/`Skill`). Add a cron here by enumerating its
+  catch-all now allows `Task`/`Skill`); and the #5199 restore `cron-ux-audit` (issue-creator
+  bash allowlist PLUS the FIRST per-cron `mcp__playwright__*` allowance — file-driven via
+  `CRON_MCP_ALLOWLISTS` + a `browser_navigate` URL-origin guard + `storage-state.json`
+  read-deny; see `cron-bash-allowlist-hook.mjs`). Add a cron here by enumerating its
   prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS` (sub-command granularity, e.g.
   `gh issue list` NOT `gh issue`; never `git config`/`git remote`) and validating end-to-end
   via `/soleur:trigger-cron`.
-- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): the remaining nine broad-bash crons. They
+- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): the remaining **eight** broad-bash crons. They
   early-return via `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no
   output issue. **Visible degradation:** their scheduled `[Scheduled]` output issues stop
   appearing (this is expected, not a regression). The Tier-2 **network-egress firewall +
   least-privilege installation token LANDED** (#5046 PR-1/PR-2, ADR-052) — the firewall now
-  contains the 4 Node-level `spawn("bash")` crons (which the hook does not cover); the nine
-  stay paused on a DIFFERENT criterion: six PR-flow crons need per-construct Bash-allowlist
-  refinement (`date -u`, dynamic `checkout -b`, `npx eleventy` — evidence-gated), and
-  bug-fixer/community-monitor/ux-audit need non-GitHub egress coverage.
+  contains the 4 Node-level `spawn("bash")` crons (which the hook does not cover); the eight
+  stay paused, **all gated on #5138** (stale `ci/*` bot-PR watchdog — still OPEN): the seven
+  `mergeMode:"auto"` crons (campaign-calendar, competitive-analysis, growth-audit,
+  seo-aeo-audit, content-generator, growth-execution, **community-monitor**) rely on
+  `enablePullRequestAutoMerge`, which silently disarms on conflict — #5138 MUST land first
+  (community-monitor is NOT firewall-dependent; it is in #5138's literal gated list). The six
+  PR-flow crons additionally need per-construct Bash-allowlist refinement (`date -u`, dynamic
+  `checkout -b`, `npx eleventy` — evidence-gated). `cron-bug-fixer` fires the same
+  `enablePullRequestAutoMerge` primitive on `bot-fix/*` branches, so it carries the identical
+  silent-stale risk despite falling outside #5138's literal `ci/*` scan.
 
 **Promoting a paused cron to Tier-1:** enumerate its verbs → add to `CRON_BASH_ALLOWLISTS`
 → remove from `TIER2_DEFERRED_CRONS` → `/soleur:trigger-cron <cron>` and confirm it produces

