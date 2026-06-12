@@ -44,4 +44,4 @@ description: "This skill should be used when announcing a new release. It parses
 
 5. Report results:
    - Print the GitHub Release URL if created
-   - Note that manually created releases do NOT trigger the CI Slack notification (it is an inline step in `reusable-release.yml`, secret `SLACK_RELEASES_WEBHOOK_URL`). If the announcement matters, post the release link to the Slack release channel manually.
+   - Note that manually created releases do NOT trigger the CI Slack notification (it is an inline step in `reusable-release.yml`, secret `SLACK_RELEASES_WEBHOOK_URL`). If the announcement matters, post the release link to the Slack release channel manually. Slack does not render GitHub-flavored Markdown — for parity with the CI path, run the changelog body through the shared converter first: `node scripts/md-to-mrkdwn.mjs --max 3000 < notes.md` (see the Slack mrkdwn formatting section in `plugins/soleur/skills/ship/references/ci-workflow-authoring.md`).

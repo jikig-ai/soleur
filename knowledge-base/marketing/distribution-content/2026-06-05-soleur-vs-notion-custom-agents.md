@@ -2,7 +2,7 @@
 title: "Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation"
 type: comparison
 publish_date: 2026-06-05
-status: scheduled
+status: stale
 channels: discord, x, bluesky, linkedin-company
 source_article: /blog/soleur-vs-notion-custom-agents/
 ---

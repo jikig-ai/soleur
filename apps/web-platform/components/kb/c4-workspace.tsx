@@ -45,7 +45,6 @@ export default function C4Workspace({
 }) {
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
-  const [currentView, setCurrentView] = useState(viewId);
   // True only when the server FAILED to re-render after a save (#4964). On a
   // successful save the server regenerates model.likec4.json out-of-process and
   // the reloaded dump is fresh, so stale stays false; if the re-render failed it
@@ -102,11 +101,7 @@ export default function C4Workspace({
                   stale={stale}
                 />
                 <div className="relative min-h-0 flex-1">
-                  <C4Canvas
-                    dump={data.dump}
-                    initialViewId={viewId}
-                    onViewChange={setCurrentView}
-                  />
+                  <C4Canvas dump={data.dump} initialViewId={viewId} />
                 </div>
                 {notes && notes.trim().length > 0 && (
                   <details className="shrink-0 border-t border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-2 text-sm">
@@ -154,9 +149,6 @@ export default function C4Workspace({
                 </button>
               ))}
               <div className="ml-auto flex items-center gap-1.5 pr-1">
-                <span className="text-[11px] text-soleur-text-muted">
-                  Architecture · {currentView}
-                </span>
                 <button
                   type="button"
                   aria-label="Collapse Concierge"

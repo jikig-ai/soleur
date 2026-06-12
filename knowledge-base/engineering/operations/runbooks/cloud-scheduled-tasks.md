@@ -738,6 +738,32 @@ monitor + no comment, so the inference is only sound when a Sentry query for
 `safe-commit-failed` / `safe-commit-deletion-guard` (fn=<cron>) over the run
 window returns empty.
 
+## Stale bot PR (#5138)
+
+The `cron-cloud-task-heartbeat` cron (daily, 09:30 UTC) also scans open PRs
+whose head branch matches `ci/*` or `self-healing/auto-*` and flags any open
+**>48h**. The trigger: a `mergeMode: "auto"` PR whose `enablePullRequestAutoMerge`
+**silently disarmed on a merge conflict** (it leaves the PR open with no signal),
+or a `direct` pipeline that fell back to arming auto-merge (`safe-commit-direct-
+merge-fell-back`) and then stalled on a later conflict. Compound-promote's
+`self-healing/auto-*` **drafts are excluded** (human-review-by-design, legitimately
+long-lived) — only a NON-draft `self-healing/auto-*` PR is flagged.
+
+The scan is **orthogonal to the cron monitor**: a stale PR does NOT turn
+`scheduled-cloud-task-heartbeat` red (found-work ≠ liveness). The signals are
+instead:
+
+| Sentry op (`feature=cron-cloud-task-heartbeat`) | Meaning | Action |
+| --- | --- | --- |
+| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open. | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. |
+| `stale-bot-pr-scan-failed` | The `GET …/pulls` list call failed — the watchdog **could not scan this run** (it returns `[]`, so no stale PR can be detected until the next run). | Transient GitHub/network or token expiry usually self-heals next run. If it recurs, the watchdog is blind — investigate the installation token / GitHub API status. |
+| `stale-bot-pr-comment-failed` | The owning-issue comment POST failed (the `stale-bot-pr` warn still fired — Sentry is the primary signal). | No action unless recurring. |
+
+All three ops route to the operator via the `sentry_issue_alert.stale_bot_pr`
+rule (`apps/web-platform/infra/sentry/issue-alerts.tf`) — no dashboard gaze
+required. Discoverability without SSH:
+`gh api "/repos/jikig-ai/soleur/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref|startswith("ci/") or (.head.ref|startswith("self-healing/auto-")))] | length'`.
+
 ## References
 
 - Migration PR: #1095

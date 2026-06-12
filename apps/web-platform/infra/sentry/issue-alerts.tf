@@ -682,3 +682,70 @@ resource "sentry_issue_alert" "egress_blocked" {
     ignore_changes = [environment]
   }
 }
+
+# server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
+# watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
+# ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge
+# silently disarmed on conflict, or a `direct` pipeline that fell back and
+# stalled — ADR-054) plus two detector SELF-failure ops (`stale-bot-pr-scan-
+# failed`, `stale-bot-pr-comment-failed`, reportSilentFallback). This rule is
+# the NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself): the warn
+# is search-only without it, AND the scan deliberately does NOT flip the
+# heartbeat monitor (found-work ≠ liveness), so a daily-failing scan would
+# silently stop the watchdog — exactly the silent-stale gap #5138 closes.
+#
+# op IS_IN (NOT feature-only): `feature=cron-cloud-task-heartbeat` is SHARED —
+# the same function also emits `task-pending-first-run`, `check-task`,
+# `issue-handling` for the unrelated cloud-task-silence check, which must NOT
+# page here. Scoping to the three watchdog ops routes only this concern.
+# Routing the self-failure ops (not just `stale-bot-pr`) is load-bearing: the
+# watchdog is the only detector for these stuck PRs, so its OWN blindness must
+# page. `action_match="any"` + first_seen/reappeared/regression: lifecycle
+# states are mutually exclusive ("all" never satisfiable) and re-page a
+# recurrence after the operator resolves the issue. Distinct frequency (14)
+# avoids Sentry POST-time exact-duplicate dedup (taken: 5,10,11,12,13,15,30,60,
+# 61,62; verified free 2026-06-12) — dedup keys on action_match+filter_match+
+# frequency+actions-shape, NOT conditions. A new watchdog op MUST be added to
+# this IS_IN value. Events carry only PR number/head/age — no user content.
+resource "sentry_issue_alert" "stale_bot_pr" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "stale-bot-pr"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 14
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cron-cloud-task-heartbeat"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "stale-bot-pr,stale-bot-pr-scan-failed,stale-bot-pr-comment-failed"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
