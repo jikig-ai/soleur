@@ -24,10 +24,20 @@ mk_payload() {
 }
 
 # Returns the permissionDecision or "<none>" when the hook emits no JSON (allow).
+# Runs the hook from the non-git $tmp CWD (not the test process CWD). This
+# isolates the require-milestone / block-stash gates under test from the
+# ORTHOGONAL, branch-dependent block-commit-on-main gate: a `git commit`-based
+# fixture (AC1/AC3/AC4) resolves its branch from the hook's CWD, so on the
+# `main` branch (post-merge CI) block-commit-on-main denies the commit and masks
+# the gate the fixture is actually exercising. A non-git CWD makes branch
+# resolution empty → block-commit-on-main no-ops → the fixture is branch- and
+# environment-independent (passes identically on a feature branch and on main).
+# See #5192 — these fixtures passed on a feature-branch worktree but failed on
+# main-CI until this isolation landed.
 decision_of() {
   local cmd="$1" tmp; tmp="$(mktemp -d)"
   local out
-  out="$(mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
+  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
   rm -rf "$tmp"
   # An allow is empty hook output (no JSON emitted); normalize to "<none>".
   if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
@@ -80,6 +90,53 @@ assert "short -R our repo wins over embedded external denies" "deny" \
 # Genuine external via short -R form, no milestone → allow.
 assert "external via -R short form allows" "<none>" \
   'gh issue create -R highagency/pencil-desktop-releases --title x'
+
+# ---------------------------------------------------------------------------
+# #5192 — commit-body / heredoc false-positive fixes (require-milestone + stash)
+# A `git commit` whose MESSAGE documents a trigger phrase must NOT be blocked:
+# the strip blanks quoted/heredoc bodies before the detection grep. Real bare
+# invocations stay gated.
+# ---------------------------------------------------------------------------
+
+# AC1 — commit-body `gh issue create` at a line-start (no --milestone in body)
+# is NOT blocked. Pre-fix this denied (the exact #5085 foot-gun).
+assert "AC1 commit-body gh issue create allows (FP fixed)" "<none>" \
+  $'git add . && git commit -m "fix the digest\ngh issue create for the operator-digest feature\n"'
+
+# AC3 — commit-body `git stash` is NOT blocked …
+assert "AC3 commit-body git stash allows (FP fixed)" "<none>" \
+  $'git commit -m "doc\ngit stash is banned in worktrees\n"'
+# … but a real `git stash` STILL denies.
+assert "AC3 real git stash still denies" "deny" \
+  'git stash'
+
+# AC4 — bare heredoc (`-F - <<EOF … EOF`) body is NOT blocked …
+assert "AC4 bare-heredoc gh issue create allows (FP fixed)" "<none>" \
+  $'git commit -F - <<EOF\nnote\ngh issue create for the digest\nEOF\n'
+# … but a real chained `gh issue create` AFTER the closing EOF STILL denies
+# (no --milestone, implicit our repo): proves the post-terminator preservation.
+assert "AC4 real create after heredoc still denies" "deny" \
+  $'git commit -F - <<EOF\nbody\nEOF\n && gh issue create --title x --body y'
+
+# Sweep (#5192) — block-delete-branch is also phrase-class. A commit body
+# documenting `gh pr merge --delete-branch` must NOT be blocked (pre-fix it
+# denied whenever >1 worktree exists). Note: the gate's deny is worktree-count-
+# gated, so a real-invocation deny is not asserted here (untestable in a single-
+# worktree CI checkout); the strip non-vacuity below proves detection survives.
+assert "sweep commit-body gh pr merge --delete-branch allows (FP fixed)" "<none>" \
+  $'git commit -m "doc\ngh pr merge --delete-branch orphans worktrees\n"'
+
+# Non-vacuity: the strip preserves a REAL invocation's flags so the
+# delete-branch detection still fires (only quoted bodies are blanked).
+# shellcheck source=lib/incidents.sh
+source "$SCRIPT_DIR/lib/incidents.sh" 2>/dev/null || true
+TOTAL=$((TOTAL + 1))
+if strip_command_bodies 'gh pr merge 7 --squash --delete-branch' \
+     | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+  PASS=$((PASS + 1)); echo "PASS: strip preserves real --delete-branch (detection non-vacuous)"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: strip dropped real --delete-branch flags"
+fi
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
