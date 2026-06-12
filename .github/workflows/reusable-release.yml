@@ -673,19 +673,31 @@ jobs:
           echo "::add-mask::$WEBHOOK"
 
           if [ -f "$RELEASE_NOTES_FILE" ]; then
-            # Escape Slack mrkdwn control chars in untrusted changelog text:
-            # neutralizes <!channel>/<!here> mass-pings and <url|label>
-            # disguised links (the Discord payload's allowed_mentions
-            # equivalent). Order matters: & first.
-            BODY=$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$RELEASE_NOTES_FILE")
+            # Convert the untrusted GFM changelog to Slack mrkdwn AND keep it
+            # injection-inert in a single pass: scripts/md-to-mrkdwn.mjs rewrites
+            # **bold**/[t](u)/## headings to mrkdwn while entity-escaping every
+            # author-typed <!channel>/<@U..>/disguised <url|label> (Slack has no
+            # allowed_mentions). The converter also caps + structure-aware-
+            # truncates (no dangling <url|, closed fences) at 3000 chars so the
+            # header and release link always survive (Slack display-folds ~4k).
+            #
+            # Fallback is for AVAILABILITY, not safety: a non-zero exit must
+            # never fail the release, so fall back to the prior sed-escaped
+            # plain body. The `if ! BODY=$(...)` form is load-bearing — a bare
+            # `BODY=$(node ... || sed ...)` assignment masks the exit code
+            # under `bash -e`, so the fallback would never trigger. Safety
+            # lives in the converter's escape correctness + its keystone output
+            # invariant (asserted in scripts/md-to-mrkdwn.test.mjs and the T7
+            # contract test), NOT in this non-zero-exit guard.
+            if ! BODY=$(node scripts/md-to-mrkdwn.mjs --max 3000 < "$RELEASE_NOTES_FILE"); then
+              echo "::warning::md-to-mrkdwn failed; sent plain escaped body"
+              BODY=$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$RELEASE_NOTES_FILE")
+              if [[ ${#BODY} -gt 3000 ]]; then
+                BODY="${BODY:0:2997}..."
+              fi
+            fi
           else
             BODY=""
-          fi
-          # Cap BODY (not MESSAGE) so the header and release-notes link always
-          # survive: Slack rejects text >~40k (PR bodies can reach 65k) and
-          # display-truncates the tail around 4k.
-          if [[ ${#BODY} -gt 3000 ]]; then
-            BODY="${BODY:0:2997}..."
           fi
           RELEASE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 

@@ -16,18 +16,40 @@ import {
   MIN_CODE_FONT_PX,
   MAX_CODE_FONT_PX,
 } from "./c4-code-syntax";
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { ChevronDownIcon } from "@/components/icons";
 import {
   LikeC4ModelProvider,
   LikeC4Diagram,
   useLikeC4ViewModel,
   type OnNavigateTo,
 } from "@likec4/diagram";
+import { MantineProvider, createTheme } from "@mantine/core";
+import { useTheme } from "@/components/theme/theme-provider";
 import { LikeC4Model } from "@likec4/core/model";
 import type { LayoutedLikeC4ModelData } from "@likec4/core/types";
 import "@likec4/diagram/styles.css";
 // Soleur re-theme — MUST come after the library styles so it wins on source
 // order (defense-in-depth alongside the scoped-selector specificity in the file).
 import "./c4-theme.css";
+
+// By supplying our own MantineProvider (Lever 1, below) we displace
+// @likec4/diagram's DefaultMantineProvider — which the library renders only when
+// no MantineContext is in scope (EnsureMantine.js). That default provider also
+// carries a theme (createTheme in DefaultMantineProvider.js). The diagram BODY is
+// driven by static `--likec4-*` CSS vars and is unaffected, but the interactive
+// chrome (controls, element-details, segmented control) reads Mantine's primary
+// accent + cursor/radius from the theme. Preserve only the zero-drift theme
+// SCALARS the library sets — NOT its full theme (whose fontSizes/spacing maps
+// re-point at library-internal vars and would silently drift on a bump; the
+// library does not export it) — so the chrome keeps its indigo identity instead
+// of reverting to Mantine's default blue.
+const c4MantineTheme = createTheme({
+  primaryColor: "indigo",
+  autoContrast: true,
+  cursorType: "pointer",
+  defaultRadius: "sm",
+});
 
 export type Diagnostic = { message: string; line: number; sourceFsPath: string };
 export type ProjectResponse = {
@@ -162,6 +184,16 @@ export function C4Canvas({
   onViewChange?: (viewId: string) => void;
 }) {
   const [currentView, setCurrentView] = useState(initialViewId);
+  // Lever 1 — bind the diagram's Mantine color scheme to Soleur's theme. The
+  // library wraps <LikeC4Diagram> in its OWN provider (hard-coded
+  // defaultColorScheme:"auto", i.e. OS prefers-color-scheme) only when no
+  // MantineContext is in scope; our <MantineProvider forceColorScheme> below
+  // supplies that context, so the diagram follows Soleur's chosen theme instead
+  // of the OS — fixing the OS-mismatch seam (dark-OS + Soleur-Light painting
+  // dark-scheme label rules over a light canvas). resolvedTheme is "light"|"dark"
+  // (already resolved from system upstream), the exact forceColorScheme union;
+  // read it from the reactive hook, NOT a raw data-theme DOM read (non-reactive).
+  const { resolvedTheme } = useTheme();
   // Fullscreen/expand toggle. The diagram subtree is re-parented into a
   // document.body portal when expanded (escapes the inline embed's h-[600px]
   // + overflow-hidden clip). Drill-down state (`currentView`) is lifted here
@@ -235,12 +267,14 @@ export function C4Canvas({
   // both — they are mutually exclusive branches), so there is no second
   // LikeC4Diagram instance forking drill-down state.
   const canvas = (
-    <LikeC4ModelProvider likec4model={model}>
-      <ViewCanvas
-        viewId={currentView}
-        onNavigate={(to) => setCurrentView(String(to))}
-      />
-    </LikeC4ModelProvider>
+    <MantineProvider theme={c4MantineTheme} forceColorScheme={resolvedTheme}>
+      <LikeC4ModelProvider likec4model={model}>
+        <ViewCanvas
+          viewId={currentView}
+          onNavigate={(to) => setCurrentView(String(to))}
+        />
+      </LikeC4ModelProvider>
+    </MantineProvider>
   );
 
   // .soleur-c4 anchors the scoped Soleur re-theme (c4-theme.css). It is applied
@@ -372,6 +406,21 @@ export function C4CodePanel({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Optimistic apply (F-A1): content the user has SUCCESSFULLY saved this
+  // session, keyed by file. On a 200 PUT the GitHub commit is the source of
+  // truth, but GET /project reads the on-disk workspace clone, which can lag —
+  // a diverged/un-fast-forwardable clone (self-heal aborts to preserve un-pushed
+  // session work) or Contents-API→fetch replica propagation lag returns the
+  // PRE-edit text. Without this, the `[data, activeFile]` re-seed below clobbers
+  // the editor back to the stale source and the save silently reverts. We keep
+  // the just-saved content as the editor value until the reloaded source catches
+  // up to it. Diagram staleness (the dump half) is surfaced honestly by the
+  // existing Layer-1 banner (#4963) — this only fixes the source revert.
+  // The marker self-clears once `incoming === optimistic` (clone caught up). For
+  // a PERMANENTLY-diverged clone (the H1 liveness gap, tracked in #5221) it
+  // persists for the session, masking external edits to that file until remount —
+  // an accepted trade vs. the silent revert; the next local save re-pins it.
+  const savedContentRef = useRef<Record<string, string>>({});
   // Per-editor font zoom (0 = default 12px), clamped to [10px, 24px]. Drives a
   // CodeMirror theme extension so content + gutter scale together — scoped to
   // this editor, independent of browser page zoom.
@@ -394,14 +443,40 @@ export function C4CodePanel({
     );
   }, [files]);
   useEffect(() => {
-    if (activeFile) setDraft(data.sources[activeFile] ?? "");
+    if (!activeFile) return;
+    const incoming = data.sources[activeFile] ?? "";
+    const optimistic = savedContentRef.current[activeFile];
+    if (optimistic !== undefined && incoming !== optimistic) {
+      // The reloaded clone has not caught up to our just-saved content yet —
+      // keep showing the saved text instead of reverting to the stale source.
+      setDraft(optimistic);
+      return;
+    }
+    // Clone caught up (incoming === optimistic) or no pending save — clear the
+    // marker so future external edits to this file apply normally, then sync.
+    if (optimistic !== undefined) delete savedContentRef.current[activeFile];
+    setDraft(incoming);
   }, [data, activeFile]);
 
   const isDark =
     typeof document !== "undefined" &&
     document.documentElement.getAttribute("data-theme") !== "light";
 
-  const dirty = activeFile ? draft !== (data.sources[activeFile] ?? "") : false;
+  // README.md is surfaced read-only as a directory index — no editor, no Save,
+  // no PUT. It renders through MarkdownRenderer instead of CodeMirror.
+  const isReadmeFile = activeFile === "README.md";
+
+  // Guard on !isReadmeFile so the one-render `draft` skew right after switching
+  // to the read-only README (the [data, activeFile] resync effect runs post-
+  // paint) can never read as dirty — Save lives in the !isReadmeFile cluster.
+  // Baseline against the optimistically-saved content (if any) so a just-saved
+  // file is not shown "dirty" while the clone catches up; falls back to the
+  // server source for files with no pending save.
+  const dirty =
+    !isReadmeFile && activeFile
+      ? draft !==
+        (savedContentRef.current[activeFile] ?? data.sources[activeFile] ?? "")
+      : false;
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -414,6 +489,10 @@ export function C4CodePanel({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error || `Save failed (${res.status})`);
+      // F-A1: the commit landed on origin (200). Pin the saved content as the
+      // optimistic editor value BEFORE onSaved triggers the parent reload(), so
+      // a stale-clone GET /project cannot revert the editor to the pre-edit text.
+      savedContentRef.current[activeFile] = draft;
       // Layer 2 (#4964): the server re-renders the diagram after a .c4 save.
       // `rerendered` reports whether that succeeded. On success the reloaded
       // dump is the fresh geometry; on failure the diagram stays stale and the
@@ -442,79 +521,99 @@ export function C4CodePanel({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-1 border-b border-soleur-border-default px-2 py-1.5">
-        {files.map((f) => (
-          <button
-            key={f}
-            onClick={() => setActiveFile(f)}
-            className={`rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
-              activeFile === f
-                ? "bg-soleur-bg-base text-soleur-text-primary"
-                : "text-soleur-text-muted hover:text-soleur-text-secondary"
-            }`}
+      <div className="flex items-center gap-2 border-b border-soleur-border-default px-2 py-1.5">
+        {/* Non-wrapping file picker: a styled native <select> keeps the header
+            on one row at any panel width (the old flex-wrap tab strip wrapped
+            onto extra lines when the panel narrowed). Native <select> is
+            a11y-complete for this 4-item, no-search list. */}
+        <div className="relative shrink-0">
+          <select
+            aria-label="Select C4 source file"
+            value={activeFile}
+            onChange={(e) => setActiveFile(e.target.value)}
+            className="appearance-none rounded border border-soleur-border-default bg-soleur-bg-base py-0.5 pl-2 pr-6 font-mono text-[11px] text-soleur-text-primary transition-colors hover:border-soleur-text-muted focus:outline-none focus:ring-1 focus:ring-soleur-accent-gold-fg/40"
           >
-            {f}
-          </button>
-        ))}
-        <div className="ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-0.5 rounded border border-soleur-border-default px-0.5">
+            {files.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+          <ChevronDownIcon className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-soleur-text-muted" />
+        </div>
+        {!isReadmeFile && (
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center gap-0.5 rounded border border-soleur-border-default px-0.5">
+              <button
+                type="button"
+                aria-label="Decrease code font size"
+                onClick={() =>
+                  setZoom((z) =>
+                    Math.max(MIN_CODE_FONT_PX - DEFAULT_CODE_FONT_PX, z - 1),
+                  )
+                }
+                disabled={atMin}
+                className="rounded px-1.5 py-0.5 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-30"
+              >
+                A−
+              </button>
+              <button
+                type="button"
+                aria-label="Reset code font size"
+                onClick={() => setZoom(0)}
+                title="Reset code font size"
+                className="min-w-[2.75rem] rounded px-1 py-0.5 text-center font-mono text-[11px] tabular-nums text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
+              >
+                {`${currentFontPx}px`}
+              </button>
+              <button
+                type="button"
+                aria-label="Increase code font size"
+                onClick={() =>
+                  setZoom((z) =>
+                    Math.min(MAX_CODE_FONT_PX - DEFAULT_CODE_FONT_PX, z + 1),
+                  )
+                }
+                disabled={atMax}
+                className="rounded px-1.5 py-0.5 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-30"
+              >
+                A+
+              </button>
+            </div>
+            {saveMsg && (
+              <span className="text-[11px] text-soleur-text-muted">
+                {saveMsg}
+              </span>
+            )}
             <button
-              type="button"
-              aria-label="Decrease code font size"
-              onClick={() =>
-                setZoom((z) =>
-                  Math.max(MIN_CODE_FONT_PX - DEFAULT_CODE_FONT_PX, z - 1),
-                )
-              }
-              disabled={atMin}
-              className="rounded px-1.5 py-0.5 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-30"
+              onClick={() => void save()}
+              disabled={saving || !dirty}
+              className="rounded bg-soleur-accent-gold-fg/90 px-2.5 py-1 text-xs font-medium text-black disabled:opacity-40"
             >
-              A−
-            </button>
-            <button
-              type="button"
-              aria-label="Reset code font size"
-              onClick={() => setZoom(0)}
-              title="Reset code font size"
-              className="min-w-[2.75rem] rounded px-1 py-0.5 text-center font-mono text-[11px] tabular-nums text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
-            >
-              {`${currentFontPx}px`}
-            </button>
-            <button
-              type="button"
-              aria-label="Increase code font size"
-              onClick={() =>
-                setZoom((z) =>
-                  Math.min(MAX_CODE_FONT_PX - DEFAULT_CODE_FONT_PX, z + 1),
-                )
-              }
-              disabled={atMax}
-              className="rounded px-1.5 py-0.5 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-30"
-            >
-              A+
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
-          {saveMsg && (
-            <span className="text-[11px] text-soleur-text-muted">{saveMsg}</span>
-          )}
-          <button
-            onClick={() => void save()}
-            disabled={saving || !dirty}
-            className="rounded bg-soleur-accent-gold-fg/90 px-2.5 py-1 text-xs font-medium text-black disabled:opacity-40"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        <CodeMirror
-          value={draft}
-          height={height}
-          theme={isDark ? oneDark : undefined}
-          extensions={extensions}
-          onChange={setDraft}
-          basicSetup={{ lineNumbers: true, foldGutter: true }}
-        />
+        {isReadmeFile ? (
+          // Directory index, read-only: rendered markdown, no editor/Save/PUT.
+          <div className="prose-kb overflow-y-auto p-4">
+            <MarkdownRenderer
+              content={data.sources[activeFile] ?? ""}
+              enableC4={false}
+            />
+          </div>
+        ) : (
+          <CodeMirror
+            value={draft}
+            height={height}
+            theme={isDark ? oneDark : undefined}
+            extensions={extensions}
+            onChange={setDraft}
+            basicSetup={{ lineNumbers: true, foldGutter: true }}
+          />
+        )}
       </div>
     </div>
   );

@@ -16,7 +16,8 @@ set -euo pipefail
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
 # environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
-# scripts shard needs neither bun nor node).
+# scripts shard needs no bun and no node *version pin*: it uses stock
+# ubuntu-latest node, unpinned, for the one `node --test` suite below).
 if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
   expected=$(tr -d '[:space:]' < .bun-version)
   actual=$(bun --version)
@@ -135,6 +136,10 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
+  # md->Slack-mrkdwn converter (scripts/md-to-mrkdwn.mjs). Runs under stock
+  # ubuntu-latest node (no setup-node — same bare-`node` precedent as
+  # secret-scan.yml). node --test ships in Node >=18.
+  run_suite "scripts/md-to-mrkdwn" node --test scripts/md-to-mrkdwn.test.mjs
 fi
 
 # Named bun-test entries — bun shard.

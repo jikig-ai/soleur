@@ -149,6 +149,31 @@ export function makeUserToolResult(
 }
 
 /**
+ * An `SDKToolProgressMessage` — the SDK's mid-tool forward-progress heartbeat
+ * (`type: 'tool_progress'`, carrying `tool_use_id`/`tool_name`/
+ * `elapsed_time_seconds`). It flows into `consumeStream` because
+ * `includePartialMessages: true` is set in the shared options builder
+ * (`agent-runner-query-options.ts:156`). The soleur-go runner re-arms
+ * `state.runaway` off this message (reads no fields — pure re-arm).
+ */
+export function makeToolProgress(
+  toolUseId: string,
+  elapsedSeconds: number,
+  sessionId = "sess-1",
+): SDKMessage {
+  return {
+    type: "tool_progress",
+    tool_use_id: toolUseId,
+    tool_name: "Read",
+    parent_tool_use_id: null,
+    elapsed_time_seconds: elapsedSeconds,
+    uuid: "00000000-0000-0000-0000-0000000000bb" as never,
+    session_id: sessionId,
+    // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
+  } as any;
+}
+
+/**
  * `SDKUserMessageReplay` shares the `tool_use_result?: unknown` field with
  * `SDKUserMessage`; a structural superset of {@link makeUserToolResult}.
  */

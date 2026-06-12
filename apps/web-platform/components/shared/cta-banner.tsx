@@ -6,6 +6,40 @@ import { useState, type FormEvent } from "react";
 // marketing-site absolute URL (see app/(auth)/signup/page.tsx).
 const PRIVACY_POLICY_URL = "https://soleur.ai/pages/legal/privacy-policy.html";
 
+// Per-browser durable marker that THIS browser already joined the waitlist. Set
+// only after a confirmed Join (see handleSubmit's res.ok branch); read once at
+// mount to suppress the banner entirely for a returning visitor. A boolean "1"
+// only — the entered email is NEVER persisted (shared docs open on shared
+// machines). Distinct from the in-memory `soleur:shared:cta-dismissed`
+// sessionStorage key (a mere collapse is deliberately NOT remembered).
+const JOINED_KEY = "soleur:shared:waitlist-joined";
+
+// No `typeof window` guard: CtaBanner is mounted as `{data && <CtaBanner />}` on
+// the `"use client"` shared-doc page (app/shared/[token]/page.tsx) after a
+// client-side fetch, so it is never in server-rendered HTML and a lazy useState
+// initializer cannot hydration-mismatch. A read throw (private mode / disabled
+// storage) falls back to `false` → banner SHOWS — the safe direction; a thrown
+// read must never suppress the CTA. NB: if this banner ever moves to a
+// server-rendered surface, restore an SSR/mount guard.
+function readJoinedFlag(): boolean {
+  try {
+    return localStorage.getItem(JOINED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// Named (not inlined) so the load-bearing "write only on confirmed success"
+// invariant is a single grep-able call site. A swallowed write (private mode /
+// quota) just keeps today's in-memory behaviour.
+function writeJoinedFlag(): void {
+  try {
+    localStorage.setItem(JOINED_KEY, "1");
+  } catch {
+    /* private mode / quota — keep in-memory behaviour */
+  }
+}
+
 type Status = "idle" | "submitting" | "success" | "error";
 type Panel = "expanded" | "collapsed";
 
@@ -15,6 +49,14 @@ export function CtaBanner() {
   const [panel, setPanel] = useState<Panel>("expanded");
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<Status>("idle");
+  // Read once at mount (lazy initializer, not useEffect). All hooks above run
+  // unconditionally; the early-return below is stable per mount, so it does not
+  // violate rules-of-hooks.
+  const [joined] = useState(() => readJoinedFlag());
+
+  // A returning visitor who already joined on this browser sees no banner at all
+  // (wireframe State C). Suppress entirely rather than collapse to the thin bar.
+  if (joined) return null;
 
   const expanded = panel === "expanded";
 
@@ -38,7 +80,16 @@ export function CtaBanner() {
       // Any non-2xx (rate-limited, upstream 502, bad request) and any fetch
       // rejection (offline / DNS / abort) land in `error` with the form
       // re-enabled — never a permanent disabled `submitting` freeze.
-      setStatus(res.ok ? "success" : "error");
+      if (res.ok) {
+        // Confirmed 2xx (new join OR Buttondown already-subscribed, both
+        // {ok:true}) — remember it so the banner doesn't return on next mount.
+        // LOAD-BEARING: the write lives ONLY in this branch. Writing on a failed
+        // signup would silently suppress the CTA and lose a real lead.
+        writeJoinedFlag();
+        setStatus("success");
+      } else {
+        setStatus("error");
+      }
     } catch {
       setStatus("error");
     }
