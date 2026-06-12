@@ -17,6 +17,7 @@ import {
   MAX_CODE_FONT_PX,
 } from "./c4-code-syntax";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { ChevronDownIcon } from "@/components/icons";
 import {
   LikeC4ModelProvider,
   LikeC4Diagram,
@@ -406,7 +407,13 @@ export function C4CodePanel({
   // no PUT. It renders through MarkdownRenderer instead of CodeMirror.
   const isReadmeFile = activeFile === "README.md";
 
-  const dirty = activeFile ? draft !== (data.sources[activeFile] ?? "") : false;
+  // Guard on !isReadmeFile so the one-render `draft` skew right after switching
+  // to the read-only README (the [data, activeFile] resync effect runs post-
+  // paint) can never read as dirty — Save lives in the !isReadmeFile cluster.
+  const dirty =
+    !isReadmeFile && activeFile
+      ? draft !== (data.sources[activeFile] ?? "")
+      : false;
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -465,18 +472,7 @@ export function C4CodePanel({
               </option>
             ))}
           </select>
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-soleur-text-muted"
-          >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+          <ChevronDownIcon className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-soleur-text-muted" />
         </div>
         {!isReadmeFile && (
           <div className="ml-auto flex items-center gap-2">
