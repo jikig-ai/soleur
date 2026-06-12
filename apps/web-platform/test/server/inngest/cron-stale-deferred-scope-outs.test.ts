@@ -74,6 +74,23 @@ function makeIssue(args: {
   };
 }
 
+/**
+ * octokit's REAL thrown shape for an undici connect timeout: a RequestError
+ * (name "HttpError", status 500) whose `.cause` is the raw TypeError, whose
+ * own `.cause` carries the undici code. NEVER a bare TypeError — that would
+ * let the test pass while isRetryableGithubError still misses the real wrapper
+ * (plan AC4 rationale).
+ */
+function wrappedConnectTimeout(): Error {
+  return Object.assign(new Error("fetch failed"), {
+    name: "HttpError",
+    status: 500,
+    cause: Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_CONNECT_TIMEOUT" },
+    }),
+  });
+}
+
 beforeEach(() => {
   vi.resetModules();
   reportSilentFallbackSpy.mockReset();
@@ -234,6 +251,129 @@ describe("cronStaleDeferredScopeOuts — kill-switch label", () => {
       state: "closed",
       state_reason: "not_planned",
     });
+  });
+});
+
+// --------------------------------------------------------------------------
+// (d) Transient connect-timeout resilience (Sentry 448a4173…)
+// --------------------------------------------------------------------------
+
+describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
+  it("recovers from a transient search connect timeout without escalating (AC4)", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchAttempts = 0;
+      octokitRequestSpy.mockImplementation(async (route: string) => {
+        if (route === "GET /search/issues") {
+          searchAttempts += 1;
+          // First attempt: octokit's real wrapped connect-timeout shape.
+          if (searchAttempts === 1) throw wrappedConnectTimeout();
+          return {
+            data: {
+              items: [makeIssue({ number: 300, labels: ["deferred-scope-out"] })],
+            },
+          };
+        }
+        // comment + close succeed.
+        return { data: {} };
+      });
+
+      const { cronStaleDeferredScopeOutsHandler } = await importModule();
+      const step = makeStep();
+      const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      await vi.runAllTimersAsync();
+      const result = await p;
+
+      // (a) sweep completes successfully (handler did NOT throw)
+      expect(result.total).toBe(1);
+      expect(result.closed).toBe(1);
+      // (b) the transient was absorbed — no error-level mirror
+      expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+      // (c) the candidate list reflects the SECOND (recovered) response
+      expect(searchAttempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT retry a genuine 403 on the comment path; surfaces issue_write_403 (AC5)", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return {
+          data: {
+            items: [makeIssue({ number: 400, labels: ["deferred-scope-out"] })],
+          },
+        };
+      }
+      if (
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // Non-retryable: a genuine issues:write-missing 403.
+        throw Object.assign(new Error("Forbidden"), {
+          name: "HttpError",
+          status: 403,
+        });
+      }
+      return { data: {} };
+    });
+
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+    const result = await cronStaleDeferredScopeOutsHandler({ step, logger });
+
+    // Sweep continues (per-issue catch is the terminal net); nothing closed.
+    expect(result.total).toBe(1);
+    expect(result.closed).toBe(0);
+
+    // The comment was attempted exactly ONCE (403 is non-retryable → rethrown
+    // on attempt 1 straight into the existing per-issue catch).
+    const commentCalls = octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    expect(commentCalls).toHaveLength(1);
+
+    // The issue_write_403 discriminator still fires.
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
+      op: "issue_write_403",
+    });
+  });
+
+  it("re-escalates a SUSTAINED search outage to the handler net (AC6)", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchAttempts = 0;
+      octokitRequestSpy.mockImplementation(async (route: string) => {
+        if (route === "GET /search/issues") {
+          searchAttempts += 1;
+          throw wrappedConnectTimeout(); // every attempt fails
+        }
+        return { data: {} };
+      });
+
+      const { cronStaleDeferredScopeOutsHandler } = await importModule();
+      const step = makeStep();
+      const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      await vi.runAllTimersAsync();
+
+      // Handler rethrows after the heartbeat (Inngest retry preserved).
+      await expect(p).rejects.toThrow(/sweep failed/);
+
+      // 3 attempts (1 + MAX_RETRIES) before exhaustion.
+      expect(searchAttempts).toBe(3);
+
+      // The sweep-level mirror fired with op:"sweep".
+      expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+      expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
+        op: "sweep",
+      });
+
+      // Heartbeat posted ok:false (the sentry-heartbeat step ran before rethrow).
+      expect(step.calls.some((c) => c.name === "sentry-heartbeat")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
