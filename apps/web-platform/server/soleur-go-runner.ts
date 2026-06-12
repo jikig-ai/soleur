@@ -2167,6 +2167,31 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           handleResultMessage(state, msg as SDKResultMessage);
         } else if (msg.type === "user") {
           handleUserMessage(state, msg as SDKUserMessage);
+        } else if (msg.type === "tool_progress") {
+          // SDK mid-tool forward-progress heartbeat (`SDKToolProgressMessage`).
+          // During a single long tool execution (large `Read`, slow Anthropic
+          // round-trip) the SDK emits no assistant block and no
+          // `tool_use_result` for tens of seconds, but DOES yield a
+          // `tool_progress` message every few seconds while the tool is alive.
+          // Re-arm the per-block idle window ONLY — mirrors
+          // `handleUserMessage`'s `tool_use_result` reset (the guard is the
+          // same `!state.closed && !state.awaitingUser`). NEVER touch
+          // `state.turnHardCap`: the 10-min absolute ceiling stays anchored on
+          // `firstToolUseAt` (chatty-stall defense, PR #3225). A genuinely HUNG
+          // tool emits NO `tool_progress`, so it still trips `idle_window` —
+          // detection is preserved, not relaxed.
+          //
+          // Precedent: the sibling runner `agent-runner.ts:1901` already
+          // consumes this message. Load-bearing precondition:
+          // `includePartialMessages: true` at
+          // `agent-runner-query-options.ts:156` (a flip there silently stops
+          // these heartbeats arriving). Plan:
+          // knowledge-base/project/plans/2026-06-12-fix-concierge-stream-timeout-debug-scroll-plan.md.
+          //
+          // Deliberately reads NO fields off the message (a pure re-arm), so
+          // it does NOT replicate `agent-runner.ts:1901-1948`'s runtime
+          // shape-guard — there is nothing to validate.
+          if (!state.closed && !state.awaitingUser) armRunaway(state);
         }
         // Other SDKMessage variants (partial assistant, hook, task notifications)
         // are ignored at V1. V2 will route stream_event → WS cumulative deltas.
