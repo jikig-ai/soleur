@@ -403,19 +403,27 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 > persisted SQLite still lists the app registration, so a loopback
 > `PUT /api/inngest` returns `modified:false` and re-arms nothing — proven #5159,
 > live-confirmed `inngest_register_http:200, inngest_register_modified:false,
-> inngest_crons:{}`). Crons re-arm ONLY via (a) a web-platform **redeploy** (new
-> `BUILD_SHA` → new `appVersion` → `modified:true` sync → immediate re-arm) or
-> (b) the server's `--poll-interval` self-heal (~minutes, automatic). So do NOT
-> reach for `restart-inngest-server.yml` to recover de-planned crons — it cannot
-> re-arm them.
+> inngest_crons:{}`). Crons re-arm ONLY via (a) **restarting the web-platform
+> container** (a redeploy, or `docker restart soleur-web-platform`) — the app's
+> disconnect+reconnect makes the inngest-server re-discover it on the next poll
+> and re-arm the cron schedule (this is reconnection-driven; the SDK sets no
+> `appVersion`, so it is NOT a version bump — it is the fresh app boot the server
+> treats as a new registration, which is why the old `docker restart` step
+> worked), or (b) the server's `--poll-interval` self-heal (~minutes, automatic).
+> So do NOT reach for `restart-inngest-server.yml` to recover de-planned crons —
+> it cannot re-arm them.
 
-**Primary (immediate) — redeploy web-platform.** A redeploy mints a new
-`appVersion`, which makes the SDK sync `modified:true` and re-arms the cron
-scheduler at once. From any machine with `gh` auth (no SSH):
+**Primary (immediate) — redeploy / restart web-platform.** Restarting the
+web-platform container makes the freshly-booted app reconnect; the inngest-server
+re-discovers it and re-arms the cron scheduler at once (reconnection-driven — the
+app sets no `appVersion`). From any machine with `gh` auth (no SSH), re-run the
+latest release (it restarts the container):
 
 ```bash
-# Re-run the latest web-platform release (a no-op redeploy is enough — the new
-# appVersion is what forces the modified:true sync), then watch deploy-status.
+# Re-run the latest web-platform release — restarting the app container is what
+# forces the inngest-server to re-discover the app and re-arm crons. Then watch
+# deploy-status. (SSH fallback if the workflow is unavailable: `docker restart
+# soleur-web-platform`.)
 gh run rerun "$(gh run list --workflow=web-platform-release.yml -L1 --json databaseId -q '.[0].databaseId')"
 ```
 
@@ -439,7 +447,7 @@ on-host loopback re-query
 **Manual fallback (SSH required — only if the no-SSH paths above are themselves unavailable):**
 
 1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service` (NOTE: this de-plans crons; it only recovers a wedged process — crons re-arm via the redeploy or poll below, NOT via this restart)
-2. Wait 30s for SQLite reinitialisation, then trigger a web-platform redeploy (above) to force the `modified:true` SDK sync that re-arms crons — a loopback `PUT /api/inngest` will NOT (it returns `modified:false`, #5159)
+2. Wait 30s for SQLite reinitialisation, then restart the web-platform container (`docker restart soleur-web-platform`, or the redeploy above) — the app's reconnect makes the inngest-server re-discover it and re-arm crons. A loopback `PUT /api/inngest` against the still-running app will NOT (it returns `modified:false`, #5159)
 3. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 41)
 4. Manual trigger to confirm end-to-end: `curl -X POST http://127.0.0.1:8288/e/<event-name> -H "Content-Type: application/json" -d '{"name":"<event-name>","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`
 5. Verify Sentry check-in: wait for the next natural fire or check manually via Sentry API
