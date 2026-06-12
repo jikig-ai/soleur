@@ -108,6 +108,26 @@ assert "AC4 bare-heredoc gh issue create allows (FP fixed)" "<none>" \
 assert "AC4 real create after heredoc still denies" "deny" \
   $'git commit -F - <<EOF\nbody\nEOF\n && gh issue create --title x --body y'
 
+# Sweep (#5192) — block-delete-branch is also phrase-class. A commit body
+# documenting `gh pr merge --delete-branch` must NOT be blocked (pre-fix it
+# denied whenever >1 worktree exists). Note: the gate's deny is worktree-count-
+# gated, so a real-invocation deny is not asserted here (untestable in a single-
+# worktree CI checkout); the strip non-vacuity below proves detection survives.
+assert "sweep commit-body gh pr merge --delete-branch allows (FP fixed)" "<none>" \
+  $'git commit -m "doc\ngh pr merge --delete-branch orphans worktrees\n"'
+
+# Non-vacuity: the strip preserves a REAL invocation's flags so the
+# delete-branch detection still fires (only quoted bodies are blanked).
+# shellcheck source=lib/incidents.sh
+source "$SCRIPT_DIR/lib/incidents.sh" 2>/dev/null || true
+TOTAL=$((TOTAL + 1))
+if strip_command_bodies 'gh pr merge 7 --squash --delete-branch' \
+     | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+  PASS=$((PASS + 1)); echo "PASS: strip preserves real --delete-branch (detection non-vacuous)"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: strip dropped real --delete-branch flags"
+fi
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

@@ -89,7 +89,10 @@ if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[
 fi
 
 # guardrails:block-delete-branch — Block gh pr merge --delete-branch when worktrees exist
-if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting `gh pr merge --delete-branch` is not mistaken for
+# one (#5192 sweep — same phrase-class FP as require-milestone).
+if echo "$SCAN" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
   WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l)
   if [ "$WORKTREE_COUNT" -gt 1 ]; then
     emit_incident "guardrails-block-delete-branch" "deny" "Never use --delete-branch with gh pr merge" "$COMMAND"
