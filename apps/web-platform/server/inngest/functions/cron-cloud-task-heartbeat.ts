@@ -76,6 +76,73 @@ export const TASK_INVENTORY: TaskEntry[] = [
 
 const SILENCE_ISSUE_TITLE_PREFIX = "[cloud-task-silence]";
 
+// --- Stale bot-PR watchdog (#5138) -------------------------------------------
+//
+// safeCommitAndPr's `mergeMode: "auto"` pipelines rely on GitHub
+// `enablePullRequestAutoMerge`, which SILENTLY disarms on a merge conflict — the
+// PR stays open with no signal. The `direct` mode's merge-fallback (Sentry op
+// `safe-commit-direct-merge-fell-back`) can enter the same disarmable state.
+// This scan catches the RESULT (an open `ci/*` PR past the threshold) merge-mode
+// agnostically, so it covers both cohorts without special-casing. Staleness is
+// kept ORTHOGONAL to the heartbeat `ok`/`silentCount` — it warns + comments only,
+// never flips the cron monitor (found-work ≠ liveness). See ADR-054.
+const STALE_BOT_PR_THRESHOLD_MS = 48 * 60 * 60 * 1000;
+const BOT_PR_HEAD_PREFIXES = ["ci/", "self-healing/auto-"] as const;
+export const STALE_BOT_PR_WARN_OP = "stale-bot-pr";
+
+/** The subset of the `GET …/pulls` payload the watchdog reads. */
+export interface BotPrLite {
+  number: number;
+  head: { ref: string };
+  created_at: string;
+  draft: boolean;
+  labels: Array<{ name: string }>;
+  html_url: string;
+}
+
+interface StaleBotPr {
+  number: number;
+  headRef: string;
+  ageHours: number;
+  /** `scheduled-<cron>` label, or null when the head does not reverse-derive one. */
+  scheduledLabel: string | null;
+  htmlUrl: string;
+}
+
+/**
+ * Reverse-derive a cron's scheduled-issue label from a `ci/<name>-<ts>` head
+ * branch (`deriveBranchName`, _cron-safe-commit.ts). The trailing
+ * `-YYYY-MM-DD-HHMMSS` timestamp is `$`-anchored so digit/hyphen cron names
+ * survive (`ci/nag-4216-readiness-…` → `scheduled-nag-4216-readiness`). Returns
+ * null for `self-healing/auto-*` (excluded) and any non-`ci/` head — a null
+ * label routes to Sentry-only (the warn still fires).
+ */
+export function scheduledLabelFromHead(headRef: string): string | null {
+  if (!headRef.startsWith("ci/")) return null;
+  const rest = headRef
+    .slice("ci/".length)
+    .replace(/-\d{4}-\d{2}-\d{2}-\d{6}$/, "");
+  return rest ? `scheduled-${rest}` : null;
+}
+
+/**
+ * A bot PR is stale iff its head matches a BOT_PR_HEAD_PREFIXES entry, it was
+ * created strictly more than 48h ago, and it is NOT a compound-promote
+ * human-review draft (draft AND labeled `self-healing/auto`). A malformed
+ * `created_at` returns false rather than throwing — a single corrupt payload
+ * must not dark the whole scan.
+ */
+export function isStaleBotPr(pr: BotPrLite, nowMs: number): boolean {
+  const ref = pr.head?.ref ?? "";
+  if (!BOT_PR_HEAD_PREFIXES.some((p) => ref.startsWith(p))) return false;
+  if (pr.draft && (pr.labels ?? []).some((l) => l.name === "self-healing/auto")) {
+    return false;
+  }
+  const createdAt = Date.parse(pr.created_at);
+  if (Number.isNaN(createdAt)) return false;
+  return nowMs - createdAt > STALE_BOT_PR_THRESHOLD_MS;
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -293,6 +360,163 @@ export async function cronCloudTaskHeartbeatHandler({
         message: "Failed to handle silence issues",
         extra: { fn: "cron-cloud-task-heartbeat" },
       });
+    }
+  });
+
+  // Step 3.5: scan open bot PRs for staleness (#5138). Orthogonal to the
+  // task-silence `ok` above — never flips the heartbeat monitor.
+  const staleBotPrs = await step.run(
+    "check-stale-bot-prs",
+    async (): Promise<StaleBotPr[]> => {
+      try {
+        const { Octokit } = await import("@octokit/core");
+        const octokit = new Octokit({ auth: installationToken });
+        const out: StaleBotPr[] = [];
+        const now = Date.now();
+        // sort=created asc (oldest first); the order is monotonic because
+        // `created_at` is immutable, so the first PR newer than the threshold
+        // means no later page can hold a stale one — early-exit bounds the scan
+        // to the >48h-old PRs (≈0 bot PRs in steady state). No page cap needed.
+        for (let page = 1; ; page++) {
+          const res = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            state: "open",
+            sort: "created",
+            direction: "asc",
+            per_page: 100,
+            page,
+            headers: { "X-GitHub-Api-Version": "2022-11-28" },
+          });
+          const prs = res.data as BotPrLite[];
+          if (prs.length === 0) break;
+          let reachedFresh = false;
+          for (const pr of prs) {
+            const createdAt = Date.parse(pr.created_at);
+            if (
+              !Number.isNaN(createdAt) &&
+              now - createdAt <= STALE_BOT_PR_THRESHOLD_MS
+            ) {
+              reachedFresh = true; // every later PR is newer → stop scanning
+              break;
+            }
+            if (isStaleBotPr(pr, now)) {
+              out.push({
+                number: pr.number,
+                headRef: pr.head.ref,
+                ageHours: Math.floor((now - createdAt) / (3600 * 1000)),
+                scheduledLabel: scheduledLabelFromHead(pr.head.ref),
+                htmlUrl: pr.html_url,
+              });
+            }
+          }
+          if (reachedFresh || prs.length < 100) break;
+        }
+        return out;
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cron-cloud-task-heartbeat",
+          op: "stale-bot-pr-scan-failed",
+          message: "Failed to scan open bot PRs for staleness",
+          extra: { fn: "cron-cloud-task-heartbeat" },
+        });
+        return [];
+      }
+    },
+  );
+
+  // Step 3.6: warn + best-effort owning-issue comment for each stale bot PR.
+  await step.run("stale-bot-pr-handling", async () => {
+    if (staleBotPrs.length === 0) return;
+    const { Octokit } = await import("@octokit/core");
+    const octokit = new Octokit({ auth: installationToken });
+
+    for (const pr of staleBotPrs) {
+      // 1. Sentry warn (always — the routed signal; op flows to the
+      //    sentry_issue_alert.stale_bot_pr rule). Stable message; per-PR detail
+      //    in `extra` so Sentry groups one issue.
+      warnSilentFallback(null, {
+        feature: "cron-cloud-task-heartbeat",
+        op: STALE_BOT_PR_WARN_OP,
+        message: "Bot PR open past staleness threshold",
+        extra: {
+          fn: "cron-cloud-task-heartbeat",
+          pr_number: pr.number,
+          head_ref: pr.headRef,
+          age_hours: pr.ageHours,
+          owning_cron: pr.scheduledLabel?.replace(/^scheduled-/, "") ?? "unknown",
+          html_url: pr.htmlUrl,
+        },
+      });
+
+      // 2. Best-effort comment on the owning cron's scheduled issue, deduped by
+      //    a hidden marker so a multi-day-stuck PR isn't re-commented daily.
+      if (!pr.scheduledLabel) continue;
+      try {
+        const issues = (await octokit.request(
+          "GET /repos/{owner}/{repo}/issues",
+          {
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            labels: pr.scheduledLabel,
+            state: "open",
+            sort: "created",
+            direction: "desc",
+            per_page: 1,
+            headers: { "X-GitHub-Api-Version": "2022-11-28" },
+          },
+        )) as { data: Array<{ number: number }> };
+        const issue = issues.data[0];
+        if (!issue) continue; // no labeled open issue → Sentry-only
+
+        const marker = `<!-- stale-bot-pr:${pr.number} -->`;
+        const comments = (await octokit.request(
+          "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            issue_number: issue.number,
+            per_page: 100,
+            headers: { "X-GitHub-Api-Version": "2022-11-28" },
+          },
+        )) as { data: Array<{ body?: string }> };
+        if (comments.data.some((c) => (c.body ?? "").includes(marker))) {
+          continue; // already commented for this PR
+        }
+
+        await octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            issue_number: issue.number,
+            body: [
+              marker,
+              `⚠️ Bot PR [#${pr.number}](${pr.htmlUrl}) (head \`${pr.headRef}\`) has been open ${pr.ageHours}h (threshold: 48h).`,
+              "",
+              "Auto-merge likely disarmed on a merge conflict (it disarms silently) — rebase the branch to resolve the conflict and let auto-merge re-fire, or close the PR.",
+              "",
+              "See [cloud-scheduled-tasks.md runbook §Stale bot PR](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md).",
+            ].join("\n"),
+            headers: { "X-GitHub-Api-Version": "2022-11-28" },
+          },
+        );
+        logger.info(
+          { fn: "cron-cloud-task-heartbeat", pr: pr.number },
+          "Stale bot PR — commented on owning scheduled issue",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cron-cloud-task-heartbeat",
+          op: "stale-bot-pr-comment-failed",
+          message: "Could not post stale-bot-PR comment on owning scheduled issue",
+          extra: {
+            fn: "cron-cloud-task-heartbeat",
+            pr_number: pr.number,
+            label: pr.scheduledLabel,
+          },
+        });
+      }
     }
   });
 
