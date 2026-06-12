@@ -10,7 +10,7 @@
 // plugins/soleur/skills/ship/references/ci-workflow-authoring.md.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toSlackMrkdwn, truncateMrkdwn } from "./md-to-mrkdwn.mjs";
+import { toSlackMrkdwn, truncateMrkdwn, parseMaxArg } from "./md-to-mrkdwn.mjs";
 
 // --- Mapping-table rows -----------------------------------------------------
 
@@ -26,6 +26,14 @@ test("italic * and _ -> single underscore", () => {
 
 test("strikethrough ~~ -> single tilde", () => {
   assert.equal(toSlackMrkdwn("a ~~gone~~ b"), "a ~gone~ b");
+});
+
+test("bold-italic ***x*** -> *_x_* (no literal asterisks leak)", () => {
+  assert.equal(toSlackMrkdwn("***hi***"), "*_hi_*");
+  assert.equal(toSlackMrkdwn("a ***wow*** b"), "a *_wow_* b");
+  // plain bold and the nested case still convert correctly
+  assert.equal(toSlackMrkdwn("**bold**"), "*bold*");
+  assert.equal(toSlackMrkdwn("**_x_**"), "*_x_*");
 });
 
 test("inline link [text](url) -> <url|text>", () => {
@@ -58,6 +66,16 @@ test("ATX headings -> bold line", () => {
 
 test("setext H1 (=== underline) -> bold line", () => {
   assert.equal(toSlackMrkdwn("Title\n==="), "*Title*");
+});
+
+test("setext H2 (--- underline) -> bold line", () => {
+  assert.equal(toSlackMrkdwn("Heading\n---\nbody"), "*Heading*\nbody");
+});
+
+test("--- after a bullet list stays a thematic break (bullet not bolded)", () => {
+  // guard: a `---` separator following a list item must NOT be read as a
+  // setext-H2 underline that bolds the bullet
+  assert.equal(toSlackMrkdwn("- Fixed Y\n---\n- Added Z"), "• Fixed Y\n\n• Added Z");
 });
 
 test("bullets -*+ -> Slack bullet", () => {
@@ -203,12 +221,19 @@ test("empty and whitespace-only bodies", () => {
 
 // --- Keystone fail-closed output invariant (P1-C) ---------------------------
 
+// The mention-prefix alphabet (! @ # subteam^) in the regex below is mirrored
+// in plugins/soleur/test/reusable-release-idempotency.test.sh (T7 keystone
+// glob) and ci-workflow-authoring.md's mapping table — keep all three in sync.
+// The converter escapes EVERY `<` in text nodes, so this is a detection
+// backstop, not the primary defense.
 test("KEYSTONE: adversarial corpus -> output never contains <! <@ <# <subteam^", () => {
   const corpus = [
     "<!channel> <!here> <!everyone>",
     "<@U12345> and <@W99999>",
     "<#C0000|general>",
     "<!subteam^S123|team>",
+    "<!here> <!everyone>",
+    "***<!channel>***",
     "[<!channel>](https://x.io)",
     "[Click](https://x.io|<!channel>)",
     "**<!everyone>** and _<@U1>_",
@@ -231,14 +256,32 @@ test("KEYSTONE: adversarial corpus -> output never contains <! <@ <# <subteam^",
   }
 });
 
-test("KEYSTONE: only raw < in output begins a URL scheme inside a minted link", () => {
-  const out = toSlackMrkdwn("[docs](https://x.io) and [a](https://y.io)");
-  // every '<' must be immediately followed by http or mailto
+test("KEYSTONE: minted < coexists with escaped author < on the same line", () => {
+  // a genuine link (minted `<url|`) AND a raw author-typed mention on one line:
+  // every '<' in the output must be a minted link delimiter (followed by a URL
+  // scheme), and the author mention must be escaped to &lt; — never a live one
+  const out = toSlackMrkdwn("see [docs](https://x.io) and ping <!channel> now");
+  assert.equal(out.includes("&lt;!channel&gt;"), true, "author mention must be escaped");
+  assert.equal(out.includes("<https://x.io|docs>"), true, "genuine link must be minted");
+  let mintedCount = 0;
   for (let i = 0; i < out.length; i++) {
     if (out[i] === "<") {
       assert.equal(/^<(https?:|mailto:)/.test(out.slice(i)), true, `stray < at ${i}: ${out}`);
+      mintedCount += 1;
     }
   }
+  assert.equal(mintedCount, 1, "exactly one minted link delimiter, no escaped-into-oblivion vacuity");
+});
+
+test("ReDoS guard: adversarial unterminated-[ input converts in well under 1s", () => {
+  // The converter runs on untrusted changelog input; a long run of `[` used to
+  // tail-scan to EOF at every position (O(n^2)). The MAX_INPUT cap + bounded
+  // link char-classes must keep this fast. (performance-oracle P1.)
+  const start = process.hrtime.bigint();
+  const out = toSlackMrkdwn("[".repeat(65536) + "x".repeat(65536));
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.equal(elapsedMs < 500, true, `conversion took ${elapsedMs.toFixed(1)}ms (expected < 500ms)`);
+  assert.equal(/<(!|@|#|subteam\^)/.test(out), false);
 });
 
 // --- Structure-aware truncation ---------------------------------------------
@@ -247,11 +290,44 @@ test("truncateMrkdwn: short text returned unchanged", () => {
   assert.equal(truncateMrkdwn("hello", 100), "hello");
 });
 
-test("truncateMrkdwn: does not leave a dangling <url| link", () => {
-  const text = "intro text here <https://x.io|the link label that is long>";
+test("truncateMrkdwn: never leaves a half-open <url| link (space-free label)", () => {
+  // A single-token (space-free) long link forces the word-boundary cut to land
+  // mid-link, so the mid-link guard MUST fire. Split assertions so neither can
+  // pass vacuously. (security-sentinel P2 / test-design P1.)
+  const text = "intro <https://x.io/" + "a".repeat(60) + "|lbl>";
   const out = truncateMrkdwn(text, 30);
-  assert.equal(out.includes("<https://x.io|") && !out.includes(">"), false, "no half-open link");
+  assert.equal(/<https?:[^>]*$/.test(out), false, "no half-open <url| at the tail");
   assert.equal(out.endsWith("…"), true);
+});
+
+test("truncateMrkdwn: half-open guard fires when a closed link is re-cut at a label space", () => {
+  // The link IS closed in the wider slice, but a multi-word label means the
+  // word-boundary cut can re-open it between `|` and `>`. The post-boundary
+  // re-trim must drop the whole link.
+  const text = "intro text here <https://x.io|alpha beta> tail-no-spaces-xxxxxxxxxxxx";
+  const out = truncateMrkdwn(text, 42);
+  assert.equal(/<https?:[^>]*$/.test(out), false, "no dangling <url|partial-label");
+  assert.equal(out.length <= 42, true, `result ${out.length} must not exceed max`);
+});
+
+test("truncateMrkdwn: result never exceeds max (suffix budget reserved)", () => {
+  const text = "```\n" + "x".repeat(5000);
+  const out = truncateMrkdwn(text, 3000);
+  assert.equal(out.length <= 3000, true, `result ${out.length} must not exceed max`);
+});
+
+test("parseMaxArg: space form, equals form, absent, and malformed", () => {
+  assert.equal(parseMaxArg(["node", "s.mjs", "--max", "3000"]), 3000);
+  assert.equal(parseMaxArg(["node", "s.mjs", "--max=3000"]), 3000);
+  assert.equal(parseMaxArg(["node", "s.mjs"]), 0);
+  // Number() parses scientific notation correctly (the whole point of the fix:
+  // parseInt("1e9") === 1 would silently destroy the body; Number("1e9") === 1e9)
+  assert.equal(parseMaxArg(["node", "s.mjs", "--max", "1e9"]), 1e9);
+  // genuinely malformed values must throw, never silently coerce
+  assert.throws(() => parseMaxArg(["node", "s.mjs", "--max", "-5"]), RangeError);
+  assert.throws(() => parseMaxArg(["node", "s.mjs", "--max", "abc"]), RangeError);
+  assert.throws(() => parseMaxArg(["node", "s.mjs", "--max", "3.5"]), RangeError);
+  assert.throws(() => parseMaxArg(["node", "s.mjs", "--max=0"]), RangeError);
 });
 
 test("truncateMrkdwn: closes an unbalanced code fence", () => {

@@ -283,7 +283,7 @@ STUB
   # Fixture mixes (a) injection-bait (<Suspense>, &, <!channel>) and (b) GFM
   # formatting (**bold**, [docs](url)) so T7 asserts BOTH the escape guarantee
   # AND the GFM->mrkdwn conversion the converter now performs.
-  printf -- '- fix: handle <Suspense> boundary & retries <!channel>\n' > "$NOTES"
+  printf -- '- fix: handle <Suspense> boundary & retries <!channel> for <@U1>\n' > "$NOTES"
   printf -- 'Some **bold** text and a [docs](https://x.io) link.\n' >> "$NOTES"
 
   run_slack() {
@@ -361,6 +361,11 @@ STUB
   # of how a mention was crafted, the converted output contains zero
   # <! / <@ / <# / <subteam^ sequences (the single backstop against every
   # injection-smuggling path). [P1-C]
+  # NOTE: the mention-prefix alphabet (! @ # subteam^) is mirrored in
+  # scripts/md-to-mrkdwn.test.mjs (the `/<(!|@|#|subteam\^)/` keystone regex)
+  # and in ci-workflow-authoring.md's mapping table — keep all three in sync if
+  # Slack adds a new mention prefix. (The converter itself escapes EVERY `<` in
+  # text nodes, so a drifted alphabet here weakens detection, not the defense.)
   case "$text" in
     *"<!"*|*"<@"*|*"<#"*|*"<subteam^"*)
       fail "keystone: payload must contain no <! <@ <# <subteam^ (got: $text)" ;;

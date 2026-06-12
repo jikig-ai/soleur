@@ -16,7 +16,8 @@ set -euo pipefail
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
 # environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
-# scripts shard needs neither bun nor node).
+# scripts shard needs no bun and no node *version pin*: it uses stock
+# ubuntu-latest node, unpinned, for the one `node --test` suite below).
 if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
   expected=$(tr -d '[:space:]' < .bun-version)
   actual=$(bun --version)

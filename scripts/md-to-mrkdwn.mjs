@@ -84,7 +84,10 @@ function convertInline(text, refs) {
     }
 
     // 2. Image ![alt](url) -> degrade to <url|alt> link.
-    m = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest);
+    //    Label/url char-classes are length-bounded ({0,K}) so a failed match
+    //    on an unterminated `[` cannot tail-scan to EOF — defense-in-depth
+    //    against the O(N^2) scan documented at the MAX_INPUT cap above.
+    m = /^!\[([^\]]{0,512})\]\(([^)]{0,2048})\)/.exec(rest);
     if (m) {
       out += mintLink(m[1], m[2], m[0]);
       i += m[0].length;
@@ -92,7 +95,7 @@ function convertInline(text, refs) {
     }
 
     // 3. Inline link [label](url).
-    m = /^\[([^\]]*)\]\(([^)]*)\)/.exec(rest);
+    m = /^\[([^\]]{0,512})\]\(([^)]{0,2048})\)/.exec(rest);
     if (m) {
       out += mintLink(m[1], m[2], m[0]);
       i += m[0].length;
@@ -100,7 +103,7 @@ function convertInline(text, refs) {
     }
 
     // 4. Reference link [label][ref] or collapsed [label][].
-    m = /^\[([^\]]*)\]\[([^\]]*)\]/.exec(rest);
+    m = /^\[([^\]]{0,512})\]\[([^\]]{0,512})\]/.exec(rest);
     if (m) {
       const key = (m[2] || m[1]).toLowerCase();
       const url = refs.get(key);
@@ -125,6 +128,15 @@ function convertInline(text, refs) {
     m = /^(https?:\/\/[^\s<>]+)/i.exec(rest);
     if (m) {
       out += m[1];
+      i += m[0].length;
+      continue;
+    }
+
+    // 6.5 Bold-italic ***x*** -> *_x_* (combined emphasis). Checked BEFORE bold
+    //     so the triple marker is not consumed as `**` + a leftover literal `*`.
+    m = /^\*\*\*([^\s][\s\S]*?)\*\*\*/.exec(rest);
+    if (m) {
+      out += "*_" + convertInline(m[1], refs) + "_*";
       i += m[0].length;
       continue;
     }
@@ -185,7 +197,17 @@ function collectRefs(lines) {
 
 // Convert a full markdown document to Slack mrkdwn.
 export function toSlackMrkdwn(md) {
-  if (!md) return "";
+  if (typeof md !== "string" || md.length === 0) return "";
+  // Hard pre-conversion input ceiling. The converter runs in CI on the
+  // PR-author-written (untrusted) changelog body. Several inline regexes
+  // tail-scan to EOF on a failed match (an unterminated `[`), so an
+  // adversarial N-byte input would cost O(N^2) in the per-position scan loop
+  // BEFORE the output `--max` cap (which runs in truncateMrkdwn, AFTER full
+  // conversion) ever applies. 16 KiB is far above any real changelog and
+  // bounds the O(N^2) constant; the rendered tail is still tidied by
+  // truncateMrkdwn. (ReDoS review on the slack-mrkdwn PR.)
+  const MAX_INPUT = 16384;
+  if (md.length > MAX_INPUT) md = md.slice(0, MAX_INPUT);
   const lines = md.split("\n");
   const refs = collectRefs(lines);
   const result = [];
@@ -230,8 +252,24 @@ export function toSlackMrkdwn(md) {
       continue;
     }
 
-    // Setext H1 (text followed by a === underline) -> bold line.
-    if (line.trim() && i + 1 < lines.length && /^\s{0,3}=+\s*$/.test(lines[i + 1])) {
+    // Setext heading (text followed by a === [H1] or --- [H2] underline) ->
+    // bold line. Checked before the thematic-break rule so a `---` that
+    // follows non-blank PARAGRAPH text is read as a heading underline
+    // (GFM-correct disambiguation). The `---` branch is guarded so it does
+    // NOT fire when the preceding line is itself a list/quote/heading — a
+    // `---` separator after a bullet list must stay a thematic break and the
+    // bullet must keep its glyph, not get bolded. `===` is unambiguous (never
+    // a thematic break) so it needs no such guard. A standalone `---` after a
+    // blank line still falls through to the thematic break below.
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
+    const setextH1 = /^\s{0,3}=+\s*$/.test(nextLine);
+    const setextH2 =
+      /^\s{0,3}-+\s*$/.test(nextLine) &&
+      !RE_BULLET.test(line) &&
+      !RE_ORDERED.test(line) &&
+      !RE_BLOCKQUOTE.test(line) &&
+      !RE_ATX.test(line);
+    if (line.trim() && (setextH1 || setextH2)) {
       result.push("*" + convertInline(line.trim(), refs) + "*");
       i += 2;
       continue;
@@ -273,17 +311,29 @@ export function toSlackMrkdwn(md) {
 export function truncateMrkdwn(text, max) {
   if (!Number.isFinite(max) || max <= 0 || text.length <= max) return text;
 
-  let slice = text.slice(0, max - 1);
+  // Reserve room for the appended suffix so the result never exceeds `max`:
+  // 1 char for the ellipsis, plus 4 ("\n```") if the body contains a fence we
+  // might need to re-close after the cut.
+  const reserve = 1 + (text.includes("```") ? 4 : 0);
+  let slice = text.slice(0, Math.max(0, max - reserve));
 
-  // Never cut inside a minted link: if a '<' is still open (no matching '>'
-  // after it) in the slice, trim back to before that '<'.
-  const lastOpen = slice.lastIndexOf("<");
-  const lastClose = slice.lastIndexOf(">");
-  if (lastOpen > lastClose) slice = slice.slice(0, lastOpen);
+  // Never cut inside a minted <url|label> link: retreat to before any '<'
+  // that has no matching '>' after it.
+  const trimOpenLink = (s) => {
+    const lastOpen = s.lastIndexOf("<");
+    const lastClose = s.lastIndexOf(">");
+    return lastOpen > lastClose ? s.slice(0, lastOpen) : s;
+  };
+  slice = trimOpenLink(slice);
 
   // Prefer a newline or word boundary if it is not too far back.
   const boundary = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf(" "));
   if (boundary > max * 0.5) slice = slice.slice(0, boundary);
+
+  // Re-check for a half-open link: the word-boundary cut above can land
+  // between `|` and `>` of a link that WAS closed in the wider slice,
+  // re-opening the <url|label> grammar. (security-sentinel P2.)
+  slice = trimOpenLink(slice);
 
   slice = slice.replace(/\s+$/, "") + "…";
 
@@ -294,15 +344,39 @@ export function truncateMrkdwn(text, max) {
   return slice;
 }
 
+// Parse the optional `--max N` / `--max=N` CLI flag. Returns a positive
+// integer, or 0 when the flag is absent. Throws RangeError on a malformed
+// value rather than silently coercing — `parseInt("1e9")` returns 1, which
+// would truncate the whole release body to a single ellipsis.
+export function parseMaxArg(argv) {
+  let raw;
+  const eq = argv.find((a) => a.startsWith("--max="));
+  if (eq) {
+    raw = eq.slice("--max=".length);
+  } else {
+    const idx = argv.indexOf("--max");
+    if (idx === -1) return 0;
+    raw = argv[idx + 1];
+  }
+  if (raw === undefined || raw === "") return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new RangeError(`--max expects a positive integer, got ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
 // --- CLI ---------------------------------------------------------------------
 // Runs only when invoked directly (not when imported by the test file).
 import { fileURLToPath } from "node:url";
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let max = 0;
-  const maxIdx = process.argv.indexOf("--max");
-  if (maxIdx !== -1 && process.argv[maxIdx + 1]) {
-    max = parseInt(process.argv[maxIdx + 1], 10) || 0;
+  try {
+    max = parseMaxArg(process.argv);
+  } catch (err) {
+    process.stderr.write(`md-to-mrkdwn: ${err.message}\n`);
+    process.exit(2);
   }
 
   const chunks = [];
