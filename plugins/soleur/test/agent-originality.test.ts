@@ -28,8 +28,26 @@ import { describe, test, expect } from "bun:test";
 import { discoverAgents, parseComponent, getComponentName } from "./helpers";
 
 const SHINGLE_N = 8;
-const FAIL = Number(process.env.AGENT_ORIGINALITY_FAIL ?? 50) / 100;
-const WARN = Number(process.env.AGENT_ORIGINALITY_WARN ?? 30) / 100;
+
+// Parse an env-overridable percentage threshold, FAIL-CLOSED. A non-numeric or
+// out-of-range value (typo, stray quote) must NOT silently disable the gate:
+// `Number("high") === NaN` and `score >= NaN` is always false, so a naive
+// `Number(env ?? 50)` would pass every pair regardless of duplication. Throw
+// instead — an unparseable threshold means the operator's intent is unknown,
+// and a CI integrity gate's safe failure is "refuse to run", not "pass".
+function pct(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  const n = raw ? Number(raw) : fallback;
+  if (!Number.isFinite(n) || n < 0 || n > 100) {
+    throw new Error(
+      `${name} must be a number in [0,100] (got ${JSON.stringify(process.env[name])})`,
+    );
+  }
+  return n / 100;
+}
+
+const FAIL = pct("AGENT_ORIGINALITY_FAIL", 50);
+const WARN = pct("AGENT_ORIGINALITY_WARN", 30);
 
 function neutralize(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s]+/g, " ");
@@ -51,11 +69,49 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return inter / (a.size + b.size - inter);
 }
 
+// Positive control for the scorer itself. The roster check below is green-path
+// only: if `shingles`/`jaccard` ever regressed (e.g. returned empty sets), the
+// gate would pass vacuously and never catch a re-skin. These two assertions
+// prove the scorer DISCRIMINATES duplicate from distinct on every CI run,
+// without committing a near-duplicate agent (which would trip the gate itself).
+// Anchored to the literal 0.5/0.3 the default thresholds encode — this tests
+// the math, independent of any AGENT_ORIGINALITY_* override.
+describe("Agent originality scorer (self-check)", () => {
+  const base =
+    "this specialist agent reviews the application codebase for security " +
+    "vulnerabilities and reports each finding with a severity rating a concrete " +
+    "remediation a reproduction path and a confidence score so the engineering " +
+    "team can prioritize fixes before the change ships to production users";
+  const reskin = base.replace("security", "performance"); // swapped noun = re-skin
+  const distinct =
+    "compose marketing email sequences and landing page copy that convert " +
+    "visitors into trial signups across paid and organic acquisition channels " +
+    "then measure open click and activation rates to iterate on the funnel";
+
+  test("scores a noun-swapped re-skin at/above FAIL", () => {
+    expect(jaccard(shingles(base), shingles(reskin))).toBeGreaterThanOrEqual(0.5);
+  });
+
+  test("scores a genuinely distinct pair below WARN", () => {
+    expect(jaccard(shingles(base), shingles(distinct))).toBeLessThan(0.3);
+  });
+});
+
 describe("Agent originality", () => {
   const agents = discoverAgents();
 
   test("discovers agents", () => {
     expect(agents.length).toBeGreaterThan(0);
+  });
+
+  test("roster bodies actually produce shingles (guards a vacuous pass)", () => {
+    // If body extraction regressed and most bodies fell below the shingle
+    // window, every pair would be skipped and the gate would report "none"
+    // forever. Assert the roster genuinely yields comparable shingles.
+    const withShingles = agents.filter(
+      (p) => shingles(parseComponent(p).body).size > 0,
+    ).length;
+    expect(withShingles).toBeGreaterThan(agents.length / 2);
   });
 
   test("no agent body substantially duplicates another", () => {
