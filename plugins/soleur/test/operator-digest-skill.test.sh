@@ -73,7 +73,10 @@ assert "source 3: post-mortems / PIRs"           'post-mortem'
 assert "source 4: action-required issues"        'action-required'
 
 # --- L2 control: incident from frontmatter/title/status ONLY, never body ---
-assert "incident uses frontmatter/title/status"  'frontmatter.*title.*status|title.*status.*frontmatter'
+# Order-independent: a correct reword ("status, frontmatter, title") must not falsely fail.
+for kw in frontmatter title status; do
+  assert "incident control names '${kw}'" "$kw"
+done
 assert "incident never reads the PIR body"       'never.*body|not.*the.*body|never the body'
 
 # --- Write-not-post contract ---

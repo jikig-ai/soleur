@@ -97,7 +97,7 @@ jobs:
           else
             gh issue create -R jikig-ai/operator-digest \
               --title "Digest withheld: ${ISO_WEEK}" \
-              --body "This week's digest was withheld by the safety scrub; a value matched a secret pattern. No data is shown. See run ${GH_RUN_ID}."
+              --body "This week's digest was withheld by the safety scrub; a value matched a safety pattern (a secret, a foreign email, or a scan error). No data is shown. See run ${GH_RUN_ID}."
           fi
 
           # No durable plaintext copy: remove the file regardless of which branch posted.

@@ -50,18 +50,40 @@ assert "persist-credentials: false on checkout" 'persist-credentials:[[:space:]]
 # --- plugin_marketplaces pinned to soleur (not the running private repo) ---
 assert "plugin_marketplaces pinned to jikig-ai/soleur" 'plugin_marketplaces:.*jikig-ai/soleur'
 
-# --- Agent allowlist: Write allowed; gh issue create is NOT in the allowlist ---
-assert "--allowedTools present and contains Write" 'allowedTools[^\n]*\bWrite\b'
-# The agent must NOT be able to post: no gh issue create on the allowedTools line.
-if grep -E 'allowedTools' "$WF" | grep -qE 'gh issue create'; then
-  fail=$((fail+1)); echo "FAIL: allowedTools must NOT contain 'gh issue create' (prompt-injection bypass)" >&2
+# --- Comment-stripped view of the asset. The YAML carries a documentation header that
+# replicates every load-bearing token (`gh issue create`, `digest-scrub.sh`, …), so a
+# whole-file grep false-passes against the comments even after the FUNCTIONAL construct is
+# deleted. Strip full-line comments before the structural asserts below. ---
+CODE="$(grep -vE '^[[:space:]]*#' "$WF")"
+
+# Agent allowlist grants Write (the agent writes digest.md).
+if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -qE '\bWrite\b'; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: --allowedTools must contain Write" >&2; fi
+
+# The agent must NOT be granted a post capability. claude_args is a YAML folded block (>-) that
+# can span multiple physical lines, so a single-line grep misses a `Bash(gh issue create:*)`
+# continuation. Refute `gh issue create` across the WHOLE claude_args region (claude_args: → prompt:).
+ARGS_REGION="$(awk '/claude_args:/{f=1} /^[[:space:]]*prompt:[[:space:]]*\|?[[:space:]]*$/{if(f) f=0} f' "$WF")"
+if printf '%s\n' "$ARGS_REGION" | grep -qE 'gh issue create'; then
+  fail=$((fail+1)); echo "FAIL: agent allowlist/args must NOT grant 'gh issue create' (prompt-injection bypass)" >&2
 else pass=$((pass+1)); fi
 
-# --- The ONLY gh issue create lives in a GHA run: post-step (outside the action) ---
-assert "gh issue create exists as a deterministic post-step" 'gh issue create'
-# It must not appear inside the claude_args/prompt allowlist (covered above) — and the scrub
-# gate must run BEFORE it as its own run: step, outside claude-code-action.
-assert "digest-scrub.sh invoked as a post-step (outside the action)" 'digest-scrub\.sh'
+# Exclusivity: EVERY `gh issue create` in the executable (comment-stripped) YAML must be a
+# run-step command line (`gh issue create -R …`). Any other occurrence — in the prompt block,
+# an allowlist continuation, etc. — means the model was handed the post capability.
+create_lines="$(printf '%s\n' "$CODE" | grep -nE 'gh issue create' || true)"
+if [[ -z "$create_lines" ]]; then
+  fail=$((fail+1)); echo "FAIL: no 'gh issue create' post-step found in executable YAML" >&2
+elif printf '%s\n' "$create_lines" | grep -qvE ':[[:space:]]+gh issue create -R '; then
+  fail=$((fail+1)); echo "FAIL: a 'gh issue create' appears outside a run-step command line (post bypass):" >&2
+  printf '%s\n' "$create_lines" | grep -vE ':[[:space:]]+gh issue create -R ' >&2
+else pass=$((pass+1)); fi
+
+# Scrub gate invoked as a post-step OUTSIDE the action — anchored to the functional invocation
+# (the SCRUB var + the `bash "$SCRUB"` call), NOT the doc-header mention.
+if printf '%s\n' "$CODE" | grep -qE 'bash[[:space:]]+"\$SCRUB"' && \
+   printf '%s\n' "$CODE" | grep -qE 'SCRUB=.*digest-scrub\.sh'; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: digest-scrub.sh must be invoked as a post-step (bash \"\$SCRUB\")" >&2; fi
 
 # --- No durable plaintext copy: rm digest.md after posting ---
 assert "rm of the digest file present" 'rm[[:space:]]+-f'
@@ -81,6 +103,15 @@ assert "workflow_dispatch present"      'workflow_dispatch'
 
 # --- Vestigial generic-template label step dropped ---
 refute "no vestigial 'gh label create' step" 'gh label create'
+
+# --- Containment: the asset must NEVER live under soleur's OWN .github/workflows/ — that would
+# run it in PUBLIC Actions logs and leak the operator's private data. It is an inert asset that
+# the provisioning script installs into the PRIVATE operator-digest repo. A future `git mv` into
+# .github/workflows/ would silently re-arm the leak with no other CI signal; this guard catches it. ---
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+if compgen -G "${REPO_ROOT}/.github/workflows/operator-digest*" >/dev/null 2>&1; then
+  fail=$((fail+1)); echo "FAIL: operator-digest workflow must NOT live under soleur/.github/workflows/ (public-logs leak)" >&2
+else pass=$((pass+1)); fi
 
 echo "=== operator-digest-workflow: ${pass} passed, ${fail} failed ===" >&2
 [[ "$fail" == 0 ]]

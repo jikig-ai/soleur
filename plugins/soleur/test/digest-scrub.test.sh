@@ -58,6 +58,22 @@ run 0 "IPv4 in prose passes (warn)" 'Affected node 203.0.113.45 was restarted.'
 # --- clean digest passes ---
 run 0 "clean business prose passes" 'We shipped faster checkout. Doppler cost held at $0. Nothing broke.'
 
+# --- grep-error fail-closed (the differentiator vs redact-sentinel.sh's per-pattern `|| true`) ---
+# A grep failure (rc>=2) must ABORT, never fail-open. Shadow `grep` with a mock that exits 2 so
+# every scan hits a grep error; the gate must exit 1. Without coverage here, a regression that
+# made the gate fail-OPEN on grep error would ship silently (the header advertises this property).
+mockd="$(mktemp -d)"
+cat > "$mockd/grep" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod +x "$mockd/grep"
+printf '%s\n' 'clean business prose, no secrets here.' > "${tmpd}/clean.md"
+PATH="$mockd:$PATH" bash "$SCRUB" "${tmpd}/clean.md" >/dev/null 2>&1
+grep_err_rc=$?
+rm -rf "$mockd"
+[[ "$grep_err_rc" == 1 ]] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: grep-error (rc=2) must ABORT (fail-closed), got exit ${grep_err_rc}"; }
+
 # --- usage error ---
 bash "$SCRUB" >/dev/null 2>&1; [[ $? == 2 ]] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: no-arg should exit 2"; }
 bash "$SCRUB" "${tmpd}/does-not-exist.md" >/dev/null 2>&1; [[ $? == 2 ]] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: unreadable file should exit 2"; }

@@ -15,7 +15,11 @@
 # After it completes: gh workflow run operator-digest.yml -R jikig-ai/operator-digest
 set -uo pipefail
 
-REPO="${OPERATOR_DIGEST_REPO:-jikig-ai/operator-digest}"
+# REPO is a hardcoded constant — it MUST stay in lockstep with the `gh issue create -R <repo>`
+# post target in assets/operator-digest.workflow.yml. Making it env-overridable would let
+# provisioning create/secret/install into repo X while the installed workflow still posts to
+# jikig-ai/operator-digest (a silent misroute). If the target ever changes, change both together.
+REPO="jikig-ai/operator-digest"
 DOPPLER_PROJECT="${OPERATOR_DIGEST_DOPPLER_PROJECT:-soleur}"
 DOPPLER_CONFIG="${OPERATOR_DIGEST_DOPPLER_CONFIG:-prd}"
 SECRET_NAME="ANTHROPIC_API_KEY"
@@ -52,6 +56,10 @@ ensure_repo() {
     log "repo ${REPO} already exists — skipping create"
   else
     log "creating private repo ${REPO}"
+    # --add-readme is load-bearing, not cosmetic: install_workflow uses the contents API
+    # (PUT repos/.../contents/...), which requires a default branch to already exist. A repo
+    # created with zero commits has no default-branch ref and the PUT 404s. The README is the
+    # initial commit that creates `main`. Do not drop --add-readme.
     gh repo create "$REPO" --private --add-readme \
       --description "Operator weekly comprehension digest — private (provisioned from soleur #5085)" \
       || die "gh repo create ${REPO} failed (needs org-owner scope)"
@@ -80,18 +88,25 @@ install_workflow() {
   log "installed ${WORKFLOW_PATH} into ${REPO}"
 }
 
-# enable_workflow — newly-added workflows are enabled by default, but GitHub may need a moment
-# to register the file before `gh workflow enable` can find it. Soft-retry; a failure here is a
-# warning, not fatal (the schedule still fires once the file is on the default branch).
+# enable_workflow — newly-added workflows may need a moment to register before `gh workflow enable`
+# can find them. Soft-retry the enable, then POSITIVELY verify the workflow state is `active`. This
+# is the terminal step of a fire-and-forget bootstrap whose operator is non-technical: a silently-
+# not-enabled workflow means the digest never fires, and a WARN buried in stderr of a "done" run is
+# effectively invisible. Fail loud (die) if it is not active — the script is idempotent, so the
+# operator can simply re-run. NOTE: `gh workflow view` has no --json; state lives on `gh workflow list`.
 enable_workflow() {
+  local state="" _
   for _ in 1 2 3 4 5; do
-    if gh workflow enable operator-digest.yml -R "$REPO" >/dev/null 2>&1; then
-      log "enabled operator-digest.yml on ${REPO}"
+    gh workflow enable operator-digest.yml -R "$REPO" >/dev/null 2>&1 || true
+    state="$(gh workflow list -R "$REPO" --json path,state \
+      -q '.[] | select(.path==".github/workflows/operator-digest.yml") | .state' 2>/dev/null || true)"
+    if [[ "$state" == "active" ]]; then
+      log "operator-digest.yml is active on ${REPO}"
       return 0
     fi
     sleep 3
   done
-  log "WARN: 'gh workflow enable' did not confirm after retries — verify with 'gh workflow list -R ${REPO}'"
+  die "operator-digest.yml is not active on ${REPO} (last state: '${state:-unknown}') — the digest will NOT fire. Re-run this script, or check 'gh workflow list -R ${REPO}'."
 }
 
 main() {

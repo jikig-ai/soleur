@@ -14,7 +14,7 @@ This skill runs **headless inside `claude-code-action`** in the private `jikig-a
 repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads four
 sources, synthesizes four sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
 **STOPS**. A deterministic workflow post-step scrubs that file (fail-closed) and is the only thing
-that posts the issue — this skill must **do NOT post** the digest itself.
+that posts the issue — this skill itself must never post the digest (it writes the file and STOPS).
 
 ## Register (how to write)
 
@@ -26,13 +26,28 @@ it fixed" terms.
 
 ## Date window
 
-The digest covers the **last 7 days**. Compute the window once at the start:
+The digest covers the **last 7 days**. Anchor to the checkout root and compute the window once at the start:
 
 ```bash
+cd "$GITHUB_WORKSPACE"   # the filesystem sources below (§2 git log, §3 ls) are relative to the soleur checkout
 SINCE="$(date -u -d '7 days ago' +%Y-%m-%d)"
 ```
 
 Use `$SINCE` for every source below.
+
+## Read-failure handling (never render a failure as a quiet week)
+
+Each source command can FAIL — a cross-repo auth denial, a missing checkout, a transient error —
+returning a non-zero exit and/or empty output. **A failed read is NOT a quiet week.** This is the
+most important comprehension guardrail: the operator must never read "Nothing shipped" and believe a
+busy week was quiet because a `gh` call silently 403'd.
+
+For each section: if its source command exits **non-zero**, do NOT emit the section's "Nothing …"
+fallback. Instead emit a clearly-labelled warning line for that section:
+
+> ⚠️ Could not read \<source\> this week — a read FAILED (this is NOT a quiet week). See the run log.
+
+Only emit the "Nothing …" fallback when the command **succeeded** and genuinely returned no rows.
 
 ## Scope guardrails (load-bearing — do not weaken)
 
@@ -41,7 +56,9 @@ Use `$SINCE` for every source below.
 - **L2 — summaries only (the named-PII + customer-email control).** A regex cannot catch "Jane Doe".
   - Incidents: build the section from each post-mortem's **frontmatter, title, and status ONLY —
     never the post-mortem body.** The body contains customer names, raw logs, and trace detail that
-    must never reach the digest.
+    must never reach the digest. If a **title or frontmatter** itself names a person, customer, or
+    company, summarize it generically ("an incident affecting a customer") rather than echoing the
+    name — title/frontmatter is author-controlled, so the named-PII control applies to it too.
   - Money: emit **amounts and vendor names only.** Never echo the ledger's Notes column (it carries
     contact emails, IPs, and account detail).
   - Never copy a raw record, email address, IP, token, or log line into the digest. Summarize.

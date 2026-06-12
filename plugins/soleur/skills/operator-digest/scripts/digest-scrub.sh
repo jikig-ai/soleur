@@ -61,6 +61,9 @@ emit() { printf 'digest-scrub %s: %s\n' "$1" "$2" >&2; }
 # scan_secret <class> <pattern> — abort on any match; abort on grep error (fail-closed).
 scan_secret() {
   local class="$1" pattern="$2" out
+  # INVARIANT: `local rc=$?` MUST be the statement immediately after the grep assignment.
+  # Anything between them (even another `local`) resets $? to that statement's exit (0) and
+  # silently defeats the grep-error fail-closed path. Do not insert code here.
   out="$(grep -oE -e "$pattern" "$FILE")"
   local rc=$?
   if (( rc >= 2 )); then
