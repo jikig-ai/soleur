@@ -1,0 +1,104 @@
+# Operator weekly comprehension digest — workflow asset (#5085).
+#
+# THIS FILE IS INERT IN soleur. It is committed here (in the PUBLIC repo) so the
+# brand-critical workflow gets multi-agent review, but it MUST NOT be placed under
+# soleur's own .github/workflows/ — that would run it in PUBLIC Actions logs and leak
+# the operator's private data. The provisioning script installs it into the PRIVATE
+# jikig-ai/operator-digest repo, where both the logs and the digest issues stay private.
+#
+# Containment boundary (do not weaken — see plan §User-Brand Impact L1-L4):
+#   - The agent reads public soleur, synthesizes prose, writes $GITHUB_WORKSPACE/digest.md, STOPS.
+#   - The agent's allowlist has NO `gh issue create` — a prompt-injection in any read source
+#     cannot make the model post. Only the deterministic post-step posts.
+#   - The scrub gate (digest-scrub.sh) runs as a GHA run: step OUTSIDE the action — an in-prompt
+#     `exit 1` is swallowed (conclusion still reads success), so the gate must live here.
+#   - On a scrub abort the post-step posts a CONTENT-FREE withheld notice (a withhold is visible,
+#     not a silent absence), then removes the plaintext digest.
+
+name: "Operator weekly digest"
+
+on:
+  schedule:
+    # Fridays 13:00 UTC. GitHub Actions cron has ~15-minute variance.
+    - cron: '0 13 * * 5'
+  workflow_dispatch: {}
+
+concurrency:
+  group: operator-digest
+  cancel-in-progress: false
+
+# Least-privilege: the data source (public soleur) needs no grant; we only write issues
+# to this private repo. id-token: write is required by claude-code-action's OIDC handshake.
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout public soleur (data source)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: jikig-ai/soleur
+          fetch-depth: 0
+          # The data source is PUBLIC — no token needed. Do not persist the workflow's
+          # own credentials into the checkout (it is not soleur's repo).
+          persist-credentials: false
+
+      # show_full_output is deliberately OFF (absent). The flag leaks ALL tool execution
+      # results — which here include private financial/incident data — into the run logs.
+      - name: Synthesize digest
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        env:
+          # Align both token contexts so the in-action cross-repo `gh` read does not
+          # silently 403/return-empty under the App-installation token (#3403).
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          # The allowlist deliberately OMITS `gh issue create`: the agent CANNOT post.
+          # It may read PRs/issues and git log, and write files (digest.md) only.
+          claude_args: >-
+            --max-turns 30
+            --allowedTools Write,Read,Glob,Grep,Bash(date:*),Bash(ls:*),Bash(gh pr list:*),Bash(gh issue list:*),Bash(git log:*)
+          prompt: |
+            Run /soleur:operator-digest on the checked-out jikig-ai/soleur repository.
+            Read the four sources, synthesize the four plain-language sections, and write the
+            digest to $GITHUB_WORKSPACE/digest.md. STOP after writing the file — do not post,
+            open, or create any issue. The workflow's post-step owns publishing.
+
+      - name: Scrub gate (fail-closed) then post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          DIGEST="$GITHUB_WORKSPACE/digest.md"
+          SCRUB="$GITHUB_WORKSPACE/plugins/soleur/skills/operator-digest/scripts/digest-scrub.sh"
+          ISO_WEEK="$(date -u +%G-W%V)"
+
+          if [[ ! -f "$DIGEST" ]]; then
+            echo "the digest file was not produced by the synthesis step — failing the run" >&2
+            exit 1
+          fi
+
+          # The scrub is a deterministic post-step OUTSIDE the action. A non-zero exit means a
+          # secret / foreign email / grep error was found: post a CONTENT-FREE withheld notice
+          # (zero source-derived content) so the withhold is operator-visible, not silent.
+          if bash "$SCRUB" "$DIGEST"; then
+            gh issue create -R jikig-ai/operator-digest \
+              --title "Digest: ${ISO_WEEK}" \
+              --body-file "$DIGEST"
+          else
+            gh issue create -R jikig-ai/operator-digest \
+              --title "Digest withheld: ${ISO_WEEK}" \
+              --body "This week's digest was withheld by the safety scrub; a value matched a safety pattern (a secret, a foreign email, or a scan error). No data is shown. See run ${GH_RUN_ID}."
+          fi
+
+          # No durable plaintext copy: remove the file regardless of which branch posted.
+          rm -f "$DIGEST"
