@@ -70,12 +70,17 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
 Source: merged pull requests in the window.
 
 ```bash
-gh pr list -R jikig-ai/soleur --state merged --search "merged:>=$SINCE" --limit 100 \
-  --json title,labels,body
+# Use the List API (NOT --search): --search routes to GitHub's Search API, which returns
+# EMPTY for a cross-repo query under the in-action App-installation token (#3403 class) — it
+# would silently render "Nothing shipped" every week. The List API works cross-repo (same path
+# as the action-required read below). Filter by mergedAt >= $SINCE in your synthesis.
+gh pr list -R jikig-ai/soleur --state merged --limit 300 \
+  --json title,labels,mergedAt
 ```
 
-Rewrite each meaningful change into its **business consequence** in plain language. Group related
-work. Drop pure chores/dependency bumps unless they matter to the owner. No PR numbers, no paths.
+Keep only PRs whose `mergedAt` is on or after `$SINCE`. Rewrite each meaningful change into its
+**business consequence** in plain language. Group related work. Drop pure chores/dependency bumps
+unless they matter to the owner. No PR numbers, no paths.
 
 ### 2. Money & vendors
 
@@ -131,12 +136,16 @@ is a failure.
 Find the most recent prior digest issue and reference it so a skipped week is visible:
 
 ```bash
-gh issue list -R jikig-ai/operator-digest --state all --search "Digest in:title" \
-  --json number,title --limit 1
+# List API, NOT --search (same Search-API-empty-under-App-token reason as section 1): list this
+# repo's recent issues and pick the most recent whose title starts with "Digest:". A false-empty
+# from --search would break the liveness loop — every week would falsely read "first digest".
+gh issue list -R jikig-ai/operator-digest --state all \
+  --json number,title --limit 20
 ```
 
-Add a final line to the digest: **"Last week: #N"** (the prior week's issue number). If no prior
-digest exists, write "Last week: (this is the first digest)." A missing prior-week back-reference is
+From that list, take the highest-numbered issue whose title begins with `Digest:` (ignore the
+withheld-notice issues) and add a final line to the digest: **"Last week: #N"**. If no prior digest
+issue exists, write "Last week: (this is the first digest)." A missing prior-week back-reference is
 the operator-visible signal that a week was skipped.
 
 ## Output
