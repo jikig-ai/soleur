@@ -6,7 +6,7 @@
  *   - withheld + disconnected affordances
  *   - the settings toggle is read-only (disabled) for a non-owner dev
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
@@ -69,6 +69,8 @@ describe("DebugStreamPanel (AC8)", () => {
 describe("DebugStreamPanel — Copy control", () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
 
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+
   beforeEach(() => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
@@ -78,16 +80,29 @@ describe("DebugStreamPanel — Copy control", () => {
     writeText.mockClear();
   });
 
-  it("copies the REDACTED body, never the raw secret (AC1/AC2)", async () => {
+  afterEach(() => {
+    // Restore so the mocked clipboard does not leak into sibling suites.
+    if (originalClipboard) {
+      Object.defineProperty(navigator, "clipboard", originalClipboard);
+    } else {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it("copies the REDACTED body, never the raw secret, and flips to Copied (AC1/AC2/AC5)", async () => {
     const events = [
       ev({ id: "1", body: `{"x":"${ANTHROPIC}"}`, label: "Running command..." }),
     ];
     render(<DebugStreamPanel available events={events} connected />);
-    fireEvent.click(screen.getByTestId("debug-stream-copy"));
+    const copy = screen.getByTestId("debug-stream-copy");
+    expect(copy.textContent).toBe("Copy");
+    fireEvent.click(copy);
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const written = writeText.mock.calls[0][0] as string;
     expect(written).toContain("[redacted-key]");
     expect(written).not.toContain(ANTHROPIC);
+    // The success affordance: the label flips to "Copied" after the write.
+    await vi.waitFor(() => expect(copy.textContent).toBe("Copied"));
   });
 
   it("copies a withheld placeholder verbatim (AC3)", async () => {

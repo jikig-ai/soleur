@@ -88,11 +88,11 @@ function DebugEventRow({ event }: { event: ChatDebugEventMessage }) {
 
 /**
  * Serialize all events to clipboard text using the SAME redaction the render
- * path applies (`DebugEventRow` at line 57). NEVER serialize raw `event.body` —
- * that would copy to the clipboard the secrets the UI withholds on screen.
- * Withheld bodies ("[input withheld…") are already placeholders;
- * `redactCommandForDisplay` returns them unchanged, so they copy as-is. An
- * empty body emits just the header line (mirrors the render path's `{body &&}`).
+ * path applies (`DebugEventRow`). NEVER serialize raw `event.body` — that would
+ * copy to the clipboard the secrets the UI withholds on screen. Withheld bodies
+ * ("[input withheld…") are already placeholders; `redactCommandForDisplay`
+ * returns them unchanged, so they copy as-is. An empty body emits just the
+ * header line (mirrors the render path's `{body && …}` gate).
  */
 export function serializeDebugEvents(events: ChatDebugEventMessage[]): string {
   return events
@@ -104,27 +104,6 @@ export function serializeDebugEvents(events: ChatDebugEventMessage[]): string {
       return body ? `${header}\n${body}` : header;
     })
     .join("\n\n");
-}
-
-/**
- * Synchronous clipboard fallback for insecure contexts / older browsers where
- * `navigator.clipboard` is undefined. Returns whether the copy succeeded.
- */
-function copyViaTextarea(text: string): boolean {
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
-  } catch {
-    return false;
-  }
 }
 
 export function DebugStreamPanel({
@@ -146,22 +125,16 @@ export function DebugStreamPanel({
   }, []);
 
   const copyAll = useCallback(async () => {
-    const text = serializeDebugEvents(events);
-    const flagCopied = () => {
+    try {
+      await navigator.clipboard.writeText(serializeDebugEvents(events));
       setCopied(true);
       if (copyTimer.current) clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopied(false), 2000);
-    };
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        flagCopied();
-        return;
-      } catch {
-        // Modern API failed (permissions, insecure context) — fall through.
-      }
+    } catch {
+      // Clipboard unavailable (insecure context / permission denied). This is a
+      // dev-cohort, same-origin panel (always a secure context in practice), so
+      // no execCommand fallback is warranted — mirrors components/kb/share-popover.tsx.
     }
-    if (copyViaTextarea(text)) flagCopied();
   }, [events]);
 
   // Sticky autoscroll-to-bottom. The list is a nested `overflow-y-auto`, so we
