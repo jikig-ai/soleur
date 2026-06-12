@@ -48,10 +48,12 @@
 // See #4993 / #4987.
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
-// installation discovery → generateInstallationToken(installation.id).
-// Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh label create` (persistence runs handler-side via
-// safeCommitAndPr — #5111; the prompt forbids git/gh-pr verbs).
+// installation discovery → generateInstallationToken(installation.id), narrowed
+// to DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (#5199).
+// Injected as GH_TOKEN so the spawned claude can run the allowlisted
+// `gh issue create` + `gh label` verbs (persistence runs handler-side via
+// safeCommitAndPr — #5111; the prompt forbids git/gh-pr verbs and the
+// containment hook denies `gh api`).
 
 import {
   redactToken,
@@ -60,6 +62,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -206,7 +210,11 @@ export async function cronCompetitiveAnalysisHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

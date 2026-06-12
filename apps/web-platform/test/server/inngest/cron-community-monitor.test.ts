@@ -109,8 +109,11 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "router path (NOT abbreviated as router.sh)",
       ],
       [
-        'ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"',
-        "shell var assignment",
+        // #5199 restore: the prompt now writes the LITERAL router path in every
+        // invocation (no `ROUTER=` shell-var assignment) so each `bash <router>`
+        // matches the containment hook's literal-path allowlist prefix.
+        "do NOT assign it to a shell",
+        "literal-path containment instruction (no shell-var)",
       ],
       [
         "knowledge-base/support/community/",
@@ -125,10 +128,10 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       ["## Top Contributors", "digest section marker"],
       ["Repository Stats", "GitHub Activity sub-section marker"],
       ["Community Interactions", "GitHub Activity sub-section marker"],
-      ["bash $ROUTER discord", "Discord platform invocation"],
-      ["bash $ROUTER github activity", "GitHub activity invocation"],
-      ["bash $ROUTER hn mentions", "Hacker News invocation"],
-      ["bash $ROUTER bsky get-metrics", "Bluesky invocation"],
+      ["bash plugins/soleur/skills/community/scripts/community-router.sh discord", "Discord platform invocation (literal path)"],
+      ["bash plugins/soleur/skills/community/scripts/community-router.sh github activity", "GitHub activity invocation (literal path)"],
+      ["bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions", "Hacker News invocation (literal path)"],
+      ["bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics", "Bluesky invocation (literal path)"],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
