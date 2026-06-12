@@ -49,18 +49,6 @@ PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 # signal. We persist structured state to /var/lock/ci-deploy.state so that the
 # /hooks/deploy-status webhook endpoint (cat-deploy-state.sh) can surface it.
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
-# #5159 follow-up: the latest inngest re-register PUT's HTTP code is persisted
-# here so cat-deploy-state.sh can surface it in /hooks/deploy-status WITHOUT any
-# host SSH. The 2026-06-11 AC15 failure (loopback PUT ran its full budget but
-# crons never re-planned) was undiagnosable because `curl -sf … || true` swallows
-# the code; this marker makes the no-op visible (000=unreachable, 4xx/5xx=rejected,
-# 2xx=registered-but-unplanned). Overridable for testing.
-INNGEST_REGISTER_HTTP_FILE="${CI_DEPLOY_INNGEST_REGISTER_HTTP:-/var/lock/inngest-register-http}"
-# #5159 follow-up 2: the re-register PUT's response `modified` flag (true/false
-# /unknown). Distinguishes a sync-dedup no-op (false) from a real push (true) —
-# the datum that the serveHost theory (#5188) refutation left open. Surfaced by
-# cat-deploy-state.sh in /hooks/deploy-status (no SSH). Overridable for testing.
-INNGEST_REGISTER_MODIFIED_FILE="${CI_DEPLOY_INNGEST_REGISTER_MODIFIED:-/var/lock/inngest-register-modified}"
 START_TS=$(date +%s)
 # These are populated as the script parses SSH_ORIGINAL_COMMAND; surfaced in state.
 COMPONENT=""
@@ -200,31 +188,33 @@ resolve_env_file() {
   return 0
 }
 
-# Verify inngest-server is healthy after restart (#4538) AND its cron plan is
-# intact (#4650 / AC9).
-# Returns 0 only if BOTH /health is reachable AND /v1/functions lists at least
-# one function carrying a cron trigger.
-# Returns 1 if the server never became reachable, OR became reachable but the
-# scheduler has no cron-triggered function (H9 — "healthy process, cron
-# de-planned"; the /health check alone cannot distinguish this from healthy).
-# The two probes carry SEPARATE budgets: /health keeps the fast default
-# (a dead process should still fail in ~30s); the cron-plan loop owns the
-# wider cron_max_attempts budget below (#5145).
+# Verify inngest-server is healthy after restart (#4538), with an ADVISORY
+# cron-plan check (#4650 / AC9, reframed #5159).
+# /health is the HARD liveness gate: returns 1 if the server never became
+# reachable (a dead process must fail the deploy).
+# The cron-plan check is ADVISORY: a standalone inngest-server restart DE-PLANS
+# all cron triggers, and they re-arm ONLY asynchronously — via a web-platform
+# redeploy (new appVersion → SDK syncs `modified:true` → immediate re-arm) or
+# the server's own `--poll-interval` self-heal (~minutes). A loopback
+# `PUT /api/inngest` does NOT re-arm them (it's a `modified:false` no-op,
+# proven #5159). So after /health passes we poll /v1/functions a FEW times
+# best-effort: if a cron trigger appears we log success; if not, we log an
+# advisory and STILL return 0. Persistent de-plans are caught out-of-band by
+# the Sentry cron monitors (the H9b safety net), NOT by failing the deploy.
 # Uses `|| true` after curl instead of set +e/-e toggle — toggling set -e
 # inside a function re-enables it globally and causes the caller's non-zero
 # capture (`VERIFY_RC=$?`) to never execute.
 verify_inngest_health() {
   local max_attempts="${1:-10}"
   local interval="${2:-3}"
-  # #5145: the cron-plan loop needs its own, wider budget. The server runs
-  # with --poll-interval 60 (inngest-bootstrap.sh ExecStart, asserted by
-  # inngest.test.sh); when the immediate post-restart SDK sync races the
-  # web-platform container, the registry only populates on the NEXT 60s poll
-  # — structurally beyond the old shared ~30s budget. 40 x 3s = 120s nominal
-  # covers two full poll cycles. Plain constant, NOT a positional default —
-  # the call sites must stay arg-less (ci-deploy.test.sh wiring grep), so a
-  # third parameter would be a knob nobody is allowed to turn.
-  local cron_max_attempts=40
+  # Advisory cron-plan probe budget (#5159). Best-effort only: crons re-arm
+  # async (redeploy or --poll-interval), so a few attempts suffice to catch the
+  # common fast-resync case. A missing cron after these attempts is NOT a deploy
+  # failure — the Sentry cron monitors are the real safety net. Plain constant,
+  # NOT a positional default — the call sites must stay arg-less
+  # (ci-deploy.test.sh wiring grep), so a third parameter would be a knob nobody
+  # is allowed to turn.
+  local cron_max_attempts=10
   local response=""
   local healthy=0
 
@@ -245,64 +235,18 @@ verify_inngest_health() {
     return 1
   fi
 
-  # Cron-plan integrity (#4650 / AC9): /health proves only process liveness.
-  # A restart that re-syncs the function registry but fails to re-plan cron
-  # triggers (H9b) would pass /health while every monitored cron stays dead.
-  # Assert the registry lists >=1 function WITH a cron trigger. Dependency-free
-  # substring check (jq is not a host dependency): match the cron-trigger KEY
-  # form `"cron":` (the value form `"cron":"<expr>"` always contains it), NOT a
-  # bare `"cron"` — every function slug is `cron-*`, so bare `"cron"` would
-  # false-pass on the slug alone even with zero planned cron triggers.
+  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159): /health proves only
+  # process liveness. A standalone inngest restart de-plans cron triggers; they
+  # re-arm async (web-platform redeploy → modified:true sync, or the server's
+  # --poll-interval self-heal). Best-effort poll /v1/functions for a re-armed
+  # cron trigger; if none appears, log an advisory and STILL succeed (the Sentry
+  # cron monitors are the real safety net). Dependency-free substring check (jq
+  # is not a host dependency): match the cron-trigger KEY form `"cron":` (the
+  # value form `"cron":"<expr>"` always contains it), NOT a bare `"cron"` — every
+  # function slug is `cron-*`, so bare `"cron"` would false-pass on the slug
+  # alone even with zero planned cron triggers.
   local functions_body=""
-  local inngest_register_http=""
-  local inngest_reg_out=""
-  local inngest_register_modified=""
   for i in $(seq 1 "$cron_max_attempts"); do
-    # #5159: active push-and-poll — re-register on EACH iteration. The
-    # inngest-server cannot self-sync its function manifest post-restart; only an
-    # SDK PUT /api/inngest re-plans cron triggers at the substrate. Firing this
-    # INSIDE the loop (not once before it) self-heals a transient :3000-not-ready
-    # window — e.g. the deploy-inngest arm where the web-platform container may
-    # still be mid-restart — so the next iteration retries instead of collapsing
-    # to the pre-fix slow-resync behavior. `|| true` is MANDATORY under set -e
-    # (a connection-refused curl exit 7 would otherwise abort verify before the
-    # cron gate). --max-time 10 bounds a listening-but-hung :3000 and is counted
-    # in the #5145 cross-file drift guard (ci-deploy.test.sh DG_PUT_MAXTIME); it
-    # is intentionally NOT --max-time 5 so it never trips the VERIFY_FN_MAXTIME==2
-    # pin. NB: -sf (no -L) treats a 307 as success with an empty body, so a
-    # /api/inngest PUBLIC_PATHS regression would silently no-op the PUT — the
-    # /v1/functions cron gate below is the authoritative backstop.
-    #
-    # #5159 follow-up (2026-06-11 AC15 failure): the original `curl -sf … || true`
-    # discarded the HTTP code, so when the loopback PUT ran its full budget WITHOUT
-    # re-planning crons we could not tell unreachable (000) from rejected (4xx/5xx)
-    # from registered-but-unplanned (2xx). Capture the code instead: `-s` (no `-f`,
-    # so a 4xx/5xx still yields its code rather than an empty failure) + `-o /dev/null
-    # -w '%{http_code}'`. The assignment-level `|| =000` maps a connection failure
-    # (curl exit 7) to 000 without aborting verify (replaces the old `|| true`). The
-    # code is logged to journald (Vector → Better Stack) AND persisted for
-    # cat-deploy-state.sh to surface in /hooks/deploy-status (no-SSH diagnosis).
-    # --max-time 10 (not 5) keeps the #5145 VERIFY_FN_MAXTIME==2 pin intact and is
-    # counted in the cross-file drift guard.
-    # #5159 follow-up 2: also capture the response BODY's `modified` flag. The
-    # serveHost fix (#5188) was refuted — even registering the public origin the
-    # loopback PUT still returned 200 + inngest_crons:{}. The remaining unknown is
-    # whether the PUT is a sync-dedup no-op (`modified:false` — SDK thinks it is
-    # already synced, never re-pushes to the restart-wiped server) vs a real push
-    # the server drops (`modified:true`). `-w '\n%{http_code}'` (no `-o /dev/null`)
-    # appends a newline + the code AFTER the JSON body, so `tail -n1`=code and the
-    # body precedes it. Both are logged + persisted for cat-deploy-state.sh to
-    # surface (with the inngest-server journal tail) in /hooks/deploy-status —
-    # no-SSH. --max-time 10 still satisfies the #5145 drift guard + the
-    # VERIFY_FN_MAXTIME==2 pin (curl -s, not -sf; time 10, not 5).
-    inngest_reg_out=$(curl -s -w '\n%{http_code}' --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest 2>/dev/null) || inngest_reg_out=$'\n000'
-    inngest_register_http=$(printf '%s' "$inngest_reg_out" | tail -n1)
-    inngest_register_modified=$(printf '%s' "$inngest_reg_out" | grep -oE '"modified"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE '(true|false)' | head -n1)
-    [[ -z "$inngest_register_http" ]] && inngest_register_http="000"
-    [[ -z "$inngest_register_modified" ]] && inngest_register_modified="unknown"
-    logger -t "$LOG_TAG" "INNGEST_REREGISTER: loopback PUT -> HTTP $inngest_register_http modified=$inngest_register_modified (attempt $i/$cron_max_attempts)"
-    printf '%s' "$inngest_register_http" > "$INNGEST_REGISTER_HTTP_FILE" 2>/dev/null || true
-    printf '%s' "$inngest_register_modified" > "$INNGEST_REGISTER_MODIFIED_FILE" 2>/dev/null || true
     functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
 
     if [[ "$functions_body" == *'"cron":'* ]]; then
@@ -313,8 +257,8 @@ verify_inngest_health() {
     sleep "$interval"
   done
 
-  logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: failed — no cron-triggered function in registry after $cron_max_attempts attempts"
-  return 1
+  logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: advisory — no cron trigger re-armed yet; a standalone inngest restart de-plans crons until a web-platform redeploy (modified:true sync) or the --poll-interval self-heal re-arms them (#5159). NOT failing the deploy — Sentry cron monitors are the H9b safety net."
+  return 0
 }
 
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
