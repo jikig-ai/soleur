@@ -41,8 +41,8 @@ sentry_issue: 448a4173f90a436382c4396371927796
 
 ## Phase 5 — Follow-ups (file as tracking issues; do NOT fold in)
 
-- [ ] 5.1 (F1) File deferral issue (verify label via `gh label list` first): "Apply withGithubRetry to remaining probe-octokit cron call sites (drift-guard, oauth-probe, installation discovery)", re-eval trigger = next api.github.com connect-timeout Sentry event from those fnIds.
-- [ ] 5.2 (F2) File tracking issue for the pre-existing non-idempotent auto-close comment double-fire on Inngest replay (minimal guard: sentinel-comment check before POST). Re-eval trigger = operator report of duplicate auto-close comments OR `comment-and-close` Sentry op spike.
+- [x] 5.1 (F1) [filed #5230] File deferral issue (verify label via `gh label list` first): "Apply withGithubRetry to remaining probe-octokit cron call sites (drift-guard, oauth-probe, installation discovery)", re-eval trigger = next api.github.com connect-timeout Sentry event from those fnIds.
+- [x] 5.2 (F2) [filed #5231] File tracking issue for the pre-existing non-idempotent auto-close comment double-fire on Inngest replay (minimal guard: sentinel-comment check before POST). Re-eval trigger = operator report of duplicate auto-close comments OR `comment-and-close` Sentry op spike.
 
 ## Post-merge (operator)
 
