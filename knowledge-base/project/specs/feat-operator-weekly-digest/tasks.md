@@ -15,13 +15,13 @@ reads public soleur, synthesizes 4 plain-language sections, runs a tuned fail-cl
 posts a private issue. Brand-critical (single-user incident).
 
 ## Phase 0 — Preconditions (probes)
-- [ ] 0.1 Confirm `jikig-ai/soleur` PUBLIC + operator `gh` token has org repo-create scope.
+- [x] 0.1 Confirm `jikig-ai/soleur` PUBLIC + operator `gh` token has org repo-create scope.
 - [ ] 0.2 **In-action token probe** (NOT local gh): a throwaway claude-code-action job reads
       `gh issue list -R jikig-ai/soleur --label action-required` via the Bash bridge with `github_token`+`env
       GH_TOKEN` set; assert authorized/non-empty (proves cross-repo read under the in-action token; #3403).
-- [ ] 0.3 Enumerate current open `action-required` issues (real signal density for section 4).
-- [ ] 0.4 Resolve latest claude-code-action SHA (re-check pin per model-launch-review).
-- [ ] 0.5 Measure new-description word count → set the components.test.ts bump value.
+- [x] 0.3 Enumerate current open `action-required` issues (real signal density for section 4).
+- [x] 0.4 Resolve latest claude-code-action SHA (re-check pin per model-launch-review).
+- [x] 0.5 Measure new-description word count → set the components.test.ts bump value.
 
 ## Phase 1 — Skill + tuned scrub gate
 - [x] 1.1 RED: `digest-scrub.sh` test — asserts ABORT on a planted secret-shaped token (positive sentinel) +
@@ -56,11 +56,11 @@ posts a private issue. Brand-critical (single-user incident).
 - [ ] 3.3 PR body `## Changelog`; `semver:minor` label.
 
 ## Phase 4 — Pre-merge verification (local)
-- [ ] 4.1 Produce a sample `digest.md` from the checked-out repo; assert content-quality (AC5 heuristic:
+- [x] 4.1 Produce a sample `digest.md` from the checked-out repo; assert content-quality (AC5 heuristic:
       not byte-identical to a bare `gh pr list` dump; ≥1 sentence-with-verb per non-empty section; no blank).
-- [ ] 4.2 Run `digest-scrub.sh` on a sample built from the REAL current `expenses.md` → exit 0 (no benign
+- [x] 4.2 Run `digest-scrub.sh` on a sample built from the REAL current `expenses.md` → exit 0 (no benign
       first-party false-positive); then plant a secret-shaped token → assert abort.
-- [ ] 4.3 `grep -nE 'sk_(test|live)_…|ghp_…|sk-ant-…'` across touched markdown returns 0 (structural placeholders).
+- [x] 4.3 `grep -nE 'sk_(test|live)_…|ghp_…|sk-ant-…'` across touched markdown returns 0 (structural placeholders).
 
 ## Phase 5 — Post-merge (operator-authenticated, automated)
 - [ ] 5.1 Run `provision-operator-digest-repo.sh` (creates private repo + Doppler-sourced secret + installs +
