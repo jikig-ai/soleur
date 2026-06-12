@@ -26,6 +26,9 @@ api.x.com
 api.linkedin.com
 # social writes + BYOK validation (token-validators.ts:54)
 bsky.social
+# Hacker News search API (hn-community.sh:15) — cron-community-monitor HN reads
+# (community-router.sh `hn mentions`/`hn trending`, #5199 restore)
+hn.algolia.com
 # community webhooks (discord notify; weekly-analytics POST;
 # cron-weekly-release-digest.ts #releases digest via postDiscordWebhook)
 discord.com

@@ -188,6 +188,68 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   // files via `gh issue create --body-file`. The Playwright tools ux-audit needs
   // are mcp__* (NOT bash) — see CRON_MCP_ALLOWLISTS.
   "cron-ux-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // #5199 — the 7 restored mergeMode:"auto" PR-flow crons. Persistence runs
+  // node-side via safeCommitAndPr (git/gh-pr verbs are FORBIDDEN by every
+  // prompt AND excluded here — cron-safe-commit-parity.test.ts invariant 3).
+  // NO `gh api` (F4a). Eleventy builds defer to CI (decision A) → no
+  // `npx @11ty/eleventy` / validate-*.sh. Each entry is evidence-gated to the
+  // handler prompt + the /soleur:* SKILL it invokes.
+  //
+  // growth-audit (cron-growth-audit.ts): Step 5 `gh issue create`, Step 5.5
+  // dedup `gh issue list` + tracking `gh issue create`/`gh issue view`/
+  // `gh issue edit`. Bespoke (keeps issue view/edit beyond the issue-creator
+  // shared const).
+  "cron-growth-audit": [
+    "gh issue list",
+    "gh issue create",
+    "gh issue view",
+    "gh issue edit",
+    "gh label list",
+    "gh label create",
+  ],
+  // growth-execution (cron-growth-execution.ts): only `gh issue create` after
+  // decision A drops the eleventy build + validate-seo.sh — pure issue-creator
+  // surface.
+  "cron-growth-execution": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // competitive-analysis (cron-competitive-analysis.ts): only `gh issue create`;
+  // the SKILL's competitive-intelligence agent uses WebSearch/WebFetch tools
+  // (no bash). Pure issue-creator surface.
+  "cron-competitive-analysis": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // seo-aeo-audit (cron-seo-aeo-audit.ts): only `gh issue create` after
+  // decision A drops the eleventy build + validate-seo.sh/validate-csp.sh (the
+  // validate scripts take a built `_site` arg, unreachable in the
+  // node_modules-free clone). Pure issue-creator surface.
+  "cron-seo-aeo-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // content-generator (cron-content-generator.ts): only `gh issue create`;
+  // prompt explicitly forbids a local eleventy build. Skills delegate via Task
+  // (no inline bash). Pure issue-creator surface.
+  "cron-content-generator": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // campaign-calendar (cron-campaign-calendar.ts): dedup `gh issue list`,
+  // `gh issue comment`, `gh issue create`, heartbeat `gh issue close`.
+  // `git log` OMITTED (depth-1 clone makes it unreliable; the SKILL offers a
+  // filename-date fallback). Bespoke.
+  "cron-campaign-calendar": [
+    "gh issue list",
+    "gh issue view",
+    "gh issue create",
+    "gh issue comment",
+    "gh issue close",
+    "gh label list",
+    "gh label create",
+  ],
+  // community-monitor (cron-community-monitor.ts): `bash …community-router.sh`
+  // (the router's child curl/gh-api are grandchild OS processes gated by the
+  // egress firewall, NOT this hook), DEDUP `gh issue list`, `gh issue create`,
+  // `gh issue comment`. Prompt-level `gh api` is REWRITTEN to
+  // `gh issue list --json updatedAt,number` (F4a). Bespoke.
+  "cron-community-monitor": [
+    "bash plugins/soleur/skills/community/scripts/community-router.sh",
+    "gh issue list",
+    "gh issue create",
+    "gh issue comment",
+    "gh label list",
+    "gh label create",
+  ],
 };
 
 // #5199 — per-cron mcp__* allowance for the containment hook. The relax-minimal

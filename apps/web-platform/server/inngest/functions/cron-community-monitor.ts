@@ -57,10 +57,12 @@
 // mislead future edits. See #4993 / #4987.
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
-// installation discovery → generateInstallationToken(installation.id).
-// Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh label create` (persistence runs handler-side via
-// safeCommitAndPr — #5111; the prompt forbids git/gh-pr verbs).
+// installation discovery → generateInstallationToken(installation.id), narrowed
+// to DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (#5199).
+// Injected as GH_TOKEN so the spawned claude can run the allowlisted
+// `gh issue create`/`gh issue list`/`gh issue comment` + `gh label` verbs
+// (persistence runs handler-side via safeCommitAndPr — #5111; the prompt forbids
+// git/gh-pr verbs and the containment hook denies `gh api`).
 
 import {
   redactToken,
@@ -69,6 +71,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -155,16 +159,20 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
 2. **Collect data** from enabled platforms. IMPORTANT: batch commands
    into as few Bash calls as possible to conserve turns. Use \`;\` (not
    \`&&\`) to chain commands so failures don't halt the batch.
-   Set: ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
+   IMPORTANT: the containment hook allowlists ONLY the literal command prefix
+   \`bash plugins/soleur/skills/community/scripts/community-router.sh\`. You MUST
+   write that full literal path in every invocation — do NOT assign it to a shell
+   variable (a \`NAME=value\` prefix is denied) and do NOT abbreviate it; a
+   variable-expanded form will be denied as non-allowlisted.
    Batch 1 (Discord + X + Bluesky — single Bash call):
-   - Discord (if enabled): \`bash $ROUTER discord guild-info; bash $ROUTER discord members; bash $ROUTER discord channels\`
+   - Discord (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info; bash plugins/soleur/skills/community/scripts/community-router.sh discord members; bash plugins/soleur/skills/community/scripts/community-router.sh discord channels\`
      Then one more call to fetch messages for each channel ID from the output above.
-   - X/Twitter (if enabled): append \`bash $ROUTER x fetch-metrics\` to the same call.
+   - X/Twitter (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics\` to the same call.
      Do NOT call fetch-mentions or fetch-timeline (403 on Free tier).
-   - Bluesky (if enabled): append \`bash $ROUTER bsky get-metrics\` to the same call.
+   - Bluesky (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics\` to the same call.
    - LinkedIn (if enabled): skip — log "enabled (posting only)".
    Batch 2 (GitHub + HN — single Bash call):
-   - \`bash $ROUTER github activity 1; bash $ROUTER github contributors 1; bash $ROUTER github discussions 1; bash $ROUTER github repo-stats 1; bash $ROUTER github fetch-interactions 1; bash $ROUTER hn mentions --query soleur --limit 20; bash $ROUTER hn trending --limit 30\`
+   - \`bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1; bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1; bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1; bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20; bash plugins/soleur/skills/community/scripts/community-router.sh hn trending --limit 30\`
    If any command in a batch fails, log the error and continue.
 
 3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
@@ -200,7 +208,7 @@ DEDUP RULE (BEFORE creating the monitor issue): run
   gh issue list --label scheduled-community-monitor --state open --search 'Community Monitor in:title' --json number,title,createdAt
 If any results from within the last 24 hours exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same day as the natural 08:00 UTC cron.
 
-CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue/PR \`updatedAt\` timestamps via \`gh api\` instead.
+CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue \`updatedAt\` timestamps via \`gh issue list --json updatedAt,number\` instead. The containment hook only allows the \`gh issue\` / \`gh label\` verbs listed above plus the community-router.sh script — do NOT reach for any other \`gh\` sub-command or the raw API.
 `;
 
 // Persistence allowlist (#5111): verbatim from the prompt's former scoped
@@ -281,7 +289,11 @@ export async function cronCommunityMonitorHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

@@ -227,6 +227,65 @@ describe("restored Task-cron allowlists vs the hook (#5046 PR-2 Phase 2.C)", () 
   });
 });
 
+// #5199 — the 7 restored mergeMode:"auto" PR-flow crons need their prompt's REAL
+// bash commands to ALLOW against the delivered allowlist. A $ROUTER-class
+// literal-path mismatch would deny-storm the cron in prod, caught only by
+// post-merge trigger-cron. decide() is pure → prove the hook accepts the
+// rewritten forms here. Mirrors the #5046 block above (test-design review P1).
+describe("restored auto-cron prompt commands vs the hook (#5199)", () => {
+  const v = (cron: string, command: string) =>
+    decide({ tool_name: "Bash", tool_input: { command } }, CRON_BASH_ALLOWLISTS[cron])
+      .hookSpecificOutput.permissionDecision;
+
+  it("community-monitor: the ;-chained LITERAL-path router batch ALLOWs (the $ROUTER-class regression)", () => {
+    // The exact prompt form post-hardening: full literal router path, ;-chained.
+    expect(
+      v(
+        "cron-community-monitor",
+        "bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info; bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20",
+      ),
+    ).toBe("allow");
+    // The pre-#5199 $ROUTER var form DENIES — proves the literal-path rewrite is
+    // load-bearing, not cosmetic.
+    expect(v("cron-community-monitor", "bash $ROUTER discord guild-info")).toBe("deny");
+    expect(v("cron-community-monitor", 'ROUTER="x"; bash $ROUTER discord')).toBe("deny");
+    // The dedup-staleness read the prompt now uses (gh api was hook-denied).
+    expect(
+      v("cron-community-monitor", "gh issue list --label scheduled-community-monitor --json updatedAt,number"),
+    ).toBe("allow");
+  });
+
+  it("each restored auto-cron's gh issue create + dedup list ALLOW; exfil forms DENY", () => {
+    const RESTORED = [
+      "cron-growth-audit", "cron-growth-execution", "cron-competitive-analysis",
+      "cron-seo-aeo-audit", "cron-content-generator", "cron-campaign-calendar",
+      "cron-community-monitor",
+    ];
+    for (const cron of RESTORED) {
+      expect(
+        v(cron, 'gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] x" --body-file /tmp/finding.md --label scheduled-x'),
+      ).toBe("allow");
+      expect(v(cron, "gh issue list --label scheduled-x --state all --limit 5")).toBe("allow");
+      // F4a + metachar layer: gh api, command substitution, raw curl all DENY.
+      expect(v(cron, "gh api repos/jikig-ai/soleur/issues")).toBe("deny");
+      expect(v(cron, 'gh issue list --search "$(cat /tmp/x)"')).toBe("deny");
+      expect(v(cron, "cat /proc/self/environ")).toBe("deny");
+    }
+  });
+
+  it("bespoke verbs ALLOW only for the crons that need them (scoping)", () => {
+    // campaign-calendar dedup-comments + closes a heartbeat issue.
+    expect(v("cron-campaign-calendar", "gh issue comment 123 --body-file /tmp/c.md")).toBe("allow");
+    expect(v("cron-campaign-calendar", "gh issue close 123")).toBe("allow");
+    // growth-audit dedup/tracking needs view + edit.
+    expect(v("cron-growth-audit", "gh issue view 123 --json body")).toBe("allow");
+    expect(v("cron-growth-audit", "gh issue edit 123 --add-label x")).toBe("allow");
+    // A pure issue-creator cron must NOT inherit the bespoke verbs.
+    expect(v("cron-content-generator", "gh issue close 123")).toBe("deny");
+    expect(v("cron-content-generator", "gh issue edit 123 --add-label x")).toBe("deny");
+  });
+});
+
 // AC2c — the spawn-time self-test converts the probe D-new-1 fail-open (a
 // crashed/missing hook) into fail-closed: it THROWS (→ cron aborts) rather than
 // letting the cron spawn unprotected. Runs the real hook binary via execFileSync.
