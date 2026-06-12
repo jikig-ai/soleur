@@ -185,6 +185,8 @@ Two SDK-side alternatives also considered and rejected:
 
 **Known limitations** (filed as follow-ups): rapid `waiting_for_user` ↔ `active` flap can extend the budget across pauses; the idle reaper does not consult `awaitingUser` and may reap a conversation in the middle of a >10-min user pause.
 
+**Amendment (2026-06-12, closes the #3225 follow-up debt):** `state.runaway` (the per-block idle window) is re-armed by exactly THREE triggers — `recordAssistantBlock` (assistant text/tool_use block boundary), `handleUserMessage` (SDK `tool_use_result` synthetic user message), and the new `tool_progress` branch (SDK `SDKToolProgressMessage` mid-tool heartbeat, requires `includePartialMessages: true` at `agent-runner-query-options.ts:156`). `state.turnHardCap` (the 10-min absolute ceiling) is deliberately fed by NONE of them — it stays anchored on `firstToolUseAt` as a chatty-stall defense. A genuinely hung tool emits no heartbeat, so it still trips `idle_window`. See plan `2026-06-12-fix-concierge-stream-timeout-debug-scroll-plan.md`.
+
 ### Decision 3 — `WORKFLOW_END_USER_MESSAGES` typed map
 
 `cc-dispatcher.ts onWorkflowEnded` previously emitted `Workflow ended (${status}) — retry to continue.` — a status-enum leak with hostile copy. Replaced with `WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string>`. Adding a new variant to `WorkflowEnd["status"]` produces a TS error at the map declaration; runtime test in `cc-dispatcher.test.ts` snapshots all keys.

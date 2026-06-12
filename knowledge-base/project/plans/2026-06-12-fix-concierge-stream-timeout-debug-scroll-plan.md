@@ -166,15 +166,15 @@ None — query ran at plan time (`gh issue list --label code-review --state open
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (watchdog reset):** `runner_runaway` does NOT fire during a single tool execution that exceeds 90s wall-clock while the SDK emits `tool_progress` messages spaced < 90s apart. Verified by the new RED→GREEN reset-case test in `test/soleur-go-runner-awaiting-user.test.ts`.
-- [ ] **AC2 (no regression on generic idle):** A turn with NO assistant block, NO `tool_use_result`, AND NO `tool_progress` for > the idle window still fires `runner_runaway` with `reason: "idle_window"` (the existing `:810` assertion still passes).
-- [ ] **AC2b (hung-tool detection preserved):** A single `tool_use` block followed by SDK silence (NO `tool_progress`, NO result) for > 90s STILL fires `runner_runaway` with `reason: "idle_window"` — the heartbeat reset must NOT blind the watchdog to a genuinely hung tool. Verified by the new hung-tool-case test.
-- [ ] **AC3 (hard cap intact):** `DEFAULT_MAX_TURN_DURATION_MS` (10 min) absolute ceiling still fires with `reason: "max_turn_duration"` even when forward-progress keeps arriving (existing `:604` test passes). The forward-progress reset touches `state.runaway` only, never `state.turnHardCap`.
-- [ ] **AC4 (sticky pin):** New debug entry arriving while the `<ul>` is scrolled to the bottom scrolls the newest entry into view (test case (a)).
-- [ ] **AC5 (no yank):** New debug entry arriving while the user has scrolled up does NOT move the scroll position (test case (b)).
-- [ ] **AC6 (resume):** Scrolling back to the bottom re-enables sticky autoscroll on the next entry (test case (c)).
-- [ ] **AC7 (order unchanged):** Debug entries remain oldest-at-top / newest-at-bottom (no reverse-order regression); the existing `debug-stream-panel.test.tsx` assertions still pass.
-- [ ] **AC8 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean.
+- [x] **AC1 (watchdog reset):** `runner_runaway` does NOT fire during a single tool execution that exceeds 90s wall-clock while the SDK emits `tool_progress` messages spaced < 90s apart. Verified by the new RED→GREEN reset-case test in `test/soleur-go-runner-awaiting-user.test.ts`.
+- [x] **AC2 (no regression on generic idle):** A turn with NO assistant block, NO `tool_use_result`, AND NO `tool_progress` for > the idle window still fires `runner_runaway` with `reason: "idle_window"` (the existing `:810` assertion still passes).
+- [x] **AC2b (hung-tool detection preserved):** A single `tool_use` block followed by SDK silence (NO `tool_progress`, NO result) for > 90s STILL fires `runner_runaway` with `reason: "idle_window"` — the heartbeat reset must NOT blind the watchdog to a genuinely hung tool. Verified by the new hung-tool-case test.
+- [x] **AC3 (hard cap intact):** `DEFAULT_MAX_TURN_DURATION_MS` (10 min) absolute ceiling still fires with `reason: "max_turn_duration"` even when forward-progress keeps arriving (existing `:604` test passes). The forward-progress reset touches `state.runaway` only, never `state.turnHardCap`.
+- [x] **AC4 (sticky pin):** New debug entry arriving while the `<ul>` is scrolled to the bottom scrolls the newest entry into view (test case (a)).
+- [x] **AC5 (no yank):** New debug entry arriving while the user has scrolled up does NOT move the scroll position (test case (b)).
+- [x] **AC6 (resume):** Scrolling back to the bottom re-enables sticky autoscroll on the next entry (test case (c)).
+- [x] **AC7 (order unchanged):** Debug entries remain oldest-at-top / newest-at-bottom (no reverse-order regression); the existing `debug-stream-panel.test.tsx` assertions still pass.
+- [x] **AC8 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean.
 
 ### Post-merge (operator)
 
