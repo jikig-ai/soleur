@@ -4,9 +4,11 @@
 # (H9 in cloud-scheduled-tasks.md runbook).
 # The verify poll window (MAX_POLLS x POLL_INTERVAL) must exceed ci-deploy.sh's
 # verify_inngest_health worst case (incl. the unit's TimeoutStopSec hung-stop
-# that can precede the verify, AND the #5159 in-loop re-register PUT that adds
-# an additive --max-time to each cron attempt) — drift-guarded by
-# ci-deploy.test.sh (#5145/#5159).
+# that can precede the verify) — drift-guarded by ci-deploy.test.sh (#5145).
+# Verify now gates on /health (process liveness); the cron-plan check is
+# ADVISORY — a standalone inngest restart de-plans crons until they re-arm async
+# via a web-platform redeploy (modified:true sync) or the --poll-interval
+# self-heal (#5159).
 name: Restart Inngest Server
 
 on:
@@ -26,8 +28,8 @@ permissions:
 jobs:
   restart:
     runs-on: ubuntu-latest
-    # Hygiene cap (#5159): the poll budget below is 1200s; 30min wall leaves
-    # ~600s headroom over the poll ceiling. No timeout-minutes key existed
+    # Hygiene cap (#5159): the poll budget below is 600s; 30min wall leaves
+    # ample headroom over the poll ceiling. No timeout-minutes key existed
     # before (defaulted to GHA's 6h) — this is poll-ceiling-tracks-window
     # hygiene, not a correctness requirement.
     timeout-minutes: 30
@@ -74,14 +76,14 @@ jobs:
           set -euo pipefail
           SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           # Client window must exceed ci-deploy.sh's server-side verify worst
-          # case (#5145/#5159). Split per loop: health 10 x (3s sleep + 5s curl)
-          # = 80s; cron 40 x (3s sleep + 5s /v1/functions curl + 10s in-loop
-          # re-register PUT --max-time) = 720s; + TimeoutStopSec=180 hung-stop
-          # that can precede the verify + 60s margin = 1040s required.
-          # 240 x 5s = 1200s > 1040s (~160s headroom). The #5159 PUT is the new
-          # additive term vs the pre-fix 640s. Drift-guarded by
-          # ci-deploy.test.sh — retune both sides together.
-          MAX_POLLS=240
+          # case (#5145). Verify gates on /health (process liveness); the
+          # cron-plan check is advisory (crons re-arm async via redeploy or the
+          # --poll-interval self-heal, #5159). (health 10 + cron 10) x (3s sleep
+          # + 5s curl) = 160s; + TimeoutStopSec=180 hung-stop that can precede
+          # the verify + 60s margin = 400s required. 120 x 5s = 600s > 400s
+          # (~200s headroom). Drift-guarded by ci-deploy.test.sh — retune both
+          # sides together.
+          MAX_POLLS=120
           POLL_INTERVAL=5
           # 60s clock-skew tolerance: the host writes start_ts with its own
           # clock (ci-deploy.sh write_state; field is schema-stable).

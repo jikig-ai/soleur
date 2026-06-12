@@ -125,28 +125,6 @@ INNGEST_JOURNAL_TAIL="$(service_journal_tail inngest-server.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"
 
-# #5159 follow-up: surface the last inngest re-register PUT's HTTP code written
-# by ci-deploy.sh's verify_inngest_health cron loop. Lets /hooks/deploy-status
-# diagnose a silent no-op PUT (000=unreachable, 4xx/5xx=rejected, 2xx=registered)
-# without host SSH. "n/a" when no restart/deploy has run since boot (marker absent).
-INNGEST_REGISTER_HTTP_FILE="${CI_DEPLOY_INNGEST_REGISTER_HTTP:-/var/lock/inngest-register-http}"
-if [[ -f "$INNGEST_REGISTER_HTTP_FILE" ]]; then
-  INNGEST_REGISTER_HTTP="$(tr -cd '0-9' < "$INNGEST_REGISTER_HTTP_FILE" 2>/dev/null | head -c 3)"
-fi
-INNGEST_REGISTER_HTTP="${INNGEST_REGISTER_HTTP:-n/a}"
-
-# #5159 follow-up 2: the re-register PUT's `modified` flag (true=real push,
-# false=sync-dedup no-op, unknown=no/garbled body). The datum the #5188
-# refutation left open. Sanitized to the literal token set.
-INNGEST_REGISTER_MODIFIED_FILE="${CI_DEPLOY_INNGEST_REGISTER_MODIFIED:-/var/lock/inngest-register-modified}"
-if [[ -f "$INNGEST_REGISTER_MODIFIED_FILE" ]]; then
-  INNGEST_REGISTER_MODIFIED="$(tr -cd 'a-z' < "$INNGEST_REGISTER_MODIFIED_FILE" 2>/dev/null | head -c 8)"
-fi
-case "${INNGEST_REGISTER_MODIFIED:-}" in
-  true|false|unknown) ;;
-  *) INNGEST_REGISTER_MODIFIED="n/a" ;;
-esac
-
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
 # Compute the base JSON once, then perform a single jq merge with the
@@ -167,8 +145,6 @@ jq -nc \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
   --arg ij "$INNGEST_JOURNAL_TAIL" \
   --argjson ic "$INNGEST_CRONS" \
-  --arg irh "$INNGEST_REGISTER_HTTP" \
-  --arg irm "$INNGEST_REGISTER_MODIFIED" \
   --argjson js "$JOURNALD_STORAGE" \
   '$base + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
@@ -177,7 +153,5 @@ jq -nc \
     vector: $vs,
     vector_journal_tail: $vj,
     inngest_journal_tail: $ij,
-    inngest_register_http: $irh,
-    inngest_register_modified: $irm,
     inngest_crons: $ic
   })}'
