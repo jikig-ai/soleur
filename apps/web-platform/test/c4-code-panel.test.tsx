@@ -108,6 +108,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   document.documentElement.removeAttribute("data-theme");
+  // Exception-safe restore of any globalThis.fetch spy — a mid-test assertion
+  // throw would otherwise leak the spy into sibling tests.
+  vi.restoreAllMocks();
 });
 
 describe("C4CodePanel — zoom controls (AC1/AC2/AC3)", () => {
@@ -288,5 +291,123 @@ describe("C4CodePanel — README surfaced read-only (AC7)", () => {
     fireEvent.change(select, { target: { value: "spec.c4" } });
     expect(screen.getByTestId("cm")).toBeTruthy();
     expect(screen.getByRole("button", { name: /^save$/i })).toBeTruthy();
+  });
+});
+
+const OLD_SOURCE = "model {\n  // a note\n  user = element\n}";
+const NEW_SOURCE = "model {\n  // a note\n  user = element TEST\n}";
+const EXTERNAL_SOURCE = "model {\n  // edited elsewhere\n  user = element X\n}";
+
+function mockFetchOnce(status: number, body: Record<string, unknown>) {
+  return vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  } as Response);
+}
+
+function project(source: string): ProjectResponse {
+  return {
+    dir: "knowledge-base/diagrams",
+    sources: { "model.c4": source },
+    dump: null,
+    viewIds: [],
+    diagnostics: [],
+  };
+}
+
+// F-A1 + F-B: a successful Save must NOT be reverted by a subsequent stale
+// reload(), and a failed Save must surface honestly without discarding the edit.
+// The revert mechanism is the [data, activeFile] effect re-seeding `draft` from
+// `data.sources` — when the on-disk clone GET /project reads is stale (diverged
+// clone / Contents-API→fetch replica lag), that source is the PRE-edit text.
+describe("C4CodePanel — save persistence (F-A1 / F-B)", () => {
+  it("F-A1: a 200 save survives a stale reload(), then external edits apply once the clone catches up", async () => {
+    mockFetchOnce(200, { rerendered: true, commitSha: "abc" });
+    const onSaved = vi.fn();
+    // The parent re-fetches after onSaved; each render gets a fresh object so the
+    // [data, activeFile] effect re-fires (mirrors useC4Project's setData).
+    const { rerender } = render(
+      <C4CodePanel
+        data={project(OLD_SOURCE)}
+        dirPath="knowledge-base/diagrams"
+        onSaved={onSaved}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: NEW_SOURCE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await screen.findByText(/Saved/);
+    // Positive control: the 200 path called onSaved(true) — proves the spy is
+    // wired, so F-B's `not.toHaveBeenCalled()` is a meaningful assertion.
+    expect(onSaved).toHaveBeenCalledWith(true);
+
+    // Parent reload returns the STALE clone (new object ref, pre-edit content).
+    rerender(
+      <C4CodePanel
+        data={project(OLD_SOURCE)}
+        dirPath="knowledge-base/diagrams"
+        onSaved={onSaved}
+      />,
+    );
+    // The editor must still show the saved text, not snap back to OLD_SOURCE.
+    expect((screen.getByTestId("cm") as HTMLTextAreaElement).value).toBe(
+      NEW_SOURCE,
+    );
+    // And the just-saved content is no longer "dirty" — Save re-disables.
+    expect(
+      (screen.getByRole("button", { name: /save/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    // Clone catches up (incoming === optimistic) → the marker clears (c4-shared
+    // :419). A SUBSEQUENT external edit must now apply normally rather than being
+    // masked by the stale optimistic value.
+    rerender(
+      <C4CodePanel
+        data={project(NEW_SOURCE)}
+        dirPath="knowledge-base/diagrams"
+        onSaved={onSaved}
+      />,
+    );
+    rerender(
+      <C4CodePanel
+        data={project(EXTERNAL_SOURCE)}
+        dirPath="knowledge-base/diagrams"
+        onSaved={onSaved}
+      />,
+    );
+    expect((screen.getByTestId("cm") as HTMLTextAreaElement).value).toBe(
+      EXTERNAL_SOURCE,
+    );
+  });
+
+  it("F-B: a 500 SYNC_FAILED shows the error and keeps the edited draft", async () => {
+    mockFetchOnce(500, {
+      error: "Workspace sync failed",
+      code: "SYNC_FAILED",
+    });
+    const onSaved = vi.fn();
+    render(
+      <C4CodePanel
+        data={project(OLD_SOURCE)}
+        dirPath="knowledge-base/diagrams"
+        onSaved={onSaved}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: NEW_SOURCE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    // The error only renders in the catch block — i.e. AFTER the save await
+    // chain has fully settled, so a synchronous assertion below is not racy.
+    await screen.findByText(/Workspace sync failed/);
+    // The edited draft is retained (no revert) and onSaved (which triggers the
+    // reload) is never called on a non-2xx.
+    expect((screen.getByTestId("cm") as HTMLTextAreaElement).value).toBe(
+      NEW_SOURCE,
+    );
+    expect(onSaved).not.toHaveBeenCalled();
   });
 });
