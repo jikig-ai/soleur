@@ -869,26 +869,24 @@ case "$COMPONENT" in
 
     rm -rf "$INNGEST_EXTRACT_DIR"
 
-    # Post-bootstrap health + cron-plan gate (#4652). The bootstrap restarts
-    # inngest-server with the new ExecStart (now carrying --poll-interval /
-    # --sdk-url); assert /health is live AND the registry re-synced >=1
-    # cron-triggered function before declaring success. Without this the
-    # `deploy inngest` path could report success on a server that came back up
-    # with an empty/unplanned registry (the H9b class #4650 chased) — the
-    # restart action already gates on this (see verify_inngest_health call on
-    # the `restart` action), the deploy path did not. The immediate
-    # post-restart SDK sync can RACE the web-platform container, in which case
-    # the registry only populates on the next 60s poll cycle; the cron-plan
-    # loop's own budget (120s nominal, two cycles) covers that window (#5145).
-    # The gate is deliberately weak-form — ">=1 cron-triggered function
-    # registered" — full all-crons/execution coverage is owned by the Sentry
-    # cron monitors (infra/sentry/cron-monitors.tf).
+    # Post-bootstrap health gate (#4652, reframed #5159). The bootstrap restarts
+    # inngest-server with the new ExecStart (--poll-interval / --sdk-url). The
+    # HARD gate is /health (process liveness) — verify_inngest_health returns 1
+    # only when /health is unreachable. The cron-plan probe inside it is ADVISORY:
+    # deploying the INNGEST image cannot re-arm web-platform crons (only a
+    # web-platform redeploy mints a new appVersion → modified:true sync that
+    # re-arms; a standalone inngest restart de-plans crons until that or the
+    # --poll-interval self-heal — proven #5159, the loopback PUT is a
+    # modified:false no-op). So a de-planned registry here is NOT a deploy
+    # failure; persistent de-plans are caught out-of-band by the Sentry cron
+    # monitors (apps/web-platform/infra/sentry/cron-monitors.tf, failure_issue
+    # _threshold=1). See the H9 runbook for redeploy/poll recovery.
     set +e
     verify_inngest_health
     VERIFY_RC=$?
     set -e
     if [[ "$VERIFY_RC" -ne 0 ]]; then
-      logger -t "$LOG_TAG" "FAILED: inngest deploy health/cron-plan check"
+      logger -t "$LOG_TAG" "FAILED: inngest deploy /health liveness check (cron-plan is advisory post-#5159)"
       final_write_state 1 "inngest_health_failed"
       exit 1
     fi
