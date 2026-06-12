@@ -25,7 +25,7 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
    ```
    Then drill into the issue's latest event for `extra` (carries the operative detail — a blocked `DST=` IP, a vendor status, the failing arg). Note: a cron-monitor **error check-in** carries no stack trace; the real exception is a separate `reportSilentFallback`/`captureException` issue — query for it.
 
-2. **Better Stack** logs (the app's pino stream, historical) via `scripts/betterstack-query.sh` (ClickHouse SQL over the Telemetry warehouse). Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. The failing fetch's error (with the HOSTNAME) lives here.
+2. **Better Stack** logs (the app's pino stream, historical) via the repo-root [betterstack-query.sh](../../../../scripts/betterstack-query.sh) helper (ClickHouse SQL over the Telemetry warehouse). Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. The failing fetch's error (with the HOSTNAME) lives here.
 
 3. Check recent commits related to the affected area, then inspect the relevant code paths — now anchored on the real error, not a guess.
 
