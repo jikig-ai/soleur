@@ -22,7 +22,7 @@ import {
   useLikeC4ViewModel,
   type OnNavigateTo,
 } from "@likec4/diagram";
-import { MantineProvider } from "@mantine/core";
+import { MantineProvider, createTheme } from "@mantine/core";
 import { useTheme } from "@/components/theme/theme-provider";
 import { LikeC4Model } from "@likec4/core/model";
 import type { LayoutedLikeC4ModelData } from "@likec4/core/types";
@@ -30,6 +30,24 @@ import "@likec4/diagram/styles.css";
 // Soleur re-theme — MUST come after the library styles so it wins on source
 // order (defense-in-depth alongside the scoped-selector specificity in the file).
 import "./c4-theme.css";
+
+// By supplying our own MantineProvider (Lever 1, below) we displace
+// @likec4/diagram's DefaultMantineProvider — which the library renders only when
+// no MantineContext is in scope (EnsureMantine.js). That default provider also
+// carries a theme (createTheme in DefaultMantineProvider.js). The diagram BODY is
+// driven by static `--likec4-*` CSS vars and is unaffected, but the interactive
+// chrome (controls, element-details, segmented control) reads Mantine's primary
+// accent + cursor/radius from the theme. Preserve only the zero-drift theme
+// SCALARS the library sets — NOT its full theme (whose fontSizes/spacing maps
+// re-point at library-internal vars and would silently drift on a bump; the
+// library does not export it) — so the chrome keeps its indigo identity instead
+// of reverting to Mantine's default blue.
+const c4MantineTheme = createTheme({
+  primaryColor: "indigo",
+  autoContrast: true,
+  cursorType: "pointer",
+  defaultRadius: "sm",
+});
 
 export type Diagnostic = { message: string; line: number; sourceFsPath: string };
 export type ProjectResponse = {
@@ -247,7 +265,7 @@ export function C4Canvas({
   // both — they are mutually exclusive branches), so there is no second
   // LikeC4Diagram instance forking drill-down state.
   const canvas = (
-    <MantineProvider forceColorScheme={resolvedTheme}>
+    <MantineProvider theme={c4MantineTheme} forceColorScheme={resolvedTheme}>
       <LikeC4ModelProvider likec4model={model}>
         <ViewCanvas
           viewId={currentView}

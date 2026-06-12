@@ -34,6 +34,8 @@ vi.mock("@mantine/core", () => ({
   MantineProvider: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="mantine-provider">{children}</div>
   ),
+  // c4-shared builds a module-level theme via createTheme(); pass-through is fine.
+  createTheme: (t: unknown) => t,
 }));
 
 import { C4Canvas } from "@/components/kb/c4-shared";

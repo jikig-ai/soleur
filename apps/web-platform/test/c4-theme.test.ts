@@ -221,6 +221,26 @@ describe("C4 visualizer Soleur re-theme", () => {
     }
   });
 
+  it("light-scopes the §4 NODE declarations too, not just the edge-label rule (AC2)", () => {
+    const css = read("c4-theme.css");
+    // The §4-UNIQUE node declarations (absent from §2a/2b/2c): the color-mix
+    // fill (§2b uses a bare var, §2c sets `fill:` not `--likec4-palette-fill:`)
+    // and the relation-label darkened to text-primary (§2b uses text-secondary).
+    // Each must live inside a [data-mantine-color-scheme="light"]-gated block, or
+    // an unscoped node rule would regress dark theme — the gap the edge-label-only
+    // guard above does not cover.
+    for (const marker of [
+      /--likec4-palette-fill:\s*color-mix/,
+      /--likec4-palette-relation-label:\s*var\(--soleur-text-primary\)/,
+    ]) {
+      const idx = css.search(marker);
+      expect(idx).toBeGreaterThan(-1);
+      // Selector opening this rule = text between the previous `}` and the `{`.
+      const selector = css.slice(css.lastIndexOf("}", idx) + 1, css.lastIndexOf("{", idx));
+      expect(selector).toContain('[data-mantine-color-scheme="light"]');
+    }
+  });
+
   it("guards the library's light-branch edge-label hooks in the installed @likec4/diagram (AC6)", () => {
     // Source-grep CSS tests are vacuous alone; this reads the INSTALLED library
     // so a bump that renames the scheme gate or the --xy hook fails CI loudly
@@ -264,5 +284,38 @@ describe("C4 visualizer Soleur re-theme", () => {
     // read of data-theme (the c4-shared.tsx CodeMirror read is non-reactive).
     expect(shared).toMatch(/const\s*\{\s*resolvedTheme\s*\}\s*=\s*useTheme\(\)/);
     expect(shared).toMatch(/from\s*"@\/components\/theme\/theme-provider"/);
+  });
+
+  it("preserves the library's chrome accent by passing a theme to the provider (AC1)", () => {
+    const shared = read("c4-shared.tsx");
+    // Supplying our own provider displaces @likec4/diagram's DefaultMantineProvider
+    // and its theme; the diagram body is static-CSS-var driven, but the chrome
+    // (controls / element-details / segmented control) reads Mantine's primary
+    // accent. Preserve the zero-drift scalars so it keeps indigo, not default blue.
+    expect(shared).toMatch(/createTheme\(\{[\s\S]*?primaryColor:\s*"indigo"/);
+    expect(shared).toMatch(/<MantineProvider[^>]*theme=\{c4MantineTheme\}/);
+  });
+
+  it("pins @mantine/core to the exact version @likec4/diagram resolves (one Mantine context) (AC6)", () => {
+    // The seam works only if the app's @mantine/core dedupes to the SAME physical
+    // copy as the library's — i.e. identical MantineContext identity. That holds
+    // only while both pin the same exact version. A future bump of either to a
+    // non-matching version installs two copies → the Fragment-collapse silently
+    // stops firing → the OS-mismatch bug returns with green source-grep tests.
+    // This is the runtime guard the CSS/source greps cannot provide.
+    const appPkg = JSON.parse(
+      readFileSync(join(__dirname, "..", "package.json"), "utf8"),
+    );
+    const libPkg = JSON.parse(
+      readFileSync(
+        join(__dirname, "..", "node_modules", "@likec4", "diagram", "package.json"),
+        "utf8",
+      ),
+    );
+    const appPin = appPkg.dependencies["@mantine/core"];
+    const libPin = libPkg.dependencies["@mantine/core"];
+    expect(appPin).toBeDefined();
+    expect(libPin).toBeDefined();
+    expect(appPin).toBe(libPin);
   });
 });

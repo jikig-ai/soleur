@@ -120,9 +120,10 @@
  *    byte-identical:
  *
  *    (a) Node-vs-canvas blend. The three Soleur light creams — bg-base #fbf7ee
- *        (the canvas, §3), surface-1 #f4eedf, surface-2 #ede4cc (the §2b fill) —
- *        sit within ~6% luminance, so element nodes nearly vanish against the
- *        canvas. Nudge the light-theme fill WARMER/deeper (mix the §2b tan toward
+ *        (the canvas, §3), surface-1 #f4eedf, and surface-2 #ede4cc (the §2b
+ *        node fill) — sit within ~6% luminance, so element nodes nearly vanish
+ *        against the canvas. Nudge the light-theme fill WARMER/deeper (mix the
+ *        §2b surface-2 tan toward
  *        border-default) so nodes read as raised warm cards while keeping the
  *        Soleur cream identity (Sharp Edge: don't push to stark white). Title
  *        (#1a1612) + description (#5c5043) stay high-contrast on the deeper tan.
