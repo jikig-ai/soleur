@@ -35,6 +35,7 @@
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { withGithubRetry } from "@/server/github-retry";
 import {
   createProbeOctokit,
   PROBE_ISSUE_OWNER,
@@ -123,11 +124,18 @@ async function fetchCandidates(args: {
   const q = `repo:${owner}/${repo} is:issue is:open label:"${TARGET_LABEL}" updated:<${cutoffIso} sort:updated-asc`;
   const candidates: SweepCandidate[] = [];
   for (let page = 1; page <= 2; page++) {
-    const res = await octokit.request("GET /search/issues", {
-      q,
-      per_page: SEARCH_PER_PAGE,
-      page,
-    });
+    // Wrap in withGithubRetry so a single transient api.github.com connect
+    // timeout (which octokit surfaces as a RequestError) is absorbed in-step
+    // rather than escalating to an error-level Sentry mirror. fetchCandidates
+    // is OUTSIDE the per-issue try, so a bare timeout here would otherwise
+    // abort the whole sweep (Sentry 448a4173…).
+    const res = await withGithubRetry(() =>
+      octokit.request("GET /search/issues", {
+        q,
+        per_page: SEARCH_PER_PAGE,
+        page,
+      }),
+    );
     const items = (res.data?.items ?? []) as SearchResponseItem[];
     for (const item of items) {
       if (typeof item.number !== "number") continue;
@@ -225,24 +233,30 @@ export async function sweepStaleScopeOuts(args: {
     if (dryRun) continue;
 
     try {
-      await octokit.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        {
-          owner,
-          repo,
-          issue_number: num,
-          body: COMMENT_BODY,
-        },
+      // Two SEPARATE withGithubRetry wrappers (NOT one around both): wrapping
+      // both together would re-POST the comment on a close-timeout retry. The
+      // comment POST is non-idempotent (see plan F2). A non-retryable 403 is
+      // rethrown on attempt 1 straight into the catch below, preserving the
+      // issue_write_403 discriminator.
+      await withGithubRetry(() =>
+        octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner,
+            repo,
+            issue_number: num,
+            body: COMMENT_BODY,
+          },
+        ),
       );
-      await octokit.request(
-        "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
-        {
+      await withGithubRetry(() =>
+        octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
           owner,
           repo,
           issue_number: num,
           state: "closed",
           state_reason: "not_planned",
-        },
+        }),
       );
       closed += 1;
     } catch (err) {
@@ -284,10 +298,23 @@ export async function cronStaleDeferredScopeOutsHandler({
   step,
   logger,
   event,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<SweepResult> {
   // dry_run lives on the event payload for manual-trigger fires. The cron
   // trigger has no event.data, so dryRun is false by default.
   const dryRun = event?.data?.dry_run === true;
+
+  // Retry-aware heartbeat gating (Sentry incident 5468023, "page before retry").
+  // Inngest delivers a zero-indexed `attempt` and optional `maxAttempts`
+  // (retries:1 → 2 attempts, 0 and 1 → maxAttempts 2; final attempt is index 1).
+  // Callers/tests passing neither (legacy shape) read attempt=0/maxAttempts=1 →
+  // isFinalAttempt=true → identical to the pre-fix behavior (error on failure).
+  // Fail-safe direction: `maxAttempts` is OPTIONAL on Inngest's BaseContext, so
+  // if a fire ever omits it the `?? 1` collapses isFinalAttempt to always-true →
+  // every failed attempt pages. That degrades to OVER-paging (the original bug),
+  // never to masking a real failure with a false `ok` — the safe way to fail.
+  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
 
   let result: SweepResult = {
     total: 0,
@@ -316,14 +343,39 @@ export async function cronStaleDeferredScopeOutsHandler({
       feature: "cron-stale-deferred-scope-outs",
       op: "sweep",
       message: "stale-deferred-scope-out sweep threw",
-      extra: { fn: "cron-stale-deferred-scope-outs", dryRun },
+      extra: {
+        fn: "cron-stale-deferred-scope-outs",
+        dryRun,
+        attempt: attempt ?? 0,
+        isFinalAttempt,
+      },
     });
-    // Heartbeat below routes status="error"; we do NOT rethrow yet.
+    // Heartbeat decision happens below; we do NOT rethrow yet.
+  }
+
+  if (sweepFailed && !isFinalAttempt) {
+    // The only throwing paths are createProbeOctokit() and GET /search/issues
+    // (per-issue write 403s are caught in-sweep and never set sweepFailed). On a
+    // NON-final attempt those are almost always a transient GitHub blip
+    // (401-after-budget / 403 secondary-rate-limit / 429 / 5xx) that Inngest's
+    // retries:1 recovers. Posting status=error here is the bug we are fixing; we
+    // skip the heartbeat step ENTIRELY (not just the POST) — a completed
+    // step.run is memoized across the retry, so an executed-but-silent step would
+    // replay and never emit the recovered `ok`. Forensics are preserved by the
+    // reportSilentFallback above (Layer 2: pino→Sentry error-level event — it
+    // captures at error level, but it is NOT a monitor check-in, so it does not
+    // page); if the retry never runs at all, the absent check-in trips the Sentry
+    // missed-check-in alert within the 30-min schedule-anchored margin (Layer 1).
+    // Rethrow to trigger the retry.
+    throw new Error(
+      "stale-deferred-scope-out sweep failed on a non-final attempt; retrying",
+    );
   }
 
   // Sentry heartbeat — single end-of-job POST mirroring drift-guard substrate.
-  // Env-unset / malformed → graceful skip (heartbeat is OPTIONAL second-net;
-  // missing it must not stop the function from completing).
+  // Reached only on success OR the final failed attempt, so the status it posts
+  // is authoritative. Env-unset / malformed → graceful skip (heartbeat is an
+  // OPTIONAL second-net; missing it must not stop the function from completing).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
       ok: !sweepFailed,
@@ -334,9 +386,22 @@ export async function cronStaleDeferredScopeOutsHandler({
   });
 
   if (sweepFailed) {
-    // Surface the sweep failure to the operator AFTER the heartbeat has
-    // reported status=error. Throwing here triggers Inngest's retry policy.
+    // Final-attempt failure: the heartbeat reported status=error above. Throwing
+    // here surfaces the persistent failure (Inngest has no retries left).
     throw new Error("stale-deferred-scope-out sweep failed; see Sentry");
+  }
+
+  if ((attempt ?? 0) > 0) {
+    // Recovered on a retry — a transient flapped on a prior attempt. Emit a WARN
+    // so a recurring daily flap is queryable as a trend instead of looking
+    // identical to a clean attempt-0 run (the failed attempt posted no heartbeat).
+    logger.warn(
+      {
+        fn: "cron-stale-deferred-scope-outs",
+        recovered_after_attempts: attempt,
+      },
+      "stale-deferred-scope-out sweep recovered after a transient fault on a prior attempt",
+    );
   }
 
   logger.info(
