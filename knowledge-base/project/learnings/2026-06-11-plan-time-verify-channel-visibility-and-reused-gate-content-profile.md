@@ -14,7 +14,7 @@ weekly digest (#5085), both of which a brainstorm/plan would otherwise carry int
 2. **A redaction sentinel tuned for one artifact class (PIRs) was about to be reused verbatim as the
    gate for a different artifact class (a synthesized business digest).** `redact-sentinel.sh`
    `exit 1`-aborts on `email`/`UUID`/`IPv4` — fine for human-reviewed PIRs, but for a weekly digest
-   it would (a) **over-abort on benign content** (`ops@jikigai.com` is literally in `expenses.md`; a
+   it would (a) **over-abort on benign content** (a first-party `@jikigai.com` address is literally in `expenses.md`; a
    trace-id or node-IP in a PIR summary) → silently kill the digest (the exact failure the feature
    exists to prevent), AND (b) **miss the threat the digest actually carries** — a named person
    ("Jane Doe at Contoso") passes a shape-regex clean.
