@@ -71,6 +71,7 @@ Generate a full article draft that:
 - Follows the brand voice from `## Voice`
 - Incorporates target keywords naturally (if `--keywords` provided)
 - Follows the provided outline structure (if `--outline` provided)
+- **Links every external source at its FIRST mention in the body** — when the article quotes a person, adopts a coined term/framework, or responds to an essay/study/announcement, hyperlink that source at the first reference or first quote, not only in a footer disclaimer or the citation list. Footer-only attribution buries the source readers (and AI engines) need at the point of the claim. A footer source line is additive, never a substitute for the inline link. **Why:** #5088 — the loop-engineering post linked Osmani's essay only in the footer; the inline link at first mention was added in review.
 - Includes complete Eleventy frontmatter:
 
   ```yaml
