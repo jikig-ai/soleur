@@ -61,8 +61,10 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' || true)
 # multiline-quoted-body class). On strip-tool failure, fall back to the raw
 # $CMD so we fail TOWARD firing (over-detect), never toward a silent
 # merge-bypass.
-SCAN=$(printf '%s' "$CMD" | perl -0777 -pe \
-  's/(<<-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs; s/"(?:[^"\\]|\\.)*"/ /gs; s/'\''(?:[^'\''\\]|\\.)*'\''/ /gs;' 2>/dev/null || printf '%s' "$CMD")
+# The perl one-liner that used to live inline here is now the shared
+# strip_command_bodies helper in lib/incidents.sh (#5192) — same canonical
+# regex, one tested copy consumed by every phrase-detecting gate.
+SCAN=$(strip_command_bodies "$CMD")
 
 # Early exit: only intercept gh pr merge commands.
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.

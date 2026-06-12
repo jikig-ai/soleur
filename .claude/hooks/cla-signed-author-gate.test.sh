@@ -100,7 +100,14 @@ t5() { local t; t=$(mktemp -d); local work="$t/work" inc="$t/inc"; mkdir -p "$wo
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')"); rc=$?
   assert_pass "T5 main branch fail-opens" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
-t1; t2; t3; t4; t5
+# T6 (#5192): a `git commit` whose MESSAGE documents `gh pr merge` must NOT
+# fire — even with an unsigned-author commit on the branch (which would deny if
+# the trigger grep ran on the raw command). The strip blanks the -m body first.
+t6() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-fp "$UNSIGNED")
+  out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')"); rc=$?
+  assert_pass "T6 commit-body gh pr merge does not fire (#5192)" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+t1; t2; t3; t4; t5; t6
 echo "----"
 echo "$PASS/$TOTAL passed"
 [[ "$FAIL" -eq 0 ]] || exit 1
