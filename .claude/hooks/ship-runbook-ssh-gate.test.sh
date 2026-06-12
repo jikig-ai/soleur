@@ -54,6 +54,14 @@ t "gh pr merge --auto"               "$CMD_RE" "gh pr merge --squash --auto" mat
 t "gh pr merge w/o --auto"           "$CMD_RE" "gh pr merge 4239 --squash" no-match
 t "chain: ready && merge --auto"     "$CMD_RE" "gh pr ready 1 && gh pr merge --auto" match
 
+# --- #5192: commit-body / heredoc strip → CMD_RE no longer fires -----------
+# shellcheck source=lib/incidents.sh
+source "$SCRIPT_DIR/lib/incidents.sh" 2>/dev/null || true
+FP_SCAN=$(strip_command_bodies $'git add . && git commit -m "ship note\ngh pr ready must not be hand-rolled\n"')
+t "commit-body gh pr ready stripped → CMD_RE no-match (#5192)" "$CMD_RE" "$FP_SCAN" no-match
+REAL_SCAN=$(strip_command_bodies $'git commit -F - <<EOF\nbody\nEOF\n && gh pr merge 7 --squash --auto')
+t "real gh pr merge --auto after heredoc still fires (#5192)" "$CMD_RE" "$REAL_SCAN" match
+
 # --- Hook syntax ---
 if bash -n "$HOOK"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: hook syntax OK"

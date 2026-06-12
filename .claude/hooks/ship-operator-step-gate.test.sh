@@ -80,6 +80,18 @@ t "gh pr view — read-only, not gated" "$CMD_RE" \
 t "echo containing 'gh pr ready' substring — word-bounded safe" "$CMD_RE" \
   "echo 'remember to gh pr ready when done'" no-match
 
+# --- #5192: commit-body / heredoc strip → CMD_RE no longer fires -----------
+# A `git commit` whose MESSAGE documents `gh pr ready` must NOT trip the gate.
+# Mirror the hook's pre-detection strip, then assert CMD_RE no-match on the
+# result — and that a REAL chained `gh pr merge --auto` after a heredoc
+# terminator still fires (post-terminator preservation).
+# shellcheck source=lib/incidents.sh
+source "$SCRIPT_DIR/lib/incidents.sh" 2>/dev/null || true
+FP_SCAN=$(strip_command_bodies $'git add . && git commit -m "ship note\ngh pr ready must not be hand-rolled\n"')
+t "commit-body gh pr ready stripped → CMD_RE no-match (#5192)" "$CMD_RE" "$FP_SCAN" no-match
+REAL_SCAN=$(strip_command_bodies $'git commit -F - <<EOF\nbody\nEOF\n && gh pr merge 7 --squash --auto')
+t "real gh pr merge --auto after heredoc still fires (#5192)" "$CMD_RE" "$REAL_SCAN" match
+
 # --- Hook script syntax check (no real invocation; lacks gh + PR context) --
 
 if bash -n "$HOOK"; then

@@ -406,6 +406,25 @@ t14_stdout_json_clean() {
   rm -rf "$tmp"
 }
 
+# --- T15 (#5192): commit-body `gh pr merge` does NOT fire → PASS ----------
+# Unpushed commits exist (gate WOULD deny if the trigger grep ran on the raw
+# command), but the trigger phrase lives only inside the -m message body, which
+# the strip blanks before detection.
+t15_commit_body_fp_pass() {
+  local tmp; tmp=$(mktemp -d)
+  read -r work origin incidents < <(make_synced_branch "$tmp" "feat-fp")
+  echo "fix" > "$work/fix.txt"
+  git -C "$work" add fix.txt
+  git -C "$work" commit -q -m "the actual fix"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_pass "T15 commit-body gh pr merge does not fire (#5192)" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
 t1_unpushed_commits_deny
 t2_clean_state_pass
 t3_on_main_pass
@@ -420,6 +439,7 @@ t11_hook_ordering
 t12_emit_incident_prefix_length
 t13_incidents_redirect
 t14_stdout_json_clean
+t15_commit_body_fp_pass
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
