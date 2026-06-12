@@ -382,6 +382,10 @@ export function C4CodePanel({
   // the just-saved content as the editor value until the reloaded source catches
   // up to it. Diagram staleness (the dump half) is surfaced honestly by the
   // existing Layer-1 banner (#4963) — this only fixes the source revert.
+  // The marker self-clears once `incoming === optimistic` (clone caught up). For
+  // a PERMANENTLY-diverged clone (the H1 liveness gap, tracked in #5221) it
+  // persists for the session, masking external edits to that file until remount —
+  // an accepted trade vs. the silent revert; the next local save re-pins it.
   const savedContentRef = useRef<Record<string, string>>({});
   // Per-editor font zoom (0 = default 12px), clamped to [10px, 24px]. Drives a
   // CodeMirror theme extension so content + gutter scale together — scoped to
@@ -426,11 +430,13 @@ export function C4CodePanel({
 
   // Compare against the optimistically-saved content (if any) so a just-saved
   // file is not shown as "dirty" while the clone catches up; falls back to the
-  // server source for files with no pending save.
-  const baseline =
-    (activeFile ? savedContentRef.current[activeFile] : undefined) ??
-    (activeFile ? data.sources[activeFile] ?? "" : "");
-  const dirty = activeFile ? draft !== baseline : false;
+  // server source for files with no pending save. `dirty` already guards on
+  // activeFile, so the baseline lookup needs no second guard (a "" key is a
+  // harmless miss).
+  const dirty = activeFile
+    ? draft !==
+      (savedContentRef.current[activeFile] ?? data.sources[activeFile] ?? "")
+    : false;
 
   const save = useCallback(async () => {
     setSaving(true);
