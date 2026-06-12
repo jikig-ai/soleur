@@ -8,11 +8,11 @@ status: scheduled
 
 ## Discord
 
-Addy Osmani just coined a name for the shift everyone's been feeling: **loop engineering** — designing the system that prompts your agents, instead of prompting them by hand. His one-liner: "replacing yourself as the person who prompts the agent."
+**Loop engineering replaced the engineer who prompts the coding agent. We built Soleur to replace something bigger: the founder who prompts every department.**
 
-He credits the same shift Boris Cherny (Claude Code) and Peter Steinberger have been describing — and scopes the whole idea to code.
+Addy Osmani just coined the term — designing the system that prompts your agents, instead of prompting them by hand. He credits the same shift Boris Cherny (Claude Code) and Peter Steinberger have been describing, and scopes the whole idea to code.
 
-We wrote up what loop engineering looks like when you stop scoping it to the codebase. The six building blocks — automations, worktrees, skills, MCP connectors, verifier sub-agents, external memory — aren't specific to engineering. Soleur runs them across marketing, sales, legal, finance, and ops.
+But the six building blocks — automations, worktrees, skills, MCP connectors, verifier sub-agents, external memory — aren't specific to engineering. Soleur runs them across marketing, sales, legal, finance, and ops.
 
 Shared memory, skills, and connectors span the whole company today; the autonomous loops are proven in engineering and extending outward.
 
@@ -23,14 +23,14 @@ Full post: https://soleur.ai/blog/loop-engineering-for-your-whole-company/?utm_s
 ## X/Twitter Thread
 
 **Tweet 1 (Hook):**
-Addy Osmani coined a name for the shift everyone's been feeling: loop engineering — designing systems that prompt your agents instead of prompting them by hand.
+Loop engineering replaced the engineer who prompts the coding agent.
 
-His one-liner: "replacing yourself as the person who prompts the agent." 🧵
+We built Soleur to replace something bigger: the founder who prompts every department. 🧵
 
 **Tweet 2:**
-2/ Osmani's six building blocks: scheduled automations, isolated worktrees, documented skills, MCP connectors, verifier sub-agents, and external memory that survives between runs.
+2/ The term is Addy Osmani's: loop engineering — designing systems that prompt your agents instead of doing it by hand. His six blocks: automations, worktrees, skills, MCP connectors, verifier sub-agents, external memory.
 
-None of them are specific to code.
+He scoped them to code.
 
 **Tweet 3:**
 3/ His essay scopes loop engineering to software engineering. But a scheduled automation doesn't care whether it triages a bug or a churn signal. A skill file is as happy with a refund policy as a migration.
@@ -48,25 +48,29 @@ https://soleur.ai/blog/loop-engineering-for-your-whole-company/?utm_source=x&utm
 
 ## LinkedIn Company Page
 
-Addy Osmani recently named a shift that was already underway: **loop engineering** — the move from prompting AI agents by hand to designing the systems that prompt them for you. Scheduled automations, isolated worktrees, documented skills, MCP connectors, verifier sub-agents, and external memory that survives between runs.
+Loop engineering replaced the engineer who prompts the coding agent. We built Soleur to replace something bigger: the founder who prompts every department.
 
-His essay scopes the idea to software engineering, because engineers built the substrate first. But the architecture is domain-neutral. A scheduled automation doesn't care whether it triages a bug or a churn signal; a skill file is as happy documenting a refund policy as a migration.
+Addy Osmani recently named the shift — **loop engineering**: designing the systems that prompt your agents instead of prompting them by hand. Six building blocks make it work — scheduled automations, isolated worktrees, documented skills, MCP connectors, verifier sub-agents, and external memory that survives between sessions.
 
-Soleur is what loop engineering looks like across a whole company — marketing, sales, legal, finance, operations, support, and product. Shared memory, skills, and connectors span every department today; the autonomous dispatch and verification loops are proven in engineering and extending outward.
+His essay scopes it to software engineering, because engineers built the substrate first. But none of the six blocks are specific to code. A scheduled automation doesn't care whether it triages a bug or a churn signal; a skill file is as happy documenting a refund policy as a migration.
 
-Osmani's instinct holds: build the loop, stay the engineer. We point it at the whole org chart.
+So we pointed the whole architecture at the rest of the company. Soleur runs loop engineering across marketing, sales, legal, finance, operations, support, and product — not just engineering. The shared memory, skills, and connectors span every department today; the autonomous dispatch and verification loops are proven in engineering and extending outward.
+
+Osmani's loop replaces you, the engineer prompting the coding agent. Ours replaces you, the founder prompting every department — the one person doing marketing on Monday, finance on Tuesday, and legal review whenever the contract lands.
+
+Build the loop. Run the company.
 
 Read the full piece: https://soleur.ai/blog/loop-engineering-for-your-whole-company/?utm_source=linkedin&utm_medium=social&utm_campaign=loop-engineering
 
-(Soleur is not affiliated with or endorsed by Addy Osmani, Google, or Anthropic.)
+(Soleur is not affiliated with or endorsed by Addy Osmani, Boris Cherny, Peter Steinberger, Google, or Anthropic.)
 
 ---
 
 ## Bluesky
 
-Loop engineering — designing systems that prompt your agents instead of doing it yourself — was coined by Addy Osmani for code.
+Loop engineering replaced the engineer who prompts the coding agent. We built Soleur to replace something bigger — the founder who prompts every department.
 
-Soleur runs the same architecture across every department:
+Addy Osmani coined the term for code. We run it across every department:
 
 https://soleur.ai/blog/loop-engineering-for-your-whole-company/
 
