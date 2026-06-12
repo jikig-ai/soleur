@@ -91,47 +91,47 @@ artifacts were all read directly this session — no paraphrase-from-memory.
 
 **Watchdog prerequisite (lands in THIS PR — atomic):**
 
-- [ ] **AC1** `BOT_PR_HEAD_PREFIXES` in `cron-cloud-task-heartbeat.ts` includes
+- [x] **AC1** `BOT_PR_HEAD_PREFIXES` in `cron-cloud-task-heartbeat.ts` includes
   `"bot-fix/"` (alongside `"ci/"` and `"self-healing/auto-"`).
-- [ ] **AC2** `cron-cloud-task-heartbeat.test.ts` asserts `BOT_PR_HEAD_PREFIXES`
+- [x] **AC2** `cron-cloud-task-heartbeat.test.ts` asserts `BOT_PR_HEAD_PREFIXES`
   contains `"bot-fix/"` AND that a `bot-fix/<N>-<slug>` PR older than 48h is
   classified stale by `isStaleBotPr` (and routes Sentry-only because
   `scheduledLabelFromHead` returns `null` for a non-`ci/` head).
 
 **Restore:**
 
-- [ ] **AC3** `"cron-bug-fixer"` removed from `TIER2_DEFERRED_CRONS`
+- [x] **AC3** `"cron-bug-fixer"` removed from `TIER2_DEFERRED_CRONS`
   (`_cron-shared.ts`); the set is now `new Set([])` (EMPTY). The block comment
   (`:320-354`) is rewritten: no crons remain deferred; the Tier-2 boundary is
   fully restored.
-- [ ] **AC4** A finite, per-construct, evidence-gated `cron-bug-fixer` entry
+- [x] **AC4** A finite, per-construct, evidence-gated `cron-bug-fixer` entry
   added to `CRON_BASH_ALLOWLISTS` (`_cron-claude-eval-substrate.ts`). Contains
   NO entry beginning with `gh api` (F4a). Enumerated verbs only (Phase 3).
-- [ ] **AC5** `cron-bug-fixer.ts` token mint narrowed to
+- [x] **AC5** `cron-bug-fixer.ts` token mint narrowed to
   `mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS, permissions: DEFAULT_CRON_TOKEN_PERMISSIONS, repositories: [REPO_NAME] })`.
   `DEFAULT_CRON_TOKEN_PERMISSIONS` imported from `_cron-shared` (`REPO_NAME`
   already imported). Does NOT use `ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS`
   (contents:read would 403 the push).
-- [ ] **AC6** The defensive `deferIfTier2Cron` guard at
+- [x] **AC6** The defensive `deferIfTier2Cron` guard at
   `cron-bug-fixer.ts:586-595` is KEPT (becomes a no-op once out of the set —
   mirrors the 7 restored crons + cron-ux-audit).
-- [ ] **AC7** `cron-egress-allowlist.txt` UNCHANGED — bug-fixer's non-GitHub
+- [x] **AC7** `cron-egress-allowlist.txt` UNCHANGED — bug-fixer's non-GitHub
   egress targets (`api.anthropic.com`, `api.resend.com`) are already present;
   no broadening. (Verification: `grep -E 'api.anthropic.com|api.resend.com' apps/web-platform/infra/cron-egress-allowlist.txt` returns both.)
-- [ ] **AC8** The `fix-issue` prompt path emits **LITERAL allowlisted command
+- [x] **AC8** The `fix-issue` prompt path emits **LITERAL allowlisted command
   forms** — no `$VAR` indirection, no `NAME=` assignment-prefix, no `$(...)`, no
   pipes/redirects in the hook-gated bash. Specifically the `eval "$TEST_CMD"` /
   `node -e` / `… | tail -50` / `$(cat <<EOF)` constructs in
   `fix-issue/SKILL.md` are replaced with literal forms (Phase 3.5).
-- [ ] **AC9 (FAILING-FIRST, parity)** In `cron-safe-commit-parity.test.ts`:
+- [x] **AC9 (FAILING-FIRST, parity)** In `cron-safe-commit-parity.test.ts`:
   `cron-bug-fixer` IS a `CRON_BASH_ALLOWLISTS` key AND ABSENT from
   `TIER2_DEFERRED_CRONS`; AND `[...TIER2_DEFERRED_CRONS]` deep-equals `[]`
   (EMPTY). The existing `only cron-bug-fixer remains Tier-2-deferred` test
   (`:246-248`) is rewritten to assert emptiness.
-- [ ] **AC10 (FAILING-FIRST, token)** A test asserts `cron-bug-fixer.ts` source
+- [x] **AC10 (FAILING-FIRST, token)** A test asserts `cron-bug-fixer.ts` source
   contains `permissions: DEFAULT_CRON_TOKEN_PERMISSIONS` and
   `repositories: [REPO_NAME]`.
-- [ ] **AC11 (FAILING-FIRST, decide-paired)** In
+- [x] **AC11 (FAILING-FIRST, decide-paired)** In
   `cron-claude-eval-substrate.test.ts`: feed bug-fixer's REAL prompt command
   forms through the pure `decide(cmd, CRON_BASH_ALLOWLISTS["cron-bug-fixer"])`
   and assert **ALLOW** for the enumerated `git`/`gh`/test verbs (literal forms),
@@ -139,8 +139,8 @@ artifacts were all read directly this session — no paraphrase-from-memory.
   substitution, pipes, redirects, `NAME=` env-assignment-prefix, and
   `cat /proc/self/environ`. (A membership/parity test alone is vacuous-green
   against a runtime DENY — the `$ROUTER`-class trap from PR 5235.)
-- [ ] **AC12 (FAILING-FIRST, watchdog)** AC2's test from the watchdog prereq.
-- [ ] **AC12b (REQUIRED, surfaced at deepen)** `cron-bug-fixer.test.ts`'s
+- [x] **AC12 (FAILING-FIRST, watchdog)** AC2's test from the watchdog prereq.
+- [x] **AC12b (REQUIRED, surfaced at deepen)** `cron-bug-fixer.test.ts`'s
   `execFileSyncSpy` mock (`:35-46`) is widened to return `allow` for
   `tool_name === "Bash"`. **Why:** today the mock returns `deny` for everything
   except Task/Agent/Skill, on the assumption "cron-bug-fixer has no Bash
@@ -151,12 +151,12 @@ artifacts were all read directly this session — no paraphrase-from-memory.
   `payload.tool_name === "Bash"` to the `allowed` condition and update the
   comment (the handler unit tests cover spawn/issue-selection, NOT hook
   containment — that is AC11's job in the substrate test).
-- [ ] **AC13** Runbook `cloud-scheduled-tasks.md` updated: bug-fixer moved to
+- [x] **AC13** Runbook `cloud-scheduled-tasks.md` updated: bug-fixer moved to
   **Tier-1**; the Tier-2 section states **all Tier-2 crons are restored /
   `TIER2_DEFERRED_CRONS` is empty**; the "Extending scan to bot-fix/* is OUT OF
   SCOPE" caveat (`:683-684`) is removed (it's now IN scope and done).
-- [ ] **AC14** `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`).
-- [ ] **AC15** Targeted vitest suites green (Phase "Test Strategy" command list).
+- [x] **AC14** `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`).
+- [x] **AC15** Targeted vitest suites green (Phase "Test Strategy" command list).
 - [ ] **AC16** PR body uses `Closes #5199`.
 
 ### Post-merge (operator-discretion, NOT auto-fired)
