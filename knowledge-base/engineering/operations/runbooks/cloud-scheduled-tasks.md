@@ -664,6 +664,13 @@ unhooked tool class / crashed hook fails OPEN. So:
   via `safeCommitAndPr`; NO `gh api`; eleventy builds defer to CI) and mints
   `DEFAULT_CRON_TOKEN_PERMISSIONS` (contents/issues/pull_requests:write) scoped to
   `[REPO_NAME]`. The gate was the PR-5200 stale-bot-PR watchdog (issue #5138), which landed.
+  **Expected degradation under containment:** the containment hook denies `WebFetch`/`WebSearch`
+  (raw web egress = the exfil surface it severs), so the web-research-dependent crons —
+  `cron-competitive-analysis` (competitor scanning) and `cron-growth-audit`'s seo-aeo live-page
+  fetch — produce REDUCED output; the output-aware heartbeat (`resolveOutputAwareOk`) surfaces a
+  no-/thin-output run via `scheduled-output-missing` rather than silently greening. This is the
+  intended posture, not a bug; restoring full web research would require a separate
+  egress-broadening decision (out of scope).
   Add a cron here by enumerating its prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS`
   (sub-command granularity, e.g. `gh issue list` NOT `gh issue`; never `git config`/`git
   remote`) and validating end-to-end via `/soleur:trigger-cron`.

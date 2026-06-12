@@ -32,9 +32,15 @@ lane: cross-domain
 PR #5200 (issue #5138, merged 2026-06-12 16:48 UTC) landed the stale-bot-PR watchdog: a
 daily age-scan in `cron-cloud-task-heartbeat.ts` that catches any `ci/*` or
 `self-healing/auto-*` bot PR whose `enablePullRequestAutoMerge` silently disarmed on a
-merge conflict. That was the gate on restoring the seven `mergeMode:"auto"` Tier-2-deferred
-crons. PR #5202 (the same issue #5199 durable anchor, merged 2026-06-12 17:04 UTC) restored
-the FIRST cron (cron-ux-audit) via the file-driven `mcp__*` hook allowance.
+merge conflict. That watchdog covers ONE failure mode — auto-merge silently disarming on a
+conflict (a PR that stays open, no signal). It is NOT the gate on a PR that *successfully*
+auto-merges bad content: that is gated by the 14 integration-id-pinned required status checks
+(`infra/github/ruleset-ci-required.tf`, `strict_required_status_checks_policy=true` — test,
+e2e, CodeQL, gitleaks, skill-security-scan, …), none of which the 7 restored crons can
+self-satisfy (they pass no `syntheticChecks`), so real CI must pass before any auto-merge.
+The watchdog landing was the prerequisite that unblocked restoring the seven `mergeMode:"auto"`
+Tier-2-deferred crons. PR #5202 (the same issue #5199 durable anchor, merged 2026-06-12
+17:04 UTC) restored the FIRST cron (cron-ux-audit) via the file-driven `mcp__*` hook allowance.
 
 This plan restores the remaining seven `mergeMode:"auto"` PR-flow crons:
 `cron-campaign-calendar`, `cron-competitive-analysis`, `cron-growth-audit`,
