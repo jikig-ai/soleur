@@ -153,6 +153,10 @@ export function buildAgentQueryOptions(
     // Prevents the SDK from loading `.claude/settings.json` whose
     // `permissions.allow` would bypass `canUseTool` (chain step 4 before step 5).
     settingSources: [],
+    // Load-bearing for the SDK `tool_progress` mid-tool heartbeats that re-arm
+    // the per-block idle watchdog in BOTH runners (soleur-go-runner.ts:2194 and
+    // agent-runner.ts:1901). Flipping this off silently stops those heartbeats
+    // and resurrects premature `runner_runaway` on long single-tool turns.
     includePartialMessages: true,
     disallowedTools: [
       ...CANONICAL_DISALLOWED_TOOLS,
