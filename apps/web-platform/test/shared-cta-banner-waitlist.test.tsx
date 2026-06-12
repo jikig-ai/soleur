@@ -137,9 +137,11 @@ describe("CtaBanner remembers an already-joined visitor (localStorage)", () => {
       expect(screen.getByText(/you're on the list/i)).toBeTruthy(),
     );
     expect(setItemSpy).toHaveBeenCalledWith(JOINED_KEY, "1");
-    // AC7 — the entered email is never persisted to storage.
+    // AC7 — the entered email is never persisted to storage, under ANY key
+    // (not just JOINED_KEY) — `expect.anything()` widens the guard so an email
+    // written under a different key would still fail this assertion.
     expect(setItemSpy).not.toHaveBeenCalledWith(
-      JOINED_KEY,
+      expect.anything(),
       expect.stringContaining("@"),
     );
   });
