@@ -33,5 +33,5 @@ A `cronName` arg/env would force the hook to duplicate `CRON_MCP_ALLOWLISTS` ins
 
 - Adding an `mcp__*`-using cron = add a `CRON_MCP_ALLOWLISTS` entry (+ `navigateOriginEnv` if it navigates) and a `--allowedTools` parity assertion; the hook needs no edit.
 - The `mcp__playwright__*` tool set is declared in two producers (the cron's `--allowedTools` string and `CRON_MCP_ALLOWLISTS`); a parity test (`cron-ux-audit.test.ts`) keeps them in lockstep.
-- The Chromium baked in the image must match `@playwright/mcp`'s `playwright-core` (registry + CDN are off the egress allowlist); a drift guard (`playwright-mcp-version-pin.test.ts`) enforces the Dockerfile↔lockfile pin.
+- The Chromium baked in the image must match `@playwright/mcp`'s `playwright-core` (registry + CDN are off the egress allowlist); a drift guard (`playwright-mcp-version-pin.test.ts`) enforces the Dockerfile↔lockfile pin. The pinned version (`@playwright/mcp@0.0.75`) is the newest **stable** release clearing the repo's bun `minimum-release-age` supply-chain floor (3 days) so both lockfiles resolve it; the Dockerfile bakes its `playwright-core@1.61.0-alpha-1778188671000`.
 - Brand-survival threshold for the restored cron is single-user incident; this primitive widens the containment posture's attack surface, so any new `mcp__*` allowance is a CPO/security-sign-off-class change.

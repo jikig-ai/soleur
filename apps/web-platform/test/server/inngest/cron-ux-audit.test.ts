@@ -102,7 +102,7 @@ describe("#5199 — restored containment (token narrow + pinned mcp + live dry-r
 
   it("pins @playwright/mcp to an exact version (no @latest supply-chain fetch)", () => {
     expect(SUT_SOURCE).not.toContain("@playwright/mcp@latest");
-    expect(SUT_SOURCE).toContain("@playwright/mcp@0.0.76");
+    expect(SUT_SOURCE).toContain("@playwright/mcp@0.0.75");
   });
 
   it("wires UX_AUDIT_DRY_RUN from env (live by default) — not hardcoded true", () => {

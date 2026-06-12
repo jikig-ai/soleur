@@ -276,7 +276,9 @@ export async function cronUxAuditHandler({
               // runtime supply-chain fetch. Its playwright-core (1.61.0-alpha) is
               // aligned with the baked Chromium (the Dockerfile installs that
               // exact revision via `npx playwright@1.61.0-alpha-… install`).
-              "@playwright/mcp@0.0.76",
+              // 0.0.75 (not the newer 0.0.76) clears the bun minimum-release-age
+              // supply-chain policy (3-day floor) so both lockfiles resolve it.
+              "@playwright/mcp@0.0.75",
               `--user-data-dir=${playwrightProfileDir}`,
             ],
           },

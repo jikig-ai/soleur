@@ -97,15 +97,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 # Playwright Chromium system deps + browser binary (TR9 PR-11).
 # Baked at image-build time — bwrap sandbox blocks apt at handler runtime.
-# Version pinned to @playwright/mcp@0.0.76's playwright-core (#5199: the prod
+# Version pinned to @playwright/mcp@0.0.75's playwright-core (#5199: the prod
 # image runs ONLY cron-ux-audit's Playwright MCP, whose playwright-core is
-# 1.61.0-alpha-1781023400000 — this bakes the matching Chromium revision so the
+# 1.61.0-alpha-1778188671000 — this bakes the matching Chromium revision so the
 # firewalled cron never needs a runtime browser download, registry.npmjs.org and
 # the CDN both being off the egress allowlist). The e2e suite's @playwright/test
 # (^1.58.2, satisfies next's peerOptional) runs in CI, NOT this image, so its
 # Chromium revision is irrelevant here. @playwright/mcp is a runtime dep (baked
 # via npm ci --omit=dev); only the browser binary + system libs persist here.
-RUN npx playwright@1.61.0-alpha-1781023400000 install --with-deps chromium
+# Kept in lockstep with package.json + package-lock.json by
+# test/playwright-mcp-version-pin.test.ts.
+RUN npx playwright@1.61.0-alpha-1778188671000 install --with-deps chromium
 
 WORKDIR /app
 ENV NODE_ENV=production

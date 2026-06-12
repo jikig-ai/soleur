@@ -23,14 +23,26 @@ prerelease (`1.61.0-alpha-…`) is **excluded from a `^` range** by semver. No
 `.npmrc legacy-peer-deps`, so `npm ci` (the Dockerfile deps stage) errors ERESOLVE.
 
 **Solution:** keep `@playwright/test@^1.58.2` (stable, satisfies `next`; the e2e
-suite runs in CI, NOT the prod image), add `@playwright/mcp@0.0.76` to
+suite runs in CI, NOT the prod image), add `@playwright/mcp@0.0.75` to
 `dependencies`, and bake ONLY the cron's browser revision in the Dockerfile:
-`npx playwright@1.61.0-alpha-1781023400000 install --with-deps chromium`. The
+`npx playwright@1.61.0-alpha-1778188671000 install --with-deps chromium`. The
 e2e `@playwright/test` and the cron's `@playwright/mcp` playwright-core coexist as
 two nested `playwright-core` versions in `node_modules` — no peer conflict
 (`@playwright/mcp`'s deps are regular, not peer). A drift guard
 (`playwright-mcp-version-pin.test.ts`) asserts the Dockerfile install version ==
 `@playwright/mcp`'s resolved nested `playwright-core` in the lockfile.
+
+**Pin the newest version that clears the bun `minimum-release-age` floor.** The
+repo's bunfig enforces a 3-day `minimum-release-age` supply-chain policy. The
+newest stable `@playwright/mcp` (0.0.76) was <3 days old → `bun install` failed
+`No version matching … (blocked by minimum-release-age)` even though `npm`
+(no such guard) had already resolved it into `package-lock.json` — a dual-lockfile
+deadlock. The fix is NOT to override the policy (overriding the age floor for a
+freshly-published package is exactly what it guards against) but to pin the
+newest STABLE release that clears the floor (`0.0.75`, 2026-05-07) and re-align
+the Dockerfile to ITS playwright-core (`1.61.0-alpha-1778188671000`). Check the
+floor for any new dep: `bun install` is the authoritative check; npm will not
+warn you.
 
 **Generalizable:** to bake a browser for a firewalled runtime, align the baked
 revision with the *consuming package's* playwright-core, not the app's top-level
@@ -70,6 +82,7 @@ for a dep add: `rm`+regenerate is never the move.
 5. **`@playwright/test`→alpha bump broke `npm ci`** (next peerOptional rejects prerelease) — Recovery: kept `@playwright/test` stable, baked only the cron browser. Prevention: this learning §1.
 6. **Plan underestimated the packaging blocker** — Recovery: surfaced to operator via AskUserQuestion before taking on a risky app-wide change. Prevention: when a plan defers a runtime-packaging question to /work ("confirm at /work"), resolve it BEFORE committing to the scope it implies.
 7. **Concurrent review agent edited the hook mid-review** — Recovery: re-read on-disk state before applying my fix. Prevention: already documented review sharp-edge (verify `git diff HEAD` after agents return).
+8. **`bun install` blocked `@playwright/mcp@0.0.76` (minimum-release-age) at ship preflight** while npm had already locked it → dual-lockfile deadlock — Recovery: downgraded to the newest stable >3d old (0.0.75) + re-aligned the Dockerfile playwright-core. Prevention: run `bun install` (not just `npm install`) when adding a dep so the age floor is caught before the package-lock.json is committed (this learning §1).
 
 ## Tags
 category: integration-issues

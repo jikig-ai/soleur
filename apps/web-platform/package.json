@@ -30,7 +30,7 @@
     "@likec4/diagram": "1.50.0",
     "@octokit/app": "^16.1.2",
     "@octokit/auth-app": "^8.2.0",
-    "@playwright/mcp": "0.0.76",
+    "@playwright/mcp": "0.0.75",
     "@sentry/nextjs": "^10.46.0",
     "@supabase/ssr": "^0.6.0",
     "@supabase/supabase-js": "^2.49.0",
