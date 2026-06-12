@@ -11,6 +11,16 @@ created: 2026-06-12
 
 # chore(inngest): stale `ci/*` bot-PR watchdog
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-12 · **Passed:** 3-agent plan-review (DHH/Kieran/simplicity) + deepen-plan precedent-diff gate + observability-coverage-reviewer.
+
+**Key improvements over the first draft:**
+1. **(P1, deepen) Alert routes the detector's own self-failure ops.** Widened `sentry_issue_alert.stale_bot_pr` op filter from `EQUAL "stale-bot-pr"` to `IS_IN {stale-bot-pr, stale-bot-pr-scan-failed, stale-bot-pr-comment-failed}` — without it, a daily-failing scan silently stops the watchdog (it returns `[]`, never flips the heartbeat monitor), recreating the exact silent-stale gap #5138 closes.
+2. **(precedent-diff) Full canonical `.tf` body.** The pre-deepen spec missed the load-bearing `conditions_v2` lifecycle triple (the firing trigger), `action_match = "any"`, and `lifecycle { ignore_changes = [environment] }` — now mirrors `egress_blocked`/`kb_db_error` verbatim. `frequency = 14` verified free against the live file.
+3. **(plan-review) Cut YAGNI:** removed `MAX_BOT_PR_PAGES` cap + truncation op + `staleBotPrCount` field (early-exit already bounds the scan).
+4. **Cleared risk (deepen):** confirmed warning-level `warnSilentFallback` events DO satisfy the alert's `first_seen_event` lifecycle condition (Sentry counts events regardless of level) — the alert fires.
+
 ## Overview
 
 After #5111 / ADR-054, `safeCommitAndPr` is the sole write path for bot cron PRs. Pipelines on `mergeMode: "auto"` rely on GitHub's `enablePullRequestAutoMerge`, which **silently disarms on merge conflict** — the PR stays open with no Sentry signal and no comment. This is the only *invisible*-stale mode (the `direct` and `none` modes fail loudly).
@@ -25,7 +35,7 @@ The scan does NOT need to read the `safe-commit-direct-merge-fell-back` op; the 
 
 **Decisions locked at plan time (operator-confirmed):**
 1. **Architecture:** extend the existing `cronCloudTaskHeartbeatHandler` (reuse the minted installation token, daily `30 9 * * *` cadence, and existing Sentry-heartbeat liveness). No new cron, no new `EXPECTED_CRON_FUNCTIONS` entry, no new cron monitor, no `function-registry-count.test` churn. Bot-PR staleness is **orthogonal** to the existing task-silence `ok`/`silentCount` — it emits warns + comments only and never flips the heartbeat monitor (per `2026-06-01-best-effort-cron-monitor-liveness-not-success`: the monitor pages on liveness, not on found-work).
-2. **Alert depth:** `warnSilentFallback(op: "stale-bot-pr")` + owning-issue comment + a new `sentry_issue_alert.stale_bot_pr` `.tf` rule routing the op to the operator via `notify_email { target_type = "IssueOwners" }` (the sibling-alert convention — satisfies `hr-no-dashboard-eyeball-pull-data-yourself` + the observability gate's `alert_target`).
+2. **Alert depth:** `warnSilentFallback(op: "stale-bot-pr")` + owning-issue comment + a new `sentry_issue_alert.stale_bot_pr` `.tf` rule routing the op (AND the two detector self-failure ops, via `IS_IN`) to the operator via `notify_email { target_type = "IssueOwners" }` (the sibling-alert convention — satisfies `hr-no-dashboard-eyeball-pull-data-yourself` + the observability gate's `alert_target`). The self-failure ops are routed because the scan deliberately does NOT flip the heartbeat monitor — without routing them, a daily-failing scan would silently stop the watchdog (deepen-plan observability-coverage-reviewer P1).
 
 **Re-evaluation gate satisfied:** #5138 gates Tier-2 restoration of the 7 PR-flow `auto` crons on this watchdog landing first. Merging this PR removes that gate.
 
@@ -105,7 +115,7 @@ New `step.run("stale-bot-pr-handling", …)` after Phase 2, before the existing 
 
 ### Phase 4 — Sentry alert routing (IaC)
 
-Add `resource "sentry_issue_alert" "stale_bot_pr"` to `apps/web-platform/infra/sentry/issue-alerts.tf` (filter `feature` = `cron-cloud-task-heartbeat` AND `op` = `stale-bot-pr`, `filter_match = "all"`, `notify_email { target_type = "IssueOwners", fallthrough_type = "ActiveMembers" }`, `frequency = 14`). See `## Infrastructure (IaC)`.
+Add `resource "sentry_issue_alert" "stale_bot_pr"` to `apps/web-platform/infra/sentry/issue-alerts.tf` (filter `feature` = `cron-cloud-task-heartbeat` AND `op` IS_IN `{stale-bot-pr, stale-bot-pr-scan-failed, stale-bot-pr-comment-failed}`, `action_match = "any"` + `conditions_v2` lifecycle triple, `filter_match = "all"`, `notify_email { target_type = "IssueOwners", fallthrough_type = "ActiveMembers" }`, `frequency = 14`). See `## Infrastructure (IaC)` for the full canonical body.
 
 ### Phase 5 — Runbook
 
@@ -154,8 +164,37 @@ No cross-domain implications detected — internal infrastructure/observability 
 
 ### Terraform changes
 - `apps/web-platform/infra/sentry/issue-alerts.tf` — new `resource "sentry_issue_alert" "stale_bot_pr"`. Provider `jianyuan/sentry` (already pinned in `versions.tf`). No new providers, no new secrets/`TF_VAR_*`.
-- Mirror an **apply-created** sibling with a real body — `kb_db_error` / `egress_blocked` (NOT the 4 import-only `auth_*` placeholder rules): `filter_match = "all"`, a `tagged_event` filter on `feature == cron-cloud-task-heartbeat` AND a second on `op == stale-bot-pr`. **Action (Kieran P1-1 — there is no email variable in the repo):** `actions_v2 = [{ notify_email = { target_type = "IssueOwners", fallthrough_type = "ActiveMembers" } }]`, exactly as every sibling alert routes (`issue-alerts.tf:59-66`); do NOT introduce a `var.operator_email` / `target_type = "Member"`.
-- **Concrete `frequency` (Kieran P1-2):** the `action_match = "any"`-shaped taken set is `{5, 10, 11, 12, 13, 30}`. Use **`frequency = 14`** (free). Rationale: the provider/back-end dedups `sentry_issue_alert` on `hash(action_match + filter_match + frequency + actions_v2-shape)`, NOT on conditions (`2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions`); a colliding frequency silently merges the POST. Put this in a `.tf` comment.
+- **Mirror the apply-created precedent VERBATIM — `egress_blocked` (`issue-alerts.tf:640-690`) / `kb_db_error` (`:432-479`), NOT the 4 import-only `auth_*` placeholder rules.** The canonical shape has FOUR load-bearing blocks my pre-deepen spec under-specified (deepen-plan precedent-diff gate):
+  ```hcl
+  resource "sentry_issue_alert" "stale_bot_pr" {
+    organization = var.sentry_org
+    project      = data.sentry_project.web_platform.slug
+    name         = "stale-bot-pr"
+    action_match = "any"          # first_seen/reappeared/regression are mutually exclusive — "all" is never satisfiable
+    filter_match = "all"          # BOTH tag filters must match
+    frequency    = 14             # distinct (verified free 2026-06-12); dedup is on action_match+filter_match+frequency+actions-shape, NOT conditions
+    conditions_v2 = [             # <-- THE FIRING TRIGGER (omitting this = a rule that never fires)
+      { first_seen_event = {} },
+      { reappeared_event = {} },
+      { regression_event = {} },  # re-pages a recurrence after the operator resolves the Sentry issue (anti-fatigue)
+    ]
+    filters_v2 = [
+      { tagged_event = { key = "feature", match = "EQUAL", value = "cron-cloud-task-heartbeat" } },
+      # IS_IN (not EQUAL) — routes the detector's OWN self-failure ops to paging too, else a daily
+      # scan/comment API failure recreates the silent-stale gap #5138 exists to close (the
+      # watchdog stops scanning and the heartbeat monitor stays green because the scan returns []).
+      # `feature` is SHARED (also carries task-pending-first-run/check-task), so op-scoping is required.
+      { tagged_event = { key = "op", match = "IS_IN", value = "stale-bot-pr,stale-bot-pr-scan-failed,stale-bot-pr-comment-failed" } },
+    ]
+    actions_v2 = [
+      { notify_email = { target_type = "IssueOwners", fallthrough_type = "ActiveMembers" } },  # N=1 accepted risk, mirrors siblings
+    ]
+    lifecycle { ignore_changes = [environment] }   # <-- present on every sibling; prevents env-drift replan
+  }
+  ```
+  **Action (Kieran P1-1 — there is no email variable in the repo):** `notify_email { target_type = "IssueOwners" }` is how EVERY sibling routes (`issue-alerts.tf:467-474`); do NOT introduce a `var.operator_email` / `target_type = "Member"`.
+  **`frequency = 14` (Kieran P1-2 + deepen verify):** confirmed free against the live file 2026-06-12 (taken: 5,10,11,12,13,15,30,60,61,62). The dedup-at-POST hazard (`2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions`) is the reason a distinct value is mandatory — carry the "verified free" date in the `.tf` comment.
+- **Optional (not a blocking AC):** the multi-op sibling alerts each have an `op-contract` test (`test/sentry-kb-db-error-alert-op-contract.test.ts`) pinning the `.tf` op-set against the code's emitted ops. `stale-bot-pr` is a **single fixed op**, so a contract test is low-value drift-guard here — skip unless review asks; the op literal already appears in both the cron (`STALE_BOT_PR_WARN_OP`) and the `.tf`.
 
 ### Apply path
 - (b) cloud-init + bootstrap is N/A; this is config on an existing live root. The new rule is **apply-created with a real body** (like `kb_db_error`), so `terraform validate` passes cleanly under `jianyuan/sentry 0.15.0-beta2` (the apply-created siblings already validate in the live file) — it does NOT need the import-only minimal-placeholder treatment. The provider deprecation *warning* at `issue-alerts.tf:16-39` is emitted but non-fatal to `validate`.
@@ -181,15 +220,15 @@ error_reporting:
   destination: Sentry via reportSilentFallback (op stale-bot-pr-scan-failed, op stale-bot-pr-comment-failed) + pino stdout mirror
   fail_loud: yes — scan/comment failures mirror to Sentry; they do NOT throw the step (no monitor flip) by design
 failure_modes:
-  - {mode: GitHub pulls list API error, detection: reportSilentFallback op stale-bot-pr-scan-failed, alert_route: Sentry issue (searchable)}
+  - {mode: GitHub pulls list API error (watchdog stopped scanning), detection: reportSilentFallback op stale-bot-pr-scan-failed, alert_route: sentry_issue_alert.stale_bot_pr (op IS_IN) -> operator}
   - {mode: stale bot PR detected, detection: warnSilentFallback op stale-bot-pr, alert_route: sentry_issue_alert.stale_bot_pr notify_email IssueOwners -> operator}
-  - {mode: owning-issue comment failed, detection: reportSilentFallback op stale-bot-pr-comment-failed, alert_route: Sentry issue (searchable)}
+  - {mode: owning-issue comment failed, detection: reportSilentFallback op stale-bot-pr-comment-failed, alert_route: sentry_issue_alert.stale_bot_pr (op IS_IN) -> operator}
 logs:
   where: container stdout -> Better Stack (pino mirror inside report/warnSilentFallback)
   retention: platform default (Better Stack)
 discoverability_test:
   command: 'gh api "/repos/jikig-ai/soleur/pulls?state=open&per_page=100" --jq ''[.[] | select(.head.ref|startswith("ci/") or (.head.ref|startswith("self-healing/auto-")))] | length'''
-  expected_output: integer count of open bot PRs (the watchdog''s input set); Sentry search "feature:cron-cloud-task-heartbeat op:stale-bot-pr" surfaces fired warns — both reachable with no ssh
+  expected_output: integer count of open bot PRs (the watchdog''s input set; this probe is single-page so it is exact only while total open PRs <= 100 — 14 today — whereas the scan itself paginates); Sentry search "feature:cron-cloud-task-heartbeat op:stale-bot-pr" surfaces fired warns — both reachable with no ssh
 ```
 
 ## Acceptance Criteria
@@ -201,7 +240,7 @@ discoverability_test:
 - [ ] Scan API failure → `reportSilentFallback` op `stale-bot-pr-scan-failed`, no throw, `ok` unaffected (Scenario 7).
 - [ ] Heartbeat orthogonality: stale bot PR does NOT change `ok`/`silentCount` (Scenario 8).
 - [ ] Pagination early-exits on first newer-than-threshold PR (Scenario 9).
-- [ ] `sentry_issue_alert.stale_bot_pr` added with a distinct `frequency`; `cd apps/web-platform/infra/sentry && terraform validate` passes.
+- [ ] `sentry_issue_alert.stale_bot_pr` added with `action_match="any"` + `conditions_v2` lifecycle triple + `op IS_IN {stale-bot-pr, stale-bot-pr-scan-failed, stale-bot-pr-comment-failed}` + distinct `frequency = 14` + `lifecycle { ignore_changes = [environment] }`; `cd apps/web-platform/infra/sentry && terraform validate` passes.
 - [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `./node_modules/.bin/vitest run test/server/inngest/cron-cloud-task-heartbeat.test.ts` green.
 - [ ] `function-registry-count.test.ts` unchanged (no new cron) — confirm it still passes.
 - [ ] Runbook `## Stale bot PR` section added; ADR-054 resolved-annotation added.
@@ -213,6 +252,7 @@ discoverability_test:
 
 ## Risks & Mitigations
 
+- **Precedent-diff — pagination shape diverges from `cron-bug-fixer` deliberately (deepen-plan Phase 4.4).** `cron-bug-fixer.ts:225 listOpenBotFixIssueNumbers` lists pulls **single-page** (`per_page:100`, no loop, default `created desc`) and tolerates missing bot-fix PRs beyond page 1 — a false-negative there just means it doesn't skip one issue. The watchdog **cannot** tolerate a false-negative (a missed stale PR = the bug it exists to catch), so it uses `sort:created direction:asc` + the early-exit loop, which reads exactly the >48h-old PRs regardless of total count. This is the one intentional divergence from the sibling precedent; it is correct because the two crons have opposite false-negative tolerances. The `.tf` alert, by contrast, mirrors `egress_blocked`/`kb_db_error` verbatim (no divergence).
 - **Listing all open PRs is expensive.** Mitigated by the ascending-created early-exit alone (scan stops at the first non-stale PR); bot PRs older than 48h are ~0 in steady state. The page cap + truncation warn were cut at plan-review as unreachable-state YAGNI.
 - **Daily comment spam on the owning issue.** Mitigated by the `<!-- stale-bot-pr:<n> -->` dedup marker; Sentry dedups the warn by fingerprint.
 - **False positives on legitimate long-lived bot PRs.** Only compound-promote uses `self-healing/auto-*` and it is draft+labeled → excluded. `ci/*` PRs are auto-merge/direct outputs that should never sit open >48h; one open >48h IS the signal.

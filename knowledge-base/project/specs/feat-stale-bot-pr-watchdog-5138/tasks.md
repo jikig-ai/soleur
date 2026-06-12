@@ -26,7 +26,7 @@ plan: knowledge-base/project/plans/2026-06-12-chore-stale-bot-pr-watchdog-plan.m
 
 ## Phase 4 — Sentry alert (IaC)
 
-- [ ] 4.1 Add `resource "sentry_issue_alert" "stale_bot_pr"` to `apps/web-platform/infra/sentry/issue-alerts.tf`, mirroring `kb_db_error` (apply-created real body): `filter_match = "all"`, `tagged_event` on `feature == cron-cloud-task-heartbeat` AND `op == stale-bot-pr`, `notify_email { target_type = "IssueOwners", fallthrough_type = "ActiveMembers" }`, `frequency = 14` (with the dedup-collision `.tf` comment).
+- [ ] 4.1 Add `resource "sentry_issue_alert" "stale_bot_pr"` to `apps/web-platform/infra/sentry/issue-alerts.tf`, mirroring `egress_blocked`/`kb_db_error` (apply-created real body) VERBATIM: `action_match = "any"`, `conditions_v2 = [{first_seen_event={}},{reappeared_event={}},{regression_event={}}]` (the firing trigger), `filter_match = "all"`, `filters_v2` = `feature EQUAL cron-cloud-task-heartbeat` AND `op IS_IN "stale-bot-pr,stale-bot-pr-scan-failed,stale-bot-pr-comment-failed"` (IS_IN routes the detector self-failure ops too — observability P1), `actions_v2` notify_email IssueOwners/ActiveMembers, `frequency = 14` (verified free; dedup-collision `.tf` comment), `lifecycle { ignore_changes = [environment] }`.
 - [ ] 4.2 `cd apps/web-platform/infra/sentry && terraform validate`.
 - [ ] 4.3 Wire scoped `-target=sentry_issue_alert.stale_bot_pr apply` into `apply-sentry-infra.yml` (terraform-architect; no manual apply).
 
