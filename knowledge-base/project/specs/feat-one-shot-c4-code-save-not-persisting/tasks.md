@@ -6,32 +6,29 @@ Mandatory fix: **F-A1 (optimistic editor apply) + F-B (honest error, no silent r
 
 ## Phase 0 — Confirm failure mode (sizes the F-C deferral; does NOT gate the fix)
 
-- [ ] 0.1 Reproduce against the dev-cohort workspace clone. Capture:
-  - `git log origin/<branch>` shows the `.c4` commit landed on origin.
-  - `git -C <clone> rev-list --count @{u}..HEAD` and `git -C <clone> status` show why `git pull --ff-only` did not advance the working tree.
-  - the `SyncWorkspaceResult` the C4 save returned (`ok:true` no-op vs `SYNC_FAILED`).
-- [ ] 0.2 Record the dominant hypothesis (H1 diverged-clone abort / H2 propagation lag / H3 concurrency / H4 wrong upstream) in the PR body. This drives the F-C tracking-issue scope, not the F-A1/F-B implementation.
-- [ ] 0.3 Open Code-Review overlap check: `gh issue list --label code-review --state open --json number,title,body --limit 200`, grep bodies for `c4-shared.tsx`, `c4-writer.ts`, `app/api/kb/c4/`. Record fold-in / acknowledge / defer (or `None`).
+- [x] 0.1 Live-clone repro deferred to the post-merge dogfood (5.1) — a synthetic CI clone cannot reproduce a perpetually-diverged prod clone. Code-trace confirms the mechanism: GET `/project` reads `data.sources` from the on-disk clone; the `[data, activeFile]` effect (`c4-shared.tsx:396-398`) re-seeds `draft` from it, so a stale clone reverts the editor. F-A1/F-B are correct for all hypotheses regardless.
+- [x] 0.2 Dominant hypothesis recorded in PR body: **H1 (diverged clone → self-heal aborts on un-pushed commits)** as PRIME for the deterministic "every save reverts" symptom; **H2 (Contents-API→fetch replica lag)** for the intermittent case. Both cured identically by F-A1 (the editor stops depending on the clone advancing). Drives the F-C tracking-issue scope.
+- [x] 0.3 Open Code-Review overlap check run: `gh issue list --label code-review --state open` grep for `c4-shared.tsx` / `c4-writer.ts` / `app/api/kb/c4/` → **None**.
 
 ## Phase 1 — RED (failing tests first)
 
-- [ ] 1.1 `apps/web-platform/test/c4-code-panel.test.tsx`: add a failing test — after a PUT 200, the editor reflects the saved source WITHOUT depending on the on-disk clone having advanced (mock `reload()` to return the OLD source; assert the editor shows the NEW saved text).
-- [ ] 1.2 `apps/web-platform/test/c4-code-panel.test.tsx`: add/confirm a test — on a PUT 500 `SYNC_FAILED`, the editor shows the error inline AND retains the user's edited draft (no revert, no `reload()` on failure). (Verify-the-negative confirmed this is already the behavior at `c4-shared.tsx:416/:497-499` — the test pins it against regression from 1.1.)
-- [ ] 1.3 (Only if the writer must echo content) `apps/web-platform/test/c4-writer-rerender.test.ts`: assert `writeC4Diagram` returns the written `content` needed for optimistic apply.
+- [x] 1.1 `c4-code-panel.test.tsx` F-A1 test added — after a 200, a stale reload() (new object, OLD source) must not revert the editor. RED confirmed: received `user = element`, expected `user = element TEST`.
+- [x] 1.2 `c4-code-panel.test.tsx` F-B test added — on a 500 `SYNC_FAILED` the editor shows the error AND retains the edited draft, and `onSaved` (the reload trigger) is never called. Passed at RED (already-shipped behavior); pins it against the F-A1 change.
+- [x] 1.3 N/A — F-A1 reuses the client's own `draft` (no server echo needed). Writer/route untouched.
 
 ## Phase 2 — GREEN (minimal implementation)
 
-- [ ] 2.1 `apps/web-platform/components/kb/c4-shared.tsx`: on a successful PUT (200), keep the client's `draft` (optimistic apply) instead of resetting it from the `reload()`-fetched `data.sources` (F-A1). Confirm the diagram-staleness path still falls through to the existing Layer-1 banner when the clone lags.
-- [ ] 2.2 `apps/web-platform/components/kb/c4-shared.tsx`: confirm/preserve the non-2xx error-inline-no-reload behavior at `:416/:497-499` (F-B regression guard).
-- [ ] 2.3 (Only if needed for 2.1) `apps/web-platform/server/c4-writer.ts` + `apps/web-platform/app/api/kb/c4/[...path]/route.ts`: return the written `content` to the client. First verify whether the existing `commitSha`/already-sent body suffices before editing the route.
-- [ ] 2.4 (Observability) `apps/web-platform/server/c4-writer.ts`: tie a greppable per-save event to the diverged-clone abort (`SYNC_FAILED` / `self-heal-aborted-dirty`) so the failure mode is dashboard-discoverable.
+- [x] 2.1 `c4-shared.tsx`: added `savedContentRef` (per-file optimistic content); the `[data, activeFile]` effect now keeps the saved text when the reloaded source is stale, clearing the marker once the clone catches up. Diagram staleness still falls through to the Layer-1 banner.
+- [x] 2.2 `c4-shared.tsx`: non-2xx still `throw`s before `onSaved` (`:416`) → error inline, no reload (F-B preserved). Pinned by the 1.2 test.
+- [x] 2.3 N/A — verified `commitSha` + the client's already-sent `draft` suffice; no route/writer change.
+- [x] 2.4 N/A — already satisfied: `c4-writer.ts:138` logs `event:c4_write` per-save; `c4-writer.ts:318` + `workspace-sync.ts:204` (`op:self-heal-aborted-dirty`) already mirror the diverged-clone abort to Sentry via `reportSilentFallback`.
 
 ## Phase 3 — Guards & regression
 
-- [ ] 3.1 Assert NO ungated `reset --hard` was added to any save/sync path; the `@{u}..HEAD == 0` gated self-heal is untouched (un-pushed agent-session work preserved).
-- [ ] 3.2 `apps/web-platform/test/c4-workspace.test.tsx`: regression on the full workspace save flow (source commits, diagram re-renders on a clean clone).
-- [ ] 3.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] 3.4 `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-panel.test.tsx test/c4-writer-rerender.test.ts test/c4-workspace.test.tsx` green.
+- [x] 3.1 No `reset --hard` added — `workspace-sync.ts` untouched; the gated `@{u}..HEAD` self-heal is preserved (un-pushed session work safe).
+- [x] 3.2 `c4-workspace.test.tsx` regression green (clean-clone save flow unchanged).
+- [x] 3.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean (EXIT=0).
+- [x] 3.4 `vitest run` of the three C4 suites green (28/28); full web-platform suite green (9613 passed, 0 failures).
 
 ## Phase 4 — Deferrals
 

@@ -284,29 +284,30 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] **Phase 0 repro captured (sizes F-C, does NOT gate F-A1/F-B):** the PR body
-      records which hypothesis (H1–H4) reproduces, with the observed git state
-      (`git log origin/<branch>` shows the commit landed; `git -C <clone> rev-list
-      --count @{u}..HEAD` / `git status` shows why the pull didn't advance) and the
-      returned `SyncWorkspaceResult`. Drives the F-C tracking-issue scope.
-- [ ] Editing a `.c4` source, clicking Save, and a **successful** PUT (200) leaves
-      the **edited text visible in the Code tab** (not reverted) — verified by a
-      vitest test that does NOT rely on the on-disk clone having advanced
-      (optimistic apply of the saved content, or GitHub-canonical read).
-- [ ] On a PUT that returns **500 `SYNC_FAILED`**, the editor shows a distinct,
+- [x] **Phase 0 repro captured (sizes F-C, does NOT gate F-A1/F-B):** PR body
+      records **H1 (diverged clone → self-heal aborts)** PRIME + **H2 (replica
+      propagation lag)** for the intermittent case; live-clone capture deferred to
+      the 5.1 dogfood (a synthetic CI clone cannot reproduce a perpetually-diverged
+      prod clone). Code-trace confirms the revert mechanism (`c4-shared.tsx:396-398`
+      re-seeds `draft` from the stale clone). Drives the F-C tracking-issue scope.
+- [x] Editing a `.c4` source, clicking Save, and a **successful** PUT (200) leaves
+      the **edited text visible in the Code tab** (not reverted) — verified by the
+      F-A1 vitest test that re-renders with a stale clone (OLD source) and asserts
+      the editor keeps the NEW saved text. Optimistic apply of the saved content.
+- [x] On a PUT that returns **500 `SYNC_FAILED`**, the editor shows a distinct,
       honest error and does **NOT** overwrite the editor with a stale reloaded
-      source (no silent revert). Verified by a vitest test on `c4-shared.tsx`.
-- [ ] No regression: the `.c4` source still commits to GitHub via
+      source (no silent revert). Verified by the F-B vitest test on `c4-shared.tsx`.
+- [x] No regression: the `.c4` source still commits to GitHub via
       `writeC4Diagram` within the `isC4DiagramPath` scope guard; the re-render +
-      `model.likec4.json` commit path (#4965/#4967/#4976) is unchanged or
-      improved, never weakened.
-- [ ] **No ungated `reset --hard`** is added to any save/sync path — the
-      diverged-clone guard (`@{u}..HEAD == 0`) is preserved; un-pushed
-      agent-session work is never destroyed
+      `model.likec4.json` commit path (#4965/#4967/#4976) is unchanged
+      (server untouched).
+- [x] **No ungated `reset --hard`** is added to any save/sync path — the
+      diverged-clone guard (`@{u}..HEAD == 0`) is preserved; `workspace-sync.ts`
+      is untouched, so un-pushed agent-session work is never destroyed
       (learning `2026-06-03-self-heal-reset-must-gate-on-actual-repo-state-not-assumed-mirror.md`).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; vitest
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; vitest
       suite green (`c4-code-panel.test.tsx`, `c4-writer-rerender.test.ts`,
-      `c4-workspace.test.tsx`, and any new sync-resilience test).
+      `c4-workspace.test.tsx` = 28/28; full web-platform suite 9613 passed, 0 fail).
 
 ### Post-merge (operator)
 
