@@ -24,7 +24,9 @@ import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
   buildCronEvalSettings,
   CRON_BASH_ALLOWLISTS,
+  CRON_MCP_ALLOWLISTS,
   DEFAULT_CLAUDE_SETTINGS,
+  ISSUE_CREATOR_BASH_ALLOWLIST,
   runHookSelfTest,
   spawnClaudeEval,
   spawnSimple,
@@ -380,6 +382,58 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
       runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
     ).toThrow(/Skill/);
   });
+
+  // --- #5199: mcp__playwright__* relaxation self-test probes ---
+  it("passes for an ux-audit-shaped workspace (mcp-allow + navigate-origin delivered)", () => {
+    const fileLines = [
+      ...ISSUE_CREATOR_BASH_ALLOWLIST,
+      "mcp-allow mcp__playwright__browser_navigate",
+      "mcp-allow mcp__playwright__browser_take_screenshot",
+      "navigate-origin https://app.soleur.ai",
+    ];
+    const spawnCwd = makeSpawnCwd({ allow: fileLines });
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd,
+        cronName: "cron-ux-audit",
+        allow: ISSUE_CREATOR_BASH_ALLOWLIST,
+        mcpAllow: [
+          "mcp__playwright__browser_navigate",
+          "mcp__playwright__browser_take_screenshot",
+        ],
+        navigateOrigin: "https://app.soleur.ai",
+      }),
+    ).not.toThrow();
+  });
+
+  it("throws when mcp policy is expected but the file did NOT deliver the directives (delivery cross-check)", () => {
+    // File carries bash prefixes only — no mcp-allow/navigate-origin lines — so
+    // the hook denies the app-origin navigate the self-test expects to allow.
+    const spawnCwd = makeSpawnCwd({ allow: ISSUE_CREATOR_BASH_ALLOWLIST });
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd,
+        cronName: "cron-ux-audit",
+        allow: ISSUE_CREATOR_BASH_ALLOWLIST,
+        mcpAllow: ["mcp__playwright__browser_navigate"],
+        navigateOrigin: "https://app.soleur.ai",
+      }),
+    ).toThrow(/navigate|mcp/i);
+  });
+
+  it("throws when a no-mcp cron's hook ALLOWS WebFetch (egress probe added #5199)", () => {
+    // Stub: denies Bash (exfil probe passes) + the unknown-class probe, allows
+    // Task/Skill, but allows WebFetch — the new egress probe must catch it.
+    const spawnCwd = makeSpawnCwd({
+      hookSource: stubHook(
+        { Bash: "deny", Task: "allow", Skill: "allow", Tier2FailClosedProbeTool: "deny" },
+        "allow",
+      ),
+    });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/WebFetch|egress|navigate|fail-closed|unknown/i);
+  });
 });
 
 describe("spawnSimple — stderr capture (clone-128 diagnosability)", () => {
@@ -490,5 +544,30 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     // The bound drops the OLDEST lines, keeping the most recent (the tail).
     expect(res.stdoutTail).toContain("FINAL_TAIL_MARKER");
     expect(res.stdoutTail).not.toContain(" line 0\n");
+  });
+});
+
+describe("cron-ux-audit restore — bash + mcp allowlists (#5199)", () => {
+  it("cron-ux-audit is present in CRON_BASH_ALLOWLISTS (issue-creator surface)", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-ux-audit"]).toEqual(ISSUE_CREATOR_BASH_ALLOWLIST);
+  });
+
+  it("cron-ux-audit's CRON_MCP_ALLOWLISTS entry pins the 5 declared Playwright tools + NEXT_PUBLIC_APP_URL origin", () => {
+    const entry = CRON_MCP_ALLOWLISTS["cron-ux-audit"];
+    expect(entry).toBeDefined();
+    expect(entry.tools).toEqual([
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_close",
+      "mcp__playwright__browser_wait_for",
+    ]);
+    expect(entry.navigateOriginEnv).toBe("NEXT_PUBLIC_APP_URL");
+  });
+
+  it("the 2 existing issue-creator crons have NO mcp allowance (cross-cron scoping)", () => {
+    expect(CRON_MCP_ALLOWLISTS["cron-legal-audit"]).toBeUndefined();
+    expect(CRON_MCP_ALLOWLISTS["cron-agent-native-audit"]).toBeUndefined();
+    expect(CRON_MCP_ALLOWLISTS["cron-roadmap-review"]).toBeUndefined();
   });
 });

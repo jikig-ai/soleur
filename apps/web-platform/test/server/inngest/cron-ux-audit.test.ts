@@ -13,9 +13,11 @@ vi.hoisted(() => {
 
 import {
   cronUxAudit,
+  CLAUDE_CODE_FLAGS,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-ux-audit";
+import { CRON_MCP_ALLOWLISTS } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
 describe("cronUxAudit — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -89,5 +91,41 @@ describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", ()
     // cq-silent-fallback-must-mirror-to-sentry / hr-observability-layer-citation.
     expect(SUT_SOURCE).toContain("warnSilentFallback");
     expect(SUT_SOURCE).toContain('op: "claude-eval-nonzero-noop"');
+  });
+});
+
+describe("#5199 — restored containment (token narrow + pinned mcp + live dry-run)", () => {
+  it("mints the narrowed ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS token (not the full grant)", () => {
+    expect(SUT_SOURCE).toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+    expect(SUT_SOURCE).toMatch(/repositories:\s*\[REPO_NAME\]/);
+  });
+
+  it("pins @playwright/mcp to an exact version (no @latest supply-chain fetch)", () => {
+    expect(SUT_SOURCE).not.toContain("@playwright/mcp@latest");
+    expect(SUT_SOURCE).toContain("@playwright/mcp@0.0.75");
+  });
+
+  it("wires UX_AUDIT_DRY_RUN from env (live by default) — not hardcoded true", () => {
+    expect(SUT_SOURCE).not.toContain('UX_AUDIT_DRY_RUN: "true"');
+    expect(SUT_SOURCE).toContain("process.env.UX_AUDIT_DRY_RUN");
+  });
+  // NOTE: the deferIfTier2Cron guard is KEPT (defensive no-op once removed from
+  // the set) to mirror the restored cron-legal-audit / cron-agent-native-audit
+  // pattern — the restore is proven by TIER2_DEFERRED_CRONS not having the cron
+  // (cron-shared.test.ts), not by deleting the guard.
+
+  it("the mcp__playwright__* tools in --allowedTools match CRON_MCP_ALLOWLISTS exactly (parity, no drift)", () => {
+    // --allowedTools is what the CLI OFFERS; CRON_MCP_ALLOWLISTS is what the
+    // containment hook PERMITS. They must agree or ux-audit silently degrades
+    // (a tool offered-but-denied fails mid-run; a tool permitted-but-not-offered
+    // is a dead grant). Derive the offered set from the source-of-truth flag.
+    const allowedToolsIdx = CLAUDE_CODE_FLAGS.indexOf("--allowedTools");
+    expect(allowedToolsIdx).toBeGreaterThan(-1);
+    const offered = CLAUDE_CODE_FLAGS[allowedToolsIdx + 1]
+      .split(",")
+      .filter((t) => t.startsWith("mcp__"))
+      .sort();
+    const permitted = [...CRON_MCP_ALLOWLISTS["cron-ux-audit"].tools].sort();
+    expect(offered).toEqual(permitted);
   });
 });
