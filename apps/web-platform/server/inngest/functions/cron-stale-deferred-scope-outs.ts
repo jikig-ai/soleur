@@ -35,6 +35,7 @@
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { withGithubRetry } from "@/server/github-retry";
 import {
   createProbeOctokit,
   PROBE_ISSUE_OWNER,
@@ -123,11 +124,18 @@ async function fetchCandidates(args: {
   const q = `repo:${owner}/${repo} is:issue is:open label:"${TARGET_LABEL}" updated:<${cutoffIso} sort:updated-asc`;
   const candidates: SweepCandidate[] = [];
   for (let page = 1; page <= 2; page++) {
-    const res = await octokit.request("GET /search/issues", {
-      q,
-      per_page: SEARCH_PER_PAGE,
-      page,
-    });
+    // Wrap in withGithubRetry so a single transient api.github.com connect
+    // timeout (which octokit surfaces as a RequestError) is absorbed in-step
+    // rather than escalating to an error-level Sentry mirror. fetchCandidates
+    // is OUTSIDE the per-issue try, so a bare timeout here would otherwise
+    // abort the whole sweep (Sentry 448a4173…).
+    const res = await withGithubRetry(() =>
+      octokit.request("GET /search/issues", {
+        q,
+        per_page: SEARCH_PER_PAGE,
+        page,
+      }),
+    );
     const items = (res.data?.items ?? []) as SearchResponseItem[];
     for (const item of items) {
       if (typeof item.number !== "number") continue;
@@ -225,24 +233,30 @@ export async function sweepStaleScopeOuts(args: {
     if (dryRun) continue;
 
     try {
-      await octokit.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        {
-          owner,
-          repo,
-          issue_number: num,
-          body: COMMENT_BODY,
-        },
+      // Two SEPARATE withGithubRetry wrappers (NOT one around both): wrapping
+      // both together would re-POST the comment on a close-timeout retry. The
+      // comment POST is non-idempotent (see plan F2). A non-retryable 403 is
+      // rethrown on attempt 1 straight into the catch below, preserving the
+      // issue_write_403 discriminator.
+      await withGithubRetry(() =>
+        octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner,
+            repo,
+            issue_number: num,
+            body: COMMENT_BODY,
+          },
+        ),
       );
-      await octokit.request(
-        "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
-        {
+      await withGithubRetry(() =>
+        octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
           owner,
           repo,
           issue_number: num,
           state: "closed",
           state_reason: "not_planned",
-        },
+        }),
       );
       closed += 1;
     } catch (err) {
