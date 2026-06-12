@@ -80,7 +80,11 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
       typeof deferIfTier2Cron
     >[0]["logger"];
 
-  it("defers a Tier-2 cron: returns true, warns, posts an on-schedule check-in", async () => {
+  it("does NOT defer cron-bug-fixer — RESTORED (#5199): returns false, no heartbeat, spawns normally", async () => {
+    // #5199 emptied TIER2_DEFERRED_CRONS (bug-fixer was the last member; the
+    // stale-bot-PR watchdog was extended to bot-fix/* so it could be restored).
+    // deferIfTier2Cron is now a defensive no-op for EVERY cron — an empty set
+    // short-circuits has() to false, so no positive (defer) path is reachable.
     const step = makeStep();
     const logger = makeLogger();
     const deferred = await deferIfTier2Cron({
@@ -89,12 +93,9 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
       step: step as unknown as Parameters<typeof deferIfTier2Cron>[0]["step"],
       logger,
     });
-    expect(deferred).toBe(true);
-    expect(step.run).toHaveBeenCalledWith(
-      "tier2-deferred-heartbeat",
-      expect.any(Function),
-    );
-    expect(logger.warn).toHaveBeenCalled();
+    expect(deferred).toBe(false);
+    expect(step.run).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("does NOT defer the Tier-1 roadmap-review cron: returns false, no heartbeat", async () => {
@@ -110,11 +111,12 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(step.run).not.toHaveBeenCalled();
   });
 
-  it("roadmap-review (#5004, Tier-1) is NOT in the deferred set; bug-fixer IS (#5199 restored growth-audit)", () => {
+  it("roadmap-review (#5004, Tier-1) is NOT in the deferred set; bug-fixer is now RESTORED too (#5199)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-roadmap-review")).toBe(false);
-    // #5199 restored the 7 mergeMode:"auto" crons — growth-audit included.
+    // #5199 restored the 7 mergeMode:"auto" crons — growth-audit included —
+    // and finally cron-bug-fixer (the watchdog was extended to bot-fix/*).
     expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(false);
-    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
+    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(false);
   });
 
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
@@ -136,10 +138,10 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS.contents).not.toBe("write");
   });
 
-  it("ONLY cron-bug-fixer stays deferred (#5199 restored the 7 mergeMode:auto crons)", () => {
-    // #5199: the PR-5200 stale-bot-PR watchdog landed, removing the gate on the
-    // 7 PR-flow crons. Only bug-fixer's bot-fix/* head pattern is outside the
-    // watchdog's ci/* + self-healing/auto-* scan, so it stays deferred.
+  it("ALL Tier-2 crons restored — TIER2_DEFERRED_CRONS is EMPTY (#5199)", () => {
+    // #5199 final: the PR-5200 stale-bot-PR watchdog was extended to bot-fix/*
+    // (this PR), so cron-bug-fixer — the last deferred cron — is now restored.
+    // The Tier-2 boundary is fully retired; the set is empty.
     for (const cron of [
       "cron-campaign-calendar",
       "cron-community-monitor",
@@ -148,11 +150,11 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
       "cron-growth-audit",
       "cron-growth-execution",
       "cron-seo-aeo-audit",
+      "cron-bug-fixer",
     ]) {
       expect(TIER2_DEFERRED_CRONS.has(cron)).toBe(false);
     }
-    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
-    expect(TIER2_DEFERRED_CRONS.size).toBe(1);
+    expect(TIER2_DEFERRED_CRONS.size).toBe(0);
   });
 
   it("cron-ux-audit is RESTORED — no longer Tier-2 deferred (#5199)", () => {
