@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1090  # SUT path is worktree-relative (non-constant source) by design
 # Test for the operator-digest provisioning bootstrap (#5085, plan §AC8).
 #
 # The script provisions the PRIVATE jikig-ai/operator-digest repo: it reads ANTHROPIC_API_KEY

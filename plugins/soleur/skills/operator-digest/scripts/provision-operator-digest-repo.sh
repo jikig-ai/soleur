@@ -84,8 +84,7 @@ install_workflow() {
 # to register the file before `gh workflow enable` can find it. Soft-retry; a failure here is a
 # warning, not fatal (the schedule still fires once the file is on the default branch).
 enable_workflow() {
-  local i
-  for i in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     if gh workflow enable operator-digest.yml -R "$REPO" >/dev/null 2>&1; then
       log "enabled operator-digest.yml on ${REPO}"
       return 0
