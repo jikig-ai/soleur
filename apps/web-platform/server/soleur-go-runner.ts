@@ -863,6 +863,38 @@ export interface DispatchEvents {
    * no-op test cases.
    */
   onSessionIdCaptured?: (sessionId: string) => void;
+  /**
+   * #5214 — mid-tool forward-progress heartbeat. Fires once per SDK
+   * `SDKToolProgressMessage` consumed in `consumeStream`, carrying the RAW
+   * SDK fields (`toolUseId` / `toolName` / `elapsedSeconds`). The cc-dispatcher
+   * wires this to a `tool_progress` WS event so the client-side stuck-watchdog
+   * (`STUCK_TIMEOUT_MS`, 45s) is heartbeat-fed during a long single-tool
+   * execution — without it, a >90s tool flips the cc_router bubble to a
+   * terminal `error` state. Mirrors the legacy `agent-runner.ts:1889-1948`
+   * forward, but factored across the runner/dispatcher seam.
+   *
+   * **Cadence:** fires at SDK cadence — un-debounced, every `tool_progress`
+   * message the SDK yields (typically every few seconds). Consumers MUST
+   * debounce before hitting the socket (the cc-dispatcher applies a 5s
+   * per-`toolUseId` debounce); a future second consumer that forgets to
+   * debounce would spam the WS channel.
+   *
+   * **Information-disclosure (#2138 / PR #2115):** `toolName` is the RAW SDK
+   * tool name — the runner does NOT label it. Routing it through
+   * `buildToolLabel` (human label only) is the DISPATCHER's responsibility at
+   * the emit boundary (`buildToolProgressWSMessage`), exactly as the
+   * `onToolUse` forward does. The raw name must NEVER reach the wire.
+   *
+   * Optional + fire-and-forget: non-cc callers (the legacy agent-runner has
+   * its own inline forward) and existing tests ignore it; the runner's
+   * `try/catch` around the invocation routes throws to Sentry rather than
+   * blocking the stream.
+   */
+  onToolProgress?: (block: {
+    toolUseId: string;
+    toolName: string;
+    elapsedSeconds: number;
+  }) => void;
 }
 
 export interface DispatchArgs {
@@ -2188,10 +2220,59 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // these heartbeats arriving). Plan:
           // knowledge-base/project/plans/2026-06-12-fix-concierge-stream-timeout-debug-scroll-plan.md.
           //
-          // Deliberately reads NO fields off the message (a pure re-arm), so
-          // it does NOT replicate `agent-runner.ts:1901-1948`'s runtime
-          // shape-guard — there is nothing to validate.
+          // The re-arm runs FIRST and unconditionally on any `tool_progress`
+          // (even a malformed one): the message itself proves the tool is
+          // alive, so re-arming is strictly safer than dropping it. NEVER touch
+          // `state.turnHardCap`: the 10-min absolute ceiling stays anchored on
+          // `firstToolUseAt` (chatty-stall defense, PR #3225).
           if (!state.closed && !state.awaitingUser) armRunaway(state);
+
+          // #5214 — AFTER the re-arm, emit a `tool_progress` DispatchEvent so
+          // the cc-dispatcher can forward a heartbeat to the client (feeds the
+          // 45s client-side stuck-watchdog during a long single tool). Runtime
+          // shape-guard the SDK payload (mirrors `agent-runner.ts:1901-1927`):
+          // a missing `tool_use_id` would poison the dispatcher's debounce map
+          // with `undefined` as the key. On a shape mismatch, mirror to Sentry
+          // and skip ONLY the emit — NOT the re-arm above (the intentional
+          // divergence from agent-runner, which `continue`s past both). The
+          // RAW `tool_name` is passed through unlabeled; the dispatcher routes
+          // it through `buildToolLabel` at the emit boundary (#2138).
+          const progress = msg as Partial<{
+            tool_use_id: string;
+            tool_name: string;
+            elapsed_time_seconds: number;
+          }>;
+          const toolUseId = progress.tool_use_id;
+          const toolName = progress.tool_name;
+          const elapsedSeconds = progress.elapsed_time_seconds;
+          if (
+            typeof toolUseId !== "string" ||
+            !toolUseId ||
+            typeof toolName !== "string" ||
+            typeof elapsedSeconds !== "number"
+          ) {
+            reportSilentFallback(null, {
+              feature: "soleur-go-runner",
+              op: "tool-progress-shape",
+              message: "SDKToolProgressMessage missing required fields",
+              extra: {
+                conversationId: state.conversationId,
+                hasToolUseId: typeof toolUseId === "string" && !!toolUseId,
+                hasToolName: typeof toolName === "string",
+                hasElapsed: typeof elapsedSeconds === "number",
+              },
+            });
+          } else {
+            try {
+              state.events.onToolProgress?.({ toolUseId, toolName, elapsedSeconds });
+            } catch (err) {
+              reportSilentFallback(err, {
+                feature: "soleur-go-runner",
+                op: "onToolProgress",
+                extra: { conversationId: state.conversationId },
+              });
+            }
+          }
         }
         // Other SDKMessage variants (partial assistant, hook, task notifications)
         // are ignored at V1. V2 will route stream_event → WS cumulative deltas.
