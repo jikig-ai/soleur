@@ -6,39 +6,38 @@ plan: knowledge-base/project/plans/2026-06-12-fix-stale-deferred-scope-outs-cron
 
 # Tasks
 
+> Single-fix design (deepen-plan revision 2026-06-12): gate the Sentry `error`
+> heartbeat on the final Inngest attempt. The dropped "Fix B" (in-attempt retry /
+> widened createProbeOctokit) is out of scope — see plan §"Alternative Considered".
+
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 `git grep -n "createProbeOctokit(" apps/web-platform/server` — confirm no caller depends on immediate-throw on 429/5xx.
-- [ ] 0.2 Confirm `ctx.attempt` (zero-indexed) + `ctx.maxAttempts` field names against `node_modules/inngest/types.d.ts`.
+- [ ] 0.1 Verify Inngest delivers `attempt`/`maxAttempts` to the function ctx AND re-invokes with an incremented `attempt` when the sweep throws inside `step.run`. (Load-bearing: no in-repo handler reads `attempt` today; field is typed on BaseContext but unproven-in-repo.) Record finding.
+- [ ] 0.2 Verify Inngest's worst-case between-attempt retry delay `D` for a `retries: 1` function; confirm `D + final-attempt-latency < 30 min` (checkin_margin_minutes). Record the number.
 - [ ] 0.3 Confirm vitest collects `test/**/*.test.ts`; extend existing `test/server/inngest/cron-stale-deferred-scope-outs.test.ts` in place.
 
 ## Phase 1 — RED (write failing tests first)
 
-- [ ] 1.1 A1: non-final attempt throw → no `error` heartbeat, rethrows, `reportSilentFallback` called.
-- [ ] 1.2 A2: final attempt throw → `error` heartbeat + rethrow.
-- [ ] 1.3 A3: no-`attempt` legacy shape → unchanged (error heartbeat on failure).
-- [ ] 1.4 B1: transient 429 on `GET /search/issues` then success → single `ok`, no thrown sweep.
-- [ ] 1.5 B3: permanent 404 on search → not retried, surfaces on final attempt.
-- [ ] 1.6 AC6: `isTransientGitHubStatus` unit assertion ({401,429,5xx,secondary-403}=true; {403-plain,404,422}=false).
+- [ ] 1.1 Add partial `_cron-shared` module mock spying on `postSentryHeartbeat` (use `importActual` spread to preserve siblings). Assert on the `ok` arg, NOT a fetch spy / makeStep().calls.
+- [ ] 1.2 A1: non-final attempt throw (`attempt:0,maxAttempts:2`) → `postSentryHeartbeat` NOT called, `.rejects.toThrow(/sweep failed/)`, `reportSilentFallback` called.
+- [ ] 1.3 A2: final attempt throw (`attempt:1,maxAttempts:2`) → heartbeat called with `{ ok: false }` + rethrow.
+- [ ] 1.4 A3: no-`attempt` legacy shape → error heartbeat (`ok:false`) on failure (backward-compat).
+- [ ] 1.5 A4: success on non-final attempt (`attempt:0,maxAttempts:2`) → heartbeat `{ ok: true }` (gating did not suppress a successful non-final check-in).
+- [ ] 1.6 A5: success on recovered attempt (`attempt:1,maxAttempts:2`) → `ok:true` + `logger.warn({ recovered_after_attempts: 1 })`.
 - [ ] 1.7 Run vitest → confirm new cases fail.
 
-## Phase 2 — GREEN: Fix A (attempt-gated heartbeat)
+## Phase 2 — GREEN
 
 - [ ] 2.1 `_cron-shared.ts`: add `attempt?: number; maxAttempts?: number;` to `HandlerArgs` (ONLY change).
-- [ ] 2.2 `cron-stale-deferred-scope-outs.ts`: destructure attempt/maxAttempts; compute `isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1)`; skip the heartbeat POST on non-final failed attempt (still `reportSilentFallback` + rethrow); error heartbeat only on final-attempt failure.
+- [ ] 2.2 `cron-stale-deferred-scope-outs.ts`: destructure attempt/maxAttempts; `isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1)`; success → `ok` (+ `recovered_after_attempts` warn when attempt>0); non-final failure → skip heartbeat POST + reportSilentFallback + rethrow; final failure → error heartbeat + rethrow.
 
-## Phase 3 — GREEN: Fix B (bounded transient retry)
+## Phase 3 — Verify
 
-- [ ] 3.1 `probe-octokit.ts`: extract + export `isTransientGitHubStatus(err)`; widen `createProbeOctokit` retry from 401-only to `!isTransientGitHubStatus(err)`, same 3-attempt / 1s,2s budget.
-- [ ] 3.2 `cron-stale-deferred-scope-outs.ts` `fetchCandidates`: wrap the `GET /search/issues` request in a bounded retry (2 retries, 1s/2s) using the shared predicate; permanent statuses rethrow immediately; preserve pagination.
+- [ ] 3.1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts` — green.
+- [ ] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean.
+- [ ] 3.3 `./node_modules/.bin/vitest run test/server/inngest/` — cohort green (HandlerArgs widening fallout check).
 
-## Phase 4 — Verify
+## Phase 4 — Post-merge re-verification (operator/ship — automatable)
 
-- [ ] 4.1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts` (+ probe-octokit test) — green.
-- [ ] 4.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean.
-- [ ] 4.3 `./node_modules/.bin/vitest run test/server/inngest/` — cohort green (HandlerArgs widening fallout check).
-
-## Phase 5 — Post-merge re-verification (operator/ship — automatable)
-
-- [ ] 5.1 Fire dry-run via `plugins/soleur/skills/trigger-cron/scripts/trigger.sh cron/stale-deferred-scope-outs.manual-trigger --data '{"dry_run": true}'`; confirm `ok` heartbeat.
-- [ ] 5.2 Confirm Sentry incident 5468023 clears to `ok` (recovery_threshold=1).
+- [ ] 4.1 Fire dry-run via `plugins/soleur/skills/trigger-cron/scripts/trigger.sh cron/stale-deferred-scope-outs.manual-trigger --data '{"dry_run": true}'`; confirm `ok` heartbeat.
+- [ ] 4.2 Confirm Sentry incident 5468023 clears to `ok` (recovery_threshold=1).
