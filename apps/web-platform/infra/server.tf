@@ -819,7 +819,12 @@ resource "terraform_data" "cron_egress_firewall" {
       "nft list chain ip filter SOLEUR-EGRESS | grep -q 'dport 8288 accept'",
       "nft list set ip filter soleur_egress_allow | grep -qE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+'",
       "nft list chain ip filter SOLEUR-EGRESS | grep -q 'cidr allowlist'",
-      "nft list set ip filter soleur_egress_allow_cidr | grep -q '140.82.112.0/20'",
+      # Match the GitHub octet, NOT the literal /20: nft renders an interval-set
+      # element as either the `/20` prefix OR the expanded range
+      # (140.82.112.0-140.82.127.255) depending on version — the literal prefix
+      # grep failed the apply post-check even though the set was correctly
+      # populated (proven live by a successful cron git clone). Display-agnostic.
+      "nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]'",
       "docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false",
       "systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer",
       # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches
