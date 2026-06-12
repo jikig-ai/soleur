@@ -41,7 +41,12 @@ service_status() {
 service_journal_tail() {
   local unit="$1"
   if command -v journalctl >/dev/null 2>&1; then
+    # #5159: belt-and-suspenders redaction before surfacing over /hooks/deploy-status
+    # (HMAC + CF-Access gated, but defense-in-depth). Neutralizes the one residual
+    # leak path — a binary echoing the inngest signing key (fixed `signkey-` prefix)
+    # in an error line. Hardens BOTH this new inngest tail and the existing vector tail.
     journalctl -u "$unit" --no-pager --output=cat -n 100 2>/dev/null \
+      | sed -E 's/signkey-(prod-)?[0-9a-fA-F]{4,}/signkey-REDACTED/g' \
       | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 8000 \
       || true
   fi
@@ -113,6 +118,10 @@ HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
+# #5159 follow-up 2: surface the inngest-server's OWN journal tail (its
+# sync/registration log) so a restart's re-register behavior is diagnosable with
+# no SSH — the decisive evidence the serveHost refutation left unseen.
+INNGEST_JOURNAL_TAIL="$(service_journal_tail inngest-server.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"
 
@@ -125,6 +134,18 @@ if [[ -f "$INNGEST_REGISTER_HTTP_FILE" ]]; then
   INNGEST_REGISTER_HTTP="$(tr -cd '0-9' < "$INNGEST_REGISTER_HTTP_FILE" 2>/dev/null | head -c 3)"
 fi
 INNGEST_REGISTER_HTTP="${INNGEST_REGISTER_HTTP:-n/a}"
+
+# #5159 follow-up 2: the re-register PUT's `modified` flag (true=real push,
+# false=sync-dedup no-op, unknown=no/garbled body). The datum the #5188
+# refutation left open. Sanitized to the literal token set.
+INNGEST_REGISTER_MODIFIED_FILE="${CI_DEPLOY_INNGEST_REGISTER_MODIFIED:-/var/lock/inngest-register-modified}"
+if [[ -f "$INNGEST_REGISTER_MODIFIED_FILE" ]]; then
+  INNGEST_REGISTER_MODIFIED="$(tr -cd 'a-z' < "$INNGEST_REGISTER_MODIFIED_FILE" 2>/dev/null | head -c 8)"
+fi
+case "${INNGEST_REGISTER_MODIFIED:-}" in
+  true|false|unknown) ;;
+  *) INNGEST_REGISTER_MODIFIED="n/a" ;;
+esac
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -144,8 +165,10 @@ jq -nc \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
+  --arg ij "$INNGEST_JOURNAL_TAIL" \
   --argjson ic "$INNGEST_CRONS" \
   --arg irh "$INNGEST_REGISTER_HTTP" \
+  --arg irm "$INNGEST_REGISTER_MODIFIED" \
   --argjson js "$JOURNALD_STORAGE" \
   '$base + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
@@ -153,6 +176,8 @@ jq -nc \
     inngest_server: $is,
     vector: $vs,
     vector_journal_tail: $vj,
+    inngest_journal_tail: $ij,
     inngest_register_http: $irh,
+    inngest_register_modified: $irm,
     inngest_crons: $ic
   })}'
