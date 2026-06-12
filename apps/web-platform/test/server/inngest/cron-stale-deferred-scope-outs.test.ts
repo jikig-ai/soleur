@@ -340,6 +340,45 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
     });
   });
 
+  it("retries a transient timeout on the comment POST and still closes (AC3 wrapper proof)", async () => {
+    vi.useFakeTimers();
+    try {
+      let commentAttempts = 0;
+      octokitRequestSpy.mockImplementation(async (route: string) => {
+        if (route === "GET /search/issues") {
+          return {
+            data: {
+              items: [makeIssue({ number: 500, labels: ["deferred-scope-out"] })],
+            },
+          };
+        }
+        if (
+          route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
+        ) {
+          commentAttempts += 1;
+          // Transient on the FIRST comment attempt, succeed on the second.
+          if (commentAttempts === 1) throw wrappedConnectTimeout();
+          return { data: {} };
+        }
+        return { data: {} };
+      });
+
+      const { cronStaleDeferredScopeOutsHandler } = await importModule();
+      const step = makeStep();
+      const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      await vi.runAllTimersAsync();
+      const result = await p;
+
+      // The comment was retried (proving the comment POST is wrapped, not just
+      // the search) and the issue still closed; no error-level mirror.
+      expect(commentAttempts).toBe(2);
+      expect(result.closed).toBe(1);
+      expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-escalates a SUSTAINED search outage to the handler net (AC6)", async () => {
     vi.useFakeTimers();
     try {

@@ -42,14 +42,21 @@ export function delay(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared transient-retry budget — single source of truth.
+// Shared transient-retry budget.
 //
-// 3 total attempts with exponential backoff (1 s, 2 s). Hoisted here so
-// fetchWithRetry (github-api.ts), createProbeOctokit's 401 path, and
-// withGithubRetry all share ONE budget definition.
+// 3 total attempts with exponential backoff (1 s, 2 s), imported by both
+// fetchWithRetry (github-api.ts) and withGithubRetry. Sibling retry sites
+// (createProbeOctokit's 401 path, github-app token/member probes) intentionally
+// keep their own local budgets — see their headers — and are NOT consumers of
+// these constants; do not assume parity is enforced for them here.
 // ---------------------------------------------------------------------------
 export const MAX_RETRIES = 2; // 3 total attempts
 export const BASE_DELAY_MS = 1_000;
+
+// Max cause-chain depth walked by isRetryableGithubError. Bounds the walk
+// against a self-referential `.cause` cycle; octokit's real chain is 3 links
+// (RequestError → TypeError "fetch failed" → { code: UND_ERR_CONNECT_TIMEOUT }).
+const MAX_CAUSE_DEPTH = 5;
 
 /**
  * Cause-chain-aware transient classifier. octokit.request() wraps a connect
@@ -69,7 +76,7 @@ export const BASE_DELAY_MS = 1_000;
  */
 export function isRetryableGithubError(err: unknown): boolean {
   let cur: unknown = err;
-  for (let depth = 0; depth < 5 && cur != null; depth++) {
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && cur != null; depth++) {
     if (isRetryable(cur)) return true;
     cur = (cur as { cause?: unknown }).cause;
   }

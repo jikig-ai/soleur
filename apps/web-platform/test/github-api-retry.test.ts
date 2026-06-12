@@ -1,10 +1,12 @@
 /**
- * GitHub API Retry Wrapper Tests
+ * GitHub API Retry Tests
  *
- * Tests the fetchWithRetry helper that adds timeout + retry logic to
- * GitHub API calls. Covers: success, retry on timeout, retry on 5xx,
- * no retry on 4xx, max retries exhausted, body drain on 5xx retry,
- * and undici-specific error codes.
+ * Two suites:
+ *  1. fetchWithRetry (github-api.ts) — success, retry on timeout, retry on 5xx,
+ *     no retry on 4xx, max retries exhausted, body drain on 5xx retry, and
+ *     undici-specific error codes.
+ *  2. isRetryableGithubError + withGithubRetry (github-retry.ts) — the
+ *     cause-chain classifier and the octokit-call retry wrapper.
  */
 import { generateKeyPairSync } from "crypto";
 
@@ -331,6 +333,24 @@ describe("isRetryableGithubError (cause-chain walk)", () => {
     }) as Error & { cause?: unknown };
     cyclic.cause = cyclic;
     expect(isRetryableGithubError(cyclic)).toBe(false);
+  });
+
+  test("deep non-cyclic chain of non-retryable causes → false (pins depth bound)", () => {
+    // A 6-link linear chain (deeper than MAX_CAUSE_DEPTH=5) of non-retryable
+    // errors stays false — proves the walk terminates on depth, not just on
+    // cycles, and never finds a transient cause that isn't there.
+    let chain: Error & { cause?: unknown } = Object.assign(new Error("leaf"), {
+      name: "HttpError",
+      status: 500,
+    });
+    for (let i = 0; i < 6; i++) {
+      chain = Object.assign(new Error(`link-${i}`), {
+        name: "HttpError",
+        status: 500,
+        cause: chain,
+      });
+    }
+    expect(isRetryableGithubError(chain)).toBe(false);
   });
 
   test("undefined / null → false", () => {
