@@ -111,23 +111,23 @@ sign-off required; the section is present per the gate.
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/infra/github-app-manifest.json` `default_permissions.checks` equals
+- [x] `apps/web-platform/infra/github-app-manifest.json` `default_permissions.checks` equals
       `"write"` (grep: `jq -r '.default_permissions.checks' apps/web-platform/infra/github-app-manifest.json` returns `write`).
-- [ ] `apps/web-platform/test/github-app-manifest-parity.test.ts` contains a test asserting
+- [x] `apps/web-platform/test/github-app-manifest-parity.test.ts` contains a test asserting
       `m.default_permissions?.checks` toBe `"write"` (mirrors the existing `administration` /
       `issues` value-assertion convention at lines 110-121), and the suite passes:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/github-app-manifest-parity.test.ts`.
-- [ ] `default_permissions` key SET is unchanged — only the `checks` *value* changes — so
+- [x] `default_permissions` key SET is unchanged — only the `checks` *value* changes — so
       `github-app-manifest-parity.test.ts` "exact-key-set" test (line 175) still passes with no
       edit to `EXPECTED_PERMISSION_KEYS` (`checks` is already in the key set at line 64).
-- [ ] `apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL` is created with a strict ISO-8601
+- [x] `apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL` is created with a strict ISO-8601
       UTC timestamp anchored to expected **deploy** time + ~24h (NOT merge — the drift guard reads
       the manifest + suppress file from the running container's filesystem, so the drift window
       opens at DEPLOY, not merge; ≤ 30-day cap enforced by drift-guard `SUPPRESS_MAX_WINDOW_MS`).
       Suppresses the self-inflicted `installation_permission_drift` alert in the deploy→re-accept
       window. (Verified mechanism: `cron-github-app-drift-guard.ts:235-275`; the suppress gate at
       `:407` short-circuits BOTH the App-level and per-installation diffs.)
-- [ ] Typecheck clean: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] Typecheck clean: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 - [ ] PR body uses `Ref #<tracking-issue>` (NOT `Closes`) for the live-grant tracking issue —
       the fix is not complete until the post-merge re-acceptance succeeds
       (`wg-use-closes-n-in-pr-body-not-title-to`, ops-remediation `Ref` rule).
