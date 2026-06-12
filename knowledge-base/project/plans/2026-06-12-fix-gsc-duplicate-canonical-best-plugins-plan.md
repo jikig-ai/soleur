@@ -11,6 +11,27 @@ classification: seo-diagnostic / no-code-change-required
 
 # 🐛 Fix GSC "Duplicate, Google chose different canonical than user" for `/blog/best-claude-code-plugins-2026/`
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-12
+
+**Deepen-plan gates run (all PASS):**
+
+- **4.6 User-Brand Impact halt** — section present; threshold `none` with non-empty reason; the sole candidate edit (`plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`) does NOT match the sensitive-path regex (`plugins/*/skills/`, not `apps/web-platform/{server,supabase,...}` / infra / secret-workflow), so no scope-out bullet is required.
+- **4.7 Observability gate** — section present; the only code-class edit is a CI lint gate, so the relevant liveness signals are *named, not added* (`sentry_uptime_monitor.soleur_www` for the 301; `validate-seo.sh` in `deploy-docs` CI for sitemap/canonical regressions).
+- **4.8 PAT-shaped variable halt** — no PAT-shaped TF vars / env vars / literal tokens. Pass.
+- **4.9 UI-wireframe halt** — no UI-surface files (CI shell script + docs only). Pass.
+- **4.4 Precedent-diff gate** — N/A: no SQL `SECURITY DEFINER`/atomic-write/lock/RPC/pool pattern; the optional Phase 2 gate mirrors the *existing* sitemap-host gate in the same file (precedent cited inline).
+- **4.5 Network-outage deep-dive** — N/A: the only network tokens (`301`, `curl`) are the *verified evidence*, not unresolved connectivity symptoms (no SSH/handshake/timeout/5xx failure being diagnosed).
+
+**Verify-the-negative pass (4.45) — all CONFIRMED against installed code:**
+
+- Plan claim "`validate-seo.sh` canonical check is presence-only (no host assertion)" → **CONFIRMED** (`grep -q 'rel="canonical"'` at the per-page check; no host comparison). This is the legitimate Phase 2 gap.
+- Plan claim "`social-distribute` links out, does not republish full text" → **CONFIRMED** (no republication directive in `SKILL.md`).
+- Live evidence re-confirmed at deepen time (drift guard): `www → 301 → apex`, `apex → 200`. PR #4729 still `MERGED`.
+
+**Key finding (carried from plan):** Both brief premises were falsified by live production — `base.njk` renders the **apex** canonical (not www), and there is **no external full-text copy**. The reported GSC class is the benign `www→apex` consolidation. **No required code change**; outcome is operator VALIDATE-FIX + wait, with an optional `validate-seo.sh` canonical-host hardening gate. No section warranted speculative research-deepening — the conclusion is grounded in live HTTP evidence + the `2026-06-01-gsc-page-with-redirect-is-historical-memory` precedent.
+
 ## Summary
 
 GSC reports **"Duplicate, Google chose different canonical than user"** for
