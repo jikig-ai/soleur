@@ -28,31 +28,31 @@ posts a private issue. Brand-critical (single-user incident).
       on a non-first-party email; PASS on `@jikigai.com` email + UUID + IPv4; ABORT on grep-error input.
 - [x] 1.2 GREEN: implement `plugins/soleur/skills/operator-digest/scripts/digest-scrub.sh` (secret classes
       hard-abort; email aborts unless first-party allowlist; UUID/IPv4 warn-only; grep exit 2 → abort).
-- [ ] 1.3 RED: skill static-contract test — frontmatter present, third-person ≤1024-char description, body
+- [x] 1.3 RED: skill static-contract test — frontmatter present, third-person ≤1024-char description, body
       names the 4 sources + "incident = frontmatter/title/status only, never body" + "write digest.md, do
       NOT post" + "even an all-empty week posts" + "reference the prior week's issue".
-- [ ] 1.4 GREEN: author `plugins/soleur/skills/operator-digest/SKILL.md` (≤30-word description; L1+L2;
+- [x] 1.4 GREEN: author `plugins/soleur/skills/operator-digest/SKILL.md` (≤30-word description; L1+L2;
       deterministic per-section fallback; chief-of-staff register; writes `$GITHUB_WORKSPACE/digest.md`; STOPS).
-- [ ] 1.5 Bump `plugins/soleur/test/components.test.ts:15` budget by the exact word count; `bun test
+- [x] 1.5 Bump `plugins/soleur/test/components.test.ts:15` budget by the exact word count; `bun test
       plugins/soleur/test/components.test.ts` green.
 
 ## Phase 2 — Workflow template + provisioning
-- [ ] 2.1 RED: workflow-lint test — `id-token: write` present; `show_full_output` ≠ true; `--allowedTools`
+- [x] 2.1 RED: workflow-lint test — `id-token: write` present; `show_full_output` ≠ true; `--allowedTools`
       contains `Write` AND NOT `gh issue create`; only `gh issue create` is a GHA `run:` post-step; a
       `digest-scrub.sh` post-step runs OUTSIDE the action; `rm digest.md` present; actions SHA-pinned;
       `plugin_marketplaces` pinned to soleur; no `cat`/`echo` of digest.md or ANTHROPIC_API_KEY.
-- [ ] 2.2 GREEN: author `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` from the
+- [x] 2.2 GREEN: author `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` from the
       `soleur:schedule` recurring template, hand-edited per Architecture (cross-repo checkout
       `persist-credentials: false`, scrub post-step + withheld-notice + rm, prior-week back-reference,
       `workflow_dispatch:`, drop vestigial label step).
-- [ ] 2.3 RED: provision-script test — `gh secret set` reads from stdin (no `--body "$VALUE"` argv leak);
+- [x] 2.3 RED: provision-script test — `gh secret set` reads from stdin (no `--body "$VALUE"` argv leak);
       fails loud if the Doppler value is empty.
-- [ ] 2.4 GREEN: author `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`
+- [x] 2.4 GREEN: author `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`
       (idempotent `gh repo create` + Doppler→stdin secret + install workflow + `gh workflow enable`).
 
 ## Phase 3 — Docs, budget, ADR
-- [ ] 3.1 `bash scripts/sync-readme-counts.sh`; both READMEs `--check` green.
-- [ ] 3.2 Author ADR via `/soleur:architecture create` (two-repo privilege-separated pipeline).
+- [x] 3.1 `bash scripts/sync-readme-counts.sh`; both READMEs `--check` green.
+- [x] 3.2 Author ADR via `/soleur:architecture create` (two-repo privilege-separated pipeline).
 - [ ] 3.3 PR body `## Changelog`; `semver:minor` label.
 
 ## Phase 4 — Pre-merge verification (local)
