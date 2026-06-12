@@ -7,6 +7,25 @@ sentry_issue: 448a4173f90a436382c4396371927796
 
 # 🐛 fix: Make `cron-stale-deferred-scope-outs` GitHub calls resilient to transient connect timeouts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-12
+**Agents used:** architecture-strategist (correctness), framework-docs-researcher (octokit/undici runtime semantics against installed node_modules), code-simplicity-reviewer (YAGNI).
+
+### Key improvements from the deepen pass
+
+1. **P0 correctness gap caught & fixed.** The original plan assumed reusing `isRetryable` would classify the connect timeout. framework-docs verified against installed `@octokit/request`/`@octokit/request-error` that octokit wraps the undici error in a `RequestError` (`HttpError`, `status:500`) with the `UND_ERR_CONNECT_TIMEOUT` code buried at `.cause.cause` — so top-level `isRetryable` MISSES it and the fix would silently not work. Plan now adds `isRetryableGithubError` (a cause-chain walk) and the regression test AC4 seeds octokit's *real* thrown shape, not a bare `TypeError`.
+2. **Idempotency over-claim corrected (P1).** The comment POST is non-idempotent; the plan no longer claims idempotency the code lacks, documents the pre-existing double-comment-on-replay window, and tracks it as follow-up F2 (not folded in).
+3. **Simplified per YAGNI.** Dropped the `withGithubRetry` `opts` param (no caller uses it), reused the existing `MAX_RETRIES`/`BASE_DELAY_MS` constants (hoisted to the leaf, one source of truth) instead of new `DEFAULT_*` duplicates, re-anchored the helper's justification on existing inline-loop de-duplication, and collapsed redundant test ceremony (single helper-test home + cron integration tests).
+
+### Research Insights
+
+- **octokit error shape (verified, installed):** connect timeout → `RequestError{ name:"HttpError", status:500, message:"fetch failed", cause: TypeError{ message:"fetch failed", cause:{ code:"UND_ERR_CONNECT_TIMEOUT" } } }`. Source: `node_modules/@octokit/request/dist-src/fetch-wrapper.js` (catch block wraps + sets `requestError.cause = error`, hardcodes status 500), `node_modules/@octokit/request-error/dist-src/index.js` (does NOT copy `.code` to top level). Versions: `@octokit/core@7.0.6`, `@octokit/app@16.1.2`, `@octokit/request-error@7.0.2`.
+- **No default retry plugin (verified):** `@octokit/core` and `@octokit/app` `getInstallationOctokit()` wire NO `@octokit/plugin-retry` — confirmed in `node_modules/@octokit/core/dist-src/index.js` and `@octokit/app/dist-src/get-installation-octokit.js`. The codebase's `github-retry.ts` is the only transient defense, and it was not on the octokit path.
+- **Budget precedent (Phase 4.4 precedent-diff):** `MAX_RETRIES=2 / BASE_DELAY_MS=1_000` is canonical across `github-api.ts:23-24` (`fetchWithRetry`) and `probe-octokit.ts:41-42` (`createProbeOctokit` 401 path). No novel pattern; `withGithubRetry` reuses it.
+- **Scheduled-work check (Phase 4.4):** not a new cron — modifying an existing Inngest function (42 `cron-*` functions present); Inngest precedent (ADR-033) already satisfied. No GH-Actions-cron consideration.
+- **Network-outage checklist (Phase 4.5):** NOT triggered as an infra/SSH outage — this is an L7 application-layer transient connect timeout fixed with code-level retry, not an SSH/firewall/DNS diagnosis. The L3→L7 firewall checklist (`hr-ssh-diagnosis-verify-firewall`) does not apply (no server, no SSH, no egress-IP allowlist in scope).
+
 ## Overview
 
 Production Sentry issue `448a4173f90a436382c4396371927796` (web-platform, prod, release `web-platform@0.122.9`, `handled: yes`, feature tag `pino-mirror`, runtime node v22.22.1) fired:
@@ -31,9 +50,13 @@ The escalation path that produced the Sentry event:
 
 ### The fix (minimal, precedent-aligned)
 
-Wrap the octokit calls in an in-step transient-retry loop using the **existing canonical classifier** `isRetryable` from `apps/web-platform/server/github-retry.ts` — which already classifies exactly this error (`UND_ERR_CONNECT_TIMEOUT`, `TypeError: fetch failed`, `TimeoutError`, `ECONNRESET`, etc.). Add a tiny shared `withGithubRetry(fn)` helper to `github-retry.ts` (MAX_RETRIES=2, BASE_DELAY 1 s → 1 s, 2 s — the same budget as `fetchWithRetry` and `createProbeOctokit`'s 401 path) and route the sweep's octokit calls through it. A transient connect timeout is then absorbed (retried in-step, exponential backoff) and never reaches the handler's error-level mirror.
+Wrap the octokit calls in an in-step transient-retry loop using a **cause-chain-aware** transient classifier built on the existing `isRetryable` from `apps/web-platform/server/github-retry.ts`. Add a tiny shared `withGithubRetry(fn)` helper to `github-retry.ts` (reusing the canonical `MAX_RETRIES=2` / `BASE_DELAY_MS=1_000` budget — 1 s, 2 s — shared with `fetchWithRetry` and `createProbeOctokit`'s 401 path) and route the sweep's octokit calls through it. A transient connect timeout is then absorbed (retried in-step, exponential backoff) and never reaches the handler's error-level mirror.
+
+> **⚠️ P0 correctness gap caught at deepen-plan (do NOT skip).** `octokit.request(...)` does **not** rethrow the raw undici `TypeError: fetch failed` on a connect timeout. Verified against installed `@octokit/request@dist-src/fetch-wrapper.js` + `@octokit/request-error@dist-src/index.js`: octokit **wraps** it in a `RequestError` (`.name === "HttpError"`, **`.status === 500` hardcoded**), copies the cause's message so `.message === "fetch failed"`, and stores the original error at `.cause` (whose own `.cause` carries `code: "UND_ERR_CONNECT_TIMEOUT"`). `RequestError` does NOT copy `.code` to the top level. So the existing `isRetryable(err)` — which keys on `err instanceof TypeError && err.message === "fetch failed"` OR a top-level `err.code` — **MISSES this error entirely**: the thrown object is a `RequestError`, not a `TypeError`, with no top-level `.code` and a non-retryable-looking `.status` of 500. **A naive reuse of `isRetryable` would silently not retry the exact Sentry error.** The fix MUST classify via a cause-chain walk (see Phase 1 `isRetryableGithubError`). This is the single most important change in this plan.
 
 This is strictly a resilience addition. It does NOT change the sweep's semantics, counters, dry-run behavior, replay-safety guards (I7), or the Inngest `retries: 1` outer policy (which remains as a last-resort net for a sustained outage that exhausts the in-step budget).
+
+> **Idempotency caveat (P1, from architecture review).** The per-issue **comment POST is non-idempotent** — every POST creates a new comment. The file header's I5 "already closed" tolerance covers the close PATCH, NOT the comment. This fix strictly *reduces* the throw frequency that triggers an Inngest-level replay (so it reduces double-comment risk), but does not eliminate a pre-existing double-comment window: if the comment succeeds and a later **un-caught** throw escapes the whole `step.run` (e.g. the `fetchCandidates` search exhausts its retry budget — that call is OUTSIDE the per-issue try), Inngest `retries: 1` re-runs the sweep, the still-`is:open` issue re-surfaces (not short-circuited by the `state === "closed"` guard), and gets commented a second time. This plan does NOT claim to close that window (it is pre-existing); it is tracked as a follow-up (see Follow-ups). Per-call wrapping (vs whole-sweep wrapping) is the correct granularity precisely because whole-sweep retry would re-comment EVERY already-commented issue on each attempt.
 
 ### Why not just downgrade the Sentry level?
 
@@ -53,7 +76,7 @@ The related learning (`2026-06-08-handled-error-sentry-event-from-fail-closed-mi
 | Spec/Task claim | Codebase reality | Plan response |
 | --- | --- | --- |
 | "wrap the fetch in an Inngest step so it gets step-level retries" | The call is already inside `step.run`; Inngest step retries are governed by function-level `retries: 1`, and a throw re-runs the whole step (not the single call). Step-level retry alone still emits one error-level mirror per failed attempt before Inngest retries. | Add **in-step** transient retry around the octokit calls so the transient is absorbed before it can throw out of the step. Keep `retries: 1` as the outer net. |
-| "add explicit retry/backoff + a sane timeout" | Codebase has a canonical classifier (`github-retry.ts isRetryable`) + backoff idiom (`fetchWithRetry`, `createProbeOctokit`). undici's 10 s connect timeout is already a "sane" per-attempt timeout; the gap is retry, not timeout length. | Reuse `isRetryable`; add a `withGithubRetry` wrapper (1 s/2 s backoff, 3 total attempts). Do NOT lengthen the per-attempt connect timeout (retrying a fresh connection beats waiting longer on a dead one). |
+| "add explicit retry/backoff + a sane timeout" | Codebase has a classifier (`github-retry.ts isRetryable`) + backoff idiom (`fetchWithRetry`, `createProbeOctokit`). BUT `isRetryable` keys on the TOP-LEVEL error; octokit buries the undici code under a `RequestError.cause.cause` chain, so `isRetryable` alone MISSES the connect timeout (P0, deepen-plan). undici's 10 s connect timeout is already a "sane" per-attempt timeout; the gap is retry classification, not timeout length. | Add `isRetryableGithubError` (cause-chain walk over `isRetryable`) + `withGithubRetry` wrapper (1 s/2 s, 3 attempts). Do NOT lengthen the per-attempt connect timeout (retrying a fresh connection beats waiting on a dead one). |
 | "consistent with how other crons call GitHub" | Other crons use `createProbeOctokit()` with no per-call retry — there is no existing per-call octokit-retry precedent to copy; the precedent is the raw-`fetch` `fetchWithRetry`. | Establish the helper in the shared leaf `github-retry.ts` (where `isRetryable` already lives) so it is the new shared precedent. |
 
 ## User-Brand Impact
@@ -62,20 +85,24 @@ The related learning (`2026-06-08-handled-error-sentry-event-from-fail-closed-mi
 
 **If this leaks, the user's data is exposed via:** N/A — the cron touches only operator-owned GitHub issue metadata (issue numbers, titles, labels). No founder/user data, no Supabase, no PII, no secrets are read or written by the changed code path. `createProbeOctokit` is explicitly the synthetic-probe, non-audit-writer client (see its file header).
 
-**Brand-survival threshold:** none — operator-internal automation, no user-facing surface, no regulated-data surface. The diff touches `apps/*/server/inngest/functions/` and `apps/*/server/github-retry.ts`; neither is a sensitive path under preflight Check 6 (no schema/migration/auth/API-route/`.sql`). Reason for `none`: the changed code only issues GitHub-API calls against the operator's own repo and mirrors transient failures to Sentry; a worst-case bug delays a janitorial backlog sweep by one daily cron cycle.
+**Brand-survival threshold:** none — operator-internal automation, no user-facing surface, no regulated-data surface.
+
+- `threshold: none, reason: the changed files under apps/web-platform/server/** match the preflight Check-6 sensitive-path regex by directory, but the code touches only GitHub-issue metadata on the operator's own repo via the synthetic-probe (non-audit-writer) Octokit — no founder/user data, no auth flow, no schema/migration/secret — and a worst-case bug only delays a janitorial backlog sweep by one daily cron cycle.`
+
+Note: two edited paths (`apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts`, `apps/web-platform/server/github-retry.ts`) DO match the canonical sensitive-path regex `^apps/web-platform/(server|…)` by prefix, so the `threshold: none` declaration above carries the mandatory scope-out reason (deepen-plan Phase 4.6 Step 2 / preflight Check 6). The match is purely path-prefix; the actual data surface is operator-internal GitHub-issue metadata.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Shared retry helper exists.** `apps/web-platform/server/github-retry.ts` exports `withGithubRetry<T>(fn: () => Promise<T>, opts?): Promise<T>` that retries `fn` up to 2 times (3 total attempts) with exponential backoff (1 s, 2 s) **only** when `isRetryable(err)` is true, and rethrows immediately on any non-retryable error or after exhausting the budget. Verify: `git grep -n "export function withGithubRetry" apps/web-platform/server/github-retry.ts` returns 1 hit.
+- [ ] **AC1 — Shared classifier + retry helper exist.** `apps/web-platform/server/github-retry.ts` exports BOTH `isRetryableGithubError(err)` (cause-chain walk, bounded depth 5) AND `withGithubRetry<T>(fn: () => Promise<T>): Promise<T>` (no `opts` param) that retries up to 2 times (3 total attempts, 1 s/2 s) **only** when `isRetryableGithubError(err)` is true, rethrowing otherwise. The budget constants `MAX_RETRIES`/`BASE_DELAY_MS` are defined in this leaf (hoisted from `github-api.ts`) and imported by `fetchWithRetry` — no `DEFAULT_*` duplicates. Verify: `git grep -n "export function withGithubRetry\|export function isRetryableGithubError" apps/web-platform/server/github-retry.ts` returns 2 hits; `git grep -nc "MAX_RETRIES = 2" apps/web-platform/server/github-retry.ts apps/web-platform/server/github-api.ts` shows the literal defined once (in the leaf).
 - [ ] **AC2 — Sweep search is wrapped.** In `cron-stale-deferred-scope-outs.ts`, the `octokit.request("GET /search/issues", …)` call inside `fetchCandidates` is routed through `withGithubRetry`. Verify by reading: the call is inside `withGithubRetry(() => octokit.request("GET /search/issues", …))`.
-- [ ] **AC3 — Per-issue comment + close are wrapped.** The `POST …/comments` and `PATCH …/issues/{issue_number}` calls in `sweepStaleScopeOuts` are each routed through `withGithubRetry` (so a transient blip on comment-or-close retries in-step before falling into the existing per-issue `catch`). The existing per-issue try/catch (swallow-and-continue + `reportSilentFallback`) is preserved as the terminal net AFTER the retry budget is exhausted.
-- [ ] **AC4 — Transient connect timeout no longer escalates (new test).** A new unit test seeds `octokitRequestSpy` to throw a `TypeError` with `message === "fetch failed"` (and a variant with `code: "UND_ERR_CONNECT_TIMEOUT"`) on the FIRST `GET /search/issues` attempt and resolve on the SECOND. Assert: (a) the sweep completes successfully, (b) `reportSilentFallbackSpy` is NOT called for the transient, (c) the candidate list reflects the second (successful) response. This is the regression test for the Sentry issue.
-- [ ] **AC5 — Non-retryable errors still surface.** A test seeds a non-retryable error (e.g. `{ status: 403 }`) on the comment/close path and asserts `withGithubRetry` does NOT retry (spy call count == 1 for that issue's first failing request) and the existing `reportSilentFallback` mirror with `op: "issue_write_403"` still fires — i.e. resilience does not mask the genuine `issues:write`-missing 403 discriminator (#4189).
-- [ ] **AC6 — Sustained outage still reaches the handler net.** A test seeds a retryable error on ALL attempts of the sweep's first `GET /search/issues`; assert the helper exhausts 3 attempts then rethrows, the handler's outer catch fires `reportSilentFallback` with `op: "sweep"`, the heartbeat posts `ok: false`, and the handler rethrows (Inngest retry preserved).
-- [ ] **AC7 — `isRetryable` not duplicated.** The new helper imports `isRetryable` from the same module; no new copy of the undici-code list is introduced in `cron-stale-deferred-scope-outs.ts`. Verify: `git grep -n "UND_ERR_CONNECT_TIMEOUT" apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts` returns 0 hits.
-- [ ] **AC8 — Typecheck + tests green.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0. `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts test/github-api-retry.test.ts` passes (existing + new cases).
+- [ ] **AC3 — Per-issue comment + close are wrapped (separately).** The `POST …/comments` and `PATCH …/issues/{issue_number}` calls in `sweepStaleScopeOuts` are each routed through `withGithubRetry` as **two separate** wrapped calls (NOT one wrapper around both — that would re-POST the comment on a close-timeout retry). The existing per-issue try/catch (swallow-and-continue + `reportSilentFallback`) is preserved as the terminal net AFTER the retry budget is exhausted.
+- [ ] **AC4 — Transient connect timeout no longer escalates (regression test for the Sentry issue).** A new test seeds `octokitRequestSpy` to throw, on the FIRST `GET /search/issues` attempt, **the error shape octokit actually throws** — a `RequestError`-like object: `Object.assign(new Error("fetch failed"), { name: "HttpError", status: 500, cause: Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }) })` — and resolve on the SECOND. Assert: (a) the sweep completes successfully, (b) `reportSilentFallbackSpy` is NOT called for the transient, (c) the candidate list reflects the second response. **Do NOT seed a bare `TypeError` — that does not match production and would let the test pass while `isRetryableGithubError` still misses the real wrapper.** (The `isRetryableGithubError` cause-chain classification itself is unit-tested directly in `github-api-retry.test.ts` per AC8 — this AC4 is the cron-integration regression.)
+- [ ] **AC5 — Non-retryable errors still surface.** A test seeds a non-retryable error (`Object.assign(new Error("Forbidden"), { name: "HttpError", status: 403 })`) on the comment path and asserts `withGithubRetry` does NOT retry (spy called once for that request) and the existing `reportSilentFallback` mirror with `op: "issue_write_403"` still fires — resilience does not mask the genuine `issues:write`-missing 403 discriminator (#4189). (A 403 has no transient cause in its chain → `isRetryableGithubError` returns false → rethrown on attempt 1.)
+- [ ] **AC6 — Sustained outage still reaches the handler net** (fold into the cron test, not a separate scenario). Seed a retryable error (RequestError-wrapped, as AC4) on ALL attempts of the first `GET /search/issues`; assert the handler's outer catch fires `reportSilentFallback` with `op: "sweep"`, heartbeat `ok: false`, and the handler rethrows (Inngest retry preserved). The "exhaust 3 then rethrow" mechanics are a `withGithubRetry` property covered directly in the helper unit tests (AC8); this AC only confirms the cron wiring.
+- [ ] **AC7 — No duplicated undici-code list.** The cron does not hand-roll a transient classifier; it imports `withGithubRetry`. Verify: `git grep -n "UND_ERR_CONNECT_TIMEOUT" apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts` returns 0 hits.
+- [ ] **AC8 — Helper unit tests + typecheck + suite green.** New direct unit tests in `apps/web-platform/test/github-api-retry.test.ts` cover `isRetryableGithubError` (RequestError-wrapped UND_ERR_CONNECT_TIMEOUT at depth 2 → true; bare 403 RequestError → false; cycle-safe) and `withGithubRetry` (retryable-then-success, non-retryable-immediate-rethrow, exhaust-3-then-rethrow) using `vi.useFakeTimers()`. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0. `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts test/github-api-retry.test.ts` passes.
 
 ### Post-merge (operator)
 
@@ -83,51 +110,68 @@ The related learning (`2026-06-08-handled-error-sentry-event-from-fail-closed-mi
 
 ## Implementation Phases
 
-### Phase 1 — Add `withGithubRetry` to the shared leaf (`github-retry.ts`)
+### Phase 1 — Add the cause-chain classifier + `withGithubRetry` to the shared leaf (`github-retry.ts`)
 
-Append a wrapper next to `isRetryable` / `delay`. Mirror the budget of `fetchWithRetry` (MAX_RETRIES=2, BASE_DELAY_MS=1_000):
+Two additions next to `isRetryable` / `delay`. **First**, a cause-chain-aware classifier (this is the P0 fix — see the warning in Overview). octokit wraps the undici error in a `RequestError`, so `isRetryable` must be applied to each link of the `.cause` chain, not just the top-level error:
 
 ```ts
 // apps/web-platform/server/github-retry.ts (appended)
 
-const DEFAULT_MAX_RETRIES = 2;      // 3 total attempts
-const DEFAULT_BASE_DELAY_MS = 1_000; // 1s, 2s
+/**
+ * Cause-chain-aware transient classifier. octokit.request() wraps a connect
+ * timeout in a RequestError (name "HttpError", status 500) whose `.cause` is
+ * the raw `TypeError: fetch failed`, whose own `.cause` carries
+ * `{ code: "UND_ERR_CONNECT_TIMEOUT" }`. Top-level `isRetryable` MISSES that
+ * wrapper (not a TypeError, no top-level `.code`). Walk the cause chain so the
+ * undici code / "fetch failed" is found wherever octokit buried it.
+ * Bounded depth (5) guards against a self-referential cause cycle.
+ */
+export function isRetryableGithubError(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 5 && cur != null; depth++) {
+    if (isRetryable(cur)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /**
- * Run `fn`, retrying ONLY on transient network errors (isRetryable) with
- * exponential backoff. Non-retryable errors (4xx, auth, shape) and the final
- * attempt's error rethrow immediately. Use to wrap octokit.request() calls in
- * crons so a single api.github.com connect-timeout does not escalate to Sentry.
+ * Run `fn`, retrying ONLY on transient network errors (isRetryableGithubError)
+ * with exponential backoff (reuses the canonical MAX_RETRIES / BASE_DELAY_MS
+ * budget below). Non-retryable errors (4xx auth, shape, a genuine GitHub 5xx
+ * with no transient cause) and the final attempt's error rethrow immediately.
+ * Wrap octokit.request() calls in crons so a single api.github.com
+ * connect-timeout does not escalate to Sentry.
  */
-export async function withGithubRetry<T>(
-  fn: () => Promise<T>,
-  opts: { maxRetries?: number; baseDelayMs?: number } = {},
-): Promise<T> {
-  const maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
-  const baseDelayMs = opts.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+export async function withGithubRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      if (attempt < maxRetries && isRetryable(err)) {
-        await delay(baseDelayMs * 2 ** attempt);
+      if (attempt < MAX_RETRIES && isRetryableGithubError(err)) {
+        await delay(BASE_DELAY_MS * 2 ** attempt);
         continue;
       }
       throw err;
     }
   }
-  // Unreachable: loop returns or the final attempt rethrows.
-  throw new Error("withGithubRetry: retry loop fell through");
+  throw new Error("withGithubRetry: unreachable"); // loop returns or rethrows
 }
 ```
 
-Keep it logger-free (the leaf is dependency-free; callers own observability via their existing catch + `reportSilentFallback`). This preserves the leaf's no-cycle property.
+**Budget constants (single source of truth).** Hoist `MAX_RETRIES = 2` and `BASE_DELAY_MS = 1_000` into this leaf (they currently live privately in `github-api.ts:23-24`) and have `fetchWithRetry` import them, so the 1 s/2 s budget is defined ONCE. Do NOT introduce new `DEFAULT_*` constants (the simplicity review flagged that as triplication). Verify `github-api.ts` still compiles after the import swap.
+
+**No `opts` parameter.** Every call site in this PR uses the defaults; a configurable signature is YAGNI. If a future caller needs a different budget, widen then.
+
+Keep the leaf logger-free (dependency-free; callers own observability via their existing catch + `reportSilentFallback`). This preserves the no-cycle property.
+
+> **Subtlety:** octokit's wrapper sets `.status = 500`. Do NOT add a "retry on status>=500" arm — that would also retry genuine GitHub 5xx responses (which octokit ALSO surfaces as `RequestError` with the real status), broadening scope beyond the connect-timeout bug. The cause-chain walk is precise: it retries only when a real undici/timeout code is present in the chain. A genuine 500 with no transient cause is correctly NOT retried.
 
 ### Phase 2 — Route the sweep's octokit calls through `withGithubRetry`
 
 In `cron-stale-deferred-scope-outs.ts`:
 
-1. Import: `import { withGithubRetry } from "@/server/github-retry";`
+1. Import: `import { withGithubRetry } from "@/server/github-retry";` (the cron needs only `withGithubRetry`; `isRetryableGithubError` is internal to the helper).
 2. In `fetchCandidates`, wrap the search request:
    ```ts
    const res = await withGithubRetry(() =>
@@ -213,23 +257,31 @@ Disposition: **None pre-verified in this planning pass (offline-safe).** The imp
 
 ## Follow-ups (deferred, tracked)
 
-- **`createProbeOctokit()` transient-retry widening** + applying `withGithubRetry` to the sibling crons `cron-github-app-drift-guard.ts` and `cron-oauth-probe.ts` (same octokit-no-retry gap). Deferred because the Sentry issue named only `cron-stale-deferred-scope-outs`; widening now would inflate the diff and blast radius beyond the reported bug. **Action at `/work`:** file a GitHub issue (label `code-review` or `chore`, verify label exists via `gh label list` first) titled "Apply withGithubRetry to remaining probe-octokit cron call sites (drift-guard, oauth-probe, installation discovery)" with re-eval trigger = "next api.github.com connect-timeout Sentry event from those fnIds".
+- **F1 — `createProbeOctokit()` transient-retry widening + sibling crons.** Apply `withGithubRetry` / `isRetryableGithubError` to `cron-github-app-drift-guard.ts` and `cron-oauth-probe.ts` (same octokit-no-retry gap) and widen `createProbeOctokit`'s installation-discovery retry beyond 401-only to all transient causes. Deferred because the Sentry issue named only `cron-stale-deferred-scope-outs`; widening now would inflate the diff and blast radius. **Action at `/work`:** file a GitHub issue (verify label via `gh label list` first) titled "Apply withGithubRetry to remaining probe-octokit cron call sites (drift-guard, oauth-probe, installation discovery)", re-eval trigger = "next api.github.com connect-timeout Sentry event from those fnIds".
+- **F2 — Non-idempotent auto-close comment (architecture review P1).** The comment POST can double-fire if the comment succeeds, a later un-caught throw escapes `step.run`, and Inngest re-runs the sweep (the still-`is:open` issue re-surfaces). This window is **pre-existing** (not introduced by this fix; the fix reduces its frequency). Minimal future guard: before POSTing, check the issue's recent comments for the `COMMENT_BODY` sentinel and skip if present. **Action at `/work`:** file a tracking issue (re-eval trigger = "any operator report of duplicate auto-close comments, or a `comment-and-close` Sentry op spike"). Do NOT fold into this PR — it is orthogonal to the connect-timeout fix.
 
 ## Test Scenarios
 
-| Scenario | Setup | Expected |
-| --- | --- | --- |
-| Transient search timeout, recovers | search rejects once (`TypeError: fetch failed`), then resolves | sweep succeeds, 0 `reportSilentFallback`, candidates from 2nd response |
-| Transient via undici code | search rejects once (`code: UND_ERR_CONNECT_TIMEOUT`), then resolves | same as above |
-| Transient comment timeout, recovers | comment rejects once retryable, then resolves; close resolves | issue closed, counter advances, 0 mirror |
-| Genuine 403 on close | close rejects `{ status: 403 }` (non-retryable) | single attempt, `op: "issue_write_403"` mirror, sweep continues |
-| Sustained search outage | search rejects retryable on all 3 attempts | 3 attempts, rethrow, `op: "sweep"` mirror, heartbeat ok:false, handler rethrows |
-| Dry-run unaffected | `dry_run: true`, search resolves | candidates listed, no comment/close calls, no retries needed |
+All retryable setups use octokit's **real thrown shape** (a `RequestError`-like object with `name:"HttpError"`, `status:500`, and the undici code at `.cause.cause.code`) — never a bare `TypeError` (see AC4 rationale). Helper-property scenarios live in `github-api-retry.test.ts`; cron-integration scenarios in the cron test.
+
+| Scenario | Home | Setup | Expected |
+| --- | --- | --- | --- |
+| Classifier: wrapped connect-timeout → retryable | helper test | `RequestError{cause: TypeError{cause:{code:UND_ERR_CONNECT_TIMEOUT}}}` | `isRetryableGithubError` returns true (depth-2 walk) |
+| Classifier: bare 403 → not retryable | helper test | `RequestError{status:403}`, no transient cause | returns false |
+| Classifier: cycle-safe | helper test | object whose `.cause` points to itself | returns false, no hang (depth bound) |
+| Helper: retryable-then-success | helper test | fn rejects retryable once, resolves | resolves with 2nd value, 1 backoff (fake timers) |
+| Helper: non-retryable immediate rethrow | helper test | fn rejects 403 | rethrows on attempt 1, 0 backoff |
+| Helper: exhaust-then-rethrow | helper test | fn rejects retryable ×3 | rethrows after 3 attempts, 2 backoffs |
+| Cron: transient search recovers (AC4 regression) | cron test | search rejects retryable once, resolves | sweep succeeds, 0 `reportSilentFallback`, candidates from 2nd response |
+| Cron: genuine 403 on comment (AC5) | cron test | comment rejects `RequestError{status:403}` | single attempt, `op:"issue_write_403"` mirror, sweep continues |
+| Cron: sustained search outage (AC6) | cron test | search rejects retryable ×3 | `op:"sweep"` mirror, heartbeat ok:false, handler rethrows |
 
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only TBD/placeholder, or omits the threshold will fail `deepen-plan` Phase 4.6. This section is filled with threshold `none` + a non-empty reason (operator-internal automation).
-- `withGithubRetry` must classify via the SHARED `isRetryable` — do not hand-roll a second undici-code list in the cron (AC7). The codebase already has a mild duplication between `github-retry.ts isRetryable` and `send-with-retry.ts isTransientFetchError`; do not add a third copy.
+- **`isRetryable` alone does NOT match octokit's thrown error.** Verified against installed `@octokit/request`/`@octokit/request-error`: `octokit.request(...)` wraps a connect timeout in a `RequestError` (`name:"HttpError"`, `status:500`), copies the cause message (`.message === "fetch failed"`), and buries the original `TypeError` + `{code:"UND_ERR_CONNECT_TIMEOUT"}` under `.cause.cause`. `isRetryable` keys on the TOP-LEVEL error (`instanceof TypeError` / top-level `.code`) and MISSES it. `withGithubRetry` MUST use `isRetryableGithubError` (cause-chain walk). A naive `isRetryable`-only reuse compiles, passes a bare-`TypeError` test, and silently fails in prod — this is the load-bearing correctness point.
+- `withGithubRetry`/`isRetryableGithubError` build on the SHARED `isRetryable` — do not hand-roll a second undici-code list in the cron (AC7). The codebase already has a mild duplication between `github-retry.ts isRetryable` and `send-with-retry.ts isTransientFetchError`; do not add a third copy.
+- Do NOT add a `status >= 500` retry arm to `withGithubRetry` to "simplify" classification — octokit also surfaces genuine GitHub 5xx as `RequestError` with the real status, so a status-based arm would over-retry real server errors. The cause-chain walk is precise.
 - The per-issue retry wrapping goes INSIDE the existing per-issue `try` so the existing swallow-and-continue catch (and its `op: "issue_write_403"` / `op: "comment-and-close"` discriminator) stays the terminal net once the retry budget is exhausted. A 403 is non-retryable → rethrown on attempt 1 → lands in that catch unchanged.
 - Typecheck for this package is `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — NOT `npm run -w apps/web-platform typecheck` (the repo root declares no `workspaces`).
 - Tests run under vitest; the new test file path must match the node project glob `test/**/*.test.ts` (the existing test already satisfies this). Use `vi.useFakeTimers()` for the `withGithubRetry` backoff so the suite does not actually sleep 1 s/2 s.
