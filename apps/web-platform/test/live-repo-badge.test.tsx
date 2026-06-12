@@ -109,9 +109,15 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     render(<LiveRepoBadge />);
     await screen.findByTestId("revocation-interstitial");
 
-    // user dismisses the notice
+    // user dismisses the notice — dismissal is an async state commit
+    // (setDismissed(true) → re-render → return null), so poll until the node
+    // is gone rather than asserting on an arbitrary tick (vacuous-absence-wait
+    // class, #5234/#5113).
     fireEvent.click(screen.getByRole("button", { name: /dismiss notice/i }));
-    expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
+    await vi.waitFor(
+      () => expect(screen.queryByTestId("revocation-interstitial")).toBeNull(),
+      { timeout: 10_000 }, // #5113 — tolerate forked-worker CPU starvation
+    );
 
     // regained access (fellBackToSolo:false) — stays hidden, no re-arm.
     // Reset the coalescing latch between simulated focus events: in production
@@ -148,11 +154,17 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
       }),
     );
     render(<LiveRepoBadge />);
-    const interstitial = await screen.findByTestId("revocation-interstitial");
+    // prove the interstitial was present before dismissal, then poll until the
+    // async dismissal commit removes it — a bare synchronous check races the
+    // re-render under load (vacuous-absence-wait class, #5234/#5113).
+    await screen.findByTestId("revocation-interstitial");
     fireEvent.click(
       screen.getByRole("button", { name: /dismiss notice/i }),
     );
-    expect(interstitial).not.toBeInTheDocument();
+    await vi.waitFor(
+      () => expect(screen.queryByTestId("revocation-interstitial")).toBeNull(),
+      { timeout: 10_000 }, // #5113 — tolerate forked-worker CPU starvation
+    );
   });
 
   it("renders nothing until the first poll resolves (no flash for solo users)", () => {
