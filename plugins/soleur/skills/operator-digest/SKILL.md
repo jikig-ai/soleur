@@ -74,7 +74,7 @@ Source: merged pull requests in the window.
 # EMPTY for a cross-repo query under the in-action App-installation token (#3403 class) — it
 # would silently render "Nothing shipped" every week. The List API works cross-repo (same path
 # as the action-required read below). Filter by mergedAt >= $SINCE in your synthesis.
-gh pr list -R jikig-ai/soleur --state merged --limit 100 \
+gh pr list -R jikig-ai/soleur --state merged --limit 300 \
   --json title,labels,mergedAt
 ```
 
