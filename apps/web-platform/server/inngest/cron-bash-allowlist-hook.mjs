@@ -351,13 +351,21 @@ export function parseAllowlist(lines) {
   return { bash, mcpAllow, navigateOrigin };
 }
 
-// Token-shaped secrets that must never ride a query string / fragment to the
+// PREFIX-SHAPED token secrets that must never ride a same-origin URL to the
 // allowlisted origin (defense-in-depth atop the secret-read denials — a
-// secret-in-querystring exfil to app.soleur.ai is the residual leg the
-// content-blind egress firewall cannot see). The origin guard below is the
-// load-bearing close; this is the belt-and-suspenders for the allowed origin.
+// secret-in-URL exfil to app.soleur.ai is the residual leg the content-blind
+// egress firewall cannot see). The origin guard below is the load-bearing
+// close; this is a best-effort second layer for the allowed origin.
+// SCOPE/LIMITS: browserNavigateReason scans the path + search + hash (and
+// rejects any userinfo outright), but only matches secrets with a recognizable
+// prefix. Notably it does NOT catch a Supabase REFRESH token, which is an
+// opaque high-entropy string with no fixed prefix; the JWT pattern below
+// catches the Supabase ACCESS token (a JWT) but not the refresh token. The
+// storage-state.json read-deny (SECRET_PATH_PATTERNS) is the primary control
+// keeping both tokens out of the agent's context in the first place; these
+// patterns are not a substitute for it.
 const SECRET_QUERY_PATTERNS = [
-  /eyJ[A-Za-z0-9_-]{16,}/, // JWT / base64url-JSON header (Supabase access/refresh)
+  /eyJ[A-Za-z0-9_-]{16,}/, // JWT / base64url-JSON header (e.g. Supabase ACCESS token; opaque refresh tokens are NOT matchable)
   /gh[posru]_[A-Za-z0-9]{20,}/, // GitHub PAT / installation / OAuth tokens
   /github_pat_[A-Za-z0-9_]{20,}/,
   /sk-ant-[A-Za-z0-9_-]{16,}/, // Anthropic API key
@@ -368,8 +376,9 @@ const SECRET_QUERY_PATTERNS = [
 
 // browser_navigate is the only mcp tool that takes an arbitrary URL, so it is
 // the only mcp egress vector. Enforce: a navigate-origin MUST be pinned, the
-// URL MUST parse, its origin MUST equal the pin, and no secret may ride the
-// query/fragment. Returns a deny reason, or null when the navigation is safe.
+// URL MUST parse, carry NO userinfo, its origin MUST equal the pin, and no
+// secret may ride the path / query / fragment. Returns a deny reason, or null
+// when the navigation is safe.
 function browserNavigateReason(toolInput, navigateOrigin) {
   if (!navigateOrigin)
     return "browser_navigate denied (no navigate-origin pinned for this cron)";
@@ -381,11 +390,17 @@ function browserNavigateReason(toolInput, navigateOrigin) {
   } catch {
     return "browser_navigate with an unparseable URL";
   }
+  // Userinfo (`https://<secret>@app.soleur.ai/`) is a same-origin exfil channel
+  // a legit audit navigation never needs — deny outright.
+  if (parsed.username || parsed.password)
+    return "browser_navigate with embedded userinfo (credentials-in-URL)";
   if (parsed.origin !== navigateOrigin)
     return `browser_navigate off-origin (${parsed.origin.slice(0, 60)} != pinned origin)`;
-  const queryAndHash = parsed.search + parsed.hash;
-  if (SECRET_QUERY_PATTERNS.some((re) => re.test(queryAndHash)))
-    return "browser_navigate with a secret-bearing query string / fragment";
+  // Scan path + query + fragment — a secret can ride a path segment to the
+  // allowed origin just as easily as a query param.
+  const scanTarget = parsed.pathname + parsed.search + parsed.hash;
+  if (SECRET_QUERY_PATTERNS.some((re) => re.test(scanTarget)))
+    return "browser_navigate with a secret-bearing URL (path/query/fragment)";
   return null;
 }
 

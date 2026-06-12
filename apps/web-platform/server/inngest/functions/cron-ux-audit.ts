@@ -68,7 +68,12 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // PR #4989): `--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree — #5091) under
 // `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
 // `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
-const CLAUDE_CODE_FLAGS = [
+// Exported so a parity test can assert the `mcp__playwright__*` tokens in
+// `--allowedTools` (what the CLI offers) stay in lockstep with
+// CRON_MCP_ALLOWLISTS["cron-ux-audit"].tools (what the containment hook permits).
+// A tool offered but not hook-permitted silently fails mid-run; the reverse is a
+// dead grant. #5199.
+export const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
   AUDIT_MODEL,

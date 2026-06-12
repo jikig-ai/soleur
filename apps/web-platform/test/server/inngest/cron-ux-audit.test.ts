@@ -13,9 +13,11 @@ vi.hoisted(() => {
 
 import {
   cronUxAudit,
+  CLAUDE_CODE_FLAGS,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-ux-audit";
+import { CRON_MCP_ALLOWLISTS } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
 describe("cronUxAudit — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -111,4 +113,19 @@ describe("#5199 — restored containment (token narrow + pinned mcp + live dry-r
   // the set) to mirror the restored cron-legal-audit / cron-agent-native-audit
   // pattern — the restore is proven by TIER2_DEFERRED_CRONS not having the cron
   // (cron-shared.test.ts), not by deleting the guard.
+
+  it("the mcp__playwright__* tools in --allowedTools match CRON_MCP_ALLOWLISTS exactly (parity, no drift)", () => {
+    // --allowedTools is what the CLI OFFERS; CRON_MCP_ALLOWLISTS is what the
+    // containment hook PERMITS. They must agree or ux-audit silently degrades
+    // (a tool offered-but-denied fails mid-run; a tool permitted-but-not-offered
+    // is a dead grant). Derive the offered set from the source-of-truth flag.
+    const allowedToolsIdx = CLAUDE_CODE_FLAGS.indexOf("--allowedTools");
+    expect(allowedToolsIdx).toBeGreaterThan(-1);
+    const offered = CLAUDE_CODE_FLAGS[allowedToolsIdx + 1]
+      .split(",")
+      .filter((t) => t.startsWith("mcp__"))
+      .sort();
+    const permitted = [...CRON_MCP_ALLOWLISTS["cron-ux-audit"].tools].sort();
+    expect(offered).toEqual(permitted);
+  });
 });

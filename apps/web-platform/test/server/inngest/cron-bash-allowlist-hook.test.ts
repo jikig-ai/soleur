@@ -401,6 +401,30 @@ describe("mcp-allow — file-driven per-cron Playwright relaxation (#5199)", () 
     expect(decideWith(mcpNav(undefined), UX_ALLOW)).toBe("deny");
     expect(decideWith(mcpNav("not a url"), UX_ALLOW)).toBe("deny");
   });
+  it("DENIES a secret smuggled in a PATH SEGMENT of the allowed origin", () => {
+    expect(
+      decideWith(
+        mcpNav("https://app.soleur.ai/ghp_0123456789abcdefghij0123/audit"),
+        UX_ALLOW,
+      ),
+    ).toBe("deny");
+    expect(
+      decideWith(
+        mcpNav("https://app.soleur.ai/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9/x"),
+        UX_ALLOW,
+      ),
+    ).toBe("deny");
+  });
+  it("DENIES browser_navigate with embedded userinfo (credentials-in-URL exfil)", () => {
+    expect(
+      decideWith(mcpNav("https://eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9@app.soleur.ai/x"), UX_ALLOW),
+    ).toBe("deny");
+    // userinfo pointing the host elsewhere is already off-origin, but a bare
+    // user:pass against the allowed host must also deny.
+    expect(
+      decideWith(mcpNav("https://user:ghp_0123456789abcdefghij0123@app.soleur.ai/"), UX_ALLOW),
+    ).toBe("deny");
+  });
 
   // --- off-list mcp + egress tools stay denied even with an mcp-allow section ---
   it("DENIES an mcp tool NOT in the allow set (browser_run_code_unsafe)", () => {
