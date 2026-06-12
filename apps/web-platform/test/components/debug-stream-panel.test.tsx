@@ -6,7 +6,7 @@
  *   - withheld + disconnected affordances
  *   - the settings toggle is read-only (disabled) for a non-owner dev
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
@@ -63,6 +63,74 @@ describe("DebugStreamPanel (AC8)", () => {
     render(<DebugStreamPanel available events={[]} connected hadCompletedTurn />);
     fireEvent.click(screen.getByRole("button", { name: /debug stream/i }));
     expect(screen.getByTestId("debug-stream-empty").textContent).toMatch(/gate is unavailable/i);
+  });
+});
+
+describe("DebugStreamPanel — Copy control", () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    writeText.mockClear();
+  });
+
+  afterEach(() => {
+    // Restore so the mocked clipboard does not leak into sibling suites.
+    if (originalClipboard) {
+      Object.defineProperty(navigator, "clipboard", originalClipboard);
+    } else {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it("copies the REDACTED body, never the raw secret, and flips to Copied (AC1/AC2/AC5)", async () => {
+    const events = [
+      ev({ id: "1", body: `{"x":"${ANTHROPIC}"}`, label: "Running command..." }),
+    ];
+    render(<DebugStreamPanel available events={events} connected />);
+    const copy = screen.getByTestId("debug-stream-copy");
+    expect(copy.textContent).toBe("Copy");
+    fireEvent.click(copy);
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const written = writeText.mock.calls[0][0] as string;
+    expect(written).toContain("[redacted-key]");
+    expect(written).not.toContain(ANTHROPIC);
+    // The success affordance: the label flips to "Copied" after the write.
+    await vi.waitFor(() => expect(copy.textContent).toBe("Copied"));
+  });
+
+  it("copies a withheld placeholder verbatim (AC3)", async () => {
+    const placeholder = "[input withheld: failed redaction probe]";
+    const events = [ev({ id: "1", body: placeholder, label: "Working..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    fireEvent.click(screen.getByTestId("debug-stream-copy"));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0] as string).toContain(placeholder);
+  });
+
+  it("does NOT toggle the panel expand state when clicked (AC4/AC6)", () => {
+    const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    const toggle = screen.getByRole("button", { name: /debug stream/i });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // Copy must be a SIBLING, not a descendant of the toggle button.
+    expect(toggle.querySelector('[data-testid="debug-stream-copy"]')).toBeNull();
+    fireEvent.click(screen.getByTestId("debug-stream-copy"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("is disabled with no events and does not write (AC5)", () => {
+    render(<DebugStreamPanel available events={[]} connected />);
+    const copy = screen.getByTestId("debug-stream-copy") as HTMLButtonElement;
+    expect(copy.disabled).toBe(true);
+    fireEvent.click(copy);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
 

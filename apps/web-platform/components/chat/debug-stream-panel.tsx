@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
 
@@ -86,6 +86,26 @@ function DebugEventRow({ event }: { event: ChatDebugEventMessage }) {
   );
 }
 
+/**
+ * Serialize all events to clipboard text using the SAME redaction the render
+ * path applies (`DebugEventRow`). NEVER serialize raw `event.body` — that would
+ * copy to the clipboard the secrets the UI withholds on screen. Withheld bodies
+ * ("[input withheld…") are already placeholders; `redactCommandForDisplay`
+ * returns them unchanged, so they copy as-is. An empty body emits just the
+ * header line (mirrors the render path's `{body && …}` gate).
+ */
+export function serializeDebugEvents(events: ChatDebugEventMessage[]): string {
+  return events
+    .map((event) => {
+      const header = event.label
+        ? `${KIND_LABEL[event.debugKind]} · ${event.label}`
+        : KIND_LABEL[event.debugKind];
+      const body = redactCommandForDisplay(event.body); // dual-gate, NOT raw
+      return body ? `${header}\n${body}` : header;
+    })
+    .join("\n\n");
+}
+
 export function DebugStreamPanel({
   available,
   events,
@@ -93,6 +113,29 @@ export function DebugStreamPanel({
   hadCompletedTurn = false,
 }: DebugStreamPanelProps) {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear the transient-"Copied" timer on unmount (the panel unmounts when
+  // `available` flips false) to avoid a setState-after-unmount warning.
+  useEffect(() => {
+    return () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    };
+  }, []);
+
+  const copyAll = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(serializeDebugEvents(events));
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable (insecure context / permission denied). This is a
+      // dev-cohort, same-origin panel (always a secure context in practice), so
+      // no execCommand fallback is warranted — mirrors components/kb/share-popover.tsx.
+    }
+  }, [events]);
 
   // Sticky autoscroll-to-bottom. The list is a nested `overflow-y-auto`, so we
   // scroll the `<ul>` directly (`scrollTop = scrollHeight`) rather than
@@ -126,13 +169,16 @@ export function DebugStreamPanel({
       aria-label="Harness debug stream"
       className="mt-6 rounded-md border border-dashed border-soleur-border-default bg-soleur-bg-surface-1/30"
     >
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
-      >
-        <span className="flex items-center gap-2">
+      {/* Header row: the expand/collapse toggle and the Copy control are
+          SIBLING buttons (never nested — a <button> inside a <button> is
+          invalid HTML), so clicking Copy can never toggle the panel. */}
+      <div className="flex w-full items-center justify-between gap-3 px-3 py-2">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          className="flex flex-1 items-center gap-2 text-left"
+        >
           <span className="text-xs font-semibold text-soleur-text-primary">
             Debug stream
           </span>
@@ -147,11 +193,27 @@ export function DebugStreamPanel({
               disconnected
             </span>
           )}
-        </span>
-        <span className="text-[10px] text-soleur-text-muted">
-          {expanded ? "Hide" : "Show"} · not saved
-        </span>
-      </button>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            data-testid="debug-stream-copy"
+            onClick={copyAll}
+            disabled={events.length === 0}
+            title={
+              events.length === 0
+                ? "No events to copy"
+                : "Copy all debug events (redacted) to clipboard"
+            }
+            className="rounded-sm border border-soleur-border-default px-1.5 py-0.5 font-mono text-[10px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <span className="text-[10px] text-soleur-text-muted">
+            {expanded ? "Hide" : "Show"} · not saved
+          </span>
+        </div>
+      </div>
 
       {expanded && (
         <div className="border-t border-soleur-border-default/40">
