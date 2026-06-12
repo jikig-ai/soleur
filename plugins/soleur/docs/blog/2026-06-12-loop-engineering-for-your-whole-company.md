@@ -10,7 +10,7 @@ tags:
   - company-as-a-service
 ---
 
-In June 2026, Addy Osmani — a director on Google's Cloud AI team — gave a name to a shift that was already underway. He called it **loop engineering**, and his one-line definition is the clearest framing of the idea anyone has written:
+In June 2026, Addy Osmani — a director on Google's Cloud AI team — gave a name to a shift that was already underway. He called it **[loop engineering](https://addyo.substack.com/p/loop-engineering)**, and his one-line definition is the clearest framing of the idea anyone has written:
 
 > "Loop engineering is replacing yourself as the person who prompts the agent. You design the system that does it instead."
 
