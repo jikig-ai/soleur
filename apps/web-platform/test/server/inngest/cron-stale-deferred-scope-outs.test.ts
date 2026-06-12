@@ -355,10 +355,12 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
       const { cronStaleDeferredScopeOutsHandler } = await importModule();
       const step = makeStep();
       const p = cronStaleDeferredScopeOutsHandler({ step, logger });
+      // Attach the rejection assertion BEFORE advancing timers — the handler
+      // rejects DURING runAllTimersAsync, so a late .rejects would surface as
+      // an unhandled rejection.
+      const rejection = expect(p).rejects.toThrow(/sweep failed/);
       await vi.runAllTimersAsync();
-
-      // Handler rethrows after the heartbeat (Inngest retry preserved).
-      await expect(p).rejects.toThrow(/sweep failed/);
+      await rejection;
 
       // 3 attempts (1 + MAX_RETRIES) before exhaustion.
       expect(searchAttempts).toBe(3);
