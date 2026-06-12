@@ -104,13 +104,16 @@ export function DebugStreamPanel({
   const stickToBottom = useRef(true);
 
   // Re-pin to the newest entry only when the operator is already at the bottom.
-  // Keyed on `events.length` so it fires on each new arrival, not on body edits.
+  // Keyed on `events.length` so it fires on each new arrival, not on body edits;
+  // also keyed on `expanded` so opening a pre-populated panel lands at the
+  // newest entry rather than scrolled to the top (the `<ul>` only mounts while
+  // expanded, so the ref is fresh on that transition).
   useEffect(() => {
     const ul = listRef.current;
     if (ul && stickToBottom.current) {
       ul.scrollTop = ul.scrollHeight;
     }
-  }, [events.length]);
+  }, [events.length, expanded]);
 
   // Visibility gate: non-dev (or flag-off) cohort never sees the panel.
   if (!available) return null;
