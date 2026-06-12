@@ -115,9 +115,13 @@ export async function GET(request: Request) {
     // Raw .c4 sources for the editor (best-effort).
     const sources: Record<string, string> = {};
     try {
-      for (const file of (await fs.readdir(dirAbs)).filter((f) =>
-        f.endsWith(C4_SOURCE_EXT),
-      ).sort()) {
+      // `.c4` editor sources PLUS the directory index README so the viewer's
+      // file picker can surface it read-only. Exact `README.md` match (not a
+      // blanket `.endsWith(".md")`) so the `c4-model.md` view-embed page — and
+      // any future `.md` — does NOT leak in as a browsable "source".
+      for (const file of (await fs.readdir(dirAbs))
+        .filter((f) => f.endsWith(C4_SOURCE_EXT) || f === "README.md")
+        .sort()) {
         const abs = path.join(dirAbs, file);
         if (!isPathInWorkspace(abs, kbRoot)) continue;
         // O_NOFOLLOW + read from the same fd: rejects symlinks atomically and
