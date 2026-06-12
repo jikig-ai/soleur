@@ -269,7 +269,7 @@ with a narrowly-scoped search-path-only retry — but that has not been observed
 
 ### Phase 0 — Preconditions (verify before editing)
 
-- [ ] **Confirm Inngest actually delivers `attempt`/`maxAttempts` at runtime AND
+- [x] **Confirm Inngest actually delivers `attempt`/`maxAttempts` at runtime AND
   that a throw inside `step.run` increments `attempt`.** This is the single
   assumption the whole fix rests on. The field is *typed* on Inngest's
   `BaseContext` (`node_modules/inngest/types.d.ts:420-431`: `attempt: number`,
@@ -281,11 +281,11 @@ with a narrowly-scoped search-path-only retry — but that has not been observed
   finding in the plan/tasks. If the SDK does NOT re-invoke with an incremented
   `attempt` on a `step.run` throw, the fix shape changes (fall back to reading
   `runId`-based de-dup or a different mechanism).
-- [ ] **Verify Inngest's worst-case between-attempt retry delay** for a
+- [x] **Verify Inngest's worst-case between-attempt retry delay** for a
   `retries: 1` function (grep `node_modules/inngest` backoff table or docs) and
   confirm `D + final-attempt-latency < 30 min` (the `checkin_margin_minutes`).
   Record the number — do not assert the margin without it.
-- [ ] Confirm the test runner: `apps/web-platform/vitest.config.ts` collects
+- [x] Confirm the test runner: `apps/web-platform/vitest.config.ts` collects
   `test/**/*.test.ts` (node env). The existing test lives at
   `apps/web-platform/test/server/inngest/cron-stale-deferred-scope-outs.test.ts`
   — extend it in place (it is already on the include glob).
@@ -312,22 +312,22 @@ and NOT on `makeStep().calls` (the heartbeat step returns `void`, carrying no
 to the handler's own wrapper, not the raw `{status}` rejection which is caught at
 `:313`). New cases:
 
-- [ ] **A1 (non-final attempt does not page):** sweep throws (`octokitRequestSpy`
+- [x] **A1 (non-final attempt does not page):** sweep throws (`octokitRequestSpy`
   on `GET /search/issues` throws `{ status: 500 }`). Invoke with
   `{ step, logger, attempt: 0, maxAttempts: 2 }`. Assert:
   `expect(postSentryHeartbeatSpy).not.toHaveBeenCalled()`,
   `await expect(handler(...)).rejects.toThrow(/sweep failed/)`, and
   `reportSilentFallback` WAS called (forensic).
-- [ ] **A2 (final attempt still pages):** same throw, `{ attempt: 1, maxAttempts: 2 }`.
+- [x] **A2 (final attempt still pages):** same throw, `{ attempt: 1, maxAttempts: 2 }`.
   Assert `postSentryHeartbeatSpy` called with `expect.objectContaining({ ok: false })`,
   then `.rejects.toThrow(/sweep failed/)`.
-- [ ] **A3 (legacy/no-attempt path unchanged):** same throw, `{ step, logger }`
+- [x] **A3 (legacy/no-attempt path unchanged):** same throw, `{ step, logger }`
   (no `attempt`). Assert error heartbeat (`ok: false`) + rethrow — backward-compat.
-- [ ] **A4 (success on non-final attempt still posts `ok`):** sweep succeeds,
+- [x] **A4 (success on non-final attempt still posts `ok`):** sweep succeeds,
   `{ attempt: 0, maxAttempts: 2 }`. Assert `postSentryHeartbeatSpy` called with
   `expect.objectContaining({ ok: true })`. Positive control — proves the gating
   did not over-reach and suppress a *successful* non-final check-in.
-- [ ] **A5 (recovered-after-retry flap signal):** sweep succeeds,
+- [x] **A5 (recovered-after-retry flap signal):** sweep succeeds,
   `{ attempt: 1, maxAttempts: 2 }`. Assert `ok: true` posted AND
   `logger.warn` called with `{ recovered_after_attempts: 1 }` (the trend signal).
 
@@ -336,9 +336,9 @@ Run RED: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inn
 
 ### Phase 2 — GREEN: implement the heartbeat-gating fix
 
-- [ ] `_cron-shared.ts`: add `attempt?: number; maxAttempts?: number;` to
+- [x] `_cron-shared.ts`: add `attempt?: number; maxAttempts?: number;` to
   `HandlerArgs` (both optional). No other `_cron-shared.ts` change.
-- [ ] `cron-stale-deferred-scope-outs.ts`: destructure `attempt`, `maxAttempts`
+- [x] `cron-stale-deferred-scope-outs.ts`: destructure `attempt`, `maxAttempts`
   in `cronStaleDeferredScopeOutsHandler`. Compute
   `isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1)`. Restructure the
   `sweepFailed` → heartbeat → throw block so:
@@ -352,15 +352,15 @@ Run RED: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inn
 
 ### Phase 3 — Verify GREEN + full suite
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts`
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts`
   — all green.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — typecheck
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — typecheck
   clean (note: `npm run -w … typecheck` aborts; the in-package `tsc` is the
   canonical form per repo learnings).
-- [ ] Run the broader cron test cohort to catch any `HandlerArgs` widening
+- [x] Run the broader cron test cohort to catch any `HandlerArgs` widening
   fallout: `./node_modules/.bin/vitest run test/server/inngest/`.
 
-### Phase 4 — Re-verification (document; do NOT run during planning)
+ (document; do NOT run during planning)
 
 Per the brief, after the fix merges and deploys, re-verify by firing the
 manual-trigger from inside this worktree:
@@ -383,31 +383,31 @@ the monitor sizing.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: New test A1 proves a non-final Inngest attempt that throws does NOT
+- [x] AC1: New test A1 proves a non-final Inngest attempt that throws does NOT
   post a `status=error` Sentry check-in (no operator page) and rethrows so
   Inngest retries.
-- [ ] AC2: New test A2 proves a final-attempt throw DOES post `status=error`
+- [x] AC2: New test A2 proves a final-attempt throw DOES post `status=error`
   (persistent failure still pages).
-- [ ] AC3: New test A3 proves the no-`attempt` (legacy/test) call shape behaves
+- [x] AC3: New test A3 proves the no-`attempt` (legacy/test) call shape behaves
   exactly as before (error heartbeat on failure) — backward-compat.
-- [ ] AC4: New test A4 proves a SUCCESS on a non-final attempt still posts the
+- [x] AC4: New test A4 proves a SUCCESS on a non-final attempt still posts the
   `ok` heartbeat (the gating did not over-reach and suppress a successful
   non-final check-in). This is the brief's "single transient must not flip the
   monitor to error" bar expressed positively — a transient that Inngest's retry
   recovers ends in a single `ok`.
-- [ ] AC5: New test A5 proves a success on a non-final-then-recovered attempt
+- [x] AC5: New test A5 proves a success on a non-final-then-recovered attempt
   (`attempt > 0`) emits `logger.warn({ recovered_after_attempts })` so a daily
   flap is queryable (observability trend signal).
-- [ ] AC6: Phase 0 records (a) confirmation that Inngest delivers `attempt`/`maxAttempts`
+- [x] AC6: Phase 0 records (a) confirmation that Inngest delivers `attempt`/`maxAttempts`
   to the ctx and re-invokes with an incremented `attempt` on a `step.run` throw,
   and (b) Inngest's worst-case between-attempt retry delay `D` with
   `D + final-attempt-latency < 30 min` margin. The fix's correctness rests on (a);
   the no-false-page guarantee rests on (b).
-- [ ] AC7: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] AC8: `_cron-shared.ts` diff is limited to the `HandlerArgs` `attempt?`/`maxAttempts?`
+- [x] AC7: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] AC8: `_cron-shared.ts` diff is limited to the `HandlerArgs` `attempt?`/`maxAttempts?`
   additions (minimize merge-conflict surface vs. the parallel
   `feat-one-shot-restore-tier2-deferred-crons-5199` worktree).
-- [ ] AC9: PR body uses `Ref` (not `Closes`) for any tracking-issue link — there
+- [x] AC9: PR body uses `Ref` (not `Closes`) for any tracking-issue link — there
   is no GitHub issue for this Sentry incident; the resolution is the merged code
   + the post-deploy heartbeat recovery, so do not auto-close anything.
 

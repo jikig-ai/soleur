@@ -284,10 +284,19 @@ export async function cronStaleDeferredScopeOutsHandler({
   step,
   logger,
   event,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<SweepResult> {
   // dry_run lives on the event payload for manual-trigger fires. The cron
   // trigger has no event.data, so dryRun is false by default.
   const dryRun = event?.data?.dry_run === true;
+
+  // Retry-aware heartbeat gating (Sentry incident 5468023, "page before retry").
+  // Inngest delivers a zero-indexed `attempt` and optional `maxAttempts`
+  // (retries:1 → 2 attempts, 0 and 1 → maxAttempts 2; final attempt is index 1).
+  // Callers/tests passing neither (legacy shape) read attempt=0/maxAttempts=1 →
+  // isFinalAttempt=true → identical to the pre-fix behavior (error on failure).
+  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
 
   let result: SweepResult = {
     total: 0,
@@ -316,14 +325,38 @@ export async function cronStaleDeferredScopeOutsHandler({
       feature: "cron-stale-deferred-scope-outs",
       op: "sweep",
       message: "stale-deferred-scope-out sweep threw",
-      extra: { fn: "cron-stale-deferred-scope-outs", dryRun },
+      extra: {
+        fn: "cron-stale-deferred-scope-outs",
+        dryRun,
+        attempt: attempt ?? 0,
+        isFinalAttempt,
+      },
     });
-    // Heartbeat below routes status="error"; we do NOT rethrow yet.
+    // Heartbeat decision happens below; we do NOT rethrow yet.
+  }
+
+  if (sweepFailed && !isFinalAttempt) {
+    // The only throwing paths are createProbeOctokit() and GET /search/issues
+    // (per-issue write 403s are caught in-sweep and never set sweepFailed). On a
+    // NON-final attempt those are almost always a transient GitHub blip
+    // (401-after-budget / 403 secondary-rate-limit / 429 / 5xx) that Inngest's
+    // retries:1 recovers. Posting status=error here is the bug we are fixing; we
+    // skip the heartbeat step ENTIRELY (not just the POST) — a completed
+    // step.run is memoized across the retry, so an executed-but-silent step would
+    // replay and never emit the recovered `ok`. Forensics are preserved by the
+    // reportSilentFallback above (Layer 2: pino→Sentry warning event); if the
+    // retry never runs at all, the absent check-in trips the Sentry missed-
+    // check-in alert within the 30-min schedule-anchored margin (Layer 1). Rethrow
+    // to trigger the retry.
+    throw new Error(
+      "stale-deferred-scope-out sweep failed on a non-final attempt; retrying",
+    );
   }
 
   // Sentry heartbeat — single end-of-job POST mirroring drift-guard substrate.
-  // Env-unset / malformed → graceful skip (heartbeat is OPTIONAL second-net;
-  // missing it must not stop the function from completing).
+  // Reached only on success OR the final failed attempt, so the status it posts
+  // is authoritative. Env-unset / malformed → graceful skip (heartbeat is an
+  // OPTIONAL second-net; missing it must not stop the function from completing).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
       ok: !sweepFailed,
@@ -334,9 +367,22 @@ export async function cronStaleDeferredScopeOutsHandler({
   });
 
   if (sweepFailed) {
-    // Surface the sweep failure to the operator AFTER the heartbeat has
-    // reported status=error. Throwing here triggers Inngest's retry policy.
+    // Final-attempt failure: the heartbeat reported status=error above. Throwing
+    // here surfaces the persistent failure (Inngest has no retries left).
     throw new Error("stale-deferred-scope-out sweep failed; see Sentry");
+  }
+
+  if ((attempt ?? 0) > 0) {
+    // Recovered on a retry — a transient flapped on a prior attempt. Emit a WARN
+    // so a recurring daily flap is queryable as a trend instead of looking
+    // identical to a clean attempt-0 run (the failed attempt posted no heartbeat).
+    logger.warn(
+      {
+        fn: "cron-stale-deferred-scope-outs",
+        recovered_after_attempts: attempt,
+      },
+      "stale-deferred-scope-out sweep recovered after a transient fault on a prior attempt",
+    );
   }
 
   logger.info(

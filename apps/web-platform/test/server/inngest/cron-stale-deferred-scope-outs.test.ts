@@ -26,6 +26,23 @@ vi.mock("@/server/github/probe-octokit", async () => ({
   PROBE_ISSUE_REPO: "soleur",
 }));
 
+// Partial mock of _cron-shared so the Sentry heartbeat is spyable WITHOUT
+// nuking the module's siblings (importActual spread preserves HandlerArgs et al).
+// Asserting on this spy's `ok` arg is the only reliable signal: a `fetch` spy
+// records zero calls (the real postSentryHeartbeat short-circuits on unset Sentry
+// env in test), and makeStep().calls carries no `ok` (the heartbeat step returns
+// void). See the heartbeat-gating plan §Phase 1.
+const postSentryHeartbeatSpy = vi.fn();
+vi.mock(
+  "@/server/inngest/functions/_cron-shared",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/server/inngest/functions/_cron-shared")
+    >()),
+    postSentryHeartbeat: postSentryHeartbeatSpy,
+  }),
+);
+
 // --- Helpers --------------------------------------------------------------
 
 interface MockStep {
@@ -77,6 +94,7 @@ function makeIssue(args: {
 beforeEach(() => {
   vi.resetModules();
   reportSilentFallbackSpy.mockReset();
+  postSentryHeartbeatSpy.mockReset();
   octokitRequestSpy.mockReset();
   createProbeOctokitSpy.mockReset();
   createProbeOctokitSpy.mockImplementation(async () => ({
@@ -234,6 +252,142 @@ describe("cronStaleDeferredScopeOuts — kill-switch label", () => {
       state: "closed",
       state_reason: "not_planned",
     });
+  });
+});
+
+// --------------------------------------------------------------------------
+// (d) Retry-aware heartbeat gating — the "page before retry" fix.
+//
+// Sentry incident 5468023: a single transient GitHub fault flipped the monitor
+// to error because the handler posted the status=error heartbeat on Inngest
+// attempt 0, BEFORE the retries:1 retry that would have recovered. The fix gates
+// the error heartbeat on the FINAL Inngest attempt. attempt is zero-indexed;
+// retries:1 → maxAttempts:2 → final attempt is 1.
+// --------------------------------------------------------------------------
+
+describe("cronStaleDeferredScopeOuts — retry-aware heartbeat gating", () => {
+  // A transient 500 on the search call is the most-exposed throwing path
+  // (fetchCandidates has no retry wrapping); it flips sweepFailed=true.
+  function mockSearchThrows() {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        throw Object.assign(new Error("boom"), { status: 500 });
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+  }
+
+  // A clean sweep (empty search result) — sweepFailed stays false.
+  function mockSearchEmpty() {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return { data: { items: [] } };
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+  }
+
+  it("A1: non-final attempt throw does NOT post a heartbeat, still rethrows + reports", async () => {
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await expect(
+      cronStaleDeferredScopeOutsHandler({
+        step,
+        logger,
+        attempt: 0,
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(/sweep failed/);
+
+    // The page is suppressed on a non-final attempt — no heartbeat POST at all
+    // (posting `ok` would mask a persistent failure; posting `error` is the bug).
+    expect(postSentryHeartbeatSpy).not.toHaveBeenCalled();
+    // Forensic breadcrumb is still emitted so the burned attempt is visible.
+    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+  });
+
+  it("A2: final attempt throw DOES post an error heartbeat and rethrows", async () => {
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await expect(
+      cronStaleDeferredScopeOutsHandler({
+        step,
+        logger,
+        attempt: 1,
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(/sweep failed/);
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
+  });
+
+  it("A3: legacy no-attempt call shape pages on failure (backward-compat)", async () => {
+    mockSearchThrows();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    // No attempt/maxAttempts → attempt=0, maxAttempts=1 → isFinalAttempt=true →
+    // behaves exactly as before (error heartbeat on failure).
+    await expect(
+      cronStaleDeferredScopeOutsHandler({ step, logger }),
+    ).rejects.toThrow(/sweep failed/);
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
+  });
+
+  it("A4: success on a non-final attempt still posts an ok heartbeat", async () => {
+    mockSearchEmpty();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    const result = await cronStaleDeferredScopeOutsHandler({
+      step,
+      logger,
+      attempt: 0,
+      maxAttempts: 2,
+    });
+
+    expect(result.total).toBe(0);
+    // Gating must NOT over-reach: a successful non-final check-in still posts ok.
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true }),
+    );
+    // attempt 0 success is a clean run — no recovered-flap warn.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ recovered_after_attempts: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it("A5: success on a retry emits the recovered-after-attempts flap signal", async () => {
+    mockSearchEmpty();
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+
+    await cronStaleDeferredScopeOutsHandler({
+      step,
+      logger,
+      attempt: 1,
+      maxAttempts: 2,
+    });
+
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true }),
+    );
+    // A recovered transient is queryable as a trend instead of looking identical
+    // to a clean attempt-0 run.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ recovered_after_attempts: 1 }),
+      expect.anything(),
+    );
   });
 });
 
