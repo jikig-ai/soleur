@@ -16,7 +16,9 @@
 //        semantics on retry + in-loop `state === "closed"` defensive guard
 //        (GH Search has a ~30s eventual-consistency window where just-closed
 //        issues may still surface; the guard short-circuits the comment/close
-//        sequence in that window).
+//        sequence in that window) + per-issue GET-before-POST comment
+//        idempotency guard (issue #5231: skips the POST if COMMENT_BODY is
+//        already present, preventing double-comment on Inngest replay).
 //
 // POLICY CARRIED VERBATIM FROM THE GHA WORKFLOW:
 //   - Cutoff: 90 days since last issue activity.
@@ -233,22 +235,42 @@ export async function sweepStaleScopeOuts(args: {
     if (dryRun) continue;
 
     try {
-      // Two SEPARATE withGithubRetry wrappers (NOT one around both): wrapping
-      // both together would re-POST the comment on a close-timeout retry. The
-      // comment POST is non-idempotent (see plan F2). A non-retryable 403 is
-      // rethrown on attempt 1 straight into the catch below, preserving the
-      // issue_write_403 discriminator.
-      await withGithubRetry(() =>
+      // Idempotency guard (issue #5231): on an Inngest replay the comment POST
+      // may already have landed; skip it if COMMENT_BODY is already present.
+      // The GET is wrapped in withGithubRetry to absorb transient connect
+      // timeouts (same rationale as the search call in fetchCandidates).
+      const commentsRes = await withGithubRetry(() =>
         octokit.request(
-          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
           {
             owner,
             repo,
             issue_number: num,
-            body: COMMENT_BODY,
+            per_page: 10,
           },
         ),
       );
+      const alreadyCommented = (
+        commentsRes.data as Array<{ body?: string }>
+      ).some((c) => c.body === COMMENT_BODY);
+
+      // The comment POST and close PATCH are SEPARATE withGithubRetry wrappers
+      // (NOT one around both): wrapping both together would re-POST the comment
+      // on a close-timeout retry. A non-retryable 403 is rethrown on attempt 1
+      // straight into the catch below, preserving the issue_write_403 discriminator.
+      if (!alreadyCommented) {
+        await withGithubRetry(() =>
+          octokit.request(
+            "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+            {
+              owner,
+              repo,
+              issue_number: num,
+              body: COMMENT_BODY,
+            },
+          ),
+        );
+      }
       await withGithubRetry(() =>
         octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
           owner,
