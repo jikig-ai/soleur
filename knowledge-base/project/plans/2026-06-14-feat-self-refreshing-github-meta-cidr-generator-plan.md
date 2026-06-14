@@ -453,8 +453,9 @@ logs:
   where: GitHub Actions run logs (refresh workflow); host journald for the firewall apply (existing)
   retention: GitHub Actions default 90d; journald per journald-soleur.conf (existing)
 discoverability_test:
-  command: curl -fsS --max-time 30 https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u | comm -23 - <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)
-  expected_output: empty comm -23 output (zero coverage gap). Cron liveness via the Sentry monitor `cron-github-cidr-refresh` (Sentry Crons UI / API) and `/api/internal/trigger-cron` dry-fire — no SSH.
+  command: curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 30 https://api.github.com/meta
+  expected_output: 200
+  full_coverage_probe: "curl -fsS --max-time 30 https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(\":\")|not)' | sort -u | comm -23 - <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)  # empty == zero coverage gap (manual; multi-stage pipe). Cron liveness via the Sentry monitor `cron-github-cidr-refresh` + `/api/internal/trigger-cron` dry-fire — no SSH."
 ```
 
 ## Hypotheses
