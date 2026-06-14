@@ -10,7 +10,7 @@
 // be silently skipped.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { ChatMessage } from "@/lib/chat-state-machine";
 import { createUseTeamNamesMock } from "../../mocks/use-team-names";
@@ -69,7 +69,34 @@ describe("ChatSurface — reconnect state machine (#5282)", () => {
     await renderFull();
 
     expect(screen.getAllByTestId("connection-banner")).toHaveLength(1);
-    expect(screen.getByText("Connection lost. Reconnecting...")).toBeInTheDocument();
+    expect(screen.getByText("Connection lost. Reconnecting…")).toBeInTheDocument();
+  });
+
+  it("AC4 (render layer): a flap rerender never stacks banners (stays ≤1)", async () => {
+    // Drive the component through reconnecting→live→reconnecting via rerender
+    // (not remount) so the render layer is exercised across a flap. The
+    // reducer's latest-wins is unit-tested separately; this proves the render
+    // produces at most one banner code path at every step.
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn = createWebSocketMock({
+      realConversationId: "test-id",
+      status: "reconnecting",
+      connection: { phase: "reconnecting" },
+    });
+    const view = render(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.getAllByTestId("connection-banner")).toHaveLength(1);
+
+    wsReturn = createWebSocketMock({ realConversationId: "test-id", connection: { phase: "live" } });
+    view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.queryByTestId("connection-banner")).not.toBeInTheDocument();
+
+    wsReturn = createWebSocketMock({
+      realConversationId: "test-id",
+      status: "reconnecting",
+      connection: { phase: "reconnecting" },
+    });
+    view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.getAllByTestId("connection-banner")).toHaveLength(1);
   });
 
   it("AC12: connection-lost banner present ⟹ retrying-chip absent (mutual exclusion)", async () => {
@@ -121,5 +148,26 @@ describe("ChatSurface — reconnect state machine (#5282)", () => {
 
     expect(await screen.findByTestId("connection-resumed")).toBeInTheDocument();
     expect(screen.queryByTestId("connection-unrecoverable")).not.toBeInTheDocument();
+  });
+
+  it("State 4 is transient: auto-dismisses after the notice window", async () => {
+    vi.useFakeTimers();
+    try {
+      wsReturn = createWebSocketMock({
+        realConversationId: "test-id",
+        connection: { phase: "live", resumedAt: 3_000 },
+      });
+      const { ChatSurface } = await import("@/components/chat/chat-surface");
+      render(<ChatSurface variant="full" conversationId="test-id" />);
+
+      expect(screen.getByTestId("connection-resumed")).toBeInTheDocument();
+      // The auto-dismiss window is 4000ms (RESUMED_NOTICE_MS).
+      await act(async () => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.queryByTestId("connection-resumed")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

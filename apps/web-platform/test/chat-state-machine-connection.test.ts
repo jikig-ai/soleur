@@ -55,10 +55,13 @@ describe("connection slice — sticky unrecoverable (AC5 / AC11 no 3→4 flip)",
     expect(state.connection.phase).toBe("unrecoverable");
   });
 
-  test("unrecoverable is sticky across clear_streams (fires on every reconnect)", () => {
+  test("unrecoverable survives clear_streams (which carries connection through unchanged)", () => {
+    // clear_streams spreads `...state` and never touches `connection`; since it
+    // fires on every reconnect, this carry-through is what keeps the sticky
+    // guard intact. Regression guard against a future connection reset here.
     let state = chatReducer(emptyState(), { type: "connection_change", phase: "unrecoverable" });
     state = chatReducer(state, { type: "clear_streams" });
-    expect(state.connection.phase).toBe("unrecoverable"); // clear_streams must NOT reset connection
+    expect(state.connection.phase).toBe("unrecoverable");
   });
 
   test("reset_connection is the ONLY escape from unrecoverable → live (new turn)", () => {
@@ -70,6 +73,28 @@ describe("connection slice — sticky unrecoverable (AC5 / AC11 no 3→4 flip)",
   test("reset_connection from live is idempotent (stays live)", () => {
     const state = chatReducer(emptyState(), { type: "reset_connection" });
     expect(state.connection.phase).toBe("live");
+  });
+
+  test("connection_change to unrecoverable CLEARS a stale resumedAt (2nd no-3→4 layer)", () => {
+    // A reattach set resumedAt (State 4 pending), then the resume turned out
+    // incomplete → unrecoverable. The slice must drop resumedAt so the render
+    // layer cannot show State 4 even before the sticky guard engages.
+    const withResumed: ChatState = {
+      ...emptyState(),
+      connection: { phase: "live", resumedAt: 1_000 },
+    };
+    const next = chatReducer(withResumed, { type: "connection_change", phase: "unrecoverable" });
+    expect(next.connection.phase).toBe("unrecoverable");
+    expect(next.connection.resumedAt).toBeUndefined();
+  });
+
+  test("connection_change to reconnecting clears a stale resumedAt", () => {
+    const withResumed: ChatState = {
+      ...emptyState(),
+      connection: { phase: "live", resumedAt: 1_000 },
+    };
+    const next = chatReducer(withResumed, { type: "connection_change", phase: "reconnecting" });
+    expect(next.connection.resumedAt).toBeUndefined();
   });
 });
 

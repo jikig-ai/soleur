@@ -160,6 +160,10 @@ interface UseWebSocketReturn {
    *  State 3 when `phase === "unrecoverable"`, and the State-4 notice from the
    *  transient `connection.resumedAt`. */
   connection: { phase: ConnectionPhase; resumedAt?: number };
+  /** #5282 — State-3 "Resume with full context" action. Escapes the sticky
+   *  `unrecoverable` phase (via `reset_connection`) and re-opens the socket;
+   *  `reconnect` alone is a no-op against the sticky guard. */
+  resumeAfterUnrecoverable: () => void;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -537,6 +541,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // connect must not request replay (its history fetch is authoritative and a
   // replayed `usage_update` would double-count against it).
   const hasConnectedBeforeRef = useRef(false);
+  // #5282 — true between a reconnect `auth_ok` (resume_stream sent) and the
+  // first genuinely-rendered post-reattach frame. Gates the honest State-4
+  // ("workspace restored") notice: only a confirmed resume (a frame actually
+  // flowed) sets `connection.resumedAt`, never the optimistic auth_ok. Cleared
+  // on confirmation, on `stream_replay{incomplete}` (failed resume), and on a
+  // fresh/resumed session boundary so it can't leak into a different turn.
+  const reattachPendingRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
   /** Most-recent close preamble carried on `ws.message` before `ws.close` fires.
@@ -795,15 +806,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               conversationId: activeConvId,
               ...(ackSeq >= 0 ? { ackSeq } : {}),
             });
-            // #5282 — successful reattach to a live conversation. Dispatch `live`
-            // with a transient `resumedAt` so the State-4 "Continuing… ·
-            // workspace restored" notice shows briefly. The sticky guard makes
-            // this a NO-OP if `unrecoverable` was already set (the AC11
-            // abort-then-reattach case) — State 3 holds, never flips to State 4.
-            // If the reattach turns out to be a miss, the follow-up
-            // `stream_replay{incomplete}` dispatches `unrecoverable` and the
-            // render's State-3-over-State-4 precedence shows the honest state.
-            dispatch({ type: "connection_change", phase: "live", resumedAt: Date.now() });
+            // #5282 — clear the State-1 banner (live) but do NOT set `resumedAt`
+            // yet: the resume is UNCONFIRMED until the server actually replays a
+            // frame. Setting State 4 ("workspace restored") here would be a lie
+            // for the ~1-RTT window before a `stream_replay{incomplete}` arrives
+            // on a failed resume — a false "restored" that then flips to State 3
+            // (the inverse of the no-3→4-flip invariant). Instead, arm a pending
+            // flag; the FIRST genuinely-rendered post-reattach frame confirms the
+            // stream is alive and promotes to State 4. The sticky guard still
+            // no-ops this `live` if `unrecoverable` was already set (AC11).
+            reattachPendingRef.current = true;
+            dispatch({ type: "connection_change", phase: "live" });
           } else {
             // Fresh initial connect (not a reconnect): plain `live`, no notice.
             dispatch({ type: "connection_change", phase: "live" });
@@ -842,6 +855,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
           // are inert pass-throughs in the reducer; Stage 4 wires rendering.
           dispatch({ type: "stream_event", msg });
+          // #5282 — a genuinely-rendered post-reattach frame CONFIRMS the resume
+          // succeeded (replayed gap frame or resumed live frame). Promote to the
+          // honest State-4 "workspace restored" notice now, not optimistically at
+          // auth_ok. Replayed already-seen frames were dropped by the seq dedup
+          // gate above, so reaching here means real forward progress. The sticky
+          // guard no-ops this if `unrecoverable` was set in the interim.
+          if (reattachPendingRef.current) {
+            reattachPendingRef.current = false;
+            dispatch({ type: "connection_change", phase: "live", resumedAt: Date.now() });
+          }
           break;
         }
 
@@ -933,6 +956,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "session_ended": {
           dispatch({ type: "clear_streams" });
           clearAllTimeouts();
+          // #5282 DELIBERATE NON-MAPPING (do not "fix" this back to the plan's
+          // original AC3/FR4): `session_ended` does NOT dispatch
+          // `connection_change(unrecoverable)`. Every live `session_ended.reason`
+          // is recoverable/normal — `turn_complete` (every normal turn),
+          // `user_aborted`, `closed`, terminal-workflow statuses (recoverable via
+          // a new turn), or `session_revoked` (which has its OWN 4012 terminal
+          // screen). Mapping it to State 3 would flash "session reset" on EVERY
+          // completed turn. The genuine in-flight-reclaim case happens server-side
+          // during the disconnect grace window (ws-handler.ts grace-expiry →
+          // abortSession + streamReplayBuffer.clear) while the client is already
+          // disconnected; the client learns of it on the NEXT reconnect via
+          // `stream_replay{incomplete}` — the actual wired unrecoverable signal.
           // #3448 PR2 (review fix): a turn ended — reset streamState so the
           // Send button comes back. Initial implementation gated this on
           // `msg.conversationId === realConversationIdRef.current` for
@@ -1002,6 +1037,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // starts at seq 0; reset the replay cursor so the first live frame
           // is never mistaken for an already-rendered replay.
           lastRenderedSeqRef.current = -1;
+          // #5282 — a new session is not a reattach; cancel any pending State-4
+          // confirmation so the first frame of this fresh turn can't promote to
+          // a "workspace restored" notice.
+          reattachPendingRef.current = false;
           // Deferred-creation: no DB row exists for this pending UUID yet
           // (it materializes on the first chat message). Mark fresh so the
           // resume-history effect skips the would-be-404 fetch (FR1).
@@ -1015,6 +1054,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // feat-stream-since-disconnect (#5273) — full transcript resume
           // rehydrates from persisted history; reset the replay cursor.
           lastRenderedSeqRef.current = -1;
+          // #5282 — full transcript resume is a new turn boundary, not a live
+          // reattach; cancel any pending State-4 confirmation.
+          reattachPendingRef.current = false;
           // Same synchronous-ref invariant as session_started — a fast
           // Stop click after `session_resumed` lands but before the
           // mirroring useEffect runs MUST find the resolved id.
@@ -1099,6 +1141,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           const targetId = realConversationIdRef.current ?? msg.conversationId;
           const controller = new AbortController();
           void runHistoryFetch(targetId, controller, { reconcileCost: true });
+          // #5282 — failed resume: cancel the pending State-4 confirmation so a
+          // later unrelated frame cannot promote to a false "restored" notice.
+          reattachPendingRef.current = false;
           // #5282 — this is THE honest unrecoverable signal (AC11): the reconnect
           // requested replay and the server's buffer was reclaimed after the
           // grace window / abort (ADR-059). The in-flight session is gone, so go
@@ -1183,7 +1228,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // by reconnect → sticky State 3. Redirect-target closes (auth
           // expired/terms) navigate away below, so marking them unrecoverable
           // would be a State-3 banner the user never sees; skip those.
-          dispatch({ type: "connection_change", phase: "unrecoverable" });
+          // CONCURRENCY_CAP (4010) + MEMBERSHIP_REVOKED (4012) have their OWN
+          // dedicated terminal UI (upgrade modal / revoked screen) dispatched
+          // above; a State-3 banner under those is redundant and only invisible
+          // today because the overlays occlude it — don't dispatch for them.
+          if (
+            event.code !== WS_CLOSE_CODES.CONCURRENCY_CAP &&
+            event.code !== WS_CLOSE_CODES.MEMBERSHIP_REVOKED
+          ) {
+            dispatch({ type: "connection_change", phase: "unrecoverable" });
+          }
         }
 
         if (entry.target) {
@@ -1651,6 +1705,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
+  // #5282 — the State-3 "Resume with full context" action. `reconnect()` alone
+  // cannot leave the sticky `unrecoverable` phase (the reducer guard no-ops any
+  // `connection_change` back to live), so the banner would stay stuck. Dispatch
+  // `reset_connection` (the sanctioned escape, same one `sendMessage` uses) to
+  // clear State 3, THEN re-open the socket. The next user turn resumes the SDK
+  // transcript with full context (#5240 v1 verified rebind).
+  const resumeAfterUnrecoverable = useCallback(() => {
+    dispatch({ type: "reset_connection" });
+    reconnect();
+  }, [reconnect]);
+
   return {
     messages: chatState.messages,
     startSession,
@@ -1678,5 +1743,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     streamState: chatState.streamState,
     abort,
     connection: chatState.connection,
+    resumeAfterUnrecoverable,
   };
 }

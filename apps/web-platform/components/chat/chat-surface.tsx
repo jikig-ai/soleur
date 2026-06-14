@@ -41,6 +41,10 @@ import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
+/** #5282 — auto-dismiss window for the transient State-4 "workspace restored"
+ *  notice. State 4 is a derived render affordance, not a reducer phase. */
+const RESUMED_NOTICE_MS = 4000;
+
 /**
  * Stage 4 review F6: typed render helper for `<InteractivePromptCard>`.
  * Replaces the prior `payload={msg.promptPayload as any}` /
@@ -221,6 +225,7 @@ export function ChatSurface({
     streamState,
     abort,
     connection,
+    resumeAfterUnrecoverable,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -250,7 +255,7 @@ export function ChatSurface({
       return;
     }
     setShowResumedNotice(true);
-    const t = setTimeout(() => setShowResumedNotice(false), 4000);
+    const t = setTimeout(() => setShowResumedNotice(false), RESUMED_NOTICE_MS);
     return () => clearTimeout(t);
   }, [connection.resumedAt, connection.phase]);
 
@@ -607,7 +612,7 @@ export function ChatSurface({
           className={`border-b border-yellow-800/50 bg-yellow-950/20 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs text-yellow-300">Connection lost. Reconnecting...</span>
+            <span className="text-xs text-yellow-300">Connection lost. Reconnecting…</span>
             <button
               onClick={reconnect}
               className="text-xs text-yellow-400 underline hover:text-yellow-300"
@@ -631,10 +636,10 @@ export function ChatSurface({
         >
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-red-300">
-              This session was reset and can&apos;t continue. Start a new message to resume with full context.
+              Your place is held — your full conversation is intact. Start a new message to resume with full context.
             </span>
             <button
-              onClick={reconnect}
+              onClick={resumeAfterUnrecoverable}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
             >
               Resume with full context
@@ -654,7 +659,9 @@ export function ChatSurface({
           className={`border-b border-emerald-900/50 bg-emerald-950/20 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
         >
           <span className="text-xs text-emerald-300">
-            — Continuing… · workspace restored —
+            {connection.resumedAt
+              ? `— Continuing from ${new Date(connection.resumedAt).toLocaleString()} · workspace restored —`
+              : "— Continuing… · workspace restored —"}
           </span>
         </div>
       )}
