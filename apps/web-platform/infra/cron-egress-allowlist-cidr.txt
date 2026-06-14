@@ -1,35 +1,22 @@
 # Container egress CIDR allowlist (cron-egress-firewall; GitHub LB-range fix).
-# One IPv4 CIDR per line; `#` comments and blank lines ignored.
+# DO NOT EDIT — regenerate via apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
+# (auto-refreshed on GitHub /meta rotation by the cron-github-cidr-refresh Inngest cron, #5284).
 #
-# WHY a separate CIDR file: cron-egress-allowlist.txt holds HOSTNAMES that
-# cron-egress-resolve.sh resolves to a SINGLE IPv4 per tick and pins in the
-# `soleur_egress_allow` set (type ipv4_addr, no interval). That works for
-# single-IP vendor APIs, but FAILS for hosts that load-balance across a large
-# rotating IP pool: the clone/API call dials whatever the LB returns at connect
-# time, which is frequently NOT the one IP the resolver pinned that tick → dropped.
+# One IPv4 CIDR per line; '#' comments and blank lines ignored. These are loaded
+# by cron-egress-nftables.sh into the 'soleur_egress_allow_cidr' interval set and
+# accepted by a dedicated SOLEUR-EGRESS rule. The crons dial BOTH github.com (git
+# clone) AND api.github.com (App-token mint + REST audit). api.github.com
+# round-robins DNS across the big git/pages blocks AND a rotating pool of Azure
+# 20.x/4.x /32 hosts; an uncovered rotated IP is default-dropped -> no GitHub call
+# -> no Sentry heartbeat -> missed cron check-in (incident 5516336,
+# scheduled-ruleset-bypass-audit, 2026-06-14).
 #
-# These CIDRs are loaded by cron-egress-nftables.sh into the
-# `soleur_egress_allow_cidr` interval set (flags interval) and accepted by a
-# dedicated SOLEUR-EGRESS rule.
-#
-# COVERAGE: the COMPLETE GitHub `/meta` `.git` + `.api` IPv4 union. The crons
-# dial BOTH github.com (git clone via buildAuthenticatedCloneUrl) AND
-# api.github.com (App-token mint + REST audit, e.g. scheduled-ruleset-bypass-audit).
-# api.github.com round-robins DNS across TWO pools: the four big git/pages blocks
-# (140.82/185.199/192.30/143.55) AND ~48 Azure 20.x/4.x /32 hosts. The earlier
-# 4-block-only file left the Azure /32s uncovered → when the daily fire landed on
-# an uncovered IP the call was default-dropped → NO GitHub call → no Sentry
-# heartbeat → missed check-in (Sentry incident 5516336,
-# scheduled-ruleset-bypass-audit, 2026-06-14 06:13 UTC). 2026-06-13 dialed a
-# covered 140.82.x IP (green); 2026-06-14 landed on an uncovered range (red).
-#
-# REFRESH (the /32s rotate — static snapshot, not permanent): regenerate with
-#   curl -s https://api.github.com/meta \
+# Source: https://api.github.com/meta  (.git + .api IPv4 union; IPv6 dropped)
+#   curl -fsS --max-time 30 https://api.github.com/meta \
 #     | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u
-# then bump the count guard in cron-egress-firewall.test.sh and the snapshot date.
-# Follow-up #5284: self-refreshing generator at apply-time (replace this static snapshot).
 #
-# Snapshot: api.github.com/meta `.git` + `.api`, 2026-06-14. 52 IPv4 ranges.
+# Snapshot: api.github.com/meta `.git` + `.api`, 52 IPv4 ranges.
+# Generated: 2026-06-14
 140.82.112.0/20
 143.55.64.0/20
 185.199.108.0/22
