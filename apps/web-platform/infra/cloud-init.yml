@@ -238,6 +238,16 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # #5289 fresh-host artifact-parity for the extracted post-apply assertion
+  # script. NOT executed by cloud-init: at fresh-host time no container exists,
+  # so the enforcement probes would WARN-skip; the SSH remote-exec is the sole
+  # LIVE execution path (the script self-handles the no-container case).
+  - path: /usr/local/bin/cron-egress-postapply-assert.sh
+    encoding: b64
+    content: ${cron_egress_postapply_assert_b64}
+    owner: root:root
+    permissions: '0755'
+
   # CI deploy script invoked by the webhook listener.
   # Content injected from ci-deploy.sh via Terraform base64encode(file()).
   # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
