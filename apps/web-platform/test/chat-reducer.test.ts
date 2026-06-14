@@ -9,6 +9,7 @@ function emptyState(): ChatState {
     workflow: { state: "idle" },
     spawnIndex: new Map(),
     streamState: "idle",
+    connection: { phase: "live" },
   };
 }
 
@@ -55,6 +56,7 @@ describe("chatReducer", () => {
       workflow: { state: "idle" },
       spawnIndex: new Map(),
       streamState: "idle",
+      connection: { phase: "unrecoverable" },
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -62,6 +64,9 @@ describe("chatReducer", () => {
 
     expect(next.activeStreams.size).toBe(0);
     expect(next.pendingTimerAction).toBeUndefined();
+    // #5282 AC11: clear_streams (fires on every reconnect) MUST NOT reset the
+    // sticky connection phase — only `reset_connection` (new turn) can.
+    expect(next.connection.phase).toBe("unrecoverable");
   });
 
   test("clear_streams also resets workflow slice and spawnIndex (review F1 #2886)", () => {
@@ -78,6 +83,7 @@ describe("chatReducer", () => {
         ["s-1", { messageIdx: 0, childIdx: 0 }],
       ]),
       streamState: "idle",
+      connection: { phase: "live" },
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -116,6 +122,7 @@ describe("chatReducer", () => {
       workflow: { state: "idle" },
       spawnIndex: new Map(),
       streamState: "idle",
+      connection: { phase: "live" },
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 

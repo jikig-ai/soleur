@@ -19,7 +19,10 @@ import {
   type StreamEventResult,
   type WorkflowLifecycleState,
   type SpawnIndex,
+  type ConnectionPhase,
 } from "@/lib/chat-state-machine";
+
+export type { ConnectionPhase } from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observability";
@@ -151,6 +154,12 @@ interface UseWebSocketReturn {
    *  `streamState !== "streaming"` (idempotent under double-click) or when
    *  no conversationId is resolved yet (pre-`session_started`). */
   abort: () => void;
+  /** #5282 — connection-lifecycle slice for the reconnect state machine. The
+   *  chat surface feeds `connection.phase` (+ the per-message `retrying` flag)
+   *  into `deriveReconnectView` for the State-1-vs-State-2 precedence, renders
+   *  State 3 when `phase === "unrecoverable"`, and the State-4 notice from the
+   *  transient `connection.resumedAt`. */
+  connection: { phase: ConnectionPhase; resumedAt?: number };
 }
 
 const MAX_BACKOFF = 30_000;
@@ -224,6 +233,22 @@ export interface ChatState {
    */
   streamState: StreamState;
   pendingTimerAction?: StreamEventResult["timerAction"];
+  /**
+   * #5282 — connection-lifecycle slice. Folded into `ChatState` (not a parallel
+   * `useState`) so the sticky-terminal `unrecoverable` guard lives inside the
+   * reducer's `: never` rail and transitions are atomic with `streamState`.
+   * `ConnectionPhase` is the minimum the socket-layer `ConnectionStatus` lacks
+   * (a value that survives the socket flipping back to `connected` on reattach).
+   * Fed by `connection_change` (socket/abort handlers) + `reset_connection`
+   * (new user turn). See `deriveReconnectView` for the State-1-vs-State-2
+   * precedence and the `connection_change` reducer arm for the sticky guard.
+   *
+   * `resumedAt`: transient render affordance for State 4 (the "Continuing… ·
+   * workspace restored" notice). Set on a successful reconnect-reattach; State 3
+   * (`unrecoverable`) takes render precedence over it, which enforces "no 3→4
+   * flip" at the render layer. NOT a phase — it has no surviving invariant.
+   */
+  connection: { phase: ConnectionPhase; resumedAt?: number };
 }
 
 export type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
@@ -244,6 +269,18 @@ export type ChatAction =
    *  `abort_turn` WS frame is sent imperatively from the hook, NOT
    *  inside the reducer (the reducer is pure). */
   | { type: "enter_stopping" }
+  /** #5282 — connection-lifecycle transition observed by the socket/abort
+   *  handlers (NOT a server `StreamEvent`/`WSMessage` — onclose has no frame).
+   *  Latest-wins (the slice holds exactly one phase, so no banner stacking —
+   *  AC4), EXCEPT the sticky guard: once `unrecoverable`, a change to
+   *  `live`/`reconnecting` is a no-op (AC11 no 3→4 flip). `resumedAt` (State 4)
+   *  rides along only on a `live` transition. */
+  | { type: "connection_change"; phase: ConnectionPhase; resumedAt?: number }
+  /** #5282 — the ONLY escape from sticky `unrecoverable`, dispatched solely
+   *  from the user-new-turn `sendMessage` path. NOT `clear_streams` (which fires
+   *  on every reconnect at connect() and from abort handlers — coupling the
+   *  reset to it would defeat the sticky guard). Resets to `{ phase: "live" }`. */
+  | { type: "reset_connection" }
   | {
       type: "resolve_interactive_prompt";
       promptId: string;
@@ -282,6 +319,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         spawnIndex: result.spawnIndex,
         streamState: nextStreamState,
         pendingTimerAction: result.timerAction,
+        // #5282 — stream events never touch connection state; carry it through.
+        connection: state.connection,
       };
     }
     case "timeout": {
@@ -321,6 +360,29 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return state.streamState === "streaming"
         ? { ...state, streamState: "stopping" }
         : state;
+    case "connection_change": {
+      // #5282 — sticky guard (AC11): once `unrecoverable`, the in-flight
+      // session is genuinely gone (grace expired → replay buffer reclaimed, or
+      // a non-transient socket close). The socket-layer `status` flips back to
+      // `connected` on reattach and CANNOT express terminal-after-grace, so
+      // this guard is the load-bearing invariant that prevents a late reattach
+      // frame from flipping State 3 → State 4. The ONLY escape is
+      // `reset_connection` (a new user turn). Do NOT relax this to "redundant".
+      if (state.connection.phase === "unrecoverable") {
+        return state;
+      }
+      // Latest-wins (AC4): the slice holds exactly one phase, so rapid
+      // disconnect→reconnect→disconnect can never stack banners.
+      return {
+        ...state,
+        connection: { phase: action.phase, resumedAt: action.resumedAt },
+      };
+    }
+    case "reset_connection":
+      // #5282 — escape the sticky `unrecoverable` on an explicit new user turn.
+      return state.connection.phase === "live" && state.connection.resumedAt === undefined
+        ? state
+        : { ...state, connection: { phase: "live" } };
     case "ack_timer_action":
       return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
@@ -402,6 +464,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     workflow: { state: "idle" },
     spawnIndex: new Map(),
     streamState: "idle",
+    connection: { phase: "live" },
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
@@ -732,6 +795,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               conversationId: activeConvId,
               ...(ackSeq >= 0 ? { ackSeq } : {}),
             });
+            // #5282 — successful reattach to a live conversation. Dispatch `live`
+            // with a transient `resumedAt` so the State-4 "Continuing… ·
+            // workspace restored" notice shows briefly. The sticky guard makes
+            // this a NO-OP if `unrecoverable` was already set (the AC11
+            // abort-then-reattach case) — State 3 holds, never flips to State 4.
+            // If the reattach turns out to be a miss, the follow-up
+            // `stream_replay{incomplete}` dispatches `unrecoverable` and the
+            // render's State-3-over-State-4 precedence shows the honest state.
+            dispatch({ type: "connection_change", phase: "live", resumedAt: Date.now() });
+          } else {
+            // Fresh initial connect (not a reconnect): plain `live`, no notice.
+            dispatch({ type: "connection_change", phase: "live" });
           }
           break;
         }
@@ -1024,6 +1099,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           const targetId = realConversationIdRef.current ?? msg.conversationId;
           const controller = new AbortController();
           void runHistoryFetch(targetId, controller, { reconcileCost: true });
+          // #5282 — this is THE honest unrecoverable signal (AC11): the reconnect
+          // requested replay and the server's buffer was reclaimed after the
+          // grace window / abort (ADR-059). The in-flight session is gone, so go
+          // STICKY-unrecoverable (State 3, "Resume with full context") — never a
+          // stale State-4 "resumed" lie. The sticky guard then holds State 3 even
+          // if a late auth_ok dispatches `live`.
+          dispatch({ type: "connection_change", phase: "unrecoverable" });
           break;
         }
         default: {
@@ -1074,6 +1156,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       if (event.code === WS_CLOSE_CODES.TIER_CHANGED) {
         pendingPreambleRef.current = null;
         setStatus("reconnecting");
+        // #5282 — a tier-change reconnect is a transient drop (State 1).
+        dispatch({ type: "connection_change", phase: "reconnecting" });
         backoffRef.current = INITIAL_BACKOFF;
         if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = setTimeout(() => {
@@ -1094,6 +1178,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             code: "disconnected",
             message: entry.reason,
           });
+          // #5282 — a non-transient close with NO redirect target (server
+          // error, superseded, rate-limited, idle-timeout) cannot be recovered
+          // by reconnect → sticky State 3. Redirect-target closes (auth
+          // expired/terms) navigate away below, so marking them unrecoverable
+          // would be a State-3 banner the user never sees; skip those.
+          dispatch({ type: "connection_change", phase: "unrecoverable" });
         }
 
         if (entry.target) {
@@ -1104,6 +1194,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
       // Transient failure — reconnect with exponential backoff
       setStatus("reconnecting");
+      // #5282 — transient drop (State 1): we will reconnect with backoff.
+      dispatch({ type: "connection_change", phase: "reconnecting" });
       const delay = backoffRef.current;
       backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF);
 
@@ -1445,6 +1537,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const sendMessage = useCallback(
     (content: string, attachments?: AttachmentRef[]) => {
+      // #5282 — an explicit new user turn is the ONLY escape from a sticky
+      // `unrecoverable` connection state (AC11). This single `sendMessage` is the
+      // unified send path for BOTH the legacy fan-out and cc-soleur-go (AC9), so
+      // wiring the reset here covers both paths without per-path branching. No-op
+      // when already `live` (the reducer arm short-circuits).
+      dispatch({ type: "reset_connection" });
       // Add the user message to local state immediately
       dispatch({
         type: "add_message",
@@ -1579,5 +1677,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     historyLoading,
     streamState: chatState.streamState,
     abort,
+    connection: chatState.connection,
   };
 }
