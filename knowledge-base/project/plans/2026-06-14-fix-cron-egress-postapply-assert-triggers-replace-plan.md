@@ -10,6 +10,21 @@ date: 2026-06-14
 
 # fix(infra): fold the `cron_egress_firewall` post-apply assertion block into `triggers_replace` 🛠️
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-14
+**Sections enhanced:** Risks & Mitigations (precedent-diff), Implementation Phases (verify-the-negative), Network deep-dive
+**Gates run:** 4.4 precedent-diff, 4.45 verify-the-negative + post-edit self-audit, 4.5 network deep-dive (SSH-provisioner trigger), 4.6 User-Brand Impact halt (PASS), 4.7 Observability halt (PASS), 4.8 PAT-shaped halt (PASS — no match), 4.9 UI-wireframe halt (skip — no UI surface)
+
+### Key Improvements
+1. **Precedent confirmed, not novel.** The extract-to-delivered-script + `config_hash` fold is byte-for-byte the established loader/resolver/orphan-reaper pattern (`server.tf:682` orphan-reaper: `triggers_replace = sha256(file(".../orphan-reaper.sh"))` + `connection{ssh}` + `provisioner "file"`). All sibling delivered scripts are standalone `.sh` opening with `set -e`/`set -euo pipefail` (`orphan-reaper.sh:2`). Reviewers do NOT need to scrutinize this as a new shape.
+2. **"No egress gap" claim verified against the loader, not asserted.** `cron-egress-nftables.sh:130-141` — Phase 2 "populate the sets BEFORE any drop rule exists" (`RESOLVE_SCRIPT` at :134) provably precedes `flush chain ip filter SOLEUR-EGRESS` (:141). The re-provision is an atomic flush+repopulate of OUR chain (`:14`), no window where the default-drop exists without the allow sets. Claim **confirms**.
+3. **Runbook parity holds with no rename.** All 18 current `ASSERT-FAILED:` sentinel names are already documented in `cron-egress-blocked.md` (verified live); this PR introduces no rename, so Phase 4.2 is verify-only and the parity test passes unchanged.
+
+### New Considerations Discovered
+- **Baseline suite is 151/0 green today** (`cron-egress-firewall.test.sh`), with the assertion block sourced from `$SERVER_TF`. After retargeting Phase 2.1 extraction to the script, the count shifts only by the source change — the same ~25 Phase-2.1 assertions must stay green (AC6). The `RED` step (Phase 1.5) must show the suite failing on the absent script/delivery before GREEN.
+- **L3 firewall has no new dependency.** The apply reaches the host via the established `tls_private_key.ci_ssh` CI bridge — the GitHub runner egress IP is intentionally NOT in `var.admin_ips` (`apply-web-platform-infra.yml:23-24`); the `connection{ssh}` block is inherited unchanged from the existing resource. This PR adds no operator-egress-IP firewall coupling, so the Phase 4.5 L3 allow-list verification is N/A-by-construction (documented in the Network deep-dive below).
+
 ## Overview
 
 `terraform_data.cron_egress_firewall` (`apps/web-platform/infra/server.tf`) keys its `triggers_replace.config_hash` on the **9 delivered artifact files** + `hcloud_server.web.id`, but **not** on the inline `remote-exec` **post-apply assertion block** (the 2nd `remote-exec`, `server.tf:802-885`). An edit to that block alone leaves the hash unchanged → terraform sees `0 changed` → the new assertion never runs on the live host until an *unrelated* delivered-file change or a VM replacement re-provisions the resource.
@@ -164,6 +179,32 @@ None. `gh issue list --label code-review --state open` was queried for the three
 - **`set -e` semantics move into the script.** The script must open with `set -e` (terraform's inline-join errexit reasoning applies equally to a `bash script.sh` invocation — the script is its own shell). Mitigated by AC1 (`bash -n` + `set -e` first) and the `server-tf-set-e.test.sh` runner-line check (AC5). **Precedent:** the loader/resolver/orphan-reaper scripts are all standalone `set -e`/`set -uo pipefail` scripts delivered via `file()` and hashed — this is the established pattern, not novel.
 - **Drift-guard extraction simplification could over/under-match.** The block's start/end markers (`chmod +x …` / `echo host-egress-ok`) become the whole script, so extraction is "read the file" — strictly simpler and less brittle than the current `awk`-slurp of `$SERVER_TF`. Mitigated by AC6 (full suite green, including the non-vacuity probe).
 - **Block-count floor false-FAIL.** If terraform-fmt or a future block reorder shifts the count, `server-tf-set-e.test.sh` floor (`>= 13`) may need an evidence-bearing bump. Handled inline at AC5.
+
+### Precedent-diff (deepen Phase 4.4) — extract-to-delivered-script is the canonical pattern
+
+The chosen approach matches three established siblings in the SAME root. Side-by-side:
+
+| Aspect | This PR (`cron-egress-postapply-assert.sh`) | Precedent: `orphan-reaper` (`server.tf:682-705`) | Precedent: loader/resolver |
+|---|---|---|---|
+| Delivery | `provisioner "file" { source = "${path.module}/cron-egress-postapply-assert.sh"; destination = "/usr/local/bin/..." }` | `provisioner "file" { source = "${path.module}/orphan-reaper.sh"; destination = "/usr/local/bin/orphan-reaper.sh" }` | same `file()` shape (the 9 artifacts already in this resource) |
+| Hash fold | `file(".../cron-egress-postapply-assert.sh")` added to `config_hash = sha256(join(",", [...]))` | `triggers_replace = sha256(file(".../orphan-reaper.sh"))` | the 9 `file()` entries already in `config_hash` |
+| Script header | `#!/usr/bin/env bash` + `set -e` first | (`orphan-reaper.sh:1-2`: `#!/usr/bin/env bash` + `set -euo pipefail`) | loader/resolver both `#!/usr/bin/env bash` |
+| Execution | 2nd `remote-exec` runs `bash /usr/local/bin/cron-egress-postapply-assert.sh` | runs via systemd unit `ExecStart=` | run by units/timer |
+
+**Verdict: not novel.** The only delta vs. orphan-reaper is that the assert script is executed inline by a `remote-exec` (because it is a one-shot post-apply assertion, not a recurring unit) rather than wired to a systemd `ExecStart`. The `set -e`-first convention is preserved both in the collapsed `remote-exec` AND in the script body.
+
+## Network-Outage Deep-Dive (deepen Phase 4.5)
+
+Fired because `terraform_data.cron_egress_firewall` carries `connection { type = "ssh" }` + `provisioner "file"`/`remote-exec` (implicit SSH apply-time dependency). Layer-by-layer per `hr-ssh-diagnosis-verify-firewall`:
+
+| Layer | Status | Verification artifact |
+|---|---|---|
+| **L3 firewall allow-list** | N/A-by-construction | The apply does NOT dial host `:22` directly. `apply-web-platform-infra.yml:23-24` documents that the GitHub runner egress IP is intentionally NOT in `var.admin_ips`; access is via the established `tls_private_key.ci_ssh` CI bridge inherited unchanged. This PR adds no operator-egress-IP coupling — the `connection` block is copied verbatim from the existing resource. No allow-list drift introduced. |
+| **L3 DNS/routing** | Unchanged | `connection.host = hcloud_server.web.ipv4_address` (direct IPv4, no DNS resolution). Identical to the existing resource and to all sibling SSH-provisioner resources in this root. |
+| **L7 TLS/proxy** | N/A | SSH transport, not HTTPS. The post-apply container probe (`curl https://api.github.com`) is the SAME probe the existing block runs; it is moved, not changed. |
+| **L7 application (the assertion block itself)** | Verified-green-on-replace | The one transient L7 surface is the re-provision flush+repopulate of `SOLEUR-EGRESS`. Verified no-gap above (loader availability-ordering, `cron-egress-nftables.sh:130-141`). The block re-asserts enforcement post-flush via the live container probes; a broken state aborts the apply with an `ASSERT-FAILED:` sentinel. |
+
+**Gap to close before implementation:** none. The SSH apply path, DNS/routing, and firewall allow-list are all inherited unchanged from the existing resource; this PR moves the post-apply assertion body to a delivered file and folds its hash. No new network dependency is introduced.
 
 ## Sharp Edges
 
