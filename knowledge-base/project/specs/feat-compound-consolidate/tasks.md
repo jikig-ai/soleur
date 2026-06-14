@@ -14,32 +14,35 @@ Derived from the finalized (post-3-reviewer) plan. v1 = decision apparatus, NOT 
 
 ## Phase 1 — Deterministic redundancy metric + SSH-free surface (FR1, FR2)
 
-- [ ] 1.1 Write failing self-test first (`cq-write-failing-tests-before`): `scripts/kb-staleness-metric.sh --self-test`
-  with synthesized fixtures asserting (a) positive near-dup pair, (b) false-negative pair (titles diverge
-  in first tokens), (c) title-less file → slug fallback, (d) exempt-class file excluded from `top_pairs`.
-- [ ] 1.2 Implement `scripts/kb-staleness-metric.sh` (pure-local, NO API): corpus = learnings excl.
-  `**/archive/**`; all-pairs `Jaccard(title-tokens ∪ tags) ≥ 0.6` (no blocking key); title-less slug
-  fallback; exempt classes (`compliance/`, `security-issues/`, incident/PIR, frontmatter
-  `category: compliance|security-issues`/`regulation:`) in denominator but never in `top_pairs`.
-- [ ] 1.3 Emit `knowledge-base/project/kb-redundancy-metrics-2026-06-14.json` (no `schema` field):
-  `corpus_count`, `redundant_pairs`, `density`, `top_pairs[]`. Make self-test pass (GREEN).
-- [ ] 1.4 Run once → commit the 2026-06-14 baseline JSON.
-- [ ] 1.5 Create `knowledge-base/project/kb-health.md`: snapshot (corpus_count, baseline density, top-3
-  pairs) + JSON pointer + the FR4 closure-lifecycle one-liner (`superseded_by:` additive convention).
-- [ ] 1.6 If baseline density ≥ 15%, note in kb-health.md that the gate's absolute shortcut is inert
-  (only +5pp delta governs) so the gate is not pre-decided.
+- [x] 1.1 Self-test (`cq-write-failing-tests-before`): `--self-test` asserts (a) positive near-dup,
+  (b) false-negative pair (first-token divergent — no blocking key), (c) title-less slug fallback,
+  (d) exempt-class excluded from `top_pairs`. 7/7 pass.
+- [x] 1.2 Implemented `scripts/kb-staleness-metric.sh` (pure-local, NO API): all-pairs
+  `Jaccard(title∪tags)≥0.6`, no blocking key, title-less slug fallback, exempt classes in denominator
+  but never in `top_pairs`.
+- [x] 1.3 Emits `kb-redundancy-metrics-<date>.json` (no `schema` field): corpus_count, redundant_pairs,
+  density, top_pairs. Self-test GREEN.
+- [x] 1.4 Baseline committed: **corpus 1550, density 0.19%** (3 pairs) — far below the 15% floor.
+- [x] 1.5 `kb-health.md` created: snapshot + JSON pointer + closure-lifecycle one-liner.
+- [x] 1.6 Baseline 0.19% < 15% → kb-health.md notes the absolute shortcut is **inert**; only +5pp delta
+  governs → gate not pre-decided.
 
-## Phase 2 — Dated checkpoint folded into existing sweeper + #5292 wiring (FR5, FR6)
+## Phase 2 — Dated checkpoint via sweeper follow-through directive + #5292 wiring (FR5, FR6)
 
-- [ ] 2.1 Edit `.github/workflows/scheduled-followthrough-sweeper.yml`: add a guarded step — on/after
-  2026-08-13, if #5292 open and no prior `kb-checkpoint` marker comment, run `kb-staleness-metric.sh`,
-  apply spec §Re-Evaluation Criteria, comment the verdict on #5292. `GITHUB_TOKEN` + `permissions:
-  { contents: read, issues: write }` (NOT App token, NOT PAT). CR/LF-strip values echoed to `::notice::`.
-- [ ] 2.2 Validate: `actionlint` clean; `bash -n` on the extracted `run:` snippet; date-guard + open/
-  unadjudicated guard present; no Anthropic/agent. (Fallback: standalone date-guarded `scheduled-*.yml`.)
-- [ ] 2.3 `gh issue edit 5292`: add a dated `named_outcome:` field (empty) + the FR4 convention one-liner.
-- [ ] 2.4 Annotate brainstorm line ~59 stale 3-clause gate as `[Superseded by spec §Re-Eval]` (done in plan
-  session — verify it remains).
+> **[Work-time adaptation]** No workflow YAML edit needed. The sweeper exposes a `soleur:followthrough`
+> directive convention (script under `scripts/followthroughs/` + native `earliest=` date guard + `env -i`
+> scoped secrets). The exit-code semantics (0=PASS→auto-close, 1=FAIL→comment+stay-open) map exactly onto
+> kill/build by framing the verified condition as "is the kill condition met?". Cleaner than editing the
+> workflow; reuses its entire security model + `GITHUB_TOKEN` auth. Tested via the two convention suites.
+
+- [x] 2.1 Create `scripts/followthroughs/kb-consolidation-checkpoint.sh` — runs `kb-staleness-metric.sh`,
+  applies spec clause 1 (redundancy), exit 0 (not material → auto-close wontfix) / 1 (material →
+  build-candidate, stay open for founder named_outcome) / 2 (transient). Pure-local, no secrets.
+- [x] 2.2 Validate: `shellcheck` clean; runs under sweeper `env -i` sandbox; both verdict branches tested;
+  `sweep-followthroughs.test.sh` (23/23) + `ship-followthrough-directive.test.sh` pass.
+- [x] 2.3 `gh issue edit 5292`: added directive + dated `named_outcome:` field + `follow-through` label;
+  issue stays OPEN.
+- [x] 2.4 Brainstorm line ~59 stale 3-clause gate annotated `[Superseded by spec §Re-Eval]` (plan session).
 
 ## Phase 3 — Verify & ship
 
