@@ -1,0 +1,14 @@
+{
+  "_doc": "Sweep-completeness contracts for .github/scripts/check-sweep-completeness.sh (#5269). To cover a new co-change set, append to sibling_sets. Each entry: name, trigger[], dependents[], reason. Paths are repo-root-relative EXACT full paths (no globs, no substrings). The gate fails a PR when any trigger path is in the diff but any dependent path is not. Editing a dependent alone is allowed. Every path must exist on disk (the gate self-checks) — a rename/delete obligates a same-PR registry edit.",
+  "sibling_sets": [
+    {
+      "name": "cron-tier2-parity",
+      "trigger": ["apps/web-platform/server/inngest/cron-manifest.ts"],
+      "dependents": [
+        "apps/web-platform/test/server/inngest/cron-safe-commit-parity.test.ts",
+        "apps/web-platform/test/server/inngest/cron-shared.test.ts"
+      ],
+      "reason": "TIER2_DEFERRED_CRONS / EXPECTED_CRON_FUNCTIONS in cron-manifest.ts are asserted by both parity tests; changing the set obligates updating both. Evidence: 2026-06-13 session error #6 (cron-shared.test.ts was missed)."
+    }
+  ]
+}
