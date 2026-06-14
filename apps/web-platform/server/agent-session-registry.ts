@@ -44,6 +44,17 @@ const activeSessions = new Map<string, AgentSession>();
 // workspace (Kieran C5 correction).
 const userWorkspaces = new Map<string, string>();
 
+// feat-stream-since-disconnect (#5273) — sidecar `userId → conversationId`
+// binding for the user's currently-streaming turn. The streaming WS frames
+// (`stream`/`tool_use`/`tool_progress`/…) carry NO `conversationId` on the
+// wire, and `sessions` (in ws-handler) is DELETED on socket close — so during
+// the disconnect grace window the replay write-hook has no other way to key a
+// frame to its conversation. This binding survives socket close (it lives in
+// this registry, not in `sessions`) and is reclaimed at turn teardown
+// (`unregisterSession`). Keyed by userId; multi-leader dispatch shares one
+// conversationId so the binding is unambiguous. See ADR-059.
+const activeTurnConversations = new Map<string, string>();
+
 /** Compose the registry key for a session. Multi-leader dispatch uses
  *  the 3-segment form so per-leader cancellation is possible without
  *  killing sibling leaders. */
@@ -68,6 +79,10 @@ export function registerSession(
   leaderId?: string,
 ): void {
   activeSessions.set(sessionKey(userId, conversationId, leaderId), session);
+  // feat-stream-since-disconnect (#5273) — bind the user's active streaming
+  // conversation so the replay write-hook can key gap-emitted frames that
+  // lack a wire `conversationId`.
+  activeTurnConversations.set(userId, conversationId);
 }
 
 /** Remove a session from the registry. Called from the finally block of
@@ -79,6 +94,58 @@ export function unregisterSession(
   leaderId?: string,
 ): void {
   activeSessions.delete(sessionKey(userId, conversationId, leaderId));
+  // feat-stream-since-disconnect (#5273) — recompute the user's active-turn
+  // binding. If another session for this user remains (a sibling leader still
+  // streaming), repoint at its conversation; otherwise drop the binding so a
+  // post-turn frame can never mis-key into a stale conversation's buffer.
+  const userPrefix = `${userId}:`;
+  let remaining: string | undefined;
+  for (const key of activeSessions.keys()) {
+    if (key.startsWith(userPrefix)) {
+      remaining = key.slice(userPrefix.length).split(":")[0];
+      break;
+    }
+  }
+  if (remaining) {
+    activeTurnConversations.set(userId, remaining);
+  } else {
+    activeTurnConversations.delete(userId);
+  }
+}
+
+/** feat-stream-since-disconnect (#5273) — the conversationId of the user's
+ *  currently-streaming turn, or undefined when no turn is active. Used by the
+ *  replay write-hook to key frames that lack a wire `conversationId`, including
+ *  during the disconnect grace window (this binding survives socket close). */
+export function getActiveTurnConversation(userId: string): string | undefined {
+  return activeTurnConversations.get(userId);
+}
+
+/** feat-stream-since-disconnect (#5273) — bind the user's active-turn
+ *  conversation for paths that do NOT register an `AgentSession` in this
+ *  registry (the cc-soleur-go runner emits frames via `sendToClient` without
+ *  going through `registerSession`). Without this, gap-emitted cc frames key
+ *  to `undefined` and are silently dropped — the feature's core scenario
+ *  fails for the dominant conversation path. Paired with
+ *  `clearActiveTurnConversation` at the cc turn boundary. */
+export function setActiveTurnConversation(
+  userId: string,
+  conversationId: string,
+): void {
+  if (!conversationId) return;
+  activeTurnConversations.set(userId, conversationId);
+}
+
+/** feat-stream-since-disconnect (#5273) — drop the cc active-turn binding at
+ *  turn end. Only clears when the binding still points at `conversationId`, so
+ *  a newer turn that already repointed the binding is not clobbered. */
+export function clearActiveTurnConversation(
+  userId: string,
+  conversationId: string,
+): void {
+  if (activeTurnConversations.get(userId) === conversationId) {
+    activeTurnConversations.delete(userId);
+  }
 }
 
 /** Look up a single session by exact key. */
@@ -233,6 +300,7 @@ export const __test_only__ = {
   clear: () => {
     activeSessions.clear();
     userWorkspaces.clear();
+    activeTurnConversations.clear();
   },
   size: () => activeSessions.size,
   workspaceSize: () => userWorkspaces.size,

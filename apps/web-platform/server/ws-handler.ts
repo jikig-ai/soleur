@@ -44,7 +44,14 @@ import {
   setUserWorkspace,
   clearUserWorkspace,
   getUserWorkspace,
+  getActiveTurnConversation,
+  setActiveTurnConversation,
+  clearActiveTurnConversation,
 } from "./agent-session-registry";
+import {
+  streamReplayBuffer,
+  isBufferedFrame,
+} from "./stream-replay-buffer";
 import {
   resolveCurrentOrganizationId,
   getDefaultWorkspaceForUser,
@@ -315,6 +322,9 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   if (session.idleTimer) clearTimeout(session.idleTimer);
   if (session.conversationId) {
     abortSession(userId, session.conversationId, "superseded");
+    // feat-stream-since-disconnect (#5273) — a superseded conversation will
+    // never be resumed; drop its replay frames (counter preserved). See ADR-059.
+    streamReplayBuffer.clear(session.conversationId);
   }
 
   // Release slot for both materialized + pending conversations. The RPC
@@ -582,6 +592,29 @@ export async function tryLedgerDivergenceRecovery(
  */
 export function sendToClient(userId: string, message: WSMessage): boolean {
   const session = sessions.get(userId);
+  // feat-stream-since-disconnect (#5273) — buffer-write hook. Stamp every
+  // buffered-family frame with a monotonic `seq` and append it to its
+  // conversation's replay ring BEFORE serialization, and REGARDLESS of send
+  // success: a frame emitted to a momentarily-dead socket (the disconnect
+  // grace window) is exactly what must be replayed on reconnect. Key on the
+  // FRAME's `conversationId` when present (never blindly `session.conversationId`
+  // — a backgrounded conv-A frame must not land in conv-B's buffer), else the
+  // user's active-turn binding (survives socket close), else session. Skip if
+  // no conversation can be resolved (e.g. pre-session frames). See ADR-059.
+  // `message.seq === undefined` distinguishes a fresh live frame (stamp it)
+  // from a REPLAYED buffered frame being re-emitted by the resume_stream
+  // handler (already carries `seq` — must NOT be re-stamped, or replay would
+  // duplicate it into the ring and rewind nothing). Live frames are always
+  // constructed without `seq`.
+  if (isBufferedFrame(message) && message.seq === undefined) {
+    const frameConvId =
+      "conversationId" in message && message.conversationId
+        ? message.conversationId
+        : getActiveTurnConversation(userId) ?? session?.conversationId;
+    if (frameConvId) {
+      streamReplayBuffer.stamp(frameConvId, message);
+    }
+  }
   if (!session || session.ws.readyState !== WebSocket.OPEN) return false;
   session.ws.send(JSON.stringify(message));
   return true;
@@ -1022,6 +1055,18 @@ export async function dispatchSoleurGoForConversation(
   attachments?: import("@/lib/types").AttachmentRef[],
   sessionId?: string | null,
 ): Promise<void> {
+  // feat-stream-since-disconnect (#5273) — turn boundary for the cc-soleur-go
+  // path. The legacy fan-out wires resetTurn in `sendUserMessage`, but cc
+  // conversations break before that call, so this is the symmetric site. (a)
+  // `resetTurn` clears the prior turn's replay frames (counter preserved) so a
+  // long never-disconnected cc conversation doesn't accumulate frames across
+  // turns up to the ring cap. (b) `setActiveTurnConversation` binds the
+  // conversation so the write-hook can key gap-emitted frames (cc never calls
+  // `registerSession`, so without this the binding is undefined and frames
+  // emitted during the disconnect grace window are silently dropped — the
+  // feature's core scenario for the dominant conversation path). See ADR-059.
+  streamReplayBuffer.resetTurn(conversationId);
+  setActiveTurnConversation(userId, conversationId);
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
     // to `legacy` via a `null` call — that silently breaks the
@@ -1127,6 +1172,7 @@ export async function dispatchSoleurGoForConversation(
     routingKind: routing.kind,
   });
 
+  try {
   await dispatchSoleurGo({
     userId,
     conversationId,
@@ -1153,6 +1199,13 @@ export async function dispatchSoleurGoForConversation(
     },
     ...documentArgs,
   });
+  } finally {
+    // feat-stream-since-disconnect (#5273) — turn ended: drop the cc
+    // active-turn binding (no-ops if a newer turn already repointed it). A
+    // mid-turn disconnect keeps the binding alive (this finally hasn't run
+    // while the turn is in flight), so gap frames are still buffered.
+    clearActiveTurnConversation(userId, conversationId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1260,6 +1313,123 @@ export async function recheckTcMidSession(
 
   session.tcRecheckCacheUntil = Date.now() + TC_RECHECK_CACHE_MS;
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// feat-stream-since-disconnect (#5273) — non-destructive reattach + replay.
+//
+// Handles a `resume_stream` control frame: a TRANSIENT reconnect within the
+// disconnect grace window where the agent is STILL RUNNING. This is NOT
+// `resume_session` — that aborts the live agent at its first line
+// (`abortActiveSession`), which would kill the in-flight turn this feature
+// exists to preserve. The reattach (`pendingDisconnects`-cancel) already
+// rebound the socket without aborting; here we replay the gap's buffered
+// frames, then live frames flow from the unaborted agent.
+//
+// Replay is gated AFTER the SAME ownership (`user_id`) + repo-scope checks the
+// resume_session path uses, keyed on the VERIFIED `conv.id` (never the raw
+// client-supplied conversationId). Correctness floor: never lie. On any
+// failure (auth probe, ownership/repo mismatch, cursor evicted, second-tab
+// slot steal) we emit `stream_replay{incomplete}` and the client falls back to
+// the v1 honest persisted-history refetch. See ADR-059.
+// ---------------------------------------------------------------------------
+
+async function handleResumeStream(
+  userId: string,
+  session: ClientSession,
+  msg: Extract<WSMessage, { type: "resume_stream" }>,
+): Promise<void> {
+  // Clamp the client-supplied cursor: negative/non-finite ⇒ -1 (whole tail).
+  const ackSeq =
+    typeof msg.ackSeq === "number" && Number.isFinite(msg.ackSeq) && msg.ackSeq >= 0
+      ? Math.floor(msg.ackSeq)
+      : -1;
+
+  const fallback = (conversationId: string) =>
+    sendToClient(userId, {
+      type: "stream_replay",
+      conversationId,
+      status: "incomplete",
+    });
+
+  try {
+    // Ownership + repo-scope re-verify — mirror resume_session (:1601-1632).
+    const currentRepoUrl = await getCurrentRepoUrl(userId);
+    const tenant = await tenantFor(userId, "handleMessage.resume-stream");
+    if (!tenant) {
+      // Auth probe failed — honest fallback, no replay (transient; retryable).
+      fallback(msg.conversationId);
+      return;
+    }
+    // visibility-sweep-audit: owner-scoped — WS replay binds to the user's own conversation.
+    const { data: conv, error: convErr } = await tenant
+      .from("conversations")
+      .select("id, repo_url")
+      .eq("id", msg.conversationId)
+      .eq("user_id", userId)
+      .single();
+    if (convErr || !conv) {
+      // Not owned / not found — potential cross-user attempt. No replay.
+      reportSilentFallback(
+        convErr ?? new Error("resume_stream: conversation not found or not owned"),
+        {
+          feature: "stream-replay",
+          op: "ownership-mismatch",
+          extra: { userId, conversationId: msg.conversationId },
+        },
+      );
+      fallback(msg.conversationId);
+      return;
+    }
+    const verifiedConvId = (conv as { id: string }).id;
+    const convRepoUrl = (conv as { repo_url?: string | null }).repo_url ?? null;
+    if (convRepoUrl !== currentRepoUrl) {
+      // Cross-repo stale cursor — same indistinguishable-from-not-found posture
+      // as resume_session; mirror as a potential cross-scope attempt.
+      reportSilentFallback(new Error("resume_stream: repo-scope mismatch"), {
+        feature: "stream-replay",
+        op: "ownership-mismatch",
+        extra: { userId, conversationId: verifiedConvId },
+      });
+      fallback(verifiedConvId);
+      return;
+    }
+    // Single-session-per-userId: if a second tab took the slot for a DIFFERENT
+    // conversation, do not interleave two conversations' streams — fall back.
+    if (session.conversationId && session.conversationId !== verifiedConvId) {
+      fallback(verifiedConvId);
+      return;
+    }
+
+    const { frames, status } = streamReplayBuffer.replayFrom(verifiedConvId, ackSeq);
+    if (status === "incomplete") {
+      // Expected/informational (cap too low or buffer reclaimed) — warn, not error.
+      warnSilentFallback(
+        new Error("stream-replay cursor evicted or buffer cleared"),
+        {
+          feature: "stream-replay",
+          op: "cursor-evicted",
+          extra: { userId, conversationId: verifiedConvId, ackSeq },
+        },
+      );
+      fallback(verifiedConvId);
+      return;
+    }
+    // Complete: re-emit buffered frames verbatim, in order, with their stamped
+    // `seq` intact (the sendToClient write-hook skips re-stamping frames that
+    // already carry `seq`). The client dedups any `seq <= lastRenderedSeq`.
+    // Live frames then resume from the still-running agent.
+    for (const frame of frames) {
+      sendToClient(userId, frame);
+    }
+  } catch (err) {
+    Sentry.captureException(err);
+    log.error(
+      { userId, conversationId: msg.conversationId, err },
+      "resume_stream error",
+    );
+    fallback(msg.conversationId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1733,6 +1903,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       try {
         const convId = session.conversationId;
         abortSession(userId, convId, "superseded");
+        // feat-stream-since-disconnect (#5273) — explicit close: drop replay
+        // frames (counter preserved). No reconnect-replay for a closed
+        // conversation. See ADR-059.
+        streamReplayBuffer.clear(convId);
         await updateConversationFor(
           userId,
           convId,
@@ -2051,6 +2225,16 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // means the turn already finished, which the client tolerates
       // by ignoring the late `stopping`-state timeout.
       abortSession(userId, msg.conversationId, "user_requested_stop");
+      // feat-stream-since-disconnect (#5273) — user-initiated Stop: the user
+      // is connected and sees the stop live, so drop replay frames (counter
+      // preserved). A trailing `session_ended:user_aborted` re-stamps a tiny
+      // buffer, which is honest on any subsequent reconnect. Gate on the
+      // session's OWN bound conversation (not the raw client `conversationId`)
+      // so a forged abort_turn cannot clear another conversation's replay
+      // buffer — abortSession above is already userId-keyed and safe. ADR-059.
+      if (session.conversationId === msg.conversationId) {
+        streamReplayBuffer.clear(msg.conversationId);
+      }
       break;
     }
 
@@ -2257,11 +2441,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "workflow_started":
     case "workflow_ended":
     case "error":
-    case "revocation_notice": {
+    case "revocation_notice":
+    // feat-stream-since-disconnect (#5273) — server→client only.
+    case "stream_replay": {
       sendToClient(userId, {
         type: "error",
         message: "This message type is server-to-client only.",
       });
+      break;
+    }
+
+    // feat-stream-since-disconnect (#5273) — client→server transient-reconnect
+    // reattach. Full ownership-gated replay handler wired in Phase 3 below.
+    case "resume_stream": {
+      await handleResumeStream(userId, session, msg);
       break;
     }
 
@@ -2571,6 +2764,11 @@ export function setupWebSocket(server: HTTPServer) {
             const timer = setTimeout(() => {
               log.info({ userId: uid, conversationId: convId }, "Grace period expired, aborting session");
               abortSession(uid, convId);
+              // feat-stream-since-disconnect (#5273) — grace expired: the
+              // reconnect window is over, so drop the replay frames (counter
+              // preserved). A later reconnect now resolves `incomplete` →
+              // honest v1 history refetch, never a stale-replay lie. See ADR-059.
+              streamReplayBuffer.clear(convId);
             }, DISCONNECT_GRACE_MS);
             timer.unref();
             // Store timer so reconnecting user can cancel it

@@ -34,6 +34,12 @@ const conversationIdSchema = z.string().min(1);
 const promptIdSchema = z.string().min(1);
 const spawnIdSchema = z.string().min(1);
 
+// feat-stream-since-disconnect (#5273) — server-stamped monotonic replay
+// cursor on the buffered streaming family. Optional on the wire so a rolling
+// prd deploy doesn't drop frames between an old server (no `seq`) and a new
+// client. Non-negative integer; the client treats it as a dedup cursor.
+const replaySeqSchema = z.number().int().nonnegative().optional();
+
 // DomainLeaderId — pinned to the 10-id allowlist from
 // `server/domain-leaders.ts`. The list is short and stable; pinning here
 // makes the bidirectional `_SchemaCovers` proof structurally complete (Zod
@@ -212,6 +218,25 @@ const resumeSessionSchema = z.strictObject({
   type: z.literal("resume_session"),
   conversationId: z.string(),
 });
+// feat-stream-since-disconnect (#5273) — client→server transient-reconnect
+// reattach control frame. `ackSeq` is the highest `seq` the client already
+// rendered (server clamps a negative/huge value; absent ⇒ replay whole tail).
+// `userId` is NOT a wire field — resolved from the authenticated socket
+// (strictObject rejects forgery; TR4 cross-user invariant). See ADR-059.
+const resumeStreamSchema = z.strictObject({
+  type: z.literal("resume_stream"),
+  conversationId: conversationIdSchema,
+  ackSeq: z.number().int().nonnegative().optional(),
+});
+// feat-stream-since-disconnect (#5273) — server→client replay-status boundary
+// frame, emitted ONLY on the fallback path (cursor older than oldest buffered
+// frame, or whole buffer map-evicted). Client triggers the v1 honest history
+// refetch. Per-status discriminated sub-union (only `incomplete` today).
+const streamReplaySchema = z.strictObject({
+  type: z.literal("stream_replay"),
+  conversationId: conversationIdSchema,
+  status: z.literal("incomplete"),
+});
 const closeConversationSchema = z.strictObject({ type: z.literal("close_conversation") });
 const reviewGateResponseSchema = z.strictObject({
   type: z.literal("review_gate_response"),
@@ -242,20 +267,24 @@ const streamSchema = z.strictObject({
   content: z.string(),
   partial: z.boolean(),
   leaderId: domainLeaderIdSchema,
+  seq: replaySeqSchema,
 });
 const streamStartSchema = z.strictObject({
   type: z.literal("stream_start"),
   leaderId: domainLeaderIdSchema,
   source: z.enum(["auto", "mention"]).optional(),
+  seq: replaySeqSchema,
 });
 const streamEndSchema = z.strictObject({
   type: z.literal("stream_end"),
   leaderId: domainLeaderIdSchema,
+  seq: replaySeqSchema,
 });
 const toolUseSchema = z.strictObject({
   type: z.literal("tool_use"),
   leaderId: domainLeaderIdSchema,
   label: z.string(),
+  seq: replaySeqSchema,
 });
 // feat-concierge-stream-commands — inline Bash command/output stream.
 // `command`/`output` are optional (set per `phase`); both are already
@@ -282,6 +311,7 @@ const toolProgressSchema = z.strictObject({
   toolUseId: z.string(),
   toolName: z.string(),
   elapsedSeconds: z.number(),
+  seq: replaySeqSchema,
 });
 // feat-debug-mode-stream — internal dev-cohort harness instruction stream.
 // Delta/append semantics: one event per frame (turn end is signalled by
@@ -357,6 +387,7 @@ const sessionEndedSchema = z.strictObject({
   // Optional disambiguator for multi-tab clients (feat-abort-conversation-web
   // PR1). Existing emitters that omit it remain wire-compatible.
   conversationId: z.string().optional(),
+  seq: replaySeqSchema,
 });
 const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),
@@ -377,6 +408,7 @@ const usageUpdateSchema = z.strictObject({
   // Tighten to required in a follow-up after the old build ages out.
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
+  seq: replaySeqSchema,
 });
 const fanoutTruncatedSchema = z.strictObject({
   type: z.literal("fanout_truncated"),
@@ -544,6 +576,8 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   chatSchema,
   startSessionSchema,
   resumeSessionSchema,
+  resumeStreamSchema,
+  streamReplaySchema,
   closeConversationSchema,
   reviewGateResponseSchema,
   autonomousDisclosureResponseSchema,

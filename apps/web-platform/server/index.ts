@@ -8,6 +8,7 @@ import next from "next";
 import { parse } from "url";
 import { WebSocket } from "ws";
 import { setupWebSocket } from "./ws-handler";
+import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
   abortAllSessions,
@@ -232,6 +233,9 @@ app.prepare().then(() => {
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".
     abortAllSessions();
+    // feat-stream-since-disconnect (#5273) — drain the in-memory replay buffer
+    // on shutdown (process-local; nothing to persist). See ADR-059.
+    streamReplayBuffer.clearAll();
 
     server.close();
     server.closeIdleConnections();

@@ -278,10 +278,12 @@ export type WSMessage =
        */
       partial: boolean;
       leaderId: DomainLeaderId;
+      /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
+      seq?: number;
     }
-  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
-  | { type: "stream_end"; leaderId: DomainLeaderId }
-  | { type: "tool_use"; leaderId: DomainLeaderId; label: string }
+  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention"; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "stream_end"; leaderId: DomainLeaderId; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "tool_use"; leaderId: DomainLeaderId; label: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
   // feat-concierge-stream-commands — Concierge Bash commands + their
   // (truncated, redacted) stdout/stderr stream INLINE into the cc_router
   // bubble, Claude-Code-terminal style, instead of spawning per-command
@@ -321,6 +323,8 @@ export type WSMessage =
       toolUseId: string;
       toolName: string;
       elapsedSeconds: number;
+      /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
+      seq?: number;
     }
   // feat-debug-mode-stream — internal dev-cohort harness instruction stream
   // (server→client). A SEPARATE collapsed debug panel renders these; they are
@@ -367,6 +371,8 @@ export type WSMessage =
        *  feat-abort-conversation-web PR1 emits it for `user_aborted`
        *  reasons. */
       conversationId?: string;
+      /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
+      seq?: number;
     }
   // #3269 — context-reset lifecycle notice. Emitted exactly once per
   // prefill-guard fire (assistant-terminated history → SDK 400 prevention
@@ -402,6 +408,8 @@ export type WSMessage =
       // `?? 0` at every consumer. Tighten in a follow-up.
       cacheReadInputTokens?: number;
       cacheCreationInputTokens?: number;
+      /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
+      seq?: number;
     }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
@@ -447,7 +455,27 @@ export type WSMessage =
       type: "revocation_notice";
       reason: string | null;
       deniedAt: string | null;
-    };
+    }
+  // feat-stream-since-disconnect (#5273) — client→server reattach control
+  // frame. Sent on a TRANSIENT reconnect (the `auth_ok` brief-drop path),
+  // distinct from `resume_session` (which aborts the live agent at its first
+  // line). The server replays buffered frames with `seq > ackSeq`, then live
+  // streaming resumes from the still-running agent. `ackSeq` is the highest
+  // `seq` the client has already rendered (a lower bound; the server clamps a
+  // negative/huge value). Absent `ackSeq` ⇒ replay the whole buffered tail.
+  // `userId` is NOT a wire field — resolved from the authenticated socket
+  // (TR4 cross-user invariant; strictObject rejects forgery). See ADR-059.
+  | { type: "resume_stream"; conversationId: string; ackSeq?: number }
+  // feat-stream-since-disconnect (#5273) — server→client replay-status
+  // boundary frame. Emitted ONLY on the fallback path: the requested cursor
+  // is older than the oldest buffered frame, or the whole conversation buffer
+  // was map-evicted. The client responds by triggering the v1 honest
+  // persisted-history refetch (never a silent stale/duplicate render). The
+  // happy path needs no bracket frames — per-`seq` dedup at the client makes
+  // a replay window redundant. Per-status discriminated sub-union so a future
+  // `complete`/`begin`/`end` status carries its own required fields without
+  // widening this one. See ADR-059.
+  | { type: "stream_replay"; conversationId: string; status: "incomplete" };
 
 /**
  * Wire-protocol naming convention (Stage 3, #2885):
