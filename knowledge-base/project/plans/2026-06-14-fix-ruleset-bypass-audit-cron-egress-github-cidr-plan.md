@@ -121,6 +121,14 @@ attacker (or an accidental config change) needs.
 
 **Brand-survival threshold:** single-user incident.
 
+**Fail-open-bootstrap caveat (worst single-user outcome):** if a malformed line ever enters
+the now-52-line CIDR file, the #5268/#5242 loader rejects the WHOLE file and `die`s before
+installing the default-drop — leaving a FRESH host / cold-restarted container with no egress
+containment (fail-open) until fixed. Mitigated by mechanical `/meta` generation, the
+`bash -n` + `discoverability_test` pre-commit gate, the per-line `is_valid_ipv4_cidr`
+validator, and the firewall drift-guard count check (all green pre-merge); the
+`cron-egress-firewall.service` `OnFailure=` alarm pages on the `die`.
+
 > CPO sign-off required at plan time before `/work` begins. The security control is
 > brand-survival-load-bearing; `user-impact-reviewer` runs at review-time.
 
@@ -388,7 +396,12 @@ post-apply; do NOT `Closes` it blind (its blocked DST must be confirmed in Phase
 
 ## Deferred / Follow-up
 
-- File a tracking issue: "Generate `cron-egress-allowlist-cidr.txt` from GitHub `/meta` at
-  apply-time (self-refreshing) instead of a static snapshot." Re-eval criterion: the static
-  list goes stale (a new `egress-blocked` GitHub DST appears). Milestone per
-  `knowledge-base/product/roadmap.md`.
+- **Filed #5284** — "infra: self-refreshing GitHub `/meta` CIDR generator for cron egress
+  firewall (replace static snapshot)" (milestone: Post-MVP / Later). Re-eval criterion: the
+  static list goes stale (a new `egress-blocked` GitHub DST appears).
+- **Noted (pre-existing, not in scope):** `apply-web-platform-infra.yml` has no
+  failure-notification step — a failed firewall re-apply surfaces only as a red GitHub
+  Actions check. The recovery backstop for THIS fix is the daily `scheduled-ruleset-bypass-audit`
+  Sentry monitor (30-min miss margin), which re-alerts on the next fire if the apply did not
+  land — the same signal that surfaced this incident. A dedicated apply-failure alert is a
+  cross-cutting observability improvement for all infra applies, separate from this CIDR fix.

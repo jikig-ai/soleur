@@ -27,7 +27,7 @@
 #   curl -s https://api.github.com/meta \
 #     | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u
 # then bump the count guard in cron-egress-firewall.test.sh and the snapshot date.
-# Follow-up: self-refreshing generator at apply-time (see plan Deferred/Follow-up).
+# Follow-up #5284: self-refreshing generator at apply-time (replace this static snapshot).
 #
 # Snapshot: api.github.com/meta `.git` + `.api`, 2026-06-14. 52 IPv4 ranges.
 140.82.112.0/20

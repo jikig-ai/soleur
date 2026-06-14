@@ -92,7 +92,7 @@ comm -23 <(curl -s https://api.github.com/meta | jq -r '(.git+.api)[]|select(tes
 
 Empty output = full coverage. Merge — the provisioner re-applies on push (no
 SSH). **The `/32`s rotate**, so this static snapshot will go stale; the
-self-refreshing-generator follow-up tracks the durable fix.
+self-refreshing-generator follow-up (#5284) tracks the durable fix.
 
 ## Remediation (loader `die "invalid CIDR …"`)
 
@@ -122,8 +122,21 @@ to `TIER2_DEFERRED_CRONS` (`_cron-shared.ts`) pending forensics.
 - `op=enforcement_missing` event = the jump/drop rules were absent at a tick
   and the self-heal re-ran the loader — investigate what flushed nftables.
 
-## Last-resort diagnosis (only after the above)
+## Deeper diagnosis without a host shell (hr-no-ssh-fallback-in-runbooks)
 
-`ssh root@<host> 'journalctl -k | grep egress-'` and
-`nft list chain ip filter SOLEUR-EGRESS` show the live ruleset and full drop
-history beyond the 3-line Sentry sample.
+The 3-line Sentry `extra.sample` is one tick's window. To go deeper WITHOUT
+SSH:
+
+1. **Accumulate drop history from Sentry.** The resolver re-runs every minute
+   and ships a fresh `egress-blocked` / `egress-dns-exfil` event per tick — group
+   the issue's events over time to see the full `DST` distribution and hit
+   counts, rather than a single sample.
+2. **Re-verify the live ruleset via a re-apply, not SSH.** Re-run
+   `apply-web-platform-infra.yml` (push to `main` touching
+   `apps/web-platform/infra/**`, or `workflow_dispatch`). Its post-apply
+   remote-exec lists the `SOLEUR-EGRESS` chain + the `soleur_egress_allow_cidr`
+   set and runs a live positive+negative container probe — a passing apply IS
+   the proof the ruleset is correct on the host; a failing one names the gap.
+3. **Watch the self-heal signal.** An `op=enforcement_missing` event means the
+   resolver detected absent jump/drop rules and re-ran the loader — the live
+   ruleset state is observable from that event without logging in.

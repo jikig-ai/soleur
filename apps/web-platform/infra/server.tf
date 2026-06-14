@@ -829,9 +829,12 @@ resource "terraform_data" "cron_egress_firewall" {
       # git/pages blocks: at least one Azure 20.x or 4.x /32 (the api.github.com
       # LB pool whose absence caused the missed check-in, incident 5516336) must
       # be present. Anchor on the leading octet after an element delimiter ({ ,
-      # whitespace) so a "20."/"4." substring inside an EXPANDED 140.82.x range
-      # (nft may render the /20 as 140.82.112.0-140.82.127.255, which contains
-      # "120.") does NOT false-pass — display-format-agnostic, same as :827.
+      # whitespace) so a bare "20."/"4." substring INSIDE one of the big blocks
+      # cannot false-pass: an unanchored "4[.]" matches "143.55.64.0" (the "4."
+      # in "64.0"), and nft may render a block as an expanded range
+      # (143.55.64.0-143.55.79.255). The delimiter anchor requires the octet to
+      # START an element, so only a real 20.x/4.x element matches.
+      # Display-format-agnostic, same intent as the :827 assert above.
       "nft list set ip filter soleur_egress_allow_cidr | grep -qE '[{,[:space:]](20|4)[.]'",
       "docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false",
       "systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer",
