@@ -21,7 +21,7 @@ authoritative decision rule in `knowledge-base/project/specs/feat-compound-conso
 
 | Field | Value |
 |---|---|
-| corpus_count (non-archive learnings) | **1549** |
+| corpus_count (non-archive learnings) | **1550** |
 | exempt (compliance / security-issues / incident / `regulation:`) | 59 |
 | Jaccard threshold | 0.6 |
 | redundant_pairs (non-exempt) | **3** |
