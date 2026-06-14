@@ -57,8 +57,39 @@ BRIDGE_GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}
 # cron-egress-allowlist-cidr.txt. Empty/missing file → empty set (no effect).
 CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
 CIDR_ELEMENTS=""
+
+# Strict IPv4-CIDR validator. $CIDR_ELEMENTS is interpolated VERBATIM into the
+# `add element ... { $CIDR_ELEMENTS }` nft heredoc below, so any non-comment line
+# containing `}`, an nft keyword, whitespace, a newline, or command-substitution
+# would be injected into the ruleset (e.g. `0.0.0.0/0` silently allow-all, or
+# `}; add rule ... accept`). This gate rejects that surface AND range-checks octets
+# (<= 255) / prefix (<= 32) so a malformed allowlist fails loud rather than
+# half-installing the firewall. The CIDR file is repo-controlled config — a bad
+# line means the committed file is wrong → reject-whole-file (vs. the resolver's
+# filter-and-drop, which is correct for untrusted DNS input; see plan precedent-diff).
+is_valid_ipv4_cidr() {
+  local cidr="$1" prefix o1 o2 o3 o4
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
+  o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
+  # A leading-zero octet (e.g. 08/09) makes (( )) attempt octal parse and fail
+  # non-zero ("value too great for base"); the `|| return 1` catches it, so such a
+  # line safely REJECTS (a canonical allowlist should not carry leading zeros anyway).
+  (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  return 0
+}
+
 if [[ -f "$CIDR_FILE" ]]; then
-  CIDR_ELEMENTS="$(grep -vE '^[[:space:]]*(#|$)' "$CIDR_FILE" | paste -sd, -)"
+  # `read -r` retains a trailing \r, so a CRLF-saved file fails the $-anchored regex
+  # and the whole file is rejected (fail-loud) — intentional: the old paste-build
+  # silently injected the \r into the nft heredoc. `|| [[ -n "$line" ]]` keeps the
+  # final line when the file has no trailing newline.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    is_valid_ipv4_cidr "$line" \
+      || die "invalid CIDR in $CIDR_FILE: '$line' (reject-whole-file; refusing to build nft elements)"
+    CIDR_ELEMENTS+="${CIDR_ELEMENTS:+,}$line"
+  done < "$CIDR_FILE"
 fi
 
 # --- Phase 1: declare table/sets/chains (additive, idempotent) -----------------
