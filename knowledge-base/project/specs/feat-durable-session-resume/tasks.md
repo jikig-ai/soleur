@@ -15,37 +15,53 @@ plan: knowledge-base/project/plans/2026-06-14-feat-durable-session-resume-v1-pla
 - [x] 0.3 Resume SELECT confirmed `"id, status, repo_url"` at `ws-handler.ts:1613` (no `workspace_id`); switch point is right after `session.conversationId = msg.conversationId` at `:1634`; terminal catch `:1649-1653` (no `.catch` replay).
 - [x] 0.4 cc-dispatcher `persistUserMessage` reads `conversations.workspace_id` (`~2203`) — FR2 branches off it.
 - [x] 0.5 **No connection-state input in the reducer** (grep of `chat-state-machine.ts` for connect/socket/disconnect found only a comment). → FR4 ships the accurate single "No response yet" state; state-1/2 split defers to #5282.
-- [ ] 0.6 Baseline `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (run at GREEN start).
+- [x] 0.6 Baseline `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (run at GREEN start).
 
 **FR1 GREEN recipe (verified):** at `ws-handler.ts:1613` add `workspace_id` to `.select(...)`; after `:1634` add `const { error: switchErr } = await tenantResumeConv.rpc("set_current_workspace_id", { p_workspace_id: (conv as {workspace_id:string}).workspace_id }); if (switchErr) reportSilentFallback({code:switchErr.code,message:switchErr.message}, { feature:"session-resume", op:"resume-workspace-rebind", message:..., extra:{userId, conversationId: msg.conversationId} });` (mirror accept-invite:78-91). RED test: integration-style (`TENANT_INTEGRATION_TEST=1`, model on `test/server/ws-handler.tenant-isolation.test.ts`) asserting the resumed session resolves to `conversations.workspace_id`, OR a focused unit test spying the tenant client `.rpc` call.
 
 ## Phase 1 — FR1 verified rebind (server) [RED→GREEN]
-- [ ] 1.1 RED: test resume aligns `user_session_state.current_workspace_id` to `conversations.workspace_id` (assert the field/resolved cwd, NOT the in-memory map).
-- [ ] 1.2 Add `workspace_id` to the resume `.select(...)` at `ws-handler.ts:~1615`.
-- [ ] 1.3 On resume, write `current_workspace_id = conv.workspace_id` via the existing switch (0.1); guard to only fire on conversationId (re)assignment (R4).
-- [ ] 1.4 On read failure/null → `reportSilentFallback(op:"resume-workspace-rebind")`; honest client error via the existing catch (no `.catch` replay assumption).
+- [x] 1.1 RED: test resume aligns `user_session_state.current_workspace_id` to `conversations.workspace_id` (assert the field/resolved cwd, NOT the in-memory map).
+- [x] 1.2 Add `workspace_id` to the resume `.select(...)` at `ws-handler.ts:~1615`.
+- [x] 1.3 On resume, write `current_workspace_id = conv.workspace_id` via the existing switch (0.1); guard to only fire on conversationId (re)assignment (R4).
+- [x] 1.4 On read failure/null → `reportSilentFallback(op:"resume-workspace-rebind")`; honest client error via the existing catch (no `.catch` replay assumption).
 
-## Phase 2 — FR2/FR3 probe + honest message (server) [RED→GREEN]
-- [ ] 2.1 RED: `.git`-absent at resolved path → honest "workspace reclaimed — resume with context?" message, not a fresh greeting.
-- [ ] 2.2 Reuse `conversationWorkspaceId` from cc-dispatcher's existing read; add `.git` `existsSync` probe (shape from `ensure-workspace-repo.ts:78`) at the pre-greeting/dispatch branch.
-- [ ] 2.3 Branch around the agent greeting (mutually exclusive, R3); `warnSilentFallback(op:"resume-workspace-gone")`.
+## Phase 2 — FR2/FR3 probe + honest message (server) [DEFERRED → follow-up]
+**Descoped from v1 (2026-06-14).** Implementation traced a regression in the
+plan's prescribed placement: the `.git`-absent self-heal (`ensureWorkspaceRepoCloned`)
+runs *inside* the cold dispatch (`realSdkQueryFactory:1464`), gated on the
+~80-line `effectiveInstallationId` entitlement-promotion chain. A pre-dispatch
+probe that skips dispatch (the plan's "off the persistUserMessage read"
+placement) prevents that self-heal from running for exactly the connected-repo
+resume case it targets — turning today's transparent re-clone into a permanent
+dead-end, and making AC7/AC8's `[Resume]` ("send a message") un-deliverable.
+The honest reclaimed-message is fundamentally a *post-self-heal-failure* concept
+and must be emitted after a failed re-clone, not before dispatch. FR1 already
+fixes the actual reported incident (resume → wrong/solo workspace → misleading
+greeting), so v1 ships FR1+FR4+FR5 and FR2/FR3 + AC6/AC7/AC8 move to a follow-up
+that does the post-self-heal architecture correctly.
+- [ ] 2.1 (deferred) honest reclaimed-message emitted only after a failed self-heal re-clone.
+- [ ] 2.2 (deferred) thread a "self-heal failed" signal out of `realSdkQueryFactory`.
+- [ ] 2.3 (deferred) branch around the agent greeting (mutually exclusive, R3); `warnSilentFallback(op:"resume-workspace-gone")`.
 
 ## Phase 3 — FR4 retire the "Retrying…" lie (client) [RED→GREEN]
-- [ ] 3.1 RED: 45s silent stream → accurate status, never "Retrying…".
-- [ ] 3.2 Replace `RetryingChip` copy + misleading semantic (`message-bubble.tsx:~50`, `chat-state-machine.ts:~1113`) with accurate "No response yet".
-- [ ] 3.3 If 0.5 found a connection-state input → split states 1/2; else ship accurate single state and defer split to #5282.
+- [x] 3.1 RED: 45s silent stream → accurate status, never "Retrying…".
+- [x] 3.2 Replace `RetryingChip` copy + misleading semantic (`message-bubble.tsx:~50`, `chat-state-machine.ts:~1113`) with accurate "No response yet".
+- [x] 3.3 If 0.5 found a connection-state input → split states 1/2; else ship accurate single state and defer split to #5282.
 
-## Phase 4 — FR5 + honesty consequences (AC6/AC7/AC8) [RED→GREEN]
-- [ ] 4.1 FR5: resumed turn with existing bound workspace continues in it (verify; falls out of Phase 1).
-- [ ] 4.2 AC6: turn-completed-while-away renders completed transcript (existing UI), no spinner/resume-prompt.
-- [ ] 4.3 AC7: failed `[Resume]` self-heal → honest retryable error (`op:"resume-action-failed"`), no silent loop/fresh greeting.
-- [ ] 4.4 AC8: define decline/ignore resting state (read-only transcript + persistent affordance + composer behavior).
+## Phase 4 — FR5 + honesty consequences (AC6/AC7/AC8)
+- [x] 4.1 FR5: resumed turn with existing bound workspace continues in it — falls out of Phase 1 (FR1 rebinds the resolver to `conversations.workspace_id`; with `.git` present the agent continues in that workspace). Verified by `ws-handler-resume-rebind.test.ts` (the rebind assertion).
+- [ ] 4.2 AC6 (deferred with FR2/FR3): turn-completed-while-away renders completed transcript, no spinner/resume-prompt. Part of the honest reclaimed/reconnect UX cluster; moves to the FR2/FR3 follow-up.
+- [ ] 4.3 AC7 (deferred with FR2/FR3): failed `[Resume]` self-heal → honest retryable error. Depends on the reclaimed-message + self-heal path → follow-up.
+- [ ] 4.4 AC8 (deferred with FR2/FR3): decline/ignore resting state. Depends on the reclaimed-message UX → follow-up.
 
 ## Phase 5 — Verification
-- [ ] 5.1 `tsc --noEmit` clean; vitest for touched suites (deterministic — assert server message/reducer state, not LLM prose).
-- [ ] 5.2 Browser QA of the 4 wireframed states (`/soleur:qa`).
-- [ ] 5.3 AC-obs: op-slug grep over `server/` + `lib/`; Sentry discoverability curl.
-- [ ] 5.4 Pre-ship: `/soleur:preflight`; PR body uses `Closes #5240`; `user-impact-reviewer` at review (single-user threshold).
+- [x] 5.1 `tsc --noEmit` clean; vitest touched suites green (deterministic — assert resolver rpc / reducer copy, not LLM prose). FR1 `ws-handler-resume-rebind.test.ts` (2) + FR4 `message-bubble-retry.test.tsx` (4) + neighbor state-machine/streaming suites (73 total).
+- [~] 5.2 Browser QA — N/A for v1: the FR2/FR3 reclaimed-message states (3 of 4 wireframes) are deferred; only FR4's "No response yet" chip copy changed (leaf `components/chat/message-bubble.tsx` — does NOT trip the structural-UI visual gate), covered by the component test.
+- [x] 5.3 AC-obs: `op: "resume-workspace-rebind"` emitted on both failure paths (`ws-handler.ts:1654,1672`). `resume-workspace-gone`/`resume-action-failed` slugs deferred with FR2/FR3. Sentry discoverability curl is a post-deploy verify (zero events in steady state).
+- [ ] 5.4 Pre-ship: `/soleur:preflight`; PR body `Refs #5240` (NOT `Closes` — FR2/FR3 + AC3/AC6/AC7/AC8 deferred, #5240 stays open as their tracker); `user-impact-reviewer` at review (single-user threshold).
 
 ## Out of scope (tracked)
 - #5273 stream-since-disconnect buffer · #5274 physical durability · #5275 in-flight work (incl. AC9) · #5282 reconnect state-machine hardening (AC10–AC12 + state 1/2 split).
+
+## Deferred from v1 (2026-06-14 descope) — tracked on #5240 (stays open)
+- **FR2/FR3 honest reclaimed-message + AC3 + AC6/AC7/AC8.** The plan's pre-dispatch `.git` probe regresses connected-repo resume recovery (skips the in-dispatch `ensureWorkspaceRepoCloned` self-heal). Correct design: emit the honest message only AFTER a failed self-heal re-clone (post-`realSdkQueryFactory` signal), suppressing the agent greeting then. v1 ships FR1 (verified rebind — fixes the reported incident) + FR4 (retire "Retrying…") + FR5.

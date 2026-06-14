@@ -29,6 +29,20 @@ v1 = FR1–FR5 (honest reconnect/resume UX + verified deterministic rebind). Def
 (stream-since-disconnect buffer), #5274 (physical durability), #5275 (in-flight work durability),
 and a new reconnect-state-machine hardening follow-up (AC10–AC12, see Open Questions).
 
+> **v1 descope (2026-06-14, implementation correction).** As SHIPPED, v1 is **FR1 + FR4 + FR5
+> only**. **FR2/FR3 (the honest reclaimed-message) and the dependent AC3/AC6/AC7/AC8 were reverted
+> and deferred (tracked on #5240).** Reason: the plan's pre-dispatch `.git` probe (Phase 2 below)
+> skips dispatch when `.git` is absent, but the recovering self-heal re-clone
+> (`ensureWorkspaceRepoCloned`) runs *inside* the cold dispatch (`realSdkQueryFactory`) — so the
+> probe would dead-end connected-repo resume recovery. The honest reclaimed-message must be emitted
+> *after* a failed self-heal re-clone, not before dispatch; that is the follow-up's correct design.
+> Consequently **only the `resume-workspace-rebind` op slug ships** — the `resume-workspace-gone`
+> and `resume-action-failed` slugs in the Observability block and the AC-obs grep below are
+> DEFERRED (do not assert them against the shipped diff). FR1 alone fixes the reported incident
+> (resume → wrong/solo workspace → misleading greeting); the genuinely-`.git`-gone path is
+> unchanged-or-improved by FR1 (the self-heal still re-clones the now-correct workspace). See
+> `tasks.md` §"Deferred from v1" for the authoritative record.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec/issue claim | Codebase reality (verified) | Plan response |
