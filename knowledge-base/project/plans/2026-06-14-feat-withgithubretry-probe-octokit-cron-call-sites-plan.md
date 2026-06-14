@@ -12,6 +12,21 @@ brand_survival_threshold: none
 
 ♻️ **Tech-debt wiring sweep** — closes #5230 (`type/chore`, `priority/p3-low`, `deferred-scope-out`).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-14
+**Sections enhanced:** Premise Validation, Research Reconciliation, Acceptance Criteria, Sharp Edges, User-Brand Impact
+**Deepen passes run:** halt-gates 4.6/4.7/4.8/4.9, precedent-diff gate 4.4, verify-the-negative pass 4.45.1, octokit-version contract check.
+
+### Key Improvements (from deepen pass)
+1. **Sensitive-path scope-out bullet added** — Files-to-Edit under `apps/web-platform/server/**` match the preflight Check-6 sensitive-path regex; the `threshold: none` declaration now carries the mandatory `threshold: none, reason: …` scope-out (without it, deepen-plan Phase 4.6 AND ship-time preflight Check 6 would both FAIL).
+2. **Verify-the-negative confirmed all 3 load-bearing claims** against installed code (not memory): (a) AC6 — `httpError` test helper sets no `.cause`, so `isRetryableGithubError` returns `false` on plain 404/403, preserving no-retry; (b) Phase 3 orthogonality — `probeDriftGuard` *returns* `makeFailure("github_app_401")` rather than throwing, so `withGithubRetry` (thrown-error-only) never double-retries the handler-level 401 retry; (c) octokit 7.1.0 sets native `Error.cause`, matching the AC7 fixture shape.
+3. **Precedent-diff gate (4.4) confirmed the individual-wrapper pattern** — `cron-stale-deferred-scope-outs.ts:241-260` wraps non-idempotent POST and sibling PATCH in SEPARATE `withGithubRetry` calls; the plan's AC4 + Sharp Edges already enforce this exactly.
+4. **"Files to Create: None" validated** — `cron-stale-deferred-scope-outs.test.ts:288` documents that `withGithubRetry` passes a successful/non-retryable thunk straight through, so the two cron unit suites (mocking at the octokit boundary) stay green unmodified.
+
+### New Considerations Discovered
+- The single subtlety on exhaustion: when `GET /app` connect-timeouts and `withGithubRetry` exhausts, it rethrows → `probeDriftGuard` catch → no `.status` on a network error → `github_api_network` (unchanged terminal behavior, already in Test Scenarios).
+
 ## Overview
 
 The prior fix for Sentry issue `448a4173f90a436382c4396371927796` (`cron-stale-deferred-scope-outs` connect-timeout resilience, #5227) introduced two shared primitives in `apps/web-platform/server/github-retry.ts`:
@@ -52,7 +67,9 @@ All three premises in #5230 hold, with one path correction:
 
 **If this leaks, the user's data is exposed via:** N/A — these crons emit only synthetic-probe diagnostics (HTTP status, GitHub request-id, clock skew) already redacted/strip-log-injected at the existing emission sites. This change touches retry control flow only; it adds no new emission, no new secret materialization, no new external call.
 
-**Brand-survival threshold:** `none` — internal ops tooling resilience improvement. No sensitive-path surface touched (no schema, migration, auth flow, API route, or `.sql` file); §Domain Review confirms infrastructure/tooling-only.
+**Brand-survival threshold:** `none` — internal ops tooling resilience improvement. §Domain Review confirms infrastructure/tooling-only.
+
+- `threshold: none, reason:` the edited files sit under `apps/web-platform/server/**` (matching the preflight Check-6 sensitive-path regex) but the change is retry control-flow only — no schema, migration, auth flow, API route, secret, or `.sql` surface is added or altered, and no new data-emission path is introduced.
 
 ## Acceptance Criteria
 
@@ -129,6 +146,28 @@ All three premises in #5230 hold, with one path correction:
 1. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (AC8).
 2. `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/github/probe-octokit-retry.test.ts test/server/inngest/cron-oauth-probe.test.ts test/server/inngest/cron-github-app-drift-guard.test.ts test/github-api-retry.test.ts` (AC9, AC6, AC7).
 3. Run the AC1–AC5 greps and confirm counts.
+
+### Research Insights (deepen pass)
+
+**Precedent-diff (gate 4.4) — canonical individual-wrapper pattern:**
+
+```ts
+// cron-stale-deferred-scope-outs.ts:241-260 — the load-bearing precedent.
+// POST (non-idempotent) and PATCH (idempotent) get SEPARATE wrappers so a
+// PATCH-timeout retry never re-POSTs the comment:
+await withGithubRetry(() =>
+  octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", { ... }),
+);
+await withGithubRetry(() =>
+  octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", { ... }),
+);
+```
+
+This is the exact shape Phases 2 and 3 replicate. No precedent gap — the pattern is established and tested.
+
+**octokit error contract (verified against installed `@octokit/request-error@7.1.0`):** octokit wraps a `fetch failed` TypeError using the native `Error.cause` chain. `isRetryableGithubError` (`github-retry.ts:77-84`) walks `.cause` to depth 5 and returns true only when a real undici code / `"fetch failed"` TypeError is present. The AC7 fixture (`.cause = { code: "UND_ERR_CONNECT_TIMEOUT" }`) models the real chain. A plain `httpError(msg, 404)` (test helper sets only `.status`/`.name`, no `.cause`) returns `false` → AC6 no-retry preserved.
+
+**Cron unit-suite passthrough (validated):** `cron-stale-deferred-scope-outs.test.ts:288` documents that `withGithubRetry` passes a non-retryable / successful thunk straight through. The drift-guard and oauth-probe handler tests mock `createProbeOctokit`/octokit at the boundary and assert request shapes; wrapping in `withGithubRetry` is transparent to them on the success path. Confirms "Files to Create: None."
 
 ## Files to Edit
 
