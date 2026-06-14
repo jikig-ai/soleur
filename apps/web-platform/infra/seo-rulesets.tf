@@ -276,10 +276,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
 
 # ── Vectors 3 + 4: Response-header X-Robots-Tag injection ─────────────────────
 #
-# Three rules, all in the http_response_headers_transform phase:
+# Four rules, all in the http_response_headers_transform phase:
 #   1. api.soleur.ai/*  → noindex, nofollow  (Supabase REST root)
 #   2. deploy.soleur.ai/* → noindex, nofollow  (CF Access challenge surface)
-#   3. soleur.ai/blog/feed.xml → noindex  (RSS feed; apex-canonical post-#4577)
+#   3. app.soleur.ai/* → noindex, nofollow  (login-gated product host; the
+#      load-bearing de-index mechanism for the GSC "Indexed, though blocked by
+#      robots.txt" report — see per-rule comment + app/robots.ts)
+#   4. soleur.ai/blog/feed.xml → noindex  (RSS feed; apex-canonical post-#4577)
 #
 # Why X-Robots-Tag and not robots.txt: a 403 is not equivalent to a noindex.
 # Google still records the URL's existence and may surface it in search
@@ -368,6 +371,31 @@ resource "cloudflare_ruleset" "seo_response_headers" {
     description = "X-Robots-Tag: noindex, nofollow on deploy.soleur.ai/*"
     enabled     = true
     expression  = "(http.host eq \"deploy.soleur.ai\")"
+    action_parameters {
+      headers {
+        name      = "X-Robots-Tag"
+        operation = "set"
+        value     = "noindex, nofollow"
+      }
+    }
+  }
+
+  # app.soleur.ai — the login-gated product host (Next.js app). GSC reported
+  # "Indexed, though blocked by robots.txt" for https://app.soleur.ai/: the bare
+  # URL was indexed despite a robots.txt `Disallow: /`, because robots.txt blocks
+  # *crawling* not *indexing*, and the crawl-block then prevented Googlebot from
+  # ever fetching the page to see a noindex. This host-wide rule is the
+  # load-bearing de-index mechanism; app/robots.ts now allows crawl so Googlebot
+  # can fetch the page, read this header, and drop the URL. All-methods scope
+  # (like deploy.soleur.ai, NOT the api. GET-only scope) so the bare-URL 307→
+  # /login and the token routes (/invite/[token], /shared/[token]) are all
+  # covered. app.soleur.ai is proxied (dns.tf cloudflare_record.app
+  # proxied = true), so unlike api.soleur.ai this rule fires live.
+  rules {
+    action      = "rewrite"
+    description = "X-Robots-Tag: noindex, nofollow on app.soleur.ai/* (login-gated product surface — GSC 'Indexed, though blocked by robots.txt')"
+    enabled     = true
+    expression  = "(http.host eq \"app.soleur.ai\")"
     action_parameters {
       headers {
         name      = "X-Robots-Tag"
