@@ -11,14 +11,14 @@ Plan: `knowledge-base/project/plans/2026-06-14-fix-supabase-disk-io-github-event
 
 ## Phase 0 — Preconditions (verify, do not assume)
 
-- [ ] 0.1 Re-confirm migration 103 is free on origin/main:
+- [x] 0.1 Re-confirm migration 103 is free on origin/main:
   `git fetch origin main -q && git ls-tree origin/main --name-only apps/web-platform/supabase/migrations/ | grep -oE '10[0-9]_' | sort -u` → must show `100_ 101_ 102_`, NOT `103_`.
-- [ ] 0.2 Re-confirm `received_at` + `processed_github_events_received_at_idx` exist (`052_multi_source_dedup.sql:128,136`); `created_at` does NOT exist.
-- [ ] 0.3 Re-confirm no WORM trigger on `processed_github_events` (the 052 WORM trigger is on `audit_github_token_use`).
+- [x] 0.2 Re-confirm `received_at` + `processed_github_events_received_at_idx` exist (`052_multi_source_dedup.sql:128,136`); `created_at` does NOT exist.
+- [x] 0.3 Re-confirm no WORM trigger on `processed_github_events` (the 052 WORM trigger is on `audit_github_token_use`).
 
 ## Phase 1 — Migration 103 (RED test first)
 
-- [ ] 1.1 Write `apps/web-platform/test/supabase-migrations/103-github-events-retention-7day.test.ts` mirroring `094-dedup-retention.test.ts` (stripComments + regex). Assertions (7):
+- [x] 1.1 Write `apps/web-platform/test/supabase-migrations/103-github-events-retention-7day.test.ts` mirroring `094-dedup-retention.test.ts` (stripComments + regex). Assertions (7):
   1. `cron.unschedule('processed_github_events_retention')` guard present
   2. `cron.schedule('processed_github_events_retention', '0 4 * * *', …)`
   3. scheduled DELETE uses `received_at` + `interval '7 days'` (NOT 90)
@@ -27,25 +27,25 @@ Plan: `knowledge-base/project/plans/2026-06-14-fix-supabase-disk-io-github-event
   6. down restores `interval '90 days'`
   7. up contains `COMMENT ON TABLE public.processed_github_events` that does NOT mention "partition rotation"
   Run it RED (file not yet created): `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/103-github-events-retention-7day.test.ts`
-- [ ] 1.2 Write `apps/web-platform/supabase/migrations/103_github_events_retention_7day.sql`:
+- [x] 1.2 Write `apps/web-platform/supabase/migrations/103_github_events_retention_7day.sql`:
   - `DO $cron_block$ … cron.unschedule guard … cron.schedule('…', '0 4 * * *', $$DELETE … received_at < now() - interval '7 days'$$) … EXCEPTION WHEN duplicate_object THEN NULL; END $cron_block$;` — mirror 094 dollar-quoting exactly.
   - One-time top-level `DELETE FROM public.processed_github_events WHERE received_at < now() - interval '7 days';`
   - `COMMENT ON TABLE public.processed_github_events IS …` correcting the stale 052 "partition rotation" claim → actual mechanism (daily pg_cron 7-day sweep; 3-day github.com redelivery horizon; service-role-only).
   - Header comment: 3-day GitHub horizon + 24h Inngest layer + `--single-transaction` note + plan path.
-- [ ] 1.3 Write `apps/web-platform/supabase/migrations/103_github_events_retention_7day.down.sql`:
+- [x] 1.3 Write `apps/web-platform/supabase/migrations/103_github_events_retention_7day.down.sql`:
   - Restore the 90-day schedule (same idempotent shape, `interval '90 days'`); lossy (no row restore).
   - Header warning: down re-arms the bloat / recreates #5225 — framework-reversibility only, never an incident rollback.
-- [ ] 1.4 Run the shape-test GREEN.
+- [x] 1.4 Run the shape-test GREEN.
 
 ## Phase 2 — Monitor message clarity (no test edit)
 
-- [ ] 2.1 Edit `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts` — widen the dedup-over-ceiling reason string to name both modes (sweep stopped OR window too long). Keep `${table}=` interpolation so `processed_github_events` stays in the reason.
-- [ ] 2.2 Confirm no test edit needed: `./node_modules/.bin/vitest run test/server/inngest/cron-supabase-disk-io.test.ts` stays GREEN (asserts `/processed_github_events/`, not the literal).
+- [x] 2.1 Edit `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts` — widen the dedup-over-ceiling reason string to name both modes (sweep stopped OR window too long). Keep `${table}=` interpolation so `processed_github_events` stays in the reason.
+- [x] 2.2 Confirm no test edit needed: `./node_modules/.bin/vitest run test/server/inngest/cron-supabase-disk-io.test.ts` stays GREEN (asserts `/processed_github_events/`, not the literal).
 
 ## Phase 3 — Verify
 
-- [ ] 3.1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/103-github-events-retention-7day.test.ts test/server/inngest/cron-supabase-disk-io.test.ts` — all GREEN.
-- [ ] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean.
+- [x] 3.1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/103-github-events-retention-7day.test.ts test/server/inngest/cron-supabase-disk-io.test.ts` — all GREEN.
+- [x] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean.
 
 ## Phase 4 — Ship
 

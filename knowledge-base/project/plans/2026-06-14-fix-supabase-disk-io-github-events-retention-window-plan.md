@@ -98,15 +98,15 @@ None. `gh issue list --label code-review --state open` bodies do not reference `
 
 ### Pre-merge (PR)
 
-- [ ] `103_github_events_retention_7day.sql` exists; cron re-schedule uses `interval '7 days'` and `'0 4 * * *'`; one-time DELETE uses `received_at` and `interval '7 days'`; idempotent `DO $cron_block$` + `EXCEPTION WHEN duplicate_object` shape matches 094 verbatim.
-- [ ] `103_…down.sql` restores `interval '90 days'` with the same idempotent guard.
-- [ ] `103-github-events-retention-7day.test.ts` passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/103-github-events-retention-7day.test.ts` (vitest unit project collects `test/**/*.test.ts` per `vitest.config.ts`).
-- [ ] Monitor alert string in `cron-supabase-disk-io.ts` names both "sweep stopped" and "window too long"; its unit test still passes (`./node_modules/.bin/vitest run test/server/inngest/cron-supabase-disk-io.test.ts`).
-- [ ] Typecheck clean: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] Migration number 103 confirmed free via the canonical `git ls-tree origin/main` check (output shows 100/101/102, not 103).
-- [ ] PR body uses **`Ref #5225`** (NOT `Closes`) — `classification: ops-only-prod-write`; the issue closes post-merge only after budget recovery is verified. (Per `2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md` and `wg-use-closes-n-in-pr-body-not-title-to` ops-remediation corollary.)
+- [x] `103_github_events_retention_7day.sql` exists; cron re-schedule uses `interval '7 days'` and `'0 4 * * *'`; one-time DELETE uses `received_at` and `interval '7 days'`; idempotent `DO $cron_block$` + `EXCEPTION WHEN duplicate_object` shape matches 094 verbatim.
+- [x] `103_…down.sql` restores `interval '90 days'` with the same idempotent guard.
+- [x] `103-github-events-retention-7day.test.ts` passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/103-github-events-retention-7day.test.ts` (vitest unit project collects `test/**/*.test.ts` per `vitest.config.ts`).
+- [x] Monitor alert string in `cron-supabase-disk-io.ts` names both "sweep stopped" and "window too long"; its unit test still passes (`./node_modules/.bin/vitest run test/server/inngest/cron-supabase-disk-io.test.ts`).
+- [x] Typecheck clean: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] Migration number 103 confirmed free via the canonical `git ls-tree origin/main` check (output shows 100/101/102, not 103).
+- [x] PR body uses **`Ref #5225`** (NOT `Closes`) — `classification: ops-only-prod-write`; the issue closes post-merge only after budget recovery is verified. (Per `2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md` and `wg-use-closes-n-in-pr-body-not-title-to` ops-remediation corollary.)
 
-### Post-merge (operator — automated; no dashboard eyeballing per `hr-no-dashboard-eyeball-pull-data-yourself`)
+ (operator — automated; no dashboard eyeballing per `hr-no-dashboard-eyeball-pull-data-yourself`)
 
 - [ ] **Migration applies automatically** via `web-platform-release.yml` `migrate` job (`run-migrations.sh` under Doppler `prd`) on merge to main — no manual SSH/apply step. **Automation:** baked into existing release pipeline.
 - [ ] **Immediately after deploy:** confirm the purge ran and the cron interval is 7d. Read-only via the Management API (per `2026-05-06-supabase-management-api-bypasses-mcp-oauth.md`; NOT MCP, NOT psql):
