@@ -3,7 +3,7 @@
 ## Problem
 
 The `scheduled-ruleset-bypass-audit` Inngest cron missed its daily Sentry check-in
-(monitor 5ccb1e67-fb90-4863-97d3-f8fd23287b37, incident 5516336, 2026-06-14 06:13 UTC).
+(monitor slug `scheduled-ruleset-bypass-audit`, Sentry incident 5516336, 2026-06-14 06:13 UTC).
 Last good check-in was the day before. The cron is all-`api.github.com` (App-token mint +
 REST audit), and the Sentry heartbeat is the LAST step — gated on the GitHub calls
 succeeding. So a blocked GitHub call yields NO heartbeat at all → a **missed** check-in
