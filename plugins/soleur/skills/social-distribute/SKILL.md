@@ -132,6 +132,8 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 
 **Important:** Every variant must contain resolved numbers, not template syntax like `{{ stats.agents }}`. Use the stats gathered in Phase 2.
 
+**Lead with the differentiating hook, not the source.** For a news-hook / response post (adopting an external term, reacting to an essay or announcement), open EACH variant with the strongest claim about *what is unique here* — credit the source immediately after, but never bury the original contribution under the news peg. The previews readers actually see — X tweet 1, the LinkedIn first line (shown before "see more"), the Bluesky opener, the Discord first line — must carry the differentiator. **Keep that opening hook consistent across all channels** for campaign cohesion. **Why (#5088):** the first loop-engineering draft opened every variant with "Addy Osmani coined…" and buried Soleur's cross-domain expansion in paragraph 3; the operator rewrote all four to lead with the founder-vs-engineer differentiator ("loop engineering replaced the engineer who prompts the coding agent; Soleur replaces the founder who prompts every department").
+
 #### 5.1 Discord Announcement
 
 - Maximum 2000 characters (UTM-tagged URLs are ~60-80 chars longer than bare URLs — account for this in the character budget)

@@ -97,6 +97,15 @@ export interface HandlerArgs {
     warn: (...a: unknown[]) => void;
     error: (...a: unknown[]) => void;
   };
+  // Inngest's zero-indexed retry attempt and (optional) max attempt count from
+  // the function context (BaseContext.attempt / .maxAttempts). Optional so every
+  // other cron handler — and the existing tests — that pass neither keep
+  // compiling and behave as before (attempt=0/maxAttempts=1 → final attempt).
+  // Read by retry-aware handlers (e.g. cron-stale-deferred-scope-outs) to gate
+  // the Sentry error heartbeat on the FINAL attempt rather than paging on a
+  // transient that the retry recovers.
+  attempt?: number;
+  maxAttempts?: number;
 }
 
 export function redactToken(s: string, token: string): string {
@@ -332,27 +341,25 @@ export async function postAnthropicMessage(args: {
 // session-secret read-deny (see CRON_MCP_ALLOWLISTS / cron-bash-allowlist-hook).
 // Each restored cron carries a finite CRON_BASH_ALLOWLISTS entry and mints a
 // narrowed token (issue-creators mint ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).
-// The remaining EIGHT stay deferred, ALL gated on #5138 (stale ci/* bot-PR
-// watchdog — still OPEN/unbuilt): the seven `mergeMode:"auto"` crons
+// #5199 restored the SEVEN `mergeMode:"auto"` PR-flow crons
 // (campaign-calendar, competitive-analysis, growth-audit, seo-aeo-audit,
-// content-generator, growth-execution, community-monitor) rely on
-// enablePullRequestAutoMerge, which silently disarms on conflict — #5138 MUST
-// land before they restore (community-monitor is NOT firewall-dependent; it is
-// in #5138's literal gated list). cron-bug-fixer fires the same
-// enablePullRequestAutoMerge primitive on bot-fix/* branches, so it carries the
-// identical silent-stale risk despite falling outside #5138's literal ci/* scan.
-// The six PR-flow crons additionally need per-construct Bash-allowlist
-// refinement (evidence-gated — NOT a blanket metachar drop).
-export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
-  "cron-bug-fixer",
-  "cron-campaign-calendar",
-  "cron-community-monitor",
-  "cron-competitive-analysis",
-  "cron-content-generator",
-  "cron-growth-audit",
-  "cron-growth-execution",
-  "cron-seo-aeo-audit",
-]);
+// content-generator, growth-execution, community-monitor) — the PR-5200
+// stale-bot-PR watchdog (issue #5138) landed, removing the gate. Each carries a
+// finite, evidence-gated CRON_BASH_ALLOWLISTS entry and mints
+// DEFAULT_CRON_TOKEN_PERMISSIONS (contents/issues/pull_requests:write — they
+// push + open PRs via safeCommitAndPr) scoped to [REPO_NAME].
+// #5199 (this PR — the FINAL restore) restored cron-bug-fixer, the last cron in
+// this set. Its blocker was that its `bot-fix/*` head pattern was OUTSIDE the
+// #5138/#5200 watchdog's scan; this PR added `bot-fix/*` to BOT_PR_HEAD_PREFIXES
+// (atomic — watchdog FIRST, then un-defer) so the silent-auto-merge-disarm class
+// is now covered. bug-fixer's commit lives in the fix-issue SKILL (not
+// safeCommitAndPr), so its CRON_BASH_ALLOWLISTS entry carries git/gh-pr
+// persistence verbs and it mints DEFAULT_CRON_TOKEN_PERMISSIONS scoped to
+// [REPO_NAME].
+// **TIER2_DEFERRED_CRONS is now EMPTY — the Tier-2 boundary is fully restored
+// and #5199 is closed.** deferIfTier2Cron stays as a defensive no-op (an empty
+// set short-circuits has() to false), so the handler call sites need no edit.
+export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([]);
 
 export async function deferIfTier2Cron(args: {
   cronName: string;

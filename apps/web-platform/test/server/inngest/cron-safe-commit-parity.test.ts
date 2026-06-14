@@ -26,6 +26,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CRON_BASH_ALLOWLISTS } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { TIER2_DEFERRED_CRONS } from "@/server/inngest/functions/_cron-shared";
 
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 const HOOK_PATH = resolve(__dirname, "../../../server/inngest/cron-bash-allowlist-hook.mjs");
@@ -214,6 +215,105 @@ describe("safe-commit parity — invariant 4: every PR-persisting cron is migrat
         stagesFiles(src),
         `${file} is migrated but carries its own staging pathway — route it through safeCommitAndPr`,
       ).toBe(false);
+    },
+  );
+});
+
+// #5199 — restore the 7 mergeMode:"auto" Tier-2-deferred crons. Each is now a
+// Tier-1, hook-contained PR-flow cron: a finite CRON_BASH_ALLOWLISTS entry,
+// ABSENT from TIER2_DEFERRED_CRONS, minting the DEFAULT_CRON_TOKEN_PERMISSIONS
+// (contents/issues/pull_requests:write — they push + open PRs via
+// safeCommitAndPr) scoped to [REPO_NAME]. Only cron-bug-fixer stays deferred.
+const RESTORED_AUTO_CRONS = [
+  "cron-growth-audit",
+  "cron-growth-execution",
+  "cron-competitive-analysis",
+  "cron-seo-aeo-audit",
+  "cron-content-generator",
+  "cron-campaign-calendar",
+  "cron-community-monitor",
+] as const;
+
+describe("#5199 — restored auto-crons: parity (allowlisted AND not deferred)", () => {
+  it.each(RESTORED_AUTO_CRONS.map((c) => [c]))(
+    "%s IS a CRON_BASH_ALLOWLISTS key AND ABSENT from TIER2_DEFERRED_CRONS",
+    (cronName) => {
+      expect(Object.keys(CRON_BASH_ALLOWLISTS)).toContain(cronName);
+      expect(TIER2_DEFERRED_CRONS.has(cronName)).toBe(false);
+    },
+  );
+
+  it("TIER2_DEFERRED_CRONS is EMPTY — all Tier-2 crons restored (#5199)", () => {
+    expect([...TIER2_DEFERRED_CRONS]).toEqual([]);
+  });
+});
+
+// #5199 (final) — restore cron-bug-fixer, the LAST Tier-2-deferred cron. Unlike
+// the 7 auto-crons above, bug-fixer's commit step lives in the fix-issue SKILL
+// (NOT safeCommitAndPr), so it stays in EXEMPT and its CRON_BASH_ALLOWLISTS entry
+// legitimately carries git/gh-pr persistence verbs. It mints
+// DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (a write-capable token —
+// ISSUE_CREATOR's contents:read would 403 the push).
+describe("#5199 — restored cron-bug-fixer: parity (allowlisted AND not deferred)", () => {
+  it("cron-bug-fixer IS a CRON_BASH_ALLOWLISTS key AND ABSENT from TIER2_DEFERRED_CRONS", () => {
+    expect(Object.keys(CRON_BASH_ALLOWLISTS)).toContain("cron-bug-fixer");
+    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(false);
+  });
+
+  it("cron-bug-fixer.ts mints DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (not ISSUE_CREATOR)", () => {
+    const src = readFileSync(join(FUNCTIONS_DIR, "cron-bug-fixer.ts"), "utf-8");
+    expect(src).toContain("permissions: DEFAULT_CRON_TOKEN_PERMISSIONS");
+    expect(src).toMatch(/repositories:\s*\[REPO_NAME\]/);
+    // bug-fixer pushes + opens PRs via the SKILL — it must NOT use the
+    // issue-creator preset (contents:read), which would 403 the push.
+    expect(src).not.toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+  });
+
+  it("cron-bug-fixer.ts stays in EXEMPT (SKILL owns the commit, not safeCommitAndPr)", () => {
+    expect(EXEMPT["cron-bug-fixer.ts"]).toBeDefined();
+    expect(MIGRATED_ALL).not.toContain("cron-bug-fixer.ts");
+  });
+
+  it("cron-bug-fixer allowlist contains no entry beginning with 'gh api' (F4a)", () => {
+    const allowlist = CRON_BASH_ALLOWLISTS["cron-bug-fixer"];
+    expect(allowlist).toBeDefined();
+    const offending = (allowlist ?? []).filter((entry) =>
+      entry.startsWith("gh api"),
+    );
+    expect(
+      offending,
+      "cron-bug-fixer: arbitrary-method 'gh api' defeats the exfil defense (F4a)",
+    ).toEqual([]);
+  });
+});
+
+describe("#5199 — restored auto-crons: token mint narrowed to DEFAULT permissions", () => {
+  it.each(RESTORED_AUTO_CRONS.map((c) => [c]))(
+    "%s mints DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (not ISSUE_CREATOR)",
+    (cronName) => {
+      const src = readFileSync(join(FUNCTIONS_DIR, `${cronName}.ts`), "utf-8");
+      expect(src).toContain("permissions: DEFAULT_CRON_TOKEN_PERMISSIONS");
+      expect(src).toMatch(/repositories:\s*\[REPO_NAME\]/);
+      // These 7 push + open PRs via safeCommitAndPr — they must NOT use the
+      // issue-creator preset (contents:read), which would 403 the push/PR.
+      expect(src).not.toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+    },
+  );
+});
+
+describe("#5199 — restored auto-crons: no gh-api allowlist entry (F4a)", () => {
+  it.each(RESTORED_AUTO_CRONS.map((c) => [c]))(
+    "%s allowlist contains no entry beginning with 'gh api'",
+    (cronName) => {
+      const allowlist = CRON_BASH_ALLOWLISTS[cronName];
+      expect(allowlist).toBeDefined();
+      const offending = (allowlist ?? []).filter((entry) =>
+        entry.startsWith("gh api"),
+      );
+      expect(
+        offending,
+        `${cronName}: arbitrary-method 'gh api' defeats the exfil defense (F4a)`,
+      ).toEqual([]);
     },
   );
 });

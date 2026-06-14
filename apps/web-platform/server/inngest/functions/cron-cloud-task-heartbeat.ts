@@ -86,8 +86,19 @@ const SILENCE_ISSUE_TITLE_PREFIX = "[cloud-task-silence]";
 // agnostically, so it covers both cohorts without special-casing. Staleness is
 // kept ORTHOGONAL to the heartbeat `ok`/`silentCount` — it warns + comments only,
 // never flips the cron monitor (found-work ≠ liveness). See ADR-054.
+// #5199 — `bot-fix/*` (cron-bug-fixer's autonomous-fixer PRs, default
+// mergeMode:"auto") is now in scope: those PRs' auto-merge can SILENTLY disarm on
+// a conflict exactly like the `ci/*` cohort, so they must rot-scan too. They
+// carry no `scheduled-<cron>` label (bug-fixer opens PRs, files no scheduled
+// issue) → scheduledLabelFromHead returns null → Sentry-only warn route.
 const STALE_BOT_PR_THRESHOLD_MS = 48 * 60 * 60 * 1000;
-const BOT_PR_HEAD_PREFIXES = ["ci/", "self-healing/auto-"] as const;
+// #5199 — `bot-fix/*` added (cron-bug-fixer restore): its auto-merge PRs disarm
+// on conflict like the `ci/*` cohort and must be age-scanned.
+export const BOT_PR_HEAD_PREFIXES = [
+  "ci/",
+  "self-healing/auto-",
+  "bot-fix/",
+] as const;
 export const STALE_BOT_PR_WARN_OP = "stale-bot-pr";
 
 /** The subset of the `GET …/pulls` payload the watchdog reads. */

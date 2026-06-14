@@ -208,6 +208,12 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  - path: /etc/soleur/cron-egress-allowlist-cidr.txt
+    encoding: b64
+    content: ${cron_egress_allowlist_cidr_b64}
+    owner: root:root
+    permissions: '0644'
+
   - path: /etc/systemd/system/cron-egress-firewall.service
     encoding: b64
     content: ${cron_egress_firewall_service_b64}

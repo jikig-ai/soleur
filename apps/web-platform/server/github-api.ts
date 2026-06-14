@@ -12,7 +12,7 @@
 import { generateInstallationToken, GitHubApiError } from "./github-app";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
-import { isRetryable, delay } from "./github-retry";
+import { isRetryable, delay, MAX_RETRIES, BASE_DELAY_MS } from "./github-retry";
 
 export { GitHubApiError };
 
@@ -20,8 +20,6 @@ const log = createChildLogger("github-api");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_FETCH_TIMEOUT_MS = 15_000;
-const MAX_RETRIES = 2; // 3 total attempts
-const BASE_DELAY_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Retry wrapper for transient failures

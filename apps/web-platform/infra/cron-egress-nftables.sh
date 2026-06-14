@@ -50,6 +50,17 @@ fi
 BRIDGE_GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
 [[ -n "$BRIDGE_GW" ]] || BRIDGE_GW="172.17.0.1"
 
+# Static CIDR allowlist for hosts that LB git/web traffic across a rotating IP
+# pool the per-tick single-IP resolver cannot cover (GitHub git ranges). These
+# are populated into an INTERVAL set (type ipv4_addr + flags interval) — the
+# dynamic single-IP set (soleur_egress_allow) is left untouched. See
+# cron-egress-allowlist-cidr.txt. Empty/missing file → empty set (no effect).
+CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
+CIDR_ELEMENTS=""
+if [[ -f "$CIDR_FILE" ]]; then
+  CIDR_ELEMENTS="$(grep -vE '^[[:space:]]*(#|$)' "$CIDR_FILE" | paste -sd, -)"
+fi
+
 # --- Phase 1: declare table/sets/chains (additive, idempotent) -----------------
 # `nft -f` table declarations MERGE into existing state — safe to re-run.
 # DOCKER-USER is declared too so this works even before dockerd starts
@@ -58,6 +69,10 @@ nft -f - <<EOF
 table ip filter {
   set soleur_egress_allow {
     type ipv4_addr
+  }
+  set soleur_egress_allow_cidr {
+    type ipv4_addr
+    flags interval
   }
   set soleur_egress_dns {
     type ipv4_addr
@@ -68,6 +83,18 @@ table ip filter {
   }
 }
 EOF
+
+# --- Phase 1.5: populate the static CIDR set (atomic flush+repopulate) ----------
+# Unlike the dynamic single-IP set (whose flush would open an empty-drop window
+# mid-tick), this set is STATIC, so an atomic one-transaction flush+add is safe
+# and idempotent across loader re-runs (avoids "element already exists" on the
+# interval set). Skipped when the file is empty/absent.
+if [[ -n "$CIDR_ELEMENTS" ]]; then
+  nft -f - <<EOF
+flush set ip filter soleur_egress_allow_cidr
+add element ip filter soleur_egress_allow_cidr { $CIDR_ELEMENTS }
+EOF
+fi
 
 # --- Phase 2: populate the sets BEFORE any drop rule exists --------------------
 # CRON_EGRESS_FROM_LOADER=1 suppresses the resolver's enforcement self-heal
@@ -91,6 +118,7 @@ add rule ip filter SOLEUR-EGRESS tcp dport 53 limit rate 10/minute burst 50 pack
 add rule ip filter SOLEUR-EGRESS tcp dport 53 counter drop comment "soleur-egress: dns exfil drop tcp"
 add rule ip filter SOLEUR-EGRESS ip daddr $BRIDGE_GW tcp dport 8288 accept comment "soleur-egress: host-gateway inngest"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
+add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
 add rule ip filter SOLEUR-EGRESS limit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"
 add rule ip filter SOLEUR-EGRESS counter drop comment "soleur-egress: default drop"
 EOF

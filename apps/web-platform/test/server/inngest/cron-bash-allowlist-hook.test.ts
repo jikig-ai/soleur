@@ -55,6 +55,45 @@ describe("Bash — allowlisted commands", () => {
       "allow",
     );
   });
+  // #5199 review — the allowlist matcher requires a separator after the prefix:
+  // exact-equal, a following space, OR the prefix ending in `/` (a path
+  // boundary). A `/`-terminated dir prefix still matches a new path segment...
+  it("allows a directory-prefix (trailing /) continuation — gh api repos/.../milestones", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues"))).toBe("allow");
+  });
+});
+
+// #5199 review — prefix-overmatch exfil. A bare `startsWith(p)` matcher let a
+// near-miss EXTENSION of an allowlisted final token (a sibling exfil script the
+// model Wrote next to the real one) prefix-match and ALLOW. The separator
+// requirement closes it: the `.sh` prefix ends in `h` (not `/` or a space), so
+// no bare continuation is accepted.
+describe("Bash — prefix-overmatch exfil close (#5199 review)", () => {
+  // a worktree-manager.sh-shaped allowlist (the cron-bug-fixer script prefix).
+  const SCRIPT_ALLOW = [
+    "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
+    "gh api repos/jikig-ai/soleur/",
+  ];
+  const sv = (command: string) =>
+    decide(bash(command), SCRIPT_ALLOW).hookSpecificOutput.permissionDecision;
+  it("DENIES a near-miss extension of the script filename (.sh-evil)", () => {
+    expect(
+      sv("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh-evil"),
+    ).toBe("deny");
+  });
+  it("DENIES a sibling script in the allowed dir (evil.sh — no prefix match at all)", () => {
+    expect(
+      sv("bash plugins/soleur/skills/git-worktree/scripts/evil.sh"),
+    ).toBe("deny");
+  });
+  it("still ALLOWS the legitimate space-separated invocation", () => {
+    expect(
+      sv("bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-1"),
+    ).toBe("allow");
+  });
+  it("still ALLOWS a `/`-terminated directory prefix continuation (gh api repos/.../x)", () => {
+    expect(sv("gh api repos/jikig-ai/soleur/milestones")).toBe("allow");
+  });
 });
 
 // #5091 — blanket-staging deny matrix. A blanket add staged 654 structural

@@ -22,6 +22,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -81,7 +83,7 @@ const GROWTH_AUDIT_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT
 
 MILESTONE RULE: Every gh issue create command must include --milestone. Use --milestone "Post-MVP / Later" for operational issues. For feature issues, read knowledge-base/product/roadmap.md.
 
-Today's date is $(date +%Y-%m-%d). Run a full growth audit of https://soleur.ai.
+Compute today's date yourself in YYYY-MM-DD format and use that literal value as <today> throughout. Do NOT use a shell command substitution to obtain the date — the containment hook denies command substitution. Run a full growth audit of https://soleur.ai.
 
 Step 1: Content Audit
 Run /soleur:growth auditing on this repository. Save the report to knowledge-base/marketing/audits/soleur-ai/<today>-content-audit.md
@@ -164,7 +166,11 @@ export async function cronGrowthAuditHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

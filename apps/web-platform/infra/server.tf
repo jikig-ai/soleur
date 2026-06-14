@@ -44,6 +44,7 @@ resource "hcloud_server" "web" {
     cron_egress_resolve_script_b64       = base64encode(file("${path.module}/cron-egress-resolve.sh"))
     cron_egress_alarm_script_b64         = base64encode(file("${path.module}/cron-egress-alarm.sh"))
     cron_egress_allowlist_b64            = base64encode(file("${path.module}/cron-egress-allowlist.txt"))
+    cron_egress_allowlist_cidr_b64       = base64encode(file("${path.module}/cron-egress-allowlist-cidr.txt"))
     cron_egress_firewall_service_b64     = base64encode(file("${path.module}/cron-egress-firewall.service"))
     cron_egress_resolve_service_b64      = base64encode(file("${path.module}/cron-egress-resolve.service"))
     cron_egress_resolve_timer_b64        = base64encode(file("${path.module}/cron-egress-resolve.timer"))
@@ -725,6 +726,7 @@ resource "terraform_data" "cron_egress_firewall" {
       file("${path.module}/cron-egress-resolve.sh"),
       file("${path.module}/cron-egress-alarm.sh"),
       file("${path.module}/cron-egress-allowlist.txt"),
+      file("${path.module}/cron-egress-allowlist-cidr.txt"),
       file("${path.module}/cron-egress-firewall.service"),
       file("${path.module}/cron-egress-resolve.service"),
       file("${path.module}/cron-egress-resolve.timer"),
@@ -773,6 +775,11 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 
   provisioner "file" {
+    source      = "${path.module}/cron-egress-allowlist-cidr.txt"
+    destination = "/etc/soleur/cron-egress-allowlist-cidr.txt"
+  }
+
+  provisioner "file" {
     source      = "${path.module}/cron-egress-firewall.service"
     destination = "/etc/systemd/system/cron-egress-firewall.service"
   }
@@ -811,6 +818,13 @@ resource "terraform_data" "cron_egress_firewall" {
       "nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-dns-exfil'",
       "nft list chain ip filter SOLEUR-EGRESS | grep -q 'dport 8288 accept'",
       "nft list set ip filter soleur_egress_allow | grep -qE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+'",
+      "nft list chain ip filter SOLEUR-EGRESS | grep -q 'cidr allowlist'",
+      # Match the GitHub octet, NOT the literal /20: nft renders an interval-set
+      # element as either the `/20` prefix OR the expanded range
+      # (140.82.112.0-140.82.127.255) depending on version — the literal prefix
+      # grep failed the apply post-check even though the set was correctly
+      # populated (proven live by a successful cron git clone). Display-agnostic.
+      "nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]'",
       "docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false",
       "systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer",
       # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches

@@ -651,30 +651,43 @@ unhooked tool class / crashed hook fails OPEN. So:
 ### Tier-1 vs Tier-2
 
 - **Tier-1** (hook-contained, scheduled): crons whose entire command surface is a finite
-  allowlist — currently `cron-roadmap-review` (#5004); the two #5046 PR-2 restores
+  allowlist — `cron-roadmap-review` (#5004); the two #5046 PR-2 restores
   `cron-agent-native-audit` and `cron-legal-audit` (issue-creator allowlists; the hook's
-  catch-all now allows `Task`/`Skill`); and the #5199 restore `cron-ux-audit` (issue-creator
+  catch-all now allows `Task`/`Skill`); the #5199 restore `cron-ux-audit` (issue-creator
   bash allowlist PLUS the FIRST per-cron `mcp__playwright__*` allowance — file-driven via
   `CRON_MCP_ALLOWLISTS` + a `browser_navigate` URL-origin guard + `storage-state.json`
-  read-deny; see `cron-bash-allowlist-hook.mjs`). Add a cron here by enumerating its
-  prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS` (sub-command granularity, e.g.
-  `gh issue list` NOT `gh issue`; never `git config`/`git remote`) and validating end-to-end
-  via `/soleur:trigger-cron`.
-- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): the remaining **eight** broad-bash crons. They
-  early-return via `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no
-  output issue. **Visible degradation:** their scheduled `[Scheduled]` output issues stop
-  appearing (this is expected, not a regression). The Tier-2 **network-egress firewall +
-  least-privilege installation token LANDED** (#5046 PR-1/PR-2, ADR-052) — the firewall now
-  contains the 4 Node-level `spawn("bash")` crons (which the hook does not cover); the eight
-  stay paused, **all gated on #5138** (stale `ci/*` bot-PR watchdog — still OPEN): the seven
-  `mergeMode:"auto"` crons (campaign-calendar, competitive-analysis, growth-audit,
-  seo-aeo-audit, content-generator, growth-execution, **community-monitor**) rely on
-  `enablePullRequestAutoMerge`, which silently disarms on conflict — #5138 MUST land first
-  (community-monitor is NOT firewall-dependent; it is in #5138's literal gated list). The six
-  PR-flow crons additionally need per-construct Bash-allowlist refinement (`date -u`, dynamic
-  `checkout -b`, `npx eleventy` — evidence-gated). `cron-bug-fixer` fires the same
-  `enablePullRequestAutoMerge` primitive on `bot-fix/*` branches, so it carries the identical
-  silent-stale risk despite falling outside #5138's literal `ci/*` scan.
+  read-deny; see `cron-bash-allowlist-hook.mjs`); and the **seven `mergeMode:"auto"` PR-flow
+  crons restored by #5199** — `cron-growth-audit`, `cron-growth-execution`,
+  `cron-competitive-analysis`, `cron-seo-aeo-audit`, `cron-content-generator`,
+  `cron-campaign-calendar`, `cron-community-monitor`. Each carries a finite, evidence-gated
+  `CRON_BASH_ALLOWLISTS` entry (issue/label verbs only — git/gh-pr persistence runs node-side
+  via `safeCommitAndPr`; NO `gh api`; eleventy builds defer to CI) and mints
+  `DEFAULT_CRON_TOKEN_PERMISSIONS` (contents/issues/pull_requests:write) scoped to
+  `[REPO_NAME]`. The gate was the PR-5200 stale-bot-PR watchdog (issue #5138), which landed.
+  **Expected degradation under containment:** the containment hook denies `WebFetch`/`WebSearch`
+  (raw web egress = the exfil surface it severs), so the web-research-dependent crons —
+  `cron-competitive-analysis` (competitor scanning) and `cron-growth-audit`'s seo-aeo live-page
+  fetch — produce REDUCED output; the output-aware heartbeat (`resolveOutputAwareOk`) surfaces a
+  no-/thin-output run via `scheduled-output-missing` rather than silently greening. This is the
+  intended posture, not a bug; restoring full web research would require a separate
+  egress-broadening decision (out of scope).
+  The #5199 (final) restore is **`cron-bug-fixer`** — the LAST Tier-2 cron, and the only
+  one whose commit step lives in a SKILL (`fix-issue`), NOT `safeCommitAndPr`. It is
+  therefore EXEMPT from the safe-commit parity migration and its `CRON_BASH_ALLOWLISTS`
+  entry legitimately CARRIES git/gh-pr persistence verbs (`git add -- <path>`, `git commit`,
+  `git push -u origin`, `gh pr create`/`edit`) — unlike the seven auto-crons above, whose
+  persistence runs node-side. It mints `DEFAULT_CRON_TOKEN_PERMISSIONS` scoped to
+  `[REPO_NAME]` (write-capable: it pushes + opens PRs). Its gate — that `bot-fix/*` heads
+  were OUTSIDE the stale-bot-PR watchdog's age-scan — was closed in this same PR by adding
+  `bot-fix/*` to `BOT_PR_HEAD_PREFIXES` (`cron-cloud-task-heartbeat.ts`), atomic: the
+  watchdog landed FIRST, then the cron un-deferred.
+  Add a cron here by enumerating its prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS`
+  (sub-command granularity, e.g. `gh issue list` NOT `gh issue`; never `git config`/`git
+  remote`) and validating end-to-end via `/soleur:trigger-cron`.
+- **Tier-2** (`TIER2_DEFERRED_CRONS`): **EMPTY** — all Tier-2 crons have been restored and
+  the Tier-2 boundary is fully retired (#5199 closed). `deferIfTier2Cron` remains in the
+  codebase as a defensive no-op (an empty set short-circuits `has()` to `false`), so no
+  handler call site needs editing; it simply never defers now.
 
 **Promoting a paused cron to Tier-1:** enumerate its verbs → add to `CRON_BASH_ALLOWLISTS`
 → remove from `TIER2_DEFERRED_CRONS` → `/soleur:trigger-cron <cron>` and confirm it produces
@@ -750,13 +763,16 @@ window returns empty.
 ## Stale bot PR (#5138)
 
 The `cron-cloud-task-heartbeat` cron (daily, 09:30 UTC) also scans open PRs
-whose head branch matches `ci/*` or `self-healing/auto-*` and flags any open
+whose head branch matches `ci/*`, `self-healing/auto-*`, or **`bot-fix/*`**
+(the last added by #5199 when `cron-bug-fixer` was restored) and flags any open
 **>48h**. The trigger: a `mergeMode: "auto"` PR whose `enablePullRequestAutoMerge`
 **silently disarmed on a merge conflict** (it leaves the PR open with no signal),
 or a `direct` pipeline that fell back to arming auto-merge (`safe-commit-direct-
 merge-fell-back`) and then stalled on a later conflict. Compound-promote's
 `self-healing/auto-*` **drafts are excluded** (human-review-by-design, legitimately
-long-lived) — only a NON-draft `self-healing/auto-*` PR is flagged.
+long-lived) — only a NON-draft `self-healing/auto-*` PR is flagged. `bot-fix/*` PRs
+(cron-bug-fixer) carry no `scheduled-<cron>` label, so they route **Sentry-only**
+(`scheduledLabelFromHead` returns null — there is no owning issue to comment on).
 
 The scan is **orthogonal to the cron monitor**: a stale PR does NOT turn
 `scheduled-cloud-task-heartbeat` red (found-work ≠ liveness). The signals are
@@ -764,14 +780,14 @@ instead:
 
 | Sentry op (`feature=cron-cloud-task-heartbeat`) | Meaning | Action |
 | --- | --- | --- |
-| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open. | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. |
+| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` / `bot-fix/*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open (`bot-fix/*` has none → Sentry-only). | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. |
 | `stale-bot-pr-scan-failed` | The `GET …/pulls` list call failed — the watchdog **could not scan this run** (it returns `[]`, so no stale PR can be detected until the next run). | Transient GitHub/network or token expiry usually self-heals next run. If it recurs, the watchdog is blind — investigate the installation token / GitHub API status. |
 | `stale-bot-pr-comment-failed` | The owning-issue comment POST failed (the `stale-bot-pr` warn still fired — Sentry is the primary signal). | No action unless recurring. |
 
 All three ops route to the operator via the `sentry_issue_alert.stale_bot_pr`
 rule (`apps/web-platform/infra/sentry/issue-alerts.tf`) — no dashboard gaze
 required. Discoverability without SSH:
-`gh api "/repos/jikig-ai/soleur/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref|startswith("ci/") or (.head.ref|startswith("self-healing/auto-")))] | length'`.
+`gh api "/repos/jikig-ai/soleur/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref|startswith("ci/") or (.head.ref|startswith("self-healing/auto-")) or (.head.ref|startswith("bot-fix/")))] | length'`.
 
 ## References
 

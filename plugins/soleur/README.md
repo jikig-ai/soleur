@@ -40,7 +40,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 67 |
+| Agents | 68 |
 | Commands | 3 |
 | Skills | 85 |
 | MCP Servers | 3 |
@@ -82,11 +82,12 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (30)
+### Engineering (31)
 
 | Agent | Description |
 |-------|-------------|
 | `cto` | Engineering domain leader -- assesses technical implications and flags architecture risks during brainstorm and planning |
+| `prompt-engineer` | Author, optimize, and test prompts and agent/skill definitions; ship happy/edge/failure prompt test cases |
 
 #### Review (17)
 
