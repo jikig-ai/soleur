@@ -462,6 +462,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // replayed frames (`seq <= lastRenderedSeq` were already applied). Survives
   // socket drops (a ref). Reset to -1 on a new/resumed session and on the
   // honest-refetch (`stream_replay{incomplete}`) path. See ADR-059.
+  // INVARIANT: this single per-hook cursor is valid only because per-
+  // conversation server seq spaces (each from 0) never interleave on one hook
+  // WITHOUT an intervening session_started/session_resumed reset (both reset it
+  // to -1). The sidebar hook is reused across conversation switches, but each
+  // switch fires session_started/resumed first, so two conversations' seq
+  // spaces can never be live against the same cursor.
   const lastRenderedSeqRef = useRef<number>(-1);
   // True once the first `auth_ok` of this hook's life has landed. Gates the
   // `resume_stream` reattach to genuine RECONNECTS only — a fresh initial
