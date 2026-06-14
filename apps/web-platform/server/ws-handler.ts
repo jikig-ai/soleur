@@ -1612,7 +1612,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // visibility-sweep-audit: owner-scoped — WS resume-by-id binds a session to the user's own conversation
         const convQuery = tenantResumeConv
           .from("conversations")
-          .select("id, status, repo_url")
+          .select("id, status, repo_url, workspace_id")
           .eq("id", msg.conversationId)
           .eq("user_id", userId);
         const { data: conv, error: convErr } = await convQuery.single();
@@ -1629,6 +1629,61 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // can't probe for existence of cross-repo threads.
           sendToClient(userId, { type: "error", message: "Conversation not found" });
           return;
+        }
+
+        // FR1 (#5240) — re-align the agent cwd resolver with the
+        // conversation's own workspace on resume. `resolveCurrentWorkspaceId`
+        // reads `user_session_state.current_workspace_id` (falling back to the
+        // solo `userId`); nobody re-aligns it on reconnect, so a resumed turn
+        // resolves the stale solo workspace and the agent reports "nothing to
+        // resume from" over intact work. We write the resolver's field via the
+        // existing membership-checked switch (mirrors accept-invite/route.ts)
+        // — NOT the in-memory `userWorkspaces` map, which the cwd resolver
+        // ignores (R1). Run this BEFORE mutating session state so a switch
+        // failure throws into the terminal catch (honest client error, no
+        // silent solo-fallback per Observability fail_loud) rather than leaving
+        // the session half-bound. (The prior-session teardown at the top of
+        // this case already ran, by design — a failed rebind degrades to an
+        // honest, retryable error on a fresh resume, not corruption.) Reuses
+        // the switch's own ordering, so it cannot race a concurrent
+        // `set_current_workspace_id` (R4).
+        //
+        // Defensive: `conversations.workspace_id` is NOT NULL (migration 059),
+        // so the `?? null` guard below is a select/schema-drift tripwire, not a
+        // live path — it fires loud (never silent) if the `.select()` and the
+        // column constraint ever drift apart.
+        const resumeWorkspaceId =
+          (conv as { workspace_id?: string | null }).workspace_id ?? null;
+        if (!resumeWorkspaceId) {
+          reportSilentFallback(
+            new Error("conversations.workspace_id null/absent on resume"),
+            {
+              feature: "session-resume",
+              op: "resume-workspace-rebind",
+              extra: { userId, conversationId: msg.conversationId },
+            },
+          );
+          throw new Error(
+            "resume-workspace-rebind: conversation workspace_id missing",
+          );
+        }
+        const { error: switchErr } = await tenantResumeConv.rpc(
+          "set_current_workspace_id",
+          { p_workspace_id: resumeWorkspaceId },
+        );
+        if (switchErr) {
+          reportSilentFallback(
+            { code: switchErr.code, message: switchErr.message },
+            {
+              feature: "session-resume",
+              op: "resume-workspace-rebind",
+              message: `set_current_workspace_id on resume failed: ${switchErr.message}`,
+              extra: { userId, conversationId: msg.conversationId },
+            },
+          );
+          throw new Error(
+            `resume-workspace-rebind failed: ${switchErr.message}`,
+          );
         }
 
         session.conversationId = msg.conversationId;

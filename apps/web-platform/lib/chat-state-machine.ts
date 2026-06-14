@@ -38,11 +38,14 @@ interface ChatMessageBase {
   toolLabel?: string;
   toolsUsed?: string[];
   /**
-   * FR5 (#2861): set by `applyTimeout` on the first stuck-timeout and cleared
-   * on a follow-up `tool_progress` or the second consecutive timeout. When
-   * true, `message-bubble.tsx` shows the "Retrying…" chip with aria-live
-   * polite. The bubble's `state` stays in its transitional form
-   * (`thinking` / `tool_use`) — `retrying` is the orthogonal render flag.
+   * FR5 (#2861) / FR4 (#5240): set by `applyTimeout` on the first stuck-timeout
+   * and cleared on a follow-up `tool_progress` or the second consecutive
+   * timeout. When true, `message-bubble.tsx` shows the honest "No response yet"
+   * chip (aria-live polite) — NOT a "Retrying…" claim, since nothing is
+   * actually retried on a silent stream. The bubble's `state` stays in its
+   * transitional form (`thinking` / `tool_use`) — `retrying` is the orthogonal
+   * render flag. The flag name is retained pending the reconnect-state-machine
+   * hardening follow-up (#5282), which also adds the connection-state input.
    */
   retrying?: boolean;
 }
@@ -1067,7 +1070,8 @@ export function applyStreamEvent(
 /**
  * Apply the stuck-state timeout for a leader. Two-stage lifecycle (FR5 #2861):
  *   1. First timeout on a transitional bubble → set `retrying: true`, keep
- *      the bubble active, reset the watchdog. Visible as "Retrying…" chip.
+ *      the bubble active, reset the watchdog. Visible as the honest "No
+ *      response yet" chip (FR4 #5240) — nothing is actually retried.
  *   2. Second consecutive timeout (bubble already has `retrying: true`) →
  *      transition to `error`, preserve `toolLabel` for the error chip, clear
  *      the watchdog.

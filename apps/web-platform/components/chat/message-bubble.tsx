@@ -32,10 +32,15 @@ export function ToolStatusChip({ label }: { label: string }) {
 }
 
 /**
- * FR5 (#2861): rendered on a `tool_use` bubble that has `retrying: true`.
- * `aria-live="polite"` announces the transition to screen-reader users.
- * The last-known activity label is shown below so the user sees *what* is
- * being retried, not just a generic spinner.
+ * FR5 (#2861) / FR4 (#5240): rendered on a `tool_use` bubble after the first
+ * watchdog timeout (`retrying: true`). Despite the internal flag name, nothing
+ * is actually retried on a silent stream — the turn is simply quiet — so the
+ * copy is the honest "No response yet", NOT the fabricated "Retrying…". The
+ * internal `retrying` field name is retained for now; renaming it (and the
+ * connection-state vs activity-watchdog split — wireframe states 1/2) is the
+ * reconnect-state-machine hardening follow-up (#5282). `aria-live="polite"`
+ * announces the transition to screen-reader users; the last-known activity
+ * label is shown below so the user sees what it was last doing.
  */
 export function RetryingChip({ label }: { label: string | undefined }) {
   return (
@@ -47,7 +52,9 @@ export function RetryingChip({ label }: { label: string | undefined }) {
     >
       <div className="flex items-center gap-2">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
-        <span className="text-sm font-medium text-amber-400">Retrying…</span>
+        <span className="text-sm font-medium text-amber-400">
+          No response yet
+        </span>
       </div>
       {label ? (
         <span className="text-xs text-soleur-text-muted">{label}</span>
@@ -110,7 +117,8 @@ export const MessageBubble = memo(function MessageBubble({
   messageState?: MessageState;
   toolLabel?: string;
   toolsUsed?: string[];
-  /** FR5 (#2861): when true, show the "Retrying…" chip on tool_use bubbles. */
+  /** FR5 (#2861) / FR4 (#5240): when true, show the honest "No response yet"
+   *  chip on tool_use bubbles (nothing is actually retried). */
   retrying?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
   getIconPath?: (id: DomainLeaderId) => string | null;
