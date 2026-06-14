@@ -57,6 +57,7 @@ const KNOWN_DIRECT_SPAWN_CRONS: ReadonlySet<string> = new Set([
   "cron-content-vendor-drift", // spawns to diff vendor docs
   "cron-daily-triage", // spawns claude directly (own CLAUDE_CODE_FLAGS), not via wrapper
   "cron-follow-through-monitor", // spawns claude directly, not via wrapper
+  "cron-github-cidr-refresh", // spawns git clone + the /meta CIDR generator; firewall-contained (it maintains that very allowlist, #5284)
   "cron-rule-prune", // spawns git/bash for rule-file pruning
   "cron-strategy-review", // spawns for strategy doc review
   "cron-weekly-analytics", // spawns for analytics aggregation

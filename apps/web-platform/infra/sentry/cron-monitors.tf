@@ -828,3 +828,20 @@ resource "sentry_cron_monitor" "scheduled_nag_4216_readiness" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Daily 06:41 UTC — #5284 self-refreshing GitHub /meta egress CIDR generator.
+# Inngest-fired via apps/web-platform/server/inngest/functions/cron-github-cidr-refresh.ts.
+# Pure-TS glue (clone + /meta fetch + shell generator + direct-merge PR on drift);
+# slug MUST match SENTRY_MONITOR_SLUG in the handler and the crontab MUST match the
+# handler's `{ cron: "41 6 * * *" }` trigger. 10-min runtime (small clone + one fetch).
+resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "cron-github-cidr-refresh"
+  schedule                = { crontab = "41 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
