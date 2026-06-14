@@ -59,10 +59,10 @@ echo "$meta_json" | jq -e 'has("git") and has("api")' >/dev/null 2>&1 \
 #    select(test(":")|not) drops the IPv6 entries). AC2 pins this string.
 mapfile -t cidrs < <(echo "$meta_json" | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u)
 
-# 4. GUARD non-empty (a truncated /meta or an IPv6-only response must not blank the file).
+# 3. GUARD non-empty (a truncated /meta or an IPv6-only response must not blank the file).
 [[ "${#cidrs[@]}" -gt 0 ]] || die "empty extraction (truncated /meta or IPv6-only) — refusing to blank the file"
 
-# 3. VALIDATE every line + reject over-broad prefixes. Both this validator and
+# 4. VALIDATE every line + reject over-broad prefixes. Both this validator and
 #    the loader's are SHAPE validators that accept a structurally-valid 0.0.0.0/0;
 #    the prefix-floor (>= /8) is the breadth defense the one allow-all vector needs.
 for cidr in "${cidrs[@]}"; do
@@ -125,7 +125,7 @@ if [[ -f "$OUT" && "$fresh_canonical" == "$(normalize_date < "$OUT")" ]]; then
   exit 0
 fi
 
-# 6. WRITE atomically: mktemp IN THE TARGET DIR (cross-device mv loses atomicity),
+# 5. WRITE atomically: mktemp IN THE TARGET DIR (cross-device mv loses atomicity),
 #    EXIT trap removes the temp on any failure, mv -f is the atomic swap.
 #    Precedent: infra-config-install.sh:118,127.
 snapshot="$(date -u +%F)"

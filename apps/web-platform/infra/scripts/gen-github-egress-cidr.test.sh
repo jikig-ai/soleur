@@ -51,8 +51,11 @@ grep -qF 'DO NOT EDIT' "$OUT1" && pass "header carries DO NOT EDIT" || fail "hea
 grep -qF 'gen-github-egress-cidr.sh' "$OUT1" && pass "header names the generator script" || fail "header names the generator script"
 grep -qF 'https://api.github.com/meta' "$OUT1" && pass "header carries source URL" || fail "header carries source URL"
 grep -qE '^# Snapshot:' "$OUT1" && pass "header carries a Snapshot: line" || fail "header carries a Snapshot: line"
-TODAY="$(date -u +%F)"
-grep -qE "^# Generated: ${TODAY}\$" "$OUT1" && pass "header carries Generated: today (UTC)" || fail "header carries Generated: today"
+# Assert the Generated: date SHAPE, not the exact value — a `date -u +%F` capture
+# in the test process can differ from the generator's by a day across a UTC
+# midnight boundary (rare tail flake). The no-op test below proves the date is
+# stamped/not-advanced correctly; here we only need the line to exist + parse.
+grep -qE '^# Generated: [0-9]{4}-[0-9]{2}-[0-9]{2}$' "$OUT1" && pass "header carries a Generated: YYYY-MM-DD line" || fail "header carries a Generated: date"
 grep -qF '(.git+.api)[]|select(test(":")|not)' "$OUT1" && pass "header carries verbatim jq filter (AC2)" || fail "header carries verbatim jq filter"
 
 echo "-- IPv6 drop + dedup --"
