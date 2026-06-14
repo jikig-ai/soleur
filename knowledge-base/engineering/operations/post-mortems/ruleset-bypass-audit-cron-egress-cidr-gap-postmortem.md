@@ -157,4 +157,4 @@ to a covered IP" check. Coverage must be verified by set-difference against `/me
 
 | Issue | Action | Status |
 |---|---|---|
-| #5284 | Self-refreshing GitHub `/meta` CIDR generator at apply-time (replace the static snapshot so a future `/meta` rotation cannot re-open this gap) | open |
+| #5284 | Self-refreshing GitHub `/meta` CIDR generator (replace the static snapshot so a future `/meta` rotation cannot re-open this gap) | **closed** — generator `apps/web-platform/infra/scripts/gen-github-egress-cidr.sh` + `cron-github-cidr-refresh` Inngest cron (daily; direct-merge PR on drift → existing apply path re-provisions the firewall) + de-magicked structural drift-guard. The earlier resolve-timer / pre-plan-regen hooks were rejected (availability hot-path / uncommitted state drift); the Inngest cron + `safeCommitAndPr` lane was chosen so the refresh fires unattended from merge. |

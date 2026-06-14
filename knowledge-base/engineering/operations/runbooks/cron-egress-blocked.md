@@ -73,26 +73,36 @@ exactly the `scheduled-ruleset-bypass-audit` miss on 2026-06-14 (incident
 
 The fix is the **CIDR** file (`cron-egress-allowlist-cidr.txt`), NOT the
 hostname file — `api.github.com` is already in the hostname allowlist; the
-single-IP resolver is the wrong layer for an LB host. Regenerate the complete
-`/meta` `.git`+`.api` IPv4 union:
+single-IP resolver is the wrong layer for an LB host.
+
+**Auto-heal (#5284): this is now self-refreshing.** The
+`cron-github-cidr-refresh` Inngest cron (daily `41 6 * * *`) fetches `/meta`,
+regenerates the file via the committed generator, and opens a direct-merge PR on
+drift, after which `apply-web-platform-infra.yml` re-provisions the firewall — no
+operator action. To regenerate **on demand** (e.g. before the next daily fire),
+run the generator — it is idempotent and a no-op when nothing changed:
 
 ```bash
-curl -s https://api.github.com/meta \
-  | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u
+bash apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 ```
 
-Write it to `apps/web-platform/infra/cron-egress-allowlist-cidr.txt` (header +
-one CIDR per line), then bump the exact-count guard + snapshot date in
-`cron-egress-firewall.test.sh`. Verify zero gap with:
+It fetches `/meta`, extracts the `.git`+`.api` IPv4 union
+(`jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u`), validates every line
+(reject-whole-file + over-broad `< /8` reject), and atomically writes
+`apps/web-platform/infra/cron-egress-allowlist-cidr.txt` only if the CIDR body
+changed (the `# Generated:` date is not restamped on a no-op). There is no count
+guard to bump — the drift-guard is now structural (floor + over-broad reject),
+not a magic count. Verify zero gap with the on-demand discoverability probe:
 
 ```bash
-comm -23 <(curl -s https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u) \
+comm -23 <(curl -fsS --max-time 30 https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u) \
          <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)
 ```
 
 Empty output = full coverage. Merge — the provisioner re-applies on push (no
-SSH). **The `/32`s rotate**, so this static snapshot will go stale; the
-self-refreshing-generator follow-up (#5284) tracks the durable fix.
+SSH). To force a refresh without waiting for the schedule, dry-fire the cron via
+`/soleur:trigger-cron` (`cron/github-cidr-refresh.manual-trigger`) — no SSH, no
+`gh workflow run`.
 
 ## Remediation (loader `die "invalid CIDR …"`)
 
