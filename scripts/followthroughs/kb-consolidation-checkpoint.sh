@@ -41,10 +41,13 @@ fi
 
 current_json="$(bash "$METRIC" --json 2>/dev/null)" || { echo "TRANSIENT: metric run failed."; exit 2; }
 
-python3 - "$BASELINE" "$ABS_THRESHOLD" "$DELTA_THRESHOLD" <<PY
-import json, sys
+# Pass JSON via env + quote the heredoc delimiter so adversarial learning
+# filenames in the metric output cannot inject Python (the corpus is
+# untrusted input to this automation). Mirrors kb-staleness-metric.sh's <<'PY'.
+CURRENT_JSON="$current_json" python3 - "$BASELINE" "$ABS_THRESHOLD" "$DELTA_THRESHOLD" <<'PY'
+import json, os, sys
 baseline_path, abs_thr, delta_thr = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
-cur = json.loads(r'''$current_json''')
+cur = json.loads(os.environ["CURRENT_JSON"])
 base = json.load(open(baseline_path))
 cd, bd = cur["density"], base["density"]
 delta = cd - bd
