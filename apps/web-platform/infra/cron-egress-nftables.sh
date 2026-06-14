@@ -72,11 +72,18 @@ is_valid_ipv4_cidr() {
   [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
   o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
   o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
+  # A leading-zero octet (e.g. 08/09) makes (( )) attempt octal parse and fail
+  # non-zero ("value too great for base"); the `|| return 1` catches it, so such a
+  # line safely REJECTS (a canonical allowlist should not carry leading zeros anyway).
   (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
   return 0
 }
 
 if [[ -f "$CIDR_FILE" ]]; then
+  # `read -r` retains a trailing \r, so a CRLF-saved file fails the $-anchored regex
+  # and the whole file is rejected (fail-loud) — intentional: the old paste-build
+  # silently injected the \r into the nft heredoc. `|| [[ -n "$line" ]]` keeps the
+  # final line when the file has no trailing newline.
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
     is_valid_ipv4_cidr "$line" \

@@ -155,16 +155,28 @@ echo "-- CIDR validation (nft-injection hardening, #5242) --"
 assert_grep "validator function defined" 'is_valid_ipv4_cidr\(\)' "$LOADER"
 assert_grep "reject-whole-file on invalid line (die, not skip)" '\|\| die "invalid CIDR in' "$LOADER"
 assert_not_grep "old unvalidated paste -sd, build removed" 'paste -sd,' "$LOADER"
-assert_grep "octet/prefix range-check (defense in depth)" '<= 255' "$LOADER"
+# Anchor on the executable arithmetic form (`o1 <= 255`, present ONLY on the
+# `(( ... ))` code line), NOT the bare `<= 255` which also appears in the loader's
+# explanatory comment — a bare-pattern assert false-passes if the range-check code is
+# deleted but the comment kept (comment-prose false-match class, 2026-06-03 learning).
+assert_grep "octet/prefix range-check (defense in depth)" 'o1 <= 255' "$LOADER"
 
-# Cross-file regex literal parity: the test's behavioral copy (below) must carry the
-# EXACT predicate the loader ships, else the copy drifts silently (same convention as
-# SENTRY_SLUG/drop-prefix parity above). grep -F = fixed string (dots/slashes literal).
+# Cross-file predicate parity: the test's behavioral copy (below) must carry the EXACT
+# predicate the loader ships, else the copy drifts silently (same convention as
+# SENTRY_SLUG/drop-prefix parity above). grep -F = fixed string (literal). Pin BOTH
+# halves of the predicate — the regex shape AND the octet/prefix range-check arithmetic
+# — so a `<= 255`→`<= 254` (or `<= 32`→`<= 128`) drift in either file fails the suite.
 CIDR_RE='([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})'
+CIDR_RANGE='o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32'
 if grep -qF -- "$CIDR_RE" "$LOADER" && grep -qF -- "$CIDR_RE" "${BASH_SOURCE[0]}"; then
   PASS=$((PASS + 1)); echo "  PASS: CIDR regex literal pinned identically in loader and test"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: CIDR regex literal drift between loader and test (loader must carry: $CIDR_RE)"
+fi
+if grep -qF -- "$CIDR_RANGE" "$LOADER" && grep -qF -- "$CIDR_RANGE" "${BASH_SOURCE[0]}"; then
+  PASS=$((PASS + 1)); echo "  PASS: CIDR range-check arithmetic pinned identically in loader and test"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: CIDR range-check drift between loader and test (loader must carry: $CIDR_RANGE)"
 fi
 
 # Behavioral exercise of the validator. `nft` is absent on CI runners and the full
