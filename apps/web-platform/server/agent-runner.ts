@@ -28,6 +28,7 @@ import {
 // inside the resolver's flag-OFF fast path.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
+import { streamReplayBuffer } from "./stream-replay-buffer";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
@@ -2494,6 +2495,13 @@ export async function sendUserMessage(
   conversationContext?: import("@/lib/types").ConversationContext,
   attachments?: AttachmentRef[],
 ): Promise<void> {
+  // feat-stream-since-disconnect (#5273) — turn boundary. Clear the prior
+  // turn's replay frames (keeping the monotonic seq counter) so a new turn's
+  // buffer starts fresh and a long, never-disconnected conversation doesn't
+  // accumulate frames across turns up to the ring cap. Called once per user
+  // turn here (before fan-out to leaders); the per-leader `startAgentSession`
+  // must NOT reset, or sibling leaders would wipe each other's frames. ADR-059.
+  streamReplayBuffer.resetTurn(conversationId);
   // PR-B §1.5.1 (#3244): tenant-scoped ownership probe. The
   // `eq("user_id", userId)` filter is now redundant under RLS (which
   // enforces auth.uid() = user_id), but kept for defense-in-depth and

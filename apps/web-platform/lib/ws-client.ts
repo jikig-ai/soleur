@@ -929,6 +929,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "interactive_prompt_response":
         case "fanout_truncated":
         case "upgrade_pending":
+        // feat-stream-since-disconnect (#5273) — client→server only; the
+        // client never receives it. Listed for exhaustiveness.
+        case "resume_stream":
           break;
         case "revocation_notice": {
           // #3930 — discriminated revocation toast. Replaces the generic
@@ -945,6 +948,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               ? `Your session was revoked. Reason: ${msg.reason}. Contact support.`
               : "Your session was revoked. Contact support.",
           });
+          break;
+        }
+        case "stream_replay": {
+          // feat-stream-since-disconnect (#5273) — fallback signal: the
+          // server could not replay from the requested cursor (cursor evicted
+          // or buffer map-evicted). Fall back to the v1 honest persisted-
+          // history refetch (never a silent stale/duplicate render). Full
+          // honest-refetch + cost-reconcile body wired in Phase 4.
           break;
         }
         default: {
