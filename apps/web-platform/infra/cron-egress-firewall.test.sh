@@ -143,6 +143,83 @@ assert_grep "CIDR allowlist accept rule present" 'ip daddr @soleur_egress_allow_
 assert_grep "loader reads the CIDR allowlist file" 'cron-egress-allowlist-cidr.txt' "$LOADER"
 assert_grep "CIDR file carries GitHub git /20" '140.82.112.0/20' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
 
+echo "-- CIDR validation (nft-injection hardening, #5242) --"
+# The CIDR file is interpolated VERBATIM into the `add element ... { $CIDR_ELEMENTS }`
+# nft heredoc. An unvalidated line containing `}`, an nft keyword, whitespace, or
+# command-substitution is injected into the ruleset (e.g. `0.0.0.0/0` allow-all, or
+# `}; add rule ... accept`). The loader MUST validate every non-comment line against
+# a strict IPv4-CIDR shape and reject the WHOLE file (die/exit 1) on any mismatch —
+# fail-loud (operator paged via OnFailure=) over half-installing a firewall.
+#
+# Source-shape drift guards (RED→GREEN with the loader edit):
+assert_grep "validator function defined" 'is_valid_ipv4_cidr\(\)' "$LOADER"
+assert_grep "reject-whole-file on invalid line (die, not skip)" '\|\| die "invalid CIDR in' "$LOADER"
+assert_not_grep "old unvalidated paste -sd, build removed" 'paste -sd,' "$LOADER"
+assert_grep "octet/prefix range-check (defense in depth)" '<= 255' "$LOADER"
+
+# Cross-file regex literal parity: the test's behavioral copy (below) must carry the
+# EXACT predicate the loader ships, else the copy drifts silently (same convention as
+# SENTRY_SLUG/drop-prefix parity above). grep -F = fixed string (dots/slashes literal).
+CIDR_RE='([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})'
+if grep -qF -- "$CIDR_RE" "$LOADER" && grep -qF -- "$CIDR_RE" "${BASH_SOURCE[0]}"; then
+  PASS=$((PASS + 1)); echo "  PASS: CIDR regex literal pinned identically in loader and test"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: CIDR regex literal drift between loader and test (loader must carry: $CIDR_RE)"
+fi
+
+# Behavioral exercise of the validator. `nft` is absent on CI runners and the full
+# loader aborts at `command -v nft` before reaching the CIDR parse, so the script
+# cannot run end-to-end here. Pin a COPY of the exact predicate (guarded byte-for-byte
+# by the literal-parity assert above) and exercise it against crafted lines.
+test_is_valid_ipv4_cidr() {
+  local cidr="$1" prefix o1 o2 o3 o4
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
+  o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
+  (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  return 0
+}
+assert_cidr_accept() {
+  if test_is_valid_ipv4_cidr "$1"; then
+    PASS=$((PASS + 1)); echo "  PASS: accepts $2"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: should accept $2 ('$1')"
+  fi
+}
+assert_cidr_reject() {
+  if test_is_valid_ipv4_cidr "$1"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: should REJECT $2 ('$1')"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: rejects $2"
+  fi
+}
+# AC2 — the 4 real allowlist ranges accept:
+assert_cidr_accept "140.82.112.0/20" "real GitHub git /20"
+assert_cidr_accept "185.199.108.0/22" "real GitHub pages /22"
+assert_cidr_accept "192.30.252.0/22" "real GitHub /22"
+assert_cidr_accept "143.55.64.0/20"  "real GitHub /20"
+# Structurally valid (allow-all breadth is a content concern, out of scope — see plan Non-Goals):
+assert_cidr_accept "0.0.0.0/0" "structurally valid CIDR"
+# AC1 — injection / command-substitution / whitespace shapes reject:
+assert_cidr_reject "140.82.112.0/20}; add rule ip filter SOLEUR-EGRESS accept" "nft-injection (} + add rule)"
+assert_cidr_reject "; nft flush ruleset" "nft keyword line"
+assert_cidr_reject '$(curl evil)' "command-substitution shape"
+assert_cidr_reject " 140.82.112.0/20" "leading whitespace"
+assert_cidr_reject "140.82.112.0/20 " "trailing whitespace"
+assert_cidr_reject $'1.1.1.0/24\nevil' "embedded newline"
+# AC1 (malformed shape) reject:
+assert_cidr_reject "0.0.0.0" "no prefix"
+assert_cidr_reject "140.82.112/20" "3 octets"
+assert_cidr_reject "garbage" "non-CIDR text"
+# AC4 — octet/prefix range (the issue's bare regex would WRONGLY accept these):
+assert_cidr_reject "999.999.999.999/99" "octets and prefix out of range"
+assert_cidr_reject "256.1.1.1/8" "first octet > 255"
+assert_cidr_reject "1.1.1.1/33" "prefix > 32"
+
+# AC3 — comment/blank lines are skipped by the loop guard, never validated:
+COMMENT_SKIP_RE='^[[:space:]]*(#|$)'
+assert_grep "loop skips comment/blank lines before validation" "$COMMENT_SKIP_RE" "$LOADER"
+
 echo "-- resolver safety invariants --"
 # Anchored on the executable form (`flush set ip filter …`), not the bare
 # phrase — the resolver's own comment legitimately SAYS "never flush set"
