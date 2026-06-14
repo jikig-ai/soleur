@@ -31,6 +31,7 @@ import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
+import { withGithubRetry } from "@/server/github-retry";
 import {
   postSentryHeartbeat,
   type HandlerArgs,
@@ -486,62 +487,82 @@ async function handleTrackingIssue(args: {
   const owner = "jikig-ai";
   const repo = "soleur";
 
-  // Search for an open tracking issue by literal title.
-  const search = await octokit.request("GET /search/issues", {
-    q: `repo:${owner}/${repo} is:issue is:open in:title "${ISSUE_TITLE}"`,
-    per_page: 1,
-  });
+  // Search for an open tracking issue by literal title. Each call is wrapped
+  // INDIVIDUALLY in withGithubRetry (#5230) so a connect-timeout retry never
+  // re-issues a sibling non-idempotent POST — see the per-call wraps below and
+  // the canonical precedent in cron-stale-deferred-scope-outs.ts.
+  const search = await withGithubRetry(() =>
+    octokit.request("GET /search/issues", {
+      q: `repo:${owner}/${repo} is:issue is:open in:title "${ISSUE_TITLE}"`,
+      per_page: 1,
+    }),
+  );
   const existing = (search.data.items ?? [])[0];
 
   // Failure path: file new issue OR add comment to existing one.
   if (result.failureMode !== "") {
     if (existing) {
-      await octokit.request(
+      // Non-idempotent POST — its OWN wrapper (never grouped with a sibling
+      // call) so a sibling's retry can never re-issue this comment. (The
+      // individual-wrapper pattern bounds cross-call re-POST; it does NOT make
+      // the POST idempotent — a response-phase transient on this call's own
+      // request can still re-issue it. Acceptable + precedent-consistent: the
+      // next hourly run's dedup search collapses a duplicate issue, and only on
+      // a transient landing in the post-commit response window.)
+      await withGithubRetry(() =>
+        octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner,
+            repo,
+            issue_number: existing.number,
+            body: `Probe failed again at ${args.detectedAtIso} — \`${result.failureMode}\`: ${result.failureDetail}. Run: ${args.runUrl}`,
+          },
+        ),
+      );
+      return;
+    }
+    // Non-idempotent POST — own wrapper.
+    await withGithubRetry(() =>
+      octokit.request("POST /repos/{owner}/{repo}/issues", {
+        owner,
+        repo,
+        title: ISSUE_TITLE,
+        labels: ["ci/auth-broken", "priority/p1-high"],
+        body: buildIssueBody({
+          failureMode: result.failureMode,
+          failureDetail: result.failureDetail,
+          detectedAtIso: args.detectedAtIso,
+          runUrl: args.runUrl,
+          runbookUrl: args.runbookUrl,
+        }),
+      }),
+    );
+    return;
+  }
+
+  // Success path: auto-close any stale tracking issue. The POST comment and
+  // the PATCH close get SEPARATE wrappers so a PATCH-timeout retry never
+  // re-issues the (non-idempotent) green comment.
+  if (existing) {
+    await withGithubRetry(() =>
+      octokit.request(
         "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
         {
           owner,
           repo,
           issue_number: existing.number,
-          body: `Probe failed again at ${args.detectedAtIso} — \`${result.failureMode}\`: ${result.failureDetail}. Run: ${args.runUrl}`,
+          body: `Probe green at ${args.detectedAtIso}. All checks passed (login HTTP 200, google+github authorize 302, settings JSON valid, all 3 GitHub App callback URLs registered, Supabase user-shape e2e green, callback-error pass-through). Run: ${args.runUrl}`,
         },
-      );
-      return;
-    }
-    await octokit.request("POST /repos/{owner}/{repo}/issues", {
-      owner,
-      repo,
-      title: ISSUE_TITLE,
-      labels: ["ci/auth-broken", "priority/p1-high"],
-      body: buildIssueBody({
-        failureMode: result.failureMode,
-        failureDetail: result.failureDetail,
-        detectedAtIso: args.detectedAtIso,
-        runUrl: args.runUrl,
-        runbookUrl: args.runbookUrl,
-      }),
-    });
-    return;
-  }
-
-  // Success path: auto-close any stale tracking issue.
-  if (existing) {
-    await octokit.request(
-      "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-      {
-        owner,
-        repo,
-        issue_number: existing.number,
-        body: `Probe green at ${args.detectedAtIso}. All checks passed (login HTTP 200, google+github authorize 302, settings JSON valid, all 3 GitHub App callback URLs registered, Supabase user-shape e2e green, callback-error pass-through). Run: ${args.runUrl}`,
-      },
+      ),
     );
-    await octokit.request(
-      "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
-      {
+    await withGithubRetry(() =>
+      octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
         owner,
         repo,
         issue_number: existing.number,
         state: "closed",
-      },
+      }),
     );
   }
 }

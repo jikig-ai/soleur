@@ -45,6 +45,7 @@ import {
   PROBE_ISSUE_OWNER,
   PROBE_ISSUE_REPO,
 } from "@/server/github/probe-octokit";
+import { withGithubRetry } from "@/server/github-retry";
 import {
   postSentryHeartbeat,
   type HandlerArgs,
@@ -331,7 +332,13 @@ async function probeDriftGuard(args: {
   };
   let appHeaders: Record<string, string | undefined> = {};
   try {
-    const res = await octokit.request("GET /app");
+    // withGithubRetry absorbs a transient connect-timeout that previously threw
+    // out of probeDriftGuard (landing in the handler catch → github_api_network).
+    // It fires ONLY on a *thrown* transient network error — a real 401 is caught
+    // below and *returned* as a DriftResult, never thrown, so the handler-level
+    // github_app_401 retry (status-driven on the returned result) stays orthogonal
+    // and the two layers never double-retry the same failure (#5230).
+    const res = await withGithubRetry(() => octokit.request("GET /app"));
     appData = res.data as typeof appData;
     appHeaders = (res.headers ?? {}) as Record<string, string | undefined>;
   } catch (err) {
@@ -439,9 +446,11 @@ async function probeDriftGuard(args: {
     headers: Record<string, string | undefined>;
   };
   try {
-    const r = await octokit.request("GET /app/installations", {
-      per_page: 100,
-    });
+    const r = await withGithubRetry(() =>
+      octokit.request("GET /app/installations", {
+        per_page: 100,
+      }),
+    );
     installRes = {
       data: r.data,
       headers: (r.headers ?? {}) as Record<string, string | undefined>,
@@ -569,58 +578,76 @@ async function handleFailureIssue(args: {
   // Failure path: file new issue OR add comment to existing one.
   if (result.failureMode !== "") {
     // Dedup search scoped by label + title-phrase per workflow line 634-637.
-    const search = await octokit.request("GET /search/issues", {
-      q: `repo:${owner}/${repo} is:issue is:open label:"${result.failureLabel}" in:title "GitHub App drift-guard"`,
-      per_page: 1,
-    });
+    // Each call is wrapped INDIVIDUALLY in withGithubRetry (#5230) —
+    // non-idempotent POSTs never share a retry wrapper with a sibling call.
+    const search = await withGithubRetry(() =>
+      octokit.request("GET /search/issues", {
+        q: `repo:${owner}/${repo} is:issue is:open label:"${result.failureLabel}" in:title "GitHub App drift-guard"`,
+        per_page: 1,
+      }),
+    );
     const existing = (search.data.items ?? [])[0];
     if (existing) {
       const commentBody = `Drift-guard failed again at ${args.detectedAtIso} — \`${result.failureMode}\`: ${result.failureDetail}. Run: ${args.runUrl}`;
       assertNoLeak("issue-comment", commentBody);
-      await octokit.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        {
-          owner,
-          repo,
-          issue_number: existing.number,
-          body: commentBody,
-        },
+      // Non-idempotent POST — own wrapper.
+      await withGithubRetry(() =>
+        octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner,
+            repo,
+            issue_number: existing.number,
+            body: commentBody,
+          },
+        ),
       );
       return;
     }
-    await octokit.request("POST /repos/{owner}/{repo}/issues", {
-      owner,
-      repo,
-      title,
-      labels: [result.failureLabel, "priority/p1-high"],
-      body,
-    });
+    // Non-idempotent POST — own wrapper.
+    await withGithubRetry(() =>
+      octokit.request("POST /repos/{owner}/{repo}/issues", {
+        owner,
+        repo,
+        title,
+        labels: [result.failureLabel, "priority/p1-high"],
+        body,
+      }),
+    );
     return;
   }
 
   // Success path: auto-close stale issues for both labels (workflow 666-687).
   for (const label of ["ci/auth-broken", "ci/guard-broken"] as const) {
-    const search = await octokit.request("GET /search/issues", {
-      q: `repo:${owner}/${repo} is:issue is:open label:"${label}" in:title "GitHub App drift-guard"`,
-      per_page: 1,
-    });
+    const search = await withGithubRetry(() =>
+      octokit.request("GET /search/issues", {
+        q: `repo:${owner}/${repo} is:issue is:open label:"${label}" in:title "GitHub App drift-guard"`,
+        per_page: 1,
+      }),
+    );
     const stale = (search.data.items ?? [])[0];
     if (!stale) continue;
-    await octokit.request(
-      "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-      {
+    // POST comment and PATCH close get SEPARATE wrappers so a PATCH-timeout
+    // retry never re-issues the (non-idempotent) green comment.
+    await withGithubRetry(() =>
+      octokit.request(
+        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+        {
+          owner,
+          repo,
+          issue_number: stale.number,
+          body: `Drift-guard green at ${args.detectedAtIso}. id + client_id matched expected sentinels; leak tripwire passed. Run: ${args.runUrl}`,
+        },
+      ),
+    );
+    await withGithubRetry(() =>
+      octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
         owner,
         repo,
         issue_number: stale.number,
-        body: `Drift-guard green at ${args.detectedAtIso}. id + client_id matched expected sentinels; leak tripwire passed. Run: ${args.runUrl}`,
-      },
+        state: "closed",
+      }),
     );
-    await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
-      owner,
-      repo,
-      issue_number: stale.number,
-      state: "closed",
-    });
   }
 }
 
@@ -632,16 +659,19 @@ async function handleLeakIssue(args: {
   const { octokit } = args;
   const owner = PROBE_ISSUE_OWNER;
   const repo = PROBE_ISSUE_REPO;
-  await octokit.request("POST /repos/{owner}/{repo}/issues", {
-    owner,
-    repo,
-    title: ISSUE_TITLE_LEAK_SUSPECTED,
-    labels: ["security/leak-suspected", "ci/guard-broken", "priority/p1-high"],
-    body: buildLeakIssueBody({
-      detectedAtIso: args.detectedAtIso,
-      runUrl: args.runUrl,
+  // Non-idempotent POST — own withGithubRetry wrapper (#5230).
+  await withGithubRetry(() =>
+    octokit.request("POST /repos/{owner}/{repo}/issues", {
+      owner,
+      repo,
+      title: ISSUE_TITLE_LEAK_SUSPECTED,
+      labels: ["security/leak-suspected", "ci/guard-broken", "priority/p1-high"],
+      body: buildLeakIssueBody({
+        detectedAtIso: args.detectedAtIso,
+        runUrl: args.runUrl,
+      }),
     }),
-  });
+  );
 }
 
 // =============================================================================

@@ -235,6 +235,13 @@ describe("cronStaleDeferredScopeOuts — kill-switch label", () => {
       }
       if (
         route ===
+        "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // No prior auto-close comment present → POST still fires.
+        return { data: [] };
+      }
+      if (
+        route ===
           "POST /repos/{owner}/{repo}/issues/{issue_number}/comments" ||
         route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}"
       ) {
@@ -455,6 +462,13 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
             },
           };
         }
+        if (
+          route ===
+          "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+        ) {
+          // No prior auto-close comment → POST still fires.
+          return { data: [] };
+        }
         // comment + close succeed.
         return { data: {} };
       });
@@ -485,6 +499,13 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
             items: [makeIssue({ number: 400, labels: ["deferred-scope-out"] })],
           },
         };
+      }
+      if (
+        route ===
+        "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // No prior auto-close comment → POST is reached (and 403s below).
+        return { data: [] };
       }
       if (
         route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
@@ -532,6 +553,13 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
               items: [makeIssue({ number: 500, labels: ["deferred-scope-out"] })],
             },
           };
+        }
+        if (
+          route ===
+          "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+        ) {
+          // No prior auto-close comment → POST path is exercised.
+          return { data: [] };
         }
         if (
           route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
@@ -596,6 +624,139 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// --------------------------------------------------------------------------
+// (f) GET-before-POST comment idempotency guard (issue #5231)
+//
+// On a sequential retry the comment POST may already have landed. The guard
+// GETs the issue's comments first and, if the COMMENT_MARKER sentinel is already
+// present, SKIPS the re-POST — but the close PATCH still fires (close is a no-op when
+// the issue is already closed, so re-issuing it is safe and keeps the counter
+// advancing on the replay).
+// --------------------------------------------------------------------------
+
+describe("cronStaleDeferredScopeOuts — comment idempotency guard", () => {
+  it("skips the comment POST when COMMENT_BODY already present, but still closes", async () => {
+    const { cronStaleDeferredScopeOutsHandler, __TESTING__ } =
+      await importModule();
+
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return {
+          data: {
+            items: [makeIssue({ number: 600, labels: ["deferred-scope-out"] })],
+          },
+        };
+      }
+      if (
+        route ===
+        "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // The auto-close comment already landed on a prior (replayed) attempt.
+        return { data: [{ body: __TESTING__.COMMENT_BODY }] };
+      }
+      return { data: {} };
+    });
+
+    const step = makeStep();
+    const result = await cronStaleDeferredScopeOutsHandler({ step, logger });
+
+    // The issue still closes (close is idempotent) and the counter advances.
+    expect(result.total).toBe(1);
+    expect(result.closed).toBe(1);
+
+    // The POST was SKIPPED — the guard short-circuited the double-comment.
+    const commentCalls = octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    expect(commentCalls).toHaveLength(0);
+
+    // The close PATCH still fired exactly once.
+    const closeCalls = octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
+    );
+    expect(closeCalls).toHaveLength(1);
+    expect(closeCalls[0][1]).toMatchObject({ issue_number: 600 });
+
+    // No error-level mirror — this is the happy idempotent path.
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("matches the sentinel even when GitHub returns the body with CRLF line endings (no re-POST)", async () => {
+    const { cronStaleDeferredScopeOutsHandler, __TESTING__ } =
+      await importModule();
+
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return {
+          data: {
+            items: [makeIssue({ number: 601, labels: ["deferred-scope-out"] })],
+          },
+        };
+      }
+      if (
+        route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // GitHub can store/return multi-line comment bodies with CRLF. The guard
+        // matches on COMMENT_MARKER via `includes`, so it must still recognise
+        // its own comment here. Full-body `=== COMMENT_BODY` (which is `\n`-joined)
+        // would WRONGLY miss this and re-POST — this case is the regression guard
+        // for that brittleness.
+        const stored = __TESTING__.COMMENT_BODY.replace(/\n/g, "\r\n");
+        return { data: [{ body: stored }] };
+      }
+      return { data: {} };
+    });
+
+    const step = makeStep();
+    const result = await cronStaleDeferredScopeOutsHandler({ step, logger });
+
+    expect(result.closed).toBe(1);
+    const commentCalls = octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    expect(commentCalls).toHaveLength(0);
+  });
+
+  it("posts the comment when prior comments exist but none carry the sentinel", async () => {
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") {
+        return {
+          data: {
+            items: [makeIssue({ number: 602, labels: ["deferred-scope-out"] })],
+          },
+        };
+      }
+      if (
+        route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        // Realistic steady state: prior human comments, none from the bot.
+        return {
+          data: [
+            { body: "Still relevant — please keep open." },
+            { body: ":+1:" },
+          ],
+        };
+      }
+      return { data: {} };
+    });
+
+    const step = makeStep();
+    const result = await cronStaleDeferredScopeOutsHandler({ step, logger });
+
+    expect(result.closed).toBe(1);
+    const commentCalls = octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    expect(commentCalls).toHaveLength(1);
   });
 });
 

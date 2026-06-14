@@ -129,6 +129,22 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
     expect(rule).toContain(`X-Robots-Tag`);
   });
 
+  // GSC "Indexed, though blocked by robots.txt" on https://app.soleur.ai/:
+  // app.soleur.ai is the login-gated product host. Its bare URL was indexed
+  // despite a robots.txt Disallow (which blocks crawling, not indexing, and
+  // prevented Google from seeing any noindex). The fix is a host-wide
+  // X-Robots-Tag: noindex, nofollow edge rule (this resource) + allow-crawl in
+  // app/robots.ts. app.soleur.ai is proxied (dns.tf cloudflare_record.app
+  // proxied = true), so unlike api.soleur.ai this rule fires live.
+  test("app.soleur.ai rewrite rule is present in seo_response_headers", () => {
+    const tf = readFileSync(TF_PATH, "utf-8");
+    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const rule = extractRuleBlockForHost(body, "app.soleur.ai");
+    expect(rule).toContain(`action`);
+    expect(rule).toContain(`"rewrite"`);
+    expect(rule).toContain(`X-Robots-Tag`);
+  });
+
   // AC2 — deploy. rule pins the EXACT live header value `noindex, nofollow`,
   // not just substring `noindex`, so dropping `nofollow` is caught.
   test("deploy.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
@@ -136,6 +152,17 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
     const body = extractResourceBody(tf, RESOURCE_NAME);
     const rule = extractRuleBlockForHost(body, "deploy.soleur.ai");
     // The header value line inside this rule's action_parameters.headers block.
+    expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
+    expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
+  });
+
+  // app.soleur.ai must pin the EXACT value — a future weakening that drops
+  // `nofollow` (or otherwise mutates the value) must fail CI, same parity as
+  // the deploy/api rules above.
+  test("app.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
+    const tf = readFileSync(TF_PATH, "utf-8");
+    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const rule = extractRuleBlockForHost(body, "app.soleur.ai");
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
   });
@@ -154,12 +181,12 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
   });
 
-  // Both rules must stay enabled — a silent `enabled = false` is as bad as a
-  // deletion (the header stops firing live).
-  test("both subdomain rewrite rules are enabled", () => {
+  // Every host rewrite rule must stay enabled — a silent `enabled = false` is
+  // as bad as a deletion (the header stops firing live).
+  test("all subdomain rewrite rules are enabled", () => {
     const tf = readFileSync(TF_PATH, "utf-8");
     const body = extractResourceBody(tf, RESOURCE_NAME);
-    for (const host of ["deploy.soleur.ai", "api.soleur.ai"]) {
+    for (const host of ["deploy.soleur.ai", "api.soleur.ai", "app.soleur.ai"]) {
       const rule = extractRuleBlockForHost(body, host);
       expect(rule, `${host} rule must be enabled`).toMatch(/enabled\s*=\s*true/);
     }
