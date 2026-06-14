@@ -301,3 +301,22 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Scan client-importable code for PII in Sentry extra
         run: bash .github/scripts/check-client-pii-sentry.sh
+
+  sweep-completeness:
+    name: Sibling-set sweep completeness (#5269)
+    # Fails a PR that changes a sibling-set's TRIGGER file but leaves a
+    # registered DEPENDENT unchanged, per .github/enforcement-contracts.json.
+    # Closes the cross-file-drift class mechanically (hr-write-boundary-sentinel-
+    # sweep-all-write-sites). Intentionally NO opt-out: at single-user-incident
+    # threshold the gate should not carry a bypass label (modeled on pii-grep).
+    # MUST check out — the script self-checks that every registry path exists on
+    # disk (anti-rot), which needs the working tree.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Check sibling-set sweep completeness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/check-sweep-completeness.sh
