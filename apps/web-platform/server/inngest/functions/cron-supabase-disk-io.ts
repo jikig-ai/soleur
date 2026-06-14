@@ -100,14 +100,18 @@ export function evaluateDiskIoSignal(signal: DiskIoSignal): DiskIoVerdict {
     );
   }
 
-  // Unbounded-growth guard: a dedup table over the ceiling means its 094
-  // retention sweep is not running.
+  // Unbounded-growth guard: a dedup table over the ceiling means its retention
+  // sweep is not bounding the table. Two distinct causes (issue #5225, 2026-06-14
+  // was the second): the cron job stopped, OR the cron is alive but its DELETE
+  // window exceeds the table's replay horizon so every run reports DELETE 0 and
+  // the table grows unbounded. The reason text names both so the operator checks
+  // the schedule AND the interval, not just whether the job exists.
   const dedupRows = signal.dedup_table_rows ?? {};
   for (const [table, rowsRaw] of Object.entries(dedupRows)) {
     const rows = Number(rowsRaw);
     if (Number.isFinite(rows) && rows > DEDUP_TABLE_ROW_CEIL) {
       reasons.push(
-        `${table}=${rows} rows > ceil ${DEDUP_TABLE_ROW_CEIL} (retention sweep may have stopped — check cron.job)`,
+        `${table}=${rows} rows > ceil ${DEDUP_TABLE_ROW_CEIL} (retention sweep stopped OR its window exceeds the table's replay horizon so it deletes nothing — check cron.job schedule AND the DELETE interval)`,
       );
     }
   }
