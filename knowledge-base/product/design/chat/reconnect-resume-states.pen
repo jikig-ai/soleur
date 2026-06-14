@@ -1,0 +1,1134 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "yAvpN",
+      "x": 0,
+      "y": 0,
+      "name": "Reconnect/Resume States v1",
+      "width": 760,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "hboqH",
+          "name": "header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "mU3SW",
+              "fill": "$text-primary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Honest Reconnect / Resume UX — v1 wireframes (#5240)",
+              "fontFamily": "Inter",
+              "fontSize": 22,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "ZyJlR",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Web-platform agent chat. CPO leader. Dark Solar Forge theme. Replaces fake “Retrying…” + fresh-session amnesia. Copy is accurate; never fakes activity, never feigns a clean start.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "H7OJr",
+          "name": "State 1 — Connection lost (reconnecting)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Zlft4",
+              "name": "lbl1",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "4wK4n",
+                  "fill": "$accent-gold",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "1 · CONNECTION LOST — RECONNECTING",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "75Bal",
+                  "fill": "$text-muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Transient, within the grace window (exp. backoff, 1s→30s). Replaces fake “Retrying…”. Honest, no fabricated tool activity.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Nz8Lt",
+              "name": "chat-surface",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$bg-base",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "4U1Ck",
+                  "name": "reconnect-banner",
+                  "width": "fill_container",
+                  "fill": "$yellow-950-20",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "$yellow-800-50"
+                  },
+                  "padding": [
+                    10,
+                    16
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "bBFAz",
+                      "name": "bl1",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "hg0t2",
+                          "fill": "$yellow-300",
+                          "width": 8,
+                          "height": 8
+                        },
+                        {
+                          "type": "text",
+                          "id": "iwlNW",
+                          "fill": "$yellow-300",
+                          "content": "Connection lost. Reconnecting…",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Qm1dQ",
+                      "fill": "$amber-400",
+                      "content": "Retry now",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Awo2h",
+                  "name": "messages",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "kroQB",
+                      "name": "agent-card-row",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "hAyA0",
+                          "name": "avatar",
+                          "width": 32,
+                          "height": 32,
+                          "fill": "$violet-500",
+                          "cornerRadius": 16,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "vVtAS",
+                              "fill": "$text-primary",
+                              "content": "P",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "tWOPz",
+                          "name": "bubble",
+                          "width": 380,
+                          "fill": "$bg-surface-1",
+                          "cornerRadius": 12,
+                          "stroke": {
+                            "thickness": 2,
+                            "fill": "$amber-600"
+                          },
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            12,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "U5dPQ",
+                              "name": "hd1",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "OuWwV",
+                                  "fill": "$text-secondary",
+                                  "content": "CPO",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "Ug512",
+                                  "fill": "$text-muted",
+                                  "content": "Chief Product Officer",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "tqum0",
+                              "name": "status-row",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "ellipse",
+                                  "id": "jyqRF",
+                                  "fill": "$yellow-300",
+                                  "width": 8,
+                                  "height": 8
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "2EKll",
+                                  "fill": "$text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": 320,
+                                  "content": "Reconnecting to keep working on Fix Issue 4826…",
+                                  "lineHeight": 1.4,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "kSKhw",
+                              "fill": "$text-muted",
+                              "textGrowth": "fixed-width",
+                              "width": 320,
+                              "content": "Your place is held. Nothing was lost.",
+                              "lineHeight": 1.4,
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ASGQG",
+          "name": "State 2 — No activity for 45s (stuck watchdog)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "GZ0m5",
+              "name": "lbl2",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "BLBAB",
+                  "fill": "$accent-gold",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "2 · NO ACTIVITY FOR 45s — STUCK WATCHDOG",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "95pEt",
+                  "fill": "$text-muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Connection is fine; the stream went silent for STUCK_TIMEOUT_MS (45s). Replaces fake “Retrying… Finding /*nav-rail*…”. States the truth — no invented tool name, no invented activity.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kL2oS",
+              "name": "chat-surface",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$bg-base",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "jatwn",
+                  "name": "messages",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "4kD0n",
+                      "name": "agent-card-row",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "ZytTe",
+                          "name": "avatar",
+                          "width": 32,
+                          "height": 32,
+                          "fill": "$violet-500",
+                          "cornerRadius": 16,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "zCQZ3",
+                              "fill": "$text-primary",
+                              "content": "P",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "IuG10",
+                          "name": "bubble",
+                          "width": 400,
+                          "fill": "$bg-surface-1",
+                          "cornerRadius": 12,
+                          "stroke": {
+                            "thickness": 2,
+                            "fill": "$amber-600"
+                          },
+                          "layout": "vertical",
+                          "gap": 10,
+                          "padding": [
+                            12,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "JEAN8",
+                              "name": "hd2",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "eZZAq",
+                                  "fill": "$text-secondary",
+                                  "content": "CPO",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "R9qZV",
+                                  "fill": "$text-muted",
+                                  "content": "Chief Product Officer",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "KsXbi",
+                              "name": "status-row",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "obbUi",
+                                  "name": "dot-wrap",
+                                  "padding": [
+                                    5,
+                                    0,
+                                    0,
+                                    0
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "hnMay",
+                                      "fill": "$amber-400",
+                                      "width": 8,
+                                      "height": 8
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "MIWnN",
+                                  "name": "stx2",
+                                  "width": 340,
+                                  "layout": "vertical",
+                                  "gap": 3,
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "Juvlg",
+                                      "fill": "$amber-400",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "No response for 45 seconds.",
+                                      "lineHeight": 1.4,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "hHrG7",
+                                      "fill": "$text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "The agent is still connected but hasn’t sent anything back. It may still be working, or it may be stuck. Last step: Editing message-bubble.tsx.",
+                                      "lineHeight": 1.45,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 13,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "jpyaU",
+                              "name": "actions",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "Xi4vd",
+                                  "name": "btn-keep-waiting",
+                                  "fill": "$bg-surface-2",
+                                  "cornerRadius": 6,
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "padding": [
+                                    7,
+                                    12
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "TLRDW",
+                                      "fill": "$text-primary",
+                                      "content": "Keep waiting",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 13,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "G9Kta",
+                                  "name": "btn-stop-turn",
+                                  "cornerRadius": 6,
+                                  "padding": [
+                                    7,
+                                    12
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "kOZJi",
+                                      "fill": "$text-secondary",
+                                      "content": "Stop the turn",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 13,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rJELv",
+          "name": "State 3 — Unrecoverable / workspace reset (KEY)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "GWllS",
+              "name": "lbl3",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "IzSvL",
+                  "fill": "$accent-gold",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "3 · UNRECOVERABLE — WORKSPACE RECLAIMED (KEY STATE)",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "tErwf",
+                  "fill": "$text-muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Grace window expired / live workspace reclaimed. Names the continuity it still has + ONE actionable choice. NEVER a fresh-session greeting, NEVER “nothing to resume from”.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "iRLJz",
+              "name": "chat-surface",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$bg-base",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "IHQEC",
+                  "name": "messages",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "T3r9e",
+                      "name": "agent-card-row",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "uibX2",
+                          "name": "avatar",
+                          "width": 32,
+                          "height": 32,
+                          "fill": "$violet-500",
+                          "cornerRadius": 16,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "KHU5Y",
+                              "fill": "$text-primary",
+                              "content": "P",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "qVoZG",
+                          "name": "bubble",
+                          "width": 430,
+                          "fill": "$bg-surface-1",
+                          "cornerRadius": 12,
+                          "stroke": {
+                            "thickness": 2,
+                            "fill": "$accent-gold"
+                          },
+                          "layout": "vertical",
+                          "gap": 12,
+                          "padding": [
+                            14,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "4eFuT",
+                              "name": "hd3",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Cp0Mq",
+                                  "fill": "$text-secondary",
+                                  "content": "CPO",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "Xso0G",
+                                  "fill": "$text-muted",
+                                  "content": "Chief Product Officer",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "AZ8HN",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": 398,
+                              "content": "I still have our full conversation about Fix Issue 4826 — every message and decision so far.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "0bgYH",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": 398,
+                              "content": "The live workspace (the cloned repo I was editing) was reclaimed while we were disconnected, so any un-pushed in-progress edits there are gone. I can resume from a fresh checkout with our full context and pick the work back up.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "2NTCx",
+                              "name": "actions",
+                              "gap": 10,
+                              "padding": [
+                                4,
+                                0,
+                                0,
+                                0
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "6atbU",
+                                  "name": "btn-resume-primary",
+                                  "fill": {
+                                    "type": "gradient",
+                                    "gradientType": "linear",
+                                    "enabled": true,
+                                    "rotation": 90,
+                                    "size": {
+                                      "height": 1
+                                    },
+                                    "colors": [
+                                      {
+                                        "color": "#D4B36A",
+                                        "position": 0
+                                      },
+                                      {
+                                        "color": "#B8923E",
+                                        "position": 1
+                                      }
+                                    ]
+                                  },
+                                  "cornerRadius": 6,
+                                  "padding": [
+                                    9,
+                                    16
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "1DQe0",
+                                      "fill": "$on-accent",
+                                      "content": "Resume with full context",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 13,
+                                      "fontWeight": "600"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "L5HZo",
+                                  "name": "btn-view-conversation",
+                                  "cornerRadius": 6,
+                                  "padding": [
+                                    9,
+                                    12
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "2O9ne",
+                                      "fill": "$text-secondary",
+                                      "content": "View conversation",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 13,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Dy64Y",
+          "name": "State 4 — Successful resume",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "EReGI",
+              "name": "lbl4",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "8sXaS",
+                  "fill": "$accent-gold",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "4 · SUCCESSFUL RESUME",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "8syCT",
+                  "fill": "$text-muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Reconnect (or [Resume]) lands back in the correct workspace/worktree with prior context. Passive “Continuing from…” notice (matches kb-chat-content) + the turn continues working.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kjN9C",
+              "name": "chat-surface",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$bg-base",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "WHyir",
+                  "name": "messages",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "10AwM",
+                      "name": "continuing-notice",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "cK2zo",
+                          "fill": "$text-muted",
+                          "content": "— Continuing from 6/14/26, 10:42 AM · workspace restored —",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dy3tc",
+                      "name": "agent-card-row",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "68ZVr",
+                          "name": "avatar",
+                          "width": 32,
+                          "height": 32,
+                          "fill": "$violet-500",
+                          "cornerRadius": 16,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "iQlaX",
+                              "fill": "$text-primary",
+                              "content": "P",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "QVBNv",
+                          "name": "bubble",
+                          "width": 420,
+                          "fill": "$bg-surface-1",
+                          "cornerRadius": 12,
+                          "stroke": {
+                            "thickness": 2,
+                            "fill": "$amber-600"
+                          },
+                          "layout": "vertical",
+                          "gap": 8,
+                          "padding": [
+                            12,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "gdSL6",
+                              "name": "hd4",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "rzH18",
+                                  "fill": "$text-secondary",
+                                  "content": "CPO",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "JrkhM",
+                                  "fill": "$text-muted",
+                                  "content": "Chief Product Officer",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "SPygJ",
+                              "layoutPosition": "absolute",
+                              "x": 300,
+                              "y": -9,
+                              "name": "status-pill",
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 999,
+                              "stroke": {
+                                "thickness": 1,
+                                "fill": "$amber-700-50"
+                              },
+                              "padding": [
+                                2,
+                                8
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "mO5al",
+                                  "fill": "$amber-500",
+                                  "content": "Working",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 10,
+                                  "fontWeight": "500"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "mWX49",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": 388,
+                              "content": "Back in the workspace for Fix Issue 4826 (branch fix-issue-4826). Picking up where we left off.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "HJhK5",
+                              "name": "tool-status-chip",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "JLRtP",
+                                  "name": "d4a",
+                                  "padding": [
+                                    4,
+                                    0,
+                                    0,
+                                    0
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "fxX8Q",
+                                      "fill": "$amber-400",
+                                      "width": 6,
+                                      "height": 6
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "fvx3v",
+                                  "fill": "$text-secondary",
+                                  "content": "Editing components/chat/message-bubble.tsx",
+                                  "fontFamily": "JetBrains Mono",
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg-base": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "bg-surface-1": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "bg-surface-2": {
+      "type": "color",
+      "value": "#1C1C1C"
+    },
+    "border-default": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "text-muted": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "accent-gold": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "amber-400": {
+      "type": "color",
+      "value": "#FBBF24"
+    },
+    "amber-500": {
+      "type": "color",
+      "value": "#F59E0B"
+    },
+    "amber-600": {
+      "type": "color",
+      "value": "#D97706"
+    },
+    "amber-700-50": {
+      "type": "color",
+      "value": "#B4530980"
+    },
+    "violet-500": {
+      "type": "color",
+      "value": "#8B5CF6"
+    },
+    "yellow-300": {
+      "type": "color",
+      "value": "#FDE047"
+    },
+    "yellow-800-50": {
+      "type": "color",
+      "value": "#854D0E80"
+    },
+    "yellow-950-20": {
+      "type": "color",
+      "value": "#42200633"
+    },
+    "red-400": {
+      "type": "color",
+      "value": "#F87171"
+    },
+    "green-500": {
+      "type": "color",
+      "value": "#22C55E"
+    },
+    "on-accent": {
+      "type": "color",
+      "value": "#1A1612"
+    }
+  }
+}
