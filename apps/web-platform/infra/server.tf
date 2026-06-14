@@ -810,7 +810,17 @@ resource "terraform_data" "cron_egress_firewall" {
       "set -e",
       "chmod +x /usr/local/bin/cron-egress-nftables.sh /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-alarm.sh",
       "systemctl daemon-reload",
-      "systemctl enable --now cron-egress-firewall.service",
+      # `enable` for boot-persistence; `restart` to RE-RUN the loader NOW. The
+      # service is Type=oneshot/RemainAfterExit=yes, so `enable --now` (= start)
+      # no-ops on an already-active unit — the loader never re-reads the
+      # freshly-provisioned cron-egress-allowlist-cidr.txt and the new CIDR
+      # ranges sit on disk but absent from the live nft set (the inert-fix bug
+      # behind the still-missed scheduled-ruleset-bypass-audit check-in,
+      # incident 5516336). The loader populates the sets BEFORE installing the
+      # default-drop (availability ordering, asserted in cron-egress-firewall.test.sh),
+      # so a restart carries no egress gap — it is the same operation that runs at boot.
+      "systemctl enable cron-egress-firewall.service",
+      "systemctl restart cron-egress-firewall.service",
       "systemctl enable --now cron-egress-resolve.timer",
       # Positive post-apply assertions (fail2ban_tuning pattern): structure...
       "nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'",
