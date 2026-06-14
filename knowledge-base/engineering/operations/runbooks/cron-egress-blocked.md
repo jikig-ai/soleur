@@ -58,6 +58,94 @@ likelihood order:
 4. Re-validate the affected flow (`/soleur:trigger-cron <event>` for crons;
    the user-facing flow itself otherwise).
 
+## Remediation (GitHub LB pool / CIDR coverage gap)
+
+If the blocked `DST=<ip>` is a GitHub address (a `20.x`/`4.x` Azure host or a
+`140.82`/`185.199`/`192.30`/`143.55` range) and the failing flow dials
+`github.com` or `api.github.com`, the CIDR allowlist is missing part of
+GitHub's load-balancer pool. **`api.github.com` round-robins DNS across TWO
+pools:** the four big git/pages blocks (`140.82.112.0/20`, `185.199.108.0/22`,
+`192.30.252.0/22`, `143.55.64.0/20`) AND ~48 Azure `20.x`/`4.x` `/32` hosts. A
+fire that lands on an uncovered IP is default-dropped → no GitHub call → for a
+cron, no Sentry heartbeat → a **missed** check-in (not a failed one). This is
+exactly the `scheduled-ruleset-bypass-audit` miss on 2026-06-14 (incident
+5516336): the file then carried only the 4 big blocks.
+
+The fix is the **CIDR** file (`cron-egress-allowlist-cidr.txt`), NOT the
+hostname file — `api.github.com` is already in the hostname allowlist; the
+single-IP resolver is the wrong layer for an LB host. Regenerate the complete
+`/meta` `.git`+`.api` IPv4 union:
+
+```bash
+curl -s https://api.github.com/meta \
+  | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u
+```
+
+Write it to `apps/web-platform/infra/cron-egress-allowlist-cidr.txt` (header +
+one CIDR per line), then bump the exact-count guard + snapshot date in
+`cron-egress-firewall.test.sh`. Verify zero gap with:
+
+```bash
+comm -23 <(curl -s https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u) \
+         <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)
+```
+
+Empty output = full coverage. Merge — the provisioner re-applies on push (no
+SSH). **The `/32`s rotate**, so this static snapshot will go stale; the
+self-refreshing-generator follow-up (#5284) tracks the durable fix.
+
+## Remediation (loader `die "invalid CIDR …"`)
+
+If `cron-egress-firewall.service` failed (not a drop page) and journald shows
+`[cron-egress-nftables] ERROR: invalid CIDR in … '<line>'`, the committed
+`apps/web-platform/infra/cron-egress-allowlist-cidr.txt` carries a malformed
+line (#5242 hardening: the loader rejects the **whole file** rather than
+inject an unvalidated line into the nft heredoc). Each line must be a strict
+IPv4 CIDR (`A.B.C.D/N`, octets ≤ 255, prefix ≤ 32); comments/blanks are fine.
+A CRLF-saved file also fails (trailing `\r`). **Fix the committed file and
+merge — do NOT SSH-patch nft;** the provisioner re-runs the loader on push.
+Until fixed, the firewall is fail-open-on-bootstrap (no default-drop installed),
+so treat it as time-sensitive.
+
+## Apply-time post-check failure (`apply-web-platform-infra.yml` red at `cron_egress_firewall`)
+
+This is NOT a runtime drop page — it is the **terraform apply** failing at
+`terraform_data.cron_egress_firewall`'s second `remote-exec` (the post-apply
+assertion block, `apps/web-platform/infra/server.tf`). Symptom in the Actions
+log: `Error: remote-exec provisioner error … error executing "/tmp/terraform_*.sh":
+Process exited with status 1`, with no further detail because terraform
+**suppresses inline remote-exec stdout**.
+
+**Read the failing assertion straight from the Actions log — no SSH (#5279).**
+Since #5279 every assertion in the block echoes a unique `ASSERT-FAILED: <name>`
+sentinel before `exit 1`, and the service enable/restart lines also dump the
+unit's `journalctl` tail. terraform surfaces the last output lines on error, so
+the sentinel is captured even though stdout is suppressed:
+
+```
+gh run view <run-id> --log | grep -E 'ASSERT-FAILED|cron-egress-nftables\] ERROR'
+```
+
+The sentinel names the culprit directly. Map it to the fix (a drift-guard in
+`cron-egress-firewall.test.sh` asserts every sentinel name appears in this
+table, so the mapping cannot silently desync from `server.tf`):
+
+| Sentinel | Meaning | Fix |
+|---|---|---|
+| `firewall-restart (loader die …)` / `firewall-enable` | the `restart` re-runs the Type=oneshot loader (`cron-egress-nftables.sh`) and it `die`d; the journalctl tail below it carries the reason (`enable` only creates the symlink) | follow the `[cron-egress-nftables] ERROR:` line — `invalid CIDR` → CIDR-file section above; `bridge interface docker0 not found` / `EnableIPv6` → host bridge state; `allowlist resolution failed` → DNS/resolver |
+| `docker-user-jump` / `default-drop` / `dns-exfil-drop` / `cidr-allowlist-rule` | an nft rule-comment grep missed the live render | re-point the grep at a render-stable token (the #5247 display-agnostic class); **never** weaken a containment invariant to green the apply |
+| `cidr-set-github` / `cidr-set-api-pool` | the interval CIDR set is missing the GitHub git blocks (`140.82` …) or the Azure `20.x`/`4.x` `/meta` api LB pool (incident 5516336, #5281) — often the set never reloaded (see `firewall-restart` / inert-fix #5285) | confirm the restart ran; regenerate `cron-egress-allowlist-cidr.txt` per the "GitHub LB pool / CIDR coverage gap" section above; both asserts are display-agnostic |
+| `bridge-ipv6` | the default docker bridge reports `EnableIPv6 != false` (real v6 side-channel) OR docker not queryable at apply | fix the bridge config — do not relax the check |
+| `allow-set-populated` / `units-active` / `host-egress` | the dynamic allow set is empty / a unit isn't active / host egress to GitHub is blocked | resolver/unit/host-firewall investigation per the named surface |
+| `egress-probe-negative` | a non-allowlisted host was REACHABLE from the container — the ruleset is **inert** | a real containment bug; fix the firewall, never the probe |
+| `egress-probe-positive` | an allowlisted host was unreachable from the container | an allowlist gap — add the host (allowlist-gap remediation above) |
+| `chmod-scripts` / `daemon-reload` / `resolve-timer-enable` / `inngest-8288-accept` | systemd/script plumbing — script not executable, unit file unparseable, timer failed to enable, or the host-gateway `:8288` accept rule is absent | read the shell error above the sentinel; these are early-setup failures, not containment gaps |
+
+The fix lands via the existing `apply-web-platform-infra.yml` on merge (the
+resource is tainted and re-fires; no manual apply). **Do NOT make the apply
+pass by making an assertion non-fatal or relaxing a containment invariant** — a
+green check over a broken firewall is worse than a red one at this threshold.
+
 ## Remediation (suspected exfil)
 
 Treat as a security incident (`/soleur:incident`). Do NOT widen the
@@ -73,8 +161,21 @@ to `TIER2_DEFERRED_CRONS` (`_cron-shared.ts`) pending forensics.
 - `op=enforcement_missing` event = the jump/drop rules were absent at a tick
   and the self-heal re-ran the loader — investigate what flushed nftables.
 
-## Last-resort diagnosis (only after the above)
+## Deeper diagnosis without a host shell (hr-no-ssh-fallback-in-runbooks)
 
-`ssh root@<host> 'journalctl -k | grep egress-'` and
-`nft list chain ip filter SOLEUR-EGRESS` show the live ruleset and full drop
-history beyond the 3-line Sentry sample.
+The 3-line Sentry `extra.sample` is one tick's window. To go deeper WITHOUT
+SSH:
+
+1. **Accumulate drop history from Sentry.** The resolver re-runs every minute
+   and ships a fresh `egress-blocked` / `egress-dns-exfil` event per tick — group
+   the issue's events over time to see the full `DST` distribution and hit
+   counts, rather than a single sample.
+2. **Re-verify the live ruleset via a re-apply, not SSH.** Re-run
+   `apply-web-platform-infra.yml` (push to `main` touching
+   `apps/web-platform/infra/**`, or `workflow_dispatch`). Its post-apply
+   remote-exec lists the `SOLEUR-EGRESS` chain + the `soleur_egress_allow_cidr`
+   set and runs a live positive+negative container probe — a passing apply IS
+   the proof the ruleset is correct on the host; a failing one names the gap.
+3. **Watch the self-heal signal.** An `op=enforcement_missing` event means the
+   resolver detected absent jump/drop rules and re-ran the loader — the live
+   ruleset state is observable from that event without logging in.

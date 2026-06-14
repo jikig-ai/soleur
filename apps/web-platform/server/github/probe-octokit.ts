@@ -24,6 +24,7 @@
 import { App } from "@octokit/app";
 import { createChildLogger } from "../logger";
 import { warnSilentFallback } from "@/server/observability";
+import { isRetryableGithubError } from "@/server/github-retry";
 import { normalizeAppPrivateKey, readAppId } from "./app-private-key";
 
 const log = createChildLogger("probe-octokit");
@@ -33,11 +34,15 @@ const PRIVATE_KEY_ENV = "GITHUB_APP_PRIVATE_KEY";
 
 // Mirrors the canonical backoff idiom in server/github-api.ts (MAX_RETRIES=2,
 // BASE_DELAY_MS=1_000 → 1s, 2s) and the parity fix in
-// server/github-app.ts:467-468,506-520 (PR 4565, #122537945). 401-only: a 401
-// on App-JWT installation discovery is the transient JWT-replication class; any
-// non-401 breaks immediately, preserving 404/403/5xx semantics. The sibling
-// hand-rolled path was hardened to this budget; this brings the @octokit/app
-// path to parity (PR #4498's single 1s retry was insufficient).
+// server/github-app.ts:467-468,506-520 (PR 4565, #122537945). Retries TWO
+// transient classes: (1) a 401 on App-JWT installation discovery is the
+// JWT-replication class; (2) a buried undici connect-timeout / ECONNRESET that
+// octokit.request() wraps in a RequestError (status 500, transient `.cause`
+// chain) — classified via `isRetryableGithubError` (#5230). Any other error
+// (404/403/genuine non-transient 5xx) breaks immediately, preserving the
+// existing 404/403/5xx no-retry semantics. The sibling hand-rolled path was
+// hardened to this budget; this brings the @octokit/app path to parity
+// (PR #4498's single 1s retry was insufficient).
 const PROBE_JWT_MAX_RETRIES = 2; // 3 total attempts
 const PROBE_JWT_BASE_DELAY_MS = 1_000; // 1s, 2s
 
@@ -148,14 +153,18 @@ export async function createProbeOctokit() {
       return await attempt();
     } catch (err) {
       const status = (err as { status?: number }).status;
-      // Non-401: not the transient JWT-replication class — capture + rethrow now.
-      if (status !== 401) captureAndRethrow(err, i + 1);
-      // Exhausted the 401 retry budget — capture + rethrow.
+      // Retry the transient JWT-replication 401 class AND any transient network
+      // cause octokit buried in the error chain (connect timeout / ECONNRESET).
+      // Anything else (404/403/non-transient 5xx) captures + rethrows now.
+      if (status !== 401 && !isRetryableGithubError(err)) {
+        captureAndRethrow(err, i + 1);
+      }
+      // Exhausted the retry budget — capture + rethrow.
       if (i >= PROBE_JWT_MAX_RETRIES) captureAndRethrow(err, i + 1);
       // Otherwise back off (1s, 2s) and re-attempt with a fresh App/JWT.
       log.warn(
         { attempt: i + 1, status },
-        "401 on App JWT installation discovery — retrying with backoff",
+        "transient failure on App JWT installation discovery (401 or network cause) — retrying with backoff",
       );
       await new Promise((r) =>
         setTimeout(r, PROBE_JWT_BASE_DELAY_MS * 2 ** i),

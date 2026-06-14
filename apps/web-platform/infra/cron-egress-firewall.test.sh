@@ -112,6 +112,15 @@ if echo "$SERVER_BLOCK" | grep -q 'egress-probe-positive'; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: post-apply positive container probe missing"
 fi
+# The service is Type=oneshot/RemainAfterExit=yes, so `enable --now` no-ops on an
+# already-active unit and the loader never re-reads a freshly-provisioned CIDR file
+# (the inert-fix bug behind incident 5516336). The provisioner MUST `restart` to
+# re-run the loader so file changes actually load into the live nft set.
+if echo "$SERVER_BLOCK" | grep -q 'systemctl restart cron-egress-firewall\.service'; then
+  PASS=$((PASS + 1)); echo "  PASS: provisioner restarts the firewall service (reloads new CIDR; not a no-op enable --now)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: provisioner must 'systemctl restart cron-egress-firewall.service' — enable --now no-ops on the active oneshot and a new CIDR file never loads"
+fi
 
 echo "-- apply workflow SSH -target --"
 assert_grep "workflow -targets cron_egress_firewall" 'target=terraform_data\.cron_egress_firewall' "$WORKFLOW"
@@ -142,6 +151,116 @@ assert_grep "CIDR set uses flags interval" 'flags interval' "$LOADER"
 assert_grep "CIDR allowlist accept rule present" 'ip daddr @soleur_egress_allow_cidr accept' "$LOADER"
 assert_grep "loader reads the CIDR allowlist file" 'cron-egress-allowlist-cidr.txt' "$LOADER"
 assert_grep "CIDR file carries GitHub git /20" '140.82.112.0/20' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+# api.github.com round-robins DNS across BOTH the 4 big git/pages blocks AND ~48
+# Azure 20.x/4.x /32 hosts (api.github.com/meta `.git`+`.api`). The 4-block-only
+# file left those /32s uncovered → a fire landing on one was default-dropped →
+# missed cron check-in (incident 5516336, scheduled-ruleset-bypass-audit,
+# 2026-06-14). The CIDR file MUST carry the Azure /32s for api.github.com.
+assert_grep "CIDR file carries >=1 Azure 20.x /32 (api.github.com LB pool)" '^20[.][0-9]+[.][0-9]+[.][0-9]+/32$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+assert_grep "CIDR file carries >=1 Azure 4.x /32 (api.github.com LB pool)" '^4[.][0-9]+[.][0-9]+[.][0-9]+/32$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+# Exact-count guard (mirrors the HOST allowlist count guard below): every GitHub
+# /meta `.git`+`.api` IPv4 range is exactly one line. A partial revert to the 4
+# big blocks fails CI. When GitHub rotates the /meta Azure /32s, refresh from
+# `curl -s https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u`
+# and bump this number deliberately with the new snapshot date.
+CIDR_COUNT="$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt")"
+if [[ "$CIDR_COUNT" -eq 52 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: CIDR allowlist range count is exactly 52"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: CIDR allowlist range count is $CIDR_COUNT (expected 52 — refresh from api.github.com/meta .git+.api and update this guard with the snapshot date)"
+fi
+
+echo "-- CIDR validation (nft-injection hardening, #5242) --"
+# The CIDR file is interpolated VERBATIM into the `add element ... { $CIDR_ELEMENTS }`
+# nft heredoc. An unvalidated line containing `}`, an nft keyword, whitespace, or
+# command-substitution is injected into the ruleset (e.g. `0.0.0.0/0` allow-all, or
+# `}; add rule ... accept`). The loader MUST validate every non-comment line against
+# a strict IPv4-CIDR shape and reject the WHOLE file (die/exit 1) on any mismatch —
+# fail-loud (operator paged via OnFailure=) over half-installing a firewall.
+#
+# Source-shape drift guards (RED→GREEN with the loader edit):
+assert_grep "validator function defined" 'is_valid_ipv4_cidr\(\)' "$LOADER"
+assert_grep "reject-whole-file on invalid line (die, not skip)" '\|\| die "invalid CIDR in' "$LOADER"
+assert_not_grep "old unvalidated paste -sd, build removed" 'paste -sd,' "$LOADER"
+# Anchor on the executable arithmetic form (`o1 <= 255`, present ONLY on the
+# `(( ... ))` code line), NOT the bare `<= 255` which also appears in the loader's
+# explanatory comment — a bare-pattern assert false-passes if the range-check code is
+# deleted but the comment kept (comment-prose false-match class, 2026-06-03 learning).
+assert_grep "octet/prefix range-check (defense in depth)" 'o1 <= 255' "$LOADER"
+
+# Cross-file predicate parity: the test's behavioral copy (below) must carry the EXACT
+# predicate the loader ships, else the copy drifts silently (same convention as
+# SENTRY_SLUG/drop-prefix parity above). grep -F = fixed string (literal). Pin BOTH
+# halves of the predicate — the regex shape AND the octet/prefix range-check arithmetic
+# — so a `<= 255`→`<= 254` (or `<= 32`→`<= 128`) drift in either file fails the suite.
+CIDR_RE='([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})'
+CIDR_RANGE='o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32'
+if grep -qF -- "$CIDR_RE" "$LOADER" && grep -qF -- "$CIDR_RE" "${BASH_SOURCE[0]}"; then
+  PASS=$((PASS + 1)); echo "  PASS: CIDR regex literal pinned identically in loader and test"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: CIDR regex literal drift between loader and test (loader must carry: $CIDR_RE)"
+fi
+if grep -qF -- "$CIDR_RANGE" "$LOADER" && grep -qF -- "$CIDR_RANGE" "${BASH_SOURCE[0]}"; then
+  PASS=$((PASS + 1)); echo "  PASS: CIDR range-check arithmetic pinned identically in loader and test"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: CIDR range-check drift between loader and test (loader must carry: $CIDR_RANGE)"
+fi
+
+# Behavioral exercise of the validator. `nft` is absent on CI runners and the full
+# loader aborts at `command -v nft` before reaching the CIDR parse, so the script
+# cannot run end-to-end here. Pin a COPY of the exact predicate (guarded byte-for-byte
+# by the literal-parity assert above) and exercise it against crafted lines.
+test_is_valid_ipv4_cidr() {
+  local cidr="$1" prefix o1 o2 o3 o4
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
+  o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
+  (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  return 0
+}
+assert_cidr_accept() {
+  if test_is_valid_ipv4_cidr "$1"; then
+    PASS=$((PASS + 1)); echo "  PASS: accepts $2"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: should accept $2 ('$1')"
+  fi
+}
+assert_cidr_reject() {
+  if test_is_valid_ipv4_cidr "$1"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: should REJECT $2 ('$1')"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: rejects $2"
+  fi
+}
+# AC2 — the 4 real allowlist ranges accept:
+assert_cidr_accept "140.82.112.0/20" "real GitHub git /20"
+assert_cidr_accept "185.199.108.0/22" "real GitHub pages /22"
+assert_cidr_accept "192.30.252.0/22" "real GitHub /22"
+assert_cidr_accept "143.55.64.0/20"  "real GitHub /20"
+# Representative api.github.com Azure LB /32 (api.github.com/meta `.api`):
+assert_cidr_accept "20.201.28.151/32" "real GitHub api Azure /32"
+assert_cidr_accept "4.208.26.197/32"  "real GitHub api Azure /32"
+# Structurally valid (allow-all breadth is a content concern, out of scope — see plan Non-Goals):
+assert_cidr_accept "0.0.0.0/0" "structurally valid CIDR"
+# AC1 — injection / command-substitution / whitespace shapes reject:
+assert_cidr_reject "140.82.112.0/20}; add rule ip filter SOLEUR-EGRESS accept" "nft-injection (} + add rule)"
+assert_cidr_reject "; nft flush ruleset" "nft keyword line"
+assert_cidr_reject '$(curl evil)' "command-substitution shape"
+assert_cidr_reject " 140.82.112.0/20" "leading whitespace"
+assert_cidr_reject "140.82.112.0/20 " "trailing whitespace"
+assert_cidr_reject $'1.1.1.0/24\nevil' "embedded newline"
+# AC1 (malformed shape) reject:
+assert_cidr_reject "0.0.0.0" "no prefix"
+assert_cidr_reject "140.82.112/20" "3 octets"
+assert_cidr_reject "garbage" "non-CIDR text"
+# AC4 — octet/prefix range (the issue's bare regex would WRONGLY accept these):
+assert_cidr_reject "999.999.999.999/99" "octets and prefix out of range"
+assert_cidr_reject "256.1.1.1/8" "first octet > 255"
+assert_cidr_reject "1.1.1.1/33" "prefix > 32"
+
+# AC3 — comment/blank lines are skipped by the loop guard, never validated:
+COMMENT_SKIP_RE='^[[:space:]]*(#|$)'
+assert_grep "loop skips comment/blank lines before validation" "$COMMENT_SKIP_RE" "$LOADER"
 
 echo "-- resolver safety invariants --"
 # Anchored on the executable form (`flush set ip filter …`), not the bare
@@ -238,6 +357,97 @@ assert_grep "cloud-init writes the allowlist" '/etc/soleur/cron-egress-allowlist
 assert_grep "cloud-init enables the firewall unit" 'systemctl enable --now cron-egress-firewall\.service' "$CLOUD_INIT"
 assert_grep "cloud-init enables the resolve timer" 'systemctl enable --now cron-egress-resolve\.timer' "$CLOUD_INIT"
 assert_grep "cloud-init installs nftables" '^ *- nftables$' "$CLOUD_INIT"
+
+echo "-- Phase 2.1: assertion-block self-reporting sentinels (#5279) --"
+# The post-apply assertion block (server.tf, the 2nd remote-exec) runs under
+# `set -e` with terraform's inline stdout SUPPRESSED — so a bare failing
+# assertion exits 1 with NO indication of WHICH check failed (the root reason
+# #5247 took 3 PRs to chase a one-line format mismatch nobody could see). Every
+# assertion MUST self-report via a unique `ASSERT-FAILED: <name>` sentinel
+# echoed BEFORE `exit 1`, so terraform's captured-on-error output names the
+# culprit even with stdout suppressed (no SSH; hr-no-ssh-fallback-in-runbooks).
+# Block = from the `chmod +x` line through `echo host-egress-ok`.
+ASSERT_BLOCK="$(awk '
+  /chmod \+x \/usr\/local\/bin\/cron-egress-nftables\.sh/ { grab=1 }
+  grab { print }
+  /echo host-egress-ok/ { grab=0 }
+' "$SERVER_TF")"
+
+SENTINEL_COUNT="$(echo "$ASSERT_BLOCK" | grep -cE 'ASSERT-FAILED:')"
+if [[ "$SENTINEL_COUNT" -ge 15 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: assertion block carries $SENTINEL_COUNT ASSERT-FAILED sentinels (>=15)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: only $SENTINEL_COUNT ASSERT-FAILED sentinels in the assertion block (expected >=15 — every assertion must self-report)"
+fi
+
+# No bare command may remain: EVERY executable line in the block (chmod, every
+# systemctl verb, nft-list, docker-network, leading-`curl`) must carry a
+# sentinel guard. The command-detection regex covers the setup lines too
+# (chmod / daemon-reload / enable / restart) — without that, those sentinels
+# could be silently stripped while the floor's slack masked the count drop
+# (PR #5280 review P2). The `echo host-egress-ok` success marker and the
+# `if docker ps … fi` probe line (which carries its own two sentinels) are
+# intentionally not command-shaped here.
+UNGUARDED="$(echo "$ASSERT_BLOCK" | grep -nE '(chmod \+x|systemctl (daemon-reload|enable|restart|is-active)|nft list|docker network inspect|^[[:space:]]*"curl )' | grep -v 'ASSERT-FAILED' || true)"
+if [[ -z "$UNGUARDED" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: no bare (sentinel-less) command remains in the block"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: unguarded command(s) without ASSERT-FAILED sentinel:"; echo "$UNGUARDED"
+fi
+
+# The service-RESTART sentinel (the LEAD failure 4c — `restart` re-runs the
+# Type=oneshot loader and propagates its `die`) must ALSO surface the loader's
+# journalctl tail, so the next apply names the loader `die` directly in the
+# Actions log (no SSH). `enable` (symlink only) does not run the loader.
+if echo "$ASSERT_BLOCK" | grep -qE 'ASSERT-FAILED: firewall-restart' \
+  && echo "$ASSERT_BLOCK" | grep -q 'journalctl -u cron-egress-firewall.service'; then
+  PASS=$((PASS + 1)); echo "  PASS: firewall-restart sentinel surfaces journalctl tail"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: firewall-restart sentinel must surface 'journalctl -u cron-egress-firewall.service'"
+fi
+
+# Protected-invariant sentinels (plan AC3/AC4 set) — each load-bearing
+# containment check names itself distinctly so the failing one is unambiguous.
+for sentinel in docker-user-jump default-drop bridge-ipv6 egress-probe-negative egress-probe-positive; do
+  if echo "$ASSERT_BLOCK" | grep -qE "ASSERT-FAILED: $sentinel"; then
+    PASS=$((PASS + 1)); echo "  PASS: sentinel present for $sentinel"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: missing ASSERT-FAILED sentinel for $sentinel"
+  fi
+done
+
+# Runbook parity (PR #5280 review P2): every sentinel NAME in the block must be
+# documented in the cron-egress-blocked runbook, so a rename in server.tf that
+# leaves the runbook stale fails the build instead of silently desyncing the
+# operator's no-SSH diagnosis table. Names are extracted from the block; the
+# trailing parenthetical detail (e.g. "firewall-restart (loader die …)") is
+# stripped so only the bare name is matched.
+RUNBOOK="$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
+SENTINEL_NAMES="$(echo "$ASSERT_BLOCK" | grep -oE "ASSERT-FAILED: [a-z0-9-]+" | sed -E 's/ASSERT-FAILED: //' | sort -u)"
+if [[ -f "$RUNBOOK" ]]; then
+  MISSING_RUNBOOK=""
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    grep -qF -- "$name" "$RUNBOOK" || MISSING_RUNBOOK+="$name "
+  done <<< "$SENTINEL_NAMES"
+  if [[ -z "$MISSING_RUNBOOK" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: every sentinel name is documented in cron-egress-blocked.md"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: sentinel name(s) absent from cron-egress-blocked.md (runbook drift): $MISSING_RUNBOOK"
+  fi
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: runbook not found at $RUNBOOK"
+fi
+
+# Behavioral non-vacuity: the sentinel pattern under `set -e` must emit the
+# sentinel AND halt (not fall through). Proves the guard actually fires rather
+# than being decorative.
+SENTINEL_OUT="$(bash -c 'set -e; false || { echo "ASSERT-FAILED: probe"; exit 1; }; echo SHOULD-NOT-REACH' 2>&1 || true)"
+if echo "$SENTINEL_OUT" | grep -qF 'ASSERT-FAILED: probe' && ! echo "$SENTINEL_OUT" | grep -qF 'SHOULD-NOT-REACH'; then
+  PASS=$((PASS + 1)); echo "  PASS: sentinel pattern emits name and halts under set -e (non-vacuous)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentinel pattern did not emit+halt as expected (got: $SENTINEL_OUT)"
+fi
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
