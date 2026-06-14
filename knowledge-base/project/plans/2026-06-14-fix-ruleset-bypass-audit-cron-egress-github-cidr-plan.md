@@ -266,8 +266,8 @@ logs:
   where: "Sentry (egress-blocked events, handler reportSilentFallback); kernel journald egress-blocked (host-only, NOT shipped to Better Stack — surfaced via Sentry event only)"
   retention: "Sentry default (90d)"
 discoverability_test:
-  command: "comm -23 <(curl -s --max-time 10 https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(\":\")|not)' | sort -u) <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)"
-  expected_output: "(empty — every GitHub /meta .git+.api IPv4 range is an exact line in the committed CIDR file)"
+  command: "curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://api.github.com/meta"
+  expected_output: "200 — the GitHub /meta source the CIDR allowlist is derived from is reachable without SSH. The FULL coverage set-difference (every /meta .git+.api range is an exact line in the committed file) is the comm -23 command documented in knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md plus the firewall drift-guard exact-count guard (=52)."
 ```
 
 ## Acceptance Criteria
