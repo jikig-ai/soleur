@@ -10,6 +10,21 @@ requires_cpo_signoff: false
 
 # fix(seo): X-Robots-Tag noindex on app.soleur.ai + allow Googlebot crawl 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-14
+**Sections enhanced:** mechanism decision, AC3 (test parity), Research Insights
+**Passes run:** verify-the-negative (Explore, sonnet), architecture-strategist review, enforcement gates 4.6/4.7/4.8/4.9
+
+### Key Improvements
+1. **Verified all three load-bearing claims** against code + Next.js types: (A) the host-only CF expression `(http.host eq "app.soleur.ai")` covers ALL paths incl. token routes (mirrors deploy rule, no path predicate); (B) `allow: "/"` is a valid key on `MetadataRoute.Robots.Rule` (`node_modules/next/dist/lib/metadata/types/metadata-interface.d.ts:542`); (C) the middleware-307-shadowing precedent is real (`knowledge-base/project/learnings/2026-05-29-nextjs-metadata-routes-need-public-paths-allowlist.md`) and `cloudflare_record.app` is `proxied = true` (`dns.tf:5`).
+2. **Tightened AC3** to require the EXACT-value pin (`value\s*=\s*"noindex, nofollow"`), not a loose substring `noindex` — closes the parity gap with the deploy/api tests so a future drop of `nofollow` fails CI for the app host too (architecture P2).
+3. **Architecture review: no P0/P1.** Mechanism choice (edge over origin) concurred; the new rule is mutually exclusive with the api/deploy/RSS rules (disjoint host predicates, no ordering interaction); X-Robots-Tag has zero browser/client side-effect; "strictly safer than blanket Disallow" framing confirmed.
+
+### New Considerations Discovered
+- The token routes (`/shared/[token]`, `/invite/[token]`) are in `PUBLIC_PATHS` and therefore genuinely crawlable — the host robots.txt block NEVER protected them from indexing-if-crawled; only the per-page `<meta noindex>` did. The new edge header makes them noindexed by TWO independent layers. This strengthens (not weakens) the "strictly safer" argument.
+- `/` is NOT in `PUBLIC_PATHS` → the bare-URL response GSC crawled is the middleware 307→/login (`middleware.ts:289-291`), the exact response origin `headers()` would leave uncertain — reconfirming the edge rule as load-bearing.
+
 ## Summary
 
 Google Search Console reports **"Indexed, though blocked by robots.txt"** for `https://app.soleur.ai/` (1 affected page, first detected 2026-06-06, non-critical). `app.soleur.ai` serves `robots.txt` with a blanket `Disallow: /` (via `apps/web-platform/app/robots.ts`). robots.txt blocks *crawling* but NOT *indexing* — Google indexed the bare URL anyway, and the crawl-block now **prevents Google from ever seeing a `noindex` directive**, so the URL cannot be removed from the index.
@@ -29,7 +44,7 @@ The task ARGUMENTS suggested adding the header via `next.config.ts headers()` / 
 | Covers the 307→/login redirect | ⚠️ Unreliable — Next.js `headers()` does NOT reliably apply to middleware-generated `NextResponse.redirect()`; precedent: `/robots.txt` was shadowed by the same middleware 307 until added to `PUBLIC_PATHS` | ✅ Fires at the edge on **every** response (200, 307, 403, error) regardless of Next.js route execution |
 | Repo precedent | none for app host | ✅ `deploy.soleur.ai` + `api.soleur.ai` rules already live in `seo_response_headers` (PR #3296/#3297, guarded by `test/seo-rulesets-noindex.test.ts` #4575) |
 | Operator steps | none (code merge) | ✅ none — `cloudflare_ruleset.seo_response_headers` is already in the `-target=` allow-list of `apply-web-platform-infra.yml` (line ~278), so it auto-applies on merge |
-| `app.soleur.ai` proxied? | n/a | ✅ `cloudflare_record.app` has `proxied = true` (`dns.tf:6`) → edge rule WILL fire |
+| `app.soleur.ai` proxied? | n/a | ✅ `cloudflare_record.app` has `proxied = true` (`dns.tf:5`) → edge rule WILL fire |
 
 The origin-code path would *also* work for 200 responses, but would leave the 307→/login (the exact response GSC crawled) uncertain, and would not match the established pattern. The edge rule covers the bare-URL 307 AND every other response, including the token routes (`/invite/*`, `/shared/[token]`) even if crawled.
 
@@ -57,6 +72,7 @@ All referenced premises checked and hold: the GSC root cause (`robots.ts` blanke
 - **If this lands broken, the user experiences:** nothing user-visible — `app.soleur.ai` continues to function identically for logged-in users; only crawler-facing headers + `robots.txt` change. Worst realistic failure: the GSC report stays open one more crawl cycle (no regression vs. today).
 - **If this leaks, the user's data is exposed via:** no new exposure vector. The change *reduces* exposure — a global `noindex` header guarantees token routes (`/invite/*`, `/shared/[token]`) are never indexed even if crawled, which the prior robots.txt block did not. No data is added to any response; `X-Robots-Tag` is a directive header carrying no PII.
 - **Brand-survival threshold:** `none` — crawler-indexing hygiene on a non-public product host; no single-user data/money/workflow path is touched. Reason for `none` on an SEO/edge surface: the change is a noindex directive + crawl-allow on an already-auth-gated host; no sensitive code path (schema, auth flow, API route, migration) is modified.
+- `threshold: none, reason: the only sensitive-path match (apps/web-platform/infra/seo-rulesets.tf) adds one crawler-directive Transform Rule; it touches no auth/secret/data path, mints no credential, and changes no user-reachable behavior.` (scope-out for the Phase 4.6 / preflight Check 6 sensitive-path gate — `apps/<app>/infra/` matches the canonical regex)
 
 ## Files to Edit
 
@@ -113,7 +129,7 @@ None.
 - Change `robots.ts` to `allow: "/"`; rewrite the comment.
 
 ### Phase 2 — CF edge noindex rule (test-first)
-- Add the `app.soleur.ai` assertions to `test/seo-rulesets-noindex.test.ts` (RED — fails because the rule doesn't exist yet).
+- Add the `app.soleur.ai` assertions to `test/seo-rulesets-noindex.test.ts` (RED — fails because the rule doesn't exist yet). Pin the EXACT value via `expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/)` (mirror lines 139-140), NOT a substring `noindex`.
 - Add the `app.soleur.ai` `rules { }` block to `seo_response_headers` in `seo-rulesets.tf`; update the resource comment (GREEN).
 - Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-rulesets-noindex.test.ts` — all rules (deploy, api, app, RSS) pass.
 
@@ -131,7 +147,7 @@ None.
 ### Pre-merge (PR)
 - [ ] AC1 — `apps/web-platform/app/robots.ts` returns `allow: "/"` (or an allow rule covering `/` and `/login`), NOT `disallow: "/"`; the code comment explains the noindex-header-is-load-bearing strategy and references the GSC issue. Verify: `grep -n 'allow' apps/web-platform/app/robots.ts` returns the allow rule and `grep -c 'disallow: "/"' apps/web-platform/app/robots.ts` returns `0`.
 - [ ] AC2 — `apps/web-platform/infra/seo-rulesets.tf` `seo_response_headers` contains a `rules` block with `expression = "(http.host eq \"app.soleur.ai\")"` and `value = "noindex, nofollow"`. Verify: `grep -n 'app.soleur.ai' apps/web-platform/infra/seo-rulesets.tf` shows the rule expression (not only the prose comment).
-- [ ] AC3 — `test/seo-rulesets-noindex.test.ts` asserts the `app.soleur.ai` rule (present, exact `noindex, nofollow`, `enabled = true`); the suite passes. Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-rulesets-noindex.test.ts` exits 0.
+- [ ] AC3 — `test/seo-rulesets-noindex.test.ts` asserts the `app.soleur.ai` rule with the SAME parity the deploy/api rules have: (a) rule present (`action`, `"rewrite"`, `X-Robots-Tag`), (b) value pinned to the EXACT string via `expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/)` — NOT a loose substring `noindex` (a future weakening that drops `nofollow` must fail CI, mirroring the deploy/api tests at `test/seo-rulesets-noindex.test.ts:139-140`), (c) `enabled = true`. The suite passes. Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-rulesets-noindex.test.ts` exits 0.
 - [ ] AC4 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
 - [ ] AC5 — PR body uses `Ref #<GSC-issue>` (NOT `Closes`) so the issue closes only after the post-merge live verification confirms the header; the PR body contains the "Why this is strictly SAFER" paragraph.
 
@@ -199,6 +215,25 @@ None. (`gh issue list --label code-review --state open` greps for `robots.ts`, `
 
 - `test/seo-rulesets-noindex.test.ts`: app.soleur.ai rule present + exact `noindex, nofollow` value + `enabled = true` (mirrors deploy/api assertions).
 - Live post-deploy (AC7): `curl -sI https://app.soleur.ai/` → `x-robots-tag: noindex, nofollow`; `curl -s https://app.soleur.ai/robots.txt` → no blanket `Disallow: /`.
+
+## Research Insights
+
+**Best Practices (Google de-indexing):**
+- Google's documented removal of an indexed URL requires the page to be BOTH crawlable AND carry a `noindex` directive (meta tag or `X-Robots-Tag` header). robots.txt `Disallow` blocks crawling but records URL existence and *prevents* the `noindex` from ever being seen — the exact "Indexed, though blocked by robots.txt" trap. The fix removes the block (crawl-allow) and adds the header.
+- `X-Robots-Tag: noindex, nofollow` is the authoritative, header-level indexing control; it is crawler-only and has no browser/client/CORS/cookie side-effect (architecture review confirmed). Safe to apply to ALL methods on the host.
+
+**Implementation Details (validated):**
+- Next.js `MetadataRoute.Robots.Rule` accepts `allow?: string | string[]` (`node_modules/next/dist/lib/metadata/types/metadata-interface.d.ts:542`); `allow: "/"` emits `Allow: /`. Either `allow: "/"` or dropping `disallow` resolves the crawl-block; explicit `allow: "/"` is clearer.
+- CF Transform Rule shape mirrors the live `deploy.soleur.ai` rule (`seo-rulesets.tf:369-370`): host-only `expression = "(http.host eq \"app.soleur.ai\")"`, `headers { name = "X-Robots-Tag"; operation = "set"; value = "noindex, nofollow" }`. Provider `cloudflare/cloudflare ~> 4.0` (`main.tf:24`) — schema unchanged.
+
+**Edge Cases / Failure modes:**
+- If `app.soleur.ai` is ever flipped to DNS-only (grey-cloud), the edge rule silently stops firing (the `api.soleur.ai` dormant-no-op precedent, #3379). Guard: `dns.tf` `cloudflare_record.app proxied = true` + `scheduled-terraform-drift.yml` + the AC7 post-deploy curl.
+- The `extractRuleBlockForHost` test helper matches the host literal as `http.host eq \"<host>\"` — the new rule's expression must use exactly that escaped-quote shape or the helper won't bind it.
+
+**References:**
+- Google Search Central — "Indexed, though blocked by robots.txt" report + the crawlable+noindex removal method.
+- Repo precedent: PR #3296/#3297 (`seo_response_headers` X-Robots-Tag mechanism), #4575 (CI guard `test/seo-rulesets-noindex.test.ts`), #4577 (apex reconcile), #3379 (api dormant-no-op tracker).
+- Learning: `knowledge-base/project/learnings/2026-06-12-gsc-duplicate-canonical-on-www-variant-is-benign-consolidation.md` (verify-live-before-fixing) and `2026-05-29-nextjs-metadata-routes-need-public-paths-allowlist.md` (middleware-307 shadowing precedent).
 
 ## Sharp Edges
 

@@ -8,7 +8,7 @@ Lane: cross-domain (spec lacks valid `lane:` — defaulted to cross-domain, fail
 - [ ] 1.2 Rewrite the code comment: noindex header is now the load-bearing de-index mechanism; robots.txt no longer blanket-disallows (that block prevented Google from seeing the noindex); token routes protected by the global noindex header. Reference the GSC issue.
 
 ## Phase 2 — Cloudflare edge noindex rule (test-first)
-- [ ] 2.1 Extend `apps/web-platform/test/seo-rulesets-noindex.test.ts`: add `app.soleur.ai` assertions (rule present + exact `noindex, nofollow` + `enabled = true`) using `extractRuleBlockForHost(body, "app.soleur.ai")` (RED).
+- [ ] 2.1 Extend `apps/web-platform/test/seo-rulesets-noindex.test.ts`: add `app.soleur.ai` assertions using `extractRuleBlockForHost(body, "app.soleur.ai")` (RED) — rule present (`action`/`"rewrite"`/`X-Robots-Tag`) + EXACT value `expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/)` (mirror deploy/api at lines 139-140, NOT substring `noindex`) + `enabled = true`.
 - [ ] 2.2 Add the `app.soleur.ai` `rules { }` block to `cloudflare_ruleset.seo_response_headers` in `apps/web-platform/infra/seo-rulesets.tf` (all-methods scope, mirror `deploy.soleur.ai`).
 - [ ] 2.3 Update the `seo_response_headers` block comment: add app.soleur.ai to the rule list + GSC "Indexed, though blocked by robots.txt" rationale.
 
