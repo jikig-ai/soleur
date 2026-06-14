@@ -10,6 +10,21 @@ migration: 103
 
 # fix: Supabase prod Disk-IO depletion — shorten processed_github_events retention 90d → 7d
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-14
+**Agents:** repo-research-analyst, learnings-researcher, verify-the-negative pass, data-integrity-guardian, user-impact-reviewer (threshold-mandated)
+
+### Key improvements from deepen-plan
+1. **Migration runs as one transaction.** `run-migrations.sh:343` invokes `psql --single-transaction` per file — so the cron re-schedule + the ~91k-row one-time DELETE commit/rollback atomically. This is the real atomicity guarantee (the `EXCEPTION WHEN duplicate_object` is belt-and-suspenders). Re-running 103 after a partial failure is safe by file-level transaction, not just by idempotent guard.
+2. **Add a `COMMENT ON TABLE` correction in 103** — the existing `052_multi_source_dedup.sql:145-146` comment claims retention is *"Postgres autovacuum + 30-day partition rotation (natural cleanup; no TTL daemon)"* — factually wrong (the table is NOT partitioned; 094 added a pg_cron sweep). This stale comment is what misled 094 into copying the 90-day window. Correct it so the next retention change doesn't re-derive the wrong window.
+3. **`.down.sql` re-arms the bloat** — restoring the 90-day schedule re-creates issue #5225. Down is for migration-framework reversibility only; it must NEVER be applied to prod as an incident rollback. Header warning added to the spec.
+4. **GHES scope-out** (user-impact-reviewer FINDING 2) — 7d clears github.com's 3-day ceiling with >2× margin, but would *tie* a GitHub Enterprise Server 7-day horizon (zero margin). Verified: Soleur has NO GHES/enterprise base-URL code path (`grep` of webhook route + lib/github + server/github returns empty). Scoped out explicitly so a future GHES onboarding doesn't inherit a zero-margin window unflagged.
+5. **Monitor test edit dropped from scope** — `cron-supabase-disk-io.test.ts` asserts on `/processed_github_events/` regex, NOT the literal "retention sweep may have stopped" string. Widening the alert message breaks no test (the table name stays interpolated in the reason). Removed from Files to Edit.
+
+### New safety margin discovered
+`releaseDedupRow` (`route.ts:175-189`) DELETEs the dedup row on a 5xx and the GitHub redelivery re-INSERTs with a fresh `received_at = now()`. So a row's `received_at` always reflects the most recent claim — the 7-day purge can NEVER delete a row inside an active redelivery cycle. This is stronger than the original framing.
+
 🐛 **Recurrence of the 2026-06-02 Disk-IO fix.** Issue **#5225** (`[disk-io] Supabase Disk-IO pressure detected`, p1-high, action-required, infra-drift) is OPEN; the vendor warning was re-sent 2026-06-14. The 2026-06-02 remediation (migration 094 retention sweep + migration 095 monitor) is in place and the monitor fired *correctly* — but the retention sweep cannot do its job because its window is set to a horizon the table never reaches.
 
 ## Overview
@@ -51,7 +66,9 @@ Checked against live state, origin/main, and GitHub's documented platform limits
 
 **If this lands broken, the user experiences:** prod Supabase Disk-IO budget continues depleting → degraded/failed DB IO on the single prod project that backs **every authenticated session** (login, chat, KB, billing reads). A fully-depleted budget throttles all writes.
 
-**If the window is set too short (< GitHub's 3-day replay horizon), the user's workflow is exposed via:** a GitHub webhook redelivered after the dedup row was purged would be **double-processed** — duplicate Inngest dispatch → duplicate agent runs / duplicate side-effects on the founder's repo. The 24h Inngest `event.id` layer mitigates the first 24h but not days 1–3. **The 7-day window is the chosen value precisely because it clears the 3-day ceiling with margin.** This is the load-bearing lever — the `user-impact-reviewer` agent must confirm the window never drops below 3 days.
+**If the window is set too short (< GitHub's 3-day replay horizon), the user's workflow is exposed via:** a GitHub webhook redelivered after the dedup row was purged would be **double-processed** — duplicate Inngest dispatch → duplicate agent runs / duplicate side-effects on the founder's repo. The 24h Inngest `event.id` layer mitigates the first 24h but not days 1–3. **The 7-day window is the chosen value precisely because it clears the 3-day ceiling with margin.** This is the load-bearing lever — the `user-impact-reviewer` agent must confirm the window never drops below 3 days. Additional margin (verified, not assumed): `releaseDedupRow` (`route.ts:175-189`) refreshes `received_at = now()` on every re-claim, so the 7-day purge can never delete a row inside an active redelivery cycle.
+
+**GHES scope-out (verified):** The 3-day ceiling is the *github.com* webhook log-retention limit. GitHub Enterprise Server has a 7-day horizon, which a 7-day window would *tie* (zero margin). Soleur is a **github.com** GitHub App only — there is NO GHES/enterprise base-URL code path (`grep -rniE "enterprise|baseUrl" apps/web-platform/app/api/webhooks/github/ lib/github* server/github*` returns empty). So the operative bound is github.com's 3 days, not GHES's 7. A future GHES onboarding would need to revisit this window (it is NOT safe at zero margin for GHES).
 
 **Brand-survival threshold:** `single-user incident` (prod Supabase is the single shared substrate; one depletion or one double-processing event is a brand-survival event). → `requires_cpo_signoff: true`. CPO sign-off required at plan time; `user-impact-reviewer` runs at review-time (review/SKILL.md conditional-agent block).
 
@@ -59,18 +76,19 @@ Checked against live state, origin/main, and GitHub's documented platform limits
 
 - `apps/web-platform/supabase/migrations/103_github_events_retention_7day.sql`
   - Idempotent `DO $cron_block$` re-schedule of `processed_github_events_retention` → `'0 4 * * *'`, `$$DELETE FROM public.processed_github_events WHERE received_at < now() - interval '7 days'$$`. Mirror 094 dollar-quoting exactly (`$cron_block$` outer, `$$` inner; `EXCEPTION WHEN duplicate_object THEN NULL`).
-  - One-time `DELETE FROM public.processed_github_events WHERE received_at < now() - interval '7 days';` (after the cron re-schedule, same file). Header comment cites the 3-day GitHub horizon + 24h Inngest layer + this plan path.
+  - One-time `DELETE FROM public.processed_github_events WHERE received_at < now() - interval '7 days';` (after the cron re-schedule, same file). Header comment cites the 3-day GitHub horizon + 24h Inngest layer + this plan path. NOTE: the runner wraps each file in `--single-transaction` (`run-migrations.sh:343`), so the re-schedule + DELETE are atomic.
+  - **`COMMENT ON TABLE public.processed_github_events IS …`** — correct the stale `052:145-146` claim (*"Postgres autovacuum + 30-day partition rotation"* — never existed) to state the actual mechanism: daily pg_cron `processed_github_events_retention` 7-day sweep (094 re-scoped by 103); 3-day github.com redelivery horizon; service-role-only. This prevents the next retention change from re-deriving the wrong window.
 - `apps/web-platform/supabase/migrations/103_github_events_retention_7day.down.sql`
   - Restore the 094 90-day schedule (same idempotent shape, `interval '90 days'`). Down does NOT restore purged rows (a retention sweep is lossy by design — mirror 094.down's note).
+  - **Header warning:** down is for migration-framework reversibility ONLY. It re-arms the 90-day pathology (table re-bloats → Disk-IO depletion → recreates issue #5225). NEVER apply down to prod as an incident rollback.
 - `apps/web-platform/test/supabase-migrations/103-github-events-retention-7day.test.ts`
-  - Mirror `094-dedup-retention.test.ts` (stripComments + regex). Assert: (1) `cron.unschedule('processed_github_events_retention')` guard present; (2) `cron.schedule('processed_github_events_retention', '0 4 * * *', …)`; (3) the scheduled DELETE uses `received_at` + `interval '7 days'` (NOT 90); (4) a one-time top-level `DELETE FROM public.processed_github_events WHERE received_at < … interval '7 days'` present; (5) does NOT reference `created_at`; (6) down restores `interval '90 days'`.
+  - Mirror `094-dedup-retention.test.ts` (stripComments + regex). Assert: (1) `cron.unschedule('processed_github_events_retention')` guard present; (2) `cron.schedule('processed_github_events_retention', '0 4 * * *', …)`; (3) the scheduled DELETE uses `received_at` + `interval '7 days'` (NOT 90); (4) a one-time top-level `DELETE FROM public.processed_github_events WHERE received_at < … interval '7 days'` present; (5) does NOT reference `created_at`; (6) down restores `interval '90 days'`; (7) the up migration contains a `COMMENT ON TABLE public.processed_github_events` that does NOT mention "partition rotation" (asserts the stale-comment correction landed).
 
 ## Files to Edit
 
 - `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts`
   - Widen the dedup-over-ceiling reason string (currently `… (retention sweep may have stopped — check cron.job)`) to name both modes, e.g. `… (retention sweep stopped OR its window exceeds the table's replay horizon — check cron.job AND the interval)`. Pure string change; no threshold change.
-- `apps/web-platform/test/server/inngest/cron-supabase-disk-io.test.ts`
-  - Update the expected reason substring in the evaluate-verdict test to match the new message (if it asserts on the literal). Grep before editing — it may only assert `tripped === true`.
+  - **No test edit required** (verified): `cron-supabase-disk-io.test.ts:65` asserts `reasons.some((r) => /processed_github_events/.test(r))` — it matches on the interpolated table name, NOT the literal "retention sweep may have stopped" phrase (which appears only at `cron-supabase-disk-io.ts:110`, nowhere in tests). Widening the message keeps `processed_github_events` interpolated, so the assertion still passes.
 
 ## Open Code-Review Overlap
 
@@ -88,7 +106,7 @@ None. `gh issue list --label code-review --state open` bodies do not reference `
 - [ ] Migration number 103 confirmed free via the canonical `git ls-tree origin/main` check (output shows 100/101/102, not 103).
 - [ ] PR body uses **`Ref #5225`** (NOT `Closes`) — `classification: ops-only-prod-write`; the issue closes post-merge only after budget recovery is verified. (Per `2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md` and `wg-use-closes-n-in-pr-body-not-title-to` ops-remediation corollary.)
 
-### Post-merge (operator — automated; no dashboard eyeballing per `hr-no-dashboard-eyeball`)
+### Post-merge (operator — automated; no dashboard eyeballing per `hr-no-dashboard-eyeball-pull-data-yourself`)
 
 - [ ] **Migration applies automatically** via `web-platform-release.yml` `migrate` job (`run-migrations.sh` under Doppler `prd`) on merge to main — no manual SSH/apply step. **Automation:** baked into existing release pipeline.
 - [ ] **Immediately after deploy:** confirm the purge ran and the cron interval is 7d. Read-only via the Management API (per `2026-05-06-supabase-management-api-bypasses-mcp-oauth.md`; NOT MCP, NOT psql):
@@ -155,14 +173,14 @@ discoverability_test:
 ## Risks & Mitigations
 
 - **Window too short → double-processing.** Mitigated: 7d > 3d GitHub ceiling (>2× margin) + 24h Inngest layer. Shape-test pins `interval '7 days'`; `user-impact-reviewer` gates the value at review.
-- **One-time DELETE locks the table during the ~91k-row purge.** Mitigated: index-backed (`received_at` idx), single transaction, no CONCURRENTLY/VACUUM (transaction-safe per `supabase-migrations.md` runner note); ~91k rows is a fast index-range delete on this small table. No precedent for a chunked delete is needed at this scale.
+- **One-time DELETE locks the table during the ~91k-row purge.** Mitigated: index-backed (`received_at` idx); the runner wraps the whole file in **`--single-transaction`** (`run-migrations.sh:343`), so the re-schedule + DELETE are one atomic transaction (this is the real atomicity guarantee, not the `EXCEPTION` guard). The DELETE takes `ROW EXCLUSIVE` on `processed_github_events`; a concurrent live webhook INSERT uses a different `delivery_id` (PK) so does not conflict. No CONCURRENTLY/VACUUM. ~91k rows is a sub-second-to-low-seconds index-range delete — no chunking needed at this scale. Crash-safe: a mid-file `psql` death rolls back the whole file; re-running 103 is safe by file-level transaction.
 - **Monitor false-trip during the deploy window** (count briefly between query and purge). Mitigated: monitor is 6-hourly; the purge is synchronous within the migration, so the next monitor fire sees the post-purge count.
 - **Precedent diff (pg_cron idempotent re-schedule):** precedent is `094_dedup_tables_retention.sql` (and 076 `workspace_activity_purge`) — same `DO $cron_block$` shape; this plan copies it verbatim. No novel pattern. (Deepen-plan Phase 4.4 to confirm the diff.)
 
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`, or omits the threshold will fail `deepen-plan` Phase 4.6. (This plan's section is filled; threshold = single-user incident.)
-- The one-time DELETE must sit in the SAME migration file as the re-schedule (not a separate operator step) so relief lands at deploy — an automatable step must not be punted to the operator (`hr-no-dashboard-eyeball`, automation-feasibility gate).
+- The one-time DELETE must sit in the SAME migration file as the re-schedule (not a separate operator step) so relief lands at deploy — an automatable step must not be punted to the operator (`hr-no-dashboard-eyeball-pull-data-yourself`, automation-feasibility gate).
 - PR body: `Ref #5225`, never `Closes` — `Closes` auto-resolves at merge, before the post-merge budget-recovery verification.
 - Do NOT widen the shape-test to also cover `processed_stripe_events` — that table's 90-day window is correct and unchanged; asserting 7d on it would be wrong.
 
