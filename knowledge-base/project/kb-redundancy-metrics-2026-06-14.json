@@ -1,0 +1,25 @@
+{
+  "corpus_count": 1550,
+  "density": 0.001935,
+  "exempt_count": 59,
+  "jaccard_threshold": 0.6,
+  "metric": "kb-redundancy",
+  "redundant_pairs": 3,
+  "top_pairs": [
+    {
+      "a": "2026-03-14-content-publisher-channel-extension-pattern.md",
+      "b": "2026-03-19-content-pipeline-channel-extension-pattern.md",
+      "jaccard": 0.875
+    },
+    {
+      "a": "2026-03-10-codex-portability-scan-methodology.md",
+      "b": "2026-04-07-openhands-portability-scan-methodology.md",
+      "jaccard": 0.7778
+    },
+    {
+      "a": "bug-fixes/2026-04-28-anon-key-test-fixture-leaked-into-prod-build.md",
+      "b": "bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md",
+      "jaccard": 0.6667
+    }
+  ]
+}
