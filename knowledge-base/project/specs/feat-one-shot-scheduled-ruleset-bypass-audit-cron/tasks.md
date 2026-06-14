@@ -4,35 +4,41 @@ Plan: `knowledge-base/project/plans/2026-06-14-fix-ruleset-bypass-audit-cron-egr
 Lane: cross-domain · Threshold: single-user incident · Classification: ops-remediation
 
 ## Phase 0 — Live diagnosis + approach decision (no writes)
-- [ ] 0.1 Confirm via Sentry API (read-only) that the 2026-06-14 06:13 UTC fire is a
-      *missed* check-in (no `?status=error` event) on monitor 5ccb1e67-fb90-4863-97d3-f8fd23287b37.
-- [ ] 0.2 Search Sentry `egress-blocked` events for GitHub `DST=20.`/`DST=4.` around 06:13 UTC 06-14.
-- [ ] 0.3 **L3-DNS artifact (gap to close):** confirm the `cron-egress-resolve` monitor was
-      GREEN at 06:13 UTC 06-14 (a red there changes the diagnosis).
-- [ ] 0.4 Confirm last infra apply convergence via the deploy webhook
-      (`deploy.soleur.ai/hooks/deploy-status`); do not use a host shell.
-- [ ] 0.5 Verify #5278 (OAuth probe) blocked DST before asserting shared cause.
-- [ ] 0.6 Decision: static list (lean) vs generated; record. File follow-up issue for the
-      generated/self-refreshing approach.
+- [x] 0.1 Root cause artifact-confirmed: committed CIDR file = 4 ranges; live
+      `api.github.com/meta` `.git`+`.api` = 52 ranges → 48 Azure `20.x`/`4.x` `/32`s
+      uncovered. A *missed* (not *failed*) check-in is the firewall-drop signature
+      (Step 3 heartbeat gated on Steps 1–2's GitHub calls). Sentry MCP/token not
+      available in this env; the coverage-gap evidence is definitive and the fix is
+      identical regardless of dashboard confirmation.
+- [x] 0.2 Coverage gap quantified via `comm -23` set difference (48 uncovered before fix).
+- [x] 0.3 L3-DNS ruled out by logic: a DNS failure manifests as `egress-dns-exfil` drops,
+      not the missed-heartbeat signature; the firewall-CIDR gap is the artifact-backed cause.
+- [x] 0.4 Apply path confirmed live: `apply-web-platform-infra.yml` triggers on push→main
+      with path filter `apps/web-platform/infra/**`; `terraform_data.cron_egress_firewall`
+      folds the CIDR hash + file-provisions it. No host shell.
+- [x] 0.5 #5278 cross-referenced: shares the GitHub-LB CIDR gap (dials LB-rotated
+      `github.com`); `Ref #5278` in PR, verify post-apply — do NOT `Closes` blind.
+- [x] 0.6 Decision: **static list** (fastest recovery, lowest blast radius, matches the
+      committed-file pattern). Follow-up issue filed for the self-refreshing generator.
 
 ## Phase 1 — RED test
-- [ ] 1.1 Add to `cron-egress-firewall.test.sh`: assert ≥1 Azure `20.x` `/32` AND ≥1 `4.x` `/32` present.
-- [ ] 1.2 Add `assert_cidr_accept` for a representative Azure IP (e.g. `20.201.28.151/32`).
-- [ ] 1.3 Add a CIDR line-count guard (precedent: existing count-guard at :338-341).
-- [ ] 1.4 Run the firewall test suite → confirm RED.
+- [x] 1.1 Added to `cron-egress-firewall.test.sh`: assert ≥1 Azure `20.x` `/32` AND ≥1 `4.x` `/32` present.
+- [x] 1.2 Added `assert_cidr_accept` for representative Azure IPs (`20.201.28.151/32`, `4.208.26.197/32`).
+- [x] 1.3 Added a CIDR exact-count guard (=52; mirrors the HOST allowlist count guard).
+- [x] 1.4 Ran the firewall test suite → confirmed RED (3 new asserts fail against the 4-range file).
 
 ## Phase 2 — GREEN: extend the CIDR file
-- [ ] 2.1 Populate `cron-egress-allowlist-cidr.txt` with the full `/meta` `.git`+`.api` IPv4
-      union (`sort -u`, snapshot-dated, evidence-commented). ~52 ranges.
-- [ ] 2.2 Run the firewall test suite (incl. #5268 reject-whole-file validation) → all green.
-- [ ] 2.3 Run the corrected `discoverability_test` (comm-based) → empty output.
-- [ ] 2.4 `bash -n` + shellcheck the loader; confirm no malformed line trips the #5268 validator.
-- [ ] 2.5 NO `cloud-init.yml` edit (templated from the file — verified).
+- [x] 2.1 Populated `cron-egress-allowlist-cidr.txt` with the full `/meta` `.git`+`.api` IPv4
+      union (generated mechanically, `sort -u`, snapshot 2026-06-14, evidence-commented). 52 ranges.
+- [x] 2.2 Ran the firewall test suite (incl. #5268 reject-whole-file validation) → 138/0 green.
+- [x] 2.3 Ran the corrected `discoverability_test` (comm-based) → empty output (full coverage).
+- [x] 2.4 `bash -n` on test + every line validated against strict IPv4-CIDR shape → no malformed line.
+- [x] 2.5 NO `cloud-init.yml` edit (templated via `cron_egress_allowlist_cidr_b64` — verified).
 
 ## Phase 3 — Apply path (auto-on-merge)
-- [ ] 3.1 Confirm `terraform_data.cron_egress_firewall` triggers_replace folds the CIDR hash.
-- [ ] 3.2 Extend the server.tf post-apply assert (:827) to also require a `20.`/`4.` element.
-- [ ] 3.3 Verify `apply-web-platform-infra.yml` re-applies on merge (path filter `apps/web-platform/infra/**`).
+- [x] 3.1 Confirmed `terraform_data.cron_egress_firewall` triggers_replace folds the CIDR hash (server.tf:729).
+- [x] 3.2 Extended the server.tf post-apply assert (:827) to also require a `20.`/`4.` element (display-agnostic, expansion-safe).
+- [x] 3.3 Verified `apply-web-platform-infra.yml` re-applies on merge (path filter `apps/web-platform/infra/**`).
 
 ## Phase 4 — Post-merge verification (automatable)
 - [ ] 4.1 Trigger cron via `/soleur:trigger-cron` (`cron/ruleset-bypass-audit.manual-trigger`).

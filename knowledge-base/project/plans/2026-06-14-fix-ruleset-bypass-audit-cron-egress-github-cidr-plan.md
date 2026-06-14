@@ -265,19 +265,20 @@ discoverability_test:
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `cron-egress-allowlist-cidr.txt` contains every IPv4 range in GitHub's `/meta`
-      `.git` + `.api` union as of the snapshot date (verify with the `discoverability_test`
-      command above → zero `UNCOVERED:` lines).
-- [ ] `cron-egress-firewall.test.sh` asserts presence of ≥1 Azure `20.x` AND ≥1 `4.x`
-      `/32` range, and a behavioral accept of a representative `api.github.com` Azure IP;
-      the full suite (incl. #5268 validation asserts) is green.
-- [ ] The #5268 reject-whole-file validator still passes on the new file (every new line is
-      a strictly valid IPv4 CIDR — no comments-as-CIDR, no trailing `\r`, no `/32` typo).
-- [ ] NO `cloud-init.yml` edit (deepen-verified: templated via `cron_egress_allowlist_cidr_b64`
+- [x] `cron-egress-allowlist-cidr.txt` contains every IPv4 range in GitHub's `/meta`
+      `.git` + `.api` union as of the snapshot date (verified with the `discoverability_test`
+      command above → empty output / zero uncovered lines).
+- [x] `cron-egress-firewall.test.sh` asserts presence of ≥1 Azure `20.x` AND ≥1 `4.x`
+      `/32` range, and a behavioral accept of representative `api.github.com` Azure IPs;
+      the full suite (incl. #5268 validation asserts) is green (138/0).
+- [x] The #5268 reject-whole-file validator still passes on the new file (every line
+      validated against the strict IPv4-CIDR shape — no comments-as-CIDR, no trailing `\r`).
+- [x] NO `cloud-init.yml` edit (deepen-verified: templated via `cron_egress_allowlist_cidr_b64`
       — editing the file is sufficient for fresh-host parity).
-- [ ] `server.tf` post-apply assert proves a NON-`140.82` GitHub range is present in the set
-      (extend the `:827` `grep -qE '140[.]82[.]'` to also assert a `20.` or `4.` element).
-- [ ] PR body uses **`Ref #<sentry-issue-tracking-issue>`**, NOT `Closes` (ops-remediation:
+- [x] `server.tf` post-apply assert proves a NON-`140.82` GitHub range is present in the set
+      (extended the `:827` `grep -qE '140[.]82[.]'` with a delimiter-anchored `(20|4).` element
+      assert — display-agnostic + expansion-safe, validated against both nft render forms).
+- [x] PR body uses **`Ref #<tracking>`**, NOT `Closes` (ops-remediation:
       the monitor recovers post-apply, after merge — closing at merge would be false-resolved).
 
 ### Post-merge (operator — all automatable; `Automation:` justification per step)

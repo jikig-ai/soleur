@@ -58,6 +58,42 @@ likelihood order:
 4. Re-validate the affected flow (`/soleur:trigger-cron <event>` for crons;
    the user-facing flow itself otherwise).
 
+## Remediation (GitHub LB pool / CIDR coverage gap)
+
+If the blocked `DST=<ip>` is a GitHub address (a `20.x`/`4.x` Azure host or a
+`140.82`/`185.199`/`192.30`/`143.55` range) and the failing flow dials
+`github.com` or `api.github.com`, the CIDR allowlist is missing part of
+GitHub's load-balancer pool. **`api.github.com` round-robins DNS across TWO
+pools:** the four big git/pages blocks (`140.82.112.0/20`, `185.199.108.0/22`,
+`192.30.252.0/22`, `143.55.64.0/20`) AND ~48 Azure `20.x`/`4.x` `/32` hosts. A
+fire that lands on an uncovered IP is default-dropped → no GitHub call → for a
+cron, no Sentry heartbeat → a **missed** check-in (not a failed one). This is
+exactly the `scheduled-ruleset-bypass-audit` miss on 2026-06-14 (incident
+5516336): the file then carried only the 4 big blocks.
+
+The fix is the **CIDR** file (`cron-egress-allowlist-cidr.txt`), NOT the
+hostname file — `api.github.com` is already in the hostname allowlist; the
+single-IP resolver is the wrong layer for an LB host. Regenerate the complete
+`/meta` `.git`+`.api` IPv4 union:
+
+```bash
+curl -s https://api.github.com/meta \
+  | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u
+```
+
+Write it to `apps/web-platform/infra/cron-egress-allowlist-cidr.txt` (header +
+one CIDR per line), then bump the exact-count guard + snapshot date in
+`cron-egress-firewall.test.sh`. Verify zero gap with:
+
+```bash
+comm -23 <(curl -s https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u) \
+         <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)
+```
+
+Empty output = full coverage. Merge — the provisioner re-applies on push (no
+SSH). **The `/32`s rotate**, so this static snapshot will go stale; the
+self-refreshing-generator follow-up tracks the durable fix.
+
 ## Remediation (loader `die "invalid CIDR …"`)
 
 If `cron-egress-firewall.service` failed (not a drop page) and journald shows
