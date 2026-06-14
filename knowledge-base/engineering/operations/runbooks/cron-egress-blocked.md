@@ -107,6 +107,45 @@ merge — do NOT SSH-patch nft;** the provisioner re-runs the loader on push.
 Until fixed, the firewall is fail-open-on-bootstrap (no default-drop installed),
 so treat it as time-sensitive.
 
+## Apply-time post-check failure (`apply-web-platform-infra.yml` red at `cron_egress_firewall`)
+
+This is NOT a runtime drop page — it is the **terraform apply** failing at
+`terraform_data.cron_egress_firewall`'s second `remote-exec` (the post-apply
+assertion block, `apps/web-platform/infra/server.tf`). Symptom in the Actions
+log: `Error: remote-exec provisioner error … error executing "/tmp/terraform_*.sh":
+Process exited with status 1`, with no further detail because terraform
+**suppresses inline remote-exec stdout**.
+
+**Read the failing assertion straight from the Actions log — no SSH (#5279).**
+Since #5279 every assertion in the block echoes a unique `ASSERT-FAILED: <name>`
+sentinel before `exit 1`, and the service enable/restart lines also dump the
+unit's `journalctl` tail. terraform surfaces the last output lines on error, so
+the sentinel is captured even though stdout is suppressed:
+
+```
+gh run view <run-id> --log | grep -E 'ASSERT-FAILED|cron-egress-nftables\] ERROR'
+```
+
+The sentinel names the culprit directly. Map it to the fix (a drift-guard in
+`cron-egress-firewall.test.sh` asserts every sentinel name appears in this
+table, so the mapping cannot silently desync from `server.tf`):
+
+| Sentinel | Meaning | Fix |
+|---|---|---|
+| `firewall-restart (loader die …)` / `firewall-enable` | the `restart` re-runs the Type=oneshot loader (`cron-egress-nftables.sh`) and it `die`d; the journalctl tail below it carries the reason (`enable` only creates the symlink) | follow the `[cron-egress-nftables] ERROR:` line — `invalid CIDR` → CIDR-file section above; `bridge interface docker0 not found` / `EnableIPv6` → host bridge state; `allowlist resolution failed` → DNS/resolver |
+| `docker-user-jump` / `default-drop` / `dns-exfil-drop` / `cidr-allowlist-rule` | an nft rule-comment grep missed the live render | re-point the grep at a render-stable token (the #5247 display-agnostic class); **never** weaken a containment invariant to green the apply |
+| `cidr-set-github` / `cidr-set-api-pool` | the interval CIDR set is missing the GitHub git blocks (`140.82` …) or the Azure `20.x`/`4.x` `/meta` api LB pool (incident 5516336, #5281) — often the set never reloaded (see `firewall-restart` / inert-fix #5285) | confirm the restart ran; regenerate `cron-egress-allowlist-cidr.txt` per the "GitHub LB pool / CIDR coverage gap" section above; both asserts are display-agnostic |
+| `bridge-ipv6` | the default docker bridge reports `EnableIPv6 != false` (real v6 side-channel) OR docker not queryable at apply | fix the bridge config — do not relax the check |
+| `allow-set-populated` / `units-active` / `host-egress` | the dynamic allow set is empty / a unit isn't active / host egress to GitHub is blocked | resolver/unit/host-firewall investigation per the named surface |
+| `egress-probe-negative` | a non-allowlisted host was REACHABLE from the container — the ruleset is **inert** | a real containment bug; fix the firewall, never the probe |
+| `egress-probe-positive` | an allowlisted host was unreachable from the container | an allowlist gap — add the host (allowlist-gap remediation above) |
+| `chmod-scripts` / `daemon-reload` / `resolve-timer-enable` / `inngest-8288-accept` | systemd/script plumbing — script not executable, unit file unparseable, timer failed to enable, or the host-gateway `:8288` accept rule is absent | read the shell error above the sentinel; these are early-setup failures, not containment gaps |
+
+The fix lands via the existing `apply-web-platform-infra.yml` on merge (the
+resource is tainted and re-fires; no manual apply). **Do NOT make the apply
+pass by making an assertion non-fatal or relaxing a containment invariant** — a
+green check over a broken firewall is worse than a red one at this threshold.
+
 ## Remediation (suspected exfil)
 
 Treat as a security incident (`/soleur:incident`). Do NOT widen the
