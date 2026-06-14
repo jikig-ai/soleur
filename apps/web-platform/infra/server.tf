@@ -825,6 +825,18 @@ resource "terraform_data" "cron_egress_firewall" {
       # grep failed the apply post-check even though the set was correctly
       # populated (proven live by a successful cron git clone). Display-agnostic.
       "nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]'",
+      # Prove the FULL /meta `.git`+`.api` union landed, not just the 4 big
+      # git/pages blocks: at least one Azure 20.x or 4.x /32 (the api.github.com
+      # LB pool whose absence caused the missed check-in, incident 5516336) must
+      # be present. nft renders the element list as `elements = { a, b, c }`, so
+      # every element is preceded by a comma or whitespace. Anchor on that
+      # delimiter so a bare "20."/"4." substring INSIDE one of the big blocks
+      # cannot false-pass: an unanchored "4[.]" matches "143.55.64.0" (the "4."
+      # in "64.0"), and nft may render a block as an expanded range
+      # (143.55.64.0-143.55.79.255). The delimiter anchor requires the octet to
+      # START an element, so only a real 20.x/4.x element matches.
+      # Display-format-agnostic, same intent as the :827 assert above.
+      "nft list set ip filter soleur_egress_allow_cidr | grep -qE '[,[:space:]](20|4)[.]'",
       "docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false",
       "systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer",
       # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches

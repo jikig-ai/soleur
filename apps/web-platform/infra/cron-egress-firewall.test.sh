@@ -142,6 +142,24 @@ assert_grep "CIDR set uses flags interval" 'flags interval' "$LOADER"
 assert_grep "CIDR allowlist accept rule present" 'ip daddr @soleur_egress_allow_cidr accept' "$LOADER"
 assert_grep "loader reads the CIDR allowlist file" 'cron-egress-allowlist-cidr.txt' "$LOADER"
 assert_grep "CIDR file carries GitHub git /20" '140.82.112.0/20' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+# api.github.com round-robins DNS across BOTH the 4 big git/pages blocks AND ~48
+# Azure 20.x/4.x /32 hosts (api.github.com/meta `.git`+`.api`). The 4-block-only
+# file left those /32s uncovered → a fire landing on one was default-dropped →
+# missed cron check-in (incident 5516336, scheduled-ruleset-bypass-audit,
+# 2026-06-14). The CIDR file MUST carry the Azure /32s for api.github.com.
+assert_grep "CIDR file carries >=1 Azure 20.x /32 (api.github.com LB pool)" '^20[.][0-9]+[.][0-9]+[.][0-9]+/32$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+assert_grep "CIDR file carries >=1 Azure 4.x /32 (api.github.com LB pool)" '^4[.][0-9]+[.][0-9]+[.][0-9]+/32$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+# Exact-count guard (mirrors the HOST allowlist count guard below): every GitHub
+# /meta `.git`+`.api` IPv4 range is exactly one line. A partial revert to the 4
+# big blocks fails CI. When GitHub rotates the /meta Azure /32s, refresh from
+# `curl -s https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u`
+# and bump this number deliberately with the new snapshot date.
+CIDR_COUNT="$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt")"
+if [[ "$CIDR_COUNT" -eq 52 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: CIDR allowlist range count is exactly 52"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: CIDR allowlist range count is $CIDR_COUNT (expected 52 — refresh from api.github.com/meta .git+.api and update this guard with the snapshot date)"
+fi
 
 echo "-- CIDR validation (nft-injection hardening, #5242) --"
 # The CIDR file is interpolated VERBATIM into the `add element ... { $CIDR_ELEMENTS }`
@@ -210,6 +228,9 @@ assert_cidr_accept "140.82.112.0/20" "real GitHub git /20"
 assert_cidr_accept "185.199.108.0/22" "real GitHub pages /22"
 assert_cidr_accept "192.30.252.0/22" "real GitHub /22"
 assert_cidr_accept "143.55.64.0/20"  "real GitHub /20"
+# Representative api.github.com Azure LB /32 (api.github.com/meta `.api`):
+assert_cidr_accept "20.201.28.151/32" "real GitHub api Azure /32"
+assert_cidr_accept "4.208.26.197/32"  "real GitHub api Azure /32"
 # Structurally valid (allow-all breadth is a content concern, out of scope — see plan Non-Goals):
 assert_cidr_accept "0.0.0.0/0" "structurally valid CIDR"
 # AC1 — injection / command-substitution / whitespace shapes reject:
