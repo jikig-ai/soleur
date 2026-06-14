@@ -70,7 +70,7 @@ nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]' || { ec
 # in "64.0"), and nft may render a block as an expanded range
 # (143.55.64.0-143.55.79.255). The delimiter anchor requires the octet to
 # START an element, so only a real 20.x/4.x element matches.
-# Display-format-agnostic, same intent as the :827 assert above.
+# Display-format-agnostic, same intent as the cidr-set-github assert above.
 nft list set ip filter soleur_egress_allow_cidr | grep -qE '[,[:space:]](20|4)[.]' || { echo 'ASSERT-FAILED: cidr-set-api-pool'; exit 1; }
 docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false || { echo 'ASSERT-FAILED: bridge-ipv6'; exit 1; }
 systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer || { echo 'ASSERT-FAILED: units-active'; exit 1; }

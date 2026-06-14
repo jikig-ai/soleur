@@ -110,12 +110,16 @@ fi
 # exits 0 on an inert ruleset; only a real container probe proves enforcement).
 # These constructs moved from the inline remote-exec to the delivered
 # cron-egress-postapply-assert.sh (#5289); assert against the script now.
-if grep -q 'egress-probe-negative' "$ASSERT_SCRIPT"; then
+# Anchor on the ASSERT-FAILED: sentinel (executable line only) NOT the bare
+# 'egress-probe-*' literal, which also appears in the script's comment prose —
+# a bare grep would false-pass if the executable probe line were deleted but
+# its comment kept (comment-prose false-match class, 2026-06-03 learning).
+if grep -qE 'ASSERT-FAILED: egress-probe-negative' "$ASSERT_SCRIPT"; then
   PASS=$((PASS + 1)); echo "  PASS: post-apply negative container probe present"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: post-apply negative container probe missing"
 fi
-if grep -q 'egress-probe-positive' "$ASSERT_SCRIPT"; then
+if grep -qE 'ASSERT-FAILED: egress-probe-positive' "$ASSERT_SCRIPT"; then
   PASS=$((PASS + 1)); echo "  PASS: post-apply positive container probe present"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: post-apply positive container probe missing"
