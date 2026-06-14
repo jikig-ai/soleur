@@ -49,8 +49,17 @@ vi.mock("@/lib/supabase/tenant", () => {
   };
 });
 
-import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
+import {
+  handleMessage,
+  sendToClient,
+  sessions,
+  type ClientSession,
+} from "@/server/ws-handler";
 import { streamReplayBuffer } from "@/server/stream-replay-buffer";
+import {
+  setActiveTurnConversation,
+  __test_only__ as registryTestOnly,
+} from "@/server/agent-session-registry";
 import type { WSMessage } from "@/lib/types";
 
 function makeSession(conversationId?: string): ClientSession {
@@ -228,5 +237,68 @@ describe("ws-handler resume_stream — reattach + replay (#5273)", () => {
     const frames = sentFrames(session);
     expect(frames.some((f) => f.type === "stream")).toBe(false);
     expect(frames.some((f) => f.type === "stream_replay")).toBe(true);
+  });
+});
+
+describe("ws-handler sendToClient write-hook keying (#5273)", () => {
+  beforeEach(() => {
+    streamReplayBuffer.reset();
+    registryTestOnly.clear();
+  });
+  afterEach(() => {
+    sessions.delete(USER_ID);
+    streamReplayBuffer.reset();
+    registryTestOnly.clear();
+  });
+
+  it("buffers a conversationId-less frame during the grace gap via the active-turn binding (cc-path: no session, no registerSession)", () => {
+    // Simulate the disconnect grace window: session deleted, but the active-turn
+    // binding survives (set by the cc dispatch path). A streaming frame carries
+    // no wire conversationId — without the binding it would be dropped.
+    setActiveTurnConversation(USER_ID, CONV_ID);
+    expect(sessions.has(USER_ID)).toBe(false); // gap: no session
+
+    sendToClient(USER_ID, {
+      type: "stream",
+      content: "gap-frame",
+      partial: true,
+      leaderId: "cc_router",
+    });
+
+    const { frames, status } = streamReplayBuffer.replayFrom(CONV_ID, -1);
+    expect(status).toBe("complete");
+    expect(frames.map((f) => (f as { content?: string }).content)).toEqual([
+      "gap-frame",
+    ]);
+  });
+
+  it("prefers the active-turn binding over a stale session.conversationId for a frame lacking conversationId", () => {
+    // Backgrounded conv-A frame must not land in conv-B's buffer: the binding
+    // (the active turn) wins over the socket's currently-bound conversation.
+    setActiveTurnConversation(USER_ID, "conv-A");
+    sessions.set(USER_ID, makeSession("conv-B"));
+
+    sendToClient(USER_ID, {
+      type: "stream",
+      content: "for-A",
+      partial: true,
+      leaderId: "cto",
+    });
+
+    expect(streamReplayBuffer.replayFrom("conv-A", -1).frames.length).toBe(1);
+    expect(streamReplayBuffer.replayFrom("conv-B", -1).status).toBe("incomplete");
+  });
+
+  it("does not re-stamp an already-seq'd replayed frame (no ring duplication)", () => {
+    setActiveTurnConversation(USER_ID, CONV_ID);
+    sessions.set(USER_ID, makeSession(CONV_ID));
+    // First emit (live) → stamped seq 0.
+    sendToClient(USER_ID, { type: "stream", content: "x", partial: true, leaderId: "cto" });
+    const before = streamReplayBuffer.replayFrom(CONV_ID, -1).frames.length;
+    // Re-emit the SAME buffered frame (carries seq) as the replay handler would.
+    const replayed = streamReplayBuffer.replayFrom(CONV_ID, -1).frames[0];
+    sendToClient(USER_ID, replayed);
+    const after = streamReplayBuffer.replayFrom(CONV_ID, -1).frames.length;
+    expect(after).toBe(before); // not appended again
   });
 });

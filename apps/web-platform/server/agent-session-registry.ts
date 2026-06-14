@@ -121,6 +121,33 @@ export function getActiveTurnConversation(userId: string): string | undefined {
   return activeTurnConversations.get(userId);
 }
 
+/** feat-stream-since-disconnect (#5273) — bind the user's active-turn
+ *  conversation for paths that do NOT register an `AgentSession` in this
+ *  registry (the cc-soleur-go runner emits frames via `sendToClient` without
+ *  going through `registerSession`). Without this, gap-emitted cc frames key
+ *  to `undefined` and are silently dropped — the feature's core scenario
+ *  fails for the dominant conversation path. Paired with
+ *  `clearActiveTurnConversation` at the cc turn boundary. */
+export function setActiveTurnConversation(
+  userId: string,
+  conversationId: string,
+): void {
+  if (!conversationId) return;
+  activeTurnConversations.set(userId, conversationId);
+}
+
+/** feat-stream-since-disconnect (#5273) — drop the cc active-turn binding at
+ *  turn end. Only clears when the binding still points at `conversationId`, so
+ *  a newer turn that already repointed the binding is not clobbered. */
+export function clearActiveTurnConversation(
+  userId: string,
+  conversationId: string,
+): void {
+  if (activeTurnConversations.get(userId) === conversationId) {
+    activeTurnConversations.delete(userId);
+  }
+}
+
 /** Look up a single session by exact key. */
 export function getSession(
   userId: string,

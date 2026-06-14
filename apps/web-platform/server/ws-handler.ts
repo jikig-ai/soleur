@@ -45,6 +45,8 @@ import {
   clearUserWorkspace,
   getUserWorkspace,
   getActiveTurnConversation,
+  setActiveTurnConversation,
+  clearActiveTurnConversation,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -1053,6 +1055,18 @@ export async function dispatchSoleurGoForConversation(
   attachments?: import("@/lib/types").AttachmentRef[],
   sessionId?: string | null,
 ): Promise<void> {
+  // feat-stream-since-disconnect (#5273) — turn boundary for the cc-soleur-go
+  // path. The legacy fan-out wires resetTurn in `sendUserMessage`, but cc
+  // conversations break before that call, so this is the symmetric site. (a)
+  // `resetTurn` clears the prior turn's replay frames (counter preserved) so a
+  // long never-disconnected cc conversation doesn't accumulate frames across
+  // turns up to the ring cap. (b) `setActiveTurnConversation` binds the
+  // conversation so the write-hook can key gap-emitted frames (cc never calls
+  // `registerSession`, so without this the binding is undefined and frames
+  // emitted during the disconnect grace window are silently dropped — the
+  // feature's core scenario for the dominant conversation path). See ADR-059.
+  streamReplayBuffer.resetTurn(conversationId);
+  setActiveTurnConversation(userId, conversationId);
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
     // to `legacy` via a `null` call — that silently breaks the
@@ -1158,6 +1172,7 @@ export async function dispatchSoleurGoForConversation(
     routingKind: routing.kind,
   });
 
+  try {
   await dispatchSoleurGo({
     userId,
     conversationId,
@@ -1184,6 +1199,13 @@ export async function dispatchSoleurGoForConversation(
     },
     ...documentArgs,
   });
+  } finally {
+    // feat-stream-since-disconnect (#5273) — turn ended: drop the cc
+    // active-turn binding (no-ops if a newer turn already repointed it). A
+    // mid-turn disconnect keeps the binding alive (this finally hasn't run
+    // while the turn is in flight), so gap frames are still buffered.
+    clearActiveTurnConversation(userId, conversationId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2206,8 +2228,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // feat-stream-since-disconnect (#5273) — user-initiated Stop: the user
       // is connected and sees the stop live, so drop replay frames (counter
       // preserved). A trailing `session_ended:user_aborted` re-stamps a tiny
-      // buffer, which is honest on any subsequent reconnect. See ADR-059.
-      streamReplayBuffer.clear(msg.conversationId);
+      // buffer, which is honest on any subsequent reconnect. Gate on the
+      // session's OWN bound conversation (not the raw client `conversationId`)
+      // so a forged abort_turn cannot clear another conversation's replay
+      // buffer — abortSession above is already userId-keyed and safe. ADR-059.
+      if (session.conversationId === msg.conversationId) {
+        streamReplayBuffer.clear(msg.conversationId);
+      }
       break;
     }
 

@@ -20,6 +20,10 @@ import { mirrorWithDebounce } from "@/server/observability";
 // The buffered streaming family — "frames the client re-applies on replay".
 // NOT `error` (a replayed error could re-fire a toast and durably widens the
 // blast radius of any unsanitized diagnostic field; see ADR-059 / plan Risks).
+// Also excluded: `command_stream` / `debug_event` — these carry their own
+// phase/append state machine and large (byte-capped) payloads, and are render-
+// only/ephemeral; replaying them is out of scope for v1 (a reconnect mid-Bash-
+// stream falls back to the honest history refetch).
 export type BufferedWSMessage = Extract<
   WSMessage,
   | { type: "stream_start" }
@@ -31,15 +35,28 @@ export type BufferedWSMessage = Extract<
   | { type: "session_ended" }
 >;
 
-export const BUFFERED_FRAME_TYPES: ReadonlySet<WSMessage["type"]> = new Set([
-  "stream_start",
-  "stream",
-  "stream_end",
-  "tool_use",
-  "tool_progress",
-  "usage_update",
-  "session_ended",
-] satisfies BufferedWSMessage["type"][]);
+// Derived from a `Record<BufferedWSMessage["type"], true>` (NOT a bare array)
+// so the buffered-type Set is EXACTLY `BufferedWSMessage["type"]` — bidirec-
+// tionally compiler-enforced. A bare `satisfies …[]` only proves the Set ⊆ the
+// Extract (a member could be silently OMITTED → that frame type never buffered
+// → silent replay gap). The Record forces every Extract member present (missing
+// key = tsc error) AND forbids extras (excess key = tsc error). When adding a
+// new streaming frame to the buffered family: add it to `BufferedWSMessage`,
+// this Record, the `seq?` field in lib/types.ts, and `replaySeqSchema` in
+// lib/ws-zod-schemas.ts (the last two are kept in lockstep by `_SchemaCovers`).
+const BUFFERED_FRAME_TYPE_MAP: Record<BufferedWSMessage["type"], true> = {
+  stream_start: true,
+  stream: true,
+  stream_end: true,
+  tool_use: true,
+  tool_progress: true,
+  usage_update: true,
+  session_ended: true,
+};
+
+export const BUFFERED_FRAME_TYPES: ReadonlySet<WSMessage["type"]> = new Set(
+  Object.keys(BUFFERED_FRAME_TYPE_MAP) as BufferedWSMessage["type"][],
+);
 
 /** True when a wire frame belongs to the buffered family (write-hook gate). */
 export function isBufferedFrame(msg: WSMessage): msg is BufferedWSMessage {
@@ -85,9 +102,22 @@ interface RingEntry {
   size: number;
 }
 
-/** Approximate byte size of a frame for the per-buffer byte cap (heuristic). */
+/**
+ * Approximate retained size of a frame for the per-buffer byte cap. Sums the
+ * lengths of string-valued fields (the size-dominant term — a `stream` frame's
+ * cumulative `content` snapshot) plus a fixed overhead for the discriminator /
+ * numeric / boolean fields. Deliberately NOT `JSON.stringify().length`: the
+ * send path (`sendToClient`) already serializes every frame, and a second full
+ * serialization here doubles hot-path CPU super-linearly for cumulative
+ * snapshots (perf review #5290). This is a memory-bound heuristic, not an exact
+ * wire size — UTF-16 code-unit lengths approximate the retained JS-string cost.
+ */
 function frameByteSize(frame: BufferedFrame): number {
-  return JSON.stringify(frame).length;
+  let n = 64; // fixed overhead: type discriminator, leaderId, seq, numbers.
+  for (const value of Object.values(frame as Record<string, unknown>)) {
+    if (typeof value === "string") n += value.length;
+  }
+  return n;
 }
 
 export class StreamReplayBuffer {
@@ -190,6 +220,12 @@ export class StreamReplayBuffer {
     if (ring === undefined) return { frames: [], status: "incomplete" };
     if (ring.length === 0) return { frames: [], status: "complete" };
     const oldestSeq = ring[0].frame.seq;
+    // `ackSeq` is the last seq the client RENDERED, so the next frame it needs
+    // is `ackSeq + 1`. Completeness requires that frame to still be buffered:
+    // `ackSeq + 1 >= oldestSeq`, i.e. `ackSeq >= oldestSeq - 1`. A smaller
+    // `ackSeq` means frames between the cursor and the oldest retained frame
+    // were evicted → a gap → `incomplete`. Load-bearing off-by-one; do not
+    // "simplify" the `- 1` away.
     const status: ReplayStatus =
       ackSeq < oldestSeq - 1 ? "incomplete" : "complete";
     const frames = ring
@@ -204,6 +240,10 @@ export class StreamReplayBuffer {
     if (ring !== undefined) {
       ring.length = 0;
     } else {
+      // New conversation — enforce the global cardinality cap BEFORE insert,
+      // mirroring `stamp` (a burst of turn-starts that emit few/no frames must
+      // not grow the map past `maxConversations` until the next TTL sweep).
+      this.evictMapIfNeeded(conversationId);
       this.rings.set(conversationId, []);
     }
     this.byteTotals.set(conversationId, 0);
@@ -283,8 +323,9 @@ function intFromEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-// Default TTL = DISCONNECT_GRACE_MS (30s, ws-handler.ts:195) + a 15s margin.
-// Hardcoded (not imported) to avoid a ws-handler → buffer import cycle.
+// Default TTL = DISCONNECT_GRACE_MS (the 30s grace constant in ws-handler) +
+// a 15s margin. Hardcoded (not imported from ws-handler) to avoid a
+// ws-handler → buffer import cycle; kept in sync by intent, not by reference.
 const DEFAULT_TTL_MS = 45_000;
 
 export const streamReplayBuffer = new StreamReplayBuffer({

@@ -163,6 +163,20 @@ describe("StreamReplayBuffer counter lifecycle", () => {
     expect(next.seq).toBe(11);
   });
 
+  it("resetTurn on a new conversation respects the global map cap (no bypass)", () => {
+    const onEvict = vi.fn();
+    const buf = newBuffer({ maxConversations: 2, onEvict });
+    buf.stamp("conv-a", streamFrame(), 1);
+    buf.stamp("conv-b", streamFrame(), 2);
+    // resetTurn for a THIRD, never-stamped conversation must evict the LRU
+    // (conv-a), not grow the map past the cap.
+    buf.resetTurn("conv-c", 3);
+    expect(buf.conversationCount).toBeLessThanOrEqual(2);
+    expect(onEvict).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "map" }),
+    );
+  });
+
   it("clearAll empties every buffer and counter", () => {
     const buf = newBuffer();
     buf.stamp("conv-a", streamFrame(), 1);

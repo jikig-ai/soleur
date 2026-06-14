@@ -13,6 +13,8 @@ import {
   registerSession,
   unregisterSession,
   getActiveTurnConversation,
+  setActiveTurnConversation,
+  clearActiveTurnConversation,
   __test_only__,
 } from "@/server/agent-session-registry";
 import type { AgentSession } from "@/server/review-gate";
@@ -57,5 +59,22 @@ describe("agent-session-registry — activeTurnConversations binding", () => {
     registerSession("user-binding-B", "conv-2", fakeSession(), "cto");
     expect(getActiveTurnConversation(USER)).toBe("conv-1");
     expect(getActiveTurnConversation("user-binding-B")).toBe("conv-2");
+  });
+
+  it("setActiveTurnConversation binds for registerSession-less paths (cc-soleur-go)", () => {
+    // cc-soleur-go never calls registerSession; the explicit setter is how the
+    // write-hook learns the conversation for gap-emitted frames.
+    setActiveTurnConversation(USER, "conv-cc");
+    expect(getActiveTurnConversation(USER)).toBe("conv-cc");
+  });
+
+  it("clearActiveTurnConversation only clears when the binding still matches (no clobber of a newer turn)", () => {
+    setActiveTurnConversation(USER, "conv-1");
+    // A newer turn repointed the binding before the older turn's finally ran.
+    setActiveTurnConversation(USER, "conv-2");
+    clearActiveTurnConversation(USER, "conv-1"); // stale finally — must no-op
+    expect(getActiveTurnConversation(USER)).toBe("conv-2");
+    clearActiveTurnConversation(USER, "conv-2"); // current turn ends — clears
+    expect(getActiveTurnConversation(USER)).toBeUndefined();
   });
 });
