@@ -40,8 +40,13 @@ changed=""
 if [[ -n "$CHANGESET_SRC" ]]; then
   if [[ "$CHANGESET_SRC" == "-" ]]; then
     changed=$(cat)
+  elif [[ ! -f "$CHANGESET_SRC" ]]; then
+    # A missing/unreadable changeset file is unprovable, not "0 changes" —
+    # fail closed (an explicitly empty-but-present file stays a legit exit 0).
+    echo "::error::sweep-completeness: changeset file not found: $CHANGESET_SRC — fail-closed"
+    exit 1
   else
-    changed=$(cat "$CHANGESET_SRC" 2>/dev/null || echo "")
+    changed=$(cat "$CHANGESET_SRC")
   fi
 else
   if [[ -z "${PR_NUMBER:-}" ]]; then
@@ -69,6 +74,9 @@ while IFS= read -r set; do
   for p in "${triggers[@]}" "${deps[@]}"; do
     [[ -f "$p" ]] || integrity_errors+=("set '$name' references missing path: $p")
   done
+  if [[ "${#triggers[@]}" -eq 0 ]]; then
+    integrity_errors+=("set '$name' has no triggers (a set with no trigger can never fire)")
+  fi
   if [[ "${#deps[@]}" -eq 0 ]]; then
     integrity_errors+=("set '$name' has no dependents (remove the set or add dependents)")
   fi

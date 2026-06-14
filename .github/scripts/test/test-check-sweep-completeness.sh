@@ -110,6 +110,22 @@ assert_out "TS7-names-dep3" "$DEP3"
 OUT=$(env -u PR_NUMBER bash "$EXEC" "$REG_ONE" 2>&1); RC=$?
 assert_rc "TS8-fail-closed-rc" 1
 
+# TS9 — fail-closed: a MISSING changeset file is unprovable → exit 1 (not a
+# swallowed-empty exit 0). Regression guard for the silent-false-negative.
+run_check "$REG_ONE" "$TMP/does-not-exist-changeset.txt"
+assert_rc "TS9-missing-changeset-file" 1
+
+# TS10 — legit: an empty-but-PRESENT changeset (0 files changed) → exit 0
+CS_EMPTY=$(cs cs_empty.txt)
+run_check "$REG_ONE" "$CS_EMPTY"
+assert_rc "TS10-empty-present-changeset" 0
+
+# TS11 — registry integrity: a set with an empty trigger array can never fire
+# → exit 1 (fail-open rot guard), mirroring the empty-dependents check.
+REG_NOTRIG=$(reg "{\"sibling_sets\":[{\"name\":\"nt\",\"trigger\":[],\"dependents\":[\"$DEP1\"]}]}" reg_notrig.json)
+run_check "$REG_NOTRIG" "$CS_ALL"
+assert_rc "TS11-empty-trigger" 1
+
 echo ""
 echo "Results: $PASS pass, $FAIL fail"
 [[ "$FAIL" -eq 0 ]] || exit 1
