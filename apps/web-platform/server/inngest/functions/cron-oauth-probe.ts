@@ -502,8 +502,13 @@ async function handleTrackingIssue(args: {
   // Failure path: file new issue OR add comment to existing one.
   if (result.failureMode !== "") {
     if (existing) {
-      // Non-idempotent POST — its OWN wrapper (never grouped) so a retry
-      // cannot double-comment.
+      // Non-idempotent POST — its OWN wrapper (never grouped with a sibling
+      // call) so a sibling's retry can never re-issue this comment. (The
+      // individual-wrapper pattern bounds cross-call re-POST; it does NOT make
+      // the POST idempotent — a response-phase transient on this call's own
+      // request can still re-issue it. Acceptable + precedent-consistent: the
+      // next hourly run's dedup search collapses a duplicate issue, and only on
+      // a transient landing in the post-commit response window.)
       await withGithubRetry(() =>
         octokit.request(
           "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
