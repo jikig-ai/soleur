@@ -9,13 +9,15 @@ plan: knowledge-base/project/plans/2026-06-14-feat-durable-session-resume-v1-pla
 
 # Tasks: Durable session resume v1 (#5240)
 
-## Phase 0 — Preconditions
-- [ ] 0.1 Pin the `set_current_workspace_id` switch call site (active-repo route; ref `workspace-resolver.ts:295`); reuse its exact shape/locking.
-- [ ] 0.2 Confirm resolver path: `resolveActiveWorkspacePath:339` → `resolveCurrentWorkspaceId:190` reads `user_session_state.current_workspace_id` (`?? userId` at :217).
-- [ ] 0.3 Confirm resume SELECT `ws-handler.ts:~1615` lacks `workspace_id`; terminal catch `~1649-1653` (no `.catch` replay).
-- [ ] 0.4 Confirm cc-dispatcher `persistUserMessage` reads `conversations.workspace_id` (`~2203-2218`) — FR2 branches off it.
-- [ ] 0.5 Check reducer for a connection-state input distinct from the activity watchdog (decides FR4 state-split vs retire-lie-only).
-- [ ] 0.6 Baseline `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+## Phase 0 — Preconditions ✅ COMPLETE (2026-06-14)
+- [x] 0.1 Switch call pinned: `supabase.rpc("set_current_workspace_id", { p_workspace_id: <id> })` — canonical pattern at `app/api/workspace/accept-invite/route.ts:78` (membership-checked, sets BOTH current_workspace_id + current_organization_id, best-effort with `reportSilentFallback`). Also at `active-repo/route.ts:59`.
+- [x] 0.2 Resolver path confirmed: `resolveActiveWorkspacePath:339` → `resolveCurrentWorkspaceId:190` reads `user_session_state.current_workspace_id`, `?? userId` solo-fallback at `:217`. (`agent-runner.ts:994` resolves agent cwd through it.)
+- [x] 0.3 Resume SELECT confirmed `"id, status, repo_url"` at `ws-handler.ts:1613` (no `workspace_id`); switch point is right after `session.conversationId = msg.conversationId` at `:1634`; terminal catch `:1649-1653` (no `.catch` replay).
+- [x] 0.4 cc-dispatcher `persistUserMessage` reads `conversations.workspace_id` (`~2203`) — FR2 branches off it.
+- [x] 0.5 **No connection-state input in the reducer** (grep of `chat-state-machine.ts` for connect/socket/disconnect found only a comment). → FR4 ships the accurate single "No response yet" state; state-1/2 split defers to #5282.
+- [ ] 0.6 Baseline `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (run at GREEN start).
+
+**FR1 GREEN recipe (verified):** at `ws-handler.ts:1613` add `workspace_id` to `.select(...)`; after `:1634` add `const { error: switchErr } = await tenantResumeConv.rpc("set_current_workspace_id", { p_workspace_id: (conv as {workspace_id:string}).workspace_id }); if (switchErr) reportSilentFallback({code:switchErr.code,message:switchErr.message}, { feature:"session-resume", op:"resume-workspace-rebind", message:..., extra:{userId, conversationId: msg.conversationId} });` (mirror accept-invite:78-91). RED test: integration-style (`TENANT_INTEGRATION_TEST=1`, model on `test/server/ws-handler.tenant-isolation.test.ts`) asserting the resumed session resolves to `conversations.workspace_id`, OR a focused unit test spying the tenant client `.rpc` call.
 
 ## Phase 1 — FR1 verified rebind (server) [RED→GREEN]
 - [ ] 1.1 RED: test resume aligns `user_session_state.current_workspace_id` to `conversations.workspace_id` (assert the field/resolved cwd, NOT the in-memory map).
