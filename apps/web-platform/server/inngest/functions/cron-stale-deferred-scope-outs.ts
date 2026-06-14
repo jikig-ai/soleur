@@ -76,6 +76,14 @@ const SENTRY_MONITOR_SLUG = "scheduled-stale-deferred-scope-outs";
  * review-todo-structure runbook so re-filers know what re-evaluation
  * trigger to attach.
  */
+// Stable idempotency sentinel appended to every auto-close comment. The
+// GET-before-POST guard (issue #5231) matches on THIS marker via substring
+// `includes`, NOT full-body equality. Exact `=== COMMENT_BODY` is brittle:
+// GitHub may return stored comment bodies with CRLF line endings (our body is
+// `\n`-joined), and the prose below is copy-edited over time — either divergence
+// would silently break the match and re-POST, defeating the guard. The marker
+// is an HTML comment so it renders invisibly on the rendered issue.
+const COMMENT_MARKER = "<!-- soleur:auto-close-stale-scope-out -->";
 const COMMENT_BODY = [
   "Auto-closing: this issue has been open with no activity for 90+ days.",
   "",
@@ -84,6 +92,8 @@ const COMMENT_BODY = [
   "Open-ended scope-outs accumulate into the backlog this auto-close exists to drain.",
   "",
   "See PR #4452 for rationale; apply the `do-not-autoclose` label to exempt.",
+  "",
+  COMMENT_MARKER,
 ].join("\n");
 
 // =============================================================================
@@ -235,10 +245,19 @@ export async function sweepStaleScopeOuts(args: {
     if (dryRun) continue;
 
     try {
-      // Idempotency guard (issue #5231): on an Inngest replay the comment POST
-      // may already have landed; skip it if COMMENT_BODY is already present.
-      // The GET is wrapped in withGithubRetry to absorb transient connect
+      // Idempotency guard (issue #5231): a prior attempt (Inngest retry after a
+      // mid-sweep throw, or the GH-search eventual-consistency window) may have
+      // already posted the auto-close comment; skip the POST if the COMMENT_MARKER
+      // sentinel is already present. This is a runtime read-back guard, not an
+      // Inngest step-memoization barrier — concurrent sweeps are prevented by the
+      // fn-scoped `concurrency.limit: 1` above; this guard covers sequential
+      // retries. The GET is wrapped in withGithubRetry to absorb transient connect
       // timeouts (same rationale as the search call in fetchCandidates).
+      // per_page: 100 (not the default 10): this endpoint returns comments
+      // oldest-first, so the just-posted auto-close comment lands LAST — a tight
+      // page size would paginate it out of view on a chatty issue and re-POST.
+      // 100 covers any realistic 90-day-stale scope-out (a >100-comment thread
+      // reaching auto-close is out of scope).
       const commentsRes = await withGithubRetry(() =>
         octokit.request(
           "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
@@ -246,13 +265,13 @@ export async function sweepStaleScopeOuts(args: {
             owner,
             repo,
             issue_number: num,
-            per_page: 10,
+            per_page: 100,
           },
         ),
       );
       const alreadyCommented = (
         commentsRes.data as Array<{ body?: string }>
-      ).some((c) => c.body === COMMENT_BODY);
+      ).some((c) => c.body?.includes(COMMENT_MARKER) ?? false);
 
       // The comment POST and close PATCH are SEPARATE withGithubRetry wrappers
       // (NOT one around both): wrapping both together would re-POST the comment
@@ -468,5 +487,6 @@ export const __TESTING__ = {
   TARGET_LABEL,
   KILLSWITCH_LABEL,
   COMMENT_BODY,
+  COMMENT_MARKER,
   sweepStaleScopeOuts,
 };
