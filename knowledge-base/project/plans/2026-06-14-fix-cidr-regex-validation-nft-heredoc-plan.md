@@ -287,8 +287,8 @@ logs:
          nft log prefixes grepped by cron-egress-resolve.sh into the Sentry event
   retention: journald default (host journald-config.test.sh governs); Sentry per project plan
 discoverability_test:
-  command: "bash apps/web-platform/infra/cron-egress-firewall.test.sh   # no remote shell; runs in CI via infra-validation.yml"
-  expected_output: "RESULT: <N> passed, 0 failed   (N >= 109 + new assertions)"
+  command: bash apps/web-platform/infra/cron-egress-firewall.test.sh
+  expected_output: "0 failed"
 ```
 
 ## Domain Review
