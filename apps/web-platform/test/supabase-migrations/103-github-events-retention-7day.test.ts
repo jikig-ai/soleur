@@ -64,27 +64,38 @@ describe("migration 103_github_events_retention_7day — re-schedule", () => {
   it("does NOT use a non-existent created_at column", () => {
     expect(executable).not.toMatch(/processed_github_events[\s\S]*?created_at/i);
   });
+
+  it("guards idempotency with EXCEPTION WHEN duplicate_object", () => {
+    // The re-schedule's idempotency rests on both the cron.unschedule guard
+    // (asserted above) AND this exception handler; pin both so a regression
+    // dropping the handler is visible.
+    expect(executable).toMatch(/exception\s+when\s+duplicate_object/i);
+  });
 });
 
 describe("migration 103_github_events_retention_7day — one-time purge", () => {
-  it("runs a one-time top-level DELETE of rows older than 7 days at deploy", () => {
-    // The scheduled DELETE lives inside a cron.schedule(...) $$...$$ literal;
-    // the one-time purge is a bare top-level statement. There must be at least
-    // two distinct `DELETE FROM public.processed_github_events ... 7 days`
-    // occurrences (the cron body + the one-time purge).
-    const matches = executable.match(
+  // Strip the cron.schedule($$...$$) body so only top-level statements remain.
+  // The one-time purge must survive as a bare top-level DELETE — a position-
+  // aware check, NOT a position-blind count (a duplicated cron body must not
+  // satisfy it; dropping the at-deploy purge must fail).
+  const topLevel = executable.replace(/\$\$[\s\S]*?\$\$/g, "");
+
+  it("runs exactly one one-time top-level DELETE of rows older than 7 days at deploy", () => {
+    const matches = topLevel.match(
       /delete\s+from\s+public\.processed_github_events\s+where\s+received_at\s*<\s*now\(\)\s*-\s*interval\s+'7\s+days'/gi,
     );
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
+    expect(matches!.length).toBe(1);
   });
 });
 
 describe("migration 103_github_events_retention_7day — stale-comment correction", () => {
-  it("corrects the COMMENT ON TABLE and drops the false 'partition rotation' claim", () => {
+  it("corrects the COMMENT ON TABLE, states the new window, and drops the false 'partition rotation' claim", () => {
     expect(executable).toMatch(
       /comment\s+on\s+table\s+public\.processed_github_events\s+is/i,
     );
+    // Pin the corrected mechanism is present (not just that the false claim is gone).
+    expect(executable).toMatch(/comment\s+on\s+table[\s\S]*?7 days/i);
     expect(executable).not.toMatch(/partition\s+rotation/i);
   });
 });
