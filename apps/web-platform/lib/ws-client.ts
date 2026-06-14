@@ -456,6 +456,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const realConversationIdRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
+  // feat-stream-since-disconnect (#5273) — highest server-stamped `seq` this
+  // client has rendered for the active conversation. Sent as the `ackSeq`
+  // cursor on a transient reconnect (`resume_stream`) and used to dedup
+  // replayed frames (`seq <= lastRenderedSeq` were already applied). Survives
+  // socket drops (a ref). Reset to -1 on a new/resumed session and on the
+  // honest-refetch (`stream_replay{incomplete}`) path. See ADR-059.
+  const lastRenderedSeqRef = useRef<number>(-1);
+  // True once the first `auth_ok` of this hook's life has landed. Gates the
+  // `resume_stream` reattach to genuine RECONNECTS only — a fresh initial
+  // connect must not request replay (its history fetch is authoritative and a
+  // replayed `usage_update` would double-count against it).
+  const hasConnectedBeforeRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
   /** Most-recent close preamble carried on `ws.message` before `ws.close` fires.
@@ -676,10 +688,45 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       }
       const msg = parseResult.msg;
 
+      // feat-stream-since-disconnect (#5273) — replay dedup gate. Buffered-
+      // family frames carry a server-stamped monotonic `seq`. After a within-
+      // grace reconnect the server replays the gap's frames; any with
+      // `seq <= lastRenderedSeq` were already rendered live (pre-disconnect)
+      // and MUST be dropped BEFORE applying — critically before the additive
+      // `usage_update` accumulation below, or replayed cost double-counts. New
+      // gap frames (`seq > lastRenderedSeq`) advance the cursor and render.
+      // Non-buffered frames carry no `seq` and bypass the gate.
+      const frameSeq = (msg as { seq?: number }).seq;
+      if (typeof frameSeq === "number") {
+        if (frameSeq <= lastRenderedSeqRef.current) {
+          return; // already-rendered replayed frame — drop
+        }
+        lastRenderedSeqRef.current = frameSeq;
+      }
+
       switch (msg.type) {
         case "auth_ok": {
           setStatus("connected");
           backoffRef.current = INITIAL_BACKOFF;
+          // feat-stream-since-disconnect (#5273) — on a genuine RECONNECT (not
+          // the first connect of this hook's life), if we were mid-conversation
+          // when the socket dropped, reattach to the live stream and request
+          // replay of frames emitted during the gap. The agent kept running
+          // through the 30s grace window, so the server replays `seq > ackSeq`
+          // then live frames resume; on a miss it sends stream_replay{incomplete}
+          // and we fall back to an honest history refetch. NOT resume_session
+          // (which would abort the live agent).
+          const isReconnect = hasConnectedBeforeRef.current;
+          hasConnectedBeforeRef.current = true;
+          const activeConvId = realConversationIdRef.current;
+          if (isReconnect && activeConvId) {
+            const ackSeq = lastRenderedSeqRef.current;
+            send({
+              type: "resume_stream",
+              conversationId: activeConvId,
+              ...(ackSeq >= 0 ? { ackSeq } : {}),
+            });
+          }
           break;
         }
 
@@ -870,6 +917,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             realConversationIdRef.current = msg.conversationId;
           }
           setResumedFrom(null);
+          // feat-stream-since-disconnect (#5273) — a new conversation's stream
+          // starts at seq 0; reset the replay cursor so the first live frame
+          // is never mistaken for an already-rendered replay.
+          lastRenderedSeqRef.current = -1;
           // Deferred-creation: no DB row exists for this pending UUID yet
           // (it materializes on the first chat message). Mark fresh so the
           // resume-history effect skips the would-be-404 fetch (FR1).
@@ -880,6 +931,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_resumed": {
           setRealConversationId(msg.conversationId);
+          // feat-stream-since-disconnect (#5273) — full transcript resume
+          // rehydrates from persisted history; reset the replay cursor.
+          lastRenderedSeqRef.current = -1;
           // Same synchronous-ref invariant as session_started — a fast
           // Stop click after `session_resumed` lands but before the
           // mirroring useEffect runs MUST find the resolved id.
@@ -951,11 +1005,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
         case "stream_replay": {
-          // feat-stream-since-disconnect (#5273) — fallback signal: the
-          // server could not replay from the requested cursor (cursor evicted
-          // or buffer map-evicted). Fall back to the v1 honest persisted-
-          // history refetch (never a silent stale/duplicate render). Full
-          // honest-refetch + cost-reconcile body wired in Phase 4.
+          // feat-stream-since-disconnect (#5273) — fallback signal: the server
+          // could not replay from our cursor (evicted, or the buffer was
+          // reclaimed after grace/abort). Fall back to the v1 honest persisted-
+          // history refetch (never a silent stale/duplicate render), and
+          // reconcile cost to the AUTHORITATIVE persisted value — the additive
+          // pre-disconnect `usage_update` partials may have over/under-counted,
+          // and the normal `seedCostData` (prev ?? costData) would keep the
+          // stale in-memory value. Reset the replay cursor so subsequent live
+          // frames render from the rehydrated base. See ADR-059.
+          lastRenderedSeqRef.current = -1;
+          const targetId = realConversationIdRef.current ?? msg.conversationId;
+          const controller = new AbortController();
+          void runHistoryFetch(targetId, controller, { reconcileCost: true });
           break;
         }
         default: {
@@ -1242,7 +1304,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // the dispatch + seed + Sentry-mirror lifecycle in one place so a future
   // change (extra seed, retry policy, etc.) cannot drift between the two
   // call sites — exactly the failure mode that produced this bug class.
-  async function runHistoryFetch(targetId: string, controller: AbortController) {
+  async function runHistoryFetch(
+    targetId: string,
+    controller: AbortController,
+    opts?: { reconcileCost?: boolean },
+  ) {
     setHistoryLoading(true);
     try {
       const result = await fetchConversationHistory(targetId, controller.signal);
@@ -1265,7 +1331,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // landed while the fetch was in flight — strictly safer than an
       // activeStreams.size === 0 guard.
       dispatch({ type: "filter_prepend", messages: result.messages });
-      seedCostData(result.costData);
+      // feat-stream-since-disconnect (#5273) — on the replay-incomplete path,
+      // OVERWRITE cost to the authoritative persisted value (the additive
+      // pre-disconnect partials are no longer trustworthy); otherwise keep the
+      // default `prev ?? costData` seed so a racing live `usage_update` wins.
+      const reconciledCost = result.costData;
+      if (opts?.reconcileCost && reconciledCost) {
+        setUsageData(() => reconciledCost);
+      } else {
+        seedCostData(result.costData);
+      }
       seedWorkflowEndedAt(result.workflowEndedAt);
       // PR-B (#3603): write the resolved row's createdAt. Unlike
       // seedCostData/seedWorkflowEndedAt (which guard against racing WS

@@ -187,6 +187,50 @@ describe("StreamReplayBuffer TTL sweep", () => {
   });
 });
 
+describe("StreamReplayBuffer replay scenarios (#5273)", () => {
+  it("flapping: each reconnect with an advancing ackSeq replays only the new tail", () => {
+    const buf = newBuffer();
+    for (let i = 0; i < 3; i++) buf.stamp("conv-a", streamFrame(), i + 1); // seq 0,1,2
+    // First reconnect: client had rendered seq 0 → gets 1,2.
+    expect(buf.replayFrom("conv-a", 0).frames.map((f) => f.seq)).toEqual([1, 2]);
+    // More frames arrive, client now at seq 2.
+    buf.stamp("conv-a", streamFrame(), 4); // seq 3
+    buf.stamp("conv-a", streamFrame(), 5); // seq 4
+    // Second reconnect: client at seq 2 → gets only 3,4 (not the whole tail).
+    expect(buf.replayFrom("conv-a", 2).frames.map((f) => f.seq)).toEqual([3, 4]);
+    // Third reconnect at seq 4 → nothing new, still complete.
+    const r = buf.replayFrom("conv-a", 4);
+    expect(r.frames).toEqual([]);
+    expect(r.status).toBe("complete");
+  });
+
+  it("trailing-emit after clear: a frame stamped post-clear re-seeds a buffer at the continued seq", () => {
+    const buf = newBuffer();
+    for (let i = 0; i < 3; i++) buf.stamp("conv-a", streamFrame(), i + 1); // seq 0,1,2
+    buf.clear("conv-a"); // abort/grace teardown — frames gone, counter kept
+    // The runner's abort branch emits one trailing frame AFTER clear ran.
+    const trailing = buf.stamp("conv-a", streamFrame("aborted"), 9);
+    expect(trailing.seq).toBe(3); // counter continued, never rewound to 0
+    // A reconnect now sees only the trailing frame (honest: the turn ended).
+    expect(buf.replayFrom("conv-a", 2).frames.map((f) => f.seq)).toEqual([3]);
+  });
+
+  it("turn-completed-while-gone: a buffered terminal session_ended is replayed", () => {
+    const buf = newBuffer();
+    buf.stamp("conv-a", streamFrame("partial"), 1); // seq 0
+    buf.stamp(
+      "conv-a",
+      { type: "session_ended", reason: "turn_complete", conversationId: "conv-a" },
+      2,
+    ); // seq 1
+    // User was gone at turn-end; reconnect within grace replays the tail
+    // INCLUDING the terminal frame → client renders "ended while you were away".
+    const { frames, status } = buf.replayFrom("conv-a", -1);
+    expect(status).toBe("complete");
+    expect(frames.map((f) => f.type)).toEqual(["stream", "session_ended"]);
+  });
+});
+
 describe("BufferedFrame type", () => {
   it("requires a numeric seq (compile-time invariant, asserted at runtime)", () => {
     const buf = newBuffer();
