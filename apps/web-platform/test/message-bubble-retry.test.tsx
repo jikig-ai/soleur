@@ -18,7 +18,7 @@ import { MessageBubble } from "../components/chat/message-bubble";
 // ---------------------------------------------------------------------------
 
 describe("MessageBubble retry + error render (FR5 #2861)", () => {
-  test("tool_use bubble with retrying=true shows RetryingChip, not ToolStatusChip", () => {
+  test("tool_use bubble with retrying=true shows an honest 'No response yet' chip, never the 'Retrying…' lie (FR4 #5240)", () => {
     const { container, getByTestId } = render(
       <MessageBubble
         role="assistant"
@@ -28,11 +28,14 @@ describe("MessageBubble retry + error render (FR5 #2861)", () => {
         retrying
       />,
     );
-    // RetryingChip is present with role="status" + aria-live
+    // The chip is present with role="status" + aria-live
     const chip = getByTestId("retrying-chip");
     expect(chip).toBeTruthy();
     expect(chip.getAttribute("aria-live")).toBe("polite");
-    expect(chip.textContent).toContain("Retrying…");
+    // FR4: nothing is actually retried on a silent stream — the copy must be
+    // honest ("No response yet"), never the fabricated "Retrying…".
+    expect(chip.textContent).toContain("No response yet");
+    expect(chip.textContent).not.toContain("Retrying");
     // Last activity label is shown below
     expect(chip.textContent).toContain("Searching code");
     // container reference retained so future assertions (e.g., "no duplicate
