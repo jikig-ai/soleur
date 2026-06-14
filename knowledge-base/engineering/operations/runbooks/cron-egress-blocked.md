@@ -58,6 +58,19 @@ likelihood order:
 4. Re-validate the affected flow (`/soleur:trigger-cron <event>` for crons;
    the user-facing flow itself otherwise).
 
+## Remediation (loader `die "invalid CIDR …"`)
+
+If `cron-egress-firewall.service` failed (not a drop page) and journald shows
+`[cron-egress-nftables] ERROR: invalid CIDR in … '<line>'`, the committed
+`apps/web-platform/infra/cron-egress-allowlist-cidr.txt` carries a malformed
+line (#5242 hardening: the loader rejects the **whole file** rather than
+inject an unvalidated line into the nft heredoc). Each line must be a strict
+IPv4 CIDR (`A.B.C.D/N`, octets ≤ 255, prefix ≤ 32); comments/blanks are fine.
+A CRLF-saved file also fails (trailing `\r`). **Fix the committed file and
+merge — do NOT SSH-patch nft;** the provisioner re-runs the loader on push.
+Until fixed, the firewall is fail-open-on-bootstrap (no default-drop installed),
+so treat it as time-sensitive.
+
 ## Remediation (suspected exfil)
 
 Treat as a security incident (`/soleur:incident`). Do NOT widen the
