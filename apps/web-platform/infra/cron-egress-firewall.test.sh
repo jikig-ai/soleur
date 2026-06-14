@@ -112,6 +112,15 @@ if echo "$SERVER_BLOCK" | grep -q 'egress-probe-positive'; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: post-apply positive container probe missing"
 fi
+# The service is Type=oneshot/RemainAfterExit=yes, so `enable --now` no-ops on an
+# already-active unit and the loader never re-reads a freshly-provisioned CIDR file
+# (the inert-fix bug behind incident 5516336). The provisioner MUST `restart` to
+# re-run the loader so file changes actually load into the live nft set.
+if echo "$SERVER_BLOCK" | grep -q 'systemctl restart cron-egress-firewall\.service'; then
+  PASS=$((PASS + 1)); echo "  PASS: provisioner restarts the firewall service (reloads new CIDR; not a no-op enable --now)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: provisioner must 'systemctl restart cron-egress-firewall.service' — enable --now no-ops on the active oneshot and a new CIDR file never loads"
+fi
 
 echo "-- apply workflow SSH -target --"
 assert_grep "workflow -targets cron_egress_firewall" 'target=terraform_data\.cron_egress_firewall' "$WORKFLOW"
