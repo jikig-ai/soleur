@@ -84,6 +84,20 @@ function httpErrorWithResponse(
   return err;
 }
 
+// Builds octokit's REAL wrapped shape for an undici connect timeout: a
+// RequestError (HttpError, status 500) whose `.cause` is the raw
+// `TypeError: fetch failed`, whose own `.cause` carries the undici code.
+// `isRetryableGithubError` walks this chain (see github-retry.ts). A flat
+// `.cause = { code: ... }` would NOT match — `isRetryable`'s code arm
+// requires `instanceof Error`; the middle TypeError is the load-bearing link.
+function httpErrorWithTransientCause(message: string, status: number): Error {
+  return Object.assign(httpError(message, status), {
+    cause: Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_CONNECT_TIMEOUT" },
+    }),
+  });
+}
+
 describe("createProbeOctokit retry-on-401", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -262,6 +276,30 @@ describe("createProbeOctokit retry-on-401", () => {
     expect(ghBody.length).toBeLessThanOrEqual(500);
     // No control chars, DEL, or Unicode line/paragraph separators survive.
     expect(ghBody).not.toMatch(/[\x00-\x1f\x7f\u2028\u2029]/);
+  });
+
+  test("retries on a transient connect-timeout cause (widened beyond 401-only)", async () => {
+    // Status 500 with a buried UND_ERR_CONNECT_TIMEOUT cause — the old
+    // 401-only guard captured-and-rethrew this immediately. The widened
+    // `status === 401 || isRetryableGithubError(err)` guard retries it.
+    const errTimeout = httpErrorWithTransientCause(
+      "request to https://api.github.com/repos/jikig-ai/soleur/installation failed",
+      500,
+    );
+    mockRequest
+      .mockRejectedValueOnce(errTimeout)
+      .mockResolvedValueOnce({ data: { id: 12345 } });
+    const fakeOctokit = { request: vi.fn() };
+    mockGetInstallationOctokit.mockResolvedValueOnce(fakeOctokit);
+
+    const promise = createProbeOctokit();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result).toBe(fakeOctokit);
+    // Two App instances — fresh JWT per attempt, same as the 401 path.
+    expect(MockApp).toHaveBeenCalledTimes(2);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
   });
 
   test("does NOT retry on 404", async () => {
