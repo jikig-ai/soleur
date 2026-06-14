@@ -35,6 +35,7 @@ import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ing
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
+import { cronGithubCidrRefresh } from "@/server/inngest/functions/cron-github-cidr-refresh";
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
 import { cronGrowthExecution } from "@/server/inngest/functions/cron-growth-execution";
 import { cronInngestCronWatchdog } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
@@ -131,6 +132,7 @@ export const { GET, POST, PUT } = serve({
     cronFollowThroughMonitor,
     cronGhPagesCertState,
     cronGithubAppDriftGuard,
+    cronGithubCidrRefresh,
     cronGrowthAudit,
     cronGrowthExecution,
     cronInngestCronWatchdog,
