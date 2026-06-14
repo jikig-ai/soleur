@@ -53,31 +53,41 @@ We are building the **falsifiable prerequisite**, not the consolidation pass.
 > (zero LLM noise, free to recompute → recurrence is genuinely affordable) and demotes the recall bench
 > to an **optional informational input**.
 
+> **[Trimmed 2026-06-14 after 3-reviewer plan-review.]** Cut staleness/age + per-subdir reporting (gate
+> reads only corpus-wide density); cut FR4's live demo + corpus touch (zero corpus mutation now); folded
+> the checkpoint into the existing daily sweeper (no new workflow, dodges 60-day scheduled-disablement);
+> corrected auth to `GITHUB_TOKEN` + scoped `permissions:` (matching the cited precedents, not App token).
+
 - **FR1** — Build `scripts/kb-staleness-metric.sh`: a **deterministic, pure-local** (NO external API)
-  scanner of `knowledge-base/project/learnings/` emitting `kb-staleness-metrics-<date>.json`. Signals:
-  per-corpus + per-subdir **staleness** (git last-commit age — NOT filesystem mtime, which is checkout
-  time in a worktree — p50/p90, count older-than-180d/365d) and **corpus-wide redundancy** (near-duplicate
-  density via title+tag Jaccard ≥ 0.6, min-pair floor). Self-tested per `cq-test-fixtures-synthesized-only`.
-  Run once now → commit the **2026-06-14 baseline**. Cost: $0 (no API), seconds to run.
-- **FR2** — Surface metrics without SSH (`hr-no-dashboard-eyeball-pull-data-yourself` /
-  `hr-no-ssh-fallback-in-runbooks`): the date-stamped JSON is committed (readable via the app.soleur.ai
-  KB viewer + GitHub), and a stable `knowledge-base/project/kb-health.md` carries the latest human-readable
-  snapshot so it is discoverable without knowing the date-stamped filename.
+  scanner of `knowledge-base/project/learnings/` (excluding `**/archive/**`) emitting
+  `kb-redundancy-metrics-<date>.json`. **One gated signal — corpus-wide redundancy density:** all-pairs
+  near-duplicate density via `Jaccard(title-tokens ∪ tags) ≥ 0.6` (n≈1549 → ~seconds, **no blocking key**
+  — it only introduced false negatives). **Title-less fallback** (~15% of corpus lacks `title:`): derive
+  tokens from the date-stripped filename slug. CLO **exempt classes** (`compliance/`, `security-issues/`,
+  incident/PIR, frontmatter `category: compliance|security-issues` / `regulation:`) are counted in the
+  denominator but never listed in `top_pairs`. Self-tested (`cq-test-fixtures-synthesized-only`) with
+  positive, **false-negative**, and **title-less** fixtures. **No `schema` versioning.** Run once →
+  commit the **2026-06-14 baseline density**. Cost: $0, seconds. *(Staleness/per-subdir CUT: a
+  stale-but-unique learning should not be consolidated, so staleness is not a gate signal.)*
+- **FR2** — Surface without SSH (`hr-no-dashboard-eyeball-pull-data-yourself` /
+  `hr-no-ssh-fallback-in-runbooks`): the date-stamped JSON is committed (readable via app.soleur.ai KB
+  viewer + GitHub), and a stable `knowledge-base/project/kb-health.md` carries the latest human-readable
+  snapshot (committed baseline density + top pairs) so it is discoverable without the date-stamped filename.
 - **FR3** — Define the **authoritative decision rule** (single source of truth; see Re-Evaluation
-  Criteria below). The hard gate clauses are deterministic (redundancy + a recorded outcome field); the
-  LLM recall bench (R@5/MRR) is an **informational input only**, never a hard clause.
-- **FR4** — Define the minimal **closure-lifecycle** frontmatter (`superseded_by:` / `status:`),
-  additive-only, with a documented way to set it, and demonstrate it once on a real superseded pair. This
-  is **enabling infrastructure**, not a hard gate clause (a single hand-made closure proves writability,
-  not closure rate — spec-flow finding). No bulk rewrite of existing files.
-- **FR5** — Update #5292 to a deferred tracker carrying the revised criteria **and a required dated
-  `named_outcome:` field**, AND stand up a **real dated checkpoint trigger** (FR6) so the gate cannot
-  silently dangle.
-- **FR6** — Create a **dated governance checkpoint** (GHA scheduled workflow, precedent
-  `scheduled-followthrough-sweeper.yml`) that fires on/after **2026-08-13**, re-runs
-  `kb-staleness-metric.sh`, evaluates the decision rule, and opens/updates a decision issue assigned to
-  `engineering` linked to #5292 — pure bash + `gh`, no agent, no Anthropic. This is the owner+trigger
-  the dangle-prevention requires.
+  Criteria below). Hard clauses are deterministic (redundancy density + a recorded outcome field); the
+  LLM recall bench (R@5/MRR) is **informational only**, never a hard clause.
+- **FR4** — **(Trimmed to a one-line convention, reserved for #5292.)** Record the closure-lifecycle
+  convention — additive `superseded_by: <path>` frontmatter, never edit/delete a body, never archive an
+  exempt class (CLO G2/G3) — in #5292's body and the spec. **No live demo, no corpus file touched in this
+  PR** (a single hand-made closure proves only writability — plan-review). The convention's first real use
+  lands with the #5292 consolidation pass, its only consumer.
+- **FR5** — Update #5292: revised criteria + a required dated `named_outcome:` field the checkpoint reads.
+- **FR6** — **Fold a dated checkpoint step into the existing `scheduled-followthrough-sweeper.yml`** (runs
+  daily, stays active → no 60-day-disablement dangle): on/after **2026-08-13**, if #5292 is open and not
+  yet adjudicated, run `kb-staleness-metric.sh`, evaluate the decision rule, and comment the verdict on
+  #5292 (build-recommended or close-recommended). **Pure bash + `gh`**, `GITHUB_TOKEN` + `permissions:
+  { contents: read, issues: write }` (NOT App token, NOT PAT — matching the precedent), no agent, no
+  Anthropic. Fallback if folding is unclean: a dated issue assigned to `engineering`.
 
 ## Technical Requirements
 
@@ -91,8 +101,11 @@ We are building the **falsifiable prerequisite**, not the consolidation pass.
   by an explicit/opt-in path, never a blanket sweep.
 - **TR3** — FR6's checkpoint is a **GHA governance workflow**, not an Inngest `cron-*.ts`; the
   six-registry lockstep does NOT apply. (It applies only if/when the #5292 consolidation cron is built.)
-- **TR4** — GitHub App auth, not PAT (`hr-github-app-auth-not-pat`); silent fallbacks mirror to Sentry
-  (`cq-silent-fallback-must-mirror-to-sentry`).
+- **TR4** — CI GitHub writes use `GITHUB_TOKEN` + scoped `permissions:` (matching
+  `scheduled-followthrough-sweeper.yml` / `rule-metrics-aggregate.yml`), **never a PAT**
+  (`hr-github-app-auth-not-pat` forbids PATs; the auto-scoped Actions `GITHUB_TOKEN` is not a PAT and is
+  the convention for same-repo issue writes — a GitHub App token is unnecessary here). Silent fallbacks
+  mirror to Sentry (`cq-silent-fallback-must-mirror-to-sentry`).
 
 ## CLO Guardrails (mandatory whenever #5292 is built)
 
@@ -109,17 +122,23 @@ We are building the **falsifiable prerequisite**, not the consolidation pass.
 > This block is the **only** place the gate is defined (spec-flow flagged a 3-vs-4-clause spec/brainstorm
 > contradiction). The brainstorm and plan reference this; they do not redefine it.
 
-**Trigger & owner:** the FR6 dated GHA checkpoint fires on/after **2026-08-13**, recomputes
-`kb-staleness-metric.sh` against the same authoritative corpus snapshot (archive-excluded learnings),
-and opens a decision issue assigned to `engineering` linked to #5292. The checkpoint **always produces a
-verdict** (build-recommended or close-recommended) — there is no "unmeasured/dangle" state, because the
-deterministic local metric is always computable.
+**Trigger & owner:** the FR6 step folded into the daily `scheduled-followthrough-sweeper.yml` fires
+on/after **2026-08-13**, recomputes `kb-staleness-metric.sh` against the same authoritative corpus
+snapshot (archive-excluded learnings), and comments a verdict on #5292 (assigned to `engineering`). The
+checkpoint **always produces a verdict** (build-recommended or close-recommended) — there is no
+"unmeasured/dangle" state, because the deterministic local metric is always computable, and the host
+sweeper runs daily (no 60-day scheduled-workflow-disablement risk).
 
 **Build #5292 only if BOTH hard clauses hold at the checkpoint:**
 
-1. **Redundancy is material** — corpus-wide near-duplicate density ≥ **15%** (absolute) **OR** grew
-   ≥ **5 percentage points** vs the 2026-06-14 baseline, measured by the deterministic
-   `kb-staleness-metric.sh` (zero LLM noise; the baseline and checkpoint use the byte-identical committed
+1. **Redundancy is material** — **primary (trustworthy) clause:** corpus-wide near-duplicate density grew
+   ≥ **5 percentage points** vs the 2026-06-14 baseline; **secondary shortcut:** absolute density ≥
+   **15%**. The delta clause is robust to the Jaccard threshold and the (now-removed) blocking key; the
+   absolute floor is softer (density is a **lower bound** — Jaccard misses paraphrase-without-token-overlap).
+   The **2026-06-14 baseline is computed and committed in this PR before the threshold is final** — if the
+   baseline already ≥ 15%, the absolute shortcut is inert and only the +5pp delta arm governs (so the gate
+   is never pre-decided). Measured by the deterministic `kb-staleness-metric.sh` (zero LLM noise; baseline
+   and checkpoint use the byte-identical committed
    script, so the delta is meaningful). Corpus-wide (not per-subdir) to cover the ~69% loose top-level
    files; exempt classes counted in the denominator but never proposed as merge candidates.
 2. **A named outcome exists** — #5292's `named_outcome:` field is non-empty and dated within the window:
