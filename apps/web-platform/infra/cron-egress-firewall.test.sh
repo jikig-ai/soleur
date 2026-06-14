@@ -26,6 +26,10 @@ LOADER="$SCRIPT_DIR/cron-egress-nftables.sh"
 RESOLVER="$SCRIPT_DIR/cron-egress-resolve.sh"
 ALARM="$SCRIPT_DIR/cron-egress-alarm.sh"
 ALLOWLIST="$SCRIPT_DIR/cron-egress-allowlist.txt"
+# Post-apply assertion block, extracted to its own delivered script (#5289) so
+# an edit to it changes config_hash and re-provisions — inline-block edits were
+# silent no-ops (the hash folded only the 9 artifacts, not the inline block).
+ASSERT_SCRIPT="$SCRIPT_DIR/cron-egress-postapply-assert.sh"
 
 PASS=0
 FAIL=0
@@ -72,18 +76,20 @@ for f in "$LOADER" "$RESOLVER" "$ALARM" "$ALLOWLIST" \
   "$SCRIPT_DIR/cron-egress-firewall.service" \
   "$SCRIPT_DIR/cron-egress-resolve.service" \
   "$SCRIPT_DIR/cron-egress-resolve.timer" \
-  "$SCRIPT_DIR/cron-egress-alarm@.service"; do
+  "$SCRIPT_DIR/cron-egress-alarm@.service" \
+  "$ASSERT_SCRIPT"; do
   assert_cmd "exists: $(basename "$f")" test -f "$f"
 done
 assert_cmd "loader parses (bash -n)" bash -n "$LOADER"
 assert_cmd "resolver parses (bash -n)" bash -n "$RESOLVER"
 assert_cmd "alarm parses (bash -n)" bash -n "$ALARM"
+assert_cmd "post-apply assert script parses (bash -n)" bash -n "$ASSERT_SCRIPT"
 
 echo "-- server.tf delivery (anchored on the file-provisioner construct) --"
 assert_grep "resource exists" 'resource "terraform_data" "cron_egress_firewall"' "$SERVER_TF"
 for f in cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
   cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt cron-egress-firewall.service \
-  cron-egress-resolve.service cron-egress-resolve.timer; do
+  cron-egress-resolve.service cron-egress-resolve.timer cron-egress-postapply-assert.sh; do
   assert_grep "delivers $f (source=)" "source += +\"\\\$\\{path\\.module\\}/$f\"" "$SERVER_TF"
   assert_grep "trigger folds $f hash" "file\\(\"\\\$\\{path\\.module\\}/$f\"\\)" "$SERVER_TF"
 done
@@ -102,21 +108,27 @@ else
 fi
 # Live positive+negative probe (AC-P2.8 iii — the silent-green guard: nft -f
 # exits 0 on an inert ruleset; only a real container probe proves enforcement).
-if echo "$SERVER_BLOCK" | grep -q 'egress-probe-negative'; then
+# These constructs moved from the inline remote-exec to the delivered
+# cron-egress-postapply-assert.sh (#5289); assert against the script now.
+# Anchor on the ASSERT-FAILED: sentinel (executable line only) NOT the bare
+# 'egress-probe-*' literal, which also appears in the script's comment prose —
+# a bare grep would false-pass if the executable probe line were deleted but
+# its comment kept (comment-prose false-match class, 2026-06-03 learning).
+if grep -qE 'ASSERT-FAILED: egress-probe-negative' "$ASSERT_SCRIPT"; then
   PASS=$((PASS + 1)); echo "  PASS: post-apply negative container probe present"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: post-apply negative container probe missing"
 fi
-if echo "$SERVER_BLOCK" | grep -q 'egress-probe-positive'; then
+if grep -qE 'ASSERT-FAILED: egress-probe-positive' "$ASSERT_SCRIPT"; then
   PASS=$((PASS + 1)); echo "  PASS: post-apply positive container probe present"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: post-apply positive container probe missing"
 fi
 # The service is Type=oneshot/RemainAfterExit=yes, so `enable --now` no-ops on an
 # already-active unit and the loader never re-reads a freshly-provisioned CIDR file
-# (the inert-fix bug behind incident 5516336). The provisioner MUST `restart` to
+# (the inert-fix bug behind incident 5516336). The assert script MUST `restart` to
 # re-run the loader so file changes actually load into the live nft set.
-if echo "$SERVER_BLOCK" | grep -q 'systemctl restart cron-egress-firewall\.service'; then
+if grep -q 'systemctl restart cron-egress-firewall\.service' "$ASSERT_SCRIPT"; then
   PASS=$((PASS + 1)); echo "  PASS: provisioner restarts the firewall service (reloads new CIDR; not a no-op enable --now)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: provisioner must 'systemctl restart cron-egress-firewall.service' — enable --now no-ops on the active oneshot and a new CIDR file never loads"
@@ -371,6 +383,7 @@ assert_not_grep "GHCR is HOST egress (must not be in the container allowlist)" '
 echo "-- cloud-init fresh-host mirror --"
 assert_grep "cloud-init writes the loader" '/usr/local/bin/cron-egress-nftables\.sh' "$CLOUD_INIT"
 assert_grep "cloud-init writes the resolver" '/usr/local/bin/cron-egress-resolve\.sh' "$CLOUD_INIT"
+assert_grep "cloud-init writes the post-apply assert script" '/usr/local/bin/cron-egress-postapply-assert\.sh' "$CLOUD_INIT"
 assert_grep "cloud-init writes the allowlist" '/etc/soleur/cron-egress-allowlist\.txt' "$CLOUD_INIT"
 assert_grep "cloud-init enables the firewall unit" 'systemctl enable --now cron-egress-firewall\.service' "$CLOUD_INIT"
 assert_grep "cloud-init enables the resolve timer" 'systemctl enable --now cron-egress-resolve\.timer' "$CLOUD_INIT"
@@ -384,12 +397,15 @@ echo "-- Phase 2.1: assertion-block self-reporting sentinels (#5279) --"
 # assertion MUST self-report via a unique `ASSERT-FAILED: <name>` sentinel
 # echoed BEFORE `exit 1`, so terraform's captured-on-error output names the
 # culprit even with stdout suppressed (no SSH; hr-no-ssh-fallback-in-runbooks).
-# Block = from the `chmod +x` line through `echo host-egress-ok`.
+# Block = from the `chmod +x` line through `echo host-egress-ok`. The block now
+# lives in its own delivered script (#5289 — folded into config_hash so edits
+# re-provision); the awk markers are unchanged, only the source file moved from
+# $SERVER_TF to the script.
 ASSERT_BLOCK="$(awk '
   /chmod \+x \/usr\/local\/bin\/cron-egress-nftables\.sh/ { grab=1 }
   grab { print }
   /echo host-egress-ok/ { grab=0 }
-' "$SERVER_TF")"
+' "$ASSERT_SCRIPT")"
 
 SENTINEL_COUNT="$(echo "$ASSERT_BLOCK" | grep -cE 'ASSERT-FAILED:')"
 if [[ "$SENTINEL_COUNT" -ge 15 ]]; then
@@ -405,8 +421,9 @@ fi
 # could be silently stripped while the floor's slack masked the count drop
 # (PR #5280 review P2). The `echo host-egress-ok` success marker and the
 # `if docker ps … fi` probe line (which carries its own two sentinels) are
-# intentionally not command-shaped here.
-UNGUARDED="$(echo "$ASSERT_BLOCK" | grep -nE '(chmod \+x|systemctl (daemon-reload|enable|restart|is-active)|nft list|docker network inspect|^[[:space:]]*"curl )' | grep -v 'ASSERT-FAILED' || true)"
+# intentionally not command-shaped here. The leading-`curl` arm anchors on the
+# bare script form (`^curl`, #5289 — no HCL quote now the block is a real .sh).
+UNGUARDED="$(echo "$ASSERT_BLOCK" | grep -nE '(chmod \+x|systemctl (daemon-reload|enable|restart|is-active)|nft list|docker network inspect|^[[:space:]]*curl )' | grep -v 'ASSERT-FAILED' || true)"
 if [[ -z "$UNGUARDED" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: no bare (sentinel-less) command remains in the block"
 else
