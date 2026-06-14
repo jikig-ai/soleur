@@ -358,6 +358,97 @@ assert_grep "cloud-init enables the firewall unit" 'systemctl enable --now cron-
 assert_grep "cloud-init enables the resolve timer" 'systemctl enable --now cron-egress-resolve\.timer' "$CLOUD_INIT"
 assert_grep "cloud-init installs nftables" '^ *- nftables$' "$CLOUD_INIT"
 
+echo "-- Phase 2.1: assertion-block self-reporting sentinels (#5279) --"
+# The post-apply assertion block (server.tf, the 2nd remote-exec) runs under
+# `set -e` with terraform's inline stdout SUPPRESSED — so a bare failing
+# assertion exits 1 with NO indication of WHICH check failed (the root reason
+# #5247 took 3 PRs to chase a one-line format mismatch nobody could see). Every
+# assertion MUST self-report via a unique `ASSERT-FAILED: <name>` sentinel
+# echoed BEFORE `exit 1`, so terraform's captured-on-error output names the
+# culprit even with stdout suppressed (no SSH; hr-no-ssh-fallback-in-runbooks).
+# Block = from the `chmod +x` line through `echo host-egress-ok`.
+ASSERT_BLOCK="$(awk '
+  /chmod \+x \/usr\/local\/bin\/cron-egress-nftables\.sh/ { grab=1 }
+  grab { print }
+  /echo host-egress-ok/ { grab=0 }
+' "$SERVER_TF")"
+
+SENTINEL_COUNT="$(echo "$ASSERT_BLOCK" | grep -cE 'ASSERT-FAILED:')"
+if [[ "$SENTINEL_COUNT" -ge 15 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: assertion block carries $SENTINEL_COUNT ASSERT-FAILED sentinels (>=15)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: only $SENTINEL_COUNT ASSERT-FAILED sentinels in the assertion block (expected >=15 — every assertion must self-report)"
+fi
+
+# No bare command may remain: EVERY executable line in the block (chmod, every
+# systemctl verb, nft-list, docker-network, leading-`curl`) must carry a
+# sentinel guard. The command-detection regex covers the setup lines too
+# (chmod / daemon-reload / enable / restart) — without that, those sentinels
+# could be silently stripped while the floor's slack masked the count drop
+# (PR #5280 review P2). The `echo host-egress-ok` success marker and the
+# `if docker ps … fi` probe line (which carries its own two sentinels) are
+# intentionally not command-shaped here.
+UNGUARDED="$(echo "$ASSERT_BLOCK" | grep -nE '(chmod \+x|systemctl (daemon-reload|enable|restart|is-active)|nft list|docker network inspect|^[[:space:]]*"curl )' | grep -v 'ASSERT-FAILED' || true)"
+if [[ -z "$UNGUARDED" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: no bare (sentinel-less) command remains in the block"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: unguarded command(s) without ASSERT-FAILED sentinel:"; echo "$UNGUARDED"
+fi
+
+# The service-RESTART sentinel (the LEAD failure 4c — `restart` re-runs the
+# Type=oneshot loader and propagates its `die`) must ALSO surface the loader's
+# journalctl tail, so the next apply names the loader `die` directly in the
+# Actions log (no SSH). `enable` (symlink only) does not run the loader.
+if echo "$ASSERT_BLOCK" | grep -qE 'ASSERT-FAILED: firewall-restart' \
+  && echo "$ASSERT_BLOCK" | grep -q 'journalctl -u cron-egress-firewall.service'; then
+  PASS=$((PASS + 1)); echo "  PASS: firewall-restart sentinel surfaces journalctl tail"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: firewall-restart sentinel must surface 'journalctl -u cron-egress-firewall.service'"
+fi
+
+# Protected-invariant sentinels (plan AC3/AC4 set) — each load-bearing
+# containment check names itself distinctly so the failing one is unambiguous.
+for sentinel in docker-user-jump default-drop bridge-ipv6 egress-probe-negative egress-probe-positive; do
+  if echo "$ASSERT_BLOCK" | grep -qE "ASSERT-FAILED: $sentinel"; then
+    PASS=$((PASS + 1)); echo "  PASS: sentinel present for $sentinel"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: missing ASSERT-FAILED sentinel for $sentinel"
+  fi
+done
+
+# Runbook parity (PR #5280 review P2): every sentinel NAME in the block must be
+# documented in the cron-egress-blocked runbook, so a rename in server.tf that
+# leaves the runbook stale fails the build instead of silently desyncing the
+# operator's no-SSH diagnosis table. Names are extracted from the block; the
+# trailing parenthetical detail (e.g. "firewall-restart (loader die …)") is
+# stripped so only the bare name is matched.
+RUNBOOK="$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
+SENTINEL_NAMES="$(echo "$ASSERT_BLOCK" | grep -oE "ASSERT-FAILED: [a-z0-9-]+" | sed -E 's/ASSERT-FAILED: //' | sort -u)"
+if [[ -f "$RUNBOOK" ]]; then
+  MISSING_RUNBOOK=""
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    grep -qF -- "$name" "$RUNBOOK" || MISSING_RUNBOOK+="$name "
+  done <<< "$SENTINEL_NAMES"
+  if [[ -z "$MISSING_RUNBOOK" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: every sentinel name is documented in cron-egress-blocked.md"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: sentinel name(s) absent from cron-egress-blocked.md (runbook drift): $MISSING_RUNBOOK"
+  fi
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: runbook not found at $RUNBOOK"
+fi
+
+# Behavioral non-vacuity: the sentinel pattern under `set -e` must emit the
+# sentinel AND halt (not fall through). Proves the guard actually fires rather
+# than being decorative.
+SENTINEL_OUT="$(bash -c 'set -e; false || { echo "ASSERT-FAILED: probe"; exit 1; }; echo SHOULD-NOT-REACH' 2>&1 || true)"
+if echo "$SENTINEL_OUT" | grep -qF 'ASSERT-FAILED: probe' && ! echo "$SENTINEL_OUT" | grep -qF 'SHOULD-NOT-REACH'; then
+  PASS=$((PASS + 1)); echo "  PASS: sentinel pattern emits name and halts under set -e (non-vacuous)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentinel pattern did not emit+halt as expected (got: $SENTINEL_OUT)"
+fi
+
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] || exit 1
