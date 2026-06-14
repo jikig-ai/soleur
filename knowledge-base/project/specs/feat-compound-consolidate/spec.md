@@ -27,13 +27,14 @@ We are building the **falsifiable prerequisite**, not the consolidation pass.
 
 ## Goals
 
-1. Make learnings-corpus recall quality **observable and recurring** (re-establish a cadence for the
-   existing bench, surface its output where an agent/founder can read it without SSH).
-2. Define a **staleness/redundancy metric** and a **degradation threshold** that would justify
-   consolidation work.
+1. Make corpus **staleness/redundancy observable** via a deterministic, pure-local, recurring-affordable
+   metric (zero LLM noise), surfaced where an agent/founder can read it without SSH.
+2. Define the **authoritative decision rule** with concrete, deterministic thresholds that justify (or
+   kill) consolidation work.
 3. Define a minimal **closure-lifecycle** signal (additive frontmatter) so any future review PR can
    actually "close" something — the missing prereq that killed the promote loop.
-4. Encode the **re-evaluation criteria** that gate the deferred consolidation pass (#5292).
+4. Encode the re-eval criteria **and a real dated checkpoint trigger+owner** so the gate cannot dangle
+   (the failure mode of the `promotion-log.md` scaffold it replaces).
 
 ## Non-Goals
 
@@ -44,27 +45,52 @@ We are building the **falsifiable prerequisite**, not the consolidation pass.
 
 ## Functional Requirements
 
-- **FR1** — Re-establish a recurring recall benchmark run from `scripts/learning-retrieval-bench.sh`,
-  emitting `learning-retrieval-metrics-<date>.json`, on a cadence (cron or documented manual trigger),
-  with cost disclosed per `hr-autonomous-loop-skill-api-budget-disclosure`.
-- **FR2** — Surface the latest recall metric where it is readable without SSH (per
-  `hr-no-dashboard-eyeball-pull-data-yourself` / `hr-no-ssh-fallback-in-runbooks`): a committed summary
-  file and/or Better Stack/Sentry signal.
-- **FR3** — Define a composite **staleness/redundancy metric** (recall-miss rate from the bench +
-  cheap near-duplicate density) and a **degradation threshold** value, documented in the spec/plan.
-- **FR4** — Define the minimal **closure-lifecycle** frontmatter (e.g. `superseded_by:` / `status:`),
-  additive-only, with a documented way to set it. No bulk rewrite of existing files.
-- **FR5** — Update #5292 to a deferred tracker carrying the ALL-must-hold re-evaluation criteria.
+> **[Revised 2026-06-14 after spec-flow-analyzer teardown.]** The original FRs pinned the gate to a
+> recurring run of the **LLM recall bench**. spec-flow proved that gate cannot fire: the bench's two
+> existing runs swung +56–104% in 24h (it measures the live LLM retriever, not the corpus), so a 10%
+> degradation threshold is below the noise floor; and deferring the recurrence made the trend it needs
+> uncollectable. The redesign pins the gate to the **deterministic pure-local redundancy metric**
+> (zero LLM noise, free to recompute → recurrence is genuinely affordable) and demotes the recall bench
+> to an **optional informational input**.
+
+- **FR1** — Build `scripts/kb-staleness-metric.sh`: a **deterministic, pure-local** (NO external API)
+  scanner of `knowledge-base/project/learnings/` emitting `kb-staleness-metrics-<date>.json`. Signals:
+  per-corpus + per-subdir **staleness** (git last-commit age — NOT filesystem mtime, which is checkout
+  time in a worktree — p50/p90, count older-than-180d/365d) and **corpus-wide redundancy** (near-duplicate
+  density via title+tag Jaccard ≥ 0.6, min-pair floor). Self-tested per `cq-test-fixtures-synthesized-only`.
+  Run once now → commit the **2026-06-14 baseline**. Cost: $0 (no API), seconds to run.
+- **FR2** — Surface metrics without SSH (`hr-no-dashboard-eyeball-pull-data-yourself` /
+  `hr-no-ssh-fallback-in-runbooks`): the date-stamped JSON is committed (readable via the app.soleur.ai
+  KB viewer + GitHub), and a stable `knowledge-base/project/kb-health.md` carries the latest human-readable
+  snapshot so it is discoverable without knowing the date-stamped filename.
+- **FR3** — Define the **authoritative decision rule** (single source of truth; see Re-Evaluation
+  Criteria below). The hard gate clauses are deterministic (redundancy + a recorded outcome field); the
+  LLM recall bench (R@5/MRR) is an **informational input only**, never a hard clause.
+- **FR4** — Define the minimal **closure-lifecycle** frontmatter (`superseded_by:` / `status:`),
+  additive-only, with a documented way to set it, and demonstrate it once on a real superseded pair. This
+  is **enabling infrastructure**, not a hard gate clause (a single hand-made closure proves writability,
+  not closure rate — spec-flow finding). No bulk rewrite of existing files.
+- **FR5** — Update #5292 to a deferred tracker carrying the revised criteria **and a required dated
+  `named_outcome:` field**, AND stand up a **real dated checkpoint trigger** (FR6) so the gate cannot
+  silently dangle.
+- **FR6** — Create a **dated governance checkpoint** (GHA scheduled workflow, precedent
+  `scheduled-followthrough-sweeper.yml`) that fires on/after **2026-08-13**, re-runs
+  `kb-staleness-metric.sh`, evaluates the decision rule, and opens/updates a decision issue assigned to
+  `engineering` linked to #5292 — pure bash + `gh`, no agent, no Anthropic. This is the owner+trigger
+  the dangle-prevention requires.
 
 ## Technical Requirements
 
-- **TR1** — Reuse `scripts/learning-retrieval-bench.sh` (do not rebuild recall measurement). If a cron is
-  added, it MUST be an Inngest sibling of `cron-compound-promote.ts`, not a new GHA workflow (ADR-027/033
-  regression).
+- **TR1** — Reuse `scripts/learning-retrieval-bench.sh` for any (optional, on-demand) recall measurement;
+  do not rebuild it. **[Narrowed 2026-06-14]** The original "any cron must be Inngest, not GHA" applies
+  to the deferred *consolidation runtime cron* (#5292, web-platform-adjacent) — NOT to a **repo-governance
+  checkpoint** (FR6), which conventionally uses GHA (precedent: `scheduled-followthrough-sweeper.yml`,
+  `rule-metrics-aggregate.yml`). ADR-027/033's "Inngest > GHA" governs app-runtime crons, not governance
+  automations.
 - **TR2** — Zero mutation of existing learning bodies in this work; frontmatter additions only, applied
   by an explicit/opt-in path, never a blanket sweep.
-- **TR3** — Any new `cron-*.ts` honors the six-registry lockstep (route.ts, cron-manifest.ts,
-  function-registry-count.test.ts, cron-monitors.tf, apply-sentry-infra.yml, cron-containment-classify.test.ts).
+- **TR3** — FR6's checkpoint is a **GHA governance workflow**, not an Inngest `cron-*.ts`; the
+  six-registry lockstep does NOT apply. (It applies only if/when the #5292 consolidation cron is built.)
 - **TR4** — GitHub App auth, not PAT (`hr-github-app-auth-not-pat`); silent fallbacks mirror to Sentry
   (`cq-silent-fallback-must-mirror-to-sentry`).
 
@@ -78,14 +104,33 @@ We are building the **falsifiable prerequisite**, not the consolidation pass.
 - **G4** — History-preserving moves (`git mv`) for archivable ordinary learnings; never plain delete.
 - **G5** — Human-in-the-loop PR gate affirming no source learning was rewritten or lost.
 
-## Re-Evaluation Criteria for #5292 (ALL must hold to unblock the build)
+## Re-Evaluation Criteria for #5292 — AUTHORITATIVE DECISION RULE (single source of truth)
 
-1. The recall metric (FR1–FR3) shows **measured degradation** past the defined threshold over the window.
-2. A **named founder/agent outcome** the consolidation unblocks this quarter is articulated.
-3. A **closure-lifecycle** (FR4) exists and has demonstrated ≥1 real closure, so review PRs can land
-   rather than accrete (the #2723 condition the dead promote loop failed).
+> This block is the **only** place the gate is defined (spec-flow flagged a 3-vs-4-clause spec/brainstorm
+> contradiction). The brainstorm and plan reference this; they do not redefine it.
 
-If, after a 60-day window, recall is not degrading and no outcome is named → **kill #5292** (correct outcome).
+**Trigger & owner:** the FR6 dated GHA checkpoint fires on/after **2026-08-13**, recomputes
+`kb-staleness-metric.sh` against the same authoritative corpus snapshot (archive-excluded learnings),
+and opens a decision issue assigned to `engineering` linked to #5292. The checkpoint **always produces a
+verdict** (build-recommended or close-recommended) — there is no "unmeasured/dangle" state, because the
+deterministic local metric is always computable.
+
+**Build #5292 only if BOTH hard clauses hold at the checkpoint:**
+
+1. **Redundancy is material** — corpus-wide near-duplicate density ≥ **15%** (absolute) **OR** grew
+   ≥ **5 percentage points** vs the 2026-06-14 baseline, measured by the deterministic
+   `kb-staleness-metric.sh` (zero LLM noise; the baseline and checkpoint use the byte-identical committed
+   script, so the delta is meaningful). Corpus-wide (not per-subdir) to cover the ~69% loose top-level
+   files; exempt classes counted in the denominator but never proposed as merge candidates.
+2. **A named outcome exists** — #5292's `named_outcome:` field is non-empty and dated within the window:
+   the concrete founder/agent outcome consolidation unblocks this quarter.
+
+**Informational inputs** (recorded in the decision issue, NOT hard clauses): optional on-demand recall
+bench R@5/MRR (noisy — if cited, run ≥3× and report the spread); closure-lifecycle adoption (organic
+`superseded_by:` count over the window).
+
+**Otherwise → close #5292 as wontfix** (the correct outcome — the corpus's problem was never bloat).
+The checkpoint issue records which clause failed.
 
 ## Out of Scope (Future Work → #5292)
 
