@@ -44,8 +44,11 @@ interface ChatMessageBase {
    * chip (aria-live polite) — NOT a "Retrying…" claim, since nothing is
    * actually retried on a silent stream. The bubble's `state` stays in its
    * transitional form (`thinking` / `tool_use`) — `retrying` is the orthogonal
-   * render flag. The flag name is retained pending the reconnect-state-machine
-   * hardening follow-up (#5282), which also adds the connection-state input.
+   * render flag. This per-message activity flag is the State-2 ("No response
+   * yet") input; connection-lifecycle state (State 1/3/4) now lives in the
+   * reducer's `connection` slice (`ConnectionPhase` below + `ChatState.connection`
+   * in ws-client.ts), and `deriveReconnectView` gives connection state
+   * precedence over this activity flag (#5282, AC12).
    */
   retrying?: boolean;
 }
@@ -1120,4 +1123,73 @@ export function applyTimeout(
     activeStreams,
     timerAction: { type: "reset", leaderId },
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// #5282 — Reconnect state machine (connection-state input + render derivation)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The connection-lifecycle phase tracked in the reducer's `connection` slice
+ * (`ChatState.connection.phase` in ws-client.ts). This is the MINIMUM the
+ * socket-layer `ConnectionStatus` ("connecting"|"connected"|"reconnecting"|
+ * "disconnected") lacks: a single STICKY-TERMINAL value (`unrecoverable`) that
+ * survives the socket flipping back to `connected` on reattach.
+ *
+ *   - `live`           — default; socket healthy, no banner.            (no State)
+ *   - `reconnecting`   — transient drop; banner "Connection lost…".     (State 1)
+ *   - `unrecoverable`  — the in-flight session was reclaimed (grace      (State 3)
+ *                        expired → `stream_replay{incomplete}`) or the
+ *                        socket closed non-transiently without a
+ *                        redirect. STICKY: a later `connection_change`
+ *                        to live/reconnecting is a no-op (AC11); only a
+ *                        `reset_connection` (new user turn) escapes it.
+ *
+ * State 4 (the brief "Continuing… · workspace restored" notice) is DERIVED at
+ * render time (a transient `resumedAt` affordance), NOT a phase — it has no
+ * invariant that must survive in reducer state. State 3 (`unrecoverable`) takes
+ * render precedence over the State-4 notice, which is what enforces "no 3→4
+ * flip" at the render layer (the sticky guard enforces it at the state layer).
+ */
+export type ConnectionPhase = "live" | "reconnecting" | "unrecoverable";
+
+/**
+ * The State-1-vs-State-2 precedence view. `connection_lost` (State 1) and
+ * `no_activity` (State 2) are derived from the SAME selector so they can never
+ * co-render (AC12). `unrecoverable` (State 3) and the derived State-4 notice are
+ * SEPARATE render branches in chat-surface.tsx — they intentionally return
+ * `none` here and do not participate in this union.
+ */
+export type ReconnectView =
+  | { kind: "none" }
+  | { kind: "connection_lost" }
+  | { kind: "no_activity" };
+
+/**
+ * Pure precedence selector (#5282, AC6/AC12). Connection state takes precedence
+ * over the per-message activity watchdog: when the connection is `reconnecting`,
+ * State 1 ("Connection lost…") renders regardless of any stuck-watchdog bubble,
+ * so State 1 and State 2 are mutually exclusive.
+ */
+export function deriveReconnectView(input: {
+  phase: ConnectionPhase;
+  hasRetryingBubble: boolean;
+}): ReconnectView {
+  switch (input.phase) {
+    case "reconnecting":
+      // Connection precedence (AC12): State 1 wins over the activity watchdog.
+      return { kind: "connection_lost" };
+    case "live":
+      return input.hasRetryingBubble ? { kind: "no_activity" } : { kind: "none" };
+    case "unrecoverable":
+      // State 3 is a separate render branch; it does not compete with the chip.
+      return { kind: "none" };
+    default: {
+      // Exhaustiveness rail: a new ConnectionPhase value without a case here
+      // fails `tsc --noEmit` (#5282 AC8, cq-union-widening-grep-three-patterns).
+      const _exhaustive: never = input.phase;
+      void _exhaustive;
+      return { kind: "none" };
+    }
+  }
 }

@@ -9,6 +9,7 @@ function emptyState(): ChatState {
     workflow: { state: "idle" },
     spawnIndex: new Map(),
     streamState: "idle",
+    connection: { phase: "live" },
   };
 }
 
@@ -55,6 +56,7 @@ describe("chatReducer", () => {
       workflow: { state: "idle" },
       spawnIndex: new Map(),
       streamState: "idle",
+      connection: { phase: "unrecoverable" },
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -62,6 +64,12 @@ describe("chatReducer", () => {
 
     expect(next.activeStreams.size).toBe(0);
     expect(next.pendingTimerAction).toBeUndefined();
+    // #5282 AC11: the clear_streams arm spreads `...state` and never mentions
+    // `connection`, so it carries the slice through unchanged. This is a
+    // regression guard against a future edit adding a connection reset here —
+    // clear_streams fires on every reconnect, so resetting connection here would
+    // defeat the sticky guard (only `reset_connection` may escape unrecoverable).
+    expect(next.connection.phase).toBe("unrecoverable");
   });
 
   test("clear_streams also resets workflow slice and spawnIndex (review F1 #2886)", () => {
@@ -78,6 +86,7 @@ describe("chatReducer", () => {
         ["s-1", { messageIdx: 0, childIdx: 0 }],
       ]),
       streamState: "idle",
+      connection: { phase: "live" },
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -116,6 +125,7 @@ describe("chatReducer", () => {
       workflow: { state: "idle" },
       spawnIndex: new Map(),
       streamState: "idle",
+      connection: { phase: "live" },
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 

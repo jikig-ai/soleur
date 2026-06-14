@@ -50,6 +50,8 @@ export function createWebSocketMock(
     historyLoading: false,
     streamState: "idle" as const,
     abort: vi.fn(),
+    connection: { phase: "live" } as const,
+    resumeAfterUnrecoverable: vi.fn(),
   } satisfies WebSocketState;
   return { ...base, ...overrides };
 }

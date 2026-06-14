@@ -36,9 +36,14 @@ import type {
   ChatInteractivePromptMessage,
   ChatDebugEventMessage,
 } from "@/lib/chat-state-machine";
+import { deriveReconnectView } from "@/lib/chat-state-machine";
 import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
+
+/** #5282 — auto-dismiss window for the transient State-4 "workspace restored"
+ *  notice. State 4 is a derived render affordance, not a reducer phase. */
+const RESUMED_NOTICE_MS = 4000;
 
 /**
  * Stage 4 review F6: typed render helper for `<InteractivePromptCard>`.
@@ -219,9 +224,40 @@ export function ChatSurface({
     historyLoading,
     streamState,
     abort,
+    connection,
+    resumeAfterUnrecoverable,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
+
+  // #5282 — reconnect state machine. `hasRetryingBubble` drives State 2 (the
+  // per-message "No response yet" watchdog chip); `deriveReconnectView` gives
+  // connection state precedence over it so State 1 and State 2 never co-render
+  // (AC12). State 3 (`unrecoverable`) and the State-4 notice are separate
+  // branches keyed directly on `connection`.
+  const hasRetryingBubble = useMemo(
+    () => messages.some((m) => m.retrying === true),
+    [messages],
+  );
+  const reconnectView = deriveReconnectView({
+    phase: connection.phase,
+    hasRetryingBubble,
+  });
+
+  // #5282 State 4 — the derived "Continuing… · workspace restored" notice is
+  // transient: shown briefly after a successful reconnect-reattach, then
+  // auto-dismissed. Never shown under sticky `unrecoverable` (State 3 takes
+  // precedence — enforces "no 3→4 flip" at the render layer).
+  const [showResumedNotice, setShowResumedNotice] = useState(false);
+  useEffect(() => {
+    if (connection.phase === "unrecoverable" || connection.resumedAt === undefined) {
+      setShowResumedNotice(false);
+      return;
+    }
+    setShowResumedNotice(true);
+    const t = setTimeout(() => setShowResumedNotice(false), RESUMED_NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [connection.resumedAt, connection.phase]);
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -564,10 +600,19 @@ export function ChatSurface({
         />
       )}
 
-      {status === "reconnecting" && (
-        <div className={`border-b border-yellow-800/50 bg-yellow-950/20 px-4 py-2 ${isFull ? "md:px-6" : ""}`}>
+      {/* #5282 State 1 — REWIRED through `deriveReconnectView` (was a bare
+          `status === "reconnecting"` check). The selector gives connection
+          state precedence over the State-2 watchdog chip (AC12), and the
+          latest-wins reducer slice guarantees exactly ONE banner across a flap
+          (AC4). aria-live polite so SRs announce the transient state. */}
+      {reconnectView.kind === "connection_lost" && (
+        <div
+          data-testid="connection-banner"
+          aria-live="polite"
+          className={`border-b border-yellow-800/50 bg-yellow-950/20 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs text-yellow-300">Connection lost. Reconnecting...</span>
+            <span className="text-xs text-yellow-300">Connection lost. Reconnecting…</span>
             <button
               onClick={reconnect}
               className="text-xs text-yellow-400 underline hover:text-yellow-300"
@@ -575,6 +620,49 @@ export function ChatSurface({
               Retry now
             </button>
           </div>
+        </div>
+      )}
+
+      {/* #5282 State 3 — unrecoverable (in-flight session reclaimed after grace,
+          or non-transient close). Sticky: a late reattach frame cannot flip
+          this to State 4 (sticky guard in the reducer + this branch taking
+          precedence over the State-4 notice below). The honest "your session is
+          gone; resume with context" affordance, never a stale-resume lie. */}
+      {connection.phase === "unrecoverable" && (
+        <div
+          data-testid="connection-unrecoverable"
+          aria-live="polite"
+          className={`border-b border-red-900/50 bg-red-950/20 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-red-300">
+              Your place is held — your full conversation is intact. Start a new message to resume with full context.
+            </span>
+            <button
+              onClick={resumeAfterUnrecoverable}
+              className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
+            >
+              Resume with full context
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* #5282 State 4 — DERIVED transient "successful resume" notice (not a
+          reducer phase). Shown only when a reconnect-reattach set `resumedAt`
+          AND we are not in the sticky `unrecoverable` state (which takes
+          precedence above — enforces "no 3→4 flip" at the render layer). */}
+      {showResumedNotice && (
+        <div
+          data-testid="connection-resumed"
+          aria-live="polite"
+          className={`border-b border-emerald-900/50 bg-emerald-950/20 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
+        >
+          <span className="text-xs text-emerald-300">
+            {connection.resumedAt
+              ? `— Continuing from ${new Date(connection.resumedAt).toLocaleString()} · workspace restored —`
+              : "— Continuing… · workspace restored —"}
+          </span>
         </div>
       )}
 
@@ -664,7 +752,10 @@ export function ChatSurface({
                       messageState={msg.state}
                       toolLabel={msg.toolLabel}
                       toolsUsed={msg.toolsUsed}
-                      retrying={msg.retrying}
+                      // #5282 AC12 — suppress the State-2 watchdog chip whenever
+                      // State 1 (connection-lost banner) is showing, so the two
+                      // can never render simultaneously.
+                      retrying={msg.retrying && reconnectView.kind !== "connection_lost"}
                       getDisplayName={getDisplayName}
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
