@@ -467,5 +467,6 @@ export const cronStaleDeferredScopeOuts = inngest.createFunction(
 export const __TESTING__ = {
   TARGET_LABEL,
   KILLSWITCH_LABEL,
+  COMMENT_BODY,
   sweepStaleScopeOuts,
 };
