@@ -57,7 +57,12 @@ import {
   getDefaultWorkspaceForUser,
   getWorkspaceForUserInOrganization,
   readWorkspaceIdFromDb,
+  workspacePathForWorkspaceId,
 } from "./workspace-resolver";
+import {
+  restoreInflightCheckpoint,
+  CHECKPOINT_REFUSED_MESSAGE,
+} from "./inflight-checkpoint";
 import { effectiveCap, nextTier } from "@/lib/plan-limits";
 import { closeWithPreamble } from "@/lib/ws-close-helper";
 import { retrieveSubscriptionTier } from "@/lib/stripe";
@@ -1935,6 +1940,79 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           throw new Error(
             `resume-workspace-rebind failed: ${switchErr.message}`,
           );
+        }
+
+        // #5275 — restore the conversation's in-flight checkpoint (uncommitted
+        // work preserved when a prior turn grace-aborted on disconnect) into the
+        // SAME physical workspace. Runs AFTER the FR1 rebind succeeds (the
+        // workspace path resolved below is correct only now) and BEFORE
+        // `session_started`. Gated restore: it materializes only when doing so
+        // provably cannot overwrite newer work (clean tree + no sibling slot),
+        // else it refuses-and-reports honestly (the work stays at the ref). A
+        // materialization failure AFTER the precondition passes throws here and
+        // propagates to the terminal catch below (honest, retryable client
+        // error) — never a silent path.
+        {
+          const restoreWorkspacePath =
+            workspacePathForWorkspaceId(resumeWorkspaceId);
+          // Probe for a LIVE sibling conversation slot on the SAME shared clone
+          // — for EVERY resume, including solo (`workspace_id === userId`). Solo
+          // is NOT single-tenant-at-rest: per-user concurrency can be >1 (free=1
+          // but solo=2 / startup=5 / scale=50), so a solo user with two tabs
+          // shares one working tree. A checkpoint taken by one tab can carry the
+          // OTHER tab's in-flight edits (the wide path predicate snapshots the
+          // whole dirty tree); restoring it over a now-clean tree would clobber
+          // the sibling. The clean-tree gate proves "nothing uncommitted to
+          // lose" but NOT "this snapshot belongs to this conversation" — the slot
+          // probe is what supplies the latter. Liveness-filtered: stale slots are
+          // swept lazily / by pg_cron but NOT on this read path.
+          let siblingSlotActive = false;
+          const liveCutoff = new Date(Date.now() - 120_000).toISOString();
+          const { data: siblingSlots, error: slotErr } = await tenantResumeConv
+            .from("user_concurrency_slots")
+            .select("conversation_id")
+            .eq("workspace_id", resumeWorkspaceId)
+            .neq("conversation_id", msg.conversationId)
+            .gte("last_heartbeat_at", liveCutoff);
+          if (slotErr) {
+            // Fail SAFE: an unreadable slot table means we cannot prove the tree
+            // is sole-tenant, so treat a sibling as present (refuse the restore
+            // rather than risk clobbering a teammate's / sibling tab's work).
+            siblingSlotActive = true;
+            reportSilentFallback(
+              { code: slotErr.code, message: slotErr.message },
+              {
+                feature: "inflight-checkpoint",
+                op: "restore-slot-probe",
+                extra: { userId, conversationId: msg.conversationId },
+              },
+            );
+          } else {
+            siblingSlotActive = (siblingSlots?.length ?? 0) > 0;
+          }
+
+          const restoreResult = await restoreInflightCheckpoint(
+            restoreWorkspacePath,
+            msg.conversationId,
+            { siblingSlotActive },
+          );
+          if (
+            !restoreResult.restored &&
+            (restoreResult.reason === "dirty" ||
+              restoreResult.reason === "sibling-active" ||
+              restoreResult.reason === "stale-base")
+          ) {
+            // Honest refuse-and-report: reuse the FR1 honest-status surface
+            // (an `error`-family frame carrying human copy — the
+            // `worktree_enter_failed` precedent uses this for non-fatal
+            // lifecycle messages). The resume still succeeds (session_started
+            // fires below); the user is told their earlier work is saved, not
+            // lost or silently overwritten.
+            sendToClient(userId, {
+              type: "error",
+              message: CHECKPOINT_REFUSED_MESSAGE,
+            });
+          }
         }
 
         session.conversationId = msg.conversationId;
