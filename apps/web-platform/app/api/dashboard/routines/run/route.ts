@@ -6,11 +6,15 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { runRoutine } from "@/server/routines/run-routine";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const { valid, origin } = validateOrigin(request);
+  if (!valid) return rejectCsrf("api/dashboard/routines/run", origin);
+
   const supabase = await createClient();
   const {
     data: { user },
