@@ -16,6 +16,10 @@ import {
   startInactivityTimer,
   startStuckActiveReaper,
 } from "./agent-runner";
+import {
+  drainCcQueriesForShutdown,
+  startCcIdleReaper,
+} from "./cc-dispatcher";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
@@ -118,6 +122,14 @@ app.prepare().then(() => {
   // .unref() already prevents shutdown blocking, but explicit cleanup
   // avoids in-flight releaseSlot calls during shutdown.
   const stuckActiveReaperTimer = startStuckActiveReaper();
+
+  // #5371 — start the cc-soleur-go idle reaper. `reapIdle()` existed on the
+  // runner but nothing wired it at runtime, so idle cc queries persisted in
+  // `activeQueries` until container restart (memory leak + a second
+  // disconnect-class gap: a tab abandoned WITHOUT a socket close never fires
+  // the ws-handler grace timer). Capture the timer so SIGTERM can stop it;
+  // .unref() already prevents shutdown blocking (see startCcIdleReaper).
+  const ccIdleReaperTimer = startCcIdleReaper();
 
   // Self-arm the one-time #4650 monitor-close oneshot (#4654). boot == deploy
   // (web-platform-release.yml restarts the container on every apps/web-platform/**
@@ -229,10 +241,19 @@ app.prepare().then(() => {
     // Stop the stuck-active reaper before aborting sessions — otherwise an
     // in-flight reaper tick could issue releaseSlot writes during shutdown.
     clearInterval(stuckActiveReaperTimer);
+    // #5371 — stop the cc idle reaper before draining for the same reason.
+    clearInterval(ccIdleReaperTimer);
 
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".
     abortAllSessions();
+    // #5371 — drain in-flight cc-soleur-go queries on shutdown. Aborts
+    // WITHOUT checkpoint (legacy abortAllSessions parity); the disconnect
+    // grace-abort terminal (#5362) is what preserves uncommitted work. Log
+    // the count so a stuck deploy can tell "drain ran, closed N" from "drain
+    // never reached" without SSH.
+    const drained = drainCcQueriesForShutdown();
+    log.info({ drained }, "cc drain on shutdown");
     // feat-stream-since-disconnect (#5273) — drain the in-memory replay buffer
     // on shutdown (process-local; nothing to persist). See ADR-059.
     streamReplayBuffer.clearAll();
