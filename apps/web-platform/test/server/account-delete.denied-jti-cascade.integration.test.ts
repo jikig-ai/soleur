@@ -112,6 +112,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     }, 30_000);
 
     test("deleteAccount succeeds with a seeded denied_jti row (CASCADE clears it)", async () => {
+      // Positive control: confirm the seeded row is actually present BEFORE the
+      // delete, so the post-delete absence assertion is a true before/after
+      // delta (not a vacuous pass if the seed had silently no-op'd).
+      const { data: preRow, error: preErr } = await service
+        .from("denied_jti")
+        .select("jti")
+        .eq("jti", seededJti)
+        .maybeSingle();
+      expect(preErr, "pre-delete read of seeded denied_jti row").toBeNull();
+      expect(preRow, "seeded denied_jti row must exist before deleteAccount").not.toBeNull();
+
       const { deleteAccount } = await import("@/server/account-delete");
       const result = await deleteAccount(user.id, user.email);
       expect(
