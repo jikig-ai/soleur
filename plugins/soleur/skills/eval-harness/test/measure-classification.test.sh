@@ -47,6 +47,26 @@ run "Priority: P2"            "P2"      "$TR" "true" "1" "P-level embedded in pr
 run "p3"                      "P3"      "$TR" "true" "1" "P-level case-insensitive match"
 run "P1"                      "P3"      "$TR" "true" "0" "P-level mismatch scores 0 but still passes"
 
+# --- file:// enum shape (the promptfoo defaultTest.vars shape — #5358 regression).
+#     enum arrives as a RAW STRING; loadEnum must read the SSOT file to score. ---
+fileref() {
+  local output="$1" golden="$2" enumref="$3" want_score="$4" label="$5"
+  local got
+  got=$(node -e '
+    const fn = require(process.argv[1]);
+    const r = fn(process.argv[2], { vars: { golden_label: process.argv[3], enum: process.argv[4] } });
+    process.stdout.write(String(r.score));
+  ' "$ASSERT" "$output" "$golden" "$enumref")
+  if [[ "$got" != "$want_score" ]]; then
+    echo "FAIL [$label]: output='$output' enum='$enumref' -> score=$got (want $want_score)"
+    fails=$((fails + 1))
+  else
+    echo "ok   [$label]: score=$got"
+  fi
+}
+fileref "fix" "fix" "file://enums/go-routes.json"     "1" "file:// enum + correct route scores 1"
+fileref "P2"  "P2"  "file://enums/triage-levels.json" "1" "file:// enum + correct P-level scores 1"
+
 if [[ "$fails" -gt 0 ]]; then
   echo "measure-classification: $fails assertion(s) failed"
   exit 1

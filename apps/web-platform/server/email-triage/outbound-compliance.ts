@@ -192,7 +192,7 @@ export function validateEmailHeaders(fields: EmailHeaderFields): void {
 
 // Own-domain / internal — a prompt-injected agent could exfiltrate by mailing
 // our own inboxes (deepen P0-3). Never send cold outreach to these.
-const INTERNAL_DOMAINS = new Set(["jikigai.com", "soleur.ai", "mail.jikigai.com"]);
+const INTERNAL_DOMAINS = new Set(["jikigai.com", "soleur.ai", "outbound.soleur.ai"]);
 
 // Role / bare local-parts — non-personal mailboxes; cold 1:1 outreach targets a
 // named individual, never a role address.

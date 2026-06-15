@@ -1053,13 +1053,28 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    Do not quote flag names -- write `--title` not `"--title"`.
 
-4. If the PR is a draft, mark it ready:
+   **The `--title` is mandatory, not optional.** The draft PR created in `/ship` Phase 6's "no PR" fallback OR by `worktree-manager.sh draft-pr` (Step 0c of `/one-shot`) is titled `WIP: <branch-name>`. A squash merge uses the **PR title** as the commit subject on `main`, so an un-updated `WIP:` title lands a `WIP: feat-… (#N)` commit in permanent history (and trips `feature-tweet` eligibility, which requires a `feat(` prefix). Editing only `--body` (e.g. `gh pr edit N --body-file …`) is the recurring miss — always pass BOTH `--title` and `--body`.
+
+4. **PR-title guard (HARD GATE — must pass before `gh pr ready` / auto-merge).** After the edit, fetch the live title and assert it is no longer the `WIP:` draft default. The squash-merge subject is immutable once merged, so this is the last point to catch it:
+
+   ```bash
+   PR_TITLE=$(gh pr view PR_NUMBER --json title --jq .title)
+   if printf '%s' "$PR_TITLE" | grep -qiE '^WIP:'; then
+     echo "[ship.phase6.title_guard] PR #PR_NUMBER title is still the draft default: '$PR_TITLE'" >&2
+     echo "       The squash-merge commit subject = PR title. Run: gh pr edit PR_NUMBER --title \"<conventional title>\"" >&2
+     exit 1
+   fi
+   ```
+
+   On non-zero exit, set the real conventional-commit title (`gh pr edit PR_NUMBER --title "feat(scope): …"`) and re-run the guard before proceeding. Do NOT mark ready or queue auto-merge while the title starts with `WIP:`. **Why:** PR #5373 (#5371) merged with the squash subject `WIP: feat-one-shot-5371-cc-durability (#5373)` because Phase 6 updated `--body-file` but omitted `--title`; the blemish is immutable on `main`. This guard makes the omission fail loudly instead of silently shipping a `WIP:` commit.
+
+5. If the PR is a draft, mark it ready:
 
    ```bash
    gh pr ready PR_NUMBER
    ```
 
-5. Present the PR URL to the user.
+6. Present the PR URL to the user.
 
 **If no open PR exists:**
 

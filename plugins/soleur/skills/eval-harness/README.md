@@ -23,9 +23,9 @@ bash scripts/gen-models.sh
 npx promptfoo validate config -c promptfooconfig.go-routing.yaml
 npx promptfoo validate config -c promptfooconfig.ticket-triage.yaml
 
-# 3. Run a target (SPENDS — see cost below).
-npx promptfoo eval -c promptfooconfig.go-routing.yaml
-npx promptfoo eval -c promptfooconfig.ticket-triage.yaml
+# 3. Run a target (SPENDS — see cost below). `--repeat 3` runs each cell 3×.
+npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3
+npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3
 
 # 4. Inspect results in the browser.
 npx promptfoo view
@@ -33,19 +33,40 @@ npx promptfoo view
 
 > **Use `validate config`, never bare `validate` or `validate target`** — the latter two spend API
 > credits. `validate config` is config-only and free.
+>
+> **`--repeat N` is a CLI flag, not a config key.** A `repeat:` key in `promptfooconfig.yaml` is
+> silently ignored (each cell runs once). Pass `--repeat 3` on the command line to get N runs per
+> cell for the median.
 
 ## Per-run cost
 
-Each target's grid is **2 arms × 3 models × ~3 golden tasks × 3 repeats ≈ 54 API calls**; running
-both targets is ≈ 108 calls. One arm runs on Opus, so cost is dominated by the Opus cells. This is
-why the harness is **opt-in and manual** and is NOT wired into per-PR CI. See the `<decision_gate>`
-in [SKILL.md](./SKILL.md) for the billing disclosure.
+Each target's grid is **2 arms × 3 models × (its golden tasks) × `--repeat`**. At the current task
+counts and `--repeat 3`: ≈ **126 API calls** for go-routing (7 tasks) and ≈ **108** for
+ticket-triage (6 tasks) — ≈ **230 to run both**. One arm runs on Opus, so cost is dominated by the
+Opus cells, but outputs are single tokens so per-call cost is small (the first full run was well
+under $1). This is why the harness is **opt-in and manual** and is NOT wired into per-PR CI. See the
+`<decision_gate>` in [SKILL.md](./SKILL.md) for the billing disclosure.
+
+## First recorded delta (2026-06-15, `--repeat 3`, opus-4-8 / sonnet-4-6 / haiku-4-5)
+
+The baseline run that proved the rig pays off (point-in-time; model updates will shift these):
+
+| Target | Skill arm | Baseline arm | Delta |
+|--------|-----------|--------------|-------|
+| `soleur:go` routing | 100% (63/63) | 81% (51/63) | **+19 pts** |
+| ticket-triage P-level | 94% (51/54) | 89% (48/54) | **+6 pts** |
+
+Read: the `/go` routing table produces a clean, consistent advantage across all three models (the
+Sonnet baseline scored only 71% on the routing-rule cases → 100% with the table). The triage rubric
+adds a smaller, real delta — priority is more inferable from raw impact than routing is from intent.
+The takeaway for expanding the harness: it discriminates routing-type classifiers strongly, prose
+rubrics modestly, so prioritize new targets by how much the rule adds beyond the label names.
 
 ## Reading the baseline-vs-skill delta
 
 Each run produces, per (arm × model) cell, the **classification-correct rate** recorded by the
 measurement assert (mean of the per-task 1.0/0.0 scores; promptfoo has no native median, so read
-the aggregate score promptfoo reports per cell, or compute the median across the `repeat` runs from
+the aggregate score promptfoo reports per cell, or compute the median across the `--repeat` runs from
 the JSON output).
 
 > **delta = (skill-arm correct rate) − (baseline-arm correct rate)**
@@ -56,6 +77,15 @@ zero means the model classifies just as well without the prose (the prose is not
 these tasks). The **gate assert** is orthogonal: it fails any cell whose emitted label is malformed
 or outside the closed enum, independent of correctness — a baseline arm that hallucinates a
 non-existent route is caught here even when its correct rate looks fine.
+
+> **Golden tasks must be *discriminating*, not just correct.** The first POC run used easy,
+> unambiguous tasks and the baseline arm scored ~89–100% — so the delta was ~0 and the harness
+> proved nothing. The discriminating tasks are the ones where the *rule* matters but the label
+> *name* alone misleads a label-only baseline: a live production outage that reads like a "fix"
+> (→ `incident`), a "close out the whole backlog" that reads like a "fix" (→ `drain`), a
+> data-deletion request that reads like "default" (→ `legal-threshold`), an `URGENT!!`-titled
+> cosmetic typo (→ `P3`), a "no new user can activate" with no scary keywords (→ `P1`). When adding
+> tasks, bias toward these adversarial cases — that is where the delta lives.
 
 To regression-check a future edit to `/go` or ticket-triage: run the relevant config before and
 after the edit and compare the skill-arm correct rate. A drop is a behavioral regression the prose

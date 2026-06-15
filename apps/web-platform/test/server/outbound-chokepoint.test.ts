@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 describe("sendCompliantOutbound — happy path", () => {
-  it("sends via Resend from mail.jikigai.com and records the WORM row", async () => {
+  it("sends via Resend from outbound.soleur.ai and records the WORM row", async () => {
     const sb = makeSupabase({ recordId: "os-42" });
     const res = await sendCompliantOutbound({ ...validArgs(), supabase: sb });
     expect(res).toEqual({ resendId: "resend-1", outboundSendId: "os-42" });
@@ -101,8 +101,8 @@ describe("sendCompliantOutbound — happy path", () => {
     expect(JSON.stringify(rec!.args)).not.toContain("journalist@example.com");
   });
 
-  it("OUTBOUND_FROM is on the mail.jikigai.com sending subdomain", () => {
-    expect(OUTBOUND_FROM).toContain("mail.jikigai.com");
+  it("OUTBOUND_FROM is on the outbound.soleur.ai sending subdomain", () => {
+    expect(OUTBOUND_FROM).toContain("outbound.soleur.ai");
   });
 });
 
@@ -205,11 +205,11 @@ function walkServerTs(dir: string): string[] {
 const SERVER_FILES = walkServerTs(SERVER_DIR);
 // The cold SENDING IDENTITY (any address ON the cold subdomain). This is the
 // thing that must be unique to outbound.ts — a transactional caller sending
-// FROM mail.jikigai.com would carry this. Distinct from the BARE domain string
-// `mail.jikigai.com`, which outbound-compliance.ts legitimately lists in its
+// FROM outbound.soleur.ai would carry this. Distinct from the BARE domain string
+// `outbound.soleur.ai`, which outbound-compliance.ts legitimately lists in its
 // recipient-block set (rejecting sends TO our own subdomain — the opposite,
 // defensive concern). So the sentinel pins the `@`-prefixed sending form.
-const COLD_FROM_ADDR = "@mail.jikigai.com";
+const COLD_FROM_ADDR = "@outbound.soleur.ai";
 const RESEND_SEND_ALLOWLIST = new Set([
   "notifications.ts",
   "cron-email-ingress-probe.ts",
@@ -217,7 +217,7 @@ const RESEND_SEND_ALLOWLIST = new Set([
 ]);
 
 describe("outbound sentinel — cold-send FROM + Resend caller boundary", () => {
-  it("(a) the cold sending identity (@mail.jikigai.com) lives in exactly one file (outbound.ts)", () => {
+  it("(a) the cold sending identity (@outbound.soleur.ai) lives in exactly one file (outbound.ts)", () => {
     const hits = SERVER_FILES.filter((f) =>
       readFileSync(f, "utf8").includes(COLD_FROM_ADDR),
     );
