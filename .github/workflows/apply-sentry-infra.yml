@@ -247,6 +247,7 @@ jobs:
             -target=sentry_issue_alert.kb_db_error \
             -target=sentry_issue_alert.egress_blocked \
             -target=sentry_issue_alert.stale_bot_pr \
+            -target=sentry_issue_alert.outbound_email_send_failure \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
