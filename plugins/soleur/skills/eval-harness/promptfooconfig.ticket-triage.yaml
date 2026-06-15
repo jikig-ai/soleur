@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "ticket-triage P-level accuracy — skill arm (priority rubric) vs baseline (no rubric)"
+
+# Model IDs are single-sourced — shared with the go-routing config. Run
+# `bash scripts/gen-models.sh` to (re)generate models.generated.json from the TS registry.
+providers: file://models.generated.json
+
+# Two arms become two grid columns. The skill arm embeds the P-level priority rubric;
+# the baseline arm knows only the P1/P2/P3 token set (the control).
+prompts:
+  - file://prompts/triage-skill.txt
+  - file://prompts/triage-baseline.txt
+
+defaultTest:
+  vars:
+    # Closed P1/P2/P3 enum (single source) — the gate's allowed set.
+    enum: file://enums/triage-levels.json
+  assert:
+    # MEASUREMENT: always passes, records P-level-correct rate (1.0 / 0.0).
+    - type: javascript
+      value: file://scripts/measure-classification.cjs
+    # GATE: fails if the emitted label is not a member of the enum.
+    - type: javascript
+      value: file://scripts/gate-classification.cjs
+
+# N runs per (prompt arm × model) cell. The classification-correct rate is the
+# mean of the measurement assert's per-run scores (promptfoo has no native median;
+# read the aggregate per-cell score or compute the median across these runs).
+repeat: 3
+
+# Golden tasks: { vars: { input, golden_label } } per line.
+tests: file://tasks/ticket-triage.jsonl

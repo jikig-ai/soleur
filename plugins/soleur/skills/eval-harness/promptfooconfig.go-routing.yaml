@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "soleur:go routing accuracy — skill arm (routing table) vs baseline (no table)"
+
+# Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
+# models.generated.json from the TS registry; no model literal is hardcoded here,
+# which keeps this config off the model-launch-review auto-fixer and stale-proof.
+providers: file://models.generated.json
+
+# Two arms become two grid columns. The skill arm embeds the /go routing table;
+# the baseline arm knows only the route token set (the control — "that delta is the point").
+prompts:
+  - file://prompts/go-skill.txt
+  - file://prompts/go-baseline.txt
+
+defaultTest:
+  vars:
+    # Closed 7-route enum (single source) — the gate's allowed set.
+    enum: file://enums/go-routes.json
+  assert:
+    # MEASUREMENT: always passes, records routing-correct rate (1.0 / 0.0).
+    - type: javascript
+      value: file://scripts/measure-classification.cjs
+    # GATE: fails if the emitted label is not a member of the enum.
+    - type: javascript
+      value: file://scripts/gate-classification.cjs
+
+# N runs per (prompt arm × model) cell. The classification-correct rate is the
+# mean of the measurement assert's per-run scores (promptfoo has no native median;
+# read the aggregate per-cell score or compute the median across these runs).
+repeat: 3
+
+# Golden tasks: { vars: { input, golden_label } } per line.
+tests: file://tasks/go-routing.jsonl

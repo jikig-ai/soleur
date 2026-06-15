@@ -1,0 +1,3 @@
+{"vars": {"input": "Title: Checkout completely broken in production\n\nEvery payment attempt returns 'card declined', even with known-good test cards. No customer can complete a purchase right now. Started ~15 minutes ago.", "golden_label": "P1"}}
+{"vars": {"input": "Title: CSV export drops the last row on large workspaces\n\nWorkspaces with more than 100 items lose the final row in the exported CSV. Affects many users. Workaround: export twice and diff. Not urgent but should be fixed soon.", "golden_label": "P2"}}
+{"vars": {"input": "Title: Footer copyright year is stale\n\nThe site footer still shows '2024'. Purely cosmetic, no functional impact.", "golden_label": "P3"}}

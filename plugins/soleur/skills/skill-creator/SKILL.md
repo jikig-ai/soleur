@@ -53,6 +53,7 @@ Executable code (Python/Bash/etc.) for tasks that require deterministic reliabil
 - **Example**: [rotate_pdf.py](./scripts/rotate_pdf.py) for PDF rotation tasks (illustrative -- not included in this skill)
 - **Benefits**: Token efficient, deterministic, may be executed without loading into context
 - **Note**: Scripts may still need to be read by Claude for patching or environment-specific adjustments
+- **Node scripts in this repo**: the repo root `package.json` is `type:module`, so a `.js` file using `module.exports`/`require` (CommonJS) fails at runtime with `MODULE_NOT_FOUND` (not at `tsc`). Name CommonJS helper/assert scripts `.cjs` (e.g. promptfoo custom asserts, which load via `require`); reserve `.js`/`.mjs` for genuine ESM. See `knowledge-base/project/learnings/build-errors/2026-06-15-cjs-required-for-commonjs-scripts-and-promptfoo-harness-gotchas.md`.
 
 ##### References ([references/](./references/))
 
