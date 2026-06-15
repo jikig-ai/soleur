@@ -504,6 +504,35 @@ edited files (`ensure-workspace-repo.ts`, `agent-runner.ts`,
 `soleur-go-runner.ts`, `cc-dispatcher.ts`, `cc-workflow-end-messages.ts`); no
 open scope-out names these files for this concern. (Re-verify at /work time.)
 
+## Implementation Notes (as-built, 2026-06-15)
+
+- **The `QueryFactoryArgs.setReprovisionResult` sink was NOT built** — superseded
+  by the plan's own deepened Phase 3 step 2 conclusion: "the per-dispatch resolve
+  is what publishes the result for the honest-message branch on both cold and
+  warm turns." A new module `cc-reprovision.ts` (`reprovisionWorkspaceOnDispatch`)
+  runs every dispatch via the fire-and-forget pattern at `cc-dispatcher.ts:~2360`
+  (mirroring the `resolveBashAutonomous` warm-query resolve), publishing
+  `reprovisionOutcome` into a dispatcher closure cell. This covers BOTH cold and
+  warm turns with one mechanism, so the factory-args sink (and the two
+  soleur-go-runner type-hops) were redundant and dropped. The cold factory call
+  at `:1469` remains unchanged as the cold-path self-heal (ignores its now-typed
+  return; the per-dispatch resolve is idempotent with it via the `.git`-absent
+  gate). `soleur-go-runner.ts` was therefore NOT edited.
+- **Honest-message routing extracted to a pure function**
+  `resolveWorktreeEnterFailedMessage(outcome)` in `cc-workflow-end-messages.ts`,
+  unit-tested directly (mirrors the codebase precedent of extracting testable
+  helpers rather than driving the whole `dispatchSoleurGo` factory — see
+  `cc-dispatcher-self-heal-observability.test.ts`). The `onWorkflowEnded`
+  else-branch calls it for `worktree_enter_failed`.
+- **Copy** authored in-place against the established honest-copy voice (the
+  existing `worktree_enter_failed` line + the `chat-surface.tsx` held-place
+  banner) rather than via a separate copywriter dispatch — single-string surface.
+- **Tests as-built:** `agent-runner-reprovision.test.ts` (leader recovery +
+  ordering + no-bespoke-message), `cc-reprovision.test.ts` (warm-query resolve,
+  fail-soft), `cc-workflow-end-messages.test.ts` (+routing polarities/placement
+  invariant), `ensure-workspace-repo.test.ts` (+outcome contract). Full
+  web-platform suite: 9947 passed / 0 failed; `tsc --noEmit` clean.
+
 ## Alternative Approaches Considered
 
 | Approach | Why not |

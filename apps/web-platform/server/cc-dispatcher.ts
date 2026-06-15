@@ -52,7 +52,12 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
-import { WORKFLOW_END_USER_MESSAGES } from "./cc-workflow-end-messages";
+import {
+  WORKFLOW_END_USER_MESSAGES,
+  resolveWorktreeEnterFailedMessage,
+} from "./cc-workflow-end-messages";
+import { reprovisionWorkspaceOnDispatch } from "./cc-reprovision";
+import type { ReprovisionOutcome } from "./ensure-workspace-repo";
 import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
@@ -2357,6 +2362,37 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // #5340 / #5240 design item #2 — deterministic workspace re-provision on
+  // reconnect. After a sandbox/host reclaim the resolved workspace path can be a
+  // fresh filesystem with no repo. The factory-internal self-heal
+  // (`ensureWorkspaceRepoCloned` at :1469) runs ONLY on a COLD conversation;
+  // warm-query reconnect (the epic's headline scenario) never re-invokes the
+  // factory. Re-provision per-dispatch here — same fire-and-forget pattern as the
+  // `setBashAutonomous` warm-query resolve above — so BOTH cold and warm turns
+  // recover AND publish the outcome the honest-message branch reads.
+  //
+  // `reprovisionOutcome` is the POST-recovery signal: `onWorkflowEnded` shows the
+  // honest "workspace reclaimed" message ONLY when a `worktree_enter_failed` turn
+  // is paired with `"failed"` here — the message is gated AFTER the recovery
+  // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
+  // recovery-it-gates.md), never before. Idempotent with the cold factory call
+  // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  let reprovisionOutcome: ReprovisionOutcome | undefined;
+  void reprovisionWorkspaceOnDispatch(userId)
+    .then((outcome) => {
+      reprovisionOutcome = outcome;
+    })
+    .catch((err) => {
+      // reprovisionWorkspaceOnDispatch is already fail-soft (returns "ok" on a
+      // resolver error); this catch is belt-and-suspenders for an unexpected
+      // synchronous throw and leaves the outcome unresolved (generic message).
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "reprovision-on-dispatch-publish",
+        extra: { userId, conversationId },
+      });
+    });
+
   // feat-debug-mode-stream — per-dispatch debug-stream gate. Two INDEPENDENT
   // conditions, BOTH required for any debug_event to emit (read as `let`
   // bindings, mirroring `bashAutonomousPosture`'s fire-and-forget resolve so
@@ -2783,6 +2819,22 @@ export async function dispatchSoleurGo(
           runnerRunawayReason: end.reason,
           runnerRunawayLastBlockKind: end.lastBlockKind,
           runnerRunawayLastBlockToolName: end.lastBlockToolName,
+        });
+      } else if (end.status === "worktree_enter_failed") {
+        // #5340 / #5240 design item #2 — post-recovery-failure honest message.
+        // `worktree_enter_failed` is NOT terminal (see
+        // TERMINAL_WORKFLOW_END_STATUSES), so it routes HERE to a
+        // `{ type: "error", message }` frame. When the per-dispatch
+        // re-provision genuinely failed (`reprovisionOutcome === "failed"`),
+        // surface the honest "workspace reclaimed" copy; otherwise the generic
+        // retryable copy. The recovery already ran (factory :1469 cold +
+        // `reprovisionWorkspaceOnDispatch` cold/warm) — this branch sits AFTER
+        // it (placement learning 2026-06-14-short-circuit-guard-must-sit-after-
+        // the-recovery-it-gates.md), so the message never lies in the
+        // recoverable case.
+        sendToClient(userId, {
+          type: "error",
+          message: resolveWorktreeEnterFailedMessage(reprovisionOutcome),
         });
       } else {
         sendToClient(userId, {
