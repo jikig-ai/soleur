@@ -78,7 +78,15 @@ require_credentials() {
 require_org_credentials() {
   local missing=()
   [[ -n "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]] || missing+=("LINKEDIN_ORG_ACCESS_TOKEN")
-  [[ -n "${LINKEDIN_ORG_ID:-}" ]] || missing+=("LINKEDIN_ORG_ID")
+  # Fail-closed numeric check: a non-numeric (or unset) org id must never be
+  # interpolated into the request URL. When unset/empty the message names the
+  # bare var (matching the existing unset path); when set-but-non-numeric it
+  # names the constraint so the operator can fix it.
+  if [[ -z "${LINKEDIN_ORG_ID:-}" ]]; then
+    missing+=("LINKEDIN_ORG_ID")
+  elif [[ ! "${LINKEDIN_ORG_ID}" =~ ^[0-9]+$ ]]; then
+    missing+=("LINKEDIN_ORG_ID (must be numeric)")
+  fi
   if (( ${#missing[@]} > 0 )); then
     echo "Error: Missing LinkedIn organization credentials: ${missing[*]}" >&2
     echo "fetch-metrics/fetch-activity read the operator's own Company Page" >&2
@@ -459,8 +467,14 @@ cmd_fetch_metrics() {
     "/rest/networkSizes/${org_urn}?edgeType=COMPANY_FOLLOWED_BY_MEMBER" 2>/dev/null); then
     local size
     size=$(echo "$network_body" | jq -r '.firstDegreeSize // empty' 2>/dev/null || true)
-    if [[ -n "$size" ]]; then
+    if [[ "$size" =~ ^[0-9]+$ ]]; then
+      # Only a clean non-negative integer is trusted: it is injected via
+      # `--argjson total_followers` into the final emit, where a non-numeric
+      # value would crash jq under set -e and defeat the degrade-to-null
+      # contract. Anything else degrades to null (same path as a failed fetch).
       total_followers="$size"
+    elif [[ -n "$size" ]]; then
+      echo "Warning: networkSizes returned non-numeric firstDegreeSize ('${size}') for org ${LINKEDIN_ORG_ID}; total_followers=null." >&2
     else
       echo "Warning: networkSizes returned no firstDegreeSize for org ${LINKEDIN_ORG_ID}; total_followers=null." >&2
     fi
@@ -495,6 +509,18 @@ cmd_fetch_activity() {
     "/rest/posts?author=${org_urn}&q=author&count=10&sortBy=LAST_MODIFIED" \
     0 \
     "X-RestLi-Method: FINDER")
+
+  # Shape validation BEFORE the `.elements[]` iteration: mirrors
+  # cmd_fetch_metrics's guard. A missing/null `.elements` (e.g. token lacks the
+  # required role, or the response shape changed) makes `.elements[]` crash jq
+  # ("Cannot iterate over null", exit 5) under set -e — emit an explicit error
+  # and exit 1 instead. A present-but-empty `elements: []` still succeeds and
+  # yields `{"posts": []}`.
+  if ! echo "$posts_body" | jq -e '(.elements | type) == "array"' >/dev/null 2>&1; then
+    echo "Error: posts author-finder returned no usable elements array for org ${LINKEDIN_ORG_ID}." >&2
+    echo "The org token may lack the required role, or the response shape changed." >&2
+    exit 1
+  fi
 
   # commentary is operator-authored Page-public post text. If a post @mentions a
   # member it flows to the digest, but the LIA's no-@mention posting TOM bounds

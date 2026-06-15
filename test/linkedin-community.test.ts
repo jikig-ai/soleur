@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "path";
 
 const SCRIPT_PATH = join(
@@ -78,6 +79,27 @@ const FAKE_ORG_CREDS_ENV: Record<string, string> = {
 
 function decode(buf: Buffer | Uint8Array): string {
   return new TextDecoder().decode(buf);
+}
+
+// ---------------------------------------------------------------------------
+// Source-parity drift guard.
+// Several tests below copy the script's jq transform/guard programs as local
+// string constants so they can exercise the EXACT shape over fixtures. That
+// copy can silently drift if someone edits the script's jq without touching
+// the test. Read the script source and assert each copied program is present
+// (ignoring pure indentation differences) so a future script-side jq edit
+// breaks the test instead of drifting. Mirrors cron-community-monitor.test.ts's
+// SUT_SOURCE / .toContain pattern.
+// ---------------------------------------------------------------------------
+
+const SUT_SOURCE = readFileSync(SCRIPT_PATH, "utf8");
+
+// Collapse all runs of whitespace to a single space and trim, so the assertion
+// tracks the jq program's CONTENT (fields, fallbacks, predicate) rather than
+// its indentation — which legitimately differs between the script body and the
+// test literal.
+function normalizeWhitespace(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +340,11 @@ const POSTS_TRANSFORM = `
     ]
   }`;
 
+// Shape guard cmd_fetch_activity runs BEFORE the `.elements[]` iteration: a
+// missing/null `.elements` would crash jq ("Cannot iterate over null", exit 5)
+// under set -e. A present-but-empty array must still pass.
+const POSTS_SHAPE_GUARD = `(.elements | type) == "array"`;
+
 describeIfJq("linkedin-community.sh fetch-activity -- posts jq transform", () => {
   test("maps post metadata only (no commenter/liker identities)", () => {
     const input = JSON.stringify({
@@ -457,5 +484,105 @@ describeIfJq("linkedin-community.sh get_request -- rate-limit exhaustion (exit 2
 
     expect(result.exitCode).toBe(2);
     expect(decode(result.stderr)).toContain("rate limit exceeded");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Source-parity drift guard: the jq programs copied into this test file as
+// local constants MUST still exist (content-equivalent) in the script. If a
+// future edit changes the script's jq without updating the copy, these break
+// — so the fixture-driven shape/transform tests above can never silently test
+// a stale program. Mirrors cron-community-monitor.test.ts's SUT_SOURCE checks.
+// ---------------------------------------------------------------------------
+
+describe("linkedin-community.sh -- copied jq programs match the script source", () => {
+  const normalizedSource = normalizeWhitespace(SUT_SOURCE);
+
+  for (const [label, program] of [
+    ["SHARE_STATS_TRANSFORM", SHARE_STATS_TRANSFORM],
+    ["SHARE_STATS_SHAPE_GUARD", SHARE_STATS_SHAPE_GUARD],
+    ["POSTS_TRANSFORM", POSTS_TRANSFORM],
+    ["POSTS_SHAPE_GUARD", POSTS_SHAPE_GUARD],
+  ] as const) {
+    test(`${label} is present verbatim (modulo indentation) in the script`, () => {
+      expect(normalizedSource).toContain(normalizeWhitespace(program));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// cmd_fetch_activity shape guard (behavioral): runs the REAL command body with
+// get_request stubbed from a fixture so no network call is made. A posts body
+// missing `.elements` must exit 1 with the actionable message (jq would
+// otherwise crash with "Cannot iterate over null"); a present-but-empty
+// `elements: []` must succeed -> {"posts": []}.
+// ---------------------------------------------------------------------------
+
+describeIfJq("linkedin-community.sh cmd_fetch_activity -- elements shape guard", () => {
+  test("missing .elements (e.g. {}) exits 1 with the actionable message", () => {
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "cmd_fetch_activity"],
+      {
+        env: {
+          ...FAKE_ORG_CREDS_ENV,
+          GET_REQUEST_POSTS_BODY: "{}",
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("posts author-finder returned no usable elements array");
+    expect(stderr).toContain("12345");
+    // Crucially NOT the raw jq crash that the guard prevents.
+    expect(stderr).not.toContain("Cannot iterate over null");
+  });
+
+  test("present-but-empty elements:[] succeeds -> {\"posts\": []}", () => {
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "cmd_fetch_activity"],
+      {
+        env: {
+          ...FAKE_ORG_CREDS_ENV,
+          GET_REQUEST_POSTS_BODY: JSON.stringify({ elements: [] }),
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(decode(result.stdout));
+    expect(out.posts).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cmd_fetch_metrics firstDegreeSize numeric guard (behavioral): a non-numeric
+// follower size must degrade total_followers to null (with a stderr warning)
+// rather than abort the emit under set -e — the same degrade path as a failed
+// networkSizes fetch.
+// ---------------------------------------------------------------------------
+
+describeIfJq("linkedin-community.sh cmd_fetch_metrics -- firstDegreeSize numeric guard", () => {
+  test("non-numeric firstDegreeSize degrades total_followers to null (no abort)", () => {
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "cmd_fetch_metrics"],
+      {
+        env: {
+          ...FAKE_ORG_CREDS_ENV,
+          GET_REQUEST_SHARE_BODY: JSON.stringify({
+            elements: [{ totalShareStatistics: { impressionCount: 5 } }],
+          }),
+          GET_REQUEST_NETWORK_BODY: JSON.stringify({ firstDegreeSize: "abc" }),
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("non-numeric firstDegreeSize");
+    const out = JSON.parse(decode(result.stdout));
+    expect(out.total_followers).toBeNull();
+    // The (more important) share-stats result still emits.
+    expect(out.share_statistics.impressions).toBe(5);
   });
 });
