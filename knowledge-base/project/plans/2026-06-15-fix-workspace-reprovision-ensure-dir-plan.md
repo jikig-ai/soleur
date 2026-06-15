@@ -10,6 +10,22 @@ requires_cpo_signoff: true
 
 # 🐛 fix: Re-provision self-heal must create the workspace dir before cloning
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Sections enhanced:** Acceptance Criteria (AC1/AC2 collapsed), Implementation Phase 1, Sharp Edges (concurrency note), Risks & Mitigations (precedent diff added).
+**Review agents used:** code-simplicity-reviewer, verify-the-negative grep pass.
+
+### Key Improvements
+1. Collapsed AC1+AC2 (and the Phase-1 test) into a single ordering+args test — both verifications fit one `it` block; removes a redundant duplicate-setup test.
+2. Added the placement-rationale: `realGraftRepoClone` first-statement is the tightest scope (fixes BOTH the leader and Concierge callers at the shared chokepoint); the agent-runner:1053 and `ensureWorkspaceRepoCloned`-caller alternatives were considered and rejected.
+3. Added a concurrency note: two racing cold dispatches both run `mkdir(ws,{recursive:true})` — idempotent, introduces no new race (ties into the existing PR #4890 concurrency reasoning).
+4. Added the signup-path precedent diff (workspace.ts:111).
+
+### New Considerations Discovered
+- Both review passes independently confirmed: the load-bearing premise ("`git clone <dir>` creates only the leaf, fails on a missing parent") is validated by the RED-first test on `origin/main` (AC1).
+- The mock-surface-drift Sharp Edge is the single highest-risk implementation detail — adding the real `mkdir` to `realGraftRepoClone` WITHOUT adding `mkdir` to the graft-race suite's `node:fs/promises` mock factory makes a real `mkdir` run against the fake path `/workspaces/ws-uuid` and breaks all 5 existing tests.
+
 ## Overview
 
 Running an agent task fails with **"the configured CWD `/workspaces/<uuid>` doesn't exist on disk"** and git reporting **"No Git repository found"**. The self-heal / re-provision clone path assumes the workspace directory already exists on disk and clones into a temp subdir of it — but after a sandbox/host reclaim the workspace root itself is gone, so the clone fails on the missing parent directory and recovery never converges.
@@ -21,6 +37,15 @@ The CWE-22 UUID-validation hardening merged on 2026-06-15 (`fix(workspace-resolv
 The signup provisioning path (`apps/web-platform/server/workspace.ts:111`, inside `provisionWorkspace`) correctly calls `ensureDir(workspacePath)` first. The re-provision / self-heal path — reached via both the **leader** half (`agent-runner.ts:1067 startAgentSession`) and the **Concierge** half (`cc-reprovision.ts:52` → `cc-dispatcher.ts realSdkQueryFactory`), both of which call `ensureWorkspaceRepoCloned()` → `realGraftRepoClone()` — skips it.
 
 **Fix.** Ensure the workspace directory exists (`mkdir(workspacePath, { recursive: true })`) at the top of `realGraftRepoClone()`, before computing `tmp` / cloning, mirroring what `workspace.ts:111` does on the signup path. This is the only change to production code. The resolver's UUID validation is upstream of this function and untouched — verify it stays green.
+
+**Placement rationale (deepen-confirmed).** `realGraftRepoClone`'s first statement is the tightest correct scope: it is reached ONLY after all three `ensureWorkspaceRepoCloned` guards pass (connected, `.git`-absent, valid github URL), and it is the SHARED chokepoint for BOTH callers (leader `agent-runner.ts:1067` + Concierge `cc-reprovision.ts:52`). Two rejected alternatives: (a) `agent-runner.ts:1053` before the `existsSync(.git)` check — fixes only the leader, leaves the Concierge path broken; (b) the caller `ensureWorkspaceRepoCloned` — runs the `mkdir` on the not-connected / no-`.git`-decision paths too (wider than necessary). The graft function is the single point where the missing-parent failure actually occurs.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| `mkdir` placement could mask cleanup or break the existing concurrency hardening | The `mkdir` is the FIRST statement, before `const tmp` and the `try`/`finally`. The existing per-attempt-unique temp dir + pre-`rename` `.git` re-check (PR #4890) are untouched. Two racing cold dispatches both run `mkdir(ws,{recursive:true})` — idempotent, no new race (mirrors the existing same-`repoUrl`-same-HEAD convergence reasoning at ensure-workspace-repo.ts:136-151). |
+| Precedent divergence from the signup path | **Precedent diff vs `workspace.ts:111` (`ensureDir(workspacePath)`):** the signup path uses the private `ensureDir`, which `lstatSync`-classifies and rejects symlinks/non-dirs (TOCTOU/#2333, scoped to KB scaffolding). The re-provision fix uses the bare `mkdir(...,{recursive:true})` — the operative final line of `ensureDir` and nothing more. This is deliberate: the symlink-rejection contract is irrelevant to a clone target and would add a failure mode. If a non-directory ever sits at `workspacePath`, `mkdir` throws → caught by `ensureWorkspaceRepoCloned`'s fail-soft catch → Sentry op='clone'. Same end-state (degrade, never crash), no symlink-specific branch needed. |
 
 ## Premise Validation
 
@@ -56,8 +81,7 @@ CPO sign-off required at plan time before `/work` begins; `user-impact-reviewer`
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (RED first).** A new failing test in `apps/web-platform/test/ensure-workspace-repo-graft-race.test.ts` asserts that `realGraftRepoClone` calls `mkdir(workspacePath, { recursive: true })` **before** `gitWithInstallationAuth` is invoked (ordering matters — the dir must exist before the clone). On `origin/main` this test FAILS (no `mkdir` call exists).
-- [ ] **AC2.** A second failing test asserts the `mkdir` is invoked with the exact `workspacePath` (`WS`) and `{ recursive: true }` (recursive so a missing parent chain is created, idempotent when the dir already exists).
+- [ ] **AC1 (RED first).** A single new failing test in `apps/web-platform/test/ensure-workspace-repo-graft-race.test.ts` asserts BOTH that `realGraftRepoClone` calls `mkdir` with the exact `workspacePath` (`WS`) and `{ recursive: true }` (recursive so a missing parent chain is created, idempotent when the dir already exists), AND that the `mkdir` runs **before** `gitWithInstallationAuth` (ordering via `invocationCallOrder` — a `mkdir` after the clone is useless). On `origin/main` this test FAILS (no `mkdir` call exists). [Deepen: collapsed the former AC1+AC2 into one test — both checks fit one `it` block; a second `it` only re-ran the same setup.]
 - [ ] **AC3 (GREEN).** After the fix, both new tests pass and all pre-existing tests in `ensure-workspace-repo-graft-race.test.ts` AND `ensure-workspace-repo.test.ts` still pass (the `mkdir` mock must be added to the graft-race suite's `node:fs/promises` mock; the orchestration suite mocks only `node:fs` so it is unaffected — but run it to prove no regression).
 - [ ] **AC4.** The fix adds `mkdir` to the existing `import { … } from "node:fs/promises";` line in `ensure-workspace-repo.ts` and calls `await mkdir(workspacePath, { recursive: true })` as the first statement inside `realGraftRepoClone` (before the `tmp` assignment). No other production file changes.
 - [ ] **AC5 (resolver preserved).** `./node_modules/.bin/vitest run test/workspace-resolver-id-shape-guard.test.ts test/workspace-resolver.test.ts` passes unchanged — confirms the CWE-22 UUID shape guard is untouched and still green.
@@ -73,7 +97,7 @@ In `apps/web-platform/test/ensure-workspace-repo-graft-race.test.ts`:
 1. Add `mockMkdir: vi.fn()` to the `vi.hoisted(() => ({ … }))` block.
 2. Extend the `vi.mock("node:fs/promises", () => ({ … }))` factory to include `mkdir: mockMkdir` alongside the existing `readdir, cp, rename, rm`.
 3. In `beforeEach`, add `mockMkdir.mockResolvedValue(undefined);`.
-4. Add a `describe`/`it` block:
+4. Add a single `it` block (args + ordering in one test):
 
 ```ts
 // Re-provision into a workspace dir that does NOT yet exist on disk (post
@@ -84,14 +108,14 @@ it("creates the workspace dir (recursive) BEFORE cloning", async () => {
   mockExistsSync.mockReturnValue(false);
   await realGraftRepoClone(WS, REPO, 123);
   expect(mockMkdir).toHaveBeenCalledWith(WS, { recursive: true });
-  // ordering: mkdir must precede the clone
-  const mkdirOrder = mockMkdir.mock.invocationCallOrder[0];
-  const cloneOrder = mockGitWithInstallationAuth.mock.invocationCallOrder[0];
-  expect(mkdirOrder).toBeLessThan(cloneOrder);
+  // ordering: mkdir must precede the clone (a mkdir after the clone is useless)
+  expect(mockMkdir.mock.invocationCallOrder[0]).toBeLessThan(
+    mockGitWithInstallationAuth.mock.invocationCallOrder[0],
+  );
 });
 ```
 
-5. Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/ensure-workspace-repo-graft-race.test.ts` and confirm the new test(s) FAIL (RED) — `mockMkdir` is never called on `origin/main`.
+5. Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/ensure-workspace-repo-graft-race.test.ts` and confirm the new test FAILS (RED) — `mockMkdir` is never called on `origin/main`.
 
 ### Phase 2 — GREEN: the one-line fix
 

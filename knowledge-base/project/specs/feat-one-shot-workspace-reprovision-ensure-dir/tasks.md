@@ -11,7 +11,7 @@ lane: single-domain
 - [ ] 1.1 In `apps/web-platform/test/ensure-workspace-repo-graft-race.test.ts`, add `mockMkdir: vi.fn()` to the `vi.hoisted` block.
 - [ ] 1.2 Add `mkdir: mockMkdir` to the `vi.mock("node:fs/promises", …)` factory (alongside `readdir, cp, rename, rm`).
 - [ ] 1.3 Add `mockMkdir.mockResolvedValue(undefined)` to `beforeEach`.
-- [ ] 1.4 Add the "creates the workspace dir (recursive) BEFORE cloning" test asserting `mkdir(WS, {recursive:true})` AND `invocationCallOrder` of mkdir < clone.
+- [ ] 1.4 Add ONE "creates the workspace dir (recursive) BEFORE cloning" test asserting both `mkdir(WS, {recursive:true})` AND `invocationCallOrder` of mkdir < clone in a single `it` block (deepen: collapsed from two tests).
 - [ ] 1.5 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/ensure-workspace-repo-graft-race.test.ts` — confirm RED.
 
 ## Phase 2 — GREEN (the fix)
