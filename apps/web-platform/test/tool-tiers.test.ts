@@ -116,6 +116,39 @@ describe("buildGateMessage", () => {
     );
     expect(msg).toContain("some_new_tool");
   });
+
+  // #5325 — the operator MUST see recipient + body before approving an
+  // outbound send; a content-free "Allow?" would make the gate decorative.
+  test("email_send gate shows the recipient, subject, and body", () => {
+    const msg = buildGateMessage("mcp__soleur_platform__email_send", {
+      to: "journalist@example.com",
+      subject: "Your listicle",
+      body: "Hi — I built something relevant to your piece.",
+    });
+    expect(msg).toContain("journalist@example.com");
+    expect(msg).toContain("Your listicle");
+    expect(msg).toContain("I built something relevant");
+    expect(msg).not.toMatch(/^Agent wants to use/); // not the default
+  });
+
+  test("email_reply gate names the inbound item + shows the body (recipient is server-derived)", () => {
+    const msg = buildGateMessage("mcp__soleur_platform__email_reply", {
+      messageId: "abc-123",
+      subject: "Re: hello",
+      body: "Thanks for your note.",
+    });
+    expect(msg).toContain("abc-123");
+    expect(msg).toContain("Thanks for your note");
+  });
+
+  test("email_suppress gate names the recipient + flags permanence", () => {
+    const msg = buildGateMessage("mcp__soleur_platform__email_suppress", {
+      recipient: "person@example.com",
+      reason: "decline",
+    });
+    expect(msg).toContain("person@example.com");
+    expect(msg).toMatch(/permanent/i);
+  });
 });
 
 describe("CC_ROUTER_TIER3_DENYLIST (#2909)", () => {
