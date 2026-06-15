@@ -21,9 +21,13 @@ autonomous work (daily triage, content publishing, legal audits, competitive ana
 handling). Today they can only be inspected by reading code and triggered via the `soleur:trigger-cron`
 CLI/route. There is **no web UI**.
 
-**Scope decision (operator, 2026-06-15): visibility-first v1.**
+**Scope decision (operator, 2026-06-15): visibility-first, with the Concierge tab pulled into scope.**
+Initial decision was visibility-first v1 with Concierge authoring deferred; operator follow-up
+(2026-06-15) brought the **Concierge chat window** into scope ("Add the chat window with concierge to
+add routines with concierge"). The engineering reality (Decision 2) is unchanged — the chat flow must
+reflect the honest PR-scaffold path.
 
-**v1 (this effort):**
+**In scope:**
 - **Routines tab** — all routines grouped by domain; each row shows frequency (human-readable cron),
   last-run (status/date/duration), owner-role chip, On/Archived state, a **Run now** button, and an
   overflow menu.
@@ -32,13 +36,20 @@ CLI/route. There is **no web UI**.
 - **Debug mode** — manual off-schedule trigger ("Run now"), routed through the *existing*
   `manual-trigger-allowlist` + `POST /api/internal/trigger-cron`, with a deny-by-default confirmation
   gate for high-side-effect routines.
+- **Concierge tab (chat window)** — delegate routine **create / edit / remove** to the Concierge agent
+  via a chat surface. The conversation flow: operator describes the routine → Concierge proposes a
+  **generated-routine review card** (name, domain, owner role, frequency + raw cron, target file,
+  "what it will do") → operator reviews/edits → Concierge **tests it (dry-run, no real side-effects)**,
+  reads back the app output, and **verifies correctness** → only then offers **confirmation → Open PR**.
+  "Create" = the Concierge **opens a PR** scaffolding a new `cron-*.ts` (routines are deployed code; see
+  Key Decision 2); it goes live on merge + deploy, NOT instantly. The test-verify loop runs a dry-run
+  sandbox of the drafted logic for new routines; for **edit**, it re-runs the existing routine and
+  verifies against live; **remove** opens a PR deleting the cron + its 5 registry entries.
 
-**v2 (deferred — separate phase/issue):**
-- **Concierge tab** — delegate routine **create / edit / remove** to the Concierge agent. "Create" =
-  the Concierge **opens a PR** scaffolding a new `cron-*.ts` (routines are deployed code; see Key
-  Decision 2). The mandatory "test it by running it, read back the app output, verify, then offer
-  confirmation" loop applies to **editing/re-running existing** routines — it is architecturally
-  impossible for a not-yet-deployed new routine.
+**Sequencing note:** the visibility surface (Routines + Recent Runs + debug Run-now) is independently
+shippable and lower-risk; the Concierge authoring path depends on a net-new agent capability (the
+5-registry PR-scaffold — see Capability Gaps) that should be built before its "create" path is wired.
+Recommend implementing as two PRs behind the same feature surface rather than one monolith.
 
 ## Why This Approach
 
@@ -77,11 +88,37 @@ gate, so "instant live routine" would overpromise persistence the architecture d
 
 ## Open Questions
 
-1. **"Concierge" naming.** "Concierge" is already the KB-chat agent surface (#3451/#3326). The v2 routine-authoring path likely *is* that same agent acting in a new mode — confirm whether the v2 tab is literally "delegate to the existing Concierge" (preferred) or a distinct surface needing its own name.
-2. **"Archived" semantics.** Is Archived a manifest/sidecar flag (display + Run-now disabled) or true deploy-time removal? v1 treats it as a display/disabled state; the durable toggle is a v2/HOW decision.
-3. **Run-log write path.** Does each `cron-*.ts` write its own run-log row (via shared helper in `_cron-shared.ts`), or does an Inngest middleware write it centrally? (HOW — plan time.)
-4. **Inngest `/v1` reachability from the app container** — the existing runs proxy works server-side, but the loopback-gate learning (2026-05-31) means the run-log is the durable source of truth and `/v1` is at most an enrichment. Confirm at plan time.
-5. **Owner-role source of truth** — the sidecar map (Decision 3); confirm the role taxonomy (COO/CTO/CMO/CLO/CFO/CRO/CCO/CPO) maps cleanly onto all 42 routines.
+1. **"Concierge" naming.** "Concierge" is already the KB-chat agent surface (#3451/#3326). The
+   routine-authoring chat tab likely *is* that same agent acting in a new mode — confirm whether the tab
+   is literally "delegate to the existing Concierge" (preferred) or a distinct surface needing its own
+   name. (Now in scope, so this needs resolution at plan time.)
+2. **"Archived" semantics.** Is Archived a manifest/sidecar flag (display + Run-now disabled) or true
+   deploy-time removal? v1 treats it as a display/disabled state; the durable toggle is a HOW decision.
+3. **Run-log write path.** Does each `cron-*.ts` write its own run-log row (via shared helper in
+   `_cron-shared.ts`), or does an Inngest middleware write it centrally? (HOW — plan time.)
+4. **Inngest `/v1` reachability from the app container** — the existing runs proxy works server-side, but
+   the loopback-gate learning (2026-05-31) means the run-log is the durable source of truth and `/v1` is
+   at most an enrichment. Confirm at plan time.
+5. **Owner-role source of truth** — the sidecar map (Decision 3); confirm the role taxonomy
+   (COO/CTO/CMO/CLO/CFO/CRO/CCO/CPO) maps cleanly onto all 42 routines.
+
+From the wireframe pass (ux-design-lead, flagged not invented):
+
+6. **Overflow `…` menu contents (v1).** Likely View runs / Archive / Copy cron (Edit/authoring lives in
+   the Concierge tab) — confirm the exact item set.
+7. **"Protected" classification source.** Is the deny-by-default flag derived automatically (routine
+   touches payments/egress/deletion) or set explicitly per-routine in the sidecar? CLO posture is shown;
+   the trigger rule is unspecified.
+8. **Run-now gating.** Prompt called Run-now a "debug-mode" trigger; the mock renders it always-visible.
+   Confirm whether Run-now is hidden outside a debug mode, or always shown (with the protected gate).
+9. **Group collapse.** Group headers imply collapsibility — confirm whether v1 ships collapse/expand or
+   static groups.
+10. **Sort / Group dimensions.** Rendered as buttons ("Sort: Last run", "Group: Domain") — confirm the
+    available sort keys and group dimensions.
+11. **Recent Runs pagination / run-log depth.** Infinite scroll vs. page size vs. date filter — the
+    durable run-log's pagination model is unspecified.
+12. **Sharp-corner vs `rounded-xl` reconciliation.** Wireframe followed the brand guide (sharp 0px
+    corners); existing codebase modals use `rounded-xl`. Reconcile at implementation.
 
 ## Domain Assessments
 

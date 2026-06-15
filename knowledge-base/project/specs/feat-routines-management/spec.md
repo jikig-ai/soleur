@@ -32,14 +32,17 @@ off-schedule from the web.
 - **G4** Every lifecycle/trigger event is recorded in a WORM audit ledger capturing actor-class
   (HUMAN vs CONCIERGE AGENT), delegating principal, timestamp, routine id/version, and invocation mode.
 - **G5** Agent-native parity: every operator action (view, run, toggle) is also a callable agent tool.
+- **G6** Operator can delegate routine **create / edit / remove** to the Concierge via a chat window;
+  the Concierge proposes a reviewable routine, **dry-run tests + verifies** it, and only then offers
+  confirmation, which **opens a PR** (routines are deployed code).
 
-## Non-Goals (deferred to v2)
+## Non-Goals
 
-- **NG1** Concierge tab for routine **create / edit / remove** delegation (separate phase/issue).
-- **NG2** The "test by running it, read back output, verify, then offer confirmation" loop (belongs to
-  the v2 authoring/edit path; impossible for not-yet-deployed new routines).
-- **NG3** Runtime routine creation (routines are deployed code; create = a PR-scaffold in v2).
-- **NG4** True deploy-time Archive (v1 Archive is a display/disabled state).
+- **NG1** Runtime routine creation — routines are deployed code; "create" = a PR-scaffold that goes live
+  on merge + deploy, never an instant live routine.
+- **NG2** True deploy-time Archive (v1 Archive is a display/disabled state; durable toggle is a HOW
+  decision).
+- **NG3** Real (non-dry-run) execution of an unconfirmed routine during the Concierge test step.
 
 ## Functional Requirements
 
@@ -59,6 +62,21 @@ off-schedule from the web.
 - **FR6** Durable run-log: each routine execution writes a record (routine id, status, started/ended,
   duration, trigger source, actor-class, delegating principal).
 - **FR7** Agent-tool parity for list / read-runs / run-now actions.
+- **FR8** Concierge tab: a chat window (sibling to Routines / Recent Runs) to delegate routine
+  create/edit/remove. Input box placeholder invites create/edit/remove requests.
+  → wireframe: `…/routines/screenshots/04-concierge-chat-create-routine.png`.
+- **FR9** Generated-routine review card in the Concierge reply: name, domain, owner role, frequency +
+  raw cron, target file path, "what it will do", with Edit and "test it" actions — shown BEFORE any
+  confirmation.
+- **FR10** Concierge verification step: a **dry-run/sandbox** execution (no real email/publish/financial/
+  egress/delete side-effects) with a visible "DRY RUN — no external effects" marker; reads back the app
+  output and asserts correctness. Confirmation is offered ONLY after verification passes. For **edit**,
+  re-run the existing routine and verify against live; for **create**, dry-run the drafted logic.
+- **FR11** Confirmation action **opens a PR** scaffolding the new `cron-*.ts` (with the 5 lockstep
+  registry edits) — copy states it goes live on merge + deploy, not instantly. **Remove** opens a PR
+  deleting the cron + its 5 registry entries.
+- **FR12** Concierge actions recorded in the WORM audit ledger as "operator-via-agent" (actor-class
+  AGENT + delegating principal).
 
 ## Technical Requirements
 
