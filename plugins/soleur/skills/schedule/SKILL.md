@@ -672,6 +672,8 @@ If the run fails, diagnose the issue, fix the workflow file, and re-run. Do not 
 
 ### `list`
 
+> Also exposed as the first-class verb `soleur:cron-list` (Read), which runs these exact steps. The cron CRUD set: `soleur:schedule` (Create — this), `soleur:cron-list` (Read), `soleur:cron-delete` (Delete), `soleur:trigger-cron` (Run-now).
+
 Display all existing scheduled workflows, distinguishing recurring from one-time by cron shape.
 
 If `$ARGUMENTS` contains `--json`, output a JSON array with `name`, `cron`, `mode` (string: `"recurring"` or `"one-time"`), and `skill` fields. Otherwise display a formatted list with a mode tag.
@@ -708,6 +710,8 @@ Display:
 V1 reports mode + cron only. Richer state (`pending` / `disabled_inactivity` / `fired-failed`) is deferred — operators can run `gh workflow list` and `gh workflow view <NAME>` directly for now.
 
 ### `delete <name>`
+
+> Also exposed as the first-class verb `soleur:cron-delete` (Delete), which runs these exact steps.
 
 Remove a scheduled workflow.
 

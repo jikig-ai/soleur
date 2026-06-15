@@ -94,4 +94,4 @@ The script (full in [scripts/create.sh](./scripts/create.sh)):
 ## Cross-references
 
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-038-feature-flags-flagsmith.md`
-- Sibling skills: `soleur:flag-set-role`, `soleur:user-set-role`
+- Sibling skills (flag CRUD set): `soleur:flag-set-role` (Update), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
