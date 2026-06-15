@@ -126,6 +126,44 @@ describe("soleur-go-runner — worktree-enter CWD-verify loop guardrail (#5313)"
     ).toBeUndefined();
   });
 
+  // AC8 (FR2.4 single-terminal invariant): emitting worktree_enter_failed
+  // clears both timers (via emitWorkflowEnded -> closeQuery) and sets
+  // state.closed, so the armed runner_runaway timer cannot double-fire a
+  // second WorkflowEnd. After the loop fires, advancing past the runaway
+  // ceiling MUST still yield exactly ONE workflow_ended, and it is the
+  // worktree_enter_failed one — not runner_runaway.
+  it("does not double-fire runner_runaway after worktree_enter_failed (single terminal)", async () => {
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+      maxTurnDurationMs: 30_000,
+    });
+    const events = makeEvents();
+    events.onToolResult = vi.fn();
+    await runner.dispatch({
+      conversationId: "conv-single",
+      userId: "u1",
+      userMessage: "fix",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+    // 3 mismatched verifies arm the timers (first tool_use) AND fire the loop.
+    for (let i = 1; i <= 3; i++) {
+      mock.emit(bashToolUse(`tu${i}`, VERIFY_CMD));
+      await flushMicrotasks();
+      mock.emit(makeBashResult(`tu${i}`, WRONG_CWD));
+      await flushMicrotasks();
+    }
+    // Advance well past both the idle window AND the absolute turn ceiling.
+    vi.advanceTimersByTime(60_000);
+    await flushMicrotasks();
+    expect(events._ended).toHaveLength(1);
+    expect((events._ended[0].status as string)).toBe("worktree_enter_failed");
+  });
+
   // Non-CWD-verify Bash commands must never trip the detector.
   it("does NOT fire on unrelated repeated Bash commands", async () => {
     const { mock, events } = await dispatchRunner("conv-ls");
