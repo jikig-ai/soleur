@@ -18,7 +18,10 @@ import { describe, test, expect } from "vitest";
 import {
   readCcMcpAllowlist,
   shouldMirrorUnregisteredPlatformToolUse,
+  C4_TOOL_FQN,
 } from "../server/cc-dispatcher";
+import { EDIT_C4_DIAGRAM_TOOL } from "../server/c4-concierge-tools";
+import { NARRATE_TOOL_FQN, SUMMARIZE_TOOL_FQN } from "../server/narrate-tool";
 
 describe("readCcMcpAllowlist (#2909 FR1)", () => {
   test("unset env returns empty object", () => {
@@ -178,5 +181,49 @@ describe("shouldMirrorUnregisteredPlatformToolUse (#2909 FR2)", () => {
         ["mcp__soleur_platform__kb_share_list"],
       ),
     ).toBe(true);
+  });
+});
+
+describe("edit_c4_diagram registration (#5388)", () => {
+  // Drift guard: the FQN the dispatcher advertises to the predicate MUST equal
+  // the FQN realSdkQueryFactory registers the tool under. Both derive from
+  // EDIT_C4_DIAGRAM_TOOL — pin the literal so a rename of either side fails here
+  // rather than silently re-introducing the false-positive.
+  test("C4_TOOL_FQN equals the soleur_platform edit_c4_diagram FQN", () => {
+    expect(C4_TOOL_FQN).toBe(`mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`);
+  });
+
+  // AC1 — c4 registered (per-dispatch set includes the c4 FQN) ⇒ no mirror.
+  test("registered c4 edit does NOT mirror", () => {
+    expect(
+      shouldMirrorUnregisteredPlatformToolUse(C4_TOOL_FQN, [
+        NARRATE_TOOL_FQN,
+        SUMMARIZE_TOOL_FQN,
+        C4_TOOL_FQN,
+      ]),
+    ).toBe(false);
+  });
+
+  // AC2 — c4 NOT registered (flag off ⇒ FQN absent from the per-dispatch set) ⇒
+  // genuine-unregistered mirror still fires. Regression guard against the wrong
+  // "just add it to the module constant unconditionally" fix.
+  test("unregistered c4 edit STILL mirrors (flag off)", () => {
+    expect(
+      shouldMirrorUnregisteredPlatformToolUse(C4_TOOL_FQN, [
+        NARRATE_TOOL_FQN,
+        SUMMARIZE_TOOL_FQN,
+      ]),
+    ).toBe(true);
+  });
+
+  // AC3 — the always-registered narration tools are unaffected by the c4 wiring.
+  test("narrate/summarize remain registered (no mirror)", () => {
+    const base = [NARRATE_TOOL_FQN, SUMMARIZE_TOOL_FQN];
+    expect(shouldMirrorUnregisteredPlatformToolUse(NARRATE_TOOL_FQN, base)).toBe(
+      false,
+    );
+    expect(
+      shouldMirrorUnregisteredPlatformToolUse(SUMMARIZE_TOOL_FQN, base),
+    ).toBe(false);
   });
 });

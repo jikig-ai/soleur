@@ -24,11 +24,9 @@ import {
   EDIT_C4_DIAGRAM_TOOL,
 } from "@/server/c4-concierge-tools";
 import {
-  getRuntimeFlag,
   isDebugModeAvailable,
   type Role,
 } from "@/lib/feature-flags/server";
-import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 
 import { applyPrefillGuard } from "./agent-prefill-guard";
 
@@ -118,6 +116,10 @@ import {
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
+import {
+  resolveC4Eligible,
+  resolveC4FlagEnabled,
+} from "./resolve-c4-eligible";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -267,10 +269,26 @@ export function shouldMirrorUnregisteredPlatformToolUse(
 // registered in the soleur_platform server (see the always-build block), so
 // they must be listed here — otherwise `shouldMirrorUnregisteredPlatformToolUse`
 // would false-positive on every legitimate narration and flood Sentry.
+//
+// #5388: this is the ALWAYS-registered BASE list. The flag+repo-gated
+// `edit_c4_diagram` tool is NOT a constant — it is registered per-dispatch only
+// when c4 is eligible for the user, so its FQN (`C4_TOOL_FQN`) is APPENDED to a
+// per-dispatch copy of this base in the `dispatchSoleurGo` scope (see the
+// `registeredPlatformToolNames` resolve) rather than listed here. Adding it
+// unconditionally here would suppress the GENUINE unregistered-tool mirror when
+// the c4 flag is OFF — the exact silent-failure surface #2909 FR2 catches.
 const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [
   NARRATE_TOOL_FQN,
   SUMMARIZE_TOOL_FQN,
 ];
+
+// #5388: the soleur_platform FQN of the flag+repo-gated edit_c4_diagram tool.
+// SINGLE source of truth for the FQN — consumed by `realSdkQueryFactory` (sets
+// `c4ToolName` when it builds the tool) AND the per-dispatch
+// `registeredPlatformToolNames` resolve (advertises it to the mirror predicate).
+// Exported so `test/cc-mcp-tier-allowlist.test.ts` can assert it never drifts
+// from `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`.
+export const C4_TOOL_FQN = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
 
 // Validates a GitHub owner/repo segment before it is closed over into the
 // edit_c4_diagram tool + system prompt — defense against a malformed/injected
@@ -1724,18 +1742,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     if (effectiveInstallationId !== null && owner && repo) {
       let c4Enabled = false;
       try {
-        const tenant = await getFreshTenantClient(args.userId);
-        const { data: roleRow } = await tenant
-          .from("users")
-          .select("role")
-          .eq("id", args.userId)
-          .single<{ role: unknown }>();
-        const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
-        c4Enabled = await getRuntimeFlag(C4_VISUALIZER_FLAG, {
-          userId: args.userId,
-          role,
-          orgId: null,
-        });
+        // #5388: the role-read + Flagsmith resolve is extracted to
+        // `resolveC4FlagEnabled` so the factory (tool-build decision) and the
+        // dispatcher's per-dispatch `registeredPlatformToolNames` resolve share
+        // ONE flag decision and cannot drift.
+        c4Enabled = await resolveC4FlagEnabled(args.userId);
       } catch (err) {
         reportSilentFallback(err, {
           feature: "cc-dispatcher",
@@ -1753,7 +1764,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           repo,
           workspacePath,
         });
-        c4ToolName = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
+        c4ToolName = C4_TOOL_FQN;
         c4PromptAddendum =
           "## C4 diagram editing\n" +
           "To edit a C4 architecture diagram, call the `edit_c4_diagram` tool " +
@@ -2655,6 +2666,40 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // #5388 — per-dispatch registered platform-tool set for the unregistered-tool
+  // mirror predicate (`onToolUse` below). Seeded with the ALWAYS-registered base
+  // (narrate/summarize); the flag+repo-gated `edit_c4_diagram` FQN is APPENDED
+  // iff c4 is eligible for THIS user/dispatch.
+  //
+  // Per-dispatch RE-RESOLUTION (not a factory-published cell) is load-bearing:
+  // the c4 tool is built in `realSdkQueryFactory`, which runs ONLY on a COLD
+  // conversation; on warm-query reuse it is not re-invoked, so a factory-published
+  // set would stay at the c4-less base and a c4 edit on a WARM conversation would
+  // false-positive again. Same fire-and-forget warm-query pattern as the
+  // `resolveBashAutonomous` / `reprovisionWorkspaceOnDispatch` resolves above.
+  // `resolveC4Eligible` re-resolves the FULL precondition set (installation +
+  // owner/repo + flag) the factory gates the tool on — sharing `resolveC4FlagEnabled`
+  // with the factory — so the advertise can never be MORE permissive than the
+  // registration (the #5388 AC2 false-suppression guard). Resolves before any c4
+  // `tool_use` can surface (the SDK must build + emit text/tool blocks first, and
+  // an `edit_c4_diagram` call is never the first block — it is an addendum-driven
+  // mid-turn call). Fail-closed: on a resolution error the c4 FQN stays OUT (a
+  // benign false-positive) and the failure is mirrored — never a false-suppression.
+  const registeredPlatformToolNames: string[] = [
+    ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
+  ];
+  void resolveC4Eligible(userId)
+    .then((eligible) => {
+      if (eligible) registeredPlatformToolNames.push(C4_TOOL_FQN);
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "c4-registered-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+
   // feat-debug-mode-stream — per-dispatch debug-stream gate. Two INDEPENDENT
   // conditions, BOTH required for any debug_event to emit (read as `let`
   // bindings, mirroring `bashAutonomousPosture`'s fire-and-forget resolve so
@@ -2849,7 +2894,11 @@ export async function dispatchSoleurGo(
       // cannot flood Sentry. Intrinsically scoped to cc-router because this
       // callback only fires from `dispatchSoleurGo` (legacy
       // `startAgentSession` is a separate path).
-      if (shouldMirrorUnregisteredPlatformToolUse(block.name, CC_REGISTERED_PLATFORM_TOOL_NAMES)) {
+      // #5388: read the PER-DISPATCH registered set (base narrate/summarize +
+      // the c4 FQN when eligible this dispatch), NOT the c4-less module constant —
+      // otherwise a legitimate edit_c4_diagram call false-positives. The cell is
+      // resolved cold+warm above (see `registeredPlatformToolNames`).
+      if (shouldMirrorUnregisteredPlatformToolUse(block.name, registeredPlatformToolNames)) {
         const safeToolName = sanitizeToolNameForLog(block.name);
         mirrorWithDebounce(
           null,
