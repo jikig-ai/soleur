@@ -11,9 +11,9 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 1 — Data model
 
-- [ ] 1.1 `server/inngest/routine-metadata.ts` — client-free leaf; `ROUTINE_METADATA: Record<fnId, {domain, ownerRole, scheduleLabel, manualTrigger}>` with one entry per `EXPECTED_CRON_FUNCTIONS` id; `manualTrigger:"confirm"` for protected crons (content-publisher, legal-audit, github-app-drift-guard, content-vendor-drift). No raw `cron` field.
-  - [ ] 1.1.1 `test/server/inngest/routine-metadata-parity.test.ts` — assert `keys(ROUTINE_METADATA) === EXPECTED_CRON_FUNCTIONS` (bound to the array). Hard CI gate.
-- [ ] 1.2 Migration `104_routine_runs.sql` + `.down.sql` — terminal-only-append WORM table; `-- LAWFUL_BASIS:` + `-- RETENTION:` headers; `ON DELETE SET NULL` FKs; no-mutate BEFORE UPDATE/DELETE trigger (037 pattern) + REVOKE from anon/authenticated; RLS select-only; `write_routine_run()` SECURITY DEFINER RPC (service-role grant, `search_path` pinned); index `(routine_id, started_at desc)`, NOT CONCURRENTLY.
+- [x] 1.1 `server/inngest/routine-metadata.ts` — client-free leaf; `ROUTINE_METADATA: Record<fnId, {domain, ownerRole, scheduleLabel, manualTrigger}>` with one entry per `EXPECTED_CRON_FUNCTIONS` id; `manualTrigger:"confirm"` for protected crons (content-publisher, legal-audit, github-app-drift-guard, content-vendor-drift). No raw `cron` field.
+  - [x] 1.1.1 `test/server/inngest/routine-metadata-parity.test.ts` — assert `keys(ROUTINE_METADATA) === EXPECTED_CRON_FUNCTIONS` (bound to the array). Hard CI gate.
+- [x] 1.2 Migration `104_routine_runs.sql` + `.down.sql` — terminal-only-append WORM table; `-- LAWFUL_BASIS:` + `-- RETENTION:` headers; `ON DELETE SET NULL` FKs; no-mutate BEFORE UPDATE/DELETE trigger (037 pattern) + REVOKE from anon/authenticated; RLS select-only; `write_routine_run()` SECURITY DEFINER RPC (service-role grant, `search_path` pinned); index `(routine_id, started_at desc)`, NOT CONCURRENTLY.
 
 ## Phase 2 — Run-log middleware
 
