@@ -595,6 +595,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     timeoutTimersRef.current.set(leaderId, timer);
   }, [clearLeaderTimeout]);
 
+  /** #5240 — (re)start EVERY currently-armed timer. Iterates the live timer Map
+   *  (NOT `chatState.activeStreams`), mirroring `clearAllTimeouts` so the reset
+   *  is self-contained (no cross-state-slice read) and touches exactly the set
+   *  of armed timers. Used by the single-leader debug heartbeat, whose
+   *  `reset_all` intent has no `leaderId` to name. */
+  const resetAllTimeouts = useCallback(() => {
+    for (const leaderId of [...timeoutTimersRef.current.keys()]) {
+      resetLeaderTimeout(leaderId);
+    }
+  }, [resetLeaderTimeout]);
+
   // Mirror realConversationId into a ref so `abort()` reads the latest value
   // without re-binding on every WS frame that updates state. The Stop UX
   // tolerates a one-tick stale read (the user has to click), but the abort
@@ -615,8 +626,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (ta.type === "reset") resetLeaderTimeout(ta.leaderId);
     else if (ta.type === "clear") clearLeaderTimeout(ta.leaderId);
     else if (ta.type === "clear_all") clearAllTimeouts();
+    else if (ta.type === "reset_all") resetAllTimeouts();
+    else {
+      // Exhaustiveness rail: this if-ladder (not an exhaustive switch) is the
+      // ONLY runtime consumer of the timerAction union, so tsc cannot otherwise
+      // catch a future member added without a branch here — it would silently
+      // no-op. A 6th member fails the build at this assignment instead.
+      const _exhaustive: never = ta;
+      void _exhaustive;
+    }
     dispatch({ type: "ack_timer_action" });
-  }, [chatState.pendingTimerAction, resetLeaderTimeout, clearLeaderTimeout, clearAllTimeouts]);
+  }, [chatState.pendingTimerAction, resetLeaderTimeout, clearLeaderTimeout, clearAllTimeouts, resetAllTimeouts]);
 
   /** Permanently tear down the WebSocket — prevents reconnect loop.
    *  Mirrors the key_invalid teardown pattern. */

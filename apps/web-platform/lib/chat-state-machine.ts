@@ -51,7 +51,28 @@ interface ChatMessageBase {
    * precedence over this activity flag (#5282, AC12).
    */
   retrying?: boolean;
+  /**
+   * #5240 (leader-liveness sub-issue): counts how many times THIS bubble's
+   * Stage-2 escalation has been *suppressed* because a sibling leader was still
+   * active (see `applyTimeout`). Bounded by `MAX_LIVENESS_REARMS` so a
+   * perpetually-busy sibling cannot mask a genuinely-hung leader forever — once
+   * the budget is exhausted the next timeout escalates to `error` regardless.
+   * Optional so existing fixtures type-check unchanged; reset to 0 on genuine
+   * (leader-attributed) liveness like a single-leader debug heartbeat.
+   */
+  livenessRearms?: number;
 }
+
+/**
+ * #5240 — the ceiling on cross-leader liveness suppression. A sibling leader
+ * being active is a *bounded grace*, NOT proof THIS leader is alive (A and its
+ * workspace can hang independently of B). After this many suppressed Stage-2
+ * timeouts (~`(2 + MAX) × STUCK_TIMEOUT_MS ≈ 3.75min` at 45s/window) the hung
+ * leader escalates to `error` even while the sibling stays busy. Per
+ * `2026-05-05-defense-relaxation-must-name-new-ceiling.md`: we add liveness
+ * inputs + a bounded grace, we never remove the genuine-hang exit.
+ */
+export const MAX_LIVENESS_REARMS = 3;
 
 /**
  * feat-concierge-stream-commands — one inline terminal block per Concierge
@@ -297,12 +318,17 @@ export interface StreamEventResult {
    * pure, so it doesn't call setTimeout — it only declares intent.
    *   - `reset`: (re)start the stuck-state timer for the given leaderId
    *   - `clear`: cancel any pending timer for the given leaderId
+   *   - `clear_all`: cancel every pending timer (teardown / clear_streams)
+   *   - `reset_all`: (re)start every currently-armed timer. #5240 — emitted by
+   *     the single-leader debug heartbeat, which has no `leaderId` to name (a
+   *     debug_event carries none), so it re-arms the one armed timer en masse.
    * `undefined` means "no timer change" (e.g., auth_ok).
    */
   timerAction?:
     | { type: "reset"; leaderId: string }
     | { type: "clear"; leaderId: string }
-    | { type: "clear_all" };
+    | { type: "clear_all" }
+    | { type: "reset_all" };
 }
 
 /**
@@ -1033,10 +1059,35 @@ export function applyStreamEvent(
       // feat-debug-mode-stream — APPEND the harness event to the message list
       // as a flat ChatDebugEventMessage. `chat-surface.tsx` filters these into
       // the separate collapsed debug panel; they NEVER render inline in the
-      // conversation. No leader routing, no `activeStreams` mutation, and no
-      // timer action: the debug stream is orthogonal to the conversation
-      // lifecycle (a tool_use/reasoning/result event must not reset the
-      // stuck-state watchdog or imply leader activity).
+      // conversation. The event carries NO `leaderId` (`types.ts:341-346`).
+      //
+      // #5240 leader-liveness: a debug `tool_use` is a HEARTBEAT proving the
+      // agent is alive — the operator can SEE it streaming while the watchdog
+      // would otherwise falsely escalate to "Agent stopped responding". We use
+      // it to reset the watchdog, but ONLY when exactly ONE leader is active:
+      //   - `size === 1` → the unattributed heartbeat is unambiguously that
+      //     leader's, so `reset_all` re-arms its single timer (sound). We also
+      //     clear `retrying` + reset `livenessRearms` on that bubble (mirror
+      //     `tool_progress` at the equivalent arm) so the stale "No response
+      //     yet" chip clears on a working turn.
+      //   - `size !== 1` → unattributable (≥2 leaders) or no active stream;
+      //     resetting all timers would let a fast leader mask a hung sibling
+      //     (the masking the scope guard forbids). The BOUNDED cross-leader gate
+      //     in `applyTimeout` handles the multi-leader case instead, so the
+      //     debug case stays inert here.
+      // Safety: `reset_all` re-arms timers but cannot resurrect a terminal
+      // bubble — `applyTimeout`'s transitional-state guard no-ops on
+      // non-thinking/tool_use bubbles, so a re-armed dangling timer is harmless.
+      // Only `kind: "tool_use"` counts; `reasoning`/`result` are weaker / can
+      // fire post-turn and are excluded to keep the ceiling tight.
+      // INVARIANT (enforced, not just asserted): debug events are LIVE-ONLY, so
+      // this heartbeat can never fire on a dead socket. #5290's stream-replay
+      // buffer EXCLUDES `debug_event` from its `BufferedWSMessage` family
+      // (server/stream-replay-buffer.ts) — and that exclusion is compiler-
+      // enforced via `BUFFERED_FRAME_TYPE_MAP` (a `Record<BufferedWSMessage
+      // ["type"], true>`), so a buffered/replayed gap frame can never be a
+      // debug_event. If a future change adds debug_event to the buffered family
+      // it becomes a tsc error there AND re-opens this hole — keep it excluded.
       const debugMsg: ChatDebugEventMessage = {
         id: `debug-${crypto.randomUUID()}`,
         role: "assistant",
@@ -1046,11 +1097,46 @@ export function applyStreamEvent(
         label: event.label,
         body: event.body,
       };
+      const isHeartbeat = event.kind === "tool_use" && activeStreams.size === 1;
+      if (!isHeartbeat) {
+        return {
+          messages: [...prev, debugMsg],
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+        };
+      }
+      // Sole active leader → its bubble index is the lone activeStreams value.
+      // Mirror `tool_progress`: only clone+rewrite when there is something to
+      // clear (a re-arm heartbeat fires every ~1-5s on a working turn; rewriting
+      // an already-clean bubble would churn the message array for no effect).
+      const soleIdx = activeStreams.values().next().value as number | undefined;
+      const sole =
+        soleIdx !== undefined && soleIdx < prev.length ? prev[soleIdx] : undefined;
+      const needsClear =
+        sole !== undefined &&
+        (sole.state === "thinking" || sole.state === "tool_use") &&
+        (sole.retrying === true || (sole.livenessRearms ?? 0) !== 0);
+      let messages: ChatMessage[];
+      if (needsClear) {
+        const updated = [...prev];
+        const { retrying: _retrying, livenessRearms: _rearms, ...rest } = updated[soleIdx!];
+        void _retrying;
+        void _rearms;
+        updated[soleIdx!] = { ...rest, livenessRearms: 0 };
+        messages = [...updated, debugMsg];
+      } else {
+        // Already-clean / terminal / non-transitional bubble (or stale index) —
+        // append only, no mutation (do not resurrect). reset_all still re-arms
+        // harmlessly.
+        messages = [...prev, debugMsg];
+      }
       return {
-        messages: [...prev, debugMsg],
+        messages,
         activeStreams,
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,
+        timerAction: { type: "reset_all" },
       };
     }
 
@@ -1100,11 +1186,43 @@ export function applyTimeout(
     return { messages: prev, activeStreams };
   }
 
-  // Second consecutive timeout — already in retrying, give up.
+  // Second consecutive timeout — already in retrying.
   if (current.retrying) {
+    // #5240 — BOUNDED cross-leader liveness suppression. If ANOTHER leader
+    // (`!== leaderId`) is still actively streaming, the session as a whole is
+    // demonstrably alive, so suppress THIS bubble's false escalation — but only
+    // up to `MAX_LIVENESS_REARMS` times. A sibling being busy is NOT proof THIS
+    // leader is alive, so the grace is bounded: once the budget is exhausted the
+    // hung leader escalates regardless. The `!== leaderId` exclusion is
+    // mandatory — the in-flight leader is still in `activeStreams` at scan time,
+    // so without it the leader would always see "itself" and never escalate.
+    const rearms = current.livenessRearms ?? 0;
+    const siblingActive = [...activeStreams.entries()].some(([id, sIdx]) => {
+      if (id === (leaderId as DomainLeaderId)) return false;
+      const sib = prev[sIdx];
+      return (
+        sib !== undefined &&
+        (sib.state === "thinking" || sib.state === "tool_use" || sib.state === "streaming")
+      );
+    });
+    if (siblingActive && rearms < MAX_LIVENESS_REARMS) {
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], retrying: true, livenessRearms: rearms + 1 };
+      // Re-arm THIS leader's own timer only — never `reset_all` (would reset the
+      // sibling's timer too), never `undefined` (the per-leader timer
+      // self-deletes on fire, so no reset = permanent suppression).
+      return {
+        messages: updated,
+        activeStreams,
+        timerAction: { type: "reset", leaderId },
+      };
+    }
+    // No sibling active, OR the re-arm budget is exhausted → escalate (the
+    // genuine-hang exit, preserved even under a perpetually-busy sibling).
     const updated = [...prev];
-    const { retrying: _retrying, ...rest } = updated[idx];
+    const { retrying: _retrying, livenessRearms: _rearms, ...rest } = updated[idx];
     void _retrying;
+    void _rearms;
     updated[idx] = { ...rest, state: "error" };
     const nextStreams = new Map(activeStreams);
     nextStreams.delete(leaderId as DomainLeaderId);

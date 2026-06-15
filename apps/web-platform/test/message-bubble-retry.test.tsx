@@ -43,6 +43,23 @@ describe("MessageBubble retry + error render (FR5 #2861)", () => {
     void container;
   });
 
+  test("AC4 (#5240): a live retrying bubble NEVER renders 'Agent stopped responding' (regression-lock)", () => {
+    // The false-positive lives in the upstream state machine (the bubble should
+    // never reach messageState="error" while the leader is alive — proven by the
+    // chat-state-machine ACs). This render guard locks the render contract: GIVEN
+    // a Stage-1 live bubble, the error banner must not appear.
+    const { container } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        messageState="tool_use"
+        toolLabel="Working"
+        retrying
+      />,
+    );
+    expect(container.textContent).not.toContain("Agent stopped responding");
+  });
+
   test("tool_use bubble WITHOUT retrying shows normal ToolStatusChip", () => {
     const { container, queryByTestId } = render(
       <MessageBubble

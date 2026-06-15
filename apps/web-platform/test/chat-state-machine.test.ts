@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { applyStreamEvent, applyTimeout } from "../lib/chat-state-machine";
+import { applyStreamEvent, applyTimeout, MAX_LIVENESS_REARMS } from "../lib/chat-state-machine";
 import type { ChatMessage } from "../lib/chat-state-machine";
 import type { DomainLeaderId } from "../server/domain-leaders";
 
@@ -795,6 +795,192 @@ describe("subagent_spawn idempotency (#3775)", () => {
     if (group.type === "subagent_group") {
       expect(group.children.length).toBe(2);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5240 (sub-issue) — leader-liveness watchdog reset.
+//
+// The per-message stuck-watchdog escalated a bubble to `error` ("Agent stopped
+// responding after: <label>") even though the LEADER was provably alive — the
+// Debug stream was still emitting tool events (screenshot 1) and/or a SIBLING
+// leader was still streaming below the errored bubble (screenshot 2). The fix
+// widens the liveness INPUT set without widening what the error MEANS:
+//   - a debug `tool_use` heartbeat resets the watchdog when exactly ONE leader
+//     is active (unambiguous attribution) → `reset_all`;
+//   - a Stage-2 timeout is BOUNDED-suppressed while ANOTHER leader is active,
+//     up to MAX_LIVENESS_REARMS, then escalates regardless (genuine-hang exit
+//     preserved even under a perpetually-busy sibling).
+// ---------------------------------------------------------------------------
+
+function toolUseMessage(leaderId: string, extra: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: `stream-${leaderId}-1`,
+    role: "assistant",
+    content: "",
+    type: "text",
+    leaderId: leaderId as any,
+    state: "tool_use",
+    toolLabel: "Reading file...",
+    toolsUsed: ["Reading file..."],
+    ...extra,
+  } as ChatMessage;
+}
+
+function debugToolUse(): any {
+  return { type: "debug_event", kind: "tool_use", body: "Running command..." };
+}
+
+describe("#5240 leader-liveness watchdog reset", () => {
+  test("AC1: single-leader debug tool_use heartbeat → reset_all + clears retrying + livenessRearms 0", () => {
+    // One active leader, Stage-1 retrying. A live debug tool_use proves the sole
+    // leader is alive → reset every armed timer, clear the stale chip.
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true, livenessRearms: 2 }),
+    ];
+    const streams = makeStreams([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, debugToolUse());
+
+    expect(result.timerAction).toEqual({ type: "reset_all" });
+    expect(result.messages[0].retrying).toBeUndefined();
+    expect(result.messages[0].livenessRearms).toBe(0);
+    // The debug message is still appended (panel log unchanged).
+    expect(result.messages[result.messages.length - 1].type).toBe("debug_event");
+  });
+
+  test("AC2: cross-leader Stage-2 suppressed (pinned reset, leaderId) while sibling active", () => {
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true }),
+      toolUseMessage("cto"),
+    ];
+    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.activeStreams.has("cpo" as DomainLeaderId)).toBe(true);
+    expect(result.messages[0].retrying).toBe(true);
+    expect(result.messages[0].livenessRearms).toBe(1);
+    // Pinned: re-arm THIS leader only — never reset_all, never undefined.
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
+  });
+
+  test("AC2-streaming: a sibling in `streaming` state (not tool_use) also grants the bounded grace", () => {
+    // `siblingActive` accepts thinking|tool_use|streaming. AC2 covers tool_use;
+    // this exercises the `streaming` disjunct so dropping it would go red.
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true }),
+      toolUseMessage("cto", { state: "streaming" }),
+    ];
+    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.messages[0].livenessRearms).toBe(1);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
+  });
+
+  test("AC1-thinking: debug heartbeat clears retrying on a sole `thinking` bubble too", () => {
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { state: "thinking", retrying: true, livenessRearms: 1 }),
+    ];
+    const streams = makeStreams([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, debugToolUse());
+
+    expect(result.timerAction).toEqual({ type: "reset_all" });
+    expect(result.messages[0].retrying).toBeUndefined();
+    expect(result.messages[0].livenessRearms).toBe(0);
+  });
+
+  test("AC3: genuine hang — sole active leader still escalates to error (bracketed against AC2)", () => {
+    // Same retrying bubble as AC2, but with NO sibling active → must escalate.
+    const prev: ChatMessage[] = [toolUseMessage("cpo", { retrying: true })];
+    const streams = makeStreams([["cpo", 0]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("error");
+    expect(result.activeStreams.has("cpo" as DomainLeaderId)).toBe(false);
+  });
+
+  test("AC3b: bounded re-arm un-masks a hung leader after MAX even with sibling always active", () => {
+    let messages: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true }),
+      toolUseMessage("cto"),
+    ];
+    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+
+    for (let call = 1; call <= MAX_LIVENESS_REARMS; call++) {
+      const r = applyTimeout(messages, streams, "cpo");
+      expect(r.messages[0].state).toBe("tool_use");
+      expect(r.messages[0].livenessRearms).toBe(call);
+      messages = r.messages;
+    }
+    // (MAX+1)-th timeout — budget exhausted → escalate despite cto active.
+    const final = applyTimeout(messages, streams, "cpo");
+    expect(final.messages[0].state).toBe("error");
+    expect(final.activeStreams.has("cpo" as DomainLeaderId)).toBe(false);
+  });
+
+  test("AC3c: re-armed leader escalates once the sibling goes silent (transient, not permanent)", () => {
+    const seed: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true }),
+      toolUseMessage("cto"),
+    ];
+    const both = makeStreams([["cpo", 0], ["cto", 1]]);
+    const rearmed = applyTimeout(seed, both, "cpo");
+    expect(rearmed.messages[0].state).toBe("tool_use");
+
+    // cto goes silent (removed from activeStreams) → cpo is now last.
+    const onlyCpo = makeStreams([["cpo", 0]]);
+    const escalated = applyTimeout(rearmed.messages, onlyCpo, "cpo");
+    expect(escalated.messages[0].state).toBe("error");
+    expect(escalated.activeStreams.has("cpo" as DomainLeaderId)).toBe(false);
+  });
+
+  test("AC7a: debug tool_use with NO active leader is inert (no timerAction)", () => {
+    const result = applyStreamEvent([], makeStreams(), debugToolUse());
+    expect(result.timerAction).toBeUndefined();
+  });
+
+  test("AC7b: debug tool_use with TWO active leaders does NOT reset_all (unattributable)", () => {
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true }),
+      toolUseMessage("cto"),
+    ];
+    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const result = applyStreamEvent(prev, streams, debugToolUse());
+    expect(result.timerAction).toBeUndefined();
+  });
+
+  test("AC7c: debug reasoning/result never reset_all (ceiling kept tight)", () => {
+    const prev: ChatMessage[] = [toolUseMessage("cpo", { retrying: true })];
+    const streams = makeStreams([["cpo", 0]]);
+    for (const kind of ["reasoning", "result"] as const) {
+      const result = applyStreamEvent(prev, streams, {
+        type: "debug_event",
+        kind,
+        body: "x",
+      } as any);
+      expect(result.timerAction).toBeUndefined();
+    }
+  });
+
+  test("AC8b: debug heartbeat does not resurrect a terminal bubble", () => {
+    // Sole active leader's bubble is already `error` but transiently still in
+    // activeStreams. reset_all may re-arm its timer, but a follow-up timeout
+    // no-ops (transitional-state guard) — no resurrection.
+    const prev: ChatMessage[] = [toolUseMessage("cpo", { state: "error" })];
+    const streams = makeStreams([["cpo", 0]]);
+
+    const afterDebug = applyStreamEvent(prev, streams, debugToolUse());
+    expect(afterDebug.messages[0].state).toBe("error");
+
+    const afterTimeout = applyTimeout(afterDebug.messages, afterDebug.activeStreams, "cpo");
+    expect(afterTimeout.messages[0].state).toBe("error");
   });
 });
 
