@@ -268,6 +268,15 @@ export async function middleware(request: NextRequest) {
           // otherwise-valid session through and re-check on the next request.
           // The genuine revoked=true branch below stays fail-CLOSED. Distinct
           // op slug so operators see transient DB degradation without SSH.
+          //
+          // DELIBERATE divergence from the T&C gate below (~L322), which
+          // fail-OPENs a transient `tcError` by REDIRECTING to /accept-terms.
+          // The two transient-Supabase-error handlers intentionally differ:
+          // revocation is a getUser()-authenticated user whose REMOVAL status
+          // is merely unknown (and RLS `is_workspace_member` still denies a
+          // removed member at the data layer), so we serve the request; T&C is
+          // a consent-demonstrability legal gate where serving /dashboard would
+          // be an Art. 7(1) breach, so we bounce. Not drift — by threat model.
           await reportEdgeSilentFallback(revokeError, {
             feature: "middleware",
             op: "revocation_gate.transient_grace",

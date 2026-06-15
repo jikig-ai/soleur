@@ -182,6 +182,11 @@ describe("middleware #4307 revocation gate", () => {
     // re-checks on the next request.
     expect(res.status).not.toBe(503);
     expect(res.headers.get("location") ?? "").not.toContain("revoked=");
+    // Positive grace-landing contract: the request reaches the downstream T&C
+    // gate (mock returns tc_accepted_version "v0" ≠ live TC_VERSION), so it
+    // lands on /accept-terms — proving "allowed through", not merely "not 503"
+    // (guards against a future regression to a 500/401 that not.toBe(503) misses).
+    expect(res.headers.get("location") ?? "").toContain("/accept-terms");
     // Operators still see the degradation without SSH via a distinct op slug.
     expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
       expect.objectContaining({ message: "ECONNRESET" }),
