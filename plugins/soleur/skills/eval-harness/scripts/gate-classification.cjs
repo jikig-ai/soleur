@@ -6,9 +6,9 @@
 // This is the deterministic contract check: the output must be a well-formed label.
 //
 // Signature: module.exports = (output, context) => GradingResult
-//   context.vars.enum : the closed set of allowed labels — a direct array, a JSON
-//   array literal, or a `file://`/relative path to the enum SSOT (promptfoo passes
-//   the `file://` ref verbatim, so loadEnum() reads the file itself).
+//   context.vars.enum : the closed set of allowed labels — a direct array or a
+//   `file://`/relative path to the enum SSOT (promptfoo passes the `file://` ref
+//   verbatim, so loadEnum() reads the file itself).
 "use strict";
 
 const { extractLabel, loadEnum } = require("./parse-label.cjs");

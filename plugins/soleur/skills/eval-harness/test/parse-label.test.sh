@@ -107,7 +107,6 @@ loadenum() {
 loadenum "file://enums/go-routes.json"     7 "fix" "loadEnum file:// go-routes (promptfoo shape — the #5358 bug)"
 loadenum "file://enums/triage-levels.json" 3 "P1"  "loadEnum file:// triage-levels"
 loadenum "enums/go-routes.json"            7 "fix" "loadEnum bare relative path"
-loadenum '["fix","drain","review"]'        3 "fix" "loadEnum JSON array literal string"
 loadenum "__ARRAY__"                       3 "a"   "loadEnum direct array passthrough"
 loadenum "file://enums/does-not-exist.json" 0 "null" "loadEnum unreadable file -> [] (gate fails closed)"
 loadenum ""                                0 "null" "loadEnum empty string -> []"

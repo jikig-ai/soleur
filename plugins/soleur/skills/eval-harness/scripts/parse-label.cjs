@@ -17,25 +17,16 @@ const path = require("node:path");
 //
 // promptfoo does NOT resolve a `file://...` value in `defaultTest.vars` for a
 // custom JS assert — it passes the literal string `"file://enums/go-routes.json"`
-// straight through. So the assert must read the SSOT file itself. Accepts, in
-// order: a direct array (unit tests), a raw JSON array literal, or a
-// `file://`/relative/absolute path to a JSON array file (the promptfoo case,
-// resolved relative to the skill dir = this script's parent). Returns [] on any
-// failure so the gate fails closed (out-of-enum) rather than throwing.
+// straight through. So the assert must read the SSOT file itself. Accepts a
+// direct array (unit tests) or a `file://`/relative/absolute path to a JSON array
+// file (the promptfoo case, resolved relative to the skill dir = this script's
+// parent). Returns [] on any failure so the gate fails closed (out-of-enum)
+// rather than throwing.
 function loadEnum(vars) {
   const raw = vars && vars.enum;
   if (Array.isArray(raw)) return raw;
   if (typeof raw !== "string" || raw.trim() === "") return [];
-  const s = raw.trim();
-  if (s.startsWith("[")) {
-    try {
-      const a = JSON.parse(s);
-      if (Array.isArray(a)) return a;
-    } catch {
-      /* not a JSON literal — fall through to file resolution */
-    }
-  }
-  const ref = s.replace(/^file:\/\//, "");
+  const ref = raw.trim().replace(/^file:\/\//, "");
   const p = path.isAbsolute(ref) ? ref : path.resolve(__dirname, "..", ref);
   try {
     const a = JSON.parse(fs.readFileSync(p, "utf8"));
