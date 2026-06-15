@@ -17,10 +17,10 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 2 — Run-log middleware
 
-- [ ] 2.1 `server/inngest/middleware/run-log.ts` (model `sentry-correlation.ts`); register at `client.ts:68` after `sentryCorrelation`; write terminal row via `lib/supabase/service.ts` on `transformOutput`.
-- [ ] 2.2 Final-attempt gate (`ctx.attempt >= (maxAttempts ?? 1) - 1`, fail-safe to write); NOT inside a memoized `step.run`. Test: fail-then-succeed → one `completed` row.
-- [ ] 2.3 Derive `trigger_source` from `event.name`; read actor fields only from chokepoint-set keys; ignore caller-supplied actor fields. Test: forged `data.actor_class` overridden.
-- [ ] 2.4 Fail-soft: write failure mirrors to Sentry, never throws into the handler. Test: throwing RPC → routine ok.
+- [x] 2.1 `server/inngest/middleware/run-log.ts` (model `sentry-correlation.ts`); register at `client.ts:68` after `sentryCorrelation`; write terminal row via `lib/supabase/service.ts` on `transformOutput`.
+- [x] 2.2 Final-attempt gate (`ctx.attempt >= (maxAttempts ?? 1) - 1`, fail-safe to write); NOT inside a memoized `step.run`. Test: fail-then-succeed → one `completed` row.
+- [x] 2.3 Derive `trigger_source` from `event.name`; read actor fields only from chokepoint-set keys; ignore caller-supplied actor fields. Test: forged `data.actor_class` overridden.
+- [x] 2.4 Fail-soft: write failure mirrors to Sentry, never throws into the handler. Test: throwing RPC → routine ok.
 
 ## Phase 3 — Shared run chokepoint
 
