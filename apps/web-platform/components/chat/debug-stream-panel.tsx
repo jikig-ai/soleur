@@ -214,7 +214,7 @@ export function DebugStreamPanel({
                 : "Copy all debug events (redacted) to clipboard"
             }
             // resting -text (gold) not -fg: -fg fails AA 4.5:1 at 10px on this surface (3.66:1 light).
-            // hover -primary (not a gold brighten): hover must DARKEN to stay AA (SC 1.4.3, no transient exemption).
+            // hover -primary (not a gold brighten): contrast INCREASES on hover both themes (SC 1.4.3, no transient exemption).
             className="rounded-sm border border-soleur-accent-gold-text/30 px-1.5 py-0.5 text-[10px] font-medium text-soleur-accent-gold-text transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:text-soleur-text-muted disabled:opacity-40"
           >
             {copied ? "Copied" : "Copy"}
