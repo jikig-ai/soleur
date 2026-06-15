@@ -1,7 +1,7 @@
 // Cold-outbound email compliance chokepoint (#5325, pilot slice).
 //
 // sendCompliantOutbound() is the ONLY path that sends cold outreach, the ONLY
-// module that holds the mail.jikigai.com FROM literal, and the ONLY non-
+// module that holds the mail.soleur.ai FROM literal, and the ONLY non-
 // transactional caller of resend.emails.send (enforced by the sentinel in
 // test/server/outbound-chokepoint.test.ts). Every gate is refuse-to-send (throws
 // before Resend); the order is load-bearing — validate → domain-verified →
@@ -28,11 +28,13 @@ import {
 } from "@/server/email-triage/outbound-compliance";
 
 // Typed FROM discriminant for the cold sending subdomain. This module is the
-// ONLY place the mail.jikigai.com literal appears; transactional senders
-// (notifications.ts, cron-email-ingress-probe.ts) send from soleur.ai and
-// structurally cannot reach this value.
-export type FromDomain = "mail.jikigai.com";
-export const OUTBOUND_FROM = "Jikigai <hello@mail.jikigai.com>";
+// ONLY place the mail.soleur.ai literal appears; transactional senders
+// (notifications.ts, cron-email-ingress-probe.ts) send from the soleur.ai apex
+// (notifications@soleur.ai) and structurally cannot reach this value. The
+// dedicated mail.soleur.ai subdomain isolates cold-outreach sender reputation
+// from the product's transactional mail (separate DKIM/DMARC stream).
+export type FromDomain = "mail.soleur.ai";
+export const OUTBOUND_FROM = "Soleur <hello@mail.soleur.ai>";
 
 function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
@@ -70,7 +72,7 @@ function assertSendingDomainVerified(): void {
   if (process.env.OUTBOUND_SENDING_DOMAIN_VERIFIED !== "true") {
     throw new OutboundComplianceError(
       "domain_unverified",
-      "mail.jikigai.com sending domain is not verified " +
+      "mail.soleur.ai sending domain is not verified " +
         "(OUTBOUND_SENDING_DOMAIN_VERIFIED != 'true') — refusing to send until " +
         "Resend reports the domain verified (deepen P1).",
     );
