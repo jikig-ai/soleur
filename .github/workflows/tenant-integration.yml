@@ -226,6 +226,23 @@ jobs:
           doppler run -p soleur -c dev_scheduled -- \
             bash scripts/run-migrations.sh --bootstrap=skip
 
+      # WORM-vs-cascade contradiction gate (#5372). Scans the LIVE post-apply
+      # schema for tables with an ON DELETE SET NULL/CASCADE FK to public.users
+      # that ALSO carry a raising BEFORE UPDATE/DELETE trigger — the class that
+      # aborts the Art-17 account-delete cascade as an opaque GoTrue 500
+      # (routine_runs / #5342). STATEMENT-level → ::error:: + exit 1 (breaks
+      # deletion for ALL users); ROW-level → ::warning:: (latent). Runs AFTER
+      # apply (scans live schema) and BEFORE the tests so a poisoned schema
+      # fails fast with a NAMED relation instead of a 500 three layers deep.
+      - name: Preflight WORM-vs-cascade contradiction check
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/preflight-worm-cascade-contradiction.sh
+
       - name: Run tenant-isolation tests
         working-directory: apps/web-platform
         env:
