@@ -96,4 +96,21 @@ describe("kb-sync-silent-failure alert op/feature contract", () => {
     const isInValue = OP_SLUGS.map((o) => o.slug).join(",");
     expect(tfBlock).toContain(isInValue);
   });
+
+  // Regression guard (PR follow-up to #5380): this rule is APPLY-CREATED, so it
+  // is inert unless the apply workflow `-target`s it. It was declared in
+  // issue-alerts.tf (#4918, re-pointed #5005) but never added to the apply
+  // -target list, so the live Sentry rule was never created and the alert sat
+  // dark — the exact "user reports it before we know" failure mode the rule
+  // exists to prevent. A declared-but-untargeted alert is silently inert; pin
+  // the wiring so dropping it breaks CI.
+  it("is wired into the apply-sentry-infra.yml -target list (else it never applies)", () => {
+    const wf = readFileSync(
+      join(here, "../../../.github/workflows/apply-sentry-infra.yml"),
+      "utf8",
+    );
+    expect(wf).toContain(
+      "-target=sentry_issue_alert.kb_sync_silent_failure",
+    );
+  });
 });
