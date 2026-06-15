@@ -45,6 +45,7 @@ import { abortableReviewGate, validateSelection, type AgentSession } from "./rev
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
@@ -1038,17 +1039,27 @@ export async function startAgentSession(
     // gains the recovery it was missing; failures degrade exactly as today.
     //
     // The installation + repo are resolved LAZILY inside this `.git`-absent gate
-    // (NOT hoisted ~300 lines above the canonical reads at :1336/:1350) — they
-    // re-resolve the active workspace claim independently (documented drift
-    // caveat at :1341-1349), so resolving them only on the rare missing-repo
+    // (NOT hoisted ~300 lines above the canonical `resolveInstallationId` /
+    // `getCurrentRepoUrl` reads later in this function) — they re-resolve the
+    // active workspace claim independently (documented drift caveat at those
+    // canonical reads), so resolving them only on the rare missing-repo
     // path minimizes exposure. `ensureWorkspaceRepoCloned` is fail-soft (never
     // throws), membership-scoped (`repoUrl`/`installationId` are server-resolved,
     // never request input — ADR-044), and runs host-side outside the sandbox.
     if (!existsSync(path.join(workspacePath, ".git"))) {
-      const [reprovInstallationId, reprovRepoUrl] = await Promise.all([
+      const [storedInstallationId, reprovRepoUrl] = await Promise.all([
         resolveInstallationId(userId),
         getCurrentRepoUrl(userId),
       ]);
+      // Promote to the entitled repo-owner install (same selection the Concierge
+      // cold factory + per-dispatch re-provision make) so a cross-account org
+      // repo re-clones with the right credential instead of 403-ing. Fail-soft:
+      // returns the stored install on any probe failure, never widening access.
+      const reprovInstallationId = await resolveEffectiveInstallationId({
+        userId,
+        installationId: storedInstallationId,
+        repoUrl: reprovRepoUrl,
+      });
       await ensureWorkspaceRepoCloned({
         userId,
         workspacePath,

@@ -17,12 +17,14 @@ const {
   mockFetchUserWorkspacePath,
   mockResolveInstallationId,
   mockGetCurrentRepoUrl,
+  mockResolveEffectiveInstallationId,
   mockEnsureWorkspaceRepoCloned,
   mockReportSilentFallback,
 } = vi.hoisted(() => ({
   mockFetchUserWorkspacePath: vi.fn(),
   mockResolveInstallationId: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
+  mockResolveEffectiveInstallationId: vi.fn(),
   mockEnsureWorkspaceRepoCloned: vi.fn(),
   mockReportSilentFallback: vi.fn(),
 }));
@@ -35,6 +37,9 @@ vi.mock("@/server/resolve-installation-id", () => ({
 }));
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
+}));
+vi.mock("@/server/cc-effective-installation", () => ({
+  resolveEffectiveInstallationId: mockResolveEffectiveInstallationId,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: mockEnsureWorkspaceRepoCloned,
@@ -55,6 +60,10 @@ beforeEach(() => {
   mockFetchUserWorkspacePath.mockResolvedValue(WS);
   mockResolveInstallationId.mockResolvedValue(INSTALL);
   mockGetCurrentRepoUrl.mockResolvedValue(REPO);
+  // Default: effective-install promotion is a pass-through (stored === owner).
+  mockResolveEffectiveInstallationId.mockImplementation(
+    async ({ installationId }: { installationId: number | null }) => installationId,
+  );
   mockEnsureWorkspaceRepoCloned.mockResolvedValue("ok");
 });
 
@@ -71,6 +80,21 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
       installationId: INSTALL,
       repoUrl: REPO,
     });
+  });
+
+  it("clones with the PROMOTED (effective) install, not the raw stored one — parity with the cold factory (review finding)", async () => {
+    const OWNER_INSTALL = 9999;
+    // Stored personal install does not own the org repo → promoted to owner.
+    mockResolveEffectiveInstallationId.mockResolvedValue(OWNER_INSTALL);
+    await reprovisionWorkspaceOnDispatch(USER);
+    expect(mockResolveEffectiveInstallationId).toHaveBeenCalledWith({
+      userId: USER,
+      installationId: INSTALL,
+      repoUrl: REPO,
+    });
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+      expect.objectContaining({ installationId: OWNER_INSTALL }),
+    );
   });
 
   it("propagates the recovery outcome — 'ok' when the repo is present/cloned", async () => {

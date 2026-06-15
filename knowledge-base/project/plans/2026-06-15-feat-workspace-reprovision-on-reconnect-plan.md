@@ -124,6 +124,23 @@ touch `denyRead: ["/workspaces"]`.
 
 **Brand-survival threshold:** single-user incident.
 
+**Known limitation (best-effort honest message — review finding, accepted).** The
+cc per-dispatch re-provision is fire-and-forget (a `git clone` up to 120s), while
+`worktree_enter_failed` can fire earlier in the turn. If the clone has not settled
+when the turn fails, `reprovisionOutcome` is `undefined` and the user sees the
+GENERIC retryable copy ("Couldn't open a workspace… try again") rather than the
+honest "workspace reclaimed" copy on that first turn. This is the SAFE direction
+— it never falsely claims "reclaimed" (only `"failed"` yields that), the generic
+copy is also true + actionable, and the next turn re-attempts recovery and can
+then surface the honest message. The honest reclaimed message is therefore
+best-effort, not guaranteed on the first failing turn; making it guaranteed would
+require awaiting the clone inside the (currently synchronous) `onWorkflowEnded`
+callback, which is out of scope. The cross-account-org false-message gap a review
+agent flagged is separately fixed: all three paths (cold factory, cc per-dispatch,
+leader) now select the SAME promoted install via `resolveEffectiveInstallationId`
+(`cc-effective-installation.ts`), so a recoverable org repo no longer 403s on the
+raw stored install and reports a false "couldn't restore".
+
 > CPO sign-off required at plan time before `/work` begins. CTO/CLO concerns from
 > the epic's brainstorm framing are reflected in §Risks and §Domain Review.
 > `user-impact-reviewer` will run at review-time.

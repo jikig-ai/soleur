@@ -33,6 +33,7 @@ const {
   mockEnsureWorkspaceRepoCloned,
   mockResolveInstallationId,
   mockGetCurrentRepoUrl,
+  mockResolveEffectiveInstallationId,
   mockSyncPull,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -43,6 +44,7 @@ const {
   mockEnsureWorkspaceRepoCloned: vi.fn(),
   mockResolveInstallationId: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
+  mockResolveEffectiveInstallationId: vi.fn(),
   mockSyncPull: vi.fn(),
 }));
 
@@ -154,6 +156,9 @@ vi.mock("../server/resolve-installation-id", () => ({
 vi.mock("../server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
 }));
+vi.mock("../server/cc-effective-installation", () => ({
+  resolveEffectiveInstallationId: mockResolveEffectiveInstallationId,
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 import { createApiKeysMock, createQueryMock } from "./helpers/agent-runner-mocks";
@@ -237,6 +242,10 @@ beforeEach(() => {
   mockEnsureWorkspaceRepoCloned.mockResolvedValue("ok");
   mockResolveInstallationId.mockResolvedValue(INSTALL);
   mockGetCurrentRepoUrl.mockResolvedValue(REPO);
+  // Effective-install promotion pass-through by default (stored === owner).
+  mockResolveEffectiveInstallationId.mockImplementation(
+    async ({ installationId }: { installationId: number | null }) => installationId,
+  );
 });
 
 describe("agent-runner leader — deterministic workspace re-provision on reconnect", () => {
@@ -258,6 +267,11 @@ describe("agent-runner leader — deterministic workspace re-provision on reconn
     });
 
     // Ordering: the recovery must precede syncPull (which needs a real repo).
+    // Guard non-vacuity — both mocks MUST have fired or the comparison is
+    // meaningless (a NaN/undefined `toBeLessThan` would not read as "syncPull
+    // never ran"). See test-design review.
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalled();
+    expect(mockSyncPull).toHaveBeenCalled();
     const reprovOrder = mockEnsureWorkspaceRepoCloned.mock.invocationCallOrder[0];
     const syncOrder = mockSyncPull.mock.invocationCallOrder[0];
     expect(reprovOrder).toBeLessThan(syncOrder);
@@ -266,11 +280,14 @@ describe("agent-runner leader — deterministic workspace re-provision on reconn
   test("workspace HAS .git → recovery no-ops (never touches an existing repo)", async () => {
     setupSupabaseMock();
     createQueryMock(mockQuery);
-    // `.git` present → the recovery gate must not fire.
-    mockExistsSync.mockImplementation((p: unknown) => String(p) === GIT_PATH || true);
+    // `.git` present → the recovery gate must not fire. (Default beforeEach
+    // already returns true for every probe; this test pins that the gate
+    // specifically probed the workspace `.git` path and then no-op'd.)
+    mockExistsSync.mockReturnValue(true);
 
     await startAgentSession(MEMBER_ID, "conv-1", "cpo");
 
+    expect(mockExistsSync).toHaveBeenCalledWith(GIT_PATH);
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
   });
 

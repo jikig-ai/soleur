@@ -1,6 +1,7 @@
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { getCurrentRepoUrl } from "./current-repo-url";
+import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 import {
   ensureWorkspaceRepoCloned,
   type ReprovisionOutcome,
@@ -11,14 +12,14 @@ import { reportSilentFallback } from "./observability";
  * Per-dispatch workspace re-provision for the Concierge (cc-soleur-go) path
  * (#5340 / #5240 design item #2).
  *
- * WHY per-dispatch and not just the factory-internal self-heal at
- * `cc-dispatcher.ts:1469`: that call lives in `realSdkQueryFactory`, which runs
- * ONLY on a COLD conversation — warm-query reconnect (the epic's headline
+ * WHY per-dispatch and not just the factory-internal self-heal: the
+ * `ensureWorkspaceRepoCloned` call in `cc-dispatcher.ts realSdkQueryFactory`
+ * runs ONLY on a COLD conversation — warm-query reconnect (the epic's headline
  * scenario) does NOT re-invoke the factory, so the cold-path self-heal never
  * fires on a warm resume. This runs every dispatch (mirroring the fire-and-
- * forget `resolveBashAutonomous` warm-query resolve at `cc-dispatcher.ts:2348`)
- * and publishes the `ReprovisionOutcome` the post-recovery-failure honest
- * message branch reads on BOTH cold and warm turns.
+ * forget `resolveBashAutonomous` warm-query resolve in `dispatchSoleurGo`) and
+ * publishes the `ReprovisionOutcome` the post-recovery-failure honest message
+ * branch reads on BOTH cold and warm turns.
  *
  * Idempotent + safe to race the cold-path factory call: `ensureWorkspaceRepoCloned`
  * is `.git`-absent-gated and the graft re-checks the `.git` sentinel before its
@@ -35,11 +36,19 @@ export async function reprovisionWorkspaceOnDispatch(
   userId: string,
 ): Promise<ReprovisionOutcome> {
   try {
-    const [workspacePath, installationId, repoUrl] = await Promise.all([
+    const [workspacePath, storedInstallationId, repoUrl] = await Promise.all([
       fetchUserWorkspacePath(userId),
       resolveInstallationId(userId),
       getCurrentRepoUrl(userId),
     ]);
+    // Promote to the entitled repo-owner install (same selection the cold
+    // factory makes) so a cross-account org repo re-clones with the right
+    // credential instead of 403-ing and surfacing a false "couldn't restore".
+    const installationId = await resolveEffectiveInstallationId({
+      userId,
+      installationId: storedInstallationId,
+      repoUrl,
+    });
     return await ensureWorkspaceRepoCloned({
       userId,
       workspacePath,
