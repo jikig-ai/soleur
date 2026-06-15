@@ -171,6 +171,21 @@ For the agent-assisted, **human-approval-gated** 1:1 outbound cold email used fo
 
 <!-- End: Outbound email authority -->
 
+<!-- Added 2026-06-15: Concierge turn summaries (#5370) -->
+### 3.12 Concierge turn summaries (durable per-turn outcome narration)
+
+For the durable, per-turn plain-language **turn summary** persisted by the Concierge (`/soleur:go`) conversation runtime on the Web Platform (Privacy Policy Section 4.7; Article 30 register Processing Activity 2, amended — this is **not** a new processing activity; migration 105 adds the additive, nullable `message_kind='turn_summary'` discriminator):
+
+- **What it is:** on a turn that completes successfully, the runtime writes one additional assistant-authored message row holding a short plain-language description of what the turn accomplished (for example, "Fixed the side panel layout"). A separate **transient** live status line shown while the agent works is never stored.
+- **Whose data it is:** the summary is agent-authored but is the **user's own data** — a record of the work the user requested — and is persisted under the user's own `user_id`. It therefore inherits the conversation row's existing handling in full.
+- **Lawful basis:** **contract performance** (Article 6(1)(b) GDPR) — the same basis as the parent conversation; the summary is part of providing the conversational service the user signed up for.
+- **Recipients / transfers:** **no new sub-processor, recipient, or third-country transfer** — the row is stored in the existing Supabase database (eu-west-1, Ireland) on the existing Hetzner-hosted infrastructure.
+- **Retention and erasure:** identical to the parent conversation — retained while the account is active, cascade-deleted on conversation deletion and account deletion (Article 17), and included in the self-serve Article 15 + 20 export. Because the Article 15(4) author-redaction keys on `user_id` (not message role), the user's own turn summaries are returned **un-redacted** in their export bundle.
+- **Article 22:** this processing involves **no automated decision-making producing legal or similarly significant effects** on the data subject — it is descriptive narration of work the user requested and makes no decision about the user.
+- **Confidentiality measure (Article 32):** the summary text passes through the same redaction and length-cap checks applied to other persisted message content **before** it is buffered or stored; a residual secret-shape match drops the entire narration (fail-loud). The same redacted string feeds both the persisted summary and the transient live frame, so the live frame is at least as protected as the stored row.
+
+<!-- End: Concierge turn summaries -->
+
 ## 4. Categories of Personal Data
 
 ### 4.1 Data NOT Collected by Soleur

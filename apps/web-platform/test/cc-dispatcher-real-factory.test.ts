@@ -76,8 +76,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   // behavior asserted by the prefill-guard test file's empty-history
   // scenario.
   getSessionMessages: vi.fn().mockResolvedValue([]),
-  tool: vi.fn(),
-  createSdkMcpServer: vi.fn(),
+  // Return inspectable shapes so the soleur_platform always-build assertion
+  // (#5370 T2) can read tool names off the registered server. `tool(name,…)`
+  // → `{ name }`; `createSdkMcpServer(cfg)` → cfg (passthrough).
+  tool: vi.fn((name: string) => ({ name })),
+  createSdkMcpServer: vi.fn((cfg: unknown) => cfg),
 }));
 
 vi.mock("@/server/agent-runner", () => ({
@@ -389,11 +392,24 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // -------------------------------------------------------------------------
   // T2: factory options omit / empty mcpServers (V1; V2-13 widens)
   // -------------------------------------------------------------------------
-  it("T2: mcpServers is empty for V1 (V2-13 will widen)", async () => {
+  it("T2: soleur_platform server is ALWAYS built with narrate/summarize (#5370)", async () => {
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
-    // Either undefined or {} is acceptable. Assert no servers registered.
-    expect(opts.mcpServers === undefined || Object.keys(opts.mcpServers).length === 0).toBe(true);
+    // feat-reasoning-chat-boxes (#5370): the soleur_platform server is now
+    // built unconditionally so the always-on narrate/summarize tools are
+    // reachable on every cc dispatch (was empty for V1; the C4 write tool is
+    // still flag+repo-gated and merged into the SAME server when eligible).
+    // makeArgs() has no connected repo / c4 flag, so ONLY narrate/summarize
+    // are present — edit_c4_diagram is absent.
+    expect(opts.mcpServers).toBeDefined();
+    expect(Object.keys(opts.mcpServers)).toEqual(["soleur_platform"]);
+    const toolNames = (opts.mcpServers.soleur_platform.tools ?? []).map(
+      (t: { name: string }) => t.name,
+    );
+    expect(toolNames).toEqual(
+      expect.arrayContaining(["narrate", "summarize"]),
+    );
+    expect(toolNames).not.toContain("edit_c4_diagram");
   });
 
   // -------------------------------------------------------------------------
@@ -478,8 +494,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // it so it routes through canUseTool → safe-bash auto-approve for
     // read-only verbs. Pinning the negative-space invariant.
     expect(opts.disallowedTools).not.toContain("Bash");
-    // Auto-approve list narrows to read-only safe tools — order-tolerant
-    // closed-set match so widening the list requires an explicit test edit.
+    // Auto-approve list narrows to read-only safe tools + the always-on
+    // narrate/summarize emit tools (feat-reasoning-chat-boxes #5370 — pure
+    // emit tools auto-approved so a narration never pays a canUseTool
+    // round-trip / surfaces a review modal). Order-tolerant closed-set match
+    // so widening the list requires an explicit test edit.
     expect(Array.isArray(opts.allowedTools)).toBe(true);
     const sorted = [...opts.allowedTools].sort();
     expect(sorted).toEqual(
@@ -491,6 +510,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         "NotebookRead",
         "Read",
         "TodoWrite",
+        "mcp__soleur_platform__narrate",
+        "mcp__soleur_platform__summarize",
       ],
     );
   });

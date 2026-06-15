@@ -85,6 +85,15 @@ import {
 } from "./observability";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
+import { formatAssistantText } from "@/lib/format-assistant-text";
+import { debugRedactionProbeTrips } from "./debug-probes";
+import { insertTurnSummary } from "./messages/insert-turn-summary";
+import {
+  buildNarrationTools,
+  NARRATE_TOOL_FQN,
+  SUMMARIZE_TOOL_FQN,
+  NARRATION_TEXT_CAP_BYTES,
+} from "./narrate-tool";
 import { updateConversationFor } from "./conversation-writer";
 import {
   getUserServiceTokens,
@@ -254,7 +263,14 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * predicate has a single named place to read, preventing drift between the
  * allowlist source and the mirror predicate at Phase 2 promotion time.
  */
-const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
+// feat-reasoning-chat-boxes (#5370): narrate/summarize are now ALWAYS
+// registered in the soleur_platform server (see the always-build block), so
+// they must be listed here — otherwise `shouldMirrorUnregisteredPlatformToolUse`
+// would false-positive on every legitimate narration and flood Sentry.
+const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [
+  NARRATE_TOOL_FQN,
+  SUMMARIZE_TOOL_FQN,
+];
 
 // Validates a GitHub owner/repo segment before it is closed over into the
 // edit_c4_diagram tool + system prompt — defense against a malformed/injected
@@ -295,6 +311,33 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
   "the platform will not retry them. If the user asks for GitHub " +
   "operations, tell them to connect a repository first (Workspace settings " +
   "→ Connect repository).";
+
+// feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
+// always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
+// tools are always built; see the soleur_platform always-build block). The
+// cross-tenant prohibition is a load-bearing legal control (the redaction probe
+// scrubs paths/secret-shapes, NOT another tenant's prose — plan §User-Brand
+// Impact / legal MEDIUM): the summary persists into the user's exportable chat
+// record, so naming any out-of-context entity would durably leak it. The
+// cc-router is the single orchestrator on this surface (deepen-plan: the inngest
+// leader-prompts path registers zero MCP tools), so "only the orchestrator
+// summarizes" holds by construction.
+const NARRATION_PROMPT_DIRECTIVE =
+  "## Narrating your work\n" +
+  "You have two tools to keep the user informed:\n" +
+  "- `narrate({ message })`: show a SHORT, plain-language live status line of " +
+  "what you are doing right now (e.g. \"Looking into your billing settings…\"). " +
+  "It is transient — call it at milestones during a longer turn so the user is " +
+  "never staring at a silent spinner. It is NOT saved.\n" +
+  "- `summarize({ summary })`: call ONCE, only when you have SUCCESSFULLY " +
+  "completed a substantive turn, with a short plain-language description of the " +
+  "OUTCOME (e.g. \"Fixed the side panel so it stays open on mobile.\"). It is " +
+  "saved as a permanent confirmed box in the chat. Never call it on a trivial, " +
+  "aborted, or failed turn, and never more than once per turn.\n" +
+  "For BOTH tools: use plain language a non-technical user understands. NEVER " +
+  "include internal identifiers, file paths, skill names, issue numbers, or the " +
+  "name of any entity, organization, person, or resource outside THIS user's " +
+  "own context.";
 
 // feat-one-shot-concierge-workspace-repo-context — name the connected
 // repository to the Concierge so it stops trying to infer owner/repo from a
@@ -486,6 +529,10 @@ export const CC_OP_SLUGS = {
   usageOrphanDropped: "usage_orphan_dropped",
   ccPersistUsageOn: "cc-persist-usage-on",
   persistUserMessage: "persist-user-message",
+  // feat-reasoning-chat-boxes (#5370) — narration emit observability.
+  narrationRedactionDrop: "reasoning-narration:redaction-drop",
+  summaryEmit: "reasoning-narration:summary-emit",
+  summaryInsertFail: "reasoning-narration:summary-insert-fail",
 } as const;
 
 // #3640 F2 — Discriminated `PersistMode` replaces the per-dispatch
@@ -556,6 +603,14 @@ export class TurnPersistenceState {
   /** Active turn index (for `onResult` to tag `captureUsage`). */
   currentTurnIndex(): number {
     return this._currentTurnIndex;
+  }
+
+  /** feat-reasoning-chat-boxes (#5370) — read the abort latch so the summarize
+   *  emit path can DROP a "✓ Done" box once the turn has been aborted/stopped
+   *  (FR5 / spec-flow 1c). Flips true in `consumeForAbort()` (the
+   *  `onWorkflowEnded` abort branch). Read-only; never mutates. */
+  isAborted(): boolean {
+    return this._aborted;
   }
 
   /**
@@ -764,6 +819,127 @@ let _assertWriteScopeOverride:
   | ((u: string, c: string) => boolean)
   | null = null;
 
+// feat-reasoning-chat-boxes (#5370) — byte-cap + redact agent narration text,
+// returning `null` when a recognized secret SHAPE survives the scrub (DROP the
+// frame, fail-loud to Sentry). The ungated all-user live frame must be at least
+// as protected as the persisted summary (security M-2); `null` means emit
+// nothing. An empty string is returned verbatim (caller no-ops on it).
+function redactNarrationOrDrop(
+  raw: string,
+  field: "message" | "summary",
+  userId: string,
+  conversationId: string,
+): string | null {
+  if (!raw) return "";
+  // Byte-cap BEFORE redaction (mirrors the command_stream path) so the wire +
+  // stored + replay-buffer payloads are bounded and redaction back-tracking is
+  // capped (security C-2).
+  const capped = capUtf8Bytes(raw, NARRATION_TEXT_CAP_BYTES);
+  const text = capped.truncated
+    ? `${capped.text}${COMMAND_STREAM_TRUNCATION_MARKER}`
+    : capped.text;
+  const redacted = formatAssistantText(text, {
+    reportFallthrough: (shape) =>
+      reportSilentFallback(new Error("narration redaction fallthrough"), {
+        feature: "cc-dispatcher",
+        op: CC_OP_SLUGS.narrationRedactionDrop,
+        message: `${field} path-leak shape survived scrub`,
+        extra: { userId, conversationId, field, shape },
+      }),
+  });
+  // Drop-on-trip: a secret SHAPE (key/token/IP) survived → never persist/emit.
+  if (debugRedactionProbeTrips(redacted)) {
+    reportSilentFallback(new Error("narration redaction probe trip"), {
+      feature: "cc-dispatcher",
+      op: CC_OP_SLUGS.narrationRedactionDrop,
+      message: `${field} dropped — secret shape survived redaction`,
+      extra: { userId, conversationId, field },
+    });
+    return null;
+  }
+  return redacted;
+}
+
+// feat-reasoning-chat-boxes (#5370) — side-effect handler for the always-on
+// narrate/summarize tools, invoked from `onToolUse`. Extracted to module scope
+// (a) for unit-testability — the `onToolUse` closure is otherwise unreachable —
+// and (b) to ease the #3243 cc-dispatcher decomposition.
+//
+//   narrate   → redact → emit transient `reasoning_narration` frame (live-only,
+//               never buffered, mirrors `debug_event`).
+//   summarize → DROP if the dispatch is aborted/stopping (FR5 / spec-flow 1c) →
+//               redact ONCE → feed the SAME redacted string to BOTH
+//               `insertTurnSummary()` AND the buffered `turn_summary` frame
+//               (security M-1: stored bytes === replayed bytes). Routes through
+//               the `assertWriteScope` seam (forward-compat + test coverage).
+async function emitNarration(opts: {
+  toolName: string;
+  input: Record<string, unknown>;
+  userId: string;
+  conversationId: string;
+  /** Turn-abort latch (`TurnPersistenceState.isAborted()`): flips true in the
+   *  `onWorkflowEnded` abort branch (`consumeForAbort`). The SDK does NOT
+   *  deliver further `tool_use` blocks after its query is aborted, so a
+   *  `summarize` cannot reach `onToolUse` post-abort-pre-onWorkflowEnded in
+   *  practice; this latch additionally drops any `summarize` that arrives at or
+   *  after the terminal abort event. (The per-Query `AbortController` lives in
+   *  `realSdkQueryFactory`, a separate function — not in the dispatch `events`
+   *  closure — so the synchronous signal is not reachable here.) */
+  aborted: boolean;
+  sendToClient: (userId: string, msg: WSMessage) => void;
+}): Promise<void> {
+  const { toolName, input, userId, conversationId, aborted, sendToClient } = opts;
+
+  if (toolName === NARRATE_TOOL_FQN) {
+    const raw = typeof input.message === "string" ? input.message : "";
+    const redacted = redactNarrationOrDrop(raw, "message", userId, conversationId);
+    if (!redacted) return; // null (dropped) or empty → emit nothing
+    sendToClient(userId, { type: "reasoning_narration", message: redacted });
+    return;
+  }
+
+  if (toolName === SUMMARIZE_TOOL_FQN) {
+    // FR5 — never persist a "✓ Done" box for an aborted/stopping turn.
+    if (aborted) return;
+    // Forward-compat write-scope seam (no-op today; the dispatch identity IS the
+    // scope). Tests force it false to prove the summarize write routes through it.
+    if (!assertWriteScope(userId, conversationId)) return;
+    const raw = typeof input.summary === "string" ? input.summary : "";
+    const redacted = redactNarrationOrDrop(raw, "summary", userId, conversationId);
+    if (!redacted) return;
+    try {
+      await insertTurnSummary({
+        founderId: userId,
+        conversationId,
+        content: redacted,
+      });
+      // Same redacted bytes to the buffered frame (security M-1). The buffer +
+      // seq stamping is auto-applied by ws-handler `isBufferedFrame()`.
+      sendToClient(userId, { type: "turn_summary", summary: redacted });
+      // Liveness: pino-only (no Sentry issue per success; NO raw body). The
+      // operator counts these by `op` without SSH (Observability block).
+      log.info(
+        { conversationId, kind: "turn_summary", op: CC_OP_SLUGS.summaryEmit },
+        "turn_summary persisted + emitted",
+      );
+    } catch (err) {
+      // insertTurnSummary already mirrored the DB error; do NOT emit the frame
+      // (no row → no replay parity). Re-mirror at the emit boundary so the
+      // failure is attributable to this dispatch.
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: CC_OP_SLUGS.summaryInsertFail,
+        extra: { userId, conversationId },
+      });
+    }
+    return;
+  }
+}
+
+// Test seam — drive `emitNarration` directly (the onToolUse closure is
+// unreachable from a unit test). Mirrors the `__set*ForTests` convention.
+export const __emitNarrationForTests = emitNarration;
+
 // #3603 PR-A2 review H4 — `CC_PERSIST_USAGE=true` is the trigger for a new
 // GDPR-regulated persisted category (Art. 13(3) prior-disclosure surface).
 // Mirror the FIRST observation per process via `reportSilentFallback` so
@@ -871,6 +1047,12 @@ const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
   "NotebookRead",
   "TodoWrite",
   "ExitPlanMode",
+  // feat-reasoning-chat-boxes (#5370) — pure emit tools, auto-approved so a
+  // narration never pays a canUseTool round-trip / surfaces a review modal.
+  // The real controls are the emit-boundary redaction + abort drop-guard, not a
+  // gate (see TOOL_TIER_MAP doc + security C-2).
+  NARRATE_TOOL_FQN,
+  SUMMARIZE_TOOL_FQN,
 ];
 
 /**
@@ -1525,9 +1707,18 @@ export const realSdkQueryFactory: QueryFactory = async (
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
   {
+    // feat-reasoning-chat-boxes (#5370): the `soleur_platform` server is now
+    // built UNCONDITIONALLY so the always-on narrate/summarize tools are
+    // reachable on every cc dispatch (the live-status + turn-summary UX is not
+    // flag-gated). The C4 write tool is still flag+repo-gated and is MERGED into
+    // the SAME server when eligible — there is exactly one soleur_platform
+    // server, with a tool set that grows by capability.
+    let c4Tools = [] as ReturnType<typeof buildC4ConciergeTools>;
+
     // Reuse the owner/repo parsed once above + the self-healed installation id
     // so the C4 write tool commits via the SAME repo-owner installation the
-    // GH_TOKEN was minted for (feat-one-shot-concierge-gh-403).
+    // GH_TOKEN was minted for (feat-one-shot-concierge-gh-403). owner/repo/
+    // installation are CLOSED OVER (ADR-044) — never tool input.
     const owner = connectedOwner;
     const repo = connectedRepo;
     if (effectiveInstallationId !== null && owner && repo) {
@@ -1555,18 +1746,13 @@ export const realSdkQueryFactory: QueryFactory = async (
         });
       }
       if (c4Enabled) {
-        const c4Server = createSdkMcpServer({
-          name: "soleur_platform",
-          version: "1.0.0",
-          tools: buildC4ConciergeTools({
-            userId: args.userId,
-            installationId: effectiveInstallationId,
-            owner,
-            repo,
-            workspacePath,
-          }),
+        c4Tools = buildC4ConciergeTools({
+          userId: args.userId,
+          installationId: effectiveInstallationId,
+          owner,
+          repo,
+          workspacePath,
         });
-        (c4McpServers as Record<string, unknown>).soleur_platform = c4Server;
         c4ToolName = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
         c4PromptAddendum =
           "## C4 diagram editing\n" +
@@ -1581,6 +1767,13 @@ export const realSdkQueryFactory: QueryFactory = async (
           "NOT paste DSL into chat for the user to apply.";
       }
     }
+
+    const platformServer = createSdkMcpServer({
+      name: "soleur_platform",
+      version: "1.0.0",
+      tools: [...buildNarrationTools({ userId: args.userId }), ...c4Tools],
+    });
+    (c4McpServers as Record<string, unknown>).soleur_platform = platformServer;
   }
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both
@@ -1629,6 +1822,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
+  // feat-reasoning-chat-boxes (#5370) — narrate/summarize are always registered,
+  // so the directive is appended unconditionally (mirrors GH_403's "always-on").
+  effectiveSystemPrompt += `\n\n${NARRATION_PROMPT_DIRECTIVE}`;
   // No entitled token → sandbox egress closed → gh/git network-dead at the
   // proxy. Override the directive's "platform will retry automatically"
   // promise, which only holds when a token (and thus egress) exists.
@@ -2618,6 +2814,30 @@ export async function dispatchSoleurGo(
       // not mirror heartbeats to the debug panel. Do not "fix" this omission.
     },
     onToolUse: (block) => {
+      // feat-reasoning-chat-boxes (#5370) — narrate/summarize drive their OWN
+      // dedicated frames (reasoning_narration / turn_summary), NOT the generic
+      // user-facing tool_use indicator. Handle + return early so the user never
+      // sees a redundant "using narrate" bubble and the team-only debug stream
+      // stays untouched. Fire-and-forget (the summarize insert awaits);
+      // `emitNarration` owns its own error handling. The abort drop-guard reads
+      // the turn-abort latch (`state.isAborted()`, set in the onWorkflowEnded
+      // abort branch) — the SDK delivers no `tool_use` after its query aborts,
+      // so a stopped turn never reaches a `summarize` here; the latch drops any
+      // that arrives at/after the terminal abort. (The per-Query AbortController
+      // lives in realSdkQueryFactory, not this closure — see emitNarration's
+      // `aborted` doc.)
+      if (block.name === NARRATE_TOOL_FQN || block.name === SUMMARIZE_TOOL_FQN) {
+        void emitNarration({
+          toolName: block.name,
+          input: block.input,
+          userId,
+          conversationId,
+          aborted: state.isAborted(),
+          sendToClient,
+        });
+        return;
+      }
+
       // #2909 FR2 — silent-failure mirror for unregistered platform tools.
       // When `mcpServers === {}` (Phase 1 default), the Claude Agent SDK
       // rejects `mcp__soleur_platform__*` calls at model-validation time

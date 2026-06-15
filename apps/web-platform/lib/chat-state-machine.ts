@@ -238,6 +238,18 @@ export interface ChatDebugEventMessage extends ChatMessageBase {
   body: string;
 }
 
+/** feat-reasoning-chat-boxes (#5370) — the DURABLE per-turn summary box. Unlike
+ *  `ChatDebugEventMessage` (team-only, filtered into the debug panel), this
+ *  renders INLINE in the main conversation as a confirmed (emerald-checkmark)
+ *  box and is PERSISTED (messages row, message_kind='turn_summary', mig 105) so
+ *  it survives reload. The summary text rides in `content` (ChatMessageBase).
+ *  Render MUST be plain-text (no MarkdownRenderer) — see chat-surface render
+ *  case + turn-summary-bubble.tsx. Authored deliberately by the agent via the
+ *  `summarize` MCP tool and redacted at the server emit boundary. */
+export interface ChatTurnSummaryMessage extends ChatMessageBase {
+  type: "turn_summary";
+}
+
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
@@ -247,7 +259,8 @@ export type ChatMessage =
   | ChatWorkflowEndedMessage
   | ChatToolUseChipMessage
   | ChatContextResetMessage
-  | ChatDebugEventMessage;
+  | ChatDebugEventMessage
+  | ChatTurnSummaryMessage;
 
 /** Stage 4 (#2886): ambient lifecycle-bar slice. The bar is sticky context;
  *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card.
@@ -350,6 +363,8 @@ export type StreamEvent = Extract<
   | { type: "tool_progress" }
   // feat-debug-mode-stream — harness instruction stream (separate panel).
   | { type: "debug_event" }
+  // feat-reasoning-chat-boxes (#5370) — durable per-turn summary (main list).
+  | { type: "turn_summary" }
   | { type: "review_gate" }
   | { type: "autonomous_disclosure" }
   | { type: "subagent_spawn" }
@@ -1137,6 +1152,27 @@ export function applyStreamEvent(
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,
         timerAction: { type: "reset_all" },
+      };
+    }
+
+    case "turn_summary": {
+      // feat-reasoning-chat-boxes (#5370) — APPEND a durable per-turn summary
+      // box to the main message list (NOT filtered into the debug panel). The
+      // summary text rides in `content`; render is plain-text (no markdown).
+      // Server only emits this on a successful turn (the `summarize` tool drop-
+      // guards aborted/stopping conversations), so a turn_summary row IS the
+      // success signal — there is no false "Done" box for an aborted turn.
+      const summaryMsg: ChatTurnSummaryMessage = {
+        id: `turn-summary-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: event.summary,
+        type: "turn_summary",
+      };
+      return {
+        messages: [...prev, summaryMsg],
+        activeStreams,
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
       };
     }
 
