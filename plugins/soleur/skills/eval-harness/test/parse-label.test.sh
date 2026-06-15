@@ -78,10 +78,12 @@ run_empty "$GO" "" "empty string output" ""
 run_empty "$GO" "" "null output" "__NULL__"
 
 # --- loadEnum: the var shapes promptfoo actually passes ---
-# Regression for the #5358 live-run bug: promptfoo passes a `defaultTest.vars`
-# `file://...` value to a custom JS assert as the LITERAL STRING, unresolved.
-# loadEnum must read the SSOT file itself. Also accepts a JSON array literal and
-# a direct array; returns [] (gate fails closed) on anything unreadable.
+# promptfoo's handling of a `defaultTest.vars` `file://*.json` value is
+# version-dependent: it may pass the RESOLVED FILE CONTENTS (JSON array text as a
+# string) OR the literal unresolved `file://...` ref. loadEnum must handle BOTH
+# (plus a direct array), returning [] (gate fails closed) on anything else. The
+# resolved-contents case is the one a prior simplification dropped, vacuuming the
+# gate — these cases lock both shapes so it cannot recur.
 loadenum() {
   local enumval="$1" want_len="$2" want_first="$3" label="$4"
   local got
@@ -104,11 +106,20 @@ loadenum() {
   fi
 }
 
-loadenum "file://enums/go-routes.json"     7 "fix" "loadEnum file:// go-routes (promptfoo shape — the #5358 bug)"
+# promptfoo's file:// var handling is version-dependent: it may pass the literal
+# `file://...` ref OR the RESOLVED FILE CONTENTS (JSON array text). Both must work.
+loadenum "file://enums/go-routes.json"     7 "fix" "loadEnum file:// literal ref (one promptfoo shape)"
 loadenum "file://enums/triage-levels.json" 3 "P1"  "loadEnum file:// triage-levels"
 loadenum "enums/go-routes.json"            7 "fix" "loadEnum bare relative path"
+# The resolved-contents shape — what promptfoo actually passes when it resolves a
+# defaultTest.vars file:// ref to the file's CONTENTS. Regression guard for the
+# gate-vacuous bug (loadEnum must JSON.parse a JSON-array-text string, not treat it
+# as a path). JSON array text as a string.
+loadenum '["fix","drain","clo-attestation","review","legal-threshold","incident","default"]' 7 "fix" "loadEnum JSON-array-text contents (promptfoo file:// resolved-contents shape)"
+loadenum '[ "a", "b", "c" ]'               3 "a"   "loadEnum whitespaced JSON-array-text contents"
 loadenum "__ARRAY__"                       3 "a"   "loadEnum direct array passthrough"
 loadenum "file://enums/does-not-exist.json" 0 "null" "loadEnum unreadable file -> [] (gate fails closed)"
+loadenum "not json and not a path"         0 "null" "loadEnum garbage -> [] (gate fails closed)"
 loadenum ""                                0 "null" "loadEnum empty string -> []"
 
 if [[ "$fails" -gt 0 ]]; then

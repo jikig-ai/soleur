@@ -15,18 +15,30 @@ const path = require("node:path");
 
 // loadEnum(vars): resolve the target's closed label set to a real array.
 //
-// promptfoo does NOT resolve a `file://...` value in `defaultTest.vars` for a
-// custom JS assert — it passes the literal string `"file://enums/go-routes.json"`
-// straight through. So the assert must read the SSOT file itself. Accepts a
-// direct array (unit tests) or a `file://`/relative/absolute path to a JSON array
-// file (the promptfoo case, resolved relative to the skill dir = this script's
-// parent). Returns [] on any failure so the gate fails closed (out-of-enum)
-// rather than throwing.
+// promptfoo's handling of a `defaultTest.vars` `file://*.json` value passed to a
+// custom JS assert is version-dependent — confirmed empirically that it may send
+// EITHER the RESOLVED FILE CONTENTS (the JSON array text as a string) OR the literal
+// unresolved ref `"file://enums/...json"`. The assert must handle both, plus a direct
+// array (unit tests). Returns [] on any failure so the gate fails closed (out-of-enum)
+// rather than throwing. (An earlier change dropped the JSON-array-text branch as
+// "speculative"; that silently broke the gate — promptfoo's resolved-contents shape IS
+// that branch's input. The regression guard lives in test/parse-label.test.sh.)
 function loadEnum(vars) {
   const raw = vars && vars.enum;
   if (Array.isArray(raw)) return raw;
   if (typeof raw !== "string" || raw.trim() === "") return [];
-  const ref = raw.trim().replace(/^file:\/\//, "");
+  const s = raw.trim();
+  // (a) JSON array literal / resolved file contents — starts with `[`, JSON.parse.
+  // (b) a `file://`/relative/absolute path — strip `file://`, read the file.
+  if (s.startsWith("[")) {
+    try {
+      const a = JSON.parse(s);
+      if (Array.isArray(a)) return a;
+    } catch {
+      /* not valid JSON — fall through to file resolution */
+    }
+  }
+  const ref = s.replace(/^file:\/\//, "");
   const p = path.isAbsolute(ref) ? ref : path.resolve(__dirname, "..", ref);
   try {
     const a = JSON.parse(fs.readFileSync(p, "utf8"));

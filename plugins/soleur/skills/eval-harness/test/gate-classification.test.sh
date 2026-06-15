@@ -64,6 +64,11 @@ fileref() {
 fileref "fix"    "file://enums/go-routes.json"     "true"  "file:// enum + in-enum route passes"
 fileref "banana" "file://enums/go-routes.json"     "false" "file:// enum + out-of-enum route fails"
 fileref "P1"     "file://enums/triage-levels.json" "true"  "file:// enum + in-enum P-level passes"
+# Resolved-contents shape (JSON array text) — what promptfoo actually passes when it
+# resolves a defaultTest.vars file:// ref to file CONTENTS. Regression guard for the
+# gate-vacuous bug (the enum arrived as JSON-array-text, not a path/literal-ref).
+fileref "fix"    '["fix","drain","clo-attestation","review","legal-threshold","incident","default"]' "true"  "contents-string enum + in-enum passes"
+fileref "banana" '["fix","drain","clo-attestation","review","legal-threshold","incident","default"]' "false" "contents-string enum + out-of-enum fails"
 
 if [[ "$fails" -gt 0 ]]; then
   echo "gate-classification: $fails assertion(s) failed"
