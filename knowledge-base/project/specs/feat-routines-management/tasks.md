@@ -24,8 +24,8 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 3 — Shared run chokepoint
 
-- [ ] 3.1 `server/routines/run-routine.ts` — `runRoutine({fnId, actorClass, actorId, delegatingPrincipal, confirmed})`: validate `fnId ∈ EXPECTED_CRON_FUNCTIONS`; enforce `manualTrigger` policy (409 on confirm && !confirmed); `inngest.send` with route-controlled keys spread LAST.
-- [ ] 3.2 Refactor `app/api/internal/trigger-cron/route.ts` to dispatch via `runRoutine` (`actorClass:'system'`, `confirmed:true`) — single `inngest.send` site. Test: legacy path records `system` attribution; policy enforced on session/agent path.
+- [x] 3.1 `server/routines/run-routine.ts` — `runRoutine({fnId, actorClass, actorId, delegatingPrincipal, confirmed})`: validate `fnId ∈ EXPECTED_CRON_FUNCTIONS`; enforce `manualTrigger` policy (409 on confirm && !confirmed); `inngest.send` with route-controlled keys spread LAST.
+- [x] 3.2 Refactor `app/api/internal/trigger-cron/route.ts` to dispatch via `runRoutine` (`actorClass:'system'`, `confirmed:true`) — single `inngest.send` site. Test: legacy path records `system` attribution; policy enforced on session/agent path.
 
 ## Phase 4 — Session routes (thin adapters)
 

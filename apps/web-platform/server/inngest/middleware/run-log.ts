@@ -60,15 +60,22 @@ function deriveAttribution(
       delegatingPrincipal: null,
     };
   }
-  const isAgent = data.trigger === "agent" || data.actor_class === "agent";
+  // actor_class is authoritative — runRoutine is the only producer of
+  // manual-trigger events and spreads it route-LAST (a caller cannot forge it).
+  // Validate against the known set; fall back to "human".
+  const ac = data.actor_class;
+  const actorClass: Attribution["actorClass"] =
+    ac === "agent" || ac === "system" ? ac : "human";
   const actorId = typeof data.actor_id === "string" ? data.actor_id : null;
   const delegatingPrincipal =
     typeof data.delegating_principal === "string"
       ? data.delegating_principal
       : null;
   return {
-    triggerSource: isAgent ? "agent" : "manual",
-    actorClass: isAgent ? "agent" : "human",
+    // A manual-trigger event is never "scheduled". Agent runs read as "agent";
+    // human + system (secret-CLI) runs both read as "manual".
+    triggerSource: actorClass === "agent" ? "agent" : "manual",
+    actorClass,
     actorId,
     delegatingPrincipal,
   };
