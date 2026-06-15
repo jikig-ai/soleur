@@ -76,7 +76,27 @@ async function setupRailMocks(page: Page) {
   await injectFakeSupabaseSession(page);
   await mockSupabaseAuth(page);
 
-  // The hook reads users.repo_url to scope the conversation list.
+  // The hook scopes the conversation list by the repo of the ACTIVE workspace,
+  // read from GET /api/workspace/active-repo (ADR-044) — NOT users.repo_url.
+  // The repoUrl here MUST match the seeded conversations' repo_url, else the
+  // hook short-circuits to the empty state and the rail rows never render.
+  await page.route("**/api/workspace/active-repo", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        workspaceId: "test-user-id",
+        repoUrl: "https://github.com/acme/repo",
+        repoName: "acme/repo",
+        repoStatus: "connected",
+        fellBackToSolo: false,
+      }),
+    });
+  });
+
+  // The users.repo_url branch below is legacy (the rail no longer reads it);
+  // the users mock is retained for the subscription_status + onboarding
+  // selects other components on the page issue.
   // All three select variants below are called via .single() / .maybeSingle()
   // which sets `Accept: application/vnd.pgrst.object+json` — pgrst returns
   // a single object, not an array. supabase-js does NOT auto-unwrap arrays,

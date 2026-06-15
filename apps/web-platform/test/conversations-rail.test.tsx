@@ -193,6 +193,40 @@ describe("ConversationsRail", () => {
     expect(cta).toHaveAttribute("href", "/dashboard/chat/new");
   });
 
+  it("renders a retryable error state (NOT the empty CTA) when the hook reports an error with no rows", async () => {
+    // Transient /api/workspace/active-repo failure: the hook sets `error` and
+    // returns an empty list. The rail must NOT show "No conversations yet —
+    // Start one" (which reads as "you have no conversations" — a lie when the
+    // list merely failed to load). See review: user-impact FINDING 1.
+    setRailHook([], { error: "Failed to resolve the active repository" });
+
+    const { ConversationsRail } = await import(
+      "@/components/chat/conversations-rail"
+    );
+    render(<ConversationsRail />);
+
+    const errorState = screen.getByTestId("conversations-rail-error");
+    expect(errorState).toHaveTextContent(/couldn.t load conversations/i);
+    expect(within(errorState).getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    // The misleading empty CTA must be absent on the error path.
+    expect(screen.queryByTestId("conversations-rail-empty")).not.toBeInTheDocument();
+  });
+
+  it("keeps rendering last-known rows when a refetch errors (failed refetch never blanks the rail)", async () => {
+    setRailHook([makeConversation({ id: "c1", title: "Kept row" })], {
+      error: "Failed to resolve the active repository",
+    });
+
+    const { ConversationsRail } = await import(
+      "@/components/chat/conversations-rail"
+    );
+    render(<ConversationsRail />);
+
+    expect(screen.getByRole("link", { name: /Kept row/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("conversations-rail-error")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("conversations-rail-empty")).not.toBeInTheDocument();
+  });
+
   it("renders the inline status badge with founder-language labels", async () => {
     setRailHook([
       makeConversation({ id: "c1", title: "Row alpha", status: "waiting_for_user" }),

@@ -79,10 +79,8 @@ vi.mock("@/lib/supabase/client", () => ({
         return builder;
       }
       if (table === "messages") return messageBuilder;
-      if (table === "users")
-        return createUpdateObservingBuilder([], null, {
-          repo_url: "https://github.com/acme/repo",
-        });
+      // Repo scope comes from GET /api/workspace/active-repo (stubbed via
+      // fetch in beforeEach); the hook no longer reads the `users` table.
       return createUpdateObservingBuilder([]);
     },
     channel: mockChannel,
@@ -96,6 +94,24 @@ describe("useConversations.updateStatus", () => {
     conversationBuilder = createUpdateObservingBuilder([mockConversation]);
     messageBuilder = createUpdateObservingBuilder(mockMessages);
     updateBuilder = createUpdateObservingBuilder([], null);
+    // Repo scope now comes from GET /api/workspace/active-repo (ADR-044),
+    // not users.repo_url. The mock conversation carries no repo_url, so any
+    // non-null route repoUrl reaches the list query (the conversations
+    // builder ignores the predicate value and returns the seeded rows).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaceId: "ws-1",
+            repoUrl: "https://github.com/acme/repo",
+            repoName: "acme/repo",
+            repoStatus: "connected",
+            fellBackToSolo: false,
+          }),
+      }),
+    );
   });
 
   it("optimistically updates conversation status in local state", async () => {

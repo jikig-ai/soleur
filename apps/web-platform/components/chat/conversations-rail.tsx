@@ -85,7 +85,7 @@ function ConversationRailRowImpl({
 export const ConversationRailRow = memo(ConversationRailRowImpl);
 
 export function ConversationsRail() {
-  const { conversations, loading } = useConversations(RAIL_OPTIONS);
+  const { conversations, loading, error, refetch } = useConversations(RAIL_OPTIONS);
   const params = useParams<{ conversationId: string }>();
   const activeId = params?.conversationId;
 
@@ -110,7 +110,27 @@ export function ConversationsRail() {
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-1">
-        {!loading && conversations.length === 0 ? (
+        {!loading && conversations.length === 0 && error ? (
+          // Transient failure with no last-known conversations: surface a
+          // distinct retryable error, NOT the "Start one" empty CTA — the
+          // empty CTA reads as "you have no conversations" and is a lie when
+          // the list simply failed to load (single-user-incident threshold).
+          // When last-known conversations exist, they keep rendering (the
+          // map branch below wins), so a failed refetch never blanks the rail.
+          <div
+            data-testid="conversations-rail-error"
+            className="px-3 py-4 text-xs text-soleur-text-muted"
+          >
+            <p>Couldn&rsquo;t load conversations.</p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="mt-1 text-soleur-text-secondary underline hover:text-soleur-text-primary"
+            >
+              Retry
+            </button>
+          </div>
+        ) : !loading && conversations.length === 0 ? (
           <RailEmptyState
             testId="conversations-rail-empty"
             message="No conversations yet."
