@@ -156,13 +156,19 @@ describe("#5371 cc idle-reaper scheduling + SIGTERM drain accessors", () => {
     __setCcRunnerForTests(stub);
 
     const timer = startCcIdleReaper();
-    // Returned timer is unref'd by the scheduler (mirrors agent-runner.ts:848)
-    // — never blocks shutdown. `unref` is a no-op under fake timers but must
-    // not throw.
+    // Returned timer is unref'd by the scheduler (mirrors startStuckActiveReaper
+    // in agent-runner.ts) — never blocks shutdown. `unref` is a no-op under fake
+    // timers but must not throw.
     expect(typeof timer.unref).toBe("function");
     expect(reapIdle).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(300_000); // CC_IDLE_REAPER_INTERVAL_MS
+    // Pin the cadence semantically (gate-present AND boundary): one tick short
+    // of the interval fires nothing; crossing it fires exactly once. A naive
+    // single advanceTimersByTime can't distinguish "fires at the interval" from
+    // "fires on any tick".
+    vi.advanceTimersByTime(299_999);
+    expect(reapIdle).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1); // crosses CC_IDLE_REAPER_INTERVAL_MS (300_000)
     expect(reapIdle).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(300_000);
     expect(reapIdle).toHaveBeenCalledTimes(2);

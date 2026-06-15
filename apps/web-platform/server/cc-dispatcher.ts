@@ -1932,7 +1932,7 @@ export function closeCcConversation(
 // #5371 — cadence for the in-process cc idle reaper. Kept a LOCAL literal
 // (not exported, not a runtime knob): coupling it to agent-runner's
 // module-private STUCK_ACTIVE_CHECK_INTERVAL_MS would entangle two
-// unrelated reapers. ≤ DEFAULT_IDLE_REAP_MS (10min, soleur-go-runner.ts:524)
+// unrelated reapers. ≤ DEFAULT_IDLE_REAP_MS (10min, in soleur-go-runner.ts)
 // so an idle query is reaped within ~1 interval of crossing the window.
 const CC_IDLE_REAPER_INTERVAL_MS = 300_000;
 
@@ -1960,7 +1960,7 @@ export function drainCcQueriesForShutdown(): number {
 
 /**
  * #5371 — start the boot-time cc idle-reaper. Mirrors
- * `startStuckActiveReaper` (agent-runner.ts:773): a `setInterval` returning
+ * `startStuckActiveReaper` (in agent-runner.ts): a `setInterval` returning
  * the timer, `unref()`'d before return so it never blocks shutdown. The
  * explicit `clearInterval` on SIGTERM is belt-and-suspenders on top of
  * `unref()`, not a replacement. The callback only ever calls the

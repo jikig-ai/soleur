@@ -323,18 +323,26 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
       persistActiveWorkflow: persist,
     });
 
-    // ws-handler grace timer fired first: closes + checkpoints, deletes the
-    // entry from activeQueries.
+    // ws-handler grace timer fired first: closeConversation → closeQuery, which
+    // DELETES the entry from activeQueries (soleur-go-runner.ts). So the drain
+    // below observes an empty map and returns 0 via absence — the in-loop
+    // `if (state.closed) continue` skip is belt-and-suspenders for a
+    // closed-but-still-present entry that no public caller can produce (every
+    // caller deletes). This test pins the OBSERVABLE contract (the drain does
+    // not double-fire onCloseQuery / query.close() after a grace-abort), not the
+    // unreachable guard line.
     runner.closeConversation("g1", "disconnected");
     expect(onCloseQuery).toHaveBeenCalledTimes(1);
     expect(onCloseQuery.mock.calls[0]?.[0]?.reason).toBe("disconnected");
+    expect(mock.closeSpy).toHaveBeenCalledTimes(1);
 
-    // Now the SIGTERM drain runs — it must not re-fire onCloseQuery for the
-    // already-closed conversation (exactly one call total).
+    // Now the SIGTERM drain runs — exactly one onCloseQuery AND one query.close()
+    // total across both the grace-abort and the drain (no double-close).
     const drained = runner.closeAllForShutdown();
 
     expect(drained).toBe(0);
     expect(onCloseQuery).toHaveBeenCalledTimes(1);
+    expect(mock.closeSpy).toHaveBeenCalledTimes(1);
   });
 
   it("reapIdle skips awaitingUser but closeAllForShutdown closes it (AC7)", async () => {
