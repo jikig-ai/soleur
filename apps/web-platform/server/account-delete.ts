@@ -112,6 +112,14 @@ export interface DeleteAccountResult {
  *                             anonymised per Art. 17(3)(b). Required:
  *                             email_triage_items.user_id REFERENCES
  *                             users(id) ON DELETE RESTRICT.
+ *   5.14 anonymise-routine-runs —
+ *                             anonymise_routine_runs RPC (migration 107,
+ *                             #5345 / #5372). Nulls actor_id +
+ *                             delegating_principal under the GUC-gated WORM
+ *                             bypass (app.worm_bypass); the append-only run-log
+ *                             row is retained anonymised. Required:
+ *                             routine_runs.actor_id / .delegating_principal
+ *                             REFERENCE users(id) ON DELETE RESTRICT.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -925,6 +933,39 @@ export async function deleteAccount(
       "anonymise_email_triage_items threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed at anonymise-email-triage-items. Please try again." };
+  }
+
+  // 3.98 Anonymise routine_runs (migration 107, #5345 / #5372).
+  //      routine_runs.actor_id / .delegating_principal reference users(id)
+  //      ON DELETE RESTRICT — without this step the auth-delete cascade aborts
+  //      with FK 23503 (and the WORM no-mutate trigger would block a SET NULL/
+  //      CASCADE anyway). The RPC NULLs both columns under the GUC-gated WORM
+  //      bypass (app.worm_bypass), preserving the append-only run-log row
+  //      (Art. 17 = scrub the subject's PII, keep the operational-audit row).
+  //      MUST run BEFORE auth.admin.deleteUser. Idempotent: re-runs no-op once
+  //      every row referencing this user is anonymised.
+  try {
+    const { error: anonRoutineErr } = await service.rpc(
+      "anonymise_routine_runs",
+      { p_user_id: userId },
+    );
+    if (anonRoutineErr) {
+      reportSilentFallback(anonRoutineErr, {
+        feature: "account-delete",
+        op: "anonymise-routine-runs",
+        extra: { userId },
+        message: "anonymise_routine_runs failed — aborting deletion to avoid FK-block",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-routine-runs. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-routine-runs",
+      extra: { userId },
+      message: "anonymise_routine_runs threw — aborting deletion to avoid FK-block",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-routine-runs. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

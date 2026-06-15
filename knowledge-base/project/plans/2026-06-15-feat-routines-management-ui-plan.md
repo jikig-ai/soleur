@@ -112,7 +112,7 @@ export const ROUTINE_METADATA: Record<string, RoutineMeta> = { /* one entry per 
   This (NOT `toBe(56)`) is what prevents a cron being added without metadata. No cron-drift/source-grep
   test (we dropped the raw `cron` field, so there is no second source to drift).
 
-**1.2 Durable run-log.** Migration `104_routine_runs.sql` (model on `037`/`051`), **terminal-only
+**1.2 Durable run-log.** Migration `107_routine_runs.sql` (model on `037`/`051`), **terminal-only
 append** (no `running` row, no lifecycle UPDATE):
 
 ```sql
@@ -244,7 +244,7 @@ Recent Runs table, Run-now confirm modal (wireframe 03). Reference the `.pen` sc
 - [ ] `EXPECTED_CRON_FUNCTIONS` element type unchanged (`string[]`); `function-registry-count.test.ts`
       (`toBe(56)`, route array) + `inngest-key-server-only.test.ts` still green. (56 ≠ the cron count;
       they are distinct sets — do not conflate.)
-- [ ] Migration `104_routine_runs.sql` + `.down.sql`: terminal-only append; WORM no-mutate trigger
+- [ ] Migration `107_routine_runs.sql` + `.down.sql`: terminal-only append; WORM no-mutate trigger
       rejects UPDATE/DELETE; RLS select-only; write only via `write_routine_run()` SECURITY DEFINER RPC
       (service-role grant, `search_path` pinned); `ON DELETE SET NULL` FKs; `-- LAWFUL_BASIS:` +
       `-- RETENTION:` headers; no `CONCURRENTLY`.
