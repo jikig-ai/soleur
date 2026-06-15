@@ -66,7 +66,18 @@ jobs:
           # Collect changed files in the PR diff against the PR base.
           # BASE_REF arrives via env: + double-quoted in the command so
           # workflow-injection guidance is honoured.
-          git fetch --quiet --depth=1 origin "$BASE_REF"
+          #
+          # NO --depth=1: the three-dot `origin/BASE...HEAD` diff is computed
+          # from the MERGE-BASE of base and HEAD (so it lists only this PR's own
+          # changes, not commits that landed on base since the branch point — a
+          # two-dot diff would mis-flag those unrelated files). A shallow
+          # `--depth=1` fetch brings only base's tip commit, so when base has
+          # advanced past the branch point the merge-base is unreachable and the
+          # diff dies with `fatal: origin/BASE...HEAD: no merge base` (exit 128)
+          # — failing the gate on a branch-history artifact, not a real finding.
+          # Checkout already runs fetch-depth:0, so this fetch is a cheap
+          # incremental that just makes the merge-base reachable.
+          git fetch --quiet origin "$BASE_REF"
           changed_files=$(git diff --name-only "origin/${BASE_REF}"...HEAD)
           echo "Changed files in PR:"
           echo "$changed_files" | sed 's/^/  /'
