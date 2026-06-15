@@ -149,8 +149,26 @@ export function WorkspaceContextBand({
           rail header). Without it the multi-workspace switcher's `▾` chevron
           (org-switcher.tsx, `shrink-0` at the card's right edge) sits under the
           toggle. Desktop-only (md:) — the mobile band is below the md breakpoint
-          and unaffected. */}
-      <div className="flex items-center gap-2 px-3 pt-2 md:pr-10">
+          and unaffected.
+
+          md:min-h-[64px] (drill === null only) reserves the floated toggle's full
+          vertical footprint — top-10 (40px) + h-6 (24px) = 64px from the aside top
+          — so the not-yet-loaded band cannot collapse below it. On the top-level
+          route the band's ONLY content is the async pill, and OrgSwitcherContainer
+          returns null until /api/workspace/list-memberships resolves
+          (org-switcher-container.tsx:214); without a reserved height the band
+          shrinks to ~8px and the nav (pt-3 below) rises into the toggle's footprint
+          — the toggle then paints over the "Dashboard" nav link during page load.
+          Scoped to drill === null because drilled (Settings/KB/Chat) bands already
+          exceed 64px via the back-link + section-title rows; md: because the mobile
+          band is below the breakpoint (inert there); the collapsed icon-only form
+          returns early above and never reaches this div. Idiom precedent:
+          components/shared/cta-banner.tsx min-h-[1rem]. */}
+      <div
+        className={`flex items-center gap-2 px-3 pt-2 md:pr-10${
+          drill === null ? " md:min-h-[64px]" : ""
+        }`}
+      >
         <div className="min-w-0 flex-1">
           <OrgSwitcherContainer />
         </div>

@@ -29,7 +29,7 @@ fi
 # Make a temp repo with sidecar fixtures + an `origin/main` baseline so
 # `git diff --name-only origin/main...HEAD` is meaningful.
 setup_repo() {
-  local repo="$1" change_pattern="${2:-}"
+  local repo="$1" change_pattern="${2:-}" mcp_variant="${3:-}"
   mkdir -p "$repo"
   (
     cd "$repo"
@@ -60,6 +60,22 @@ REST
 - [id: cq-test-docs] → docs
 - [id: cq-test-rest] → rest
 IDX
+    # MCP capability-roster fixtures (#5319). The hook reads .mcp.json and
+    # plugins/soleur/.claude-plugin/plugin.json from REPO_ROOT. Seed per variant;
+    # committed in the baseline so they do NOT appear in the change-class diff.
+    #   ""        → seed nothing (default; preserves pre-#5319 fixture shape, also AC3)
+    #   both      → .mcp.json={playwright} ∪ plugin.json={context7,stripe}
+    #   malformed → .mcp.json=invalid-JSON + plugin.json={context7,stripe} (AC10)
+    case "$mcp_variant" in
+      both|malformed)
+        mkdir -p plugins/soleur/.claude-plugin
+        printf '%s\n' '{"mcpServers":{"context7":{},"stripe":{}}}' > plugins/soleur/.claude-plugin/plugin.json
+        ;;
+    esac
+    case "$mcp_variant" in
+      both)      printf '%s\n' '{"mcpServers":{"playwright":{}}}' > .mcp.json ;;
+      malformed) printf '%s\n' '{invalid json' > .mcp.json ;;
+    esac
     git add . && git commit -q -m baseline
     # Simulate origin/main pointing at the baseline so `origin/main...HEAD`
     # is empty by default. Individual tests overlay extra commits.
@@ -290,6 +306,165 @@ else
   PASS=$((PASS+1))
 fi
 rm -f /tmp/loader-symlink-target-$$
+
+# ------------- Test 15 (AC1): workspace fields + dirty count -----------
+# The session-context line-1 carries branch + dirty file count. Two untracked
+# files in the worktree → `dirty: 2 files`. Note: the snapshot's dirty count is
+# computed BEFORE the hook creates .claude/.session-manifests/, so the manifest
+# dir never self-inflates the count (mirrors prod where it is gitignored).
+TOTAL=$((TOTAL+1))
+T15=$(mktemp -d); setup_repo "$T15" docs both
+echo "uncommitted A" > "$T15/dirty-a.txt"
+echo "uncommitted B" > "$T15/dirty-b.txt"
+out15=$(invoke_hook "$T15")
+ctx15=$(printf '%s' "$out15" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if printf '%s' "$ctx15" | grep -qE '^\[session-context\] branch: main \| dirty: 2 files$' \
+   && printf '%s' "$ctx15" | grep -qF "[session-context] worktree: $T15"; then
+  echo "PASS: AC1 workspace fields (branch + dirty: 2 files + worktree)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC1 workspace fields — got: $(printf '%s' "$ctx15" | grep -F '[session-context]' | head -3 | tr '\n' '~')"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 16 (AC2): MCP roster unions both sources -----------
+TOTAL=$((TOTAL+1))
+T16=$(mktemp -d); setup_repo "$T16" docs both
+out16=$(invoke_hook "$T16")
+ctx16=$(printf '%s' "$out16" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+mcp16=$(printf '%s' "$ctx16" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
+if printf '%s' "$mcp16" | grep -q 'playwright' \
+   && printf '%s' "$mcp16" | grep -q 'context7' \
+   && printf '%s' "$mcp16" | grep -q 'stripe'; then
+  echo "PASS: AC2 MCP roster unions .mcp.json + plugin.json ($mcp16)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC2 MCP roster union — got: $mcp16"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 17 (AC3): fail-open on missing config --------------
+TOTAL=$((TOTAL+1))
+T17=$(mktemp -d); setup_repo "$T17" docs   # no mcp_variant → neither config file
+out17_rc=0
+out17=$(invoke_hook "$T17") || out17_rc=$?
+ctx17=$(printf '%s' "$out17" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if (( out17_rc == 0 )) \
+   && printf '%s' "$ctx17" | grep -qF '[session-context] MCP(committed-config): (none)' \
+   && printf '%s' "$ctx17" | grep -qF '[id: hr-test-core]'; then
+  echo "PASS: AC3 fail-open missing config (roster=(none), exit 0, rule bodies present)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC3 fail-open missing config (rc=$out17_rc; ctx head=$(printf '%s' "$ctx17" | grep -F '[session-context]' | tr '\n' '~'))"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 18 (AC4): fail-open when branch resolution fails ----
+# A `git` shim that fails ONLY for `rev-parse --abbrev-ref` and delegates all
+# else to real git. The worktree gate (`--is-inside-work-tree`) and the dirty/
+# diff queries still succeed, so the hook reaches the snapshot and WS_BRANCH
+# degrades to `(unknown)` via the `|| echo "(unknown)"` guard.
+TOTAL=$((TOTAL+1))
+T18=$(mktemp -d); setup_repo "$T18" docs both
+REAL_GIT=$(command -v git)
+GITSHIM=$(mktemp -d)
+cat > "$GITSHIM/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [[ "\$a" == "--abbrev-ref" ]] && exit 1; done
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$GITSHIM/git"
+out18_rc=0
+out18=$(invoke_hook "$T18" "PATH=$GITSHIM:$PATH") || out18_rc=$?
+ctx18=$(printf '%s' "$out18" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if (( out18_rc == 0 )) \
+   && printf '%s' "$ctx18" | grep -qE '^\[session-context\] branch: \(unknown\) \| dirty: [0-9]+ files$'; then
+  echo "PASS: AC4 fail-open on branch-resolution failure (branch: (unknown), exit 0)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC4 fail-open on branch-resolution failure (rc=$out18_rc; line=$(printf '%s' "$ctx18" | grep -F '[session-context] branch:' | head -1))"
+  FAIL=$((FAIL+1))
+fi
+rm -rf "$GITSHIM"
+
+# ------------- Test 19 (AC7): per-line byte budget + line position -----
+# Long branch name (100 chars) + deep worktree path. Each [session-context]
+# line must be ≤ 512 bytes, and the 3 session-context lines must sit at envelope
+# positions 4-6 (after STAMP/HINT/manifest, outside Test 11's head -3 window).
+TOTAL=$((TOTAL+1))
+LONGBR=$(printf 'b%.0s' $(seq 1 100))
+T19_DEEP=$(mktemp -d)/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/dddddddddd/eeeeeeeeee
+mkdir -p "$T19_DEEP"
+setup_repo "$T19_DEEP" docs both
+( cd "$T19_DEEP" && git checkout -q -b "$LONGBR" )
+out19=$(invoke_hook "$T19_DEEP")
+ctx19=$(printf '%s' "$out19" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+sc_max=$(printf '%s' "$ctx19" | grep -F '[session-context]' | awk '{ print length }' | sort -n | tail -1 || true)
+l4=$(printf '%s' "$ctx19" | sed -n '4p'); l5=$(printf '%s' "$ctx19" | sed -n '5p'); l6=$(printf '%s' "$ctx19" | sed -n '6p')
+l3=$(printf '%s' "$ctx19" | sed -n '3p'); l7=$(printf '%s' "$ctx19" | sed -n '7p')
+if (( ${sc_max:-0} <= 512 && sc_max > 0 )) \
+   && [[ "$l3" == '[rules-loader] manifest: '* ]] \
+   && [[ "$l4" == '[session-context]'* && "$l5" == '[session-context]'* && "$l6" == '[session-context]'* ]] \
+   && [[ "$l7" != '[session-context]'* ]]; then
+  echo "PASS: AC7 byte budget (max=$sc_max ≤ 512) + lines 4-6 are session-context"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC7 byte/position (max=$sc_max; l3='${l3:0:40}' l4='${l4:0:40}' l7='${l7:0:40}')"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 20 (AC10): fail-open on malformed .mcp.json --------
+# Invalid JSON → jq exit-5 (writes nothing to stdout); the roster falls back to
+# the plugin.json keys only and the hook still exits 0. This proves the
+# malformed-config FAIL-OPEN behavior. Note: the `|| true` guards are
+# defense-in-depth, not load-bearing here — `set -e` is off in the hook and the
+# jq calls sit in assignment-position command-subs (ERR-exempt), so the fallback
+# holds with or without them; the value of this test is the fail-open contract.
+TOTAL=$((TOTAL+1))
+T20=$(mktemp -d); setup_repo "$T20" docs malformed
+out20_rc=0
+out20=$(invoke_hook "$T20") || out20_rc=$?
+ctx20=$(printf '%s' "$out20" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+mcp20=$(printf '%s' "$ctx20" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
+if (( out20_rc == 0 )) \
+   && printf '%s' "$mcp20" | grep -q 'context7' \
+   && printf '%s' "$mcp20" | grep -q 'stripe' \
+   && ! printf '%s' "$mcp20" | grep -q 'playwright' \
+   && printf '%s' "$ctx20" | grep -qF '[id: hr-test-core]'; then
+  echo "PASS: AC10 malformed .mcp.json → plugin.json keys only, exit 0 ($mcp20)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC10 malformed .mcp.json (rc=$out20_rc; mcp=$mcp20)"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 21 (AC11): control-char / newline sanitization ------
+# A JSON key may legally contain a newline or other control char. Without the
+# per-key gsub("[[:cntrl:]]") strip in the hook, an embedded newline splits one
+# server into two roster entries and a raw control char lands verbatim in the
+# agent's context. Assert the roster collapses to a single CLEAN token and the
+# session-context block stays exactly 3 lines (no envelope line-shift).
+TOTAL=$((TOTAL+1))
+T21=$(mktemp -d); setup_repo "$T21" docs
+# JSON-escaped key contains an embedded newline (valid JSON \n escape, not a
+# literal newline byte). Without the hook's per-key gsub("[[:cntrl:]]") strip the
+# newline would split this into two roster entries; after gsub it collapses to a
+# single clean token "abinjected".
+jq -nc '{mcpServers:{"ab\ninjected":{}}}' > "$T21/.mcp.json"
+out21=$(invoke_hook "$T21")
+ctx21=$(printf '%s' "$out21" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+mcp21=$(printf '%s' "$ctx21" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
+sc_count21=$(printf '%s' "$ctx21" | grep -cF '[session-context]' || true)
+l7_21=$(printf '%s' "$ctx21" | sed -n '7p')
+if printf '%s' "$mcp21" | grep -qE 'MCP\(committed-config\): abinjected$' \
+   && [[ "$sc_count21" == "3" ]] \
+   && [[ "$l7_21" != '[session-context]'* ]]; then
+  echo "PASS: AC11 control-char sanitization (single clean token, 3 session-context lines)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC11 control-char sanitization (mcp='$mcp21' sc_count=$sc_count21 l7='${l7_21:0:40}')"
+  FAIL=$((FAIL+1))
+fi
 
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
