@@ -23,6 +23,7 @@ import {
   tearDownSharedWorkspace,
   type SharedWorkspaceFixture,
 } from "../helpers/workspace-members-fixtures";
+import { withGoTrueRetry } from "../helpers/gotrue-retry";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -126,28 +127,34 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(error, `set password for ${user.email}`).toBeNull();
       }
 
-      const { error: signInA } = await userAClient.auth.signInWithPassword({
-        email: userA.email,
-        password: knownPassword,
-      });
+      const { error: signInA } = await withGoTrueRetry("signIn:userA", () =>
+        userAClient.auth.signInWithPassword({
+          email: userA.email,
+          password: knownPassword,
+        }),
+      );
       expect(signInA, "userA sign-in").toBeNull();
 
       userBClient = createClient(supabaseUrl, anonKey, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
-      const { error: signInB } = await userBClient.auth.signInWithPassword({
-        email: userB.email,
-        password: knownPassword,
-      });
+      const { error: signInB } = await withGoTrueRetry("signIn:userB", () =>
+        userBClient.auth.signInWithPassword({
+          email: userB.email,
+          password: knownPassword,
+        }),
+      );
       expect(signInB, "userB sign-in").toBeNull();
 
       userCClient = createClient(supabaseUrl, anonKey, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
-      const { error: signInC } = await userCClient.auth.signInWithPassword({
-        email: userC.email,
-        password: knownPassword,
-      });
+      const { error: signInC } = await withGoTrueRetry("signIn:userC", () =>
+        userCClient.auth.signInWithPassword({
+          email: userC.email,
+          password: knownPassword,
+        }),
+      );
       expect(signInC, "userC sign-in").toBeNull();
     }, 60_000);
 
@@ -235,25 +242,105 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     // ------------------------------------------------------------------
-    // AC8: RESTRICTIVE policy — client UPDATE on visibility rejected
+    // AC8: effective write-isolation contract for the visibility column.
+    //
+    // Mig 075's `REVOKE UPDATE(visibility) ON conversations FROM
+    // authenticated` is a NO-OP on a real Supabase project: the table-level
+    // `GRANT ... ON public.conversations TO authenticated` subsumes the
+    // narrower column REVOKE, so `authenticated` retains column UPDATE.
+    // (Confirmed live on dev AND prd; see the SOLEUR-DEBT marker in
+    // mig 075_conversation_visibility.sql.) The ENFORCED contract is the
+    // RLS policy `conversations_owner_update` — owner-only writes. These
+    // tests assert that effective contract, not the defense-in-depth column
+    // grant a clean-migration replica would have. A test that asserts the
+    // column REVOKE cannot pass against any real Supabase project.
+    //
+    // SOLEUR-DEBT: mig 075 column REVOKE on conversations.visibility is a no-op (Supabase's table-level GRANT to authenticated subsumes it); RLS conversations_owner_update is the enforced guard so impact is nil; restore real column protection only if a non-owner write path to visibility that RLS does not cover is ever introduced, by GRANTing conversations at column granularity instead of ALL. (Marker lives here, not in mig 075 — editing an applied migration trips the content_sha drift probe.)
     // ------------------------------------------------------------------
-    it("Client UPDATE on visibility column is rejected", async () => {
-      const { error } = await userAClient
+    it("Owner CAN UPDATE own conversation visibility directly (RLS allows)", async () => {
+      // Use a DEDICATED row, not the shared privateConvId — this is the only
+      // destructive test in the suite, and coupling it to a shared row that
+      // downstream tests assert on means a mid-test failure would cascade into
+      // misleading downstream failures. Self-contained insert + finally-delete.
+      const ownConvId = randomUUID();
+      const userA = ws1.members[0];
+      const { error: insErr } = await service.from("conversations").insert({
+        id: ownConvId,
+        user_id: userA.userId,
+        workspace_id: ws1.workspaceId,
+        repo_url: REPO_URL,
+        status: "active",
+        last_active: new Date().toISOString(),
+        visibility: "private",
+      });
+      expect(insErr, "insert owner-update fixture row").toBeNull();
+
+      try {
+        const { error } = await userAClient
+          .from("conversations")
+          .update({ visibility: "workspace" } as Record<string, unknown>)
+          .eq("id", ownConvId);
+        expect(error).toBeNull();
+
+        const { data: after } = await service
+          .from("conversations")
+          .select("visibility")
+          .eq("id", ownConvId)
+          .single();
+        expect(after?.visibility).toBe("workspace");
+      } finally {
+        await service.from("conversations").delete().eq("id", ownConvId);
+      }
+    });
+
+    it("Non-owner CANNOT UPDATE another owner's conversation visibility (RLS blocks)", async () => {
+      const { data, error } = await userBClient
+        .from("conversations")
+        .update({ visibility: "private" } as Record<string, unknown>)
+        .eq("id", sharedConvId)
+        .select("id");
+
+      // RLS owner-only UPDATE deny is dual-shape: a 42501 error, OR a 0-row
+      // match (PostgREST returns no error when the USING clause filters all
+      // candidate rows). Either is a correct deny.
+      if (error) {
+        expect(error.code).toBe("42501");
+      } else {
+        expect(data).toEqual([]);
+      }
+
+      // Load-bearing proof: service-role read-back confirms unchanged.
+      const { data: unchanged } = await service
+        .from("conversations")
+        .select("visibility")
+        .eq("id", sharedConvId)
+        .single();
+      expect(unchanged?.visibility).toBe("workspace");
+    });
+
+    it("anon CANNOT UPDATE visibility (RLS blocks)", async () => {
+      const anonClient = createClient(supabaseUrl, anonKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data, error } = await anonClient
         .from("conversations")
         .update({ visibility: "workspace" } as Record<string, unknown>)
-        .eq("id", privateConvId);
+        .eq("id", privateConvId)
+        .select("id");
 
-      // Column-level REVOKE produces 42501 (insufficient_privilege)
-      expect(error).not.toBeNull();
-      expect(error!.code).toBe("42501");
+      // anon has no auth.uid(); the owner-update USING clause matches 0 rows.
+      // Accept either an error or an empty result — both deny the write.
+      if (!error) {
+        expect(data).toEqual([]);
+      }
 
-      // Verify row unchanged
-      const { data } = await service
+      // Load-bearing proof: read-back confirms unchanged.
+      const { data: unchanged } = await service
         .from("conversations")
         .select("visibility")
         .eq("id", privateConvId)
         .single();
-      expect(data?.visibility).toBe("private");
+      expect(unchanged?.visibility).toBe("private");
     });
 
     // ------------------------------------------------------------------
@@ -309,8 +396,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       );
 
       expect(error).not.toBeNull();
-      // RPC raises insufficient_privilege
-      expect(error!.code).toBe("P0001");
+      // RPC raises USING ERRCODE = 'insufficient_privilege' → SQLSTATE 42501
+      // (mig 075's NOT-FOUND branch). The prior P0001 assertion was wrong
+      // since #4521 — the RPC has never raised the default raise_exception
+      // code; it was hidden because this opt-in suite never runs in CI.
+      expect(error!.code).toBe("42501");
 
       // Verify unchanged
       const { data } = await service

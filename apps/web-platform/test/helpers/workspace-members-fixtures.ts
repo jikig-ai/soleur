@@ -21,6 +21,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { withGoTrueRetry } from "./gotrue-retry";
 
 export const WORKSPACE_FIXTURE_EMAIL_RE =
   /^workspace-fixture-[a-f0-9]{16}@soleur\.test$/;
@@ -77,11 +78,13 @@ export async function createSharedWorkspaceMembers(
   for (let i = 0; i < count; i++) {
     const email = syntheticWorkspaceFixtureEmail();
     assertSyntheticWorkspaceFixture(email);
-    const { data, error } = await service.auth.admin.createUser({
-      email,
-      password: randomBytes(16).toString("hex"),
-      email_confirm: true,
-    });
+    const { data, error } = await withGoTrueRetry(`createUser:${email}`, () =>
+      service.auth.admin.createUser({
+        email,
+        password: randomBytes(16).toString("hex"),
+        email_confirm: true,
+      }),
+    );
     if (error) throw new Error(`createUser failed: ${error.message}`);
     const userId = data.user?.id;
     if (!userId) throw new Error("createUser returned no user.id");
@@ -167,10 +170,13 @@ export async function tearDownSharedWorkspace(
       .eq("id", fixture.organizationId);
   } catch {}
 
-  // 4. Auth users (CASCADE to public.users).
+  // 4. Auth users (CASCADE to public.users). Retry past GoTrue rate limits
+  // and the opaque transient "Database error deleting user".
   for (const m of fixture.members) {
     try {
-      await service.auth.admin.deleteUser(m.userId);
+      await withGoTrueRetry(`deleteUser:${m.userId}`, () =>
+        service.auth.admin.deleteUser(m.userId),
+      );
     } catch {}
   }
 }

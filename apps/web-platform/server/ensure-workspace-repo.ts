@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { rm, rename, cp, readdir } from "node:fs/promises";
+import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -156,6 +156,11 @@ export async function realGraftRepoClone(
   repoUrl: string,
   installationId: number,
 ): Promise<void> {
+  // `git clone` creates only the leaf (`.ensure-repo-tmp-<uuid>`), not missing
+  // parents, so the workspace root must exist first — it can be gone after a
+  // sandbox/host reclaim. Matches the operative mkdir of the signup path
+  // (workspace.ts:111); not its symlink-rejection contract, which is irrelevant here.
+  await mkdir(workspacePath, { recursive: true });
   const tmp = join(workspacePath, `.ensure-repo-tmp-${randomUUID()}`);
   try {
     await gitWithInstallationAuth(
