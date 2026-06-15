@@ -1,9 +1,9 @@
 ---
 title: "Your in-progress work now survives a dropped connection"
 type: feature-launch
-publish_date: ""
+publish_date: "2026-06-15"
 channels: x, bluesky
-status: draft
+status: published
 pr_reference: "#5362"
 issue_reference: "#5356"
 ---
