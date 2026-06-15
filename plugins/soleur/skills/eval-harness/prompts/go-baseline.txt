@@ -1,0 +1,6 @@
+You are a request router. Classify the user's request into EXACTLY ONE route token from this set: fix, drain, clo-attestation, review, legal-threshold, incident, default.
+
+Respond with ONLY the single route token. No explanation, no punctuation, no extra words.
+
+User request: {{input}}
+Route:

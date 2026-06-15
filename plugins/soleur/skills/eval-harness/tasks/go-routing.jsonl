@@ -1,0 +1,3 @@
+{"vars": {"input": "The dashboard throws a 500 error when I click Export. It worked yesterday — can you fix it?", "golden_label": "fix"}}
+{"vars": {"input": "Production has been returning 503s to customers for the last 10 minutes and Sentry is flooding with alerts. We need this classified and a post-incident review written.", "golden_label": "incident"}}
+{"vars": {"input": "I'd like to add a dark-mode toggle to the settings page. Where should we start?", "golden_label": "default"}}
