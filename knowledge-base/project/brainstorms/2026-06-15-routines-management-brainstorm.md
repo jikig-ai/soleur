@@ -84,7 +84,7 @@ gate, so "instant live routine" would overpromise persistence the architecture d
 | 6 | **Debug-mode Run-now routes through the existing allowlist**, never a bypass endpoint; tighten financial/egress/deletion routines to deny-by-default (scheduled-only or per-routine confirmation) | CTO + CLO: off-schedule runs fire real prod work; the allowlist (currently derives from ALL crons) must gain a curated protected subset. Parity-tested (`trigger-cron-allowlist-parity.test.ts`). |
 | 7 | **Concierge v2 test-runs are dry-run/sandbox by default** (block email/publish/financial/egress/delete) with a visible "DRY RUN — no external effects" marker | CLO: running an unapproved routine against real systems is the highest risk; real run only on explicit operator confirmation. |
 | 8 | New internal/agent-callable routes registered in `PUBLIC_PATHS` in the same PR; heartbeats gated on final attempt | learnings: 2026-06-01 (PUBLIC_PATHS or 307→/login), 2026-06-12 (don't page on transient retry faults). |
-| 9 | Visual design: `knowledge-base/product/design/routines/routines-management.pen` (Routines tab grouped-by-domain, Recent Runs, Run-now confirm modal) | Mock-confirmation gate before implementation; matches operator reference mock. |
+| 9 | Visual design: `knowledge-base/product/design/routines/routines-management.pen` — 4 screens: (1) Routines tab grouped-by-domain, (2) Recent Runs, (3) Run-now confirm modal, (4) Concierge chat (draft → dry-run test+verify → Open PR) | Mock-confirmation gate before implementation; matches operator reference mock. Note: Concierge mock's target-file path is illustrative — real path is `apps/web-platform/server/inngest/functions/cron-*.ts`. |
 
 ## Open Questions
 
@@ -161,3 +161,10 @@ on the diff.
 
 - None blocking. Note: `worktree-manager.sh` warns `session-state.sh missing` (lease/lock protection
   disabled in this worktree) — non-blocking for brainstorm.
+- **Pencil `open_document` is destructive on `routines-management.pen`** (#3274 adapter parse-then-blank):
+  it wiped the file to a 41-byte empty doc on open. ux-design-lead recovered from git and merged the new
+  screen via temp-build + JSON-merge (screens 01-03 byte-identical to HEAD). Future Pencil iterations on
+  this `.pen` must use the same temp-build + JSON-merge route, not `open_document`. Commit the `.pen`
+  after every edit.
+- Premature commit: I committed an early partial `.pen` + low-res screenshots before the first
+  ux-design-lead agent finished; reconciled to the high-res finals. Fixed workflow captured in memory.
