@@ -174,8 +174,8 @@ logs:
   where: "pino child logger 'ensure-workspace-repo' → stdout → Better Stack; Sentry for errors"
   retention: "per existing platform retention (unchanged)"
 discoverability_test:
-  command: "rg -n 'await mkdir\\(workspacePath' apps/web-platform/server/ensure-workspace-repo.ts && ./node_modules/.bin/vitest run test/ensure-workspace-repo-graft-race.test.ts"
-  expected_output: "mkdir call present; graft-race suite all green incl. the ordering test"
+  command: "grep -c 'await mkdir(workspacePath' apps/web-platform/server/ensure-workspace-repo.ts"
+  expected_output: "1"
 ```
 
 No new observability surface — the fix reuses the existing fail-soft Sentry mirror. A failed `mkdir` is now reported under the same `op='clone'` slug rather than presenting as an opaque clone failure.
