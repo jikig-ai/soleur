@@ -15,10 +15,15 @@ brand_survival_threshold: single-user incident
 > **DEVIATION from plan (operator-approved "Durable + targeted gate"):** Phase 2's "blocking orphan-drift gate
 > on push:main" was found UNSAFE — shared dev accumulates orphans from every open migration-PR (e.g. #5363's
 > 105_turn_summary), so blocking-on-main would persistently false-red main. Replaced with a TARGETED gate
-> (`preflight-worm-cascade-contradiction.sh`) that flags the actual deletion-breaking class: STATEMENT-level
-> raising BEFORE U/D triggers on tables with ON DELETE SET NULL/CASCADE FK to users (::error::), row-level
-> (::warning::). Drift probe left warning-only. The source fix in #5342 is a precise blocking review comment
-> (not a push onto its active branch); the new gate is the enforcement teeth (its CI fails until #5342 fixes).
+> (`preflight-worm-cascade-contradiction.sh`) that flags the actual deletion-breaking class: raising UPDATE/DELETE
+> triggers (BEFORE or AFTER, STATEMENT or ROW) on tables with ON DELETE SET NULL/CASCADE FK to users. Two-axis
+> disposition: STATEMENT-level → hard class; ROW-level → latent (::warning::). **Per-ref ownership gate** (added
+> after architecture review caught that a live-dev scan alone would false-red main exactly like the rejected
+> design — #5342's CI re-applies routine_runs to shared dev): a STATEMENT-level contradiction blocks (::error::)
+> ONLY when the offending table is OWNED by a migration in the current checkout; a leave-behind from another ref
+> is downgraded to ::warning::. Net: #5342's own CI fails (owns routine_runs), main + unrelated PRs stay green, a
+> genuinely-merged bad migration on main still errors. Drift probe left warning-only. The source fix in #5342 is a
+> precise blocking review comment (not a push onto its active branch); the gate is the enforcement teeth on #5342.
 
 ## Phase 0 — Preconditions
 - [x] 0.1 Confirm repro: `cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/account-delete.cascade.integration.test.ts` fails 3/3 (anchor: "Account deletion failed at auth-delete").

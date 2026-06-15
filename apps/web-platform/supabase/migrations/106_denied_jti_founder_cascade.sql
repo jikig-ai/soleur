@@ -24,6 +24,23 @@
 -- CASCADE delete is not blocked — and the new preflight-worm-cascade-
 -- contradiction gate confirms this table is not a deletion-blocker.
 --
+-- ART-30 vs ART-17 reconciliation: migration 068 and scripts/revoke-jti.ts
+-- frame the denied_jti row as "the audit artifact per Article 30 PA1 §(g)(10)"
+-- (a record that a runtime JWT was revoked). This migration deliberately
+-- SUBORDINATES that retention framing to the Art-17 right-to-erasure: on a
+-- confirmed account deletion the row is destroyed, not retained. Rationale:
+-- (a) Art-17 erasure overrides Art-30/legitimate-interest retention absent a
+-- specific legal-hold basis, and none applies to a self-erasing user's own
+-- revocation entry; (b) the durable Art-30 evidence that a revocation OCCURRED
+-- is the application-side log event (is_jti_denied / revoke-jti.ts emit to the
+-- pino → Vector → Better Stack pipeline), not the retained row — so destroying
+-- the row does not erase the audit trail of the revocation event itself;
+-- (c) once the founder's auth.users row is gone the deny entry is operationally
+-- void (the JWT cannot authenticate regardless). This contrasts with the WORM
+-- audit tables (audit_byok_use etc.) which are ANONYMISED (founder_id NULLed,
+-- row kept) precisely because their rows carry standalone audit value beyond
+-- the subject; denied_jti's does not once the subject is erased.
+--
 -- Conventions: idempotent (DROP IF EXISTS + ADD re-creates deterministically),
 -- no outer BEGIN/COMMIT (the runner wraps each migration in a transaction).
 
