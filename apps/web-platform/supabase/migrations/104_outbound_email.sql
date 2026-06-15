@@ -34,6 +34,15 @@
 -- Per 2026-04-18-supabase-migration-concurrently-forbidden: NO CREATE INDEX
 -- CONCURRENTLY. Per Kieran P1-4 (mig 051): NO outer BEGIN/COMMIT (runner wraps).
 
+-- Cross-file FK precondition (lint-migration-fk-preconditions; learning
+-- 2026-05-22-schema-vs-ledger-drift-on-dev-supabase): both new tables FK
+-- public.users, so assert it exists before this migration runs.
+DO $$ BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.users must exist before 104';
+  END IF;
+END $$;
+
 -- ============================================================================
 -- email_suppression — per-founder permanent suppression set
 -- ============================================================================

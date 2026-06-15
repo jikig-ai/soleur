@@ -14,8 +14,8 @@ checklist treated three things as if they were equal-weight in-feature line item
 2. "SPF/DKIM/DMARC for jikigai.com" listed as one checkbox among many — but
    `apps/web-platform/infra/dns.tf` is a **single-zone root** (`var.cf_zone_id` =
    soleur.ai). `jikigai.com` appears in **zero** Terraform; it exists only as the
-   `ops@jikigai.com` recipient string in `infra/variables.tf`. So the "domain auth"
-   checkbox is actually a **blocking zone-onboarding prerequisite**, not an in-feature task.
+   operator `ops@` recipient string for jikigai.com in `infra/variables.tf`. So the
+   "domain auth" checkbox is actually a **blocking zone-onboarding prerequisite**, not an in-feature task.
 3. The issue proposed adding outbound send/reply authority, but a prior LIA
    (`knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md`)
    **explicitly deferred** that authority ("Not pursued under this LIA: any outbound
@@ -36,7 +36,7 @@ before committing to the issue's framing):
    an in-feature checklist item. If the zone is absent from IaC, it is a **blocking
    prerequisite** with its own onboarding cost and token-reachability question
    (`hr-fresh-host-provisioning-reachable-from-terraform-apply`), not a checkbox. The
-   "inbound already works at ops@jikigai.com" fact does NOT imply the zone is IaC-managed.
+   "inbound already works at the operator ops@ address on jikigai.com" fact does NOT imply the zone is IaC-managed.
 3. **Overturned-deferral probe:** when adding an authority, grep the
    legitimate-interest-assessments / ADR / deferred-issue corpus for a prior decision
    that *declined* it. If found, the brainstorm needs the superseding artifact (new/amended

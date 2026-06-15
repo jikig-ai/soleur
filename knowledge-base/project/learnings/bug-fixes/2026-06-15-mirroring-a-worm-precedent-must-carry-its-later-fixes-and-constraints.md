@@ -48,8 +48,8 @@ satisfiable in the new call context.**
 3. **A keyed hash used for matching must canonicalize identically at write AND
    check.** `recipientHash` normalized with `trim().toLowerCase()` only, but the
    recipient *validator* used `normalizeEmail(extractAddrSpec(...))`. So
-   suppressing `a@b.com` (bare) produced a different HMAC than a send addressed
-   `Name <a@b.com>` (display-name form) → the C5 suppression check silently
+   suppressing `a@example.com` (bare) produced a different HMAC than a send
+   addressed `Name <a@example.com>` (display-name form) → the C5 check silently
    passed and re-mailed an opted-out contact. `email_reply` hit this by default
    (inbound `from` headers carry a display name). **Lesson:** any
    hash-for-matching must run the SAME canonicalization on both sides; add a test
