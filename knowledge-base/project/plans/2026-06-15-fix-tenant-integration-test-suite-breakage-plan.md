@@ -10,6 +10,60 @@ brand_survival_threshold: none
 
 # fix: tenant-integration test-suite breakage
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Halt gates passed:** 4.6 User-Brand Impact (threshold `none`, sensitive-`.sql`-path scope-out present), 4.7 Observability (skip — test/docs only), 4.8 PAT-shaped var (no match), 4.9 UI-wireframe (no UI surface in Files lists).
+
+### Key Improvements
+1. **Fix 3 retry predicate is now grounded against the installed `@supabase/auth-js@2.99.2`** — was the load-bearing unknown. HTTP 429 surfaces as `AuthApiError` with `.status === 429` (the library does NOT auto-retry 429 — only 502/503/504 via `AuthRetryableFetchError`, `node_modules/@supabase/auth-js/dist/module/lib/fetch.js:6-14`), so the wrapper IS required. Canonical detect predicate pinned below.
+2. **Precedent-diff (Phase 4.4) confirms Option B (durable column protection) is achievable** — it is the exact mig-006 pattern, proving the arguments' "would be re-clobbered" is imprecise. The recommendation stays Option A (debt marker) on maintenance-cost grounds, but now honestly.
+3. **Verify-negative pass confirms Phase 2.1** — no table-level UPDATE revoke exists on `conversations`, so owner direct UPDATE succeeds under RLS (the original test relied solely on the no-op column-REVOKE).
+
+### New Considerations Discovered
+- The opaque `"Database error deleting user"` is a 500-class admin error (not a 429); the retry predicate must match it by message too, not only by 429 status.
+- mig 075's SECURITY DEFINER RPC grant shape (`REVOKE ALL … FROM PUBLIC, anon, authenticated, service_role; GRANT EXECUTE … TO authenticated`) is already correct — no RPC change in scope, consistent with "do not touch the RPC".
+
+## Research Insights — grounded findings
+
+### GoTrue retry predicate (Fix 3, auth-js@2.99.2)
+
+Verified against `node_modules/@supabase/auth-js/dist/module/lib/errors.d.ts:13-40` + `error-codes.d.ts:6` + `fetch.js:6-14`:
+
+- `AuthApiError.status` is always a `number` (required ctor arg); `.code` is `string | undefined`.
+- HTTP 429 → `AuthApiError` (`.status === 429`), NOT auto-retried by the library.
+- Rate-limit `code` enum values: `over_request_rate_limit`, `over_email_send_rate_limit`, `over_sms_send_rate_limit`.
+- `createUser`/`deleteUser`/`signInWithPassword` all resolve `{ data, error }` with `error: AuthError | AuthApiError` on failure.
+
+Canonical detect predicate for `withGoTrueRetry`:
+
+```ts
+function isRetryableGoTrueError(err: unknown): boolean {
+  const e = err as { status?: number; code?: string; message?: string } | null;
+  if (!e) return false;
+  const RATE_CODES = ["over_request_rate_limit", "over_email_send_rate_limit", "over_sms_send_rate_limit"];
+  return (
+    e.status === 429 ||
+    (e.code != null && RATE_CODES.includes(e.code)) ||
+    /rate limit|too many requests/i.test(e.message ?? "") ||
+    /database error deleting user/i.test(e.message ?? "") // opaque 500-class transient seen on shared dev
+  );
+}
+```
+
+### Precedent-Diff (Phase 4.4)
+
+| Pattern in plan | Repo precedent | Diff / verdict |
+|---|---|---|
+| Option B durable column protection (Phase 2.5) | `mig 006_restrict_tc_accepted_at_update.sql`: `REVOKE UPDATE ON TABLE public.users FROM authenticated; GRANT UPDATE (email) … TO authenticated;` | **Identical pattern.** Confirms Option B is durable (Supabase blanket grant runs once at init; later migration REVOKE wins). The arguments' "re-clobbered" claim is wrong; Option A is chosen on maintenance cost, not impossibility. |
+| SECURITY DEFINER RPC (NOT being changed) | `mig 075:105-108`: `REVOKE ALL … FROM PUBLIC, anon, authenticated, service_role; GRANT EXECUTE … TO authenticated` | Already canonical (matches `cq-pg-security-definer-search-path-pin-pg-temp` + the 2026-05-06 named-role-revoke learning). No change. |
+| SOLEUR-DEBT marker (Phase 2.4) | `knowledge-base/project/learnings/technical-debt/README.md` `// SOLEUR-DEBT: <ceiling>; <upgrade trigger>` | Marker form matches; `harvest-debt` will surface it. |
+
+### Verify-the-Negative pass
+
+- Plan claim "owner CAN update visibility via RLS" (Phase 2.1): **confirmed** — `conversations_owner_update` is `USING (user_id = auth.uid())` and there is NO table-level UPDATE revoke on `conversations` (`git grep "REVOKE.*conversations" supabase/migrations/` returns only the visibility column-REVOKE). Owner direct UPDATE succeeds.
+- Plan claim "non-owner/anon write blocked by RLS" (Phase 2.2/2.3): **confirmed** — no PERMISSIVE UPDATE policy admits a non-owner; userB/anon UPDATE matches 0 rows (write deny shape).
+
 ## Overview
 
 Running `apps/web-platform` tenant-integration suites against the shared dev Supabase
@@ -159,10 +213,11 @@ with assertions on the contract that actually holds in prod:
 3.1. **Shared GoTrue retry wrapper.** Add `withGoTrueRetry<T>(label, fn)` to a shared helper
    (new `test/helpers/gotrue-retry.ts`, or extend `mint-once.ts` to keep rate-limit logic in one
    place — decide at Phase 0.3 after reading `mint-once.ts`). Behavior:
-   - Retries on rate-limit signals: `AuthApiError` with `status === 429`, or message matching
-     `/rate limit|too many requests/i`, or the opaque `"Database error deleting user"` transient.
-     Verify the actual error shape supabase-js returns for GoTrue 429 (read
-     `node_modules/@supabase/auth-js` types or capture once) — do not assume the field names.
+   - Retries on rate-limit signals using the **grounded predicate from Research Insights**
+     (`isRetryableGoTrueError`): `err.status === 429`, OR `err.code ∈ {over_request_rate_limit,
+     over_email_send_rate_limit, over_sms_send_rate_limit}`, OR message matching
+     `/rate limit|too many requests/i`, OR the opaque `/database error deleting user/i` 500-class
+     transient. Verified against `@supabase/auth-js@2.99.2` (`errors.d.ts:13-40`, `error-codes.d.ts:6`).
    - Exponential backoff with jitter, bounded (e.g. base 500ms, factor 2, max ~5 attempts, cap ~8s),
      under the existing `hookTimeout: 20_000` ceiling (vitest.config.ts:37) — the total backoff
      budget MUST stay under hookTimeout or the fixture times out instead of recovering.

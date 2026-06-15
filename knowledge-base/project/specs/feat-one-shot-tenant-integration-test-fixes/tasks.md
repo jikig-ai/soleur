@@ -30,7 +30,7 @@ account-delete cascade migs 065/066 — verified correct/live, out of scope.
 
 ## Phase 3 — Fix 3: harness determinism
 
-- [ ] 3.1 Add `withGoTrueRetry(label, fn)` — retry on 429/rate-limit/"Database error deleting user"; bounded exp-backoff+jitter under hookTimeout(20s); rethrow non-rate-limit errors.
+- [ ] 3.1 Add `withGoTrueRetry(label, fn)` using the grounded `isRetryableGoTrueError` predicate (auth-js@2.99.2: `status===429` | `code ∈ over_*_rate_limit` | `/rate limit|too many requests/i` | `/database error deleting user/i`); bounded exp-backoff+jitter under hookTimeout(20s); rethrow non-rate-limit errors.
 - [ ] 3.2 Wrap: `createUser` (workspace-members-fixtures:80), `deleteUser` (workspace-members-fixtures:173 + tenant-isolation-teardown:94), `signInWithPassword` (target test ×3).
 - [ ] 3.3 Update `test/README.md`: dedicated-project requirement for behavioral suites (both env conventions); add conversation-visibility suite row + run command.
 
