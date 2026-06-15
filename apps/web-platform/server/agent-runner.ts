@@ -58,7 +58,10 @@ import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
-import { resolveActiveWorkspacePath } from "./workspace-resolver";
+import {
+  resolveActiveWorkspacePath,
+  workspacePathForWorkspaceId,
+} from "./workspace-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -187,6 +190,7 @@ import {
   forEachSessionForConversation,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { checkpointInflightWork } from "./inflight-checkpoint";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
 
@@ -2295,7 +2299,8 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       // future kinds (e.g., a `superseded_by_admin`) would have
       // silently flipped that check, and there is one obvious place
       // for the abort branch to read the kind.
-      const { isUserRequested, isSuperseded } = classifyAbortReason(controller.signal.reason);
+      const { isUserRequested, isSuperseded, isDisconnected } =
+        classifyAbortReason(controller.signal.reason);
 
       if (!isSuperseded) {
         // Persist partial assistant text. Applies to BOTH user-requested
@@ -2333,6 +2338,69 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                 isUserRequested,
                 hadPartialText: true,
               },
+            });
+          }
+        }
+
+        // #5275 — preserve the in-flight WORK (uncommitted git changes), not
+        // just the partial text. ONLY on a `disconnected` grace-abort: that is
+        // the irrecoverable window where a tab-close leaves the workspace's
+        // uncommitted edits dirty + unreferenced (a later resume can clobber
+        // them). `user_requested_stop` keeps the conversation continuable (no
+        // checkpoint); `superseded`/`account_deleted`/`server_shutdown`/
+        // `workspace_membership_revoked` own their terminal state.
+        //
+        // Neither `workspacePath` NOR `sessionTenant` is in scope here — both
+        // are `const`s declared INSIDE the `try` body (closed above), so the
+        // catch cannot see them. Re-mint a fresh tenant client and re-resolve
+        // the active workspace path. Both calls can throw (a `getFreshTenantClient`
+        // RuntimeAuthError or a resolve failure); wrap them so a failure mirrors
+        // to Sentry and does NOT break the abort path (the partial-text persist +
+        // status flip below still run). `checkpointInflightWork` is itself
+        // fire-and-forget and never throws.
+        // NOTE (#5275 scope): this checkpoint covers the LEGACY agent path
+        // (`startAgentSession`, registered in `activeSessions`). The
+        // cc-soleur-go (Concierge) path is NOT in `activeSessions` and is not
+        // aborted by the disconnect grace timer — it runs to completion / idle
+        // reap, so its durability boundary is architecturally different (idle
+        // reap / server_shutdown, not grace-abort). cc-go checkpoint parity is
+        // tracked in #5356 (follow-up under #5240), not built here.
+        if (isDisconnected) {
+          try {
+            // Resolve the checkpoint's clone from the CONVERSATION's bound
+            // `workspace_id` — symmetric with the resume restore path
+            // (`ws-handler.ts` uses `workspacePathForWorkspaceId(conversations.workspace_id)`).
+            // The active-workspace resolver (`resolveActiveWorkspacePath`, which
+            // reads the mutable `current_workspace_id` and falls back to solo) can
+            // diverge from the conversation's workspace if the active claim drifts
+            // during the 30s grace window — that would write the ref onto a clone
+            // the restore never consults (silent no-checkpoint + a stranded ref).
+            const checkpointTenant = await getFreshTenantClient(userId);
+            const { data: convRow, error: convErr } = await checkpointTenant
+              .from("conversations")
+              .select("workspace_id")
+              .eq("id", conversationId)
+              .single();
+            const checkpointWorkspaceId =
+              (convRow as { workspace_id?: string | null } | null)?.workspace_id ??
+              null;
+            if (convErr || !checkpointWorkspaceId) {
+              throw new Error(
+                `checkpoint: could not resolve conversation workspace_id${convErr ? `: ${convErr.message}` : ""}`,
+              );
+            }
+            const checkpointWorkspacePath =
+              workspacePathForWorkspaceId(checkpointWorkspaceId);
+            await checkpointInflightWork(
+              checkpointWorkspacePath,
+              conversationId,
+              userId,
+            );
+          } catch (checkpointErr) {
+            reportSilentFallback(checkpointErr, {
+              feature: "inflight-checkpoint",
+              op: "checkpoint-on-abort",
+              extra: { userId, conversationId, stage: "resolve-workspace-path" },
             });
           }
         }
