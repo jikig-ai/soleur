@@ -66,8 +66,7 @@ ok "$(grep -qi "no .*marker" <<<"$out2" && echo 0 || echo 1)" "empty state print
 rm -rf "$tmp2"
 
 # === Case 8: --help ===
-bash "$HARVEST" --help >/dev/null 2>&1
-ok "$([[ $? == 0 ]] && echo 0 || echo 1)" "--help exits 0"
+if bash "$HARVEST" --help >/dev/null 2>&1; then ok 0 "--help exits 0"; else ok 1 "--help exits 0"; fi
 
 echo "=== harvest-debt: ${pass} passed, ${fail} failed ==="
 [[ "$fail" == 0 ]]
