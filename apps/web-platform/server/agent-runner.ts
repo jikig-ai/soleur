@@ -187,6 +187,7 @@ import {
   forEachSessionForConversation,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { checkpointInflightWork } from "./inflight-checkpoint";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
 
@@ -2281,7 +2282,8 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       // future kinds (e.g., a `superseded_by_admin`) would have
       // silently flipped that check, and there is one obvious place
       // for the abort branch to read the kind.
-      const { isUserRequested, isSuperseded } = classifyAbortReason(controller.signal.reason);
+      const { isUserRequested, isSuperseded, isDisconnected } =
+        classifyAbortReason(controller.signal.reason);
 
       if (!isSuperseded) {
         // Persist partial assistant text. Applies to BOTH user-requested
@@ -2319,6 +2321,43 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                 isUserRequested,
                 hadPartialText: true,
               },
+            });
+          }
+        }
+
+        // #5275 — preserve the in-flight WORK (uncommitted git changes), not
+        // just the partial text. ONLY on a `disconnected` grace-abort: that is
+        // the irrecoverable window where a tab-close leaves the workspace's
+        // uncommitted edits dirty + unreferenced (a later resume can clobber
+        // them). `user_requested_stop` keeps the conversation continuable (no
+        // checkpoint); `superseded`/`account_deleted`/`server_shutdown`/
+        // `workspace_membership_revoked` own their terminal state.
+        //
+        // Neither `workspacePath` NOR `sessionTenant` is in scope here — both
+        // are `const`s declared INSIDE the `try` body (closed above), so the
+        // catch cannot see them. Re-mint a fresh tenant client and re-resolve
+        // the active workspace path. Both calls can throw (a `getFreshTenantClient`
+        // RuntimeAuthError or a resolve failure); wrap them so a failure mirrors
+        // to Sentry and does NOT break the abort path (the partial-text persist +
+        // status flip below still run). `checkpointInflightWork` is itself
+        // fire-and-forget and never throws.
+        if (isDisconnected) {
+          try {
+            const checkpointTenant = await getFreshTenantClient(userId);
+            const checkpointWorkspacePath = await resolveActiveWorkspacePath(
+              userId,
+              checkpointTenant,
+            );
+            await checkpointInflightWork(
+              checkpointWorkspacePath,
+              conversationId,
+              userId,
+            );
+          } catch (checkpointErr) {
+            reportSilentFallback(checkpointErr, {
+              feature: "inflight-checkpoint",
+              op: "checkpoint-on-abort",
+              extra: { userId, conversationId, stage: "resolve-workspace-path" },
             });
           }
         }

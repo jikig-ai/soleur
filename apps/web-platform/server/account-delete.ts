@@ -179,6 +179,11 @@ export async function deleteAccount(
   // their own workspace at this point (Phase 7 anonymise_workspace_members
   // strips any team memberships earlier in the cascade). `userId` ===
   // `workspaces.id` per migration 053 §1.1.7 N2 invariant.
+  //
+  // #5275 erasure cascade: in-flight checkpoint refs (`refs/checkpoints/*`) live
+  // ON this clone, so removing the directory reaps them with no extra step. The
+  // unreferenced git objects they pointed at are reclaimed by the clone's normal
+  // gc — moot here since the whole directory is removed.
   try {
     await deleteWorkspace(userId);
   } catch (err) {
