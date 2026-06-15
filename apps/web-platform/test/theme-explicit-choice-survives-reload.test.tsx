@@ -36,12 +36,14 @@ function mountScenario({ stored, osDark }: { stored: string; osDark: boolean }):
   document.documentElement.removeAttribute("data-theme");
   localStorage.clear();
 
+  let released = false;
   const mql = {
     get matches() {
       // First read is inside getSystemPreference() during the second lazy
       // initializer — post-init, pre-effect. Populate the durable store now so
       // only the client-side first-mount effect can observe the stored choice.
       localStorage.setItem(STORAGE_KEY, stored);
+      released = true;
       return osDark;
     },
     addEventListener: () => {},
@@ -54,6 +56,21 @@ function mountScenario({ stored, osDark }: { stored: string; osDark: boolean }):
       <Probe />
     </ThemeProvider>,
   );
+
+  // Precondition self-check: the gate only reproduces the no-bootstrap
+  // SSR-hydration state if matchMedia was read during init (before the
+  // first-mount effect). If a future ThemeProvider refactor stops touching
+  // matchMedia at init time, the store would never populate and these tests
+  // would assert against the wrong setup — fail LOUDLY as a fixture error
+  // (not a misleading SUT-regression message). See the docstring above.
+  if (!released) {
+    throw new Error(
+      "theme test fixture did not reproduce the SSR-hydration no-bootstrap " +
+        "precondition: matchMedia was not read during ThemeProvider init, so " +
+        "the durable-store gate never released. The gate mechanism is stale " +
+        "relative to the provider's initializer — update mountScenario.",
+    );
+  }
 }
 
 describe("explicit theme choice survives reload (no-bootstrap SSR-hydration path)", () => {
