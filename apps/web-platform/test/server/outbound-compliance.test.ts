@@ -15,7 +15,7 @@ import {
 function euCompliantRequest(): OutboundComplianceRequest {
   return {
     to: "journalist@example.com",
-    from: "Founder <hello@mail.jikigai.com>",
+    from: "Founder <hello@outbound.soleur.ai>",
     subject: "Your piece on solo-founder tooling",
     bodyText: "Hi — I read your listicle and built something relevant.",
     jurisdiction: "eu_uk",
@@ -36,7 +36,7 @@ function euCompliantRequest(): OutboundComplianceRequest {
 function usCompliantRequest(): OutboundComplianceRequest {
   return {
     to: "editor@example.com",
-    from: "Founder <hello@mail.jikigai.com>",
+    from: "Founder <hello@outbound.soleur.ai>",
     subject: "Quick idea for your roundup",
     bodyText: "Hi — built a tool your readers may like.",
     jurisdiction: "us",
@@ -164,9 +164,9 @@ describe("validateEmailHeaders — RFC-5322 + injection guard", () => {
     expect(() =>
       validateEmailHeaders({
         to: "journalist@example.com",
-        from: "Founder <hello@mail.jikigai.com>",
+        from: "Founder <hello@outbound.soleur.ai>",
         subject: "A normal subject line",
-        replyTo: "hello@mail.jikigai.com",
+        replyTo: "hello@outbound.soleur.ai",
       }),
     ).not.toThrow();
   });
@@ -183,9 +183,9 @@ describe("validateEmailHeaders — RFC-5322 + injection guard", () => {
   ])("throws on %s", (_label, override) => {
     const base = {
       to: "journalist@example.com",
-      from: "Founder <hello@mail.jikigai.com>",
+      from: "Founder <hello@outbound.soleur.ai>",
       subject: "A normal subject line",
-      replyTo: "hello@mail.jikigai.com",
+      replyTo: "hello@outbound.soleur.ai",
     };
     expect(() => validateEmailHeaders({ ...base, ...override })).toThrow(
       OutboundComplianceError,
@@ -196,7 +196,7 @@ describe("validateEmailHeaders — RFC-5322 + injection guard", () => {
     expect(() =>
       validateEmailHeaders({
         to: "not-an-email",
-        from: "Founder <hello@mail.jikigai.com>",
+        from: "Founder <hello@outbound.soleur.ai>",
         subject: "Hi",
       }),
     ).toThrow(/rfc.?5322|invalid|address/i);
@@ -206,7 +206,7 @@ describe("validateEmailHeaders — RFC-5322 + injection guard", () => {
     expect(() =>
       validateEmailHeaders({
         to: "a@example.com, b@example.com",
-        from: "Founder <hello@mail.jikigai.com>",
+        from: "Founder <hello@outbound.soleur.ai>",
         subject: "Hi",
       }),
     ).toThrow(/recipient|count|single/i);
