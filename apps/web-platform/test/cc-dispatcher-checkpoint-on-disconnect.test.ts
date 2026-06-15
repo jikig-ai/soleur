@@ -106,4 +106,23 @@ describe("#5356 handleCcCloseQuery", () => {
     expect(mockCheckpointForConversation).not.toHaveBeenCalled();
     expect(gateIsLive("u-n", "conv-n")).toBe(false);
   });
+
+  it("T5(dispatcher): bash-gate drain does NOT depend on checkpoint completion", () => {
+    // The user-facing drain runs synchronously BEFORE the fire-and-forget
+    // checkpoint. A never-settling checkpoint must not leave the gate live.
+    mockCheckpointForConversation.mockImplementationOnce(
+      () => new Promise<void>(() => {}),
+    );
+    seedBashGate("u-s", "conv-s");
+
+    handleCcCloseQuery({
+      conversationId: "conv-s",
+      userId: "u-s",
+      reason: "disconnected",
+    });
+
+    expect(mockCheckpointForConversation).toHaveBeenCalledTimes(1);
+    // Drained synchronously, independent of the still-pending checkpoint.
+    expect(gateIsLive("u-s", "conv-s")).toBe(false);
+  });
 });

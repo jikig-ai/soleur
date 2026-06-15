@@ -274,7 +274,9 @@ export async function checkpointInflightWork(
 export async function checkpointInflightWorkForConversation(
   userId: string,
   conversationId: string,
-  stage: string = "resolve-workspace-path",
+  stage:
+    | "resolve-workspace-path"
+    | "cc-resolve-workspace-path" = "resolve-workspace-path",
 ): Promise<void> {
   try {
     const checkpointTenant = await getFreshTenantClient(userId);

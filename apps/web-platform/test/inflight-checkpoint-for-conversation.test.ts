@@ -95,6 +95,9 @@ describe("#5356 checkpointInflightWorkForConversation", () => {
     expect(ctx).toMatchObject({
       feature: "inflight-checkpoint",
       op: "checkpoint-on-abort",
+      // Legacy call site uses the default stage; a swap would silently
+      // fragment the shared Sentry monitor.
+      extra: { stage: "resolve-workspace-path" },
     });
   });
 
