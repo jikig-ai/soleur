@@ -85,15 +85,31 @@ type RealtimeChannelKind = "own" | "shared";
 
 // Single source of truth for "this conversation does NOT belong in the rail's
 // current scope". Used by BOTH the INSERT and UPDATE handlers so the two cannot
-// drift (architecture review P2). Covers all three drop conditions:
+// drift (architecture review P2). Covers all four drop conditions, and is
+// scope-EQUIVALENT to the fetch query (which filters by repo_url AND
+// workspace_id, lines below) so the realtime path cannot surface a row the
+// refetch would not:
 //   (a) repo_url mismatch (both channels)
-//   (b) visibility !== "workspace" on the shared channel
-//   (c) archive-state mismatch vs the active archiveFilter
+//   (b) workspace_id mismatch (both channels). The own channel's WAL filter is
+//       only user_id, so without this an owner with two workspaces on the SAME
+//       repo would see workspace-B conversations INSERTed into the workspace-A
+//       rail — repo_url alone cannot discriminate two same-repo workspaces
+//       (see the fetch-query comment + server/conversations-tools.ts). When the
+//       active workspaceId is not yet resolved (null), this drops INSERTs; the
+//       SUBSCRIBED backfill recovers them once the binding resolves.
+//   (c) visibility !== "workspace" on the shared channel
+//   (d) archive-state mismatch vs the active archiveFilter
 export function shouldDropForScope(
   conv: Conversation,
-  opts: { repoUrl: string | null; channel: RealtimeChannelKind; archiveFilter: ArchiveFilter },
+  opts: {
+    repoUrl: string | null;
+    workspaceId: string | null;
+    channel: RealtimeChannelKind;
+    archiveFilter: ArchiveFilter;
+  },
 ): boolean {
   if ((conv.repo_url ?? null) !== opts.repoUrl) return true;
+  if ((conv.workspace_id ?? null) !== opts.workspaceId) return true;
   if (opts.channel === "shared" && conv.visibility !== "workspace") return true;
   const isArchived = conv.archived_at !== null;
   const showingArchived = opts.archiveFilter === "archived";
@@ -184,7 +200,8 @@ export function useConversations(
         return;
       }
 
-      // visibility-sweep: RLS conversations_owner_or_shared returns own +
+      // visibility-sweep: RLS policies conversations_owner_select +
+      // conversations_shared_select (migration 075) return own +
       // workspace-shared conversations; no app-level user_id filter needed.
       //
       // Scope by BOTH repo_url AND the active workspace_id, matching the
@@ -291,7 +308,7 @@ export function useConversations(
       // if it is currently shown, then stop. Same single guard the INSERT path
       // uses, so the two cannot drift (architecture review P2). Returning the
       // same array reference when the row is absent lets React bail the render.
-      if (shouldDropForScope(updated, { repoUrl: repoUrlRef.current, channel, archiveFilter })) {
+      if (shouldDropForScope(updated, { repoUrl: repoUrlRef.current, workspaceId, channel, archiveFilter })) {
         setConversations((prev) =>
           prev.some((c) => c.id === updated.id) ? prev.filter((c) => c.id !== updated.id) : prev,
         );
@@ -318,7 +335,7 @@ export function useConversations(
       channel: RealtimeChannelKind,
     ) => {
       const created = payload.new as Conversation;
-      if (shouldDropForScope(created, { repoUrl: repoUrlRef.current, channel, archiveFilter })) return;
+      if (shouldDropForScope(created, { repoUrl: repoUrlRef.current, workspaceId, channel, archiveFilter })) return;
 
       setConversations((prev) => {
         if (prev.some((c) => c.id === created.id)) return prev; // fill-only de-dup

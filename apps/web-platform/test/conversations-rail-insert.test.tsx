@@ -220,6 +220,20 @@ describe("useConversations — Realtime INSERT + SUBSCRIBED backfill", () => {
     expect(result.current.conversations.map((c) => c.id)).toContain("shared-1");
   });
 
+  it("AC2: INSERT with a mismatched workspace_id (same repo) is dropped", async () => {
+    // Owner-with-two-same-repo-workspaces case: the own channel filters only on
+    // user_id, so a conversation created in workspace B (same repo_url) must NOT
+    // surface in the workspace-A rail. The guard scopes by workspace_id too.
+    const { result } = await mountEmptyRail();
+    act(() => {
+      insertHandler("command-center-own")({
+        new: makeRow({ id: "ws-b", workspace_id: "ws-other" }),
+        eventType: "INSERT",
+      });
+    });
+    expect(result.current.conversations.length).toBe(0);
+  });
+
   it("AC2: an INSERT already archived is dropped when archiveFilter is 'active'", async () => {
     const { result } = await mountEmptyRail();
     act(() => {
@@ -232,17 +246,19 @@ describe("useConversations — Realtime INSERT + SUBSCRIBED backfill", () => {
   });
 
   it("AC3 (fill-only): a placeholder INSERT does not downgrade an already-enriched row", async () => {
-    // Mount with an enriched row already present.
-    state.rows = [makeRow({ id: "conv-x" })];
+    // Mount with an enriched row whose title is provably NOT the placeholder
+    // default. domain_leader "cto" → the fetch path derives "<leader>
+    // conversation" (a non-"Untitled" title); a placeholder INSERT for the same
+    // id carries domain_leader: null → would derive "Untitled conversation". So
+    // if the reducer wrongly overwrote on id-collision, the title would change.
+    // Asserting before.title !== "Untitled conversation" makes this non-vacuous.
+    state.rows = [makeRow({ id: "conv-x", domain_leader: "cto" })];
     const { useConversations } = await import("@/hooks/use-conversations");
-    // Seed messages so the fetch path enriches the title.
     const view = renderHook(() => useConversations({ limit: 15 }));
     await waitFor(() => expect(view.result.current.loading).toBe(false));
-    // Manually set the enriched title via a refetch is overkill; instead assert
-    // the placeholder INSERT for the same id keeps whatever title is present and
-    // does NOT replace the existing row (fill-only → returns prev unchanged).
     const before = view.result.current.conversations.find((c) => c.id === "conv-x");
     expect(before).toBeDefined();
+    expect(before?.title).not.toBe("Untitled conversation"); // non-vacuity guard
 
     act(() => {
       insertHandler("command-center-own")({
@@ -253,7 +269,7 @@ describe("useConversations — Realtime INSERT + SUBSCRIBED backfill", () => {
 
     const after = view.result.current.conversations.filter((c) => c.id === "conv-x");
     expect(after).toHaveLength(1); // de-dup: no duplicate row
-    expect(after[0]?.title).toBe(before?.title); // fill-only: title preserved
+    expect(after[0]?.title).toBe(before?.title); // fill-only: enriched title preserved
   });
 
   it("AC3b (system title): an INSERT for a system conversation reads 'Project Analysis'", async () => {
