@@ -45,42 +45,12 @@ function buildConversationsChain(rows: ReturnType<typeof buildConversationRows>)
   return chain;
 }
 
-function buildUsersChain() {
-  const chain: Record<string, unknown> = {};
-  Object.assign(chain, {
-    select: vi.fn(() => chain),
-    eq: vi.fn(() => chain),
-    maybeSingle: vi.fn(() =>
-      Promise.resolve({
-        data: { repo_url: "https://github.com/acme/repo" },
-        error: null,
-      }),
-    ),
-  });
-  return chain;
-}
-
 function buildMessagesChain() {
   const chain: Record<string, unknown> = {};
   Object.assign(chain, {
     select: vi.fn(() => chain),
     in: vi.fn(() => chain),
     order: vi.fn(() => Promise.resolve({ data: [], error: null })),
-  });
-  return chain;
-}
-
-function buildWorkspaceMembersChain() {
-  const chain: Record<string, unknown> = {};
-  Object.assign(chain, {
-    select: vi.fn(() => chain),
-    eq: vi.fn(() => chain),
-    maybeSingle: vi.fn(() =>
-      Promise.resolve({
-        data: { workspace_id: "ws-1" },
-        error: null,
-      }),
-    ),
   });
   return chain;
 }
@@ -92,9 +62,10 @@ function buildSupabaseClient(rows: ReturnType<typeof buildConversationRows>) {
         Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
       ),
     },
+    // Repo scope comes from GET /api/workspace/active-repo (stubbed via
+    // fetch in beforeEach), so the hook no longer reads `users` or
+    // `workspace_members`. The throw asserts that invariant.
     from: vi.fn((table: string) => {
-      if (table === "users") return buildUsersChain();
-      if (table === "workspace_members") return buildWorkspaceMembersChain();
       if (table === "conversations") return buildConversationsChain(rows);
       if (table === "messages") return buildMessagesChain();
       throw new Error(`unexpected table: ${table}`);
@@ -119,14 +90,27 @@ vi.mock("@/lib/supabase/client", () => ({
   createClient: createClientMock,
 }));
 
-vi.mock("@/lib/repo-url", () => ({
-  normalizeRepoUrl: (s: string | null | undefined) => (s ?? "").trim(),
-}));
-
 describe("useConversations({ limit })", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     limitSpy.mockClear();
+    // Repo scope now comes from GET /api/workspace/active-repo (ADR-044),
+    // not users.repo_url. Stub it to the same repo the conversation rows
+    // carry so the list query is reached.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaceId: "ws-1",
+            repoUrl: "https://github.com/acme/repo",
+            repoName: "acme/repo",
+            repoStatus: "connected",
+            fellBackToSolo: false,
+          }),
+      }),
+    );
   });
 
   it("threads limit through to the underlying Supabase query", async () => {
