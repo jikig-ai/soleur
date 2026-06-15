@@ -41,9 +41,9 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 6 — UI
 
-- [ ] 6.1 `app/(dashboard)/dashboard/routines/page.tsx` (template `audit/page.tsx`) + tab bar + grouped-by-domain list + row + Recent Runs table + Run-now confirm modal (wireframe 03/04 screens 01-03).
-- [ ] 6.2 Nav rail entry "Routines" (`next/link`).
-- [ ] 6.3 States: P0-1 ack + optimistic Running + disable-while-in-flight (covers P2-10); P1-4 empty; P1-5 failed-run drill-in (non-empty scrubbed `error_summary`); P1-6 keyset pagination. (P2-11 archived cut.)
+- [x] 6.1 `app/(dashboard)/dashboard/routines/page.tsx` (template `audit/page.tsx`) + tab bar + grouped-by-domain list + row + Recent Runs table + Run-now confirm modal (wireframe 03/04 screens 01-03).
+- [x] 6.2 Nav rail entry "Routines" (`next/link`).
+- [x] 6.3 States: P0-1 ack + optimistic Running + disable-while-in-flight (covers P2-10); P1-4 empty; P1-5 failed-run drill-in (non-empty scrubbed `error_summary`); P1-6 keyset pagination. (P2-11 archived cut.)
 
 ## Phase 7 — Verify
 
