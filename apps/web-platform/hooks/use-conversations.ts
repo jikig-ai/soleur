@@ -77,6 +77,40 @@ function derivePreview(messages: Message[], conversationId: string): { text: str
   return { text, leader: lastMsg.leader_id };
 }
 
+// The two realtime channels the rail subscribes to. The own channel filters
+// server-side on `user_id`; the shared channel on `workspace_id` (realtime-js#97
+// allows only one equality predicate per channel — the rest is enforced
+// client-side here).
+type RealtimeChannelKind = "own" | "shared";
+
+// Single source of truth for "this conversation does NOT belong in the rail's
+// current scope". Used by BOTH the INSERT and UPDATE handlers so the two cannot
+// drift (architecture review P2). Covers all three drop conditions:
+//   (a) repo_url mismatch (both channels)
+//   (b) visibility !== "workspace" on the shared channel
+//   (c) archive-state mismatch vs the active archiveFilter
+export function shouldDropForScope(
+  conv: Conversation,
+  opts: { repoUrl: string | null; channel: RealtimeChannelKind; archiveFilter: ArchiveFilter },
+): boolean {
+  if ((conv.repo_url ?? null) !== opts.repoUrl) return true;
+  if (opts.channel === "shared" && conv.visibility !== "workspace") return true;
+  const isArchived = conv.archived_at !== null;
+  const showingArchived = opts.archiveFilter === "archived";
+  if (isArchived !== showingArchived) return true;
+  return false;
+}
+
+// Single title-derivation path shared by the fetch enrichment AND the INSERT
+// placeholder. The `system` domain leader maps to the literal "Project
+// Analysis" (architecture review P2) — without this branch a live-created system
+// conversation reads "Untitled conversation" until the next refetch.
+export function deriveRailTitle(conv: Conversation, messages: Message[]): string {
+  return conv.domain_leader === "system"
+    ? "Project Analysis"
+    : deriveTitle(messages, conv.id, conv.domain_leader);
+}
+
 export function useConversations(
   options: UseConversationsOptions = {},
 ): UseConversationsResult {
@@ -216,9 +250,7 @@ export function useConversations(
       // Derive titles and previews
       const enriched: ConversationWithPreview[] = convData.map((conv: Conversation) => {
         const { text, leader } = derivePreview(messages, conv.id);
-        const title = conv.domain_leader === "system"
-          ? "Project Analysis"
-          : deriveTitle(messages, conv.id, conv.domain_leader);
+        const title = deriveRailTitle(conv, messages);
         return {
           ...conv,
           title,
@@ -250,42 +282,87 @@ export function useConversations(
 
     const supabase = createClient();
 
-    const handleConversationUpdate = (payload: { new: unknown }) => {
+    const handleConversationUpdate = (
+      payload: { new: unknown },
+      channel: RealtimeChannelKind,
+    ) => {
       const updated = payload.new as Conversation;
-      const currentRepoUrl = repoUrlRef.current;
-      if ((updated.repo_url ?? null) !== currentRepoUrl) return;
+      // Out-of-scope (wrong repo / non-shared / archive-flip): remove the row
+      // if it is currently shown, then stop. Same single guard the INSERT path
+      // uses, so the two cannot drift (architecture review P2). Returning the
+      // same array reference when the row is absent lets React bail the render.
+      if (shouldDropForScope(updated, { repoUrl: repoUrlRef.current, channel, archiveFilter })) {
+        setConversations((prev) =>
+          prev.some((c) => c.id === updated.id) ? prev.filter((c) => c.id !== updated.id) : prev,
+        );
+        return;
+      }
 
-      setConversations((prev) => {
-        const isArchivedNow = updated.archived_at !== null;
-        const showingArchived = archiveFilter === "archived";
-
-        if (isArchivedNow !== showingArchived) {
-          return prev.filter((c) => c.id !== updated.id);
-        }
-
-        return prev.map((c) =>
+      setConversations((prev) =>
+        prev.map((c) =>
           c.id === updated.id
             ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader, archived_at: updated.archived_at, visibility: updated.visibility }
             : c,
-        );
+        ),
+      );
+    };
+
+    // Realtime INSERT delivers only the `conversations` row (no messages), so we
+    // synthesize a placeholder enriched row. The reducer is FILL-ONLY: if the id
+    // is already present (at-least-once delivery, or the SUBSCRIBED backfill
+    // landed an enriched row first) we keep the existing row rather than
+    // downgrading its title/preview to the placeholder (architecture review P2).
+    // No per-INSERT messages fetch — the backfill + subsequent UPDATEs refine it.
+    const handleConversationInsert = (
+      payload: { new: unknown },
+      channel: RealtimeChannelKind,
+    ) => {
+      const created = payload.new as Conversation;
+      if (shouldDropForScope(created, { repoUrl: repoUrlRef.current, channel, archiveFilter })) return;
+
+      setConversations((prev) => {
+        if (prev.some((c) => c.id === created.id)) return prev; // fill-only de-dup
+        const placeholder: ConversationWithPreview = {
+          ...created,
+          title: deriveRailTitle(created, []),
+          preview: null,
+          lastMessageLeader: null,
+        };
+        // New row is stamped last_active = now() → belongs at the head; truncate
+        // to the hook's limit so a long session cannot grow the list unbounded.
+        return [placeholder, ...prev].slice(0, limit);
       });
     };
 
     // Channel 1 (user_id): own conversations — always subscribed when
-    // userId is available, regardless of workspace membership.
+    // userId is available, regardless of workspace membership. Branch on event
+    // (UPDATE + INSERT) on the SAME channel (fewer WS connections). The
+    // SUBSCRIBED backfill below closes the reconnection/initial-load gap:
+    // Realtime delivers INSERTs at-least-once and does NOT replay events
+    // buffered during a disconnect, so we refetch once when the channel goes
+    // live (bounded to the subscribe transition — fires once, not per render).
     const ownChannel = supabase
       .channel("command-center-own")
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "conversations", filter: `user_id=eq.${userId}` },
-        handleConversationUpdate,
+        (payload) => handleConversationUpdate(payload, "own"),
       )
-      .subscribe();
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "conversations", filter: `user_id=eq.${userId}` },
+        (payload) => handleConversationInsert(payload, "own"),
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") fetchConversations();
+      });
 
-    // Channel 2 (workspace_id): workspace-shared updates — additive,
-    // only when workspaceId is available. Private conversation metadata
-    // transits the WebSocket (WAL filter is workspace_id, not visibility)
-    // but the client-side guard below drops non-shared payloads.
+    // Channel 2 (workspace_id): workspace-shared updates + inserts — additive,
+    // only when workspaceId is available. Private conversation metadata transits
+    // the WebSocket (WAL filter is workspace_id, not visibility) but
+    // shouldDropForScope({ channel: "shared" }) drops non-shared payloads. The
+    // backfill lives only on the own channel (always present); fetchConversations
+    // refetches own + shared rows together, so one backfill covers both.
     let sharedChannel: ReturnType<typeof supabase.channel> | null = null;
     if (workspaceId) {
       sharedChannel = supabase
@@ -293,11 +370,12 @@ export function useConversations(
         .on(
           "postgres_changes",
           { event: "UPDATE", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
-          (payload) => {
-            const updated = payload.new as Conversation;
-            if (updated.visibility !== "workspace") return;
-            handleConversationUpdate(payload);
-          },
+          (payload) => handleConversationUpdate(payload, "shared"),
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
+          (payload) => handleConversationInsert(payload, "shared"),
         )
         .subscribe();
     }
@@ -306,7 +384,7 @@ export function useConversations(
       supabase.removeChannel(ownChannel);
       if (sharedChannel) supabase.removeChannel(sharedChannel);
     };
-  }, [userId, workspaceId, archiveFilter]);
+  }, [userId, workspaceId, archiveFilter, limit, fetchConversations]);
 
   // Note: there is no cross-tab `users` UPDATE channel. Repo scope now comes
   // from /api/workspace/active-repo (workspaces.repo_url), not users.repo_url,
