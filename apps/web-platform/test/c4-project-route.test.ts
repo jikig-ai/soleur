@@ -66,7 +66,6 @@ import { C4_DIAGRAMS_DIR } from "@/lib/c4-constants";
 
 const OWNER = "jikig-ai";
 const REPO = "soleur";
-const CONTENTS_PREFIX = `/repos/${OWNER}/${REPO}/contents/knowledge-base/${C4_DIAGRAMS_DIR}`;
 
 /**
  * Wire the `githubApiGet` mock to serve a diagrams dir:
@@ -144,10 +143,13 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
     expect(body.viewIds).toEqual(["index"]);
   });
 
-  it("AC2: a 1–4 MB model.likec4.json round-trips fully via the Blobs API (Contents-content impl would truncate)", async () => {
+  it("AC2: a 1–4 MB model.likec4.json round-trips fully via the Blobs API", async () => {
     // ~1.5 MB of JSON — above the Contents API's 1 MB `content` cutoff, below
-    // the 4 MB MAX_C4_BYTES cap. A Contents-API `content` read returns empty
-    // for this size; the Blobs API base64 carries the full body.
+    // the 4 MB MAX_C4_BYTES cap. `setupGitHub` serves bodies ONLY from
+    // `/git/blobs/{sha}` (the listing entries carry no `content` field), so a
+    // full 12000-view round-trip is reachable only through the Blobs path — an
+    // implementation that read the Contents `content` field instead would see
+    // `undefined` and fail this assertion.
     const bigViews: Record<string, unknown> = {};
     for (let i = 0; i < 12000; i++) bigViews[`view-${i}`] = { id: `view-${i}`, blob: "x".repeat(100) };
     const bigDump = JSON.stringify({ views: bigViews });
@@ -221,22 +223,40 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
     expect(paths.every((p) => p.includes("/repos/shared-org/shared-repo/"))).toBe(true);
   });
 
-  it("AC5: a GitHub-read failure → 503, reportSilentFallback, and NO stale body", async () => {
+  it("AC5: a GitHub-read failure → 503, reportSilentFallback, and NO partial/stale body", async () => {
+    // Non-vacuous negative: the dir LISTING succeeds (so the route HAS the model
+    // entry + sha in hand) but the model BLOB read fails. A route that served a
+    // partial dump or fell back to anything would leak a body here — assert it
+    // returns a clean 503 with neither `dump` nor `sources`.
     setupGitHub(
-      { "model.likec4.json": JSON.stringify({ views: {} }) },
-      { listingError: new GitHubApiError("rate limited", 429) },
+      { "model.c4": "model {}", "model.likec4.json": JSON.stringify({ views: {} }) },
+      { blobErrors: { "model.likec4.json": new GitHubApiError("rate limited", 429) } },
     );
     const res = await callGET();
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.dump).toBeUndefined();
     expect(body.sources).toBeUndefined();
+    expect(body.error).toContain("try again");
     expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         feature: "c4-project-read",
         op: "github-read-failed",
       }),
+    );
+  });
+
+  it("AC5b: a dir-LISTING failure also → 503 (not a stale serve)", async () => {
+    setupGitHub(
+      { "model.likec4.json": JSON.stringify({ views: {} }) },
+      { listingError: new GitHubApiError("rate limited", 429) },
+    );
+    const res = await callGET();
+    expect(res.status).toBe(503);
+    expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "github-read-failed" }),
     );
   });
 
@@ -249,11 +269,22 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
     expect(body.code).toBe("MODEL_NOT_BUILT");
   });
 
-  it("AC7: an oversized (>4 MB) model.likec4.json from GitHub → 413", async () => {
+  it("AC7: an oversized (>4 MB) model.likec4.json from GitHub → 413 + oversize op", async () => {
     const huge = "x".repeat(4 * 1024 * 1024 + 10);
     setupGitHub({ "model.c4": "model {}", "model.likec4.json": huge });
     const res = await callGET();
     expect(res.status).toBe(413);
+    const body = await res.json();
+    expect(body.error).toContain("too large");
+    // The oversize path mirrors a DISTINCT op so a corrupt/oversized model is
+    // not conflated with a transient github-read-failed in the Sentry filter.
+    expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "c4-project-read",
+        op: "github-read-oversize",
+      }),
+    );
   });
 
   it("AC8: the op slug is pinned in the route source so the Sentry filter can match it", async () => {
