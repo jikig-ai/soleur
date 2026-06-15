@@ -8,9 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.njk (renders at /skills/)
-// Last verified: 2026-06-01 (4 categories, 82 skills)
+// Last verified: 2026-06-15 (4 categories, 85 skills)
 const SKILL_CATEGORIES = {
-  // Content & Release (17)
+  // Content & Release (22)
   "brainstorm-techniques": "Review & Planning",
   "campaign-calendar": "Content & Release",
   changelog: "Content & Release",
@@ -21,19 +21,21 @@ const SKILL_CATEGORIES = {
   "deploy-docs": "Content & Release",
   "discord-content": "Content & Release",
   "every-style-editor": "Content & Release",
+  "feature-tweet": "Content & Release",
   "feature-video": "Content & Release",
   "file-todos": "Content & Release",
   "gemini-imagegen": "Content & Release",
   growth: "Content & Release",
   "legal-audit": "Content & Release",
   "legal-generate": "Content & Release",
+  "operator-digest": "Content & Release",
   "release-announce": "Content & Release",
   "release-docs": "Content & Release",
   "seo-aeo": "Content & Release",
   "social-distribute": "Content & Release",
   triage: "Content & Release",
 
-  // Development (12)
+  // Development (13)
   "agent-native-architecture": "Development",
   "agent-native-audit": "Development",
   "andrew-kane-gem-writer": "Development",
@@ -43,33 +45,48 @@ const SKILL_CATEGORIES = {
   "docs-site": "Development",
   "dspy-ruby": "Development",
   "frontend-design": "Development",
+  "pencil-setup": "Development",
   "skill-creator": "Development",
   "spec-templates": "Development",
   "user-story-writer": "Development",
 
-  // Review & Planning (11)
+  // Review & Planning (15)
   architecture: "Review & Planning",
   brainstorm: "Review & Planning",
   "competitive-analysis": "Review & Planning",
   "deepen-plan": "Review & Planning",
   "frontend-anti-slop": "Review & Planning",
+  "gdpr-gate": "Review & Planning",
   "heal-skill": "Review & Planning",
+  "model-launch-review": "Review & Planning",
   plan: "Review & Planning",
   "plan-review": "Review & Planning",
   "product-roadmap": "Review & Planning",
   review: "Review & Planning",
   "skill-security-scan": "Review & Planning",
+  "ux-audit": "Review & Planning",
 
-  // Workflow (22)
+  // Workflow (35)
+  "admin-ip-refresh": "Workflow",
   "agent-browser": "Workflow",
   "fix-issue": "Workflow",
   "archive-kb": "Workflow",
   deploy: "Workflow",
+  "drain-labeled-backlog": "Workflow",
+  "flag-create": "Workflow",
+  "flag-set-role": "Workflow",
   "git-worktree": "Workflow",
+  incident: "Workflow",
+  "kb-search": "Workflow",
+  "linear-fetch": "Workflow",
   "merge-pr": "Workflow",
   "one-shot": "Workflow",
   postmerge: "Workflow",
   preflight: "Workflow",
+  "provision-cloudflare": "Workflow",
+  "provision-doppler": "Workflow",
+  "provision-github": "Workflow",
+  "provision-hetzner": "Workflow",
   qa: "Workflow",
   rclone: "Workflow",
   schedule: "Workflow",
@@ -79,6 +96,8 @@ const SKILL_CATEGORIES = {
   "resolve-pr-parallel": "Workflow",
   "resolve-todo-parallel": "Workflow",
   ship: "Workflow",
+  "trigger-cron": "Workflow",
+  "user-set-role": "Workflow",
   work: "Workflow",
   "test-browser": "Workflow",
   "test-fix-loop": "Workflow",
