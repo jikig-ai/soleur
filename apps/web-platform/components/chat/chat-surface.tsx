@@ -919,15 +919,18 @@ export function ChatSurface({
 
           {/* feat-reasoning-chat-boxes (#5370) — transient live narration line.
               Shows the agent's deliberate plain-language status near the Working
-              badge while a turn is in flight. Gated on BOTH `streamState ===
-              "streaming"` AND a non-null `liveNarration` so it is fully inert
-              until the emit path (Phase 5) actually produces narration — it
-              never adds a spurious line to a turn the agent didn't narrate, and
-              it disappears on turn-end (the reducer nulls liveNarration on every
-              turn-end path). The spec-flow Finding 4 reconnect placeholder needs
-              a "narration-seen-this-turn" signal to avoid showing on every turn;
-              deferred to the emit phase. */}
-          {streamState === "streaming" && liveNarration !== null && (
+              badge while a turn is in flight. The slot is gated only on
+              `streamState === "streaming"`; the CONTENT falls back to a
+              "Still working…" placeholder when `liveNarration === null` — which
+              is exactly the spec-flow Finding 4 reconnect case: the live frame is
+              live-only (never buffered), so a mid-turn reconnect nulls
+              `liveNarration` while the turn is still streaming. The placeholder
+              keeps the user oriented instead of leaving a blank gap, and is
+              immediately replaced when the next `narrate` frame arrives. It
+              disappears on turn-end (the reducer nulls liveNarration AND
+              streamState leaves "streaming" on every turn-end path), so it is
+              still fully inert outside an in-flight turn. */}
+          {streamState === "streaming" && (
             <div
               data-testid="live-narration"
               aria-live="polite"
@@ -938,7 +941,7 @@ export function ChatSurface({
                 className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
               />
               <span className="min-w-0 [overflow-wrap:anywhere]">
-                {liveNarration}
+                {liveNarration ?? "Still working…"}
               </span>
             </div>
           )}

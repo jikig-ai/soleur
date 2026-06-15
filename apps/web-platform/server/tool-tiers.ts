@@ -95,6 +95,24 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_reply": "gated",
   "mcp__soleur_platform__email_suppress": "gated",
 
+  // Reasoning narration (feat-reasoning-chat-boxes #5370): both are
+  // auto-approve. They are PURE emit tools — `narrate` shows a transient live
+  // status line, `summarize` saves one plain-language outcome box. The handler
+  // captures only userId and returns an ack; the real side-effect (redact →
+  // frame / row) runs in cc-dispatcher `emitNarration()`, where the agent text
+  // is scrubbed (formatAssistantText + redaction-probe drop-on-trip) and
+  // length-capped. There is nothing for a human to gate per-call (a status
+  // line / summary is not a privileged side-effect), and a review modal per
+  // narration would defeat the entire "never a silent spinner" UX. On the
+  // cc-router path these never reach getToolTier anyway — they sit in the
+  // `allowedTools` auto-approve list (CC_PATH_ALLOWED_TOOLS) — so the real
+  // controls are: allowlist + emit-boundary redaction + abort-state drop-guard,
+  // NOT a review gate (security C-2). Explicit entries documented here so the
+  // "gated" fail-closed default cannot silently apply if a future path routes
+  // them through canUseTool.
+  "mcp__soleur_platform__narrate": "auto-approve",
+  "mcp__soleur_platform__summarize": "auto-approve",
+
   // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
   // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
   // map — the legacy `startAgentSession` path relies on `getToolTier()`'s
