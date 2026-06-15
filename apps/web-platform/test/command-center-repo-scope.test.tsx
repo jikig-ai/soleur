@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, waitFor, act } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 
-// RED phase for plan 2026-04-22-fix-command-center-stale-conversations-after-repo-swap.
+// Originally RED phase for plan
+// 2026-04-22-fix-command-center-stale-conversations-after-repo-swap.
+// Updated by plan
+// 2026-06-15-fix-conversations-rail-empty-repo-url-source-divergence: the
+// repo scope source moved from the deprecated `users.repo_url` column to
+// GET /api/workspace/active-repo (workspaces.repo_url, ADR-044). The list-
+// scoping contract below is unchanged in shape; only its SOURCE changed.
 //
 // Contract:
-//   useConversations() must scope the list query to the user's CURRENT
-//   users.repo_url. Pre-swap conversations (different repo_url) must not
-//   render. When users.repo_url is null (disconnected), the hook returns
-//   an empty list without issuing the main list query.
+//   useConversations() must scope the list query to the user's CURRENT repo,
+//   read from /api/workspace/active-repo. Pre-swap conversations (different
+//   repo_url) must not render. When the route returns repoUrl=null
+//   (disconnected), the hook returns an empty list without issuing the main
+//   list query.
 //
 //   The Realtime channel for conversations stays on user_id only (realtime-js
 //   single-column filter limitation); cross-repo payloads must be dropped in
@@ -90,26 +97,6 @@ function buildMessagesBuilder() {
   return builder;
 }
 
-function buildUsersBuilder() {
-  const builder: Record<string, unknown> = {
-    select: vi.fn(() => builder),
-    eq: vi.fn(() => builder),
-    single: vi.fn(() =>
-      Promise.resolve({
-        data: { repo_url: state.currentRepoUrl },
-        error: null,
-      }),
-    ),
-    maybeSingle: vi.fn(() =>
-      Promise.resolve({
-        data: { repo_url: state.currentRepoUrl },
-        error: null,
-      }),
-    ),
-  };
-  return builder;
-}
-
 const mockChannel = vi.fn().mockReturnValue({
   on: vi.fn().mockReturnThis(),
   subscribe: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
@@ -126,17 +113,6 @@ vi.mock("@/lib/supabase/client", () => ({
     from: (table: string) => {
       if (table === "conversations") return buildConversationsBuilder();
       if (table === "messages") return buildMessagesBuilder();
-      if (table === "users") return buildUsersBuilder();
-      if (table === "workspace_members") {
-        const b: Record<string, unknown> = {
-          select: vi.fn(() => b),
-          eq: vi.fn(() => b),
-          maybeSingle: vi.fn(() =>
-            Promise.resolve({ data: { workspace_id: "ws-1" }, error: null }),
-          ),
-        };
-        return b;
-      }
       return buildConversationsBuilder();
     },
     channel: mockChannel,
@@ -146,10 +122,30 @@ vi.mock("@/lib/supabase/client", () => ({
 
 // --- Tests ------------------------------------------------------------------
 
-describe("useConversations — repo_url scoping", () => {
+describe("useConversations — repo scoping (source: /api/workspace/active-repo)", () => {
   beforeEach(() => {
     resetState();
     mockChannel.mockClear();
+    vi.restoreAllMocks();
+    // Repo scope now comes from GET /api/workspace/active-repo (ADR-044).
+    // Resolve `repoUrl` lazily from state.currentRepoUrl so each test can set
+    // it before renderHook.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              workspaceId: "ws-1",
+              repoUrl: state.currentRepoUrl,
+              repoName: null,
+              repoStatus: state.currentRepoUrl ? "connected" : "not_connected",
+              fellBackToSolo: false,
+            }),
+        }),
+      ),
+    );
   });
 
   it("returns ONLY the conversations matching the user's current repo_url", async () => {
@@ -237,79 +233,12 @@ describe("useConversations — repo_url scoping", () => {
     expect(result.current.conversations.length).toBe(0);
   });
 
-  it("refetches and re-scopes when users.repo_url changes in another tab (race R-C)", async () => {
-    state.currentRepoUrl = "https://github.com/acme/first";
-    state.conversationsByRepo = {
-      "https://github.com/acme/first": [
-        {
-          id: "conv-first",
-          user_id: "user-1",
-          repo_url: "https://github.com/acme/first",
-          domain_leader: null,
-          session_id: null,
-          status: "active",
-          total_cost_usd: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          last_active: new Date().toISOString(),
-          created_at: new Date(Date.now() - 2_000).toISOString(),
-          archived_at: null,
-        },
-      ],
-      "https://github.com/acme/second": [
-        {
-          id: "conv-second",
-          user_id: "user-1",
-          repo_url: "https://github.com/acme/second",
-          domain_leader: null,
-          session_id: null,
-          status: "active",
-          total_cost_usd: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          last_active: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          archived_at: null,
-        },
-      ],
-    };
-
-    // Capture the users-channel UPDATE callback so the test can fire it.
-    let usersCallback:
-      | ((payload: { new: { repo_url: string | null } }) => void)
-      | null = null;
-
-    mockChannel.mockImplementation((name: string) => {
-      const ch: Record<string, unknown> = {
-        on: vi.fn((event: string, cfg: { table: string }, cb: unknown) => {
-          if (cfg.table === "users") {
-            usersCallback = cb as (p: {
-              new: { repo_url: string | null };
-            }) => void;
-          }
-          return ch;
-        }),
-        subscribe: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
-      };
-      return ch;
-    });
-
-    const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
-
-    await waitFor(() => {
-      expect(result.current.conversations[0]?.id).toBe("conv-first");
-    });
-
-    // Another tab switched repos: users.repo_url changed.
-    state.currentRepoUrl = "https://github.com/acme/second";
-
-    await act(async () => {
-      usersCallback?.({ new: { repo_url: "https://github.com/acme/second" } });
-    });
-
-    await waitFor(() => {
-      expect(result.current.conversations[0]?.id).toBe("conv-second");
-    });
-  });
+  // NOTE: The former "refetches when users.repo_url changes in another tab"
+  // test was removed with plan
+  // 2026-06-15-fix-conversations-rail-empty-repo-url-source-divergence. The
+  // cross-tab `users` UPDATE realtime channel was deleted because the hook no
+  // longer reads `users.repo_url` — repo scope comes from
+  // /api/workspace/active-repo. A workspace switch is a hard navigation to
+  // /dashboard (org-switcher remounts → fetchConversations re-runs), so there
+  // is no resubscribe gap to cover and nothing to refetch on a `users` event.
 });

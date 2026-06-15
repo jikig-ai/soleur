@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { normalizeRepoUrl } from "@/lib/repo-url";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
@@ -90,7 +89,8 @@ export function useConversations(
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   // Ref mirror of repoUrl so Realtime callbacks read the latest value
   // without forcing the subscription effect to re-subscribe on every
-  // repo change (see review F1). Both channels read from this ref.
+  // repo change (see review F1). The conversation realtime channels
+  // (own + workspace-shared) read from this ref.
   const repoUrlRef = useRef<string | null>(null);
   useEffect(() => {
     repoUrlRef.current = repoUrl;
@@ -113,31 +113,35 @@ export function useConversations(
       const currentUserId = authData.user.id;
       setUserId(currentUserId);
 
-      // Scope the list to the user's CURRENT repo_url. Disconnected users
-      // (repo_url IS NULL) see an empty list — the old repo's conversations
-      // stay attached to their repo_url and are hidden until the user
-      // reconnects that exact URL. See plan
-      // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
-      const [{ data: userRow }, { data: memberRow }] = await Promise.all([
-        supabase
-          .from("users")
-          .select("repo_url")
-          .eq("id", currentUserId)
-          .maybeSingle(),
-        supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", currentUserId)
-          .maybeSingle(),
-      ]);
-      setWorkspaceId((memberRow?.workspace_id as string) ?? null);
-      // Normalize on read — defense-in-depth for pre-backfill rows and
-      // any future direct-DB insert that bypasses `/api/repo/setup`.
-      // Post-backfill this is a no-op on at-rest data.
-      const rawRepoUrl =
-        (userRow?.repo_url as string | null | undefined) ?? null;
-      const normalized = normalizeRepoUrl(rawRepoUrl);
-      const currentRepoUrl = normalized.length > 0 ? normalized : null;
+      // Scope the list to the user's CURRENT repo. The source of truth is
+      // `workspaces.repo_url` resolved via the ACTIVE workspace, read through
+      // GET /api/workspace/active-repo (ADR-044, #4543). NEVER read
+      // `users.repo_url` here: that deprecated per-user column is empty for a
+      // joined workspace member, so reading it filters out the member's active
+      // conversations and shows the empty rail forever — the #4543
+      // dual-ownership trap restated at the UI layer. The route also returns
+      // the resolved (self-healed) `workspaceId`, so the realtime channel and
+      // the list query agree on the same workspace. See plan
+      // 2026-06-15-fix-conversations-rail-empty-repo-url-source-divergence and
+      // hooks/use-active-repo.ts (the established consumer of this route).
+      // Disconnected users (repoUrl null) see an empty list — old-repo
+      // conversations stay attached to their repo_url and are hidden until the
+      // user reconnects that exact URL (2026-04-22 repo-swap isolation plan).
+      const res = await fetch("/api/workspace/active-repo");
+      if (!res.ok) {
+        // Transient route failure — surface an error rather than silently
+        // flashing the empty state (which reads as "you have no conversations").
+        setError("Failed to resolve the active repository");
+        setLoading(false);
+        return;
+      }
+      const activeRepo = (await res.json()) as {
+        workspaceId: string;
+        repoUrl: string | null;
+      };
+      // repoUrl is already normalized server-side by the active-repo route.
+      const currentRepoUrl = activeRepo.repoUrl ?? null;
+      setWorkspaceId(activeRepo.workspaceId ?? null);
       setRepoUrl(currentRepoUrl);
 
       if (!currentRepoUrl) {
@@ -148,10 +152,20 @@ export function useConversations(
 
       // visibility-sweep: RLS conversations_owner_or_shared returns own +
       // workspace-shared conversations; no app-level user_id filter needed.
+      //
+      // Scope by BOTH repo_url AND the active workspace_id, matching the
+      // server-side list tool (server/conversations-tools.ts). repo_url alone
+      // cannot separate two of the OWNER'S OWN workspaces connected to the
+      // SAME repo — both rows share repo_url, and RLS (075) returns the
+      // owner's rows across all their workspaces. conversations.workspace_id
+      // (NOT NULL, mig 059) is the precise discriminator, and it matches the
+      // route's resolved workspaceId so the list query and the workspace-
+      // shared realtime channel agree on the same workspace.
       let query = supabase
         .from("conversations")
         .select("*")
         .eq("repo_url", currentRepoUrl)
+        .eq("workspace_id", activeRepo.workspaceId)
         .order("last_active", { ascending: false })
         .order("created_at", { ascending: false });
 
@@ -294,44 +308,18 @@ export function useConversations(
     };
   }, [userId, workspaceId, archiveFilter]);
 
-  // Cross-tab disconnect/reconnect awareness (race R-C): another tab may
-  // swap the user's repo_url while this hook is mounted. Subscribe to
-  // users UPDATE events and refetch when repo_url changes — without this
-  // the Command Center keeps showing the pre-swap scope until a hard reload.
-  useEffect(() => {
-    if (!userId) return;
-    const supabase = createClient();
-    const channel = supabase
-      .channel("command-center-user")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "users",
-          filter: `id=eq.${userId}`,
-        },
-        (payload) => {
-          const updated = payload.new as { repo_url?: string | null };
-          // Normalize the Realtime payload before comparison — migration
-          // backfill will eventually make this a no-op on at-rest data,
-          // but an in-flight write from a pre-migration path could still
-          // arrive denormalized and cause a false-positive refetch.
-          const normalized = normalizeRepoUrl(updated?.repo_url ?? null);
-          const nextRepoUrl = normalized.length > 0 ? normalized : null;
-          if (nextRepoUrl !== repoUrlRef.current) {
-            fetchConversations();
-          }
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // repoUrl intentionally not in deps (see F1) — the comparison reads
-    // repoUrlRef.current, which stays fresh without forcing resubscribe.
-  }, [userId, fetchConversations]);
+  // Note: there is no cross-tab `users` UPDATE channel. Repo scope now comes
+  // from /api/workspace/active-repo (workspaces.repo_url), not users.repo_url,
+  // so watching `users` rows would be dead. A workspace switch is a hard
+  // navigation to /dashboard (the org-switcher remounts the page →
+  // fetchConversations re-runs), which covers the dominant re-scope path.
+  // Caveat: a same-session repo connect/disconnect that uses router.refresh()
+  // (settings/project-setup-card, repo/reconnect-notice) re-renders server
+  // components without remounting this client hook, so the rail can show stale
+  // scope until the next mount/refetch. Acceptable: scope staleness is a
+  // read-freshness gap, never a correctness/isolation break (RLS + the
+  // repo_url/workspace_id filter still bound what is shown). Revisit if
+  // operators report stale rails after in-session reconnect.
 
   const archiveConversation = useCallback(async (id: string) => {
     // Slot release on archive: handled by AFTER UPDATE OF archived_at

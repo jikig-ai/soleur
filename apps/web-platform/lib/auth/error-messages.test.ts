@@ -26,9 +26,12 @@ describe("mapSupabaseError", () => {
     );
   });
 
-  it("still maps 'email rate limit exceeded' to the rate-limit string (regression guard)", () => {
+  it("still maps 'email rate limit exceeded' to the email-send rate-limit copy (regression guard)", () => {
+    // Reference the exported constant rather than a stale inline literal so a
+    // copy-tone edit (2026-06-15) keeps this guard honest. The mapping target
+    // (email-send ceiling → its own distinct constant) is what's pinned here.
     expect(mapSupabaseError("email rate limit exceeded")).toBe(
-      "Too many sign-in attempts. Please wait a few minutes and try again.",
+      EMAIL_SEND_RATE_LIMIT_MESSAGE,
     );
   });
 

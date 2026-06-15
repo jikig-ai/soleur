@@ -521,6 +521,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // Mirror of `realConversationId` for the `abort()` callback so a stale
   // closure cannot send the wrong conversationId on the wire.
   const realConversationIdRef = useRef<string | null>(null);
+  // #5290 false-positive fix — mirror of `sessionKind` for the `auth_ok`
+  // reconnect closure. That handler lives in the `connect` useCallback whose
+  // dep array excludes `sessionKind`, so the useState would be captured STALE
+  // there (unlike the history-fetch useEffect at the bottom, which lists
+  // `sessionKind` in its deps and can read the state directly). The ref is read
+  // fresh. Kept paired with realConversationIdRef's reset sites so the resume
+  // gate survives future refactors that decouple the two writes (#4816
+  // corollary).
+  const sessionKindRef = useRef<"fresh" | "resumed" | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   // feat-stream-since-disconnect (#5273) — highest server-stamped `seq` this
@@ -654,6 +663,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     // (review: P3 reset-symmetry — defends the FR1 gate against future
     // refactors that decouple the two writes.)
     setSessionKind(null);
+    sessionKindRef.current = null;
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
@@ -819,7 +829,30 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           const isReconnect = hasConnectedBeforeRef.current;
           hasConnectedBeforeRef.current = true;
           const activeConvId = realConversationIdRef.current;
-          if (isReconnect && activeConvId) {
+          // #5290 false-positive fix — only request replay for a row that
+          // PROVABLY EXISTS server-side, so the owner-scoped `(id,user_id)`
+          // lookup cannot return zero rows and mint a spurious
+          // `op=ownership-mismatch`. Two eligible cases:
+          //   (1) `"resumed"` — a materialized, owned row (the sidebar resume).
+          //   (2) `"fresh"` that has ALREADY rendered ≥1 server-stamped frame
+          //       (`lastRenderedSeq >= 0`). A stamped frame is emitted only
+          //       after the agent starts streaming, which only happens once the
+          //       deferred row has materialized on the first chat message — so a
+          //       rendered frame is proof the row exists. This recovers the
+          //       mid-turn reconnect case (new chat, first turn streaming, socket
+          //       drops): its gap frames replay instead of being lost (review:
+          //       user-impact P2).
+          // A `"fresh"` conv that has streamed NOTHING yet (`lastRenderedSeq
+          // === -1`) stays ineligible — that is the not-yet-materialized race
+          // whose `resume_stream` produced the false positive. `null`→ineligible.
+          // Positive allowlist over the `"fresh" | "resumed" | null` union; never
+          // `!== "fresh"` (#4816 single-literal-gate corollary: a future 4th kind
+          // forces a conscious in/out call).
+          const sessionKindNow = sessionKindRef.current;
+          const replayEligible =
+            sessionKindNow === "resumed" ||
+            (sessionKindNow === "fresh" && lastRenderedSeqRef.current >= 0);
+          if (isReconnect && activeConvId && replayEligible) {
             const ackSeq = lastRenderedSeqRef.current;
             send({
               type: "resume_stream",
@@ -838,7 +871,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             reattachPendingRef.current = true;
             dispatch({ type: "connection_change", phase: "live" });
           } else {
-            // Fresh initial connect (not a reconnect): plain `live`, no notice.
+            // Not replay-eligible: a fresh initial connect, OR a reconnect of a
+            // `"fresh"`/unknown-kind session (no materialized row to replay, no
+            // buffered turn worth requesting). Plain `live`, no replay request,
+            // no notice.
             dispatch({ type: "connection_change", phase: "live" });
           }
           break;
@@ -1065,6 +1101,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // (it materializes on the first chat message). Mark fresh so the
           // resume-history effect skips the would-be-404 fetch (FR1).
           setSessionKind("fresh");
+          // #5290 — keep the ref in lockstep with the state for the auth_ok
+          // reconnect gate (a fresh deferred conv must NOT request resume_stream).
+          sessionKindRef.current = "fresh";
           setSessionConfirmed(true);
           break;
         }
@@ -1090,6 +1129,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // effect SHOULD fetch (api-messages returns 200-empty for a zero-
           // message row). Gate keys on session kind, not count (FR2).
           setSessionKind("resumed");
+          // #5290 — ref lockstep: a resumed (materialized, owned) row is the
+          // ONLY kind that may request resume_stream replay on reconnect.
+          sessionKindRef.current = "resumed";
           setSessionConfirmed(true);
           break;
         }

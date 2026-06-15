@@ -3,7 +3,7 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { normalizeRepoUrl } from "@/lib/repo-url";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 /**
@@ -35,7 +35,14 @@ export async function getCurrentRepoUrl(
     tenant = await getFreshTenantClient(userId);
   } catch (err) {
     if (err instanceof RuntimeAuthError) {
-      reportSilentFallback(err, {
+      // Transient retryable auth blip (tenant JWT mint) on a hot reconnect
+      // path — WARNING, not error. This upstream emit is the single
+      // highest-volume contributor to the `feature=stream-replay`
+      // ownership-mismatch false-positive flood (the WS resume handler reads
+      // this and used to misread the resulting null as a repo-scope mismatch).
+      // The genuine query-error path below stays at error level. (#5290 /
+      // ADR-059 false-positive remediation.)
+      warnSilentFallback(err, {
         feature: "repo-scope",
         op: "read-current-repo-url.tenant-mint",
         extra: { userId },

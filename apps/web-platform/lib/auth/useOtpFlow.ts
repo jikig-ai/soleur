@@ -64,7 +64,7 @@ export function useOtpFlow({
 
   // Disable resend for >= GoTrue's 60s per-user OTP window so the UI cannot
   // fire a same-email re-send before GoTrue will accept it (the double-send
-  // that returns "Too many sign-in attempts").
+  // that returns the `email rate limit exceeded` 429).
   function startCooldown() {
     clearCooldown();
     setCooldownEmail(email);
