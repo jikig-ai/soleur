@@ -197,77 +197,93 @@ export async function middleware(request: NextRequest) {
   // Topology:
   //   - Per-request RPC call (no cache; Vercel edge isolates are non-
   //     coherent so a per-isolate cache would still leak across regions).
-  //   - Fail-CLOSED: any RPC error → 503. Revocation IS a security
-  //     boundary; a silent fall-open here would silently re-leak.
+  //   - GENUINE revocation is fail-CLOSED: a row with revoked=true clears
+  //     cookies and redirects to /login. That boundary is non-negotiable
+  //     (a silent fall-open would re-leak a removed member's stale JWT).
+  //   - TRANSIENT failures are NOT revocations and must NOT log the user
+  //     out (2026-06-15 session-disconnect fix). A transient RPC error or a
+  //     JWT-decode hiccup grace-falls-through (request allowed, re-checked
+  //     next request) instead of 503-for-all / forced /login. getUser()
+  //     above already authenticated the session against the auth server, so
+  //     "RPC errored" and "can't decode iat" tell us nothing about removal.
   //   - User-global predicate (plan F5): the RPC is keyed on auth.uid()
   //     alone, NOT current_organization_id — multi-workspace user removed
   //     from one workspace is bounced on ANY context.
   if (user) {
+    // getUser() (above) is the authentication — it validates the JWT with
+    // the Supabase auth server. getSession() is retained ONLY to read the
+    // raw access-token bytes for the local `iat` decode below; getUser()
+    // does not expose the token string. This is NOT the redundant
+    // getSession()-after-getUser() re-validation the @supabase/ssr docs warn
+    // against (framework-docs §2.4) — it is a token-bytes read, not a second
+    // auth round trip. (AC4: documented single getSession() call.)
     const { data: sessionData } = await supabase.auth.getSession();
     const accessToken = sessionData?.session?.access_token;
     if (accessToken) {
       let iatSeconds: number | null = null;
+      let decodeThrew = false;
       try {
         const payload = decodeJwtPayloadEdgeSafe(accessToken);
         if (typeof payload.iat === "number") {
           iatSeconds = payload.iat;
         }
       } catch (err) {
-        // Malformed JWT — fail-CLOSED 401. The session is broken; signing
-        // the user out is the safe action.
+        decodeThrew = true;
+        // Malformed JWT. getUser() already validated the session, so this is
+        // a decoder/transport hiccup, NOT a removal — grant GRACE (allow the
+        // request through; re-check next request) rather than forcing a
+        // logout. Still mirror to Sentry so a real decoder regression is
+        // visible without SSH.
         await reportEdgeSilentFallback(err, {
           feature: "middleware",
           op: "revocation_gate.malformed_jwt",
           extra: { userId: user.id },
         });
-        // Malformed/no-iat JWT is NOT a removal — emit a neutral
-        // `session-error` reason rather than the user-hostile
-        // "workspace owner removed you" copy (review user-impact P1
-        // #4307). The login-form maps `session-error` to neutral copy.
-        const params = new URLSearchParams({ revoked: "session-error" });
-        return clearSessionAndRedirect(request, cspValue, "/login", params);
-      }
-      if (iatSeconds === null) {
-        await reportEdgeSilentFallback(
-          new Error("JWT missing iat claim"),
-          {
-            feature: "middleware",
-            op: "revocation_gate.no_iat",
-            extra: { userId: user.id },
-          },
-        );
-        // Malformed/no-iat JWT is NOT a removal — emit a neutral
-        // `session-error` reason rather than the user-hostile
-        // "workspace owner removed you" copy (review user-impact P1
-        // #4307). The login-form maps `session-error` to neutral copy.
-        const params = new URLSearchParams({ revoked: "session-error" });
-        return clearSessionAndRedirect(request, cspValue, "/login", params);
       }
 
-      const iat = new Date(iatSeconds * 1000);
-      const { data: revokeData, error: revokeError } = await supabase.rpc(
-        "check_my_revocation",
-        { p_jwt_iat: iat.toISOString() },
-      );
-      if (revokeError) {
-        await reportEdgeSilentFallback(revokeError, {
+      if (!decodeThrew && iatSeconds === null) {
+        // Decode succeeded but carried no numeric `iat`. Same grace rationale
+        // as malformed_jwt: getUser() validated the session, a missing iat is
+        // a token-shape hiccup, not a revocation. Distinct op slug preserved.
+        await reportEdgeSilentFallback(new Error("JWT missing iat claim"), {
           feature: "middleware",
-          op: "revocation_gate.db_error",
+          op: "revocation_gate.no_iat",
           extra: { userId: user.id },
         });
-        return withCspHeaders(
-          new NextResponse("Service Unavailable", { status: 503 }),
-          cspValue,
-        );
       }
-      const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
-      if (row && row.revoked === true) {
-        const reason =
-          row.reason === "ownership-transferred"
-            ? "ownership-transferred"
-            : row.reason === "role-changed" ? "role-changed" : "removed";
-        const params = new URLSearchParams({ revoked: reason });
-        return clearSessionAndRedirect(request, cspValue, "/login", params);
+
+      // Only run the revocation predicate when we have a usable iat. A decode
+      // hiccup or missing iat grace-falls-through to the normal flow below.
+      if (iatSeconds !== null) {
+        const iat = new Date(iatSeconds * 1000);
+        const { data: revokeData, error: revokeError } = await supabase.rpc(
+          "check_my_revocation",
+          { p_jwt_iat: iat.toISOString() },
+        );
+        if (revokeError) {
+          // Transient revocation-RPC failure (connectivity blip, pool
+          // exhaustion, read-replica lag). Previously fail-CLOSED to 503 for
+          // EVERY authenticated request — a single DB blip became a site-wide
+          // outage / mass forced-logout. Now: GRACE — allow the
+          // otherwise-valid session through and re-check on the next request.
+          // The genuine revoked=true branch below stays fail-CLOSED. Distinct
+          // op slug so operators see transient DB degradation without SSH.
+          await reportEdgeSilentFallback(revokeError, {
+            feature: "middleware",
+            op: "revocation_gate.transient_grace",
+            extra: { userId: user.id },
+          });
+        } else {
+          const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
+          if (row && row.revoked === true) {
+            const reason =
+              row.reason === "ownership-transferred"
+                ? "ownership-transferred"
+                : row.reason === "role-changed" ? "role-changed" : "removed";
+            const params = new URLSearchParams({ revoked: reason });
+            return clearSessionAndRedirect(request, cspValue, "/login", params);
+          }
+        }
       }
     }
   }
