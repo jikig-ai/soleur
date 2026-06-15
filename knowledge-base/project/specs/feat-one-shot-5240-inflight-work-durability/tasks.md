@@ -45,11 +45,16 @@ abort and restore on resume only when safe. `Ref #5240` (NOT `Closes`). Build ta
 
 ## Phase 2 — GREEN: checkpoint-on-abort (server)
 - [ ] 2.1 Create `server/inflight-checkpoint.ts`: `checkpointInflightWork(workspacePath, conversationId): void`
-  + `checkpointRefName(conversationId)`. Lock-wrapped.
-- [ ] 2.2 No-op if no allowlisted change (`git status --porcelain`).
+  + `restoreInflightCheckpoint(...)` + `checkpointRefName(conversationId)` + a private
+  `runPlumbingGit` (model on `_cron-safe-commit.ts runGit`: async `promisify(execFile)`,
+  `{ok,stdout,stderr}` no-throw, `GIT_CONFIG_GLOBAL=/dev/null`; the plumbing verbs are greenfield —
+  NOT in any existing allowlist; do NOT reuse `runConnectedRepoGit`). Lock-wrapped entries.
+- [ ] 2.2 No-op if no change (`git status --porcelain=v1 -z`).
 - [ ] 2.3 Snapshot over a temp `GIT_INDEX_FILE` OUTSIDE the worktree (`os.tmpdir()`, `finally` cleanup):
-  `read-tree HEAD` → `add -- <allowlisted paths>` (NOT `-A`; `getAllowlistedChanges` semantics) →
-  `write-tree` → `commit-tree <tree> -p HEAD` → `update-ref refs/checkpoints/<id>`.
+  `read-tree HEAD` → `add -- <explicit paths>` (NOT `-A`; `hr-never-git-add-a-in-user-repo-agents`;
+  reuse the porcelain-parse SHAPE of `getAllowlistedChanges` but a path predicate WIDER than
+  `knowledge-base/**` so code edits are captured) → `write-tree` → `commit-tree <tree> -p HEAD` →
+  `update-ref refs/checkpoints/<id>`.
 - [ ] 2.4 HEAD/real-index/worktree never mutated; no stash; no WIP branch commit.
 - [ ] 2.5 Failure → `reportSilentFallback(... op:"checkpoint-on-abort")`; must NOT break the abort path.
 - [ ] 2.6 Wire into `agent-runner.ts` disconnected-only abort arm (re-resolve `workspacePath` first);

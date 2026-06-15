@@ -14,6 +14,32 @@ prior_plan: knowledge-base/project/plans/2026-06-14-feat-durable-session-resume-
 
 # Plan: In-flight work durability — ref-based worktree checkpoint + gated restore (#5275)
 
+## Enhancement Summary
+**Deepened on:** 2026-06-15. **Plan-review applied:** DHH + Kieran + Simplicity (3 P0 code-verified
+correctness fixes + consensus scope cut). **Deepen-plan gates:** 4.6 User-Brand Impact ✓,
+4.7 Observability ✓ (5 fields, no-ssh), 4.8 PAT-shaped ✓ (none), 4.9 UI-wireframe ✓ (no UI surface).
+Verify-the-negative + precedent-diff passes run.
+
+### Key improvements over the first draft
+1. **`workspacePath` re-resolution** at the abort catch (NOT in closure — code-verified P0).
+2. **Temp-index for BOTH checkpoint AND restore** (real index never mutated — `git read-tree`
+   into the real index would stage the snapshot; P0).
+3. **Path-allowlist, never `git add -A`** (`hr-never-git-add-a-in-user-repo-agents`) — AND the
+   allowlist is deliberately **wider than `knowledge-base/**`** so the agent's code edits (the
+   actual in-flight work) are captured, not dropped.
+4. **Clean-tree is the primary no-clobber guarantor**; the slot probe is a team-workspace-only
+   belt with a `last_heartbeat_at >= now()-120s` liveness filter (else it refuses in the solo case).
+5. **Orphan-TTL prune DEFERRED** (refs self-clean; build a ref-count gauge first) — only the
+   account-deletion erasure cascade is in v1.
+6. **Greenfield git-plumbing wrapper** `runPlumbingGit` modeled on `_cron-safe-commit.ts runGit`
+   (the verbs are NOT in any existing allowlist).
+
+### New considerations discovered
+- Stale concurrency slots are swept by pg_cron every minute AND lazily in the acquire RPC — but
+  NOT on the resume read path, so the 120s liveness filter on the probe is load-bearing.
+- The `knowledge-base/**`-scoped `getAllowlistedChanges` is the wrong predicate for *work*
+  durability; reuse its porcelain-parse shape, widen its path predicate.
+
 ## Overview
 
 Build the **PRESERVE** half of #5240 design item #4. The "accurately report the fate"
@@ -123,10 +149,11 @@ abort branch at `agent-runner.ts:~2261-2287`. No stale premises.
   slot table `user_concurrency_slots` carries `workspace_id` (column added NOT NULL in mig
   **059**; populated by the `acquire_conversation_slot` RPC writer in mig **093**). There is **no
   existing read-only RPC** for "other active slot sharing this workspace_id." The probe MUST
-  filter on liveness or it over-counts stale slots (the RPC sweeps dead slots *lazily*, only
-  inside `acquire_conversation_slot`; on resume within 120s the user's own crashed slot may still
-  be present → a naive `count(*)` would refuse-and-report in the solo reconnect case the plan
-  markets as durable). Required query shape (via the existing tenant client; RLS
+  filter on liveness or it over-counts stale slots. Stale slots are swept BOTH lazily inside
+  `acquire_conversation_slot` AND by a `pg_cron` job every minute (`* * * * *`, mig 029:219-226) —
+  but neither runs on the resume read path, so within the ~120s window the user's own crashed slot
+  can still be present → a naive `count(*)` would refuse-and-report in the solo reconnect case the
+  plan markets as durable. Required query shape (via the existing tenant client; RLS
   `is_workspace_member(workspace_id, auth.uid())` on the SELECT policy):
   `select count(*) from user_concurrency_slots where workspace_id = $1 and conversation_id <> $2
   and last_heartbeat_at >= now() - interval '120 seconds'`. Pin and confirm it passes RLS in
@@ -163,7 +190,16 @@ state + restored file bytes, never on LLM prose):
   (`package.json scripts.test`). NOT `bun test`, NOT a co-located `server/*.test.ts`.
 
 ### Phase 2 — GREEN: extract `checkpointInflightWork(workspacePath, conversationId)` (server)
-- New helper (e.g. `server/inflight-checkpoint.ts`) with two unit-testable entry points, both
+- **Git exec wrapper (deepen-plan precedent-diff):** the plumbing verbs
+  (`write-tree`/`commit-tree`/`update-ref`/`read-tree`/`checkout-index`/`for-each-ref`) are
+  **greenfield in server code** (zero hits in `apps/web-platform/server/`). They are NOT in
+  `session-sync.ts ALLOWED_GIT_SUBCOMMANDS` (`status|add|commit|remote|rev-list`) and
+  `runConnectedRepoGit` is private to that module — do NOT reuse it. Define a private
+  `runPlumbingGit` in `inflight-checkpoint.ts` modeled on `runGit` in
+  `_cron-safe-commit.ts:190-221` (async `promisify(execFile)`, `{ ok, stdout, stderr }` no-throw
+  return, `GIT_CONFIG_GLOBAL=/dev/null` / `GIT_CONFIG_NOSYSTEM=1` isolation), passing
+  `GIT_INDEX_FILE` via `extraEnv` on the `read-tree`/`add`/`write-tree`/`checkout-index` calls.
+- New helper `server/inflight-checkpoint.ts` with two unit-testable entry points, both
   wrapped in `withWorkspacePermissionLock(workspacePath, …)`:
   - `checkpointInflightWork(workspacePath, conversationId)` → returns `void` (the abort caller
     is fire-and-forget on a degraded path and branches on nothing — no result type, plan-review
@@ -180,10 +216,19 @@ state + restored file bytes, never on LLM prose):
        `git update-ref refs/checkpoints/<conversationId> <commit>`.
     3. **Path scoping is MANDATORY, not optional** (plan-review P0-3, hard rule
        `hr-never-git-add-a-in-user-repo-agents`): `inflight-checkpoint.ts` is a user-repo writer
-       — `git add -A`/`.` is forbidden. Use `getAllowlistedChanges(workspacePath)` semantics from
-       `session-sync.ts` (allowlist scoped to `knowledge-base/**`) to enumerate the paths to add.
-       This also bounds the cross-sibling-capture risk at the checkpoint (not just restore): an
-       `-A` over the shared tree would snapshot a sibling's dirt.
+       — `git add -A`/`.` is forbidden; enumerate explicit paths from `git status --porcelain=v1 -z`
+       and `git add -- <paths>`. **Design decision (deepen-plan): the checkpoint allowlist must be
+       WIDER than `session-sync.ts getAllowlistedChanges` (which is scoped to `knowledge-base/**`
+       only).** In-flight *work* durability means the agent's **code** edits, not just KB files —
+       restricting to `knowledge-base/**` would silently drop exactly the work this feature exists
+       to preserve. So: reuse the **status-parsing shape** of `getAllowlistedChanges`
+       (`session-sync.ts:103`, returns repo-root-relative paths from porcelain `-z`, yields rename
+       *destination*, `[]` on git error) but with a **broader path predicate** = "all working-tree
+       changes EXCEPT the deny-set" (`.git/`, the temp index, build artifacts) — still an explicit
+       enumerated list, never `-A`. The `hr-never-git-add-a` rule forbids the wildcard *verb*, not
+       a wide explicit path list. Enumerating the full porcelain set also captures only THIS
+       workspace's tree (no `-A` glob), and the sibling-capture concern is bounded by the
+       restore-side gate (a checkpoint that captured sibling dirt is never blindly restored).
     4. Parent at current HEAD so the checkpoint is restorable/diffable as `git diff HEAD <ref>`.
        (Connected-repo clones always have a HEAD commit — verified at clone time; if absent the
        commit-tree fails loudly into the Sentry mirror, not silently.)
