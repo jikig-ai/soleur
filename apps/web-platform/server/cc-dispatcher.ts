@@ -52,6 +52,7 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
+import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 import {
   WORKFLOW_END_USER_MESSAGES,
   resolveWorktreeEnterFailedMessage,
@@ -1176,6 +1177,39 @@ export function cleanupCcBashGatesForConversation(
   _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
 }
 
+/**
+ * #5356 — the runner's `onCloseQuery` close-side hook (fires from EVERY close
+ * path BEFORE `activeQueries.delete`: `emitWorkflowEnded`, `reapIdle`,
+ * `closeConversation`). Two responsibilities:
+ *   1. ALWAYS drain `_ccBashGates` (+ batched-approval cache + ack posture) for
+ *      the conversation — `reapIdle` / `closeConversation` close the Query
+ *      WITHOUT firing `onWorkflowEnded`, so the dispatch-side cleanup would
+ *      otherwise never run and the gate registry would leak.
+ *   2. On a `disconnected` grace-abort ONLY, checkpoint the conversation's
+ *      uncommitted working-tree changes — the cc-soleur-go (Concierge) parity
+ *      with the legacy `agent-runner` disconnect branch (#5275/#5356). The
+ *      helper is fire-and-forget and never throws, so the unconditional
+ *      bash-gate drain above always completes regardless.
+ */
+export function handleCcCloseQuery({
+  conversationId,
+  userId,
+  reason,
+}: {
+  conversationId: string;
+  userId: string;
+  reason?: "disconnected";
+}): void {
+  cleanupCcBashGatesForConversation(userId, conversationId);
+  if (reason === "disconnected") {
+    void checkpointInflightWorkForConversation(
+      userId,
+      conversationId,
+      "cc-resolve-workspace-path",
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // realSdkQueryFactory — Stage 2.12 binding (unconditional since #3270).
 //
@@ -1877,6 +1911,24 @@ export function hasActiveCcQuery(conversationId: string): boolean {
   return _runner.hasActiveQuery(conversationId);
 }
 
+/**
+ * #5356 — signal the process-wide cc runner to close a conversation's live
+ * `Query` from OUTSIDE a dispatch (the ws-handler disconnect grace timer).
+ * Mirrors `hasActiveCcQuery`'s `_runner`-direct accessor shape so the caller
+ * does not need to thread `sendToClient`. A no-op when no runner exists yet OR
+ * the conversation has no live `activeQueries` entry (a legacy-path or already-
+ * completed conversation — `closeConversation` itself no-ops on a missing
+ * entry). `reason === "disconnected"` threads to the close hook and triggers
+ * the in-flight checkpoint.
+ */
+export function closeCcConversation(
+  conversationId: string,
+  reason?: "disconnected",
+): void {
+  if (!_runner) return;
+  _runner.closeConversation(conversationId, reason);
+}
+
 export function getSoleurGoRunner(
   sendToClient: (userId: string, message: WSMessage) => boolean,
 ): SoleurGoRunner {
@@ -1901,13 +1953,13 @@ export function getSoleurGoRunner(
       // wire boundary.
       sendToClient(userId, event as unknown as WSMessage);
     },
-    // Drain `_ccBashGates` from EVERY internal close path. Without this
-    // hook, `runner.reapIdle()` and `runner.closeConversation()` close
-    // the Query without firing `onWorkflowEnded`, so the dispatch-side
-    // cleanup in `onWorkflowEnded` is never reached and the gate
-    // registry leaks. The runner fires this BEFORE `activeQueries.delete`.
-    onCloseQuery: ({ conversationId, userId }) =>
-      cleanupCcBashGatesForConversation(userId, conversationId),
+    // Drain `_ccBashGates` from EVERY internal close path, AND checkpoint
+    // in-flight work on a `disconnected` grace-abort (#5356). Without the
+    // drain, `runner.reapIdle()` / `runner.closeConversation()` close the
+    // Query without firing `onWorkflowEnded`, so the dispatch-side cleanup is
+    // never reached and the gate registry leaks. The runner fires this BEFORE
+    // `activeQueries.delete`. See `handleCcCloseQuery`.
+    onCloseQuery: handleCcCloseQuery,
     defaultCostCaps: readCcCostCaps(),
   });
   return _runner;
