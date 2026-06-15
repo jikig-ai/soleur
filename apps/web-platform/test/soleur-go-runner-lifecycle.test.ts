@@ -246,4 +246,132 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
   it("exports DEFAULT_IDLE_REAP_MS = 10 minutes", () => {
     expect(DEFAULT_IDLE_REAP_MS).toBe(10 * 60 * 1000);
   });
+
+  // #5371 — closeAllForShutdown (SIGTERM drain). Contract:
+  //   - closes EVERY active query, aborting WITHOUT a checkpoint reason
+  //     (legacy `abortAllSessions` parity — server_shutdown does not
+  //     checkpoint), so onCloseQuery fires with `reason === undefined`;
+  //   - does NOT skip `awaitingUser` (a deploy tears down review-gate
+  //     queries too — unlike reapIdle);
+  //   - is idempotent against the grace-abort overlap (a conversation the
+  //     ws-handler already closed via closeConversation(id,"disconnected")
+  //     is not re-fired).
+
+  it("closeAllForShutdown closes active queries WITHOUT a checkpoint reason (AC4)", async () => {
+    const onCloseQuery = vi.fn();
+    const m1 = createMockQuery();
+    const m2 = createMockQuery();
+    let nth = 0;
+    const runner = createSoleurGoRunner({
+      queryFactory: () => (nth++ === 0 ? m1.query : m2.query),
+      now: () => Date.now(),
+      onCloseQuery,
+    });
+    const events = makeEvents();
+    const persist = vi.fn().mockResolvedValue(undefined);
+
+    await runner.dispatch({
+      conversationId: "d1",
+      userId: "u1",
+      userMessage: "x",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: persist,
+    });
+    await runner.dispatch({
+      conversationId: "d2",
+      userId: "u1",
+      userMessage: "y",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: persist,
+    });
+    expect(runner.activeQueriesSize()).toBe(2);
+
+    const drained = runner.closeAllForShutdown();
+
+    expect(drained).toBe(2);
+    expect(runner.activeQueriesSize()).toBe(0);
+    expect(m1.closeSpy).toHaveBeenCalled();
+    expect(m2.closeSpy).toHaveBeenCalled();
+    expect(onCloseQuery).toHaveBeenCalledTimes(2);
+    for (const call of onCloseQuery.mock.calls) {
+      // The checkable contract: a `"disconnected"` reason is the ONLY
+      // thing that triggers a checkpoint via handleCcCloseQuery. Drain
+      // must pass none.
+      expect(call[0]?.reason).toBeUndefined();
+    }
+  });
+
+  it("closeAllForShutdown does NOT re-fire on an already grace-aborted query (AC6)", async () => {
+    const onCloseQuery = vi.fn();
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      onCloseQuery,
+    });
+    const events = makeEvents();
+    const persist = vi.fn().mockResolvedValue(undefined);
+
+    await runner.dispatch({
+      conversationId: "g1",
+      userId: "u1",
+      userMessage: "x",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: persist,
+    });
+
+    // ws-handler grace timer fired first: closes + checkpoints, deletes the
+    // entry from activeQueries.
+    runner.closeConversation("g1", "disconnected");
+    expect(onCloseQuery).toHaveBeenCalledTimes(1);
+    expect(onCloseQuery.mock.calls[0]?.[0]?.reason).toBe("disconnected");
+
+    // Now the SIGTERM drain runs — it must not re-fire onCloseQuery for the
+    // already-closed conversation (exactly one call total).
+    const drained = runner.closeAllForShutdown();
+
+    expect(drained).toBe(0);
+    expect(onCloseQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("reapIdle skips awaitingUser but closeAllForShutdown closes it (AC7)", async () => {
+    const onCloseQuery = vi.fn();
+    let now = 0;
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => now,
+      idleReapMs: 10 * 60 * 1000,
+      onCloseQuery,
+    });
+    const events = makeEvents();
+    const persist = vi.fn().mockResolvedValue(undefined);
+
+    await runner.dispatch({
+      conversationId: "a1",
+      userId: "u1",
+      userMessage: "x",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: persist,
+    });
+    runner.notifyAwaitingUser("a1", true);
+
+    now = 30 * 60 * 1000; // well past the 10-min idle window
+    // Reaper skips the paused (human-review-gate) query.
+    expect(runner.reapIdle()).toBe(0);
+    expect(runner.activeQueriesSize()).toBe(1);
+
+    // Drain does NOT copy the reaper's awaitingUser skip — a deploy must
+    // tear down review-gate-parked queries too.
+    const drained = runner.closeAllForShutdown();
+
+    expect(drained).toBe(1);
+    expect(runner.activeQueriesSize()).toBe(0);
+    expect(onCloseQuery).toHaveBeenCalledTimes(1);
+    expect(onCloseQuery.mock.calls[0]?.[0]?.reason).toBeUndefined();
+  });
 });

@@ -12,7 +12,7 @@
  *
  * RED before GREEN per AGENTS.md `cq-write-failing-tests-before`.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 
@@ -47,8 +47,13 @@ import {
   handleCcCloseQuery,
   registerCcBashGate,
   resolveCcBashGate,
+  reapIdleCcQueries,
+  drainCcQueriesForShutdown,
+  startCcIdleReaper,
   __resetDispatcherForTests,
+  __setCcRunnerForTests,
 } from "@/server/cc-dispatcher";
+import type { SoleurGoRunner } from "@/server/soleur-go-runner";
 
 function seedBashGate(userId: string, conversationId: string) {
   const session = {
@@ -124,5 +129,44 @@ describe("#5356 handleCcCloseQuery", () => {
     expect(mockCheckpointForConversation).toHaveBeenCalledTimes(1);
     // Drained synchronously, independent of the still-pending checkpoint.
     expect(gateIsLive("u-s", "conv-s")).toBe(false);
+  });
+});
+
+describe("#5371 cc idle-reaper scheduling + SIGTERM drain accessors", () => {
+  beforeEach(() => {
+    __resetDispatcherForTests(); // sets _runner = null
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("AC5: reaper/drain accessors no-op when no runner exists yet", () => {
+    // Lazy singleton: a deploy with no cc traffic since boot has _runner null.
+    // Both accessors must return 0 without forcing runner creation.
+    expect(reapIdleCcQueries()).toBe(0);
+    expect(drainCcQueriesForShutdown()).toBe(0);
+  });
+
+  it("AC1: startCcIdleReaper schedules reapIdle() on the live runner", () => {
+    vi.useFakeTimers();
+    const reapIdle = vi.fn(() => 0);
+    // Only `reapIdle` is exercised by the scheduler path; the rest of the
+    // SoleurGoRunner surface is irrelevant here.
+    const stub = { reapIdle } as unknown as SoleurGoRunner;
+    __setCcRunnerForTests(stub);
+
+    const timer = startCcIdleReaper();
+    // Returned timer is unref'd by the scheduler (mirrors agent-runner.ts:848)
+    // — never blocks shutdown. `unref` is a no-op under fake timers but must
+    // not throw.
+    expect(typeof timer.unref).toBe("function");
+    expect(reapIdle).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300_000); // CC_IDLE_REAPER_INTERVAL_MS
+    expect(reapIdle).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(300_000);
+    expect(reapIdle).toHaveBeenCalledTimes(2);
+
+    clearInterval(timer);
   });
 });
