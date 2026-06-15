@@ -33,16 +33,18 @@
 -- ============================================================================
 -- email_suppression — per-founder permanent suppression set
 -- ============================================================================
+-- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-06-15-outbound-email-authority-lia.md; Art.30 PA-28)
+-- RETENTION: permanent / monotonic — retention IS the opt-out guarantee (Art. 17 via anonymise_email_suppression; no un-suppress)
 CREATE TABLE IF NOT EXISTS public.email_suppression (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   -- NULLABLE to admit Art-17 anonymisation. ON DELETE RESTRICT prevents
   -- accidental user-row deletion before anonymise_email_suppression runs.
-  owner_id       uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT,
-  -- HMAC-SHA-256(pepper, normalize(email)) — deterministic, app-computed.
-  recipient_hash text NOT NULL CHECK (length(recipient_hash) BETWEEN 1 AND 128),
+  owner_id       uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT, -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
+  -- HMAC-SHA-256(pepper, normalize(email)) — deterministic keyed pseudonym (Art. 32); plaintext address never stored.
+  recipient_hash text NOT NULL CHECK (length(recipient_hash) BETWEEN 1 AND 128), -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); pseudonymised recipient)
   -- Why the recipient is suppressed: opt-out reply, hard decline, bounce.
-  reason         text NOT NULL CHECK (reason IN ('opt_out', 'decline', 'bounce', 'manual')),
-  added_at       timestamptz NOT NULL DEFAULT now()
+  reason         text NOT NULL CHECK (reason IN ('opt_out', 'decline', 'bounce', 'manual')), -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
+  added_at       timestamptz NOT NULL DEFAULT now() -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
 );
 
 COMMENT ON TABLE public.email_suppression IS
@@ -232,29 +234,31 @@ COMMENT ON FUNCTION public.anonymise_email_suppression(uuid) IS
 -- the gated-tier review; per_send_body_sha256 is recomputed by the chokepoint
 -- at send time (outbound.ts rejects on mismatch — body-binding).
 -- ============================================================================
+-- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-06-15-outbound-email-authority-lia.md; Art.30 PA-28)
+-- RETENTION: append-only WORM; accountability period (Art. 5(2)) — Art. 17 via anonymise_outbound_sends (Art. 17(3)(b) override)
 CREATE TABLE IF NOT EXISTS public.outbound_sends (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   -- NULLABLE to admit Art-17 anonymisation; ON DELETE RESTRICT prevents
   -- user-row deletion before anonymise_outbound_sends runs.
-  owner_id              uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  owner_id              uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT, -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
   -- HMAC-SHA-256(EMAIL_HASH_PEPPER, normalize(email)) — same keyed hash the
   -- suppression set uses, so an audit row is linkable to a suppression entry.
-  recipient_hash        text NOT NULL CHECK (length(recipient_hash) BETWEEN 1 AND 128),
+  recipient_hash        text NOT NULL CHECK (length(recipient_hash) BETWEEN 1 AND 128), -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); pseudonymised recipient)
   -- The body hash the human approved at the gated review (P0-1 body-binding).
-  approved_body_sha256  text NOT NULL CHECK (length(approved_body_sha256) BETWEEN 1 AND 128),
+  approved_body_sha256  text NOT NULL CHECK (length(approved_body_sha256) BETWEEN 1 AND 128), -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); body never stored, only its hash)
   -- The body hash recomputed by the chokepoint at send time. Equal to
   -- approved_body_sha256 on every legitimate row (the chokepoint throws on
   -- mismatch before Resend); persisted so a later audit can prove equality.
-  per_send_body_sha256  text NOT NULL CHECK (length(per_send_body_sha256) BETWEEN 1 AND 128),
+  per_send_body_sha256  text NOT NULL CHECK (length(per_send_body_sha256) BETWEEN 1 AND 128), -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
   -- Resend message id (the un-rollback-able side effect's receipt). NULL only
   -- if recorded for a send that failed AFTER dispatch — not expected in v1.
-  resend_id             text NULL,
+  resend_id             text NULL, -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
   -- Free-text classifier (NOT the typed ActionClass union — this table does not
   -- use action_sends/scope_grants). Enum-ABSENCE CHECK mirrors action_sends so
   -- a locked-domain class can never be recorded here.
   action_class          text NOT NULL DEFAULT 'marketing.outreach'
                           CHECK (action_class !~ '^(payment|legal|auth)\.'),
-  sent_at               timestamptz NOT NULL DEFAULT now()
+  sent_at               timestamptz NOT NULL DEFAULT now() -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))
 );
 
 COMMENT ON TABLE public.outbound_sends IS
