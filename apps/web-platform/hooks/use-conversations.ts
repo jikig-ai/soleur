@@ -89,7 +89,8 @@ export function useConversations(
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   // Ref mirror of repoUrl so Realtime callbacks read the latest value
   // without forcing the subscription effect to re-subscribe on every
-  // repo change (see review F1). Both channels read from this ref.
+  // repo change (see review F1). The conversation realtime channels
+  // (own + workspace-shared) read from this ref.
   const repoUrlRef = useRef<string | null>(null);
   useEffect(() => {
     repoUrlRef.current = repoUrl;
@@ -151,10 +152,20 @@ export function useConversations(
 
       // visibility-sweep: RLS conversations_owner_or_shared returns own +
       // workspace-shared conversations; no app-level user_id filter needed.
+      //
+      // Scope by BOTH repo_url AND the active workspace_id, matching the
+      // server-side list tool (server/conversations-tools.ts). repo_url alone
+      // cannot separate two of the OWNER'S OWN workspaces connected to the
+      // SAME repo — both rows share repo_url, and RLS (075) returns the
+      // owner's rows across all their workspaces. conversations.workspace_id
+      // (NOT NULL, mig 059) is the precise discriminator, and it matches the
+      // route's resolved workspaceId so the list query and the workspace-
+      // shared realtime channel agree on the same workspace.
       let query = supabase
         .from("conversations")
         .select("*")
         .eq("repo_url", currentRepoUrl)
+        .eq("workspace_id", activeRepo.workspaceId)
         .order("last_active", { ascending: false })
         .order("created_at", { ascending: false });
 
@@ -301,7 +312,14 @@ export function useConversations(
   // from /api/workspace/active-repo (workspaces.repo_url), not users.repo_url,
   // so watching `users` rows would be dead. A workspace switch is a hard
   // navigation to /dashboard (the org-switcher remounts the page →
-  // fetchConversations re-runs), so there is no resubscribe gap to cover.
+  // fetchConversations re-runs), which covers the dominant re-scope path.
+  // Caveat: a same-session repo connect/disconnect that uses router.refresh()
+  // (settings/project-setup-card, repo/reconnect-notice) re-renders server
+  // components without remounting this client hook, so the rail can show stale
+  // scope until the next mount/refetch. Acceptable: scope staleness is a
+  // read-freshness gap, never a correctness/isolation break (RLS + the
+  // repo_url/workspace_id filter still bound what is shown). Revisit if
+  // operators report stale rails after in-session reconnect.
 
   const archiveConversation = useCallback(async (id: string) => {
     // Slot release on archive: handled by AFTER UPDATE OF archived_at

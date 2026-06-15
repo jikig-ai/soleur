@@ -253,7 +253,7 @@ describe("useConversations — repo scope from /api/workspace/active-repo (ADR-0
       expect(result.current.loading).toBe(false);
     });
 
-    expect(result.current.error).toBeTruthy();
+    expect(result.current.error).toBe("Failed to resolve the active repository");
     expect(result.current.conversations.length).toBe(0);
   });
 });

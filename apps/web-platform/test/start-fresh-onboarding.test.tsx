@@ -116,7 +116,7 @@ beforeEach(() => {
   globalThis.fetch = vi
     .fn()
     .mockImplementation((url: string, ...rest: unknown[]) => {
-      if (url === "/api/workspace/active-repo") {
+      if (typeof url === "string" && url.startsWith("/api/workspace/active-repo")) {
         return Promise.resolve({
           ok: true,
           status: 200,

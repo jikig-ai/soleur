@@ -79,10 +79,8 @@ vi.mock("@/lib/supabase/client", () => ({
         return builder;
       }
       if (table === "messages") return messageBuilder;
-      if (table === "users")
-        return createUpdateObservingBuilder([], null, {
-          repo_url: "https://github.com/acme/repo",
-        });
+      // Repo scope comes from GET /api/workspace/active-repo (stubbed via
+      // fetch in beforeEach); the hook no longer reads the `users` table.
       return createUpdateObservingBuilder([]);
     },
     channel: mockChannel,

@@ -118,7 +118,7 @@ function mockFetchWithActiveRepo(treeResponse: {
   json: () => Promise<unknown>;
 }) {
   return vi.fn().mockImplementation((url: string) =>
-    url === "/api/workspace/active-repo"
+    typeof url === "string" && url.startsWith("/api/workspace/active-repo")
       ? Promise.resolve({
           ok: true,
           status: 200,
