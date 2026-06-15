@@ -3,7 +3,7 @@ title: Listicle-Author Outreach Briefs
 category: marketing
 tag: outbound
 owner: CMO (outbound-strategist / copywriter)
-status: ready-to-send (pending CLO pre-send review)
+status: ready-to-send (CLO pre-send review DISCHARGED 2026-06-15 #5314 — conditions C1–C5 applied; audit at knowledge-base/legal/audits/2026-06-15-clo-presend-review-listicle-outreach-5314.md)
 last_updated: 2026-06-15
 source_issues:
   - 5314
@@ -21,7 +21,7 @@ This is the **outbound half** of #2073 (the on-site content half — our own ran
 
 Cold author outreach touches **CAN-SPAM (US)** and **GDPR consent (EU-based authors)**. Before sending:
 
-1. Route the final send list + templates to the `clo` agent (run `/soleur:go #5314` or invoke `clo` directly) for a CAN-SPAM / GDPR review.
+1. Route the final send list + templates to the `clo` agent (run `/soleur:go #5314` or invoke `clo` directly) for a CAN-SPAM / GDPR review. **STATUS: DISCHARGED 2026-06-15** — audit at `knowledge-base/legal/audits/2026-06-15-clo-presend-review-listicle-outreach-5314.md`; mandatory conditions C1–C5 applied to the templates and target list above. Re-route to `clo` if the campaign shifts to bulk/templated send >50 recipients, adds any payment/affiliate/sponsored term, or is run by an arms-length tenant.
 2. Every email MUST carry a working opt-out and an honest sender identity.
 3. Never offer payment, affiliate kickbacks, or sponsored placement — that converts an earned editorial citation into a paid one (lower AEO weight + FTC disclosure obligations). Free product access is the only lever.
 
@@ -38,6 +38,8 @@ Cold author outreach touches **CAN-SPAM (US)** and **GDPR consent (EU-based auth
 - **Offer:** full free hands-on access so any mention is tested, not taken on trust.
 
 ## Prioritized target list
+
+> **C3 (mandatory before first send, per CLO review #5314):** tag each target **US** or **EU/UK** before sending and pick the matching footer (US baseline vs EU/UK Art. 14 variant). For EU/UK *individual* (non-corporate) addresses in stricter member states, prefer the platform DM channel or the publication's corporate contact form over a cold personal email. If jurisdiction is unknown, default to the EU/UK footer (it is a strict superset).
 
 Scored on **inclusion-likelihood × AEO citation weight**. Priority inverts raw traffic: Claude-Code-plugin lists are the strongest fit (Soleur installs as a Claude Code extension), generic solopreneur-tool lists are higher-traffic but a harder editorial sell, competitor-owned lists are near-unwinnable.
 
@@ -92,9 +94,25 @@ We are early and our community is small. I am not asking for a ranking or a slot
 
 Source-available (BSL 1.1), built on Claude Code and MCP, human-in-the-loop by design: https://soleur.ai
 
+If you'd like to test it first, I'm glad to set you up with free access — and if that access shapes anything you write, disclose it however your editorial policy / the FTC endorsement guidelines call for ("Soleur provided free access for testing" is plenty).
+
 Happy to answer anything.
 
 Jean
+
+—
+Jean Deruelle · Soleur (Jikigai SARL)
+25 rue de Ponthieu, 75008 Paris, France
+This is a one-time personal note about your list. If you'd rather not hear from me, reply "no thanks" and I won't contact you again.
+
+> **Compliance footer (per CLO pre-send review #5314):** the block above is the **US baseline** footer (CAN-SPAM postal address + opt-out). For any target tagged **EU/UK** (or unknown jurisdiction → default to EU/UK), replace it with the EU/UK footer below (GDPR Art. 14 source/rights + opt-out; it is a strict superset and also satisfies CAN-SPAM, so it is safe to use universally):
+>
+> ```
+> —
+> Jean Deruelle · Soleur (Jikigai SARL), data controller
+> 25 rue de Ponthieu, 75008 Paris, France · legal@jikigai.com
+> I'm contacting you because of your published article {{list_title}}; I found your contact via its public byline. I'll only send one polite follow-up at most. You can object at any time (reply to opt out), and you have the right to access or have me erase your contact details — email legal@jikigai.com. Our privacy policy: https://soleur.ai/legal/privacy-policy/
+> ```
 
 ### Email B — independent tester blogs (lead with free access)
 
@@ -106,6 +124,8 @@ You actually run the products you write about, so I want to put Soleur in your h
 
 Full free access, no conditions. Test it, break it, and write what you find — including what falls short. We are early-stage with a small community, and honest hands-on coverage is worth more to us than a flattering mention.
 
+One ask if you do cover us: if the free access shapes what you write, please disclose it however your editorial policy / the FTC endorsement guidelines call for ("Soleur provided free access for testing" is plenty). Honest, disclosed coverage is exactly what we want.
+
 Soleur is a Company-as-a-Service platform: 60+ agents across 8 departments sharing one compounding knowledge base — the organization layer above the single-purpose tools you usually review. Source-available (BSL 1.1), built on Claude Code and MCP. Every output is a starting point you approve, not a final answer.
 
 Start here: https://soleur.ai
@@ -114,6 +134,13 @@ Our own honest ranking for context: https://soleur.ai/blog/best-ai-tools-for-sol
 Reply and I will set you up today.
 
 Jean
+
+—
+Jean Deruelle · Soleur (Jikigai SARL)
+25 rue de Ponthieu, 75008 Paris, France
+This is a one-time personal note about your list. If you'd rather not hear from me, reply "no thanks" and I won't contact you again.
+
+> **Compliance footer (per CLO pre-send review #5314):** US baseline above (CAN-SPAM). For **EU/UK** (or unknown → default EU/UK) targets, use the EU/UK footer from the Email A note (GDPR Art. 14 source/rights + opt-out). **C5 (operational):** if anyone declines, suppress them permanently — do not send Touch 2 — and note it on the send list.
 
 ### X / LinkedIn DM (under 60 words)
 

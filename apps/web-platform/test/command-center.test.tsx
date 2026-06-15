@@ -100,6 +100,34 @@ let messageBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
 // dashboard disconnected-hint effect both short-circuit sensibly.
 const DEFAULT_USERS_ROW = { repo_url: "https://github.com/acme/repo" };
 
+// useConversations now resolves its repo scope from GET /api/workspace/active-repo
+// (ADR-044), not users.repo_url. The page also fetches the KB tree. This helper
+// returns a URL-aware fetch mock: the active-repo route gets the connected-repo
+// payload; every other URL (the KB tree) gets the supplied response.
+const ACTIVE_REPO_RESPONSE = {
+  workspaceId: "ws-1",
+  repoUrl: "https://github.com/acme/repo",
+  repoName: "acme/repo",
+  repoStatus: "connected",
+  fellBackToSolo: false,
+};
+
+function mockFetchWithActiveRepo(treeResponse: {
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
+}) {
+  return vi.fn().mockImplementation((url: string) =>
+    typeof url === "string" && url.startsWith("/api/workspace/active-repo")
+      ? Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(ACTIVE_REPO_RESPONSE),
+        })
+      : Promise.resolve(treeResponse),
+  );
+}
+
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
@@ -127,7 +155,7 @@ describe("Command Center", () => {
     messageBuilder = buildSupabaseQueryBuilder({ data: mockMessages });
 
     // Mock fetch for KB tree — return all foundation files so page shows Command Center
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = mockFetchWithActiveRepo({
       ok: true,
       status: 200,
       json: () =>
@@ -171,7 +199,7 @@ describe("Command Center", () => {
     messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     // Mock KB tree with ALL files (4 foundation + 6 operational)
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = mockFetchWithActiveRepo({
       ok: true,
       status: 200,
       json: () =>
@@ -345,7 +373,7 @@ describe("Command Center", () => {
     conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
     messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = mockFetchWithActiveRepo({
       ok: true,
       status: 200,
       json: () =>
@@ -408,7 +436,7 @@ describe("Command Center", () => {
       messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
       // KB tree without vision.md
-      globalThis.fetch = vi.fn().mockResolvedValue({
+      globalThis.fetch = mockFetchWithActiveRepo({
         ok: true,
         status: 200,
         json: () =>

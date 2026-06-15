@@ -40,6 +40,16 @@ export const WORKFLOW_END_STATUSES = [
   // `cc-dispatcher.onWorkflowEnded` routes it to the terminal
   // `session_ended` family (see TERMINAL_WORKFLOW_END_STATUSES).
   "session_revoked",
+  // #5313 (deferred #5240 FR-half) — the worktree-rebind loop. Emitted by
+  // the runner's command-pattern detector when N=3 consecutive
+  // near-identical `cd <path> && pwd` CWD-verification commands return a
+  // `pwd` that does not equal the expected worktree path (the Bash bwrap
+  // sandbox could not enter the worktree). A fast, honest terminal state
+  // so the operator sees "couldn't enter the workspace" in seconds instead
+  // of the agent looping the verify command until the 10-min runner_runaway
+  // breaker fires with a generic status. `z.enum(WORKFLOW_END_STATUSES)` in
+  // `ws-zod-schemas.ts` reuses this tuple — no duplicate enum to update.
+  "worktree_enter_failed",
 ] as const;
 export type WorkflowEndStatus = typeof WORKFLOW_END_STATUSES[number];
 
