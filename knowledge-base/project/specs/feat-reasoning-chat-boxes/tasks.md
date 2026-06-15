@@ -32,16 +32,16 @@ issue: 5370
 - [ ] 4.1 ws-client `ChatState`: set `liveNarration` on `reasoning_narration`; clear on `clear_streams`/`enter_stopping`/`timeout`→error/`onclose`/`connection_change`.
 - [ ] 4.2 `chat-state-machine.ts`: `turn_summary` appends `ChatTurnSummaryMessage`.
 
-## Phase 5 — Emit + agent channel
-- [ ] 5.1 `narrate-tool.ts`: `narrate({message})` + `summarize({summary})`; register in `tool-tiers.ts` + `permission-callback.ts`.
-- [ ] 5.2 `cc-dispatcher.ts` `emitNarration()`: narrate→frame; summarize→drop-if-aborted, redact-at-construction (drop-on-trip + Sentry), insert, emit buffered frame.
-- [ ] 5.3 `insert-turn-summary.ts`: `getFreshTenantClient(founderId)`, `user_id=founderId`, `message_kind='turn_summary'`, redacted `content`.
+## Phase 5 — Emit + agent channel (tool-result-handler pattern)
+- [ ] 5.1 `narrate-tool.ts`: `narrate({message})` + `summarize({summary})` as PURE validate-and-return factories (capture only userId; length-cap args); explicit tier in `tool-tiers.ts` + `permission-callback.ts` (document cc-path is auto-approve, no review gate).
+- [ ] 5.2 `cc-dispatcher.ts` `emitNarration()` in `onToolResult` (`:2602`), BRANCH BEFORE `:2608` guard: narrate→redact(formatAssistantText+probe drop-on-trip)→frame; summarize→drop-if-aborted(read dispatch state)→redact ONCE→same string to insert + buffered frame.
+- [ ] 5.3 `insert-turn-summary.ts`: redact INSIDE helper; `getFreshTenantClient(founderId)`; FULL column set — `conversation_id`, `workspace_id=founderId` (solo-pin), `template_id='default_legacy'`, `user_id=founderId`, `role='assistant'`, `message_kind='turn_summary'`, redacted `content`.
 - [ ] 5.4 `prompt-assembly.ts` + `constants.ts`: narration directive + cross-tenant prohibition; orchestrator-only `summarize`.
 
 ## Phase 6 — Render + hydrate
 - [ ] 6.1 `chat-surface.tsx`: `turn_summary` case → `<TurnSummaryBubble>`; live line near Working badge; reconnect "Still working…" placeholder.
-- [ ] 6.2 `turn-summary-bubble.tsx` (NEW): emerald checkmark + accent rail; `formatAssistantText`.
-- [ ] 6.3 `ws-client.ts`: dispatch both frames; hydrate `message_kind='turn_summary'`; both-path teardown.
+- [ ] 6.2 `turn-summary-bubble.tsx` (NEW): PLAIN TEXT (`<p whitespace-pre-wrap>` + `formatAssistantText`), NOT MarkdownRenderer; emerald checkmark + accent rail. Test: inert `<script>`/`<img onerror>`.
+- [ ] 6.3 `ws-client.ts`: dispatch both frames; hydrate `message_kind='turn_summary'` (unknown kind THROWS, no MarkdownRenderer fallthrough); both-path teardown.
 - [ ] 6.4 `api-messages.ts`: add `message_kind` to history `.select` (`:139-151`).
 - [ ] 6.5 Wireframe: correct Frame 07 caption; add reconnect-mid-turn frame (or cross-ref `reconnect-resume-states.pen`).
 
@@ -55,3 +55,8 @@ issue: 5370
 - [ ] 8.3 `turn-summary-bubble.test.tsx` (in `test/components/`).
 - [ ] 8.4 DSAR: un-redacted export + conversation-delete cascade.
 - [ ] 8.5 `tsc --noEmit` + `vitest run` green.
+- [ ] 8.6 Insert against real-Postgres/rollback-tx (not mock) — catches 23502/RLS on the full column set.
+- [ ] 8.7 turn-summary-bubble inert-HTML test; same-redacted-string-to-both-sinks test; narrate redaction test.
+
+## Phase 9 — Tripwire (file at /work)
+- [ ] 9.1 File follow-up issue: multi-tenant cross-tenant-prose structural control (when a 2nd human tenant shares the surface, directive-only control is inadequate).

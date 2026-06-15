@@ -122,16 +122,18 @@ No falsified spec assumptions. Gate-discovered deltas folded into phases:
 - **ws-client `ChatState` (`ws-client.ts`)** owns `liveNarration`: set on `reasoning_narration` dispatch; **clear (→null) on `clear_streams`, `enter_stopping`, `timeout`→error, `onclose`/`connection_change`** [spec-flow P0]. Single highest-leverage correctness fix.
 - `chat-state-machine.ts`: `turn_summary` appends `ChatTurnSummaryMessage` (mirrors persisted-text append).
 
-### Phase 5 — Emit + agent channel
-- `narrate-tool.ts` (or extend `conversations-tools.ts`): `narrate({message})` + `summarize({summary})` on soleur_platform MCP server; register in `tool-tiers.ts` + `permission-callback.ts`.
-- `cc-dispatcher.ts` — extractable `emitNarration()` (eases #3243): `narrate`→`reasoning_narration` frame. `summarize`→ **drop if conversation aborted/stopping** [spec-flow 1c]; redact at construction (`formatAssistantText` + `redactCommandForDisplay` + `debugRedactionProbeTrips`, drop-on-trip + Sentry mirror); `insertTurnSummary()`; emit buffered `turn_summary`.
-- `insert-turn-summary.ts`: mirror `insert-draft-card.ts` — `getFreshTenantClient(founderId)`, **`user_id=founderId`** [legal HIGH], `role='assistant'`, `message_kind='turn_summary'`, redacted `content`.
+### Phase 5 — Emit + agent channel (tool-result-handler pattern — CTO deepen)
+- `narrate-tool.ts` (or extend `conversations-tools.ts`): `narrate({message})` + `summarize({summary})` as **pure validate-and-return factories** (mirror `buildConversationsTools`/`buildC4ConciergeTools` — they capture only `userId`, NOT `send`). The tool validates args (incl. a **length cap** on `message`/`summary` — uncapped agent text = stored-payload/buffer-bloat DoS [security C-2]) and returns a value; it does NOT emit or insert. Register in `tool-tiers.ts` + `permission-callback.ts` with an **explicit tier** (state it; the cc-router path uses an `allowedTools` auto-approve list, so the `"gated"` default does NOT fire there — document that the real controls are allowlist + redaction + abort-guard, NOT a review gate [security C-2]).
+- `cc-dispatcher.ts` — the side-effect lives in **`onToolResult` (`:2602`)**, keyed on `block.name === "mcp__soleur_platform__narrate" / "__summarize"`, in an extractable `emitNarration()` (eases #3243), template = the Bash `command_stream` handler (`:2602-2663`). **Branch BEFORE the `!bashAutonomousPosture` early-return at `:2608`** or it's silently skipped in non-autonomous postures [CTO]. The `onToolResult` closure has `sendToClient`, `userId`, `conversationId`, AND the dispatch `state` machine (abort/stopping @`:2696-2718`) in scope — the tool does not, which is why the side-effect must live here.
+  - `narrate` → **redact** (`formatAssistantText` + `debugRedactionProbeTrips` drop-on-trip — the ungated all-user live frame must be at least as protected as the persisted one [security M-2]) → emit `reasoning_narration` (with `CC_ROUTER_LEADER_ID`).
+  - `summarize` → **drop if conversation aborted/stopping** (read dispatch `state`) [spec-flow 1c / FR5] → redact ONCE → feed the **same redacted+probed string** to BOTH `insertTurnSummary()` AND the buffered `turn_summary` frame [security M-1].
+- `insert-turn-summary.ts`: mirror `insert-draft-card.ts` AND **redact inside the helper** (single write choke point [data-integrity P2]). **Explicit full column contract** [data-integrity P0-1] — all NOT-NULL undefaulted: `conversation_id` (required by `messages_row_kind_chk` + DSAR cross-tenant guard), **`workspace_id = founderId`** (solo-pin per `insert-draft-card.ts:66`; NOT `resolveCurrentWorkspaceId` — load-bearing for the `messages_workspace_member_insert` RLS gate [P0-2]), **`template_id = 'default_legacy'`** (satisfies `messages_template_id_check`), **`user_id = founderId`** [legal HIGH / Art-15(4)], `role='assistant'`, `message_kind='turn_summary'`, redacted `content`. Insert via `getFreshTenantClient(founderId)`.
 - `prompt-assembly.ts` + `constants.ts`: directive — "call `narrate` with a short plain-language status at milestones; call `summarize` once with the outcome on successful completion. **Never name any entity, org, person, file path, skill name, or issue number outside the current user's own context**" [legal MEDIUM cross-tenant]. Multi-leader: only the orchestrator calls `summarize`.
 
 ### Phase 6 — Render + hydrate
+- `turn-summary-bubble.tsx` (NEW): **render as PLAIN TEXT** — scrubbed string inside `<p className="whitespace-pre-wrap">` + `formatAssistantText`, NOT `MarkdownRenderer` [security C-1]. Summaries are short plain-language; markdown is unneeded and turning an LLM-authored, prompt-injection-steerable, *persisted+replayed* string into a markdown sink is a stored-XSS risk the moment a future change adds `rehype-raw`. Emerald checkmark + `border-l` rail (wireframe 06). Test asserts a `<script>`/`<img onerror>` in `content` renders inert.
 - `chat-surface.tsx`: `case "turn_summary"` → `<TurnSummaryBubble>`; render `liveNarration` near the Working badge (wireframe 05); **reconnect placeholder** — `streamState==="streaming"` && `liveNarration===null` → "Still working…" [spec-flow 4] (cross-ref `reconnect-resume-states.pen`).
-- `turn-summary-bubble.tsx` (NEW): emerald checkmark + `border-l` rail (wireframe 06); `formatAssistantText`.
-- `ws-client.ts`: dispatch both frames; hydrate `message_kind='turn_summary'`→`ChatTurnSummaryMessage` (omission → silent fallthrough to a generic text bubble — name the regression [Kieran P2-3]); teardown on BOTH turn-boundary paths.
+- `ws-client.ts`: dispatch both frames; hydrate `message_kind='turn_summary'`→`ChatTurnSummaryMessage`. **A missing/unknown `message_kind` case must throw, NOT silently fall through to a generic `MarkdownRenderer` text bubble** [security C-1 — the fallthrough is the XSS sink]. Teardown on BOTH turn-boundary paths.
 - `api-messages.ts`: add `message_kind` to history `.select(...)` (`:139-151` [Kieran P2-3]).
 - Wireframe task: correct Frame 07 caption ("completed turns **may** leave a summary"); add reconnect-mid-turn frame (or cross-ref sibling .pen).
 
@@ -255,8 +257,39 @@ discoverability_test:
 - `assertWriteScope` is a `return true` placeholder; the RLS tenant-client is the actual write-scope control.
 - Do not co-locate the component test; vitest `include:` only collects `test/**`.
 
-## Next: deepen-plan
-`single-user incident` + ultrathink → run `soleur:deepen-plan` after this. Focus: CTO precedent-check on the
-`narrate`/`summarize` emit channel + leaderId source + tool registration surface [Kieran P1-1];
-data-integrity-guardian on the additive migration + redact-before-persist + `user_id` invariant;
-security-sentinel on persisted-PII + cross-tenant prose.
+## Deepen-Plan Findings (folded — authoritative; supersedes conflicting earlier text)
+
+Ran CTO + data-integrity-guardian + security-sentinel (single-user incident + ultrathink). Folded:
+
+**CTO — emit channel resolved (Phase 5 above rewritten):** tool-result-handler pattern; tools are
+pure validate-and-return; side-effect in `onToolResult` (`:2602`) BEFORE the `:2608` guard; abort-state
+from dispatch `state`; single-leader confirmed (inngest leader-prompts has zero MCP-tool registration).
+
+**data-integrity — TWO P0s (folded into Phase 5 insert contract):** (P0-1) insert MUST set
+`conversation_id` + `workspace_id=founderId` + `template_id='default_legacy'` — all NOT-NULL undefaulted
+(`059:79`, `053:50`); omission = 23502/23514 at first prod write, invisible to mocked tests. (P0-2) the
+real RLS insert gate is `messages_workspace_member_insert WITH CHECK (is_workspace_member(workspace_id,
+auth.uid()))` (`059:106-108`; the conversation-join + user_id policies were dropped) — `workspace_id` is
+load-bearing for RLS, not just NOT-NULL. **Correction to Architecture Decision RLS sentence:** the insert
+passes RLS because `workspace_id` is the founder's solo workspace, not via conversation_id/user_id.
+Optional CHECK hardening: `(message_kind IS NULL OR (message_kind='turn_summary' AND role='assistant'))`.
+
+**security — TWO Criticals (folded into Phase 5/6):** (C-1) plain-text render + throw-on-unknown-kind
+(no MarkdownRenderer fallthrough) + inert-HTML test. (C-2) explicit tier + length cap + document
+cc-path-is-auto-approve (no review gate). Plus: narrate redaction [M-2]; single redacted value → both
+sinks [M-1]; co-locate `user_id=founderId` invariant assertion with the insert [L-1].
+
+**Accepted residual risk + tripwire (security H-1):** no feasible server-side check that summary prose
+references only the user's own data; mitigations are the RLS tenant-client (attribution) + prompt
+directive (content) + `user-impact-reviewer`. Acceptable at single-user-incident TODAY (founder is
+effectively single-tenant; solo-pin). **Tripwire:** file a follow-up issue — "when a second human tenant
+shares this surface, the directive-only cross-tenant-prose control is inadequate; add a structural
+control (summaries restricted to entities in the current conversation's own context)." Create at /work.
+
+### Added Acceptance Criteria (from deepen)
+- [ ] `insert-turn-summary` sets ALL of `conversation_id`, `workspace_id=founderId`, `template_id='default_legacy'`, `user_id=founderId`, `role='assistant'`, `message_kind='turn_summary'` — assert against a real-Postgres (or rollback-tx) insert, not a mock (catches 23502/RLS).
+- [ ] `narrate`/`summarize` have an explicit tier in `TOOL_TIER_MAP`; `summary`/`message` length-capped at the tool boundary.
+- [ ] `turn-summary-bubble.tsx` renders plain text; a `<script>` / `<img onerror>` in `content` renders inert (no markdown/HTML execution); unknown `message_kind` throws (no silent MarkdownRenderer fallthrough).
+- [ ] `narrate` content runs through `formatAssistantText` + `debugRedactionProbeTrips` (drop-on-trip) before the live frame is emitted.
+- [ ] Emit test: the SAME redacted string feeds both the persisted `content` and the buffered frame bytes (plant a secret, assert both sinks).
+- [ ] Follow-up tripwire issue filed for the multi-tenant cross-tenant-prose structural control.
