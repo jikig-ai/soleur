@@ -19,6 +19,9 @@ to the Hetzner box whenever a cron needs an on-demand run.
   `knowledge-base/engineering/operations/runbooks/inngest-server.md` and
   `oauth-probe-failure.md`.
 
+The cron CRUD set: `soleur:schedule` (Create), `soleur:cron-list` (Read),
+`soleur:cron-delete` (Delete), **`soleur:trigger-cron` (Run-now — this)**.
+
 ## How it works
 
 The route authenticates a fail-closed shared secret
