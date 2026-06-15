@@ -177,6 +177,22 @@ describe("migration 104_outbound_email — negative-space invariants", () => {
     expect(executable).not.toMatch(/alter\s+type/i);
   });
 
+  it("anonymise RPCs are service-role-only — NOT granted to authenticated (no self-service erasure; sec review #5325)", () => {
+    // The erasure RPCs must never be self-callable: outbound_sends is a
+    // third-party WORM audit, and wiping email_suppression could re-enable
+    // opted-out sends. Account deletion (service_role) is the only Art-17 trigger.
+    expect(executable).not.toMatch(
+      /grant\s+execute\s+on\s+function\s+public\.anonymise_outbound_sends\(uuid\)\s+to\s+authenticated/i,
+    );
+    expect(executable).not.toMatch(
+      /grant\s+execute\s+on\s+function\s+public\.anonymise_email_suppression\(uuid\)\s+to\s+authenticated/i,
+    );
+    // The body guards service-role-only (no auth.uid()=p_user_id self-branch).
+    expect(executable).toMatch(/anonymise_outbound_sends:\s*service-role only/i);
+    expect(executable).toMatch(/anonymise_email_suppression:\s*service-role only/i);
+    expect(executable).not.toMatch(/self-call only for authenticated callers/i);
+  });
+
   it("has NO un-suppress path (suppression is permanent/monotonic)", () => {
     // No RPC that removes a row from email_suppression. The ONLY DELETE on the
     // table is the down-migration's DROP TABLE, never a per-row un-suppress.

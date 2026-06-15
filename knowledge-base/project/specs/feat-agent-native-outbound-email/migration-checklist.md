@@ -29,6 +29,21 @@ in ADR-060. No `action_sends`/`scope_grants` alteration; no TS `ActionClass`
 union widening (`outbound_sends.action_class` is free text with the enum-ABSENCE
 CHECK, defaulting to `marketing.outreach`).
 
+## Security hardening (2026-06-15, automated review #5325)
+
+Background security review flagged `anonymise_outbound_sends` as HIGH
+(Authorization / Audit-Trail Tampering) for granting `authenticated` a
+self-service erasure path (`auth.uid() = p_user_id`). Valid: `outbound_sends`
+is third-party-facing accountability evidence, so a founder self-wiping it is
+tampering (distinct from the `action_sends` precedent, which is the founder's own
+action log). Fixed BOTH erasure RPCs to **service-role-only** (dropped the
+`authenticated` grant + the self-call branch) — `anonymise_email_suppression`
+shares the class (wiping the suppression set could re-enable opted-out sends).
+The only Art-17 trigger is full account deletion via `service.rpc(...)` in
+`server/account-delete.ts` (steps 3.93/3.94, wired this session BEFORE
+`auth.admin.deleteUser` so the `owner_id` ON DELETE RESTRICT FK does not block).
+`verify/104` checks (19)/(20) assert NOT-executable-by-authenticated.
+
 ## Resume verification (2026-06-15)
 
 Migration 104 was authored + committed in a prior session but NOT applied.

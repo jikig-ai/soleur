@@ -177,18 +177,15 @@ AS $$
 DECLARE
   affected integer;
 BEGIN
-  -- Authorisation: service-role callers (account-delete.ts; auth.uid() NULL,
-  -- current_user service_role/postgres) OR self-DSAR (auth.uid() = p_user_id).
-  IF auth.uid() IS NULL THEN
-    IF current_user NOT IN ('service_role', 'postgres') THEN
-      RAISE EXCEPTION 'anonymise_email_suppression: caller not authorised'
-        USING ERRCODE = '42501';
-    END IF;
-  ELSE
-    IF auth.uid() <> p_user_id THEN
-      RAISE EXCEPTION 'anonymise_email_suppression: self-call only for authenticated callers'
-        USING ERRCODE = '42501';
-    END IF;
+  -- SERVICE-ROLE ONLY (account-delete.ts). No self-service erasure path: the
+  -- suppression set is CLO C5 compliance evidence (who opted out / declined),
+  -- and a founder self-wiping it could lead to re-mailing opted-out recipients
+  -- (CAN-SPAM/GDPR violation). The only legitimate Art-17 trigger is full
+  -- account deletion, which runs as service_role BEFORE auth.admin.deleteUser
+  -- (security review #5325; same posture as anonymise_outbound_sends).
+  IF current_user NOT IN ('service_role', 'postgres') THEN
+    RAISE EXCEPTION 'anonymise_email_suppression: service-role only (no self-service erasure)'
+      USING ERRCODE = '42501';
   END IF;
 
   -- recipient_hash scrubbed to a per-row-unique tombstone so the UNIQUE index
@@ -204,12 +201,11 @@ BEGIN
 END;
 $$;
 
+-- service_role-only: NOT granted to authenticated (no self-service erasure).
 REVOKE ALL ON FUNCTION public.anonymise_email_suppression(uuid)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.anonymise_email_suppression(uuid)
   TO service_role;
-GRANT EXECUTE ON FUNCTION public.anonymise_email_suppression(uuid)
-  TO authenticated;
 
 COMMENT ON FUNCTION public.anonymise_email_suppression(uuid) IS
   'Art. 17 erasure: tombstones email_suppression rows for the given founder '
@@ -375,16 +371,17 @@ AS $$
 DECLARE
   affected integer;
 BEGIN
-  IF auth.uid() IS NULL THEN
-    IF current_user NOT IN ('service_role', 'postgres') THEN
-      RAISE EXCEPTION 'anonymise_outbound_sends: caller not authorised'
-        USING ERRCODE = '42501';
-    END IF;
-  ELSE
-    IF auth.uid() <> p_user_id THEN
-      RAISE EXCEPTION 'anonymise_outbound_sends: self-call only for authenticated callers'
-        USING ERRCODE = '42501';
-    END IF;
+  -- SERVICE-ROLE ONLY. No self-service (auth.uid() = p_user_id) erasure path:
+  -- outbound_sends is a THIRD-PARTY-facing WORM accountability audit (proof of
+  -- what cold mail went to whom under what approval). A founder self-erasing it
+  -- on demand is audit-trail tampering — it defeats Art. 5(2) accountability and
+  -- a recipient's potential DSAR (security review #5325; distinct from the
+  -- action_sends precedent, which is the founder's OWN action log). The only
+  -- legitimate Art-17 trigger is full account deletion, which runs as
+  -- service_role via server/account-delete.ts BEFORE auth.admin.deleteUser.
+  IF current_user NOT IN ('service_role', 'postgres') THEN
+    RAISE EXCEPTION 'anonymise_outbound_sends: service-role only (no self-service erasure)'
+      USING ERRCODE = '42501';
   END IF;
 
   -- Bypass the pure-reject WORM trigger for this erasure UPDATE only.
@@ -400,12 +397,11 @@ BEGIN
 END;
 $$;
 
+-- service_role-only: NOT granted to authenticated (no self-service erasure).
 REVOKE ALL ON FUNCTION public.anonymise_outbound_sends(uuid)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.anonymise_outbound_sends(uuid)
   TO service_role;
-GRANT EXECUTE ON FUNCTION public.anonymise_outbound_sends(uuid)
-  TO authenticated;
 
 COMMENT ON FUNCTION public.anonymise_outbound_sends(uuid) IS
   'Art. 17 erasure: zeros owner_id + recipient_hash on outbound_sends rows for '

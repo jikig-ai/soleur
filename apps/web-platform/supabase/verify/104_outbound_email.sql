@@ -175,4 +175,22 @@ SELECT 'outbound_sends_rpcs_security_definer',
          WHERE n.nspname = 'public'
            AND p.proname IN ('record_outbound_send', 'anonymise_outbound_sends', 'outbound_sends_no_mutate')
            AND p.prosecdef
-       ) = 3 THEN 0 ELSE 1 END::int;
+       ) = 3 THEN 0 ELSE 1 END::int
+UNION ALL
+-- (19) anonymise_outbound_sends NOT executable by authenticated (service-role
+-- only — no self-service erasure of the third-party WORM audit; sec review #5325)
+SELECT 'anonymise_outbound_sends_not_granted_to_authenticated',
+       CASE WHEN has_function_privilege(
+         'authenticated',
+         'public.anonymise_outbound_sends(uuid)',
+         'EXECUTE'
+       ) THEN 1 ELSE 0 END::int
+UNION ALL
+-- (20) anonymise_email_suppression NOT executable by authenticated (service-role
+-- only — wiping the suppression set could re-enable opted-out sends)
+SELECT 'anonymise_email_suppression_not_granted_to_authenticated',
+       CASE WHEN has_function_privilege(
+         'authenticated',
+         'public.anonymise_email_suppression(uuid)',
+         'EXECUTE'
+       ) THEN 1 ELSE 0 END::int;
