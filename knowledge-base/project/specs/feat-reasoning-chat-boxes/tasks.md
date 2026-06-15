@@ -9,6 +9,8 @@ issue: 5370
 
 > Contract-before-consumer order. Run `soleur:deepen-plan` BEFORE `/work` (single-user-incident + ultrathink). Deepen-plan must resolve the Phase 5 emit-channel/leaderId plumbing (Kieran P1-1) before implementation.
 
+> **STATUS (2026-06-15, in progress):** Phases 0–4 + Phase 6 read/render path DONE, committed, pushed, tsc green, touched suites green (9 commits beyond main on `feat-reasoning-chat-boxes`). The full wire/schema/replay/reducer/persistence-read/render CONTRACT is in place and **inert-safe** (nothing emits the frames yet, so no behavior change on deploy). REMAINING: **Phase 5 (emit — the producer)**, **Phase 7 (4 legal docs + PA-2)**, **Phase 8 (dedicated test files)**. Phase 5 has a structural prerequisite: the `soleur_platform` MCP server in `cc-dispatcher.ts:1538` is currently built ONLY when `c4Enabled` — narrate/summarize must be registered unconditionally (always-build the server, merge C4 tools when enabled). Emit in `onToolUse` (block.input carries the message/summary), keyed on `mcp__soleur_platform__narrate`/`__summarize`; summarize reads the dispatch abort-state (`consumeForAbort`/`_aborted`, cc-dispatcher ~536) to drop on aborted/stopping. Phase 6 reconnect "Still working…" placeholder was deferred (needs a narration-seen-this-turn signal — wire with emit).
+
 ## Phase 0 — Preconditions (grep, no code)
 - [ ] 0.1 Read `conversations-tools.ts`, `tool-tiers.ts`, `permission-callback.ts`; confirm `cc-dispatcher.ts:741` `assertWriteScope` is a no-op + emit sites + `CC_ROUTER_LEADER_ID`.
 - [ ] 0.2 Read `ws-client.ts:219-293` (`ChatState` + actions, `onclose:1228`).
