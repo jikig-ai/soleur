@@ -79,12 +79,21 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
 
   // Email triage inbox reads (operator-inbox-delegation AC11): both
   // read-only, owner-scoped via closure userId + RLS → auto-approve (parity
-  // with kb_share_list rationale). FR9 boundary: there is NO email_triage
-  // write tool — if one ever ships it must be "gated", never auto-approve
-  // (a prompt-injected auto-acknowledge would silently unpin a statutory
-  // clock; the gate approval IS the human seeing the item — #4671).
+  // with kb_share_list rationale).
   "mcp__soleur_platform__email_triage_list": "auto-approve",
   "mcp__soleur_platform__email_triage_get": "auto-approve",
+
+  // Email WRITE tools (#5325, agent-native outbound). The FR9 boundary that
+  // formerly said "there is NO email_triage write tool" now ships: these are
+  // `gated` (NEVER auto-approve) because the human review gate IS the trust
+  // boundary — the operator sees the exact recipient + body and approves before
+  // the handler runs. A prompt-injected auto-send would be a CAN-SPAM/GDPR +
+  // brand incident; the gate approval is what binds the send to a human-
+  // reviewed body (the chokepoint recomputes the body hash). Suppression is
+  // also gated (permanent, no un-suppress) so a mis-suppression is human-seen.
+  "mcp__soleur_platform__email_send": "gated",
+  "mcp__soleur_platform__email_reply": "gated",
+  "mcp__soleur_platform__email_suppress": "gated",
 
   // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
   // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this

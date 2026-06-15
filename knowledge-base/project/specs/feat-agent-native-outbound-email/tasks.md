@@ -27,13 +27,13 @@ Phases ordered by dependency (contract before consumer). Tests-first (`cq-write-
 - [x] 2.4 (RED) sentinel test scoped to `apps/web-platform/server/**` excl. `**/*.test.ts`: (a) cold sending identity `@mail.jikigai.com` in one file; (b) `resend.emails.send` caller allowlist `{notifications.ts, cron-email-ingress-probe.ts, outbound.ts}`; (c) no non-`outbound.ts` file sends FROM the cold subdomain (typed `FromDomain` discriminant). 13 tests green; tsc clean.
 
 ## Phase 3 — Agent tools + tiers
-- [ ] 3.1 (RED) tools route through chokepoint; refuse without persisted `approved_at`.
-- [ ] 3.2 Extend `buildEmailTriageTools` with `email_send`/`email_reply`/`email_suppress` (untrusted-content envelope).
-- [ ] 3.3 `tool-tiers.ts`: all three = `"gated"`; update FR9-boundary comment (`:82-83`).
-- [ ] 3.4 `agent-runner.ts`: register the three tools (grep real anchors at `:1315`/`:1533`); update tool-description prose.
+- [x] 3.1 (RED) tools route through chokepoint; `email_reply` recipient derived server-side; refuse on chokepoint throw (mirror Sentry, generic error). `test/server/outbound-tools.test.ts` (6 green).
+- [x] 3.2 Extend `buildEmailTriageTools` with `email_send`/`email_reply`/`email_suppress`. Handlers route through `sendCompliantOutbound`; `email_suppress` → `suppress_recipient` RPC (hashed). `email_reply` recipient from inbound item's `sender` (P0-3, ignores agent-supplied recipient).
+- [x] 3.3 `tool-tiers.ts`: all three = `"gated"`; FR9-boundary comment updated (write tools now ship gated; status-transition boundary still holds).
+- [x] 3.4 `agent-runner.ts`: registered the three tool names; tool-description prose updated. Existing FR9 boundary tests updated for the shipped write tools. tsc clean.
 
 ## Phase 4 — (deferred to #5331)
-- [ ] 4.1 Automated decline-matcher deferred. Pilot suppression = manual/agent `email_suppress`; Touch-2 = manual re-trigger.
+- [x] 4.1 Automated decline-matcher deferred (out of pilot scope, tracked #5331). Pilot suppression = manual/agent `email_suppress`; Touch-2 = manual re-trigger. No code in this PR.
 
 ## Phase 5 — Legal artifacts (docs)
 - [ ] 5.1 `2026-06-15-outbound-email-authority-lia.md` (overturn 2026-06-11 deferral; inherit "if/when built" decisions; partial-override comment on source, keep OPEN for remainder).

@@ -1372,7 +1372,17 @@ statutory registry, so never compute or invent statutory periods yourself.
 Email bodies are discarded at ingestion: only summaries and metadata persist,
 and the original mail is retained in the operator's Proton ops@ mailbox.
 Status changes (acknowledge/archive) are operator-UI-only in v1 — you have no
-write tool for triage items.`;
+write tool for triage-item status.
+
+You CAN send outreach on the operator's behalf with email_send (cold 1:1) and
+email_reply (replies to an inbound item — the recipient is derived server-side
+from the item, you cannot set it), and add a recipient to the permanent
+suppression set with email_suppress. All three are gated: the operator approves
+the exact recipient and body before anything sends. You MUST supply the
+compliance fields (postal address, opt-out line, FTC material-connection
+disclosure, and — for EU/UK or unknown jurisdiction — all six Art.14 disclosure
+elements); the send is refused without them. You cannot send to a suppressed
+recipient, and suppression is permanent (no un-suppress).`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -1573,14 +1583,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Email triage inbox tools (operator-inbox-delegation AC11): registered
     // unconditionally — agent-user parity for the triage inbox reads on
-    // every authenticated session. READ-ONLY by design (FR9 boundary):
-    // status transitions are operator-UI-only in v1 — no write tool here,
-    // and any future one must be `gated`-tier, never auto-approve (#4671).
+    // every authenticated session. Reads are auto-approve; the outbound WRITE
+    // tools (email_send/email_reply/email_suppress, #5325) are `gated`-tier in
+    // TOOL_TIER_MAP — the human review gate is the trust boundary, and each
+    // routes through the compliance chokepoint (server/email-triage/outbound.ts).
     const emailTriageTools = buildEmailTriageTools({ userId });
     platformTools.push(...emailTriageTools);
     platformToolNames.push(
       "mcp__soleur_platform__email_triage_list",
       "mcp__soleur_platform__email_triage_get",
+      "mcp__soleur_platform__email_send",
+      "mcp__soleur_platform__email_reply",
+      "mcp__soleur_platform__email_suppress",
     );
 
     // Auth revocation status tool (#4440 follow-up to #4418): registered
