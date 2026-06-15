@@ -2,7 +2,7 @@
 title: "No persisted session" is a claim requiring a Playwright probe, not an answer
 category: workflow-patterns
 tags: [playwright-mcp, operator-steps, automation-claims, linkedin, probe-receipt]
-issue: 5334
+issue: 4049
 date: 2026-06-15
 ---
 
