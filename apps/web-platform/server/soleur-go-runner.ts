@@ -1129,6 +1129,17 @@ export interface SoleurGoRunner {
   reapIdle(): number;
   closeConversation(conversationId: string, reason?: "disconnected"): void;
   /**
+   * Drain EVERY active query on process shutdown (SIGTERM). Aborts WITHOUT
+   * a checkpoint reason — matching the legacy `abortAllSessions` parity
+   * (`server_shutdown` is non-`disconnected`, so the checkpoint branch is
+   * skipped; conversations "own their terminal state"). Unlike `reapIdle`,
+   * does NOT skip `awaitingUser` queries — a deploy tears down
+   * review-gate-parked queries too. Idempotent against the grace-abort
+   * overlap (skips entries already marked `state.closed`). Returns the
+   * count closed. (#5371)
+   */
+  closeAllForShutdown(): number;
+  /**
    * Push a `tool_result` content-block back into the SDK for an in-flight
    * interactive tool_use. Used by the `interactive_prompt_response`
    * handler (Stage 2.14) to close the cycle: the client picks an option,
@@ -3133,6 +3144,25 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeQuery(state, reason);
   }
 
+  function closeAllForShutdown(): number {
+    let closed = 0;
+    for (const state of Array.from(activeQueries.values())) {
+      // #5371 — `closeQuery` has no body-level `state.closed` guard (the
+      // three other callers set it before calling). Skip entries already
+      // closed by the grace-abort overlap so the drain never double-fires
+      // `onCloseQuery` / `query.close()`. Synchronous iteration → no
+      // concurrent reaper tick can interleave; the real overlap defended
+      // here is a prior `closeConversation(id, "disconnected")`.
+      if (state.closed) continue;
+      // No reason → no checkpoint (legacy `abortAllSessions` parity). And no
+      // `awaitingUser` skip — a deploy tears down review-gate queries too.
+      state.closed = true;
+      closeQuery(state);
+      closed++;
+    }
+    return closed;
+  }
+
   function respondToToolUse(args: {
     conversationId: string;
     toolUseId: string;
@@ -3239,6 +3269,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     activeQueriesSize,
     reapIdle,
     closeConversation,
+    closeAllForShutdown,
     respondToToolUse,
     notifyAwaitingUser,
   };

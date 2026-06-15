@@ -17,14 +17,16 @@ own surfaces.
 2. **ticket-triage P-level accuracy** — does the priority rubric produce the correct P1/P2/P3?
 
 <decision_gate>
-**API budget.** Each `npx promptfoo eval` run calls the Anthropic API against the key in your
-session — 2 arms × 3 models × ~3 golden tasks × 3 repeats ≈ **54 API calls per target** (~108 to
-run both). Cost scales with the model mix (one arm runs Opus) and the task count. This harness is
-**opt-in and manual** — it is deliberately NOT wired into per-PR CI (that cost decision is
-separate and later). Soleur does not bill or proxy these calls — Anthropic does, against your key.
-The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this harness against
-your own budget. To inspect the config without spending, use `npx promptfoo validate config` (no
-API calls).
+**API budget.** Each `npx promptfoo eval --repeat 3` run calls the Anthropic API against the key in
+your session — 2 arms × 3 models × the target's golden tasks × 3 repeats. At the current task counts
+that is ≈ **126 API calls** for go-routing (7 tasks) and ≈ **108** for ticket-triage (6 tasks), so
+≈ **230 to run both**. Cost scales with the model mix (one arm runs Opus), the task count, and the
+`--repeat` value (outputs are single tokens, so per-call cost is small — the first full run was well
+under $1). This harness is **opt-in and manual** — it is deliberately NOT wired into per-PR CI (that
+cost decision is separate and later). Soleur does not bill or proxy these calls — Anthropic does,
+against your key. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this
+harness against your own budget. To inspect the config without spending, use
+`npx promptfoo validate config` (no API calls).
 </decision_gate>
 
 ## How it works (the four ponytail patterns)
@@ -66,10 +68,13 @@ and the additive recipe for adding a new target. In short:
 
 ```bash
 cd plugins/soleur/skills/eval-harness
-bash scripts/gen-models.sh                                  # refresh model IDs from the registry
-npx promptfoo eval -c promptfooconfig.go-routing.yaml       # ~54 API calls
-npx promptfoo eval -c promptfooconfig.ticket-triage.yaml    # ~54 API calls
+bash scripts/gen-models.sh                                            # refresh model IDs from the registry
+npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3      # ~126 API calls (7 tasks)
+npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3   # ~108 API calls (6 tasks)
 ```
+
+`--repeat 3` runs each cell 3× so the rate can be a median over runs — a config-level `repeat:` key
+is NOT honored by promptfoo, so the flag is required.
 
 Model IDs are single-sourced via [gen-models.sh](./scripts/gen-models.sh), which reads the three
 current IDs from the TypeScript registry into `models.generated.json` — no model literal is

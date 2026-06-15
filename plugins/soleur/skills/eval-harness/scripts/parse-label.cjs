@@ -10,6 +10,33 @@
 // hyphen counts as part of a label token so "clo-attestation" is not split.
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
+
+// loadEnum(vars): resolve the target's closed label set to a real array.
+//
+// promptfoo does NOT resolve a `file://...` value in `defaultTest.vars` for a
+// custom JS assert — it passes the literal string `"file://enums/go-routes.json"`
+// straight through. So the assert must read the SSOT file itself. Accepts a
+// direct array (unit tests) or a `file://`/relative/absolute path to a JSON array
+// file (the promptfoo case, resolved relative to the skill dir = this script's
+// parent). Returns [] on any failure so the gate fails closed (out-of-enum)
+// rather than throwing.
+function loadEnum(vars) {
+  const raw = vars && vars.enum;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  const ref = raw.trim().replace(/^file:\/\//, "");
+  const p = path.isAbsolute(ref) ? ref : path.resolve(__dirname, "..", ref);
+  try {
+    const a = JSON.parse(fs.readFileSync(p, "utf8"));
+    if (Array.isArray(a)) return a;
+  } catch {
+    /* unreadable / not an array — fall through */
+  }
+  return [];
+}
+
 function extractLabel(output, allowed) {
   const text = String(output == null ? "" : output).trim();
   const set = Array.isArray(allowed) ? allowed : [];
@@ -51,4 +78,4 @@ function extractLabel(output, allowed) {
   return firstLine == null ? text : firstLine;
 }
 
-module.exports = { extractLabel };
+module.exports = { extractLabel, loadEnum };
