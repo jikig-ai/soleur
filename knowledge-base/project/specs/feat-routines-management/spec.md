@@ -45,7 +45,8 @@ off-schedule from the web.
 
 - **FR1** Routines tab: list all `EXPECTED_CRON_FUNCTIONS`, grouped by domain badge, with owner-role chip,
   human-readable frequency, last-run status pill + timestamp + duration, On/Archived indicator, Run-now
-  button, and overflow menu. Sort + Group controls. → wireframe (Phase 3.55).
+  button, and overflow menu. Sort + Group controls.
+  → wireframe: `knowledge-base/product/design/routines/routines-management.pen`.
 - **FR2** Recent Runs tab: reverse-chronological table across all routines (name, domain, status,
   started-at, duration, trigger source), paginated, backed by the durable run-log.
 - **FR3** Routine metadata sidecar: a client-free leaf exporting `Record<fnId, {domain, ownerRole,

@@ -73,7 +73,7 @@ gate, so "instant live routine" would overpromise persistence the architecture d
 | 6 | **Debug-mode Run-now routes through the existing allowlist**, never a bypass endpoint; tighten financial/egress/deletion routines to deny-by-default (scheduled-only or per-routine confirmation) | CTO + CLO: off-schedule runs fire real prod work; the allowlist (currently derives from ALL crons) must gain a curated protected subset. Parity-tested (`trigger-cron-allowlist-parity.test.ts`). |
 | 7 | **Concierge v2 test-runs are dry-run/sandbox by default** (block email/publish/financial/egress/delete) with a visible "DRY RUN — no external effects" marker | CLO: running an unapproved routine against real systems is the highest risk; real run only on explicit operator confirmation. |
 | 8 | New internal/agent-callable routes registered in `PUBLIC_PATHS` in the same PR; heartbeats gated on final attempt | learnings: 2026-06-01 (PUBLIC_PATHS or 307→/login), 2026-06-12 (don't page on transient retry faults). |
-| 9 | Visual design: see Phase 3.55 wireframes (referenced below) | Mock-confirmation gate before implementation. |
+| 9 | Visual design: `knowledge-base/product/design/routines/routines-management.pen` (Routines tab grouped-by-domain, Recent Runs, Run-now confirm modal) | Mock-confirmation gate before implementation; matches operator reference mock. |
 
 ## Open Questions
 
