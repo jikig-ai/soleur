@@ -10,6 +10,22 @@ status: planned
 
 # 🐛 fix(theme): explicit theme choice overridden by OS `prefers-color-scheme` on reload
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Sections enhanced:** Hypotheses (re-ranked), Implementation Phases (root cause pinned), Files to Edit (scoped down)
+**Research agents used:** Explore ×3 (CSP/nonce verification, ThemeProvider H2 reachability, theme learnings), architecture-strategist
+
+### Key Improvements
+1. **Root cause pinned without needing Phase 0 guesswork.** The deepen agents traced the exact reachable bug state in `theme-provider.tsx`: on the **SSR-hydration path** (the production path) the lazy `useState` initializer at line 180 returns `"system"` (`typeof window === "undefined"` is true server-side), React 18 reuses that snapshot on the client, and when the inline bootstrap also did not write `dataset.theme`, the first-mount effect's else-branch at **line 239 writes `theme` (= `"system"`)** to `dataset.theme` — so the `@media (prefers-color-scheme)` block drives the palette. **This is the bug.** The fix is to seed line 239 from `readStoredTheme()` (durable store) and sync React state, mirroring the bootstrap-ran branch at lines 230-232.
+2. **H1 (CSP nonce-miss block) demoted from leading to low-probability.** `lib/csp.ts:84-90` always includes `'unsafe-inline'` in `script-src` alongside `'nonce-…'` + `'strict-dynamic'`. A nonce-less inline script is admitted on CSP1/CSP2 via `'unsafe-inline'` and on CSP3 via the nonce — so a plain nonce-miss does NOT block the script. The one residual CSP path is **edge/CDN caching serving a stale HTML document whose baked-in nonce diverges from a fresh `Content-Security-Policy` header nonce** (strict-dynamic then blocks on CSP3); normal page responses carry no `Cache-Control: no-store`. This is a real-but-narrow contributor to the "sometimes" intermittency, not the primary cause.
+3. **Files-to-Edit scoped down.** `middleware.ts` / `lib/csp.ts` are NOT on the critical path for the primary fix (the line-239 seed is the load-bearing change). They remain optional hardening only if Phase 0 confirms the edge-cache nonce-divergence path is material in production.
+
+### New Considerations Discovered
+- The architecture-strategist initially flagged the fix as "already implemented" because `resolveClientInitialTheme()` (line 65-72) reads `readStoredTheme()` as its fallback. That fallback is **only reached on a client-only render** — on the SSR-hydration path React reuses the server's `"system"` snapshot and the initializer's `readStoredTheme()` branch never runs on the client. The line-239 else-branch is therefore genuinely writing `"system"`, and the fix has a real diff. The regression test MUST simulate the SSR-hydration path (initial `theme` state = `"system"`, `dataset.theme` absent, localStorage = `"light"`) — not a client-only mount, which would mask the bug.
+- Prior-art learning `2026-06-12-likec4-mantine-color-scheme-seam-and-vendored-theme-preservation.md` documents a structurally identical defect (provider `"auto"`/`"system"` default firing before the persisted value, letting OS `prefers-color-scheme` win) — same seam-analysis fix pattern: force the resolved value before the OS fallback can win.
+- Prior-art learning `2026-04-27-critical-css-fouc-prevention-via-static-and-playwright-gates.md` gives the canonical QA gate: block external stylesheets at the network layer (`page.route('**/*.css', abort)` + `waitUntil:'domcontentloaded'`) and assert the `data-theme` attribute — directly applicable to the Phase 3 Playwright re-verification.
+
 ## Overview
 
 A user who explicitly picks **Dark** (or Light) sometimes finds that after a
@@ -75,21 +91,18 @@ threshold: none, reason: the change touches only client-side theme rendering in 
 ## Hypotheses (to confirm/eliminate in Phase 0)
 
 The symptom requires `data-theme` to be unset or `"system"` at first paint, or
-reset afterward, despite localStorage holding `dark`/`light`. Candidate
-reachable causes, ranked by likelihood given the **intermittent** ("sometimes")
-report:
+reset afterward, despite localStorage holding `dark`/`light`. Re-ranked after the
+deepen pass traced the code paths (see Enhancement Summary):
 
-- **H1 — CSP nonce miss blocks the inline `NoFoucScript`.** If the per-request nonce is absent/mismatched (e.g., a cached/edge-served document, a route where `x-nonce` isn't set, a CSP that rejects the inline script), the bootstrap never runs → `data-theme` stays unset → `globals.css` `:root:not([data-theme])` `@media (prefers-color-scheme)` block drives the palette to the OS preference. **Intermittent** fits (only on routes/edge cases where the nonce path fails). `theme-csp-regression.test.tsx` covers the *passthrough*, but only asserts the attribute is rendered — not that production CSP actually admits the script, and not the unset-`data-theme` → OS-palette fallback consequence. *This is the leading hypothesis.*
-- **H2 — `ThemeProvider` first-mount effect overwrites a correct `dataset.theme` with `"system"`.** In `theme-provider.tsx` lines 217-247, when `dataset.theme` is *invalid/absent* the effect writes React's current `theme` (which is `"system"` on the SSR-fallback path) to `dataset.theme`. If the inline script ran but the attribute was scrubbed/raced, the effect could pin `"system"`. Need to confirm whether any ordering makes `prevThemeRef.current === null` see an absent attribute while localStorage is `dark`.
-- **H3 — localStorage value not durable.** The user's choice never actually persisted (quota, private mode, an unexpected clear). `setTheme` mirrors `setItem` failures to Sentry; check whether `reportSilentFallback`/`op:"setItem"` events exist. If localStorage is empty on reload, `system` is the correct fallback and the "bug" is a persistence-write failure, not a read/cascade failure.
-- **H4 — A second writer/clearer of the key.** `git grep` confirmed only `theme-provider.tsx` + `no-fouc-script.tsx` touch `soleur:theme` (the `notification-prompt.tsx` STORAGE_KEY is unrelated). H4 is effectively eliminated but Phase 0 re-confirms no extension/SDK path clears it.
+- **H2 (CONFIRMED — PRIMARY) — `ThemeProvider` first-mount effect writes `"system"` to `dataset.theme` on the SSR-hydration path when the bootstrap did not run.** Traced precisely: the lazy `useState` initializer at `theme-provider.tsx:179-180` returns `"system"` on the server (`typeof window === "undefined"`); React 18 reuses the server snapshot on the client and does NOT re-run the initializer, so `theme === "system"` at first mount. When `dataset.theme` is absent/invalid (bootstrap didn't run), the first-mount effect's else-branch at **line 239 writes `theme` (= `"system"`)** to `dataset.theme` — the `globals.css` `@media (prefers-color-scheme)` block then drives the palette to the OS preference. The `readStoredTheme()` fallback inside `resolveClientInitialTheme()` (line 71) does NOT save this case, because that function is only reached on a *client-only* render, never on the SSR-hydration path React actually uses in production. **This is the bug; the fix is the line-239 seed.**
+- **H1 (DEMOTED — low probability) — CSP edge-cache nonce divergence.** A plain nonce-miss does NOT block the inline script: `lib/csp.ts:84-90` always includes `'unsafe-inline'` in `script-src` (admits on CSP1/CSP2) alongside `'nonce-…'` + `'strict-dynamic'` (admits on CSP3). The only residual block path is an **edge/CDN cache serving a stale HTML document whose baked-in nonce diverges from a freshly-headered CSP nonce** (`'strict-dynamic'` then blocks on CSP3); normal page responses set no `Cache-Control: no-store`. This is a plausible *contributor to the "sometimes"* intermittency (it leaves `dataset.theme` unset → triggers the H2 else-branch), but it is upstream of the same H2 mechanism — fixing line 239 makes the palette correct even when the bootstrap is blocked. Phase 0 confirms whether edge caching of documents actually occurs in prod; if so, add the optional CSP hardening, but the primary fix stands regardless.
+- **H3 — localStorage value not durable.** The user's choice never persisted (quota, private mode, clear). `setTheme` already mirrors `setItem` failures to Sentry; Phase 0 queries for `reportSilentFallback op:"setItem"` events. If localStorage is empty on reload, `system` is the correct fallback (not a bug). Likely a minor/secondary contributor at most.
+- **H4 — A second writer/clearer of the key.** `git grep` confirmed only `theme-provider.tsx` + `no-fouc-script.tsx` touch `soleur:theme` (the `notification-prompt.tsx` STORAGE_KEY is unrelated). Eliminated.
 
-**Phase 0 picks the confirmed hypothesis; later phases implement against it.**
-The most probable outcome is H1 (matches the intermittent symptom and the
-unset-`data-theme`→OS-palette mechanism exactly); the plan is structured so the
-fix and regression test target whichever hypothesis Phase 0 confirms, but the
-default implementation path below is written for H1 with H2 as a defense-in-depth
-secondary.
+**Phase 0 reproduces and confirms H2 as primary; the fix and regression test
+target the line-239 SSR-hydration mechanism.** Phase 0 is now confirmation +
+edge-cache scoping, not open-ended hypothesis selection — the deepen pass already
+pinned the cause.
 
 ## Implementation Phases
 
@@ -100,23 +113,33 @@ secondary.
 3. Reproduce in a real browser with the Playwright MCP: set OS to dark, set `localStorage["soleur:theme"]="light"`, hard-reload, and read `document.documentElement.dataset.theme` + the computed `--soleur-bg-base` on first paint. Repeat with a simulated nonce-less/CSP-blocked inline script (block the inline script via route or CSP) to confirm the unset-`data-theme`→OS-palette mechanism. Capture a screenshot.
 4. Write the confirmed root cause as a one-paragraph note at the top of Phase 1, and adjust Phase 1's fix target if Phase 0 confirms H2/H3 over H1.
 
-### Phase 1 — Fix the confirmed cause (default: H1 — guarantee the bootstrap always runs / fails safe to stored theme)
+### Phase 1 — Fix the confirmed cause (PRIMARY: H2 — seed the first-mount fallback from the durable store, not React's `"system"`)
 
-Default path (H1 confirmed):
+Primary path (H2, confirmed by the deepen pass):
 
-1. Ensure the inline `NoFoucScript` is admitted by CSP on every document route. Two non-exclusive measures, chosen per Phase 0 findings:
-   - If a route can render `layout.tsx` without a nonce, fix the nonce-set path in `middleware.ts`/`lib/csp.ts` so `x-nonce` is always present for document responses (preferred — keeps strict CSP intact).
-   - If strict-nonce CSP can race/cache such that the script is occasionally rejected, add a CSP **hash** for the static `SCRIPT` string as a belt-and-suspenders admit path (the script body is a static literal, so a stable sha256 hash is computable at build time — no `'unsafe-inline'`).
-2. Harden the fallback so that *even if the inline script does not run*, an explicit stored choice is not silently surrendered to the OS:
-   - In `ThemeProvider`'s first-mount effect (`theme-provider.tsx` ~217-247): when `dataset.theme` is absent/invalid, **read `localStorage` directly** (`readStoredTheme()`) and write *that* to `dataset.theme` + React state — instead of writing React's SSR-fallback `theme` (`"system"`). This converts the current "establish baseline from React state" branch (which is `"system"` on the SSR path) into "establish baseline from the durable store", closing the unset-`data-theme`→OS-palette window without depending on the inline script. This is the smallest correctness-restoring edit and is defense-in-depth even if H1's CSP fix fully resolves the symptom.
+1. In `ThemeProvider`'s first-mount effect (`theme-provider.tsx` else-branch around lines 236-241): when `dataset.theme` is absent/invalid, **read `localStorage` directly** (`readStoredTheme()`) and write *that* to `dataset.theme`, AND sync React state to it — mirroring the bootstrap-ran branch at lines 230-232 (`setThemeState(fromDom); setResolvedTheme(resolveInitial(fromDom))`). Concretely, replace `document.documentElement.dataset.theme = theme` (line 239, which writes the SSR-fallback `"system"`) with:
+   - `const stored = readStoredTheme();`
+   - `document.documentElement.dataset.theme = stored;`
+   - `if (stored !== theme) { setThemeState(stored); setResolvedTheme(resolveInitial(stored)); }`
+   - `prevThemeRef.current = stored;`
 
-Secondary path (only if Phase 0 confirms H2): adjust the first-mount effect so an absent attribute never resolves to `"system"` when localStorage holds a concrete choice (same edit as 1.2 above; H2 and H1's fallback converge on the same code change).
+   This closes the unset-`data-theme`→OS-palette window on the SSR-hydration path without depending on the inline script. **State-sync is load-bearing:** writing `dataset.theme` alone fixes the palette but leaves the React `theme` state on `"system"`, so the `ThemeToggle` indicator would show the wrong segment (the #3318 symptom) — sync both, as the bootstrap branch already does.
 
-Tertiary path (only if Phase 0 confirms H3 — write failure): the read side is
-already correct; scope the fix to surfacing the persistence failure (the Sentry
-mirror already exists) and confirm no additional write-path bug. If H3 is the
-sole cause, document it and close — there is no "OS override" logic bug, and the
-plan re-scopes to a write-durability note (flag at review for re-scope).
+**Research Insight (verified):** the bootstrap-ran branch (lines 219-234) is
+unaffected — `isTheme(fromDom)` returns early at line 234 before reaching the
+else-branch, so no regression for the normal path. The genuine `system` case
+(localStorage = `"system"`/empty) is unaffected: `readStoredTheme()` returns
+`"system"`, identical to current behavior. (Source: H2-reachability deepen agent,
+`theme-provider.tsx:219-247`.)
+
+Optional hardening (only if Phase 0 confirms edge/CDN caching of HTML documents
+in prod — the H1 residual path):
+
+2. Add a CSP **hash** for the static `NoFoucScript` body in `lib/csp.ts` (the body is a static literal → stable sha256, no `'unsafe-inline'` reliance), and/or set `Cache-Control: no-store` on document responses so a stale baked-in nonce never diverges from the CSP-header nonce. This is belt-and-suspenders — the primary line-239 fix already makes the palette correct even when the bootstrap is fully blocked.
+
+If Phase 0 finds H3 (write failure) is also occurring, note it; the read-side
+fix above already handles a present-but-not-applied value, and the existing
+Sentry mirror surfaces write failures — no additional write-path code needed.
 
 ### Phase 2 — Regression test (assert the resolved palette, not a proxy)
 
@@ -128,9 +151,9 @@ Per the runner config, jsdom/happy-dom component tests MUST live under
 never collected.
 
 1. New `apps/web-platform/test/theme-explicit-choice-survives-reload.test.tsx`:
-   - Simulate `localStorage["soleur:theme"]="light"` + OS dark (`matchMedia` stub returns dark), with the inline bootstrap **not** having run (scrubbed `dataset.theme` — the exact unset-attribute state). Mount `<ThemeProvider>` and assert the first-mount effect writes `data-theme="light"` (NOT `"system"`/unset) — i.e., the explicit stored choice wins over OS even on the no-bootstrap path.
-   - Symmetric case: stored `"dark"` + OS light → resolves dark.
-   - Control: stored `"system"` + OS light → resolves to follow OS (light) — proves we did not break the genuine system-follow behavior.
+   - **MUST simulate the SSR-hydration path, not a client-only mount.** The bug only manifests when the first-mount `theme` state is `"system"` (the server snapshot React reuses) AND `dataset.theme` is absent. A naive client-only mount would let the lazy initializer reach `readStoredTheme()` (line 71) and mask the bug — the test would pass green before any fix and prove nothing. To force the buggy state: scrub `document.documentElement.dataset.theme` (unset), set `localStorage["soleur:theme"]="light"`, stub `matchMedia` to report OS dark, and ensure the provider's initial `theme` state resolves to `"system"` (e.g., by mounting with `dataset.theme` absent at initializer time so `resolveClientInitialTheme()`→`readStoredTheme()` is the only seed — OR explicitly assert the post-effect DOM state which is the real invariant regardless of init path). Assert the first-mount effect resolves `document.documentElement.dataset.theme === "light"` (NOT `"system"`/unset) AND the `useTheme()` context `theme === "light"` (state-sync invariant).
+   - Symmetric case: stored `"dark"` + OS light → resolves dark, context `theme === "dark"`.
+   - Control: stored `"system"` + OS light → resolves to follow OS (light), context `theme === "system"` — proves we did not break the genuine system-follow behavior.
 2. If Phase 1 includes a CSP hash/nonce change, extend `theme-csp-regression.test.tsx` (or add a sibling) to assert the admit mechanism Phase 1 chose (hash present in CSP, or nonce always non-undefined for document responses) — assert the mechanism, not "specialist reported done".
 
 ### Phase 3 — Verify
@@ -141,9 +164,9 @@ never collected.
 
 ## Files to Edit
 
-- `apps/web-platform/components/theme/theme-provider.tsx` — first-mount effect: when `dataset.theme` is absent/invalid, seed from `readStoredTheme()` (durable store) instead of React's SSR-fallback `"system"` state. (Always edited — this is the defense-in-depth correctness fix regardless of confirmed hypothesis.)
-- `apps/web-platform/middleware.ts` — *conditional on H1*: ensure `x-nonce` is set on every document response. Read in Phase 0; edit only if a nonce-less document path exists.
-- `apps/web-platform/lib/csp.ts` — *conditional on H1*: add a sha256 CSP hash for the static `NoFoucScript` body as a belt-and-suspenders admit path, or fix the nonce emission. Read in Phase 0; edit only if Phase 0 confirms a CSP-block path.
+- `apps/web-platform/components/theme/theme-provider.tsx` — **the primary fix (always edited).** First-mount effect else-branch (~lines 236-241): seed `dataset.theme` from `readStoredTheme()` (durable store) and sync React state, instead of writing React's SSR-fallback `"system"` (current line 239). This is the load-bearing H2 fix.
+- `apps/web-platform/lib/csp.ts` — *optional hardening, conditional on Phase 0 confirming HTML edge/CDN caching in prod*: add a sha256 CSP hash for the static `NoFoucScript` body and/or `Cache-Control: no-store` on document responses. NOT required for the primary fix (a plain nonce-miss is already admitted by `'unsafe-inline'`; the line-239 fix corrects the palette even if the bootstrap is fully blocked).
+- ~~`apps/web-platform/middleware.ts`~~ — **removed from scope.** The deepen pass confirmed `x-nonce` is set on every non-excluded document route (`middleware.ts:93,125`) and that `'unsafe-inline'` covers any nonce-less render; there is no nonce-emission bug to fix here.
 
 ## Files to Create
 

@@ -10,25 +10,28 @@ date: 2026-06-15
 
 Derived from `2026-06-15-fix-theme-preference-persistence-system-override-plan.md`.
 
-## Phase 0 — Reproduce & pin root cause (no code change)
+## Phase 0 — Confirm root cause + scope edge-cache (no code change)
 
-- [ ] 0.1 Read `apps/web-platform/middleware.ts` + `apps/web-platform/lib/csp.ts`; determine whether `x-nonce` is set on every document response and whether `script-src` is strict-nonce (H1).
-- [ ] 0.2 Query Sentry (client-observability layer, NOT dashboard eyeball) for `feature:"theme-provider"` events `op:"setItem"` / `op:"storage-event"` to confirm/eliminate H3.
-- [ ] 0.3 Playwright MCP repro: OS=dark, `localStorage["soleur:theme"]="light"`, hard reload; read `dataset.theme` + computed `--soleur-bg-base` at first paint. Repeat with inline script blocked. Screenshot.
-- [ ] 0.4 Write confirmed root-cause note (H1/H2/H3 + exact reachable state) at top of Phase 1; adjust fix target if not H1.
+Root cause already pinned by the deepen pass: H2 — on the SSR-hydration path the
+lazy initializer (`theme-provider.tsx:179-180`) returns `"system"`, React reuses
+it, and the first-mount else-branch (line 239) writes `"system"` to
+`dataset.theme` when the bootstrap didn't run → OS palette wins.
 
-## Phase 1 — Fix the confirmed cause
+- [ ] 0.1 Playwright MCP repro: OS=dark, `localStorage["soleur:theme"]="light"`, hard reload; read `dataset.theme` + computed `--soleur-bg-base` at first paint; confirm the H2 state. Screenshot.
+- [ ] 0.2 Confirm whether HTML documents are edge/CDN-cached in prod (H1 residual nonce-divergence path). If yes → enable optional hardening 1.2; if no → skip it.
+- [ ] 0.3 (Optional) Query Sentry (client-observability layer, NOT dashboard) for `feature:"theme-provider"` `op:"setItem"` events to gauge H3 contribution. Not blocking.
 
-- [ ] 1.1 (Always) `theme-provider.tsx` first-mount effect (~217-247): when `dataset.theme` absent/invalid, seed from `readStoredTheme()` (durable store) instead of React SSR-fallback `"system"`. Defense-in-depth correctness fix.
-- [ ] 1.2 (If H1) Ensure inline `NoFoucScript` is CSP-admitted on every document route: fix `x-nonce` emission in `middleware.ts`/`lib/csp.ts`, and/or add a sha256 CSP hash for the static `SCRIPT` body in `lib/csp.ts` (no `'unsafe-inline'`).
-- [ ] 1.3 (If H3 only) Re-scope to write-durability note; flag at review that there is no OS-override logic bug. (Gate.)
+## Phase 1 — Fix the confirmed cause (PRIMARY: H2)
+
+- [ ] 1.1 (Always — PRIMARY) `theme-provider.tsx` first-mount effect else-branch (~236-241): replace `dataset.theme = theme` (line 239, writes `"system"`) with `const stored = readStoredTheme(); dataset.theme = stored; if (stored !== theme) { setThemeState(stored); setResolvedTheme(resolveInitial(stored)); } prevThemeRef.current = stored;`. State-sync is load-bearing (avoids reintroducing the #3318 wrong-segment symptom). Bootstrap-ran branch (219-234) unaffected.
+- [ ] 1.2 (Optional hardening — only if Phase 0.2 confirms HTML edge caching) `lib/csp.ts`: add sha256 CSP hash for the static `NoFoucScript` body and/or `Cache-Control: no-store` on document responses. NOT required for primary fix.
 
 ## Phase 2 — Regression test (assert palette invariant, not proxy)
 
 - [ ] 2.1 Create `apps/web-platform/test/theme-explicit-choice-survives-reload.test.tsx` (under `test/` — NOT co-located; vitest happy-dom glob is `test/**/*.test.tsx`).
-- [ ] 2.2 Case: stored `"light"` + OS dark + no bootstrap → resolves `data-theme="light"`.
-- [ ] 2.3 Symmetric: stored `"dark"` + OS light → resolves dark. Control: stored `"system"` + OS light → follows OS (light).
-- [ ] 2.4 (If CSP change shipped) Extend `theme-csp-regression.test.tsx` (or sibling) to assert the chosen admit mechanism.
+- [ ] 2.2 MUST force the SSR-hydration buggy state (initial `theme`=`"system"`, `dataset.theme` absent, localStorage=`"light"`, `matchMedia`=OS dark) — a client-only mount masks the bug (lazy init reaches `readStoredTheme()`). Assert post-effect `dataset.theme === "light"` AND `useTheme().theme === "light"`.
+- [ ] 2.3 Symmetric: stored `"dark"` + OS light → resolves dark (+ context). Control: stored `"system"` + OS light → follows OS (light), context `"system"`.
+- [ ] 2.4 (Only if 1.2 shipped) Extend `theme-csp-regression.test.tsx` (or sibling) to assert the chosen admit mechanism (hash present / no-store header).
 
 ## Phase 3 — Verify
 
