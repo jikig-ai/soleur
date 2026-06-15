@@ -44,6 +44,18 @@ vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: vi.fn(async () => REPO_URL),
 }));
 
+// #5275 — this suite covers the FR1 rebind, not the in-flight restore. Stub the
+// restore helper so no real `git` subprocess runs against a synthetic workspace
+// path; the restore-refused / restored branches have their own unit coverage in
+// test/inflight-checkpoint.test.ts.
+vi.mock("@/server/inflight-checkpoint", () => ({
+  restoreInflightCheckpoint: vi.fn(async () => ({
+    restored: false,
+    reason: "no-checkpoint" as const,
+  })),
+  CHECKPOINT_REFUSED_MESSAGE: "stubbed-refused-message",
+}));
+
 vi.mock("@/lib/supabase/tenant", () => {
   class RuntimeAuthError extends Error {
     cause: string;
@@ -52,14 +64,25 @@ vi.mock("@/lib/supabase/tenant", () => {
       this.cause = cause;
     }
   }
+  // Recursive-by-default chain: every builder method returns the same chain, so
+  // both the conversation read (`.select().eq().eq().single()`) AND the #5275
+  // sibling-slot probe (`.select().eq().neq().gte()`, awaited directly) resolve.
+  // `.single()` yields the conversation row; awaiting the chain yields an empty
+  // slot set (no live sibling).
+  const makeChain = () => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "neq", "gte", "lte", "order", "limit"]) {
+      chain[m] = () => chain;
+    }
+    chain.single = singleSpy;
+    // Thenable so `await tenantClient.from(...).select().eq().neq().gte()`
+    // resolves to an empty (no live sibling slot) result.
+    chain.then = (resolve: (v: { data: unknown[]; error: null }) => unknown) =>
+      resolve({ data: [], error: null });
+    return chain;
+  };
   const tenantClient = {
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({ single: singleSpy }),
-        }),
-      }),
-    }),
+    from: () => makeChain(),
     rpc: rpcSpy,
   };
   return {
