@@ -30,8 +30,11 @@ describe("ship Phase 6 PR-title guard", () => {
   test("the guard greps the live title for the WIP draft prefix and fails closed", () => {
     // The detection pattern must anchor on the start of the title, case-insensitively.
     expect(skill).toContain("grep -qiE '^WIP:'");
-    // Fail-closed: a still-WIP title must abort, not warn-and-continue.
-    expect(skill).toMatch(/title_guard[\s\S]*?exit 1/);
+    // Fail-closed: a still-WIP title must abort, not warn-and-continue. Bound the
+    // window to ~500 chars so the match can ONLY bind to the guard's own `exit 1`
+    // (a few lines below `title_guard`), never a far-away `exit 1` elsewhere in the
+    // file — otherwise deleting the guard's exit would vacuously still pass.
+    expect(skill).toMatch(/\[ship\.phase6\.title_guard\][\s\S]{0,500}exit 1/);
   });
 
   test("the guard fetches the live PR title (not the local commit subject)", () => {
