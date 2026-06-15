@@ -177,7 +177,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -200,7 +200,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -224,7 +224,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -247,7 +247,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -271,7 +271,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -289,7 +289,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -307,7 +307,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -325,7 +325,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -343,7 +343,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -366,7 +366,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -389,7 +389,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -412,7 +412,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
 
@@ -432,7 +432,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -463,7 +463,7 @@ describe("agent-runner MCP tool wiring", () => {
     );
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
@@ -488,7 +488,7 @@ describe("agent-runner MCP tool wiring", () => {
     );
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
@@ -505,7 +505,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const allowed = options.allowedTools ?? [];
@@ -529,7 +529,7 @@ describe("agent-runner MCP tool wiring", () => {
     );
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -559,7 +559,7 @@ describe("agent-runner MCP tool wiring", () => {
     );
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("## Connected Services");
@@ -575,7 +575,7 @@ describe("agent-runner MCP tool wiring", () => {
     });
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     // Only anthropic row exists (skipped by getUserServiceTokens) → no Connected Services
@@ -599,7 +599,7 @@ describe("agent-runner MCP tool wiring", () => {
     );
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("## Connected Services");

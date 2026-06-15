@@ -536,7 +536,7 @@ describe("registration + tiering (AC11)", () => {
       createQueryMock(mockQuery);
 
       const { startAgentSession } = await import("@/server/agent-runner");
-      await startAgentSession("user-1", "conv-1", "cpo");
+      await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
       return mockQuery.mock.calls[0][0].options as {
         systemPrompt: string;
         allowedTools: string[];

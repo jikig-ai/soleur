@@ -35,6 +35,7 @@ vi.mock("@/server/logger", () => ({
 
 import { GET } from "@/app/api/shared/[token]/route";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
+import { makeUuidWorkspaceTmpdir } from "./helpers/workspace-tmpdir";
 
 function hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
@@ -68,7 +69,7 @@ async function callGET() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "shared-hash-"));
+  tmpWorkspace = makeUuidWorkspaceTmpdir("shared-hash-").workspacePath;
   // ADR-044: the route resolves kbRoot via workspacePathForWorkspaceId
   // (`<WORKSPACES_ROOT>/<workspace_id>`). The mock derives workspace_id from
   // this dir's basename, so point WORKSPACES_ROOT at its parent.

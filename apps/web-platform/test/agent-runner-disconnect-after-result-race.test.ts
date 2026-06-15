@@ -279,7 +279,7 @@ function setupSupabaseMock(): { updates: UpdateRecord[] } {
           const selectChain: Record<string, unknown> = {
             eq: vi.fn(),
             single: vi.fn(() => ({
-              data: { workspace_id: "ws-race" },
+              data: { workspace_id: "22222222-2222-4222-8222-222222222222" },
               error: null,
             })),
           };
@@ -312,10 +312,10 @@ describe("agent-runner — disconnect-after-result race (#3463)", () => {
   test("abort branch's status write threads .in('status', ['active']) so a row already at waiting_for_user is left alone", async () => {
     const { updates } = setupSupabaseMock();
     mockQuery.mockReturnValue(
-      buildRaceIterator({ userId: "user-1", conversationId: "conv-1" }) as never,
+      buildRaceIterator({ userId: "11111111-1111-4111-8111-111111111111", conversationId: "conv-1" }) as never,
     );
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Project the captured updates onto only the fields under test
     // (status + .in() predicates). A failure prints the entire

@@ -9,6 +9,7 @@ import {
   __resetShareHashVerdictCacheForTest,
 } from "@/server/share-hash-verdict-cache";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
+import { makeUuidWorkspaceTmpdir } from "./helpers/workspace-tmpdir";
 
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
@@ -84,7 +85,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hashStreamSpy.mockClear();
   __resetShareHashVerdictCacheForTest();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "shared-cache-"));
+  tmpWorkspace = makeUuidWorkspaceTmpdir("shared-cache-").workspacePath;
   // ADR-044: the route resolves kbRoot via workspacePathForWorkspaceId
   // (`<WORKSPACES_ROOT>/<workspace_id>`). The mock derives workspace_id from
   // this dir's basename, so point WORKSPACES_ROOT at its parent.

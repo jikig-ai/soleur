@@ -183,7 +183,7 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
       reason: "prefill-guard",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.systemPrompt).toContain("RUNNER-RESET-NOTICE");
@@ -194,7 +194,7 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
       safeResumeSessionId: "session-s",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.systemPrompt).not.toContain("Prior conversation context was reset");
@@ -207,13 +207,13 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
       reason: "prefill-guard",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const contextResetCalls = mockSendToClient.mock.calls.filter(
       (call) => call[1]?.type === "context_reset",
     );
     expect(contextResetCalls).toHaveLength(1);
-    expect(contextResetCalls[0][0]).toBe("user-1");
+    expect(contextResetCalls[0][0]).toBe("11111111-1111-4111-8111-111111111111");
     expect(contextResetCalls[0][1]).toEqual({
       type: "context_reset",
       reason: "prefill-guard",
@@ -228,7 +228,7 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
       reason: "tool_use_orphan",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const contextResetCalls = mockSendToClient.mock.calls.filter(
       (call) => call[1]?.type === "context_reset",
@@ -242,7 +242,7 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
       safeResumeSessionId: "session-s",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const contextResetCalls = mockSendToClient.mock.calls.filter(
       (call) => call[1]?.type === "context_reset",
@@ -257,7 +257,7 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
       contextResetNotice: "FIRST-CALL-NOTICE",
       reason: "prefill-guard",
     });
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const firstOpts = mockQuery.mock.calls[0][0].options;
     expect(firstOpts.systemPrompt).toContain("FIRST-CALL-NOTICE");
@@ -266,7 +266,7 @@ describe("startAgentSession — context_reset signal (#3269)", () => {
     mockApplyPrefillGuard.mockResolvedValueOnce({
       safeResumeSessionId: "session-s",
     });
-    await startAgentSession("user-1", "conv-1", "cpo", "session-s");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", "session-s");
 
     const secondOpts = mockQuery.mock.calls[1][0].options;
     expect(secondOpts.systemPrompt).not.toContain("FIRST-CALL-NOTICE");

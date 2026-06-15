@@ -262,7 +262,7 @@ describe("session resume fallback", () => {
     } as any);
 
     await expect(
-      startAgentSession("user-1", "conv-1", "cto", STALE_SESSION_ID, "test message"),
+      startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cto", STALE_SESSION_ID, "test message"),
     ).rejects.toThrow("No conversation found with session ID");
   });
 
@@ -277,7 +277,7 @@ describe("session resume fallback", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
       () => {},
     );
 
@@ -299,7 +299,7 @@ describe("session resume fallback", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
       () => {},
     );
 
@@ -317,7 +317,7 @@ describe("session resume fallback", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
       () => {},
     );
 
@@ -338,7 +338,7 @@ describe("session resume fallback", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cto", STALE_SESSION_ID, "test message").catch(
       () => {},
     );
 
@@ -365,7 +365,7 @@ describe("session resume fallback", () => {
     } as any);
 
     // Non-resume errors should NOT reject (internal catch resolves the promise)
-    await startAgentSession("user-1", "conv-1", "cto", undefined, "test message");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cto", undefined, "test message");
 
     // Sentry should be called for non-resume errors
     expect(mockCaptureException).toHaveBeenCalledOnce();

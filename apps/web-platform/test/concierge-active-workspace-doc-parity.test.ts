@@ -74,8 +74,8 @@ import {
   _resetWorkspacePathCacheForTests,
 } from "@/server/kb-document-resolver";
 
-const MEMBER_ID = "member-0000-0000-0000-000000000001";
-const ACTIVE_WS_ID = "teamws-0000-0000-0000-000000000099";
+const MEMBER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACTIVE_WS_ID = "44444444-4444-4444-8444-444444444444";
 
 let workspacesRoot: string;
 let prevWorkspacesRoot: string | undefined;

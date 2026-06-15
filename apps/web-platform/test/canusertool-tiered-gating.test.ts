@@ -276,7 +276,7 @@ async function getCanUseTool() {
   });
   setupQueryMockImmediate();
 
-  await startAgentSession("user-1", "conv-1", "cpo");
+  await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
   const options = mockQuery.mock.calls[0][0].options;
   return options.canUseTool! as (
@@ -343,7 +343,7 @@ describe("canUseTool tiered gating (#1926)", () => {
       expect(result.behavior).toBe("allow");
       // The gate must fire — create_pull_request is now gated, not auto-approved
       expect(mockSendToClient).toHaveBeenCalledWith(
-        "user-1",
+        "11111111-1111-4111-8111-111111111111",
         expect.objectContaining({ type: "review_gate" }),
       );
       expect(mockAbortableReviewGate).toHaveBeenCalled();
@@ -362,7 +362,7 @@ describe("canUseTool tiered gating (#1926)", () => {
       expect(result.behavior).toBe("allow");
       // The gate must fire — create_issue is gated, not auto-approved
       expect(mockSendToClient).toHaveBeenCalledWith(
-        "user-1",
+        "11111111-1111-4111-8111-111111111111",
         expect.objectContaining({ type: "review_gate" }),
       );
       expect(mockAbortableReviewGate).toHaveBeenCalled();
