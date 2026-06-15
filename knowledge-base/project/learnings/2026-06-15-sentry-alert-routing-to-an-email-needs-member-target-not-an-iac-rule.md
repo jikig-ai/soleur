@@ -1,7 +1,11 @@
 # Routing a Sentry alert to a specific email is account-routing, not an IaC rule — and needs a Member/Team target
 
 **Date:** 2026-06-15
-**Context:** `/soleur:go` request — "change the Sentry error notification email to ops@jikigai.com" + fix a paged cron-failure. Branch `feat-one-shot-sentry-cron-margin-alert-routing` (PR #5327).
+**Context:** `/soleur:go` request — "change the Sentry error notification email to the operator's ops
+inbox (`ops@example.com` here; a real `ops@<domain>` address)" + fix a paged cron-failure. Branch
+`feat-one-shot-sentry-cron-margin-alert-routing` (PR #5327). Emails below are genericized to
+`@example.com` — the `lint fixture content` CI gate (secret-scan.yml) flags real-looking emails in
+`knowledge-base/project/learnings/*.md`.
 
 ## The cron "failure" was a false positive (the real, shippable fix)
 
@@ -21,12 +25,12 @@ monitor whose margin < job wall-clock budget will false-page on every slow-but-s
 
 ## Routing notifications to a specific email: three hard facts the plan didn't anticipate
 
-The user chose "codify in IaC" for routing high-priority issues to `ops@jikigai.com`. Phase-0
+The user chose "codify in IaC" for routing high-priority issues to `ops@example.com`. Phase-0
 verification (live, via the Doppler `SENTRY_IAC_AUTH_TOKEN`) falsified the IaC approach:
 
 1. **Sentry `notify_email` has no raw-email target.** `target_type ∈ {IssueOwners, Team, Member}`.
    To email a specific address it must belong to a Member (or Team). So an IaC rule needs to resolve
-   `ops@jikigai.com` → a member id.
+   `ops@example.com` → a member id.
 2. **The IaC integration token lacks `member:read`.** ADR-031's `iac-terraform-prd` scope set is
    `alerts:read/write, event:read, org:read, project:admin/read/write` — no member scope. All four
    Sentry tokens in Doppler returned **HTTP 403** on `/organizations/<org>/members/`. So a
@@ -34,18 +38,18 @@ verification (live, via the Doppler `SENTRY_IAC_AUTH_TOKEN`) falsified the IaC a
    every future `apply-sentry-infra.yml` run — which would also block unrelated changes (e.g. the
    cron-margin fix) from applying. **A token that can't read members must not gain a member-reading
    data source in shared IaC.**
-3. **`ops@jikigai.com` is not a Sentry member at all.** The org has exactly one member,
-   `jean.deruelle@jikigai.com` (the founder's login). The desired recipient was never a member, so
+3. **`ops@example.com` is not a Sentry member at all.** The org has exactly one member,
+   `founder@example.com` (the founder's login). The desired recipient was never a member, so
    even with `member:read` there was nothing to resolve — codifying it would have required *inviting*
    `ops@` (member:write + a billable seat + invite acceptance).
 
 ## What actually routes a founder's alerts to ops@: account-level Email Routing
 
 For a solo founder, the right mechanism is **not** a new `sentry_issue_alert` resource. It is:
-- Sentry → Account → **Email Addresses**: add `ops@jikigai.com` as a secondary email (Sentry mails a
+- Sentry → Account → **Email Addresses**: add `ops@example.com` as a secondary email (Sentry mails a
   verification link the operator must click — the one genuine operator gate).
 - Sentry → Account → **Notifications → Email Routing**: per-org/per-project, route the `web-platform`
-  project's notifications to `ops@jikigai.com`.
+  project's notifications to `ops@example.com`.
 
 This needed zero IaC, zero new member/seat, and zero standing change to the IaC token. The default
 "high priority issues" rule keeps firing; only the delivery address changes.
