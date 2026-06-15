@@ -122,4 +122,7 @@ CREATE VIEW public.routine_runs_latest
   FROM public.routine_runs
   ORDER BY routine_id, started_at DESC;
 
-GRANT SELECT ON public.routine_runs_latest TO authenticated;
+-- authenticated: dashboard routes (RLS-enforced via security_invoker).
+-- service_role: the agent MCP tools read via the service client (explicit grant
+-- mirrors the write_routine_run RPC grant — don't rely on default privileges).
+GRANT SELECT ON public.routine_runs_latest TO authenticated, service_role;
