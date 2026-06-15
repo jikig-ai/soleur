@@ -1,14 +1,14 @@
 ---
 title: "Agent workspaces now self-heal on reconnect"
 type: feature-launch
-publish_date: ""
+publish_date: "2026-06-15"
 channels: x
-status: draft
+status: scheduled
 pr_reference: "#5339"
 issue_reference: "#5340"
 ---
 
-<!-- To publish: set BOTH publish_date AND status: scheduled -->
+<!-- Scheduled for 2026-06-15 by operator request; content-publisher cron posts to X. -->
 
 ## X/Twitter Thread
 
