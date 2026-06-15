@@ -34,31 +34,31 @@ issue: 5370
 - [ ] 4.1 ws-client `ChatState`: set `liveNarration` on `reasoning_narration`; clear on `clear_streams`/`enter_stopping`/`timeout`→error/`onclose`/`connection_change`.
 - [ ] 4.2 `chat-state-machine.ts`: `turn_summary` appends `ChatTurnSummaryMessage`.
 
-## Phase 5 — Emit + agent channel (tool-result-handler pattern)
-- [ ] 5.1 `narrate-tool.ts`: `narrate({message})` + `summarize({summary})` as PURE validate-and-return factories (capture only userId; length-cap args); explicit tier in `tool-tiers.ts` + `permission-callback.ts` (document cc-path is auto-approve, no review gate).
-- [ ] 5.2 `cc-dispatcher.ts` `emitNarration()` in `onToolResult` (`:2602`), BRANCH BEFORE `:2608` guard: narrate→redact(formatAssistantText+probe drop-on-trip)→frame; summarize→drop-if-aborted(read dispatch state)→redact ONCE→same string to insert + buffered frame.
-- [ ] 5.3 `insert-turn-summary.ts`: redact INSIDE helper; `getFreshTenantClient(founderId)`; FULL column set — `conversation_id`, `workspace_id=founderId` (solo-pin), `template_id='default_legacy'`, `user_id=founderId`, `role='assistant'`, `message_kind='turn_summary'`, redacted `content`.
-- [ ] 5.4 `prompt-assembly.ts` + `constants.ts`: narration directive + cross-tenant prohibition; orchestrator-only `summarize`.
+## Phase 5 — Emit + agent channel (tool-result-handler pattern) — DONE
+- [x] 5.1 `narrate-tool.ts`: `narrate({message})` + `summarize({summary})` PURE validate-and-return (length caps); explicit auto-approve tier in `tool-tiers.ts` (cc-path auto-approve list documented, no review gate).
+- [x] 5.2 `cc-dispatcher.ts` `emitNarration()` — wired in `onToolUse` (block.input carries args), keyed on `mcp__soleur_platform__narrate`/`__summarize`, BEFORE the Bash/posture branch (supersedes the plan's `onToolResult` note per resume STATUS): narrate→redact(formatAssistantText+probe drop-on-trip)→frame; summarize→drop-if-aborted(`state.isAborted()`)→assertWriteScope seam→redact ONCE→same string to insert + buffered frame. Also: always-build `soleur_platform` MCP server (was c4Enabled-gated); register FQNs in allowlist + registered-tool-names.
+- [x] 5.3 `insert-turn-summary.ts`: redact INSIDE helper; `getFreshTenantClient(founderId)`; FULL column set — `conversation_id`, `workspace_id=founderId`, `template_id='default_legacy'`, `user_id=founderId`, `role='assistant'`, `message_kind='turn_summary'`, redacted `content`.
+- [x] 5.4 `NARRATION_PROMPT_DIRECTIVE` appended to the cc-router `effectiveSystemPrompt` (the actual producer; plan said prompt-assembly/constants but deepen-plan confirmed single-leader cc-router): narrate-at-milestones + summarize-once-on-success + cross-tenant prohibition.
 
-## Phase 6 — Render + hydrate
-- [ ] 6.1 `chat-surface.tsx`: `turn_summary` case → `<TurnSummaryBubble>`; live line near Working badge; reconnect "Still working…" placeholder.
-- [ ] 6.2 `turn-summary-bubble.tsx` (NEW): PLAIN TEXT (`<p whitespace-pre-wrap>` + `formatAssistantText`), NOT MarkdownRenderer; emerald checkmark + accent rail. Test: inert `<script>`/`<img onerror>`.
-- [ ] 6.3 `ws-client.ts`: dispatch both frames; hydrate `message_kind='turn_summary'` (unknown kind THROWS, no MarkdownRenderer fallthrough); both-path teardown.
-- [ ] 6.4 `api-messages.ts`: add `message_kind` to history `.select` (`:139-151`).
-- [ ] 6.5 Wireframe: correct Frame 07 caption; add reconnect-mid-turn frame (or cross-ref `reconnect-resume-states.pen`).
+## Phase 6 — Render + hydrate — DONE (read/render committed earlier; reconnect wired here)
+- [x] 6.1 `chat-surface.tsx`: `turn_summary` case + live line; reconnect "Still working…" placeholder wired (`liveNarration ?? "Still working…"` during streaming — spec-flow Finding 4).
+- [x] 6.2 `turn-summary-bubble.tsx` (committed earlier): PLAIN TEXT, NOT MarkdownRenderer; emerald + accent rail. Inert-HTML test added Phase 8.
+- [x] 6.3 `ws-client.ts` (committed earlier): dispatch both frames; hydrate `message_kind='turn_summary'`; both-path teardown.
+- [x] 6.4 `api-messages.ts` (committed earlier): `message_kind` in history `.select`.
+- [ ] 6.5 Wireframe: Frame 07 caption / reconnect-mid-turn frame — DEFERRED (`.pen` polish; not an eng AC; non-blocking).
 
-## Phase 7 — Compliance docs (lockstep)
-- [ ] 7.1 Amend PA-2 in `article-30-register.md` (b)+(g); no new PA.
-- [ ] 7.2 Update privacy-policy, GDPR policy, Data Protection Disclosure, compliance-posture; record Art-22 negative determination; CLO-attestation.
+## Phase 7 — Compliance docs (lockstep) — DONE
+- [x] 7.1 PA-2 amended in `article-30-register.md` (b)+(g) TOMs (14)-(16) + Art-22 negative determination; no new PA.
+- [x] 7.2 privacy-policy §4.7, gdpr-policy §3.12 (new), data-protection-disclosure §2.3(i), compliance-posture #5370 entry; Art-22 negative determination; 3 SHA pins repinned (legal-doc-shas.ts). CLO-attestation = post-merge operator AC. Eleventy public mirrors NOT synced (non-T&C body-equivalence deferred per check-tc-document-sha.sh; separate remediation PR).
 
-## Phase 8 — Tests
-- [ ] 8.1 `turn-summary-emit.test.ts` (insert + redact + abort=0 + tenant-client + seam).
-- [ ] 8.2 `reasoning-narration-frame.test.ts` (not buffered; ws-client teardown per arm).
-- [ ] 8.3 `turn-summary-bubble.test.tsx` (in `test/components/`).
-- [ ] 8.4 DSAR: un-redacted export + conversation-delete cascade.
-- [ ] 8.5 `tsc --noEmit` + `vitest run` green.
-- [ ] 8.6 Insert against real-Postgres/rollback-tx (not mock) — catches 23502/RLS on the full column set.
-- [ ] 8.7 turn-summary-bubble inert-HTML test; same-redacted-string-to-both-sinks test; narrate redaction test.
+## Phase 8 — Tests — DONE
+- [x] 8.1 `cc-dispatcher-turn-summary-emit.test.ts` (insert + redact + abort=0 + assertWriteScope seam + same-string-both-sinks).
+- [x] 8.2 `reasoning-narration-frame.test.ts` (not buffered; ws-client teardown per arm).
+- [x] 8.3 `turn-summary-bubble.test.tsx` (in `test/components/`).
+- [x] 8.4 DSAR: `dsar-turn-summary.test.ts` — un-redacted subject export + mig-001 conversation-delete cascade.
+- [x] 8.5 `tsc --noEmit` + `vitest run` green.
+- [~] 8.6 Full NOT-NULL/CHECK/RLS column contract verified structurally against the live constraint defs (migrations 082/105/059/053) + pinned in `insert-turn-summary.test.ts`. Live rollback-tx insert rides the plan's post-merge DEV verification (migration 105 applies on merge via `web-platform-release.yml#migrate`; the post-merge DSAR DEV probe exercises a real `turn_summary` row).
+- [x] 8.7 turn-summary-bubble inert-HTML test; same-redacted-string-to-both-sinks test; narrate redaction-drop test; narrate-tool length-cap + tier test.
 
-## Phase 9 — Tripwire (file at /work)
-- [ ] 9.1 File follow-up issue: multi-tenant cross-tenant-prose structural control (when a 2nd human tenant shares the surface, directive-only control is inadequate).
+## Phase 9 — Tripwire — DONE
+- [x] 9.1 Filed #5384 (multi-tenant cross-tenant-prose structural control). Net-flow: Closing #5370 / Filing #5384 / Net 0.
