@@ -168,6 +168,24 @@ describe("migration 104_outbound_email — outbound_sends WORM audit (ADR-060)",
       /grant\s+execute\s+on\s+function\s+public\.anonymise_outbound_sends\(uuid\)\s+to\s+service_role/i,
     );
   });
+
+  it("uses the privilege-free app.worm_bypass GUC, NOT superuser-only session_replication_role (mig 087 / #4696)", () => {
+    // session_replication_role is PGC_SUSET — postgres is not superuser on
+    // managed Supabase, so it 42501-aborts the account-delete saga (the #4696
+    // outage). Migration 087 eradicated it; 104 must follow.
+    expect(executable).not.toMatch(/session_replication_role/i);
+    expect(executable).toMatch(/set\s+local\s+app\.worm_bypass\s*=\s*'on'/i);
+    expect(executable).toMatch(/current_setting\('app\.worm_bypass',\s*true\)\s*=\s*'on'/i);
+  });
+
+  it("has a duplicate-send guard (UNIQUE dedup index + outbound_send_exists RPC)", () => {
+    expect(executable).toMatch(
+      /create\s+unique\s+index\s+if\s+not\s+exists\s+outbound_sends_dedup_unique\s+on\s+public\.outbound_sends\s*\(\s*owner_id,\s*recipient_hash,\s*approved_body_sha256\s*\)/i,
+    );
+    expect(executable).toMatch(
+      /create\s+or\s+replace\s+function\s+public\.outbound_send_exists[\s\S]*?security\s+definer[\s\S]*?set\s+search_path\s*=\s*public,\s*pg_temp/i,
+    );
+  });
 });
 
 describe("migration 104_outbound_email — negative-space invariants", () => {

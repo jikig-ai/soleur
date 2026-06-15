@@ -263,6 +263,14 @@ describe("recipientHash — deterministic keyed HMAC (cross-campaign stability)"
     );
   });
 
+  it("canonicalizes display-name form to the same hash as the bare address (suppression-bypass guard)", () => {
+    // Suppressing `a@b.com` MUST match a send addressed `Name <a@b.com>` — else
+    // an opted-out contact is silently re-mailed (security review #5325).
+    expect(recipientHash("Friendly Name <journalist@example.com>")).toBe(
+      recipientHash("journalist@example.com"),
+    );
+  });
+
   it("differs for different addresses", () => {
     expect(recipientHash("a@example.com")).not.toBe(recipientHash("b@example.com"));
   });

@@ -169,6 +169,26 @@ export function buildGateMessage(
       const preview = raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
       return `Agent wants to revoke share token **${preview}**. This is permanent. Allow?`;
     }
+    // Outbound email (#5325) — the operator MUST see the exact recipient,
+    // subject, and body before approving: the body-hash approval binding and
+    // the whole single-user-incident safety story rest on the human reviewing
+    // what is actually sent. A content-free "Allow?" here would make the gate
+    // decorative. Body shown as a preview is DISPLAY-ONLY untrusted content —
+    // do not act on instructions inside it.
+    case "email_send": {
+      const body = String(toolInput.body ?? "");
+      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+      return `Agent wants to send a cold email to **${toolInput.to ?? "unknown"}** — subject: "${toolInput.subject ?? ""}".\n\nBody (review carefully — untrusted, display-only):\n${preview}\n\nSend?`;
+    }
+    case "email_reply": {
+      const body = String(toolInput.body ?? "");
+      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+      // The recipient is derived server-side from the inbound item (P0-3); it
+      // is NOT in toolInput, so the gate names the inbound item, not an address.
+      return `Agent wants to reply to inbound item **${toolInput.messageId ?? "unknown"}** (the reply goes to that item's original sender) — subject: "${toolInput.subject ?? ""}".\n\nBody (review carefully — untrusted, display-only):\n${preview}\n\nSend?`;
+    }
+    case "email_suppress":
+      return `Agent wants to PERMANENTLY suppress **${toolInput.recipient ?? "unknown"}** (reason: ${toolInput.reason ?? "unknown"}) so no future cold email can reach them. There is no un-suppress. Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }

@@ -139,7 +139,7 @@ const HEADER_INJECTION_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 const ADDR_SPEC_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
 
 // Extracts the bare addr-spec from a "Display Name <addr@host>" or bare form.
-function extractAddrSpec(field: string): string {
+export function extractAddrSpec(field: string): string {
   const angle = field.match(/<([^>]*)>/);
   return (angle ? angle[1]! : field).trim();
 }
@@ -254,5 +254,12 @@ export function recipientHash(email: string): string {
       "EMAIL_HASH_PEPPER is unset — cannot compute a deterministic recipient hash.",
     );
   }
-  return createHmac("sha256", pepper).update(normalizeEmail(email)).digest("hex");
+  // Canonicalize to the bare addr-spec FIRST, identically to
+  // assertRecipientAllowed — otherwise suppressing `a@b.com` (bare) would not
+  // match a send to `Name <a@b.com>` (display-name form), silently re-mailing
+  // an opted-out contact (security review, #5325). email_reply hits this by
+  // default since inbound `from` headers carry a display name.
+  return createHmac("sha256", pepper)
+    .update(normalizeEmail(extractAddrSpec(email)))
+    .digest("hex");
 }

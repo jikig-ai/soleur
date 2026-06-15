@@ -193,4 +193,23 @@ SELECT 'anonymise_email_suppression_not_granted_to_authenticated',
          'authenticated',
          'public.anonymise_email_suppression(uuid)',
          'EXECUTE'
-       ) THEN 1 ELSE 0 END::int;
+       ) THEN 1 ELSE 0 END::int
+UNION ALL
+-- (21) duplicate-send guard: the UNIQUE(owner_id, recipient_hash,
+-- approved_body_sha256) dedup index exists
+SELECT 'outbound_sends_dedup_unique_index',
+       CASE WHEN EXISTS (
+         SELECT 1 FROM pg_class i
+         JOIN pg_namespace n ON n.oid = i.relnamespace
+         WHERE n.nspname = 'public'
+           AND i.relname = 'outbound_sends_dedup_unique'
+           AND i.relkind = 'i'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (22) outbound_send_exists IS executable by authenticated (pre-send dup check)
+SELECT 'outbound_send_exists_granted_to_authenticated',
+       CASE WHEN has_function_privilege(
+         'authenticated',
+         'public.outbound_send_exists(text, text)',
+         'EXECUTE'
+       ) THEN 0 ELSE 1 END::int;

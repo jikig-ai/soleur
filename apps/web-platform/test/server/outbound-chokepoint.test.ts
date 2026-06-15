@@ -33,12 +33,15 @@ interface RpcCall {
   args: Record<string, unknown>;
 }
 
-function makeSupabase(opts?: { suppressed?: boolean; recordId?: string }) {
+function makeSupabase(opts?: { suppressed?: boolean; recordId?: string; alreadySent?: boolean }) {
   const calls: RpcCall[] = [];
   const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
     calls.push({ name, args });
     if (name === "is_recipient_suppressed") {
       return { data: opts?.suppressed ?? false, error: null };
+    }
+    if (name === "outbound_send_exists") {
+      return { data: opts?.alreadySent ?? false, error: null };
     }
     if (name === "record_outbound_send") {
       return { data: opts?.recordId ?? "os-1", error: null };
@@ -144,6 +147,16 @@ describe("sendCompliantOutbound — refuse-to-send gates (throw BEFORE Resend)",
       sendCompliantOutbound({ ...validArgs(), supabase: sb }),
     ).rejects.toThrow(/suppress/i);
     expect(sb.calls.some((c) => c.name === "is_recipient_suppressed")).toBe(true);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(sb.calls.some((c) => c.name === "record_outbound_send")).toBe(false);
+  });
+
+  it("throws on a duplicate send (same approved body to same recipient) and does not send", async () => {
+    const sb = makeSupabase({ alreadySent: true });
+    await expect(
+      sendCompliantOutbound({ ...validArgs(), supabase: sb }),
+    ).rejects.toThrow(/duplicate|already/i);
+    expect(sb.calls.some((c) => c.name === "outbound_send_exists")).toBe(true);
     expect(sendMock).not.toHaveBeenCalled();
     expect(sb.calls.some((c) => c.name === "record_outbound_send")).toBe(false);
   });

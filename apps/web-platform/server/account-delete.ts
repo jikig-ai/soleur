@@ -927,7 +927,7 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed at anonymise-email-triage-items. Please try again." };
   }
 
-  // 3.93 Anonymise email_suppression rows for this user BEFORE auth-delete
+  // 3.98 Anonymise email_suppression rows for this user BEFORE auth-delete
   //      (migration 104, #5325). email_suppression.owner_id → users(id) is ON
   //      DELETE RESTRICT, so auth-delete would FK-block (23503) without this.
   //      service_role-only RPC (no self-service erasure). Idempotent.
@@ -955,7 +955,7 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed at anonymise-email-suppression. Please try again." };
   }
 
-  // 3.94 Anonymise outbound_sends rows for this user BEFORE auth-delete
+  // 3.99 Anonymise outbound_sends rows for this user BEFORE auth-delete
   //      (migration 104, #5325). outbound_sends.owner_id → users(id) is ON
   //      DELETE RESTRICT; the RPC bypasses the WORM trigger via SET LOCAL
   //      session_replication_role. service_role-only (no self-service erasure

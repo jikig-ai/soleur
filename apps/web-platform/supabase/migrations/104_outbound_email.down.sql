@@ -6,9 +6,11 @@
 -- outbound_sends (WORM audit) — triggers + RPCs before the table.
 DROP FUNCTION IF EXISTS public.anonymise_outbound_sends(uuid);
 DROP FUNCTION IF EXISTS public.record_outbound_send(text, text, text, text, text);
+DROP FUNCTION IF EXISTS public.outbound_send_exists(text, text);
 DROP TRIGGER IF EXISTS outbound_sends_no_delete ON public.outbound_sends;
 DROP TRIGGER IF EXISTS outbound_sends_no_update ON public.outbound_sends;
 DROP FUNCTION IF EXISTS public.outbound_sends_no_mutate();
+DROP INDEX IF EXISTS public.outbound_sends_dedup_unique;
 DROP INDEX IF EXISTS public.outbound_sends_owner_sent_idx;
 DROP TABLE IF EXISTS public.outbound_sends;
 

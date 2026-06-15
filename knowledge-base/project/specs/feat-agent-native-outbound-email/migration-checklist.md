@@ -89,8 +89,17 @@ against prd as the canonical runtime sentinel (10 checks, all must return
 
 ## EMAIL_HASH_PEPPER (Doppler) — required before first send
 
-`recipient_hash = HMAC-SHA-256(EMAIL_HASH_PEPPER, normalize(email))` is computed
-in `server/email-triage/outbound-compliance.ts` (Phase 2). `EMAIL_HASH_PEPPER`
-must exist in Doppler (all envs) before the chokepoint can hash; it is NOT a
-migration concern (the table stores opaque text). Tracked as a Phase 2 / pre-send
-precondition, not a schema step.
+`recipient_hash = HMAC-SHA-256(EMAIL_HASH_PEPPER, normalize(extractAddrSpec(email)))`
+is computed in `server/email-triage/outbound-compliance.ts` (Phase 2).
+`EMAIL_HASH_PEPPER` must exist in Doppler (all envs) before the chokepoint can
+hash; it is NOT a migration concern (the table stores opaque text). Tracked as a
+Phase 2 / pre-send precondition, not a schema step.
+
+**EMAIL_HASH_PEPPER is ROTATION-FORBIDDEN (suppression-bypass risk; review #5325).**
+Rotating the pepper orphans every existing `email_suppression` + `outbound_sends`
+row — the new-pepper hash of a previously-suppressed address no longer matches the
+stored hash, so `is_recipient_suppressed` silently returns false and a
+previously-opted-out contact is re-mailed (CAN-SPAM/GDPR incident) with no error.
+If a rotation is ever genuinely required, it MUST be paired with a re-hash
+migration (version-tagged hashes + backfill) — never a bare secret rotation.
+Document the pepper as non-rotatable in the Doppler secret description.

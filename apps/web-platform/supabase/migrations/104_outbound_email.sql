@@ -275,6 +275,19 @@ CREATE OR REPLACE FUNCTION public.outbound_sends_no_mutate() RETURNS trigger
   SET search_path = public, pg_temp
 AS $$
 BEGIN
+  -- Art-17 erasure bypass: the PRIVILEGE-FREE custom GUC app.worm_bypass (set
+  -- with SET LOCAL by anonymise_outbound_sends), NOT session_replication_role.
+  -- session_replication_role is superuser-only (PGC_SUSET); on managed Supabase
+  -- the postgres role is NOT superuser, so SET session_replication_role raises
+  -- 42501 and would abort the account-delete saga at this step → NO account
+  -- could be deleted (migration 087 / #4696 fixed exactly this class for the
+  -- other WORM tables; 104 must follow it, not the pre-087 mig 051 shape).
+  -- At STATEMENT level NEW/OLD are NULL and the return is ignored — the bypass
+  -- works by NOT raising; the RETURN is harmless (mirrors action_sends_no_mutate
+  -- post-087, which is also FOR EACH STATEMENT).
+  IF current_setting('app.worm_bypass', true) = 'on' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
   RAISE EXCEPTION 'outbound_sends is append-only (WORM); % rejected', TG_OP
     USING ERRCODE = 'P0001';
 END;
@@ -309,6 +322,58 @@ REVOKE INSERT, UPDATE, DELETE ON public.outbound_sends FROM authenticated;
 
 CREATE INDEX IF NOT EXISTS outbound_sends_owner_sent_idx
   ON public.outbound_sends (owner_id, sent_at DESC);
+
+-- Idempotency / duplicate-send guard (#5325 user-impact review): a UNIQUE on
+-- (owner_id, recipient_hash, approved_body_sha256) makes a retry's record fail
+-- (23505) — the race-closer behind the chokepoint's pre-send existence check
+-- (outbound_send_exists below). For cold 1:1 outreach, re-sending the IDENTICAL
+-- approved body to the SAME recipient is the "duplicate cold email" failure the
+-- plan's User-Brand Impact section names; a genuine follow-up uses a different
+-- body (different hash) and is unaffected. Post-anonymise rows (owner_id NULL)
+-- are NULLs-distinct so the tombstone scrub never collides here.
+CREATE UNIQUE INDEX IF NOT EXISTS outbound_sends_dedup_unique
+  ON public.outbound_sends (owner_id, recipient_hash, approved_body_sha256);
+
+-- ============================================================================
+-- outbound_send_exists — pre-send duplicate check. auth.uid() owner-pin.
+-- The chokepoint calls this immediately before Resend; if a row already exists
+-- for (owner, recipient_hash, approved_body_sha256) it refuses (the human
+-- already approved + sent this exact body to this recipient). The UNIQUE index
+-- above closes the concurrent-race residual the SELECT cannot.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.outbound_send_exists(
+  p_recipient_hash       text,
+  p_approved_body_sha256 text
+) RETURNS boolean
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_owner_id uuid := auth.uid();
+BEGIN
+  IF v_owner_id IS NULL THEN
+    RAISE EXCEPTION 'auth.uid() is NULL — caller must be authenticated'
+      USING ERRCODE = '28000';
+  END IF;
+  RETURN EXISTS (
+    SELECT 1 FROM public.outbound_sends
+     WHERE owner_id = v_owner_id
+       AND recipient_hash = p_recipient_hash
+       AND approved_body_sha256 = p_approved_body_sha256
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.outbound_send_exists(text, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.outbound_send_exists(text, text)
+  TO authenticated;
+
+COMMENT ON FUNCTION public.outbound_send_exists(text, text) IS
+  'Pre-send duplicate check for the calling founder (auth.uid()): true if an '
+  'outbound_sends row already exists for (recipient_hash, approved_body_sha256). '
+  'The chokepoint refuses to re-send when true (duplicate-cold-email guard). #5325.';
 
 -- ============================================================================
 -- record_outbound_send — the ONLY write path. auth.uid() owner-pin.
@@ -364,7 +429,8 @@ COMMENT ON FUNCTION public.record_outbound_send(text, text, text, text, text) IS
 
 -- ============================================================================
 -- anonymise_outbound_sends — Art-17 erasure. Mirrors anonymise_action_sends
--- (mig 051) — session_replication_role bypass for the pure-reject WORM trigger.
+-- POST-migration-087 — app.worm_bypass GUC (privilege-free) to bypass the
+-- pure-reject WORM trigger, NOT the superuser-only session_replication_role.
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.anonymise_outbound_sends(p_user_id uuid)
   RETURNS integer
@@ -388,14 +454,19 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  -- Bypass the pure-reject WORM trigger for this erasure UPDATE only.
-  SET LOCAL session_replication_role = 'replica';
+  -- Bypass the pure-reject WORM trigger for this erasure UPDATE only, via the
+  -- PRIVILEGE-FREE app.worm_bypass GUC (migration 087 pattern) — NOT
+  -- session_replication_role, which is superuser-only and 42501-aborts on
+  -- managed Supabase (postgres is not superuser), breaking the whole
+  -- account-delete saga (#4696). SET LOCAL is transaction-scoped; re-arm
+  -- immediately after the UPDATE.
+  SET LOCAL app.worm_bypass = 'on';
   UPDATE public.outbound_sends
      SET owner_id       = NULL,
          recipient_hash = '__anonymised__'
    WHERE owner_id = p_user_id;
   GET DIAGNOSTICS affected = ROW_COUNT;
-  RESET session_replication_role;
+  SET LOCAL app.worm_bypass = 'off';
 
   RETURN affected;
 END;

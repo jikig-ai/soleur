@@ -154,6 +154,34 @@ export async function sendCompliantOutbound(
     );
   }
 
+  // 6b. Duplicate-send guard (user-impact review) — refuse if this exact
+  //     approved body has already been sent to this recipient. Prevents the
+  //     "duplicate cold email to a journalist" failure on a tool retry. The
+  //     UNIQUE(owner_id, recipient_hash, approved_body_sha256) index closes the
+  //     concurrent-race residual this SELECT cannot.
+  const { data: alreadySent, error: dupErr } = await supabase.rpc(
+    "outbound_send_exists",
+    { p_recipient_hash: rHash, p_approved_body_sha256: approvedBodySha256 },
+  );
+  if (dupErr) {
+    reportSilentFallback(dupErr, {
+      feature: "outbound-email",
+      op: "outbound.dedup_check",
+      extra: { userId: ownerId },
+      message: "outbound_send_exists RPC failed — refusing to send",
+    });
+    throw new OutboundComplianceError(
+      "dedup_check_failed",
+      "Duplicate-send check failed — refusing to send.",
+    );
+  }
+  if (alreadySent === true) {
+    throw new OutboundComplianceError(
+      "duplicate_send",
+      "This exact approved body has already been sent to this recipient — refusing to re-send.",
+    );
+  }
+
   // 7. Resend dispatch — the un-rollback-able side effect. PII (recipient/body)
   //    must NEVER reach Sentry: a raw Resend error can echo the recipient, so
   //    the mirror carries only op + hashed userId, never the error payload's
