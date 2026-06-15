@@ -132,6 +132,7 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       ["bash plugins/soleur/skills/community/scripts/community-router.sh github activity", "GitHub activity invocation (literal path)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions", "Hacker News invocation (literal path)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics", "Bluesky invocation (literal path)"],
+      ["bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics", "LinkedIn fetch-metrics invocation (literal path)"],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
@@ -196,6 +197,8 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       "BSKY_APP_PASSWORD",
       "LINKEDIN_ACCESS_TOKEN",
       "LINKEDIN_PERSON_URN",
+      "LINKEDIN_ORG_ACCESS_TOKEN",
+      "LINKEDIN_ORG_ID",
       "X_API_KEY",
       "X_API_SECRET",
       "X_ACCESS_TOKEN",
