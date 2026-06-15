@@ -181,13 +181,13 @@ matches.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] Phase 0 produces a written, reproduced root-cause note naming the confirmed hypothesis (H1/H2/H3) and the exact reachable state (`data-theme` value at first paint) that produced the OS-override symptom.
-- [ ] With `localStorage["soleur:theme"]="light"`, OS = dark, and the inline bootstrap **not** run, mounting `<ThemeProvider>` resolves `document.documentElement.dataset.theme === "light"` (NOT `"system"`/unset) — asserted in `test/theme-explicit-choice-survives-reload.test.tsx`.
-- [ ] Symmetric: stored `"dark"` + OS light → resolves dark; control: stored `"system"` + OS light → follows OS (light). All in the new test.
-- [ ] If a CSP/nonce change ships: the new/extended test asserts the chosen admit mechanism (CSP hash present, or `x-nonce` always non-undefined for document responses).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] All listed theme tests pass via `./node_modules/.bin/vitest run …` (new test + 5 pre-existing affected suites).
-- [ ] No change to `--soleur-*` token values in `globals.css` or to the `globals.css` cascade (the cascade is correct; this is a bootstrap/persistence fix). The `theme-no-fouc-script.tsx` drift-guard test still passes.
+- [x] Phase 0 produces a written, reproduced root-cause note naming the confirmed hypothesis (H1/H2/H3) and the exact reachable state (`data-theme` value at first paint) that produced the OS-override symptom.
+- [x] With `localStorage["soleur:theme"]="light"`, OS = dark, and the inline bootstrap **not** run, mounting `<ThemeProvider>` resolves `document.documentElement.dataset.theme === "light"` (NOT `"system"`/unset) — asserted in `test/theme-explicit-choice-survives-reload.test.tsx`.
+- [x] Symmetric: stored `"dark"` + OS light → resolves dark; control: stored `"system"` + OS light → follows OS (light). All in the new test.
+- [~] (N/A — no CSP/nonce change shipped) If a CSP/nonce change ships: the new/extended test asserts the chosen admit mechanism (CSP hash present, or `x-nonce` always non-undefined for document responses).
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] All listed theme tests pass via `./node_modules/.bin/vitest run …` (new test + 5 pre-existing affected suites).
+- [x] No change to `--soleur-*` token values in `globals.css` or to the `globals.css` cascade (the cascade is correct; this is a bootstrap/persistence fix). The `theme-no-fouc-script.tsx` drift-guard test still passes.
 
 ### Post-merge (operator)
 - [ ] Playwright MCP (automatable — no operator-only step): load `/dashboard` on a dark-OS profile, select Light, reload, confirm Light palette persists; repeat Dark on light-OS; confirm `system` follows OS. `Automation: feasible via Playwright MCP` — fold into Phase 3, not a manual checklist item.

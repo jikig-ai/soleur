@@ -233,11 +233,27 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         }
         return;
       }
-      // No (or invalid) dataset.theme — inline script did not run, or
-      // we are mid-test in an environment that scrubs the attribute.
-      // Establish the baseline by writing React's current state.
-      document.documentElement.dataset.theme = theme;
-      prevThemeRef.current = theme;
+      // No (or invalid) dataset.theme — the inline boot script did not run
+      // (CSP-blocked, edge-cached stale HTML, very old browser), or we are
+      // mid-test in an environment that scrubs the attribute.
+      //
+      // Do NOT seed from React's `theme` state here: on the SSR-hydration
+      // path React's lazy initializer ran server-side (window undefined) and
+      // landed on the "system" fallback, which React's first client render
+      // reuses. Writing that "system" to dataset.theme makes the
+      // @media (prefers-color-scheme) cascade drive the palette to the OS
+      // preference — overriding the user's explicit stored choice on reload.
+      // Read the durable store directly instead, then sync React state to it
+      // (mirroring the bootstrap-ran branch above). State-sync is
+      // load-bearing: writing dataset.theme alone fixes the palette but
+      // leaves the ThemeToggle indicator on the wrong segment (#3318 symptom).
+      const stored = readStoredTheme();
+      document.documentElement.dataset.theme = stored;
+      prevThemeRef.current = stored;
+      if (stored !== theme) {
+        setThemeState(stored);
+        setResolvedTheme(resolveInitial(stored));
+      }
       return;
     }
     if (prevThemeRef.current === theme) return;
