@@ -47,6 +47,10 @@ readonly SHARED_SEGMENT_NAME="org-targeted"
 
 # Map known flag-name → Doppler env-var name. Keep in sync with
 # apps/web-platform/lib/feature-flags/server.ts RUNTIME_FLAGS.
+# Co-editor: soleur:flag-delete (scripts/delete.sh) removes an entry from this
+# map on delete by regex-matching `["<name>"]="FLAG_<X>"`. If you reshape this
+# declaration (quoting, generated map, multi-line), update delete.sh's removal
+# regex in lockstep or a deleted flag will leave a stale entry here.
 declare -A FLAG_ENV_VARS=(
   ["kb-chat-sidebar"]="FLAG_KB_CHAT_SIDEBAR"
   ["team-workspace-invite"]="FLAG_TEAM_WORKSPACE_INVITE"

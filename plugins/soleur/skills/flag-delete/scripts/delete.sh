@@ -92,7 +92,7 @@ fs_api() { curl -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: applica
 # --- resolve Flagsmith feature_id via EXACT-name filter (security P2-2) ------
 # ?q= is substring (name__icontains) — a bare pick could DELETE the wrong
 # feature, so filter to f['name'] == NAME exactly (create.sh:68-69 shape).
-RESOLVED=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/features/?q=${NAME}" \
+RESOLVED=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/features/?q=${NAME}&page_size=100" \
   | python3 -c "
 import json, sys
 d = json.load(sys.stdin)

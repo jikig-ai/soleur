@@ -24,7 +24,7 @@ of truth — these verbs cross-link to it, they do not re-implement it.
 
 ## Procedure
 
-Execute the **`### list`** section of
+Execute the **``### `list` ``** section of
 [`plugins/soleur/skills/schedule/SKILL.md`](../schedule/SKILL.md): enumerate
 `.github/workflows/scheduled-*.yml`, classify each by cron shape (5-field with
 explicit single integers for minute/hour/day/month + `*` for year → one-time;

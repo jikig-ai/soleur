@@ -30,7 +30,7 @@ Optional: `--yes` / `--confirm` (skip the confirmation prompt).
 
 ## Procedure
 
-Execute the **`### delete <name>`** section of
+Execute the **``### `delete <name>` ``** section of
 [`plugins/soleur/skills/schedule/SKILL.md`](../schedule/SKILL.md):
 
 1. Verify `.github/workflows/scheduled-<name>.yml` exists; if not, point the

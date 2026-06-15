@@ -116,7 +116,9 @@ python3 -c '
 import json, re
 src = open("'"$SERVER_TS"'").read()
 def block(const):
-    m = re.search(r"const " + const + r" = \{([^}]*)\}", src, re.DOTALL)
+    # Anchor on `} as const;` (matching create.sh/delete.sh) so a reformat that
+    # splits the closing brace from the suffix cannot match a truncated block.
+    m = re.search(r"const " + const + r" = \{(.*?)\}\s*as const;", src, re.DOTALL)
     pairs = re.findall(r"\"([a-z0-9-]+)\"\s*:\s*\"([A-Z0-9_]+)\"", m.group(1)) if m else []
     return dict(pairs)
 print(json.dumps({"runtime": block("RUNTIME_FLAGS"), "env": block("ENV_FLAGS")}))
