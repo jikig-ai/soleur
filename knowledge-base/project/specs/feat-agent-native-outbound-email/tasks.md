@@ -36,9 +36,9 @@ Phases ordered by dependency (contract before consumer). Tests-first (`cq-write-
 - [x] 4.1 Automated decline-matcher deferred (out of pilot scope, tracked #5331). Pilot suppression = manual/agent `email_suppress`; Touch-2 = manual re-trigger. No code in this PR.
 
 ## Phase 5 — Legal artifacts (docs)
-- [ ] 5.1 `2026-06-15-outbound-email-authority-lia.md` (overturn 2026-06-11 deferral; inherit "if/when built" decisions; partial-override comment on source, keep OPEN for remainder).
-- [ ] 5.2 Article 30 register entry (grep next free `PA-` id; document collision if any).
-- [ ] 5.3 ADR-060 (one paragraph: decision + rejected alternative).
+- [x] 5.1 `2026-06-15-outbound-email-authority-lia.md` (Art.6(1)(f) Purpose/Necessity/Balancing; cold-contact + Art.14 + keyed-HMAC tradeoff). Partial-override note added to the 2026-06-11 LIA's send-authority re-evaluation trigger (PA-27 stays in force for inbound).
+- [x] 5.2 Article 30 **PA-28** entry appended (next free id confirmed = 28; rebased origin/main first — no collision).
+- [x] 5.3 ADR-060 (decision + 4 rejected alternatives incl. the action_sends-reuse fork; CTO-decided).
 
 ## Phase 6 — Gates & verification
 - [ ] 6.1 `/soleur:gdpr-gate` against FR/TR (deepen-plan Phase 4.6 / work Phase 0); fold or track Critical findings.
