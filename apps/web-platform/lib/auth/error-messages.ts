@@ -37,11 +37,16 @@ export const TEMPORARILY_UNAVAILABLE_MESSAGE =
 export const CONNECTION_FAILURE_MESSAGE =
   "Couldn't reach the sign-in service. Check your connection and try again.";
 
-// Email-SEND ceiling copy (freetext `email rate limit exceeded`). Exported so
-// the divergence guard in the test suite can reference it by name rather than
-// hard-coding the literal (which would silently desync on a copy edit).
+// Email-SEND ceiling copy (freetext `email rate limit exceeded`). In practice
+// this surfaces the per-user 60s OTP send window — a SHORT transient cooldown,
+// not an abuse lockout. Copy softened (2026-06-15 login-blocking fix) to
+// surface the ~1-minute recovery window rather than reading as a hard lockout
+// ("Too many sign-in attempts"); the resend control also shows a live
+// countdown (useOtpFlow.cooldownSeconds). Exported so the divergence guard in
+// the test suite can reference it by name rather than hard-coding the literal
+// (which would silently desync on a copy edit).
 export const EMAIL_SEND_RATE_LIMIT_MESSAGE =
-  "Too many sign-in attempts. Please wait a few minutes and try again.";
+  "You just requested a code. Please wait about a minute before requesting another.";
 
 /**
  * Structural shape of a Supabase `AuthError` (or a transport throw — a bare
