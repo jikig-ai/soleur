@@ -50,6 +50,11 @@ main() {
     exit 2
   fi
 
+  # Anchor at the repo root so the exclude pathspecs (which are repo-root-relative)
+  # match regardless of the caller's subdirectory — enforces the "run from root"
+  # contract instead of merely documenting it.
+  cd "$(git rev-parse --show-toplevel)" || exit 2
+
   # git grep already skips untracked paths (node_modules, .git). Exclude prose
   # (*.md), this skill's own dir (its marker literals are definitions), and build
   # output. git grep exits 1 on no match under pipefail — tolerate with `|| true`.
@@ -73,8 +78,12 @@ main() {
   printf '%s\n' "$hits" | awk -v marker="$MARKER" '
     BEGIN { total = 0; untriggered = 0; prev = "" }
     {
-      # Peel "<file>:<lineno>:<content>" without splitting paths on stray colons.
-      i = index($0, ":"); file = substr($0, 1, i - 1); rest = substr($0, i + 1)
+      # git grep -n emits "<file>:<lineno>:<content>". Anchor on the ":<digits>:"
+      # boundary (lineno is always numeric) so a colon WITHIN the path does not
+      # mis-peel file/lineno. Skip any line lacking that boundary.
+      if (!match($0, /:[0-9]+:/)) next
+      file = substr($0, 1, RSTART - 1)
+      rest = substr($0, RSTART + 1)
       j = index(rest, ":"); lineno = substr(rest, 1, j - 1); content = substr(rest, j + 1)
 
       m = index(content, marker)

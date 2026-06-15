@@ -293,8 +293,12 @@ convention doc and reference the gate by id.
 
 ### Pre-merge (PR)
 - [ ] AC1 (ITEM ONE): constitution Code Style contains the minimalism ladder (6 rungs) + 5-concern carve-out.
-- [ ] AC2 (ITEM ONE): `cq-minimalism-ladder-generation-bias` present in `AGENTS.docs.md` (body, ≤600 bytes)
-      and `AGENTS.md` (index pointer under `## Code Quality`); both linters pass.
+- [~] AC2 (ITEM ONE): **DESCOPED at /work** — `cq-minimalism-ladder-generation-bias` was NOT added.
+      The always-loaded AGENTS payload was at 22994/23000 bytes (6 bytes slack); a new index pointer
+      (`lint_union` couples pointer↔body 1:1, so the docs body needs the always-loaded pointer) would
+      have tipped B_ALWAYS over the 23000 critical cap, forcing an unrelated core-rule demotion — out
+      of scope, and the brief made the pointer conditional ("if that matches the established pattern").
+      ITEM ONE ships as the constitution body only (AC1); the body no longer references the rule id.
 - [ ] AC3 (ITEM TWO): `harvest-debt.sh` correctly groups by file and flags `no-trigger` markers
       (all four Test Scenarios green); script is read-only and idempotent; the convention-doc/skill-dir
       self-exclusion holds.
