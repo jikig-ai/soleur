@@ -3,7 +3,7 @@ title: "Agent workspaces now self-heal on reconnect"
 type: feature-launch
 publish_date: "2026-06-15"
 channels: x
-status: scheduled
+status: published
 pr_reference: "#5339"
 issue_reference: "#5340"
 ---
