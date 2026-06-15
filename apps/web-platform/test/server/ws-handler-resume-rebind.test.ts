@@ -20,7 +20,11 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 
 const REPO_URL = "https://github.com/acme/repo.git";
 const CONV_ID = "conv-resume-1";
-const WORKSPACE_ID = "ws-shared-123";
+// Valid UUID: production `conversations.workspace_id` is a NOT-NULL UUID FK
+// (migration 059). `workspacePathForWorkspaceId` (called by the #5275 restore
+// hook on resume) validates the format, so the fixture must be a real UUID —
+// a `team` workspace whose id differs from USER_ID (cross-user shared tree).
+const WORKSPACE_ID = "a1b2c3d4-0000-4000-8000-000000000123";
 const USER_ID = "user-resume-A";
 
 const { rpcSpy, singleSpy } = vi.hoisted(() => ({
@@ -34,7 +38,7 @@ const { rpcSpy, singleSpy } = vi.hoisted(() => ({
       id: "conv-resume-1",
       status: "active",
       repo_url: "https://github.com/acme/repo.git",
-      workspace_id: "ws-shared-123",
+      workspace_id: "a1b2c3d4-0000-4000-8000-000000000123",
     },
     error: null,
   })),
