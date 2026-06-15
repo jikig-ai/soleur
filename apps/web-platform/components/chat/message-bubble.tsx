@@ -174,7 +174,12 @@ export const MessageBubble = memo(function MessageBubble({
     <div
       className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
     >
-      <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+      <div className={`flex min-w-0 max-w-[90%] md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+        {/* Assistant card: `w-fit` shrinks to content so short routing chips
+            don't wrap prematurely; `min-w-[6rem]` floors the width (~96px > the
+            widest "Streaming" badge) so the absolute `right-3` status badges
+            never overhang the left edge. User card keeps `min-w-0` for long-
+            content / wide-`<pre>` overflow shrink. */}
         <div
           data-testid="message-bubble-card"
           className={`relative rounded-xl px-4 py-3 text-sm leading-relaxed ${

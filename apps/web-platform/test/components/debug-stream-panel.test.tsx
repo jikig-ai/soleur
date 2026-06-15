@@ -139,27 +139,21 @@ describe("DebugStreamPanel — Show/Hide toggle affordance (regression #5241)", 
     const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
     render(<DebugStreamPanel available events={events} connected />);
     const toggle = screen.getByRole("button", { name: /debug stream/i });
-    // (a) collapsed → the toggle button's own text carries the "Show" affordance.
+    // (a) collapsed → the toggle button's own text carries the "Show" affordance
+    //     (#5241 had moved it into an inert sibling span outside the button).
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.textContent).toMatch(/Show/);
+    expect(within(toggle).getByText("Show")).toBeTruthy();
     // (b) clicking the word "Show" (inside the toggle) flips expanded false→true.
-    fireEvent.click(within(toggle).getByText(/Show/));
+    fireEvent.click(within(toggle).getByText("Show"));
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     // …and the label swaps to "Hide" (still inside the toggle).
-    expect(within(toggle).getByText(/Hide/)).toBeTruthy();
+    expect(within(toggle).getByText("Hide")).toBeTruthy();
     // (c) clicking "Hide" collapses again.
-    fireEvent.click(within(toggle).getByText(/Hide/));
+    fireEvent.click(within(toggle).getByText("Hide"));
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
-
-  it("Copy is NOT a descendant of the toggle and never carries the Show/Hide label (AC1c)", () => {
-    const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
-    render(<DebugStreamPanel available events={events} connected />);
-    const toggle = screen.getByRole("button", { name: /debug stream/i });
-    const copy = screen.getByTestId("debug-stream-copy");
-    expect(toggle.querySelector('[data-testid="debug-stream-copy"]')).toBeNull();
-    expect(copy.textContent).not.toMatch(/Show|Hide/);
-  });
+  // The "Copy is NOT a descendant of the toggle / does not toggle" invariant is
+  // already owned by the AC4/AC6 test above — not duplicated here.
 });
 
 describe("DebugModeToggle (AC8 — owner-write, member read-only)", () => {
