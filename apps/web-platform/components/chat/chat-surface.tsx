@@ -918,13 +918,16 @@ export function ChatSurface({
           )}
 
           {/* feat-reasoning-chat-boxes (#5370) — transient live narration line.
-              Shows the agent's deliberate plain-language status near the
-              Working badge while a turn is in flight. On reconnect mid-turn the
-              live-only frame is gone (not buffered) but the turn continues — so
-              fall back to "Still working…" rather than a dead blank (spec-flow
-              Finding 4). Torn down automatically when streamState leaves
-              "streaming" (the reducer also nulls liveNarration on turn-end). */}
-          {streamState === "streaming" && (
+              Shows the agent's deliberate plain-language status near the Working
+              badge while a turn is in flight. Gated on BOTH `streamState ===
+              "streaming"` AND a non-null `liveNarration` so it is fully inert
+              until the emit path (Phase 5) actually produces narration — it
+              never adds a spurious line to a turn the agent didn't narrate, and
+              it disappears on turn-end (the reducer nulls liveNarration on every
+              turn-end path). The spec-flow Finding 4 reconnect placeholder needs
+              a "narration-seen-this-turn" signal to avoid showing on every turn;
+              deferred to the emit phase. */}
+          {streamState === "streaming" && liveNarration !== null && (
             <div
               data-testid="live-narration"
               aria-live="polite"
@@ -935,7 +938,7 @@ export function ChatSurface({
                 className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
               />
               <span className="min-w-0 [overflow-wrap:anywhere]">
-                {liveNarration ?? "Still working…"}
+                {liveNarration}
               </span>
             </div>
           )}
