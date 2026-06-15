@@ -1,13 +1,17 @@
 -- 104_outbound_email.sql
 -- Agent-native outbound email (#5325, pilot slice).
 --
--- Net-new schema is ONLY the email_suppression table. The send-audit +
--- approval binding reuses public.action_sends (migration 051): an outbound
--- email send records an action_sends row with action_class = 'marketing.outreach'
--- (admissible — action_sends.action_class has only an enum-ABSENCE CHECK
--- `!~ '^(payment|legal|auth)\.'`; no enum/migration change needed), bound to
--- per_send_body_sha256 + approval_signature_sha256 + grant_id. There is NO
--- outbound_sends table and NO bare approved_at.
+-- Net-new schema is TWO tables: email_suppression (per-founder suppression set)
+-- and outbound_sends (per-send WORM cold-send audit). Per ADR-060 (CTO decision),
+-- outbound_sends is a DEDICATED table, NOT a reuse of public.action_sends: that
+-- table's message_id is a NOT NULL FK to public.messages with UNIQUE(message_id),
+-- built for the founder-clicks-Send-on-a-draft path, and the agent tool path has
+-- no messages.id at tool-exec time. outbound_sends mirrors the action_sends WORM
+-- posture (append-only trigger, owner-RLS, app.worm_bypass-gated anonymise) but
+-- has no messages FK. There is NO bare approved_at — approval is body-hash-bound
+-- (approved_body_sha256 recomputed at the chokepoint). (This supersedes the plan's
+-- "reuse action_sends / no outbound_sends table" P0-1, whose premise the code
+-- falsified; see ADR-060.)
 --
 -- email_suppression is a per-founder SET (not a log): one row per
 -- (owner_id, recipient_hash), upserted ON CONFLICT DO NOTHING. Suppression is
