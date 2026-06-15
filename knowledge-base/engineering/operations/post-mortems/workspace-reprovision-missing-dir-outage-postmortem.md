@@ -1,10 +1,10 @@
 ---
 title: "Concierge/leader workspace re-provision dead-ends when the workspace dir is missing on disk"
 date: 2026-06-15
-incident_pr: "#5367"
-incident_window: "latent since the re-provision self-heal graft path shipped; surfaced for a user on 2026-06-15 after a sandbox/host reclaim"
-recovery_at: "on merge + deploy of #5367"
-suspected_change: "re-provision self-heal clone path (ensure-workspace-repo.ts realGraftRepoClone) never created workspacePath before cloning into a temp subdir of it"
+incident_pr: "#5367 (partial), #5375 (completion)"
+incident_window: "latent since the re-provision self-heal graft path shipped; surfaced for a user on 2026-06-15 after a sandbox/host reclaim; #5367 fixed the connected-repo slice but the user re-reported it still broke — completed in #5375"
+recovery_at: "on merge + deploy of #5375 (the #5367 fix was necessary but insufficient — see Update below)"
+suspected_change: "re-provision self-heal clone path (ensure-workspace-repo.ts realGraftRepoClone) never created workspacePath before cloning; #5367's mkdir was CONDITIONAL (skipped for not-connected / .git-present workspaces) and guarded a different resolved path than the sandbox binds"
 brand_survival_threshold: single-user incident
 status: resolved
 triggers:
@@ -26,7 +26,11 @@ A user's Concierge dashboard reported every "Fix issue …" run dead-ending with
 
 ## Status
 
-resolved — fix landed in #5367 (workspace dir is created before the self-heal clone).
+resolved — completed in #5375. #5367 was necessary but **insufficient**: its `mkdir` lived inside `realGraftRepoClone`, reached only PAST `ensureWorkspaceRepoCloned`'s not-connected (`:85`) and `.git`-present (`:89`) early-returns, AND the Concierge sandbox binds the factory's OWN resolved `workspacePath` (`cc-dispatcher.ts:1315`), not the value `#5367` guaranteed. So a reclaimed NOT-CONNECTED workspace still dead-ended. #5375 adds an UNCONDITIONAL `ensureWorkspaceDirExists()` at both `query()`-construction sites (Concierge + leader), on the value the sandbox binds, before `buildAgentQueryOptions`.
+
+## Update (2026-06-15) — #5367 was insufficient; completed in #5375
+
+The user re-reported the exact symptom AFTER #5367 deployed (the `web-v` release shipped #5367 at 17:08; the repro was at 20:10). Re-diagnosis (deepen-plan: architecture-strategist + spec-flow-analyzer) found two gaps #5367 left open: (1) the clone-mkdir is CONDITIONAL — not-connected and `.git`-present reclaimed workspaces skip it entirely; (2) the bwrap sandbox `cwd` is the factory's own `fetchUserWorkspacePath` resolve, a different variable than any dispatch-level guard would protect. The completing fix makes the dir-existence guarantee UNCONDITIONAL and places it on the bound value. RED-first invariant test (`existsSync(boundCwd)` at sandbox construction, not-connected fixture) + leader-path parity. Full web-platform vitest: 10,133 passed / 0 failed.
 
 ## Symptom
 
@@ -43,6 +47,9 @@ Concierge (and leader) agent turns fail immediately after a sandbox/host reclaim
 | human | 2026-06-15 | User reported via Concierge that "the workspace fix is still not correctly done" (the prior CWE-22 hardening had not fixed the symptom). |
 | agent | 2026-06-15 | Traced root cause to `realGraftRepoClone` cloning into a temp subdir of a possibly-missing `workspacePath`. |
 | agent | 2026-06-15 | RED-first test + one-line `mkdir(workspacePath,{recursive:true})` fix landed in #5367. |
+| human | 2026-06-15 20:10 | User re-reported the SAME symptom after #5367 deployed ("it seems it didn't fix it"), with the debug stream. |
+| agent | 2026-06-15 | Confirmed #5367 deployed (web-v release 17:08); re-diagnosed: #5367's mkdir is conditional (skips not-connected / `.git`-present) AND the sandbox binds the factory's own resolved path. |
+| agent | 2026-06-15 | Unconditional `ensureWorkspaceDirExists()` at both `query()`-construction sites (Concierge + leader), invariant RED-first test, landed in #5375. |
 
 ## Participants and Systems Involved
 
@@ -62,7 +69,8 @@ system — a sandbox/host reclaim removed the workspace directory; the self-heal
 | Hypothesis | Supporting evidence | Disconfirming evidence | Status |
 |---|---|---|---|
 | CWE-22 UUID-validation PR (merged 2026-06-15) should have fixed it | the prior PR touched the resolver feeding this path | it only validates the workspaceId shape before join(); never creates the dir | rejected |
-| Self-heal clone never creates the workspace dir before cloning | `realGraftRepoClone` builds `<ws>/.ensure-repo-tmp-<uuid>` and clones there; git creates only the leaf, not missing parents | — | confirmed |
+| Self-heal clone never creates the workspace dir before cloning | `realGraftRepoClone` builds `<ws>/.ensure-repo-tmp-<uuid>` and clones there; git creates only the leaf, not missing parents | — | confirmed (#5367, partial) |
+| #5367's mkdir is conditional + guards the wrong path | it sits past `ensureWorkspaceRepoCloned`'s `:85`/`:89` early-returns (skipped for not-connected / `.git`-present), and the sandbox binds the factory's own `:1315` resolve | — | confirmed (#5375, completion) |
 
 ## Resolution
 
@@ -81,6 +89,7 @@ Added `await mkdir(workspacePath, { recursive: true })` as the first statement o
 3. Why was the parent missing? A sandbox/host reclaim removed the workspace directory.
 4. Why didn't the clone create it? The function assumed the parent already existed — only the signup path called `ensureDir(workspacePath)`; the re-provision path never did.
 5. Why was the asymmetry not caught? The two paths (signup vs. self-heal) were never tested against a genuinely-absent workspace dir; the self-heal's own tests mocked the parent as present.
+6. Why did #5367 not fully fix it? Its mkdir was placed inside the clone (conditional on connected + `.git`-absent), but dir-existence is a STRONGER precondition than clone-eligibility — a reclaimed not-connected workspace needs the dir whether or not it has a repo. The completing fix (#5375) makes the mkdir unconditional and binds it to the sandbox's own resolved `workspacePath`, with an invariant test (dir exists at the bound cwd at sandbox-construction) that is genuinely RED on the post-#5367 main.
 
 ## Versions of Components
 
@@ -126,4 +135,4 @@ The signup and self-heal paths diverged on a load-bearing precondition (does the
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR (#5367) with a regression test and no residual work._
+_No action items — incident fully resolved across #5367 (partial) and #5375 (completion), each with a regression test and no residual work._

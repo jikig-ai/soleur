@@ -160,6 +160,10 @@ vi.mock("@/server/current-repo-url", () => ({
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: mockEnsureWorkspaceRepoCloned,
+  // Unconditional pre-sandbox dir guarantee — no-op here (these tests assert
+  // option shape, not real dir existence). The dedicated invariant coverage
+  // lives in cc-dispatcher-warm-presandbox-mkdir.test.ts (real mkdir).
+  ensureWorkspaceDirExists: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/permission-callback", () => ({

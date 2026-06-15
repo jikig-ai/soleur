@@ -111,7 +111,10 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
 import { getCurrentRepoUrl } from "./current-repo-url";
-import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+import {
+  ensureWorkspaceRepoCloned,
+  ensureWorkspaceDirExists,
+} from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1611,6 +1614,23 @@ export const realSdkQueryFactory: QueryFactory = async (
       repoUrl,
     });
 
+    // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
+    // reprovision-ensure-dir-presandbox). The bwrap sandbox binds `cwd` to THIS
+    // factory's own resolved `workspacePath` (the `:1315` `fetchUserWorkspacePath`
+    // in the Promise.all above — NOT `args.workspacePath`, which is system-prompt-
+    // only) at `query()` construction below, and requires the dir to EXIST. After
+    // a reclaim it can be gone. The clone's mkdir (PR #5367) is CONDITIONAL — it
+    // sits past `ensureWorkspaceRepoCloned`'s not-connected / `.git`-present early-
+    // returns — so a reclaimed not-connected workspace would skip it and the
+    // sandbox would `chdir` into a missing dir. Ensuring the dir here, before the
+    // clone and before `buildAgentQueryOptions`, is the stronger precondition. On
+    // failure it surfaces a retryable error (rides the `query()`-construction catch
+    // below) rather than building a doomed sandbox.
+    await ensureWorkspaceDirExists(workspacePath, {
+      feature: "cc-dispatcher",
+      userId: args.userId,
+    });
+
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
     // it so the agent has a real git repo to branch/commit/work in. Runs once per
@@ -2123,6 +2143,58 @@ export function closeCcConversation(
 ): void {
   if (!_runner) return;
   _runner.closeConversation(conversationId, reason);
+}
+
+// #5371 — cadence for the in-process cc idle reaper. Kept a LOCAL literal
+// (not exported, not a runtime knob): coupling it to agent-runner's
+// module-private STUCK_ACTIVE_CHECK_INTERVAL_MS would entangle two
+// unrelated reapers. ≤ DEFAULT_IDLE_REAP_MS (10min, in soleur-go-runner.ts)
+// so an idle query is reaped within ~1 interval of crossing the window.
+const CC_IDLE_REAPER_INTERVAL_MS = 300_000;
+
+/**
+ * #5371 — reap idle cc queries from OUTSIDE a dispatch (the boot-time
+ * scheduler). Mirrors `closeCcConversation`'s `_runner`-guarded accessor
+ * shape so the caller never forces runner creation (no `sendToClient`
+ * closure needed). No-op → 0 when no runner exists yet.
+ */
+export function reapIdleCcQueries(): number {
+  if (!_runner) return 0;
+  return _runner.reapIdle();
+}
+
+/**
+ * #5371 — drain EVERY active cc query on SIGTERM, aborting WITHOUT a
+ * checkpoint (legacy `abortAllSessions` parity — the disconnect grace-abort
+ * terminal, #5362, is what preserves uncommitted work; shutdown only stops
+ * API spend + flips status cleanly). No-op → 0 when no runner exists yet.
+ */
+export function drainCcQueriesForShutdown(): number {
+  if (!_runner) return 0;
+  return _runner.closeAllForShutdown();
+}
+
+/**
+ * #5371 — start the boot-time cc idle-reaper. Mirrors
+ * `startStuckActiveReaper` (in agent-runner.ts): a `setInterval` returning
+ * the timer, `unref()`'d before return so it never blocks shutdown. The
+ * explicit `clearInterval` on SIGTERM is belt-and-suspenders on top of
+ * `unref()`, not a replacement. The callback only ever calls the
+ * null-guarded `reapIdleCcQueries()` — never `_runner.reapIdle()` directly.
+ */
+export function startCcIdleReaper(): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    try {
+      reapIdleCcQueries();
+    } catch (err) {
+      // reapIdle is synchronous in-memory Map iteration (no I/O), so this
+      // catch is defensive per cq-silent-fallback-must-mirror-to-sentry —
+      // not an expected-to-fire path.
+      reportSilentFallback(err, { feature: "cc-idle-reaper", op: "reap" });
+    }
+  }, CC_IDLE_REAPER_INTERVAL_MS);
+  timer.unref();
+  return timer;
 }
 
 export function getSoleurGoRunner(
