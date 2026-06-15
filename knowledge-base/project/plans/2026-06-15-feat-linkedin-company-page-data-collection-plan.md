@@ -242,8 +242,9 @@ logs:
   where: Inngest run logs (handler) + Sentry (reportSilentFallback) — NO ssh required
   retention: per existing Inngest/Sentry retention
 discoverability_test:
-  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-community-monitor.test.ts
-  expected_output: positive-class includes LINKEDIN_ORG_ACCESS_TOKEN + LINKEDIN_ORG_ID; new LinkedIn fetch-metrics prompt anchor present; all green
+  command: grep -l "linkedin fetch-metrics" apps/web-platform/server/inngest/functions/cron-community-monitor.ts
+  expected_output: cron-community-monitor.ts
+  note: source-presence probe — the cron is Tier-2-deferred (no live endpoint until restore), so this confirms the collection wiring is in the handler without an SSH/live dependency. Behavioral coverage is the cron vitest suite (CI webplat shard) + the live router fetch-metrics verified at QA 2026-06-15.
 ```
 
 ## Domain Review
