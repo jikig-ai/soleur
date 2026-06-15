@@ -143,11 +143,12 @@ const CLAUDE_CODE_FLAGS = [
 // across plan→work cycles.
 //
 // LinkedIn collection note (#4049): the "LinkedIn (if enabled): … fetch-metrics"
-// step below only fires once this cron is RESTORED from TIER2_DEFERRED_CRONS.
-// The handler currently early-returns via deferIfTier2Cron (no claude spawn), so
-// the prompt edit is source-shape-testable but NOT live-verifiable until restore.
-// Do NOT attempt to un-defer the cron here (out of scope — see the Tier-2
-// restore effort, #5018 / #5046 lineage).
+// step below is LIVE — it runs on every fire. TIER2_DEFERRED_CRONS is empty
+// (Tier-2 boundary fully restored, #5199), so deferIfTier2Cron is a defensive
+// no-op that does NOT gate this cron. Verified live 2026-06-15 (manual run →
+// digest #5357 carried real LinkedIn metrics: 3 followers, 2,137 impressions).
+// If a future Tier-2 deferral re-adds "community-monitor" to the set, collection
+// pauses behind the deferral heartbeat until restore.
 const COMMUNITY_MONITOR_PROMPT = `You are a community monitoring agent. Your job is to generate a daily
 community digest and create a GitHub Issue summarizing the findings.
 
