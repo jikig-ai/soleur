@@ -22,34 +22,39 @@ Derived from `2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md`. Scope is
 
 ## Phase 1 — Failing tests first (RED) — `cq-write-failing-tests-before`
 
+[Updated 2026-06-15 deepen — T1 folded into T2; T3 collapsed to one case; added T-race.]
+
 - [ ] 1.1 Create `apps/web-platform/test/cc-soleur-go-checkpoint-on-disconnect.test.ts` (vitest, node, SDK removed from assertion path — injected factory/spies).
-- [ ] 1.2 T1: `abortConversation(convId, "disconnected")` fires the cc close path (`onCloseQuery`) for that conversation.
-- [ ] 1.3 T2: on `reason === "disconnected"`, the close hook calls `checkpointInflightWork(path, convId, userId)` exactly once with the conversation-bound path.
-- [ ] 1.4 T3: natural completion (`onWorkflowEnded status:"completed"`) + non-disconnect `closeConversation` do NOT checkpoint.
-- [ ] 1.5 T4: checkpoint resolves clone from `conversations.workspace_id` via `workspacePathForWorkspaceId`, NOT `resolveActiveWorkspacePath`.
-- [ ] 1.6 T5: `checkpointInflightWork` rejection → close path still completes (bash-gate drain runs), `reportSilentFallback` mirrored, no throw escapes.
-- [ ] 1.7 T6: ws-handler disconnect grace timer signals BOTH `abortSession` and `abortConversation(convId, "disconnected")`.
-- [ ] 1.8 Confirm all RED for the right reason (missing trigger/hook), not harness error.
+- [ ] 1.2 T2: `closeConversation(convId, "disconnected")` with a live `activeQueries` entry → `closeQuery` → `onCloseQuery` with `reason:"disconnected"` → hook calls `checkpointInflightWorkForConversation` → `checkpointInflightWork(path, convId, userId)` once with conversation-bound path.
+- [ ] 1.3 T3 (one parametrized case): `closeConversation(convId)` no-reason AND natural completion (`onWorkflowEnded status:"completed"`) both leave `reason` undefined → no checkpoint.
+- [ ] 1.4 T4: helper resolves clone from `conversations.workspace_id` via `workspacePathForWorkspaceId`, NOT `fetchUserWorkspacePath`/`resolveActiveWorkspacePath`.
+- [ ] 1.5 T5: checkpoint/resolve rejection → close path still completes (bash-gate drain runs), `reportSilentFallback` mirrored, no throw escapes `onCloseQuery`.
+- [ ] 1.6 T6: ws-handler grace timer calls BOTH `abortSession` and `getSoleurGoRunner().closeConversation(convId, "disconnected")`.
+- [ ] 1.7 T-race: a conversation whose `activeQueries` entry was already deleted (natural completion) does NOT checkpoint when `closeConversation(convId, "disconnected")` is later called (lookup undefined → no-op).
+- [ ] 1.8 Confirm all RED for the right reason (missing reason-plumbing/hook), not harness error.
 
-## Phase 2 — cc runner: `abortConversation` (soleur-go-runner.ts)
+## Phase 2 — cc runner: thread `reason` through existing close path (soleur-go-runner.ts)
 
-- [ ] 2.1 Add `abortConversation(conversationId, reason)` — lookup `activeQueries.get(conversationId)`, no-op if absent (idempotent).
-- [ ] 2.2 Abort controller/interrupt the SDK query (mirror `reapIdle`/`closeConversation` internals), then route through `closeQuery(state)` so `onCloseQuery` fires (`:1966-1983`).
-- [ ] 2.3 Widen `onCloseQuery` signature `{conversationId, userId}` → `{conversationId, userId, reason?}`; per `hr-type-widening-cross-consumer-grep` + `cq-union-widening-grep-three-patterns`, grep + update all consumers; existing `reapIdle`/`closeConversation` callers pass NO reason.
-- [ ] 2.4 Export `abortConversation` in the returned object (`:3220-3231`).
+[Updated 2026-06-15 deepen — reuse dead-code `closeConversation`; NO new method.]
 
-## Phase 3 — cc dispatcher: checkpoint on disconnect (cc-dispatcher.ts)
+- [ ] 2.1 Widen `closeConversation(conversationId, reason?: "disconnected")` (`:3115`) — no behavior change to existing (zero) callers.
+- [ ] 2.2 Widen `closeQuery(state, reason?)` (`:1942`); thread `reason` to the `onCloseQuery({conversationId, userId, reason})` call (`:1971`). HAND-CHECK all 3 `closeQuery` callers (`emitWorkflowEnded :1939`, `reapIdle :3108`, `closeConversation :3119`) — first two pass no reason. `tsc` does NOT enumerate this internal seam (P1-2).
+- [ ] 2.3 Widen `onCloseQuery` type (`:1115`) → `{conversationId, userId, reason?: "disconnected"}`. One consumer (`cc-dispatcher.ts:1909`); `tsc --noEmit` sufficient for this surface (additive optional field).
+- [ ] 2.4 (No new export — `closeConversation` already exported at `:3220-3231`.)
 
-- [ ] 3.1 In `getSoleurGoRunner` `onCloseQuery` (`:1909-1910`), when `reason === "disconnected"`: `getFreshTenantClient(userId)` → SELECT `workspace_id` from `conversations` where `id = conversationId`; on error/null → Sentry-mirror + skip (no throw).
-- [ ] 3.2 `checkpointWorkspacePath = workspacePathForWorkspaceId(boundWorkspaceId)`.
-- [ ] 3.3 `await checkpointInflightWork(checkpointWorkspacePath, conversationId, userId)` (reuse as-is).
-- [ ] 3.4 Wrap resolution in try/catch → `reportSilentFallback({feature:"inflight-checkpoint", op:"checkpoint-on-abort", extra:{…, stage:"cc-resolve-workspace-path"}})`.
-- [ ] 3.5 Keep bash-gate cleanup on EVERY close (reason or not). (Phase 2 MUST land before Phase 3 consumes `reason`.)
+## Phase 3 — shared helper + dispatcher hook (inflight-checkpoint.ts, agent-runner.ts, cc-dispatcher.ts)
+
+[Updated 2026-06-15 deepen — EXTRACT the checkpoint block; refactor legacy + wire cc.]
+
+- [ ] 3.1 Add `checkpointInflightWorkForConversation(userId, conversationId[, stage])` to `inflight-checkpoint.ts` = verbatim legacy block (`getFreshTenantClient` → SELECT `workspace_id` → `workspacePathForWorkspaceId` → `checkpointInflightWork` → `reportSilentFallback` try/catch, `op:"checkpoint-on-abort"`). Never throws.
+- [ ] 3.2 Refactor legacy site (`agent-runner.ts:2368-2406`) to call the helper inside its `if (isDisconnected)` guard (kill the duplicate, same PR).
+- [ ] 3.3 In `getSoleurGoRunner` `onCloseQuery` (`cc-dispatcher.ts:1909-1910`), when `reason === "disconnected"` → `await checkpointInflightWorkForConversation(userId, conversationId)` (cc-tagged `stage:"cc-resolve-workspace-path"`). Keep bash-gate drain unconditional.
+- [ ] 3.4 (Phase 2 reason-plumbing MUST land before 3.3 consumes `reason`.)
 
 ## Phase 4 — ws-handler trigger (ws-handler.ts)
 
-- [ ] 4.1 In grace-timer callback (`:2923-2931`), after `abortSession(uid, convId)` also call `abortConversation(convId, "disconnected")` (via `getSoleurGoRunner()`/dispatch surface).
-- [ ] 4.2 Add comment citing #5356 + the dual-path-terminal learning (turn-boundary hooks need BOTH lineages wired).
+- [ ] 4.1 In grace-timer callback (`:2923-2931`), after `abortSession(uid, convId)` also call `getSoleurGoRunner().closeConversation(convId, "disconnected")`.
+- [ ] 4.2 Add comment citing #5356 + the dual-path-terminal learning (turn-boundary hooks need BOTH lineages wired). Note registries are mutually exclusive (no double-checkpoint).
 
 ## Phase 5 — Observability + GREEN + exit gate
 

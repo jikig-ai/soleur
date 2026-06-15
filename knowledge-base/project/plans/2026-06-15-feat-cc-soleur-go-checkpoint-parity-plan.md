@@ -13,6 +13,51 @@ created: 2026-06-15
 
 # feat: cc-soleur-go in-flight work checkpoint parity (#5356)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Agents:** verify-the-negative + precedent-diff (general-purpose), architecture-strategist, code-simplicity-reviewer
+**Verification result:** ZERO contradictions — every load-bearing file:line citation
+and every negative/no-op premise (N1–N6) confirmed against the worktree code.
+
+### Key Improvements (applied)
+
+1. **Drop the new `abortConversation` method — reuse + widen the existing
+   `closeConversation(conversationId, reason?)`.** Both architecture (P1-1) and
+   simplicity reviewers found `abortConversation` as originally specified was a
+   near-verbatim duplicate of `closeConversation` (`soleur-go-runner.ts:3115-3120`),
+   which is currently DEAD CODE (zero production callers — N2 confirmed). Widening
+   the dead method is risk-free and deletes ~25-35 LOC of new surface.
+2. **Correct the abort primitive.** There is NO AbortController/`controllerSignal`
+   on the cc `ActiveQuery`. The spend-stopping abort is `state.query.close()`,
+   reached via the existing `closeQuery(state)` — the same primitive
+   `closeConversation`/`reapIdle` already use. Phase 2 reworded accordingly (P1-1).
+3. **Thread `reason` through `closeQuery`, not just `onCloseQuery`.** `closeQuery`
+   is the single function that fires `onCloseQuery` and is shared by 3 callers; it
+   needs an optional `reason` param. This internal seam is NOT fully enumerated by
+   `tsc` — hand-check the 3 `closeQuery` call sites (P1-2).
+4. **Extract the checkpoint block into `inflight-checkpoint.ts`** and call it from
+   BOTH the legacy site (`agent-runner.ts:2368-2406`) and the new cc hook. The
+   block encodes the conversation-bound-clone invariant (the plan's #1 silent-failure
+   mode) — two verbatim copies would drift. Single enforcement point (simplicity Q3).
+5. **Trim cross-consumer-widening ceremony.** `onCloseQuery` has exactly ONE
+   consumer (`cc-dispatcher.ts:1909`) and one producer (`closeQuery`). Keep
+   `tsc --noEmit` as a normal gate; drop the "exhaustiveness rails" framing.
+
+### New Considerations Discovered
+
+- **Dispatch-time workspace resolution is USER-keyed, not conversation-bound**
+  (`cc-dispatcher.ts:1281` `fetchUserWorkspacePath(userId)`). This is exactly the
+  active-claim-drift hazard the conversation-bound re-resolve guards against —
+  confirms AC3/T4 are load-bearing, not belt-and-suspenders.
+- **Registries are mutually exclusive by construction** (per-turn routing at
+  `ws-handler.ts:2314`: cc vs legacy `sendUserMessage`; different key shapes). No
+  window exists where a conversationId is in both `activeSessions` AND
+  `activeQueries` — so dual-signalling the grace timer cannot double-checkpoint.
+- **Post-disconnect/pre-grace natural completion is safe** because `closeQuery`
+  synchronously `activeQueries.delete`s the entry; a later `closeConversation`
+  finds nothing and no-ops. Pinned by a new test (T-race).
+
 > ✨ Follow-up to #5275 (PR #5350). Extends the in-flight work checkpoint
 > guarantee to the **cc-soleur-go (Concierge)** path — the dominant production
 > agent path — which #5275 explicitly scoped out as an architectural-pivot.
@@ -134,89 +179,129 @@ New file `apps/web-platform/test/cc-soleur-go-checkpoint-on-disconnect.test.ts`
 `2026-04-19-llm-sdk-security-tests-need-deterministic-invocation.md` — use direct
 runner method invocation + an injected `queryFactory`/spy, NOT a `query({prompt})`):
 
-- **T1 (trigger reaches cc):** a registered cc `activeQuery` for `convId`, when
-  the new `abortConversation(convId, "disconnected")` runner method is called,
-  fires the cc close path (`onCloseQuery`) for that conversation. Assert via a
-  spy on the dispatcher's wired hook.
-- **T2 (checkpoint fires on disconnect):** the cc close path, when the abort
-  reason is `disconnected`, calls `checkpointInflightWork(path, convId, userId)`
-  exactly once with the conversation-bound workspace path. Spy/mock
-  `checkpointInflightWork`.
-- **T3 (no checkpoint on non-disconnect terminals):** natural completion
-  (`onWorkflowEnded` with `status:"completed"`) and explicit
-  `closeConversation` (non-disconnect) do NOT call `checkpointInflightWork`
-  (mirrors legacy: only `disconnected` checkpoints).
-- **T4 (workspace resolution symmetry):** the checkpoint resolves the clone from
+**[Updated 2026-06-15 — T1 folded into T2 (its assertion was existing-behavior
+once `abortConversation` is dropped); T3 collapsed to one parametrized case;
+added T-race.]**
+
+- **T2 (checkpoint fires on disconnect):** `closeConversation(convId, "disconnected")`
+  with a live `activeQueries` entry routes through `closeQuery` → `onCloseQuery`
+  with `reason:"disconnected"`, and the dispatcher hook calls
+  `checkpointInflightWorkForConversation` → `checkpointInflightWork(path, convId,
+  userId)` exactly once with the conversation-bound path. Spy/mock the checkpoint
+  helper. (Subsumes the old T1 "close path fires" assertion via the reason-propagation
+  check.)
+- **T3 (no checkpoint on non-disconnect terminals):** ONE parametrized case —
+  `closeConversation(convId)` with NO reason AND natural completion
+  (`onWorkflowEnded status:"completed"` → `closeQuery` with no reason) both leave
+  `reason` undefined → do NOT call the checkpoint helper (mirrors legacy).
+- **T4 (workspace resolution symmetry):** the helper resolves the clone from
   `conversations.workspace_id` (mock the tenant `.from("conversations").select`),
-  NOT from `resolveActiveWorkspacePath`. Assert the path passed equals
-  `workspacePathForWorkspaceId(boundWorkspaceId)`.
-- **T5 (fire-and-forget / never breaks abort):** when `checkpointInflightWork`
-  rejects, the cc abort/close path still completes (existing bash-gate drain
-  still runs; no throw escapes). Assert `reportSilentFallback` mirrored.
+  NOT from `fetchUserWorkspacePath`/`resolveActiveWorkspacePath`. Assert the path
+  equals `workspacePathForWorkspaceId(boundWorkspaceId)`. (Load-bearing: cc
+  dispatch-time resolution is USER-keyed at `cc-dispatcher.ts:1281` and can drift.)
+- **T5 (fire-and-forget / never breaks the drain):** when `checkpointInflightWork`
+  (or the workspace resolve) rejects, the cc close path still completes (bash-gate
+  drain still runs; no throw escapes `onCloseQuery`). Assert `reportSilentFallback`
+  mirrored.
 - **T6 (grace-timer wiring, ws-handler):** the disconnect grace timer
-  (`ws-handler.ts:2923`) ALSO signals the cc runner for the bound conversation
-  (in addition to `abortSession`). Use the existing ws-handler test harness
-  pattern; assert the cc abort method is invoked with `convId`.
+  (`ws-handler.ts:2923`) calls BOTH `abortSession` (legacy) and
+  `getSoleurGoRunner().closeConversation(convId, "disconnected")` (cc). Use the
+  existing ws-handler test harness; assert both invoked with `convId`.
+- **T-race (P2-1 — completed-before-grace):** a conversation whose `activeQueries`
+  entry was already removed (natural completion via `closeQuery`'s synchronous
+  `activeQueries.delete`) does NOT checkpoint when `closeConversation(convId,
+  "disconnected")` is subsequently called (the lookup returns undefined → no-op).
+  Pins the race resolution against a future refactor that delays the Map delete.
 
 All RED before any GREEN. Confirm each fails for the RIGHT reason (missing
 trigger / missing hook), not a harness error.
 
-### Phase 2 — cc runner: `abortConversation(conversationId, reason)` (soleur-go-runner.ts)
+### Phase 2 — cc runner: thread an abort `reason` through the existing close path (soleur-go-runner.ts)
 
-Add a public runner method that aborts a SINGLE in-flight query by
-`conversationId` (the disconnect terminal the cc path lacks today):
+**[Updated 2026-06-15 — reuse the existing dead-code `closeConversation`; do NOT
+add a new `abortConversation` method.]** The runner already has the disconnect
+terminal it needs — `closeConversation(conversationId)` (`:3115-3120`) already
+looks up `activeQueries.get(conversationId)`, no-ops if absent (idempotent), sets
+`state.closed = true`, and calls `closeQuery(state)`; `closeQuery` (`:1942-1984`)
+calls `state.query.close()` (`:1953`) — the SDK subprocess-terminating primitive
+that STOPS API spend (the same call `reapIdle` uses; there is NO AbortController
+on the cc `ActiveQuery`). It is currently **dead code** (zero production callers —
+N2). The only missing piece is carrying a `reason` to the close hook.
 
-- Look up `activeQueries.get(conversationId)`; if absent, no-op (idempotent —
-  a tab can close after the turn already ended).
-- Abort the query's controller/interrupt the SDK `query()` (mirror what
-  `reapIdle`/`closeConversation` already do internally to stop API spend), then
-  route through the existing `closeQuery(state)` so `onCloseQuery` fires
-  (`soleur-go-runner.ts:1966-1983`) — the same close hook `reapIdle`/
-  `closeConversation` use.
-- Thread the abort `reason` (`"disconnected"` | other) to `onCloseQuery` so the
-  dispatcher hook can decide whether to checkpoint. Widen the `onCloseQuery`
-  callback signature from `{conversationId, userId}` to
-  `{conversationId, userId, reason?: "disconnected"}` (or a small typed enum).
-  Per `hr-type-widening-cross-consumer-grep` + `cq-union-widening-grep-three-patterns`,
-  grep all `onCloseQuery` call sites/consumers and update exhaustively; the
-  existing `reapIdle`/`closeConversation` callers pass NO reason (→ undefined,
-  → no checkpoint), preserving current behavior.
-- Export `abortConversation` in the runner's returned object alongside
-  `reapIdle`/`closeConversation` (`soleur-go-runner.ts:3220-3231`).
+Minimal change set (all three are small, internal-seam edits):
 
-### Phase 3 — cc dispatcher: checkpoint on disconnect close (cc-dispatcher.ts)
+1. **Widen `closeConversation(conversationId: string, reason?: "disconnected")`**
+   (`:3115`). No behavior change to existing (zero) callers.
+2. **Widen `closeQuery(state, reason?)`** (`:1942`) — the SINGLE function that
+   fires `onCloseQuery` (`:1969-1974`). Pass `reason` through to the
+   `onCloseQuery({ conversationId, userId, reason })` call (`:1971`). `closeQuery`
+   has THREE callers (`emitWorkflowEnded` `:1939`, `reapIdle` `:3108`,
+   `closeConversation` `:3119`); the first two pass NO reason (→ undefined → no
+   checkpoint). **This is an INTERNAL seam — `tsc` does NOT enumerate `closeQuery`'s
+   callers as exhaustively as the exported `onCloseQuery` type; hand-check all
+   three call sites (P1-2).**
+3. **Widen the `onCloseQuery` callback type** (`:1115`) from
+   `{conversationId, userId}` to `{conversationId, userId, reason?: "disconnected"}`.
+   `onCloseQuery` has exactly ONE production consumer (`cc-dispatcher.ts:1909`) and
+   one producer (`closeQuery`) — `tsc --noEmit` is a sufficient gate for THIS
+   surface (the `reason?` is additive/optional, so no caller breaks). Do not invoke
+   heavyweight cross-consumer-widening ceremony for a single-callsite union.
 
-In `getSoleurGoRunner`'s `onCloseQuery` hook (`cc-dispatcher.ts:1909-1910`),
-extend the existing `cleanupCcBashGatesForConversation(...)` body so that **when
-`reason === "disconnected"`** it ALSO checkpoints, mirroring the legacy block
-(`agent-runner.ts:2368-2406`) verbatim in shape:
+`closeConversation` stays exported (`:3220-3231`) — no new export needed.
 
+### Phase 3 — shared checkpoint helper + cc dispatcher hook (inflight-checkpoint.ts, cc-dispatcher.ts, agent-runner.ts)
+
+**[Updated 2026-06-15 — EXTRACT the checkpoint block; do not copy-paste it.]**
+The legacy block (`agent-runner.ts:2368-2406`) encodes the conversation-bound-clone
+invariant the plan's Sharp Edges calls the #1 silent-failure mode. Two verbatim
+copies would drift, so extract it to ONE place and call it from both paths.
+
+**3a — Extract `checkpointInflightWorkForConversation` into `inflight-checkpoint.ts`**
+(co-located with `checkpointInflightWork`). Inputs: a tenant-client factory (or
+the `userId` it mints from via `getFreshTenantClient`), `conversationId`, `userId`.
+Body = the verbatim legacy block:
 1. `getFreshTenantClient(userId)` → SELECT `workspace_id` from `conversations`
-   where `id = conversationId`. On error/null → mirror to Sentry, skip
-   checkpoint (do NOT throw — the gate drain must still run).
-2. `checkpointWorkspacePath = workspacePathForWorkspaceId(boundWorkspaceId)`.
-3. `await checkpointInflightWork(checkpointWorkspacePath, conversationId, userId)`
-   (already fire-and-forget + Sentry-mirrored + never-throws — reuse as-is).
-4. Wrap the resolution in try/catch with `reportSilentFallback({feature:
-   "inflight-checkpoint", op: "checkpoint-on-abort", extra:{…, stage:
-   "cc-resolve-workspace-path"}})` so a resolve failure cannot break the
-   bash-gate drain (the existing `onCloseQuery` responsibility).
-5. Keep the bash-gate cleanup running on EVERY close (reason or not).
+   where `id = conversationId`. On error/null → `reportSilentFallback({feature:
+   "inflight-checkpoint", op: "checkpoint-on-abort", extra:{userId, conversationId,
+   stage: "resolve-workspace-path"}})`, return (no throw).
+2. `workspacePathForWorkspaceId(boundWorkspaceId)`.
+3. `await checkpointInflightWork(path, conversationId, userId)` (fire-and-forget,
+   never throws — reuse as-is).
+4. Whole resolve wrapped in try/catch → `reportSilentFallback`. Never throws to
+   the caller (both the legacy abort branch AND the cc bash-gate drain must survive).
 
-Phase-ordering note (`2026-05-10-plan-phase-order-load-bearing…`): the
-`onCloseQuery` signature widening (Phase 2) MUST land before the dispatcher
-consumes `reason` (Phase 3) — even though the PR merges atomically, `/work`
-executes phases in order.
+**3b — Refactor the legacy site** (`agent-runner.ts:2368-2406`) to call the new
+helper inside the existing `if (isDisconnected)` guard (same PR — it's already a
+3-file PR; leaving the duplicate defeats the extraction).
+
+**3c — Wire the cc dispatcher hook** (`cc-dispatcher.ts:1909-1910`). The
+`onCloseQuery` hook already calls `cleanupCcBashGatesForConversation(...)` on
+EVERY close. Add: **when `reason === "disconnected"`**, ALSO
+`await checkpointInflightWorkForConversation(userId, conversationId)`. Keep the
+bash-gate cleanup running unconditionally. Use Sentry `stage: "cc-resolve-workspace-path"`
+(deliberate cc/legacy distinction — the shared `op: "checkpoint-on-abort"` keeps
+both on one monitor; the `cc-` prefix is intentional, not a typo — P2-3); thread
+it via an optional `stage` arg to the helper, or accept the helper hard-codes
+`"resolve-workspace-path"` and the cc/legacy distinction lives in the helper's
+own caller-tagged `feature`/extra. Decide at `/work`; either keeps one emit site.
+
+Phase-ordering note (`2026-05-10-plan-phase-order-load-bearing…`): Phase 2's
+`closeQuery`/`onCloseQuery` `reason` plumbing MUST land before Phase 3c consumes
+`reason` — `/work` executes phases in order even though the PR merges atomically.
 
 ### Phase 4 — ws-handler: signal cc runner from the grace timer (ws-handler.ts)
 
 In the disconnect grace-timer callback (`ws-handler.ts:2923-2931`), after the
-existing `abortSession(uid, convId)`, ALSO call the cc runner's new
-`abortConversation(convId, "disconnected")` (via `getSoleurGoRunner()` or the
-already-imported dispatch surface). Both calls are safe no-ops for the path that
-does not own the conversation (legacy `abortSession` no-ops for a cc-only
-conversation and vice-versa), so dual-signalling is correct and idempotent — it
-does NOT double-checkpoint because only ONE path holds the live in-flight state.
+existing `abortSession(uid, convId)`, ALSO call
+`getSoleurGoRunner().closeConversation(convId, "disconnected")`. Both calls are
+safe no-ops for the path that does not own the conversation (legacy
+`abortSession` no-ops for a cc-only conversation; `closeConversation` no-ops when
+`activeQueries` has no entry — e.g. a legacy conversation). Dual-signalling is
+correct and idempotent — it does NOT double-checkpoint because the two registries
+are mutually exclusive by construction (per-turn routing at `ws-handler.ts:2314`
+sends a conversation to cc XOR legacy `sendUserMessage`, with different key
+shapes), so a conversationId is never live in both `activeSessions` AND
+`activeQueries` simultaneously.
 
 Add a one-line comment citing #5356 + the dual-path-terminal learning
 (`2026-06-14-ws-lifecycle-hook-must-cover-both-legacy-and-cc-soleur-go-turn-boundaries.md`):
@@ -247,7 +332,11 @@ any turn-boundary lifecycle hook needs wiring on BOTH the `sendUserMessage`
 - [ ] **AC1 (issue re-eval criterion met):**
   `git grep -n checkpointInflightWork apps/web-platform/server/cc-dispatcher.ts apps/web-platform/server/soleur-go-runner.ts`
   returns ≥1 hit (the cc-path checkpoint is wired) — the exact grep from the
-  issue's "Re-eval by (event-grep)".
+  issue's "Re-eval by (event-grep)". NOTE: the extraction (Phase 3a) means
+  cc-dispatcher calls `checkpointInflightWorkForConversation` — which substring-matches
+  `checkpointInflightWork`, so the issue's literal grep still returns ≥1. (If a
+  future reviewer wants the bare `checkpointInflightWork(` call, that lives in the
+  shared helper in `inflight-checkpoint.ts`; the cc path reaches it transitively.)
 - [ ] **AC2 (write-side only — no restore regression):** `restoreInflightCheckpoint`
   call site (`ws-handler.ts:1994`) is unchanged; `git diff` touches no read-side
   restore logic. The cc checkpoint produces a ref the existing gated restore
@@ -261,10 +350,13 @@ any turn-boundary lifecycle hook needs wiring on BOTH the `sendUserMessage`
   failure mirrors to Sentry and the bash-gate drain still completes; no throw
   escapes `onCloseQuery`.
 - [ ] **AC6 (dual-path terminal wired):** T6 proves the disconnect grace timer
-  signals BOTH `abortSession` (legacy) and `abortConversation` (cc).
-- [ ] **AC7 (exhaustive widening):** `tsc --noEmit` clean after the `onCloseQuery`
-  signature change; every existing caller (`reapIdle`, `closeConversation`)
-  passes no `reason` and is unaffected.
+  signals BOTH `abortSession` (legacy) and
+  `getSoleurGoRunner().closeConversation(convId, "disconnected")` (cc).
+- [ ] **AC7 (widening clean):** `tsc --noEmit` clean after the `closeConversation`/
+  `closeQuery`/`onCloseQuery` `reason?` additions. The `onCloseQuery` type has one
+  consumer (`cc-dispatcher.ts:1909`); `closeQuery`'s 3 internal callers are
+  hand-verified (P1-2 — `tsc` does not exhaustively enumerate an internal helper's
+  call sites). `emitWorkflowEnded` + `reapIdle` pass no `reason` (→ no checkpoint).
 - [ ] **AC8 (full suite green):** `./node_modules/.bin/vitest run` (apps/web-platform)
   passes, including `cc-dispatcher-bash-gate.test.ts` and `inflight-checkpoint.test.ts`.
 - [ ] **AC9 (observability slug parity):** the new emit uses
@@ -314,7 +406,7 @@ discoverability_test:
 | Approach | Verdict | Rationale |
 | --- | --- | --- |
 | **(a) Register cc turns in `activeSessions`** so they inherit grace-abort + checkpoint | **Rejected** | The cc bypass of `activeSessions` is intentional (`cc-dispatcher.ts:920-927`): `activeSessions` assumes an `AgentSession` with a `reviewGateResolvers` Map + `controllerSignal`; cc tracks `activeQueries` itself and synthesizes per-`query()` bash-gate sessions separately. Registering cc turns would re-route them through legacy supersede/SIGTERM/grace semantics they were built to avoid — a high-blast-radius regression surface (every cc turn's lifecycle) for a checkpoint write. |
-| **(b) cc-side disconnect terminal + checkpoint hook** | **Selected** | One signal edge (grace timer → `abortConversation`) + reuse of the existing close hook + verbatim reuse of the legacy checkpoint block. Touches 3 files; legacy contract unchanged. |
+| **(b) cc-side disconnect terminal + checkpoint hook** | **Selected** | One signal edge (grace timer → existing `closeConversation(reason)`) + reuse of the existing close hook + a shared extracted checkpoint helper. Touches 5 files (incl. legacy refactor to the shared helper); legacy disconnect behavior unchanged. |
 | **Hang checkpoint off `reapIdle` / `server_shutdown`** | **Rejected** | Both are dead/no-op for cc today (`reapIdle` unscheduled; SIGTERM drains only `activeSessions`). Would require ALSO building a live reaper / SIGTERM cc-drain — scope creep beyond the disconnect guarantee #5275 defines. Tracked as a separate concern (see Deferred). |
 | **Schedule the idle reaper as the trigger** | **Deferred** | Scheduling `reapIdle` is a distinct durability/cost concern (idle cc queries leak in `activeQueries` until container restart). It is orthogonal to disconnect checkpoint parity and carries its own cost/UX tradeoffs. Filed as deferral (below). |
 
@@ -345,13 +437,15 @@ Legal, Finance, Marketing, Sales, Operations, Support implications.
 **Status:** reviewed (carry-forward — pipeline plan; CTO assessment folded into
 Research Reconciliation + Sharp Edges)
 **Assessment:** Net-new cross-subsystem lifecycle wiring (ws-handler trigger →
-runner abort-by-conversation → dispatcher checkpoint hook). Primary risk is the
-mirroring-a-sibling-predicate class: the cc checkpoint mirrors the legacy
-`isDisconnected` block — load-bearing sub-value is (a) cross-path durability the
-legacy block does not provide for cc traffic, NOT redundant defense
-(`2026-05-06-defense-in-depth-recovery-mirroring-sql-predicate…`). Type-widening
-of `onCloseQuery` is the one cross-consumer surface — exhaustiveness enforced by
-`tsc` (AC7), not a hand count.
+existing `closeConversation` reused with a `reason` → shared checkpoint helper).
+Primary risk is the mirroring-a-sibling-predicate class — resolved by EXTRACTING
+the checkpoint block to one helper called by both legacy + cc, so the
+conversation-bound-clone invariant has a single enforcement point (not two
+verbatim copies that drift). The `reason` threads through `closeQuery`, a shared
+internal helper — `tsc` covers the exported `onCloseQuery` type but the 3
+`closeQuery` callers are hand-checked (P1-2). architecture-strategist verdict:
+approve-with-edits (all P1 edits applied here); double-checkpoint premise verified
+sound (registries mutually exclusive).
 
 ### Product/UX Gate
 
@@ -383,9 +477,11 @@ the diff per Phase 2.7 and expect "no new regulated surface; inherits #5275 post
 
 ## Files to Edit
 
-- `apps/web-platform/server/soleur-go-runner.ts` — add `abortConversation(conversationId, reason)` public method; widen `onCloseQuery` callback signature to carry `reason`; export the new method. (~line 1109-1115 hook, ~1966-1983 closeQuery, ~3220-3231 return object)
-- `apps/web-platform/server/cc-dispatcher.ts` — extend the `onCloseQuery` hook in `getSoleurGoRunner` (~line 1909-1910) to checkpoint when `reason === "disconnected"`, mirroring `agent-runner.ts:2368-2406`. Import `checkpointInflightWork`, `workspacePathForWorkspaceId`, `getFreshTenantClient` as needed.
-- `apps/web-platform/server/ws-handler.ts` — in the disconnect grace-timer callback (~line 2923-2931), also call the cc runner's `abortConversation(convId, "disconnected")` after `abortSession`.
+- `apps/web-platform/server/soleur-go-runner.ts` — widen `closeConversation(conversationId, reason?)` (~3115), `closeQuery(state, reason?)` (~1942, thread `reason` to the `onCloseQuery` call ~1971), and the `onCloseQuery` callback type (~1115) to carry `reason?: "disconnected"`. No new method, no new export. Hand-check `closeQuery`'s 3 internal callers.
+- `apps/web-platform/server/inflight-checkpoint.ts` — **[Updated]** add `checkpointInflightWorkForConversation(userId, conversationId[, stage])` extracting the conversation-bound resolve + checkpoint + Sentry-mirror block; never throws. Co-located with `checkpointInflightWork`.
+- `apps/web-platform/server/agent-runner.ts` — **[Updated]** refactor the legacy `if (isDisconnected)` block (~2368-2406) to call the new shared helper (kill the duplicate in the same PR).
+- `apps/web-platform/server/cc-dispatcher.ts` — extend the `onCloseQuery` hook in `getSoleurGoRunner` (~1909-1910) to `await checkpointInflightWorkForConversation(userId, conversationId)` when `reason === "disconnected"`; keep the bash-gate drain unconditional. Import the helper.
+- `apps/web-platform/server/ws-handler.ts` — in the disconnect grace-timer callback (~2923-2931), also call `getSoleurGoRunner().closeConversation(convId, "disconnected")` after `abortSession`.
 
 ## Files to Create
 
@@ -403,21 +499,35 @@ timer. Re-confirm at `/work` Phase 0 per skill Step 1.7.5.)
 - **The cc durability boundary the issue names ("idle reap / server_shutdown")
   is partly fictional.** `reapIdle` is unscheduled and SIGTERM does not drain
   `activeQueries` — so the ONLY real cc terminal this PR can hang a disconnect
-  checkpoint off is the one it BUILDS (grace timer → `abortConversation` →
+  checkpoint off is the one it BUILDS (grace timer → `closeConversation(reason)` →
   close hook). Do not assume a pre-existing idle/shutdown terminal exists.
+- **`closeConversation` is dead code today (zero production callers)** — which is
+  WHY widening it (vs. adding a new method) is risk-free, and ALSO why the grace
+  timer is now its first production caller. The documented invariant: any future
+  caller passing NO `reason` preserves current behavior (undefined → no checkpoint).
+- **The abort primitive is `state.query.close()` (via `closeQuery`), NOT an
+  AbortController.** The cc `ActiveQuery` has no `controllerSignal`. Do not hunt
+  for one; `closeConversation` → `closeQuery` → `query.close()` already stops API
+  spend (same as `reapIdle`).
+- **Grace-abort covers only the session-bound conversation** (`ws-handler.ts:2920`
+  captures one `current.conversationId`). Concurrent non-bound cc conversations
+  rely on idle-reap (unscheduled) — the SAME gap legacy `abortSession` has, so
+  this is parity, not a new regression. Tracked with the idle-reaper deferral.
 - **Clone-resolution asymmetry is the #1 silent-failure mode** (learning
   `2026-06-15-git-checkpoint-clean-tree-not-sufficient…` gap #3): resolve the
   checkpoint clone from `conversations.workspace_id` (what restore reads), never
   from the mutable active-claim resolver. A mismatch writes the ref where restore
   never looks → silent no-checkpoint + stranded ref. Enforced by AC3/T4.
 - **Do NOT double-checkpoint.** The grace timer signals both `abortSession`
-  (legacy) and `abortConversation` (cc); only ONE holds live in-flight state for
-  a given conversation, so only one checkpoint fires. If a future change lets
-  both paths own the same conversation, this invariant breaks — assert it in T6.
-- **`onCloseQuery` widening is cross-consumer.** `reapIdle` and
-  `closeConversation` both call `closeQuery → onCloseQuery`; they must pass NO
-  `reason` (→ no checkpoint) to preserve current behavior. `tsc` enumerates the
-  rails (AC7) — do not hand-count.
+  (legacy) and `closeConversation(reason)` (cc); the registries are mutually
+  exclusive (per-turn routing at `ws-handler.ts:2314`), so only ONE holds live
+  state and only one checkpoint fires. If a future change lets both paths own the
+  same conversation, this invariant breaks.
+- **`reason` threads through `closeQuery`, a SHARED internal helper.** `closeQuery`
+  is called by `emitWorkflowEnded`, `reapIdle`, AND `closeConversation`; only the
+  last (from the grace timer) carries `"disconnected"`. `tsc` covers the exported
+  `onCloseQuery` type but NOT `closeQuery`'s internal callers — hand-check all
+  three (P1-2).
 - **A plan whose `## User-Brand Impact` section is empty, contains placeholder
   text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This section
   is filled (threshold: single-user incident).
