@@ -10,6 +10,26 @@ requires_cpo_signoff: true
 
 # 🐛 fix: Recent Conversations rail shows empty state while user is in an active conversation
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15 · **Sections enhanced:** Research Insights (new), Files to Edit,
+Files to Create, Acceptance Criteria, Sharp Edges · **Passes:** verify-the-negative (5/5
+claims confirmed), precedent-diff + implementation-realism (both `model: sonnet`).
+
+### Key Improvements
+1. Root cause confirmed end-to-end (client `users.repo_url` vs server `workspaces.repo_url`
+   per ADR-044); canonical fix is the existing `/api/workspace/active-repo` route pattern.
+2. Discovered two **additional required edits** the v1 plan missed: removing the dead cross-tab
+   `users` UPDATE realtime channel (`:301-334`) and the now-unused `normalizeRepoUrl` import.
+3. Corrected the v1 "extract a shared coalescing helper" suggestion → call `fetch` directly
+   (per-hook latch is the project pattern; no focus-poll concurrency here).
+
+### New Considerations Discovered
+- The removed `workspace_members.maybeSingle()` read is a **latent multi-workspace bug today**
+  (≥2 rows → 406 → shared realtime channel never subscribes); the fix closes it incidentally.
+- Workspace switch is a hard nav to `/dashboard`, so removing the cross-tab channel introduces
+  no resubscribe gap.
+
 ## Overview
 
 The **Recent Conversations** rail (`components/chat/conversations-rail.tsx`, fed by the
@@ -95,38 +115,97 @@ incident on its own. `requires_cpo_signoff: true` set; `user-impact-reviewer` ru
    set, a null `users.repo_url` triggers `setConversations([])` at `:143-147`. Same root,
    same fix.
 
+## Research Insights
+
+**Deepened on:** 2026-06-15 · verify-the-negative pass + precedent-diff/implementation-realism
+pass (both `model: sonnet` per ADR-053 advisory tier).
+
+**Verify-the-negative — all 5 negative claims CONFIRMED:**
+- `use-conversations.ts:123` is the **only** client SELECT of `users.repo_url` for scoping;
+  `use-onboarding.ts:32/52` touch `users` but only UI-state columns (not `repo_url`). (AC8 codifies this sweep.)
+- Conversations SELECT RLS has **no `repo_url` predicate** in either `059` (`USING (is_workspace_member(workspace_id, auth.uid()))`) or `075` (`user_id = auth.uid()` OR `visibility='workspace' AND is_workspace_member(...)`). The empty list is 100% the client app-filter.
+- `/api/workspace/active-repo` is **IDOR-safe**: `userId` from `supabase.auth.getUser()` (`:25`), workspace from `user_session_state` keyed on `userId` (`:37-41`), no request body/query read.
+- `createConversation` **throws** on null repo (`ws-handler.ts:827-832`) — never persists a null-repo row.
+- The app-level `.eq("repo_url", ...)` filter is **load-bearing** for repo-swap isolation (`:116-120`), not redundant with RLS.
+
+**Precedent-diff & implementation realism (new, folded into Files to Edit / ACs):**
+- **Cross-tab `users` UPDATE channel (`:301-334`) must be removed** — dead after the source
+  swap; firing a spurious refetch on unrelated `users` updates. (AC9.) No resubscribe gap:
+  workspace switch is a hard nav to `/dashboard` (org-switcher remounts → `fetchConversations`).
+- **`workspace_members.maybeSingle()` is a latent multi-workspace bug today**: ≥2 rows → 406 →
+  `workspaceId=null` → shared channel never subscribed. The route's `current_workspace_id`
+  resolution is strictly correct; the fix closes this incidentally.
+- **`normalizeRepoUrl` import becomes unused** after the two removals (its only sites were `:139`
+  and the deleted `:320`). (AC10; `noUnusedLocals` backstops via AC6.)
+- **No shared coalescing module** — per-hook latch is the project pattern
+  (`use-active-repo.ts:32`, `use-active-workspace.ts:27`); `use-conversations` calls the route
+  once per `fetchConversations`, not per focus. Call `fetch` directly. (Corrects the v1 plan's
+  "Files to Create" extract-helper suggestion.)
+- **Test must be `.tsx` under `test/`** (vitest `component` project glob `test/**/*.test.tsx`,
+  `vitest.config.ts:60`); precedent mocks: `vi.stubGlobal("fetch", ...)`
+  (`test/live-repo-badge.test.tsx:34-46`) + `vi.mock("@/lib/supabase/client", ...)`
+  (`test/command-center-repo-scope.test.tsx:118-145`).
+
+**Precedent-diff verdict:** the fix is NOT a novel pattern — `hooks/use-active-repo.ts` is the
+direct precedent (client reads repo state from `/api/workspace/active-repo`, never `users`).
+The plan adopts it verbatim minus the focus-poll coalescing (not needed here).
+
 ## Files to Edit
 
-- **`apps/web-platform/hooks/use-conversations.ts`** — replace the `users.repo_url` read
-  (`:121-147`) with a fetch to `GET /api/workspace/active-repo`; derive `currentRepoUrl`
-  from the route's `repoUrl` field (already normalized server-side) and `workspaceId` from
-  the route's `workspaceId` field (replacing the `workspace_members` read at `:127-133`).
-  Keep `setConversations([])` early-return when `repoUrl` is null (a user with no connected
-  repo genuinely has no scoped conversations). Keep the normalize-on-read as defense-in-depth
-  but the route already returns normalized. Keep the realtime subscriptions and the
-  `repoUrlRef` mirror unchanged in shape; feed them from the new source. **Drift safeguard:**
-  add a code comment citing ADR-044 + this plan so the next reader doesn't re-introduce the
-  `users.repo_url` read.
-- **`apps/web-platform/test/conversations-rail.test.tsx`** — extend/verify coverage:
-  rail renders rows when the active-repo route returns a `repoUrl`; renders the empty state
-  only when `repoUrl` is null. (Currently mocks `useConversations`; add/confirm a case for
-  the populated path.)
-- **`apps/web-platform/test/api-conversations.test.ts`** *(or the closest existing hook
-  test — see Sharp Edges for runner/glob verification)* — add a hook-level RED→GREEN test:
-  given `/api/workspace/active-repo` returns `{ repoUrl: "...", workspaceId: "..." }` and a
-  conversation row stamped with that `repoUrl`, the hook surfaces the conversation (today it
-  would be filtered out because `users.repo_url` is null). This is the regression that locks
-  the fix.
+- **`apps/web-platform/hooks/use-conversations.ts`** — four coupled changes (deepen-verified
+  line refs):
+  1. **Replace the `Promise.all([users, workspace_members])` block (`:121-141`)** with a
+     single `const res = await fetch("/api/workspace/active-repo")`. Derive `currentRepoUrl`
+     from the route's `repoUrl` (already normalized server-side, `route.ts:73`) and
+     `workspaceId` from the route's `workspaceId` (the *active, self-healed* workspace, not a
+     bare `workspace_members` row). On `!res.ok`, set `error` + stop (transient — do not flash
+     to empty silently; mirror `use-active-repo`'s last-known intent in spirit, but here a
+     fresh fetch failure should surface `error`). Keep the `setConversations([])` early-return
+     when `repoUrl` is null (`:143-147`).
+  2. **Remove the cross-tab `users` UPDATE realtime channel (`:301-334`).** It watches
+     `users.repo_url` — a column the hook no longer reads after change (1). Leaving it is dead
+     code that fires a spurious refetch on every `users` row update (`cq-ref-removal-sweep-cleanup-closures`).
+     Workspace switches are a **hard navigation to `/dashboard`** (org-switcher remounts the
+     page → `fetchConversations` re-runs), so there is no resubscribe gap from removing it.
+  3. **Remove the now-unused `normalizeRepoUrl` import (`:5`).** After (1) and (2) its only
+     two call sites (`:139`, `:320`) are gone. `tsc --noEmit` (AC6) will catch it if missed.
+  4. **Drift-safeguard comment.** Add a comment near the new fetch citing ADR-044 + this plan
+     ("source of truth is `workspaces.repo_url` via `/api/workspace/active-repo`; NEVER read
+     `users.repo_url` — the #4543 dual-ownership trap") so the next reader doesn't regress it.
+
+  The list query (`:151-156`, `.eq("repo_url", currentRepoUrl)`), the `repoUrlRef` mirror
+  (`:94-97`, `:241-242`), and the two conversation realtime channels (own `user_id`, shared
+  `workspace_id`) stay unchanged in shape — only their `repoUrl`/`workspaceId` *source*
+  changes. **Latent-bug note:** the removed `workspace_members.maybeSingle()` read 406s for a
+  user in ≥2 workspaces (multiple rows) → `workspaceId=null` → shared channel never
+  subscribed; the route's `current_workspace_id` resolution is strictly correct, so this fix
+  also closes that latent multi-workspace gap.
+
+- **`apps/web-platform/test/<new>-active-repo-scope.test.tsx`** *(new `.tsx` file under
+  `test/` — see Files to Create)* — the RED→GREEN regression: with `/api/workspace/active-repo`
+  mocked to return `{ workspaceId, repoUrl }` and a conversation row stamped with that
+  `repoUrl`, the hook surfaces the conversation. Against the pre-fix hook (reading null
+  `users.repo_url`) this is RED; against the fixed hook it is GREEN.
+- **`apps/web-platform/test/conversations-rail.test.tsx`** — verify/extend: rail renders rows
+  when `useConversations` yields conversations; renders the empty state only when empty.
+  (Mocks `useConversations` directly — no route mock needed here.)
 
 ## Files to Create
 
-- *(Possibly none.)* Prefer reusing the coalesced fetch helper pattern from
-  `hooks/use-active-repo.ts`. **Decision for /work:** if `useConversations` and
-  `useActiveRepo` would both fetch `/api/workspace/active-repo`, extract the coalesced
-  `fetchActiveRepoCoalesced()` into a tiny shared module (e.g.
-  `hooks/active-repo-fetch.ts`) and have both import it, rather than duplicating the
-  in-flight latch. Otherwise call the route inline. Do not add a new API route — the
-  canonical one already exists.
+- **`apps/web-platform/test/<descriptive>-active-repo-scope.test.tsx`** — the hook-level
+  regression test (see above). Must be `.tsx` and under `test/` to be collected by vitest's
+  `component` project glob `test/**/*.test.tsx` (`vitest.config.ts:60`); a `.ts` file or a
+  co-located `hooks/*.test.tsx` is **silently never run**. Mocking precedent:
+  `vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ workspaceId, repoUrl, ... }) }))`
+  (per `test/live-repo-badge.test.tsx:34-46`) + `vi.mock("@/lib/supabase/client", ...)`
+  stubbing only the `conversations` + `messages` + `channel` builders (per
+  `test/command-center-repo-scope.test.tsx:118-145`) — do NOT stub `users`/`workspace_members`
+  (no longer read). `vi.restoreAllMocks()` in `beforeEach`.
+- **No shared coalescing module.** Deepen-verified: the project pattern is per-hook latches
+  (`use-active-repo.ts:32`, `use-active-workspace.ts:27`), and `use-conversations` calls the
+  route **once per `fetchConversations`** (not per window-focus like `use-active-repo`'s
+  4-concurrent-mounts problem), so no coalescing is needed. Call `fetch` directly. Do NOT
+  extract `fetchActiveRepoCoalesced` and do NOT add a new API route (the canonical one exists).
 
 ## Open Code-Review Overlap
 
@@ -140,8 +219,8 @@ jq -r --arg path "hooks/use-conversations.ts" \
   /tmp/open-review-issues.json
 ```
 None known at plan time (no open code-review issue grep run yet — /work must run the above
-for `hooks/use-conversations.ts`, `test/conversations-rail.test.tsx`,
-`test/api-conversations.test.ts` and fold-in / acknowledge / defer each match).
+for `hooks/use-conversations.ts`, `test/conversations-rail.test.tsx`, and the new
+`test/*-active-repo-scope.test.tsx` and fold-in / acknowledge / defer each match).
 
 ## Acceptance Criteria
 
@@ -178,6 +257,14 @@ for `hooks/use-conversations.ts`, `test/conversations-rail.test.tsx`,
 - [ ] **AC8 (no other divergent reads):**
   `git grep -rn 'from("users")' apps/web-platform/hooks apps/web-platform/components | grep repo_url`
   returns 0 (confirms no sibling client-side `users.repo_url` repo-scoping read was missed).
+- [ ] **AC9 (cross-tab dead channel removed):** the `command-center-user` realtime channel
+  watching `users` UPDATE (`:301-334`) is gone. Verify:
+  `git grep -n 'command-center-user' apps/web-platform/hooks/use-conversations.ts` returns 0.
+- [ ] **AC10 (ref-removal sweep):** `normalizeRepoUrl` is no longer imported in the hook if
+  unused after AC9. Verify:
+  `git grep -n 'normalizeRepoUrl' apps/web-platform/hooks/use-conversations.ts` returns 0
+  (or, if a remaining use is justified, the import stays and AC10 is annotated with the
+  surviving call site). Caught regardless by AC6 typecheck (`noUnusedLocals`).
 
 ### Post-merge (operator)
 
@@ -260,13 +347,13 @@ discoverability_test:
   test discovery. Use `./node_modules/.bin/vitest run <path>`. Typecheck is in-package
   `tsc --noEmit`, NOT `npm run -w apps/web-platform typecheck` (repo root has no
   `workspaces` field → `-w` aborts).
-- **Vitest `include` globs only collect `test/**/*.test.ts(x)`** per
-  `apps/web-platform/vitest.config.ts`. A co-located `hooks/*.test.ts` is silently never
-  run. Place the new hook regression test under `test/` and `grep` the `include:` globs
-  before fixing the path. Confirm whether an existing hook test
-  (`test/use-conversations-limit.test.tsx`) is the right home for the regression case rather
-  than authoring a duplicate — `git grep -l "use-conversations" apps/web-platform/test/`
-  first.
+- **Vitest `include` globs only collect `test/**/*.test.ts(x)`** (`component` project =
+  `test/**/*.test.tsx`, `vitest.config.ts:60`). A co-located `hooks/*.test.tsx` is silently
+  never run. The new regression test MUST be `.tsx` under `test/`. Before authoring, run
+  `git grep -l "use-conversations" apps/web-platform/test/` to confirm no existing test
+  (e.g. `test/use-conversations-limit.test.tsx`) already covers the active-repo path —
+  extend it rather than duplicate if it does; otherwise add the dedicated
+  `test/*-active-repo-scope.test.tsx`.
 - **Do not reintroduce `users.repo_url` as a fallback.** ADR-044 forbids a `users` read-time
   fallback ("Repo reads come from `workspaces` only"). The route is the single source.
 - **Realtime workspace-shared channel** depends on `workspaceId`. The active-repo route
