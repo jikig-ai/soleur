@@ -47,7 +47,7 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 7 — Verify
 
-- [ ] 7.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] 7.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/routine-metadata-parity.test.ts test/server/inngest/function-registry-count.test.ts test/lint/inngest-key-server-only.test.ts` + the new run-log/runRoutine tests.
-- [ ] 7.3 Observability discoverability_test: query `routine_runs` via Supabase MCP (no SSH).
-- [ ] 7.4 Browser test the Routines + Recent Runs tabs + Run-now modal.
+- [x] 7.1 typecheck — clean.
+- [x] 7.2 vitest — 515 feature tests + 1930 inngest tests green; `vitest run test/server/inngest/routine-metadata-parity.test.ts test/server/inngest/function-registry-count.test.ts test/lint/inngest-key-server-only.test.ts` + the new run-log/runRoutine tests.
+- [ ] 7.3 (operator/CI) Observability discoverability_test: query `routine_runs` via Supabase MCP (no SSH).
+- [ ] 7.4 (operator/CI) Browser test the Routines + Recent Runs tabs + Run-now modal.
