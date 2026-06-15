@@ -12,6 +12,15 @@
 -- LAWFUL_BASIS: legitimate_interest (operational audit of operator-/agent-triggered routine runs; single-operator tenant)
 -- RETENTION: indefinite (operational audit log; ~one row per routine run, low volume). Revisit if volume grows (cf. 103_github_events_retention_7day).
 
+-- Cross-file FK precondition: routine_runs.actor_id / .delegating_principal
+-- reference public.users (lint-migration-fk-preconditions.sh; see
+-- knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md).
+DO $$ BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.users must exist before 104';
+  END IF;
+END $$;
+
 -- ============================================================================
 -- routine_runs: append-only WORM run-log. One row per terminal routine run.
 -- Operator-readable (single-operator tenant — all runs are the company's runs,
