@@ -5,13 +5,29 @@ Verify sentinel: `apps/web-platform/supabase/verify/104_outbound_email.sql`
 
 ## Scope
 
-Net-new schema is ONLY `email_suppression` + its three SECURITY DEFINER RPCs
-(`suppress_recipient`, `is_recipient_suppressed`, `anonymise_email_suppression`).
-The send-audit + body-hash approval binding **reuses** `public.action_sends`
-(migration 051) unchanged — no `outbound_sends` table, no enum widening,
-no `action_sends`/`scope_grants` alteration. `action_sends.action_class` admits
-`marketing.outreach` via its enum-ABSENCE CHECK (`!~ '^(payment|legal|auth)\.'`),
-verified against `051_action_class_widening_and_action_sends.sql:104-106`.
+Net-new schema is two tables + their SECURITY DEFINER RPCs:
+- `email_suppression` + `suppress_recipient` / `is_recipient_suppressed` /
+  `anonymise_email_suppression` (per-founder permanent suppression set).
+- `outbound_sends` (WORM cold-send audit) + `record_outbound_send` /
+  `anonymise_outbound_sends` + the `outbound_sends_no_mutate` trigger fn.
+
+**ADR-060 substrate decision (CTO).** The plan's deepen P0-1 mandated reusing
+`public.action_sends` (migration 051) for the send-audit + body-hash approval and
+forbade an `outbound_sends` table. At /work, tracing the actual producer falsified
+that premise: `action_sends.message_id` is a `NOT NULL` FK to `public.messages`
+with `UNIQUE(message_id)` — built for the founder-clicks-Send-on-a-draft path —
+and the agent tool path has NO `messages.id` at tool-exec time (the tool runs
+inside the SDK iterator; the assistant message is persisted only at the `result`
+event; the tool closure carries `userId` only). `scope_grants` creation is
+UI-only. The `soleur:engineering:cto` agent ruled a **dedicated `outbound_sends`
+WORM table** (mirroring the proven `action_sends` posture, NOT FK'd to messages),
+overturning the plan's "no new table" rule. Body-binding is enforced by the
+chokepoint recomputing `per_send_body_sha256` and rejecting on mismatch vs the
+gated-review `approved_body_sha256` (the RPC also rejects a mismatch — defense in
+depth). Rejected alternatives (action_sends reuse; gate-only no-WORM) are recorded
+in ADR-060. No `action_sends`/`scope_grants` alteration; no TS `ActionClass`
+union widening (`outbound_sends.action_class` is free text with the enum-ABSENCE
+CHECK, defaulting to `marketing.outreach`).
 
 ## Resume verification (2026-06-15)
 

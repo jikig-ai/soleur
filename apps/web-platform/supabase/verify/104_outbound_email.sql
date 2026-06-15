@@ -101,12 +101,78 @@ SELECT 'anonymise_email_suppression_granted_to_service_role',
          'EXECUTE'
        ) THEN 0 ELSE 1 END::int
 UNION ALL
--- (10) all three RPCs are SECURITY DEFINER (prosecdef)
+-- (10) all three suppression RPCs are SECURITY DEFINER (prosecdef)
 SELECT 'email_suppression_rpcs_security_definer',
        CASE WHEN (
          SELECT count(*) FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public'
            AND p.proname IN ('suppress_recipient', 'is_recipient_suppressed', 'anonymise_email_suppression')
+           AND p.prosecdef
+       ) = 3 THEN 0 ELSE 1 END::int
+UNION ALL
+-- (11) outbound_sends exists with RLS enabled
+SELECT 'outbound_sends_rls_enabled',
+       CASE WHEN EXISTS (
+         SELECT 1 FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND c.relname = 'outbound_sends' AND c.relrowsecurity
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (12) no INSERT/UPDATE/DELETE policies on outbound_sends
+SELECT 'outbound_sends_no_write_policies',
+       (SELECT count(*) FROM pg_policy p
+        JOIN pg_class c ON c.oid = p.polrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = 'outbound_sends'
+          AND p.polcmd IN ('a', 'w', 'd'))::int
+UNION ALL
+-- (13) authenticated cannot INSERT directly into outbound_sends
+SELECT 'outbound_sends_insert_revoked_from_authenticated',
+       CASE WHEN has_table_privilege('authenticated', 'public.outbound_sends', 'INSERT')
+         THEN 1 ELSE 0 END::int
+UNION ALL
+-- (14) both WORM triggers attached to outbound_sends
+SELECT 'outbound_sends_worm_triggers_attached',
+       CASE WHEN (
+         SELECT count(*) FROM pg_trigger t
+         JOIN pg_class c ON c.oid = t.tgrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND c.relname = 'outbound_sends'
+           AND t.tgname IN ('outbound_sends_no_update', 'outbound_sends_no_delete')
+           AND NOT t.tgisinternal
+       ) = 2 THEN 0 ELSE 1 END::int
+UNION ALL
+-- (15) record_outbound_send IS executable by authenticated
+SELECT 'record_outbound_send_granted_to_authenticated',
+       CASE WHEN has_function_privilege(
+         'authenticated',
+         'public.record_outbound_send(text, text, text, text, text)',
+         'EXECUTE'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (16) record_outbound_send NOT executable by anon
+SELECT 'record_outbound_send_not_granted_to_anon',
+       CASE WHEN has_function_privilege(
+         'anon',
+         'public.record_outbound_send(text, text, text, text, text)',
+         'EXECUTE'
+       ) THEN 1 ELSE 0 END::int
+UNION ALL
+-- (17) anonymise_outbound_sends IS executable by service_role
+SELECT 'anonymise_outbound_sends_granted_to_service_role',
+       CASE WHEN has_function_privilege(
+         'service_role',
+         'public.anonymise_outbound_sends(uuid)',
+         'EXECUTE'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (18) all outbound_sends RPCs + trigger fn are SECURITY DEFINER (prosecdef)
+SELECT 'outbound_sends_rpcs_security_definer',
+       CASE WHEN (
+         SELECT count(*) FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('record_outbound_send', 'anonymise_outbound_sends', 'outbound_sends_no_mutate')
            AND p.prosecdef
        ) = 3 THEN 0 ELSE 1 END::int;

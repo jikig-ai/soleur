@@ -121,11 +121,56 @@ describe("migration 104_outbound_email — Art-17 erasure", () => {
   });
 });
 
-describe("migration 104_outbound_email — negative-space invariants", () => {
-  it("does NOT create an outbound_sends table (reuses action_sends)", () => {
-    expect(executable).not.toMatch(/create\s+table[\s\S]*?outbound_sends/i);
+describe("migration 104_outbound_email — outbound_sends WORM audit (ADR-060)", () => {
+  it("creates public.outbound_sends NOT FK'd to messages", () => {
+    expect(executable).toMatch(
+      /create\s+table\s+if\s+not\s+exists\s+public\.outbound_sends/i,
+    );
+    // The whole point of ADR-060: no messages FK (agent path has no message id).
+    const tableBlock = executable.slice(
+      executable.search(/create\s+table\s+if\s+not\s+exists\s+public\.outbound_sends/i),
+      executable.search(/create\s+table\s+if\s+not\s+exists\s+public\.outbound_sends/i) + 1200,
+    );
+    expect(tableBlock).not.toMatch(/references\s+public\.messages/i);
   });
 
+  it("binds body hash both ways (approved + per-send) and recipient hash", () => {
+    expect(executable).toMatch(/approved_body_sha256\s+text\s+not\s+null/i);
+    expect(executable).toMatch(/per_send_body_sha256\s+text\s+not\s+null/i);
+    expect(executable).toMatch(/recipient_hash\s+text\s+not\s+null/i);
+  });
+
+  it("action_class carries the enum-absence CHECK (no locked domain)", () => {
+    expect(executable).toMatch(
+      /action_class\s+text\s+not\s+null\s+default\s+'marketing\.outreach'[\s\S]*?check\s*\(\s*action_class\s*!~\s*'\^\(payment\|legal\|auth\)\\\.'\s*\)/i,
+    );
+  });
+
+  it("is WORM — both pure-reject triggers attached + owner-select RLS, writes revoked", () => {
+    expect(executable).toMatch(
+      /create\s+or\s+replace\s+function\s+public\.outbound_sends_no_mutate\(\)\s+returns\s+trigger/i,
+    );
+    expect(executable).toMatch(/create\s+trigger\s+outbound_sends_no_update[\s\S]*?before\s+update\s+on\s+public\.outbound_sends/i);
+    expect(executable).toMatch(/create\s+trigger\s+outbound_sends_no_delete[\s\S]*?before\s+delete\s+on\s+public\.outbound_sends/i);
+    expect(executable).toMatch(/alter\s+table\s+public\.outbound_sends\s+enable\s+row\s+level\s+security/i);
+    expect(executable).toMatch(/revoke\s+insert,\s*update,\s*delete\s+on\s+public\.outbound_sends\s+from\s+authenticated/i);
+  });
+
+  it("record_outbound_send is the SECURITY DEFINER write path, auth.uid()-pinned, rejects hash mismatch", () => {
+    expect(executable).toMatch(
+      /create\s+or\s+replace\s+function\s+public\.record_outbound_send[\s\S]*?security\s+definer[\s\S]*?set\s+search_path\s*=\s*public,\s*pg_temp/i,
+    );
+    expect(executable).toMatch(/p_approved_body_sha256\s+is\s+distinct\s+from\s+p_per_send_body_sha256/i);
+  });
+
+  it("provides anonymise_outbound_sends (Art-17) granted to service_role", () => {
+    expect(executable).toMatch(
+      /grant\s+execute\s+on\s+function\s+public\.anonymise_outbound_sends\(uuid\)\s+to\s+service_role/i,
+    );
+  });
+});
+
+describe("migration 104_outbound_email — negative-space invariants", () => {
   it("does NOT widen any enum or alter action_sends/scope_grants", () => {
     expect(executable).not.toMatch(/alter\s+table\s+public\.action_sends/i);
     expect(executable).not.toMatch(/alter\s+table\s+public\.scope_grants/i);

@@ -215,3 +215,199 @@ COMMENT ON FUNCTION public.anonymise_email_suppression(uuid) IS
   'Art. 17 erasure: tombstones email_suppression rows for the given founder '
   '(owner_id NULL, recipient_hash scrubbed). Called by account-delete.ts BEFORE '
   'auth.admin.deleteUser. Pattern source: mig 051 anonymise_action_sends. #5325.';
+
+-- ============================================================================
+-- outbound_sends — WORM audit of every cold-outbound send (#5325).
+--
+-- ADR-060 decision (CTO, overturning the plan's "no outbound_sends table"
+-- rule whose premise — clean action_sends reuse — was falsified at /work):
+-- action_sends.message_id is a NOT NULL FK to public.messages with
+-- UNIQUE(message_id), built for the founder-clicks-Send-on-a-draft path; the
+-- agent tool path has no messages.id at tool-exec time, so action_sends cannot
+-- be reused for agent-initiated sends. outbound_sends is a dedicated WORM table
+-- NOT FK'd to messages, mirroring the action_sends posture (mig 051):
+--   * append-only (BEFORE UPDATE/DELETE pure-reject trigger)
+--   * owner-select + owner-insert RLS, no FOR ALL USING
+--   * writes ONLY via the SECURITY DEFINER record_outbound_send RPC
+--   * Art-17 erasure via anonymise_outbound_sends (mirrors anonymise_action_sends)
+-- GDPR Art. 5(2) accountability for cold outreach to non-consenting third
+-- parties: a durable, tamper-evident, recipient-bound (HMAC), body-bound
+-- (sha256) send record. approved_body_sha256 is the hash the human approved at
+-- the gated-tier review; per_send_body_sha256 is recomputed by the chokepoint
+-- at send time (outbound.ts rejects on mismatch — body-binding).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.outbound_sends (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- NULLABLE to admit Art-17 anonymisation; ON DELETE RESTRICT prevents
+  -- user-row deletion before anonymise_outbound_sends runs.
+  owner_id              uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  -- HMAC-SHA-256(EMAIL_HASH_PEPPER, normalize(email)) — same keyed hash the
+  -- suppression set uses, so an audit row is linkable to a suppression entry.
+  recipient_hash        text NOT NULL CHECK (length(recipient_hash) BETWEEN 1 AND 128),
+  -- The body hash the human approved at the gated review (P0-1 body-binding).
+  approved_body_sha256  text NOT NULL CHECK (length(approved_body_sha256) BETWEEN 1 AND 128),
+  -- The body hash recomputed by the chokepoint at send time. Equal to
+  -- approved_body_sha256 on every legitimate row (the chokepoint throws on
+  -- mismatch before Resend); persisted so a later audit can prove equality.
+  per_send_body_sha256  text NOT NULL CHECK (length(per_send_body_sha256) BETWEEN 1 AND 128),
+  -- Resend message id (the un-rollback-able side effect's receipt). NULL only
+  -- if recorded for a send that failed AFTER dispatch — not expected in v1.
+  resend_id             text NULL,
+  -- Free-text classifier (NOT the typed ActionClass union — this table does not
+  -- use action_sends/scope_grants). Enum-ABSENCE CHECK mirrors action_sends so
+  -- a locked-domain class can never be recorded here.
+  action_class          text NOT NULL DEFAULT 'marketing.outreach'
+                          CHECK (action_class !~ '^(payment|legal|auth)\.'),
+  sent_at               timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.outbound_sends IS
+  'Per-send WORM audit of agent cold-outbound email (#5325, ADR-060). Append-only '
+  'GDPR Art. 5(2) accountability evidence: recipient_hash (HMAC), '
+  'approved_body_sha256 (gated-review approval), per_send_body_sha256 (chokepoint '
+  'recompute), resend_id. UPDATE/DELETE rejected by trigger; Art-17 erasure via '
+  'anonymise_outbound_sends. NOT FK''d to messages (agent path has no message id).';
+
+-- Pure-reject UPDATE/DELETE trigger (mirror action_sends_no_mutate, mig 051).
+CREATE OR REPLACE FUNCTION public.outbound_sends_no_mutate() RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RAISE EXCEPTION 'outbound_sends is append-only (WORM); % rejected', TG_OP
+    USING ERRCODE = 'P0001';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.outbound_sends_no_mutate()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS outbound_sends_no_update ON public.outbound_sends;
+CREATE TRIGGER outbound_sends_no_update
+  BEFORE UPDATE ON public.outbound_sends
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION public.outbound_sends_no_mutate();
+
+DROP TRIGGER IF EXISTS outbound_sends_no_delete ON public.outbound_sends;
+CREATE TRIGGER outbound_sends_no_delete
+  BEFORE DELETE ON public.outbound_sends
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION public.outbound_sends_no_mutate();
+
+-- RLS — owner-select + owner-insert; no FOR ALL USING (2026-04-18-rls-for-all-using).
+ALTER TABLE public.outbound_sends ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS outbound_sends_owner_select ON public.outbound_sends;
+CREATE POLICY outbound_sends_owner_select ON public.outbound_sends
+  FOR SELECT TO authenticated
+  USING (owner_id = auth.uid());
+
+-- Direct writes from authenticated are revoked; the SECURITY DEFINER
+-- record_outbound_send RPC is the only write path. (No INSERT policy.)
+REVOKE INSERT, UPDATE, DELETE ON public.outbound_sends FROM authenticated;
+
+CREATE INDEX IF NOT EXISTS outbound_sends_owner_sent_idx
+  ON public.outbound_sends (owner_id, sent_at DESC);
+
+-- ============================================================================
+-- record_outbound_send — the ONLY write path. auth.uid() owner-pin.
+-- Called by the chokepoint (outbound.ts) AFTER a successful Resend dispatch.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.record_outbound_send(
+  p_recipient_hash       text,
+  p_approved_body_sha256 text,
+  p_per_send_body_sha256 text,
+  p_resend_id            text,
+  p_action_class         text DEFAULT 'marketing.outreach'
+) RETURNS uuid
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_owner_id uuid := auth.uid();
+  v_id       uuid;
+BEGIN
+  IF v_owner_id IS NULL THEN
+    RAISE EXCEPTION 'auth.uid() is NULL — caller must be authenticated'
+      USING ERRCODE = '28000';
+  END IF;
+  -- Defense-in-depth: the chokepoint already asserts equality before Resend.
+  IF p_approved_body_sha256 IS DISTINCT FROM p_per_send_body_sha256 THEN
+    RAISE EXCEPTION 'record_outbound_send: body-hash mismatch (approved <> per-send)'
+      USING ERRCODE = '23514';
+  END IF;
+
+  INSERT INTO public.outbound_sends (
+    owner_id, recipient_hash, approved_body_sha256, per_send_body_sha256,
+    resend_id, action_class
+  ) VALUES (
+    v_owner_id, p_recipient_hash, p_approved_body_sha256, p_per_send_body_sha256,
+    p_resend_id, p_action_class
+  )
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.record_outbound_send(text, text, text, text, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_outbound_send(text, text, text, text, text)
+  TO authenticated;
+
+COMMENT ON FUNCTION public.record_outbound_send(text, text, text, text, text) IS
+  'Append a WORM outbound_sends row for the calling founder (auth.uid()). The '
+  'ONLY write path into outbound_sends. Rejects a body-hash mismatch (23514). '
+  'Called by the outbound chokepoint after a successful Resend dispatch. #5325.';
+
+-- ============================================================================
+-- anonymise_outbound_sends — Art-17 erasure. Mirrors anonymise_action_sends
+-- (mig 051) — session_replication_role bypass for the pure-reject WORM trigger.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.anonymise_outbound_sends(p_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  affected integer;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    IF current_user NOT IN ('service_role', 'postgres') THEN
+      RAISE EXCEPTION 'anonymise_outbound_sends: caller not authorised'
+        USING ERRCODE = '42501';
+    END IF;
+  ELSE
+    IF auth.uid() <> p_user_id THEN
+      RAISE EXCEPTION 'anonymise_outbound_sends: self-call only for authenticated callers'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  -- Bypass the pure-reject WORM trigger for this erasure UPDATE only.
+  SET LOCAL session_replication_role = 'replica';
+  UPDATE public.outbound_sends
+     SET owner_id       = NULL,
+         recipient_hash = '__anonymised__'
+   WHERE owner_id = p_user_id;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  RESET session_replication_role;
+
+  RETURN affected;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.anonymise_outbound_sends(uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.anonymise_outbound_sends(uuid)
+  TO service_role;
+GRANT EXECUTE ON FUNCTION public.anonymise_outbound_sends(uuid)
+  TO authenticated;
+
+COMMENT ON FUNCTION public.anonymise_outbound_sends(uuid) IS
+  'Art. 17 erasure: zeros owner_id + recipient_hash on outbound_sends rows for '
+  'the given founder. Called by account-delete.ts BEFORE auth.admin.deleteUser. '
+  'Pattern source: mig 051 anonymise_action_sends. #5325.';
