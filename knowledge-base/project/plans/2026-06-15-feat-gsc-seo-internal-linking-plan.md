@@ -11,6 +11,40 @@ related_prior_work: "Apex-canonical Cloudflare/Sentry IaC reconciliation, merged
 
 # 📚 SEO internal-linking for 3 GSC crawled-not-indexed pages
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Sections enhanced:** Research Reconciliation, Implementation Phases, Sharp Edges (all verified against the live worktree)
+**Deepen passes run:** mandatory halt gates (4.6 User-Brand Impact, 4.7 Observability, 4.8 PAT-shaped, 4.9 UI-wireframe) + verify-the-negative pass (4.45) against every load-bearing factual claim.
+
+### Gate results
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | PASS — section present, threshold `none`, zero sensitive-path files in scope (no scope-out bullet required) |
+| 4.7 Observability | SKIP — pure-docs (all 4 Files-to-Edit under `plugins/soleur/docs/`, no `apps/*/server`, `*/src`, `*/infra`, `plugins/*/scripts`) |
+| 4.8 PAT-shaped variable | PASS — no PAT-shaped var/literal in plan |
+| 4.9 UI-wireframe | SKIP — no UI-surface file (`.md`/`.json` only; no `.tsx`/`components`/`page`/`layout`) |
+| 4.4 Scheduled-work precedent | N/A — no cron/scheduled job introduced |
+| 4.5 Network-outage deep-dive | N/A — no SSH/network/timeout/handshake trigger pattern |
+
+### Verify-the-negative — every load-bearing claim confirmed against the live worktree
+
+- **T1 Link A anchor** `reads your brand guide` — present at `how-to-run-every-department-with-ai-agents.md:60`. ✓
+- **T1 Link B anchor** `brand guide's positioning` — present at `case-study-business-validation.md:39`. ✓
+- **T2 anchor** MCP paragraph (`…pasting outputs between tabs`) — present at `billion-dollar-solo-founder-stack.md:48`. ✓
+- **Footer gap is real** — `_data/site.json:83-87` `footerLegal` has exactly 3 entries (`Legal`, `Privacy Policy`, `Terms of Service`); AUP omitted. ✓
+- **No template edit needed** — `_includes/base.njk:307` iterates `site.footerLegal` (new entry renders automatically). ✓
+- **No legal-index edit needed** — `pages/legal.njk` already links AUP (1 occurrence). ✓
+- **Footer link will resolve** — AUP `permalink: legal/acceptable-use-policy/` matches the footer URL `/legal/acceptable-use-policy/`. ✓
+- **Inbound counts confirmed** — Target 1 = 0 contextual inbound (only `/blog/` index); Target 2 = 1 (`why-most-agentic-tools-plateau.md:133`). ✓
+
+### Key improvements over the base plan
+
+1. Pinned the two competing internal-link styles (`{{ site.url }}/blog/<slug>/` dominant 14×, bare `](/blog/<slug>/)` 3×) and resolved per-file: both blog targets use the templated form (their source files already do); footer uses the bare apex path matching its JSON siblings.
+2. Encoded the two Eleventy Sharp Edges that bite this exact change: the `{{ site.url }}` leading-slash host-mangle bug (`2026-04-21`) and the worktree `agents.js` build-CWD gotcha (`2026-03-10`), each with a Phase-4 verification gate.
+3. Confirmed the footer change is justified (siblings already in footer) rather than inventing a new section — the ARGUMENTS' conditional resolved to "proceed."
+
 ## Overview
 
 Google Search Console's 2026-06-15 Coverage drilldown flagged 3 canonical pages as
