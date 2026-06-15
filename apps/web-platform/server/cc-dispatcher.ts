@@ -874,7 +874,14 @@ async function emitNarration(opts: {
   input: Record<string, unknown>;
   userId: string;
   conversationId: string;
-  /** Synchronous dispatch stop signal (controller.signal.aborted). */
+  /** Turn-abort latch (`TurnPersistenceState.isAborted()`): flips true in the
+   *  `onWorkflowEnded` abort branch (`consumeForAbort`). The SDK does NOT
+   *  deliver further `tool_use` blocks after its query is aborted, so a
+   *  `summarize` cannot reach `onToolUse` post-abort-pre-onWorkflowEnded in
+   *  practice; this latch additionally drops any `summarize` that arrives at or
+   *  after the terminal abort event. (The per-Query `AbortController` lives in
+   *  `realSdkQueryFactory`, a separate function — not in the dispatch `events`
+   *  closure — so the synchronous signal is not reachable here.) */
   aborted: boolean;
   sendToClient: (userId: string, msg: WSMessage) => void;
 }): Promise<void> {
@@ -2741,7 +2748,12 @@ export async function dispatchSoleurGo(
       // sees a redundant "using narrate" bubble and the team-only debug stream
       // stays untouched. Fire-and-forget (the summarize insert awaits);
       // `emitNarration` owns its own error handling. The abort drop-guard reads
-      // the SYNCHRONOUS controller signal so a stop mid-turn drops the summary.
+      // the turn-abort latch (`state.isAborted()`, set in the onWorkflowEnded
+      // abort branch) — the SDK delivers no `tool_use` after its query aborts,
+      // so a stopped turn never reaches a `summarize` here; the latch drops any
+      // that arrives at/after the terminal abort. (The per-Query AbortController
+      // lives in realSdkQueryFactory, not this closure — see emitNarration's
+      // `aborted` doc.)
       if (block.name === NARRATE_TOOL_FQN || block.name === SUMMARIZE_TOOL_FQN) {
         void emitNarration({
           toolName: block.name,
