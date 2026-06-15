@@ -50,6 +50,24 @@ RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PAT
       "external_email_enabled": true,
       "mailer_otp_length": 6,
       "mailer_otp_exp": 600,
+      # Auth rate-limit ceilings. DEFENSE RELAXATION (per
+      # 2026-05-05-defense-relaxation-must-name-new-ceiling): raised from the
+      # over-aggressive values that locked legitimate users out of their own
+      # product (the "login blocked easily" symptom). Measured prd actuals at
+      # change time (Management API GET 2026-06-15):
+      #   rate_limit_email_sent: 2  -> 100  (project-wide OTP email sends /hr)
+      #   rate_limit_verify:      30 -> 150 (token verifications /hr, per-IP)
+      # The old email_sent=2/hr meant the WHOLE project could send only two
+      # sign-in codes per hour — a handful of users, or one user across a few
+      # retry/multi-tab cycles, exhausted it and locked everyone out. The
+      # ceiling these values no longer bound is spam-email cost (Resend
+      # volume); 100/hr stays well within the current Resend tier. The
+      # per-user 60s OTP send window is a SEPARATE knob (not set here) and is
+      # intentionally left at default — the client cooldown already matches it
+      # and relaxing it would re-open the invited-user double-send class
+      # (#4638). NOTE: jq strips these "#" comment lines from the JSON body.
+      "rate_limit_email_sent": 100,
+      "rate_limit_verify": 150,
       "smtp_admin_email": "noreply@soleur.ai",
       "smtp_host": "smtp.resend.com",
       "smtp_port": "465",
