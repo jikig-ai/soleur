@@ -319,61 +319,61 @@ None are folded in: this fix is intentionally minimal and these are independent 
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (RED→GREEN, single-bubble debug-liveness):** New test in `chat-state-machine.test.ts`: with
+- [x] **AC1 (RED→GREEN, single-bubble debug-liveness):** New test in `chat-state-machine.test.ts`: with
       exactly ONE active leader's bubble at Stage 1 (`retrying: true`, state `tool_use`,
       `activeStreams.size === 1`), applying `debug_event { kind: "tool_use" }` emits
       `timerAction.type === "reset_all"` AND clears `retrying` AND resets `livenessRearms` to 0 on that
       bubble. Test FAILS on base (today `debug_event` emits no `timerAction`).
-- [ ] **AC2 (RED→GREEN, multi-bubble cross-leader, pinned):** New test: leader A bubble at Stage 1
+- [x] **AC2 (RED→GREEN, multi-bubble cross-leader, pinned):** New test: leader A bubble at Stage 1
       (`retrying`, `livenessRearms` unset/0), leader B still in `activeStreams` (state `tool_use`).
       `applyTimeout(prev, streams, "A")` returns `messages[Aidx].state === "tool_use"` (NOT `error`),
       `activeStreams.has("A") === true`, `messages[Aidx].retrying === true`, `messages[Aidx].livenessRearms === 1`,
       and `timerAction` is **exactly** `{ type: "reset", leaderId: "A" }` (pin the value — not `reset` OR
       `reset_all`; test-design Rec 2). FAILS on base (today A escalates regardless of B).
-- [ ] **AC3 (genuine-hang ceiling, single leader — standalone):** Dedicated test (do NOT fold into `:73`/`:86`):
+- [x] **AC3 (genuine-hang ceiling, single leader — standalone):** Dedicated test (do NOT fold into `:73`/`:86`):
       leader A is the **only** active leader (`activeStreams.size === 1`), `retrying: true`, no debug event.
       `applyTimeout(prev, streams, "A")` STILL transitions A to `error` + removes A from `activeStreams`.
       Bracket it with the AC2 seed (same bubble + a second active leader) so the pair proves the gate is the
       discriminator, not the leader count alone (test-design Rec 1).
-- [ ] **AC3b (genuine-hang ceiling, BOUNDED re-arm — the un-masking guard):** New sequence test (user-impact
+- [x] **AC3b (genuine-hang ceiling, BOUNDED re-arm — the un-masking guard):** New sequence test (user-impact
       FINDING 1/2): leader A `retrying`, leader B active. Call `applyTimeout(…, "A")`
       `MAX_LIVENESS_REARMS + 1` times **with B kept active throughout** (B never leaves `activeStreams`).
       Assert A re-arms for the first `MAX_LIVENESS_REARMS` calls (`livenessRearms` increments 1→2→3, state
       stays `tool_use`) and on the `(MAX+1)`-th call A escalates to `error` **regardless of B still being
       active**. This is the load-bearing proof that a perpetually-busy sibling cannot mask a hung leader
       forever.
-- [ ] **AC3c (re-arm then later all-silent escalates):** Sequence test (test-design Gap 3): A `retrying`,
+- [x] **AC3c (re-arm then later all-silent escalates):** Sequence test (test-design Gap 3): A `retrying`,
       B active → `applyTimeout(…, "A")` re-arms A (no error). Then B goes silent (remove B from
       `activeStreams`) → next `applyTimeout(…, "A")` with A now last DOES escalate to `error`. Proves the
       gate is transient, not permanent suppression.
-- [ ] **AC4 (render-level, no false banner + chip clears):** Test in `message-bubble-retry.test.tsx`: a
+- [x] **AC4 (render-level, no false banner + chip clears):** Test in `message-bubble-retry.test.tsx`: a
       Stage-1 `retrying` bubble renders the honest "No response yet" chip, NEVER "Agent stopped responding".
       Keep the existing `:59`/`:80` terminal-error render tests green. (Single render assertion — do not
       re-drive the full reducer through render; the state-machine ACs already prove the state never reaches
       `error` on a live leader. code-simplicity trim.)
-- [ ] **AC5 (`reset_all` wired in hook, timer-Map iteration):** `ws-client.ts` `useEffect` handles
+- [x] **AC5 (`reset_all` wired in hook, timer-Map iteration):** `ws-client.ts` `useEffect` handles
       `reset_all` by iterating `timeoutTimersRef.current.keys()` (NOT `chatState.activeStreams`) and resetting
       each. Verify `git grep -n "reset_all\|resetAllTimeouts" apps/web-platform/lib/ws-client.ts` returns the
       branch + helper, sitting beside the existing `clearAllTimeouts` handling (`:617`).
-- [ ] **AC6 (type-widening sweep):** `git grep -n "pendingTimerAction\|timerAction" apps/web-platform/` lists
+- [x] **AC6 (type-widening sweep):** `git grep -n "pendingTimerAction\|timerAction" apps/web-platform/` lists
       every consumer; the `ws-client.ts:612-619` if-ladder handles `reset_all`. `applyTimeout`'s return union
       is NOT widened (only `applyStreamEvent`'s is). `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
       is clean.
-- [ ] **AC7 (ceiling negatives — debug-event tight):** Tests: (a) `debug_event { kind: "tool_use" }` with
+- [x] **AC7 (ceiling negatives — debug-event tight):** Tests: (a) `debug_event { kind: "tool_use" }` with
       `activeStreams.size === 0` emits NO `timerAction` (inert); (b) with `activeStreams.size > 1` (two
       leaders) emits NO `reset_all` (unattributable → cross-leader gate handles it instead); (c)
       `debug_event { kind: "reasoning" }` and `{ kind: "result" }` each emit NO `reset_all`. `debug_event`
       still appends a `ChatDebugEventMessage`, still carries no `leaderId`, still never persisted (standing
       CI grep gate unaffected).
-- [ ] **AC8b (no resurrection of terminal bubble):** Test (test-design Gap 2 / ping-pong vector): the sole
+- [x] **AC8b (no resurrection of terminal bubble):** Test (test-design Gap 2 / ping-pong vector): the sole
       active leader's bubble is already `error`/`done` but still (transiently) in `activeStreams`. A
       `debug_event { kind: "tool_use" }` `reset_all` re-arms its timer, but the next `applyTimeout` no-ops
       (the `:1099` transitional-state guard rejects non-`thinking`/`tool_use` bubbles) — assert no state
       change / no resurrection.
-- [ ] **AC8 (full suite green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/chat-state-machine.test.ts test/message-bubble-retry.test.tsx test/cc-soleur-go-tool-progress-no-terminal-error.test.ts`
+- [x] **AC8 (full suite green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/chat-state-machine.test.ts test/message-bubble-retry.test.tsx test/cc-soleur-go-tool-progress-no-terminal-error.test.ts`
       passes (the existing `cc-soleur-go-tool-progress-no-terminal-error` regression test must stay green —
       it asserts the unchanged single-leader heartbeat path).
-- [ ] **AC9 (PR body links parent):** PR body uses `Ref #5240` (NOT `Closes #5240` — #5240 is the open
+- [x] **AC9 (PR body links parent):** PR body uses `Ref #5240` (NOT `Closes #5240` — #5240 is the open
       parent epic and must stay open) and `Closes #<new-sub-issue>` for the focused sub-issue filed under it.
 
 ### Post-merge (operator)
