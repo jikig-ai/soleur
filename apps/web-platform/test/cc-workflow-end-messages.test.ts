@@ -26,6 +26,8 @@ describe("WORKFLOW_END_USER_MESSAGES", () => {
       // Routes to the terminal session_ended family via
       // TERMINAL_WORKFLOW_END_STATUSES in cc-dispatcher.ts.
       "session_revoked",
+      // #5313 (deferred #5240 FR-half) — worktree-rebind loop guardrail.
+      "worktree_enter_failed",
     ];
     const actualKeys = Object.keys(WORKFLOW_END_USER_MESSAGES).sort();
     expect(actualKeys).toEqual([...expectedKeys].sort());
@@ -48,6 +50,15 @@ describe("WORKFLOW_END_USER_MESSAGES", () => {
     );
     expect(WORKFLOW_END_USER_MESSAGES.session_revoked).toContain(
       "revoked",
+    );
+
+    // #5313 AC7 — the worktree-enter failure surfaces an honest, actionable
+    // status and NEVER the misleading "Agent stopped responding" banner.
+    expect(WORKFLOW_END_USER_MESSAGES.worktree_enter_failed).toContain(
+      "workspace",
+    );
+    expect(WORKFLOW_END_USER_MESSAGES.worktree_enter_failed).not.toContain(
+      "Agent stopped responding",
     );
 
     // Defense-in-depth: NO entry should leak the status token verbatim

@@ -446,6 +446,10 @@ const ABORT_FLUSH_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   // `aborted` BEFORE the terminal session_ended emit. Matches the
   // semantic of every other non-completed terminal status.
   "session_revoked",
+  // #5313 (deferred #5240 FR-half) — worktree-enter failure is a
+  // non-completed terminal status; flush partial text before the terminal
+  // emit like every sibling.
+  "worktree_enter_failed",
 ]);
 
 // Compile-time exhaustiveness rail for `ABORT_FLUSH_STATUSES`.
@@ -460,6 +464,7 @@ const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
   plugin_load_failure: true,
   internal_error: true,
   session_revoked: true,
+  worktree_enter_failed: true,
 };
 void _abortFlushExhaustive;
 

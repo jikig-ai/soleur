@@ -532,6 +532,13 @@ export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 90 * 1000;
 // activity; cost cap fires only at SDKResultMessage boundaries). Anchored
 // on `turnOriginAt` set once when the first block of a turn arrives.
 export const DEFAULT_MAX_TURN_DURATION_MS = 10 * 60 * 1000;
+// #5313 (deferred #5240 FR-half) — consecutive mismatched `cd <path> && pwd`
+// CWD-verification commands before the runner emits `worktree_enter_failed`.
+// The observed 4826-session loop ran 4+ identical iterations before the turn
+// died; 3 is below that and well above any single transient-fs jitter. A
+// bounded counter (modeled on LEADER_MAX_TURNS), not a duration — it fires in
+// seconds, where the `runner_runaway` duration breaker would take 10 min.
+export const CWD_VERIFY_LOOP_THRESHOLD = 3;
 
 // Recalibrated 2026-04-24 from stream-input rerun (see plan RERUN
 // §"Cost caps vs measured reality"). CFO gate at Stage 6.5.1.
@@ -737,6 +744,17 @@ function flattenToolResultText(content: unknown): string {
   return acc;
 }
 
+/** #5313 — extract the target path from a CWD-verification command of the
+ *  one-shot/plan gate's canonical shape `cd <path> && pwd`. Returns null for
+ *  any other command (a real intervening command breaks the loop). Tolerates
+ *  surrounding whitespace and an optional trailing `&& …` continuation (the
+ *  live loop ran `cd <wt> && pwd && git branch …`). Pure — unit-tested
+ *  directly and exercised by the detector. */
+export function parseCwdVerifyTarget(command: string): string | null {
+  const m = command.match(/^\s*cd\s+(\S+)\s*&&\s*pwd\b/);
+  return m ? m[1] : null;
+}
+
 export type CostCaps = {
   perWorkflow: Partial<Record<WorkflowName, number>>;
   default: number;
@@ -773,7 +791,20 @@ export type WorkflowEnd =
   // `denied_jti.denied_at` timestamp), populated by a best-effort
   // `getMyRevocationStatus(userId)` lookup at emit time. Both nullable
   // because legacy deny rows pre-date the schema columns.
-  | { status: "session_revoked"; reason: string | null; deniedAt: string | null };
+  | { status: "session_revoked"; reason: string | null; deniedAt: string | null }
+  // #5313 (deferred #5240 FR-half) — Bash bwrap sandbox could not enter a
+  // git worktree. Emitted by the command-pattern CWD-verify-loop detector
+  // (`handleUserMessage`) after `CWD_VERIFY_LOOP_THRESHOLD` consecutive
+  // near-identical `cd <expectedPath> && pwd` commands returned a `pwd`
+  // (`observedCwd`) that did not equal `expectedPath`. `attempts` is the
+  // consecutive-mismatch count at fire time. Routes through the same honest
+  // terminal-error path as `runner_runaway` but fires in seconds, not 10 min.
+  | {
+      status: "worktree_enter_failed";
+      expectedPath: string;
+      observedCwd: string;
+      attempts: number;
+    };
 
 // Cardinality assert (#3827 + ADR-031 amendment 2026-05-15): the runner's
 // `WorkflowEnd["status"]` union MUST equal the wire-protocol
@@ -1608,6 +1639,16 @@ interface ActiveQuery {
    * tool_uses are never recorded here.
    */
   bashToolUses: Map<string, string>;
+  /**
+   * #5313 — CWD-verify-loop detector state. Tracks consecutive
+   * near-identical `cd <expectedPath> && pwd` commands whose observed `pwd`
+   * did not equal `expectedPath` (the Bash sandbox could not enter the
+   * worktree). Reset to `null` on any non-CWD-verify command, a different
+   * target path, or a successful verify. Fires `worktree_enter_failed` at
+   * `count >= CWD_VERIFY_LOOP_THRESHOLD`. Compliance-independent: keyed on
+   * observed Bash tool-results, not a cooperative agent marker.
+   */
+  cwdVerifyLoop: { expectedPath: string; count: number } | null;
 }
 
 /**
@@ -2067,6 +2108,65 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   // `state.turnHardCap` — the 10-min absolute ceiling stays anchored on
   // `firstToolUseAt` (defense pair from PR #3225 + learning
   // 2026-05-05-defense-relaxation-must-name-new-ceiling.md).
+  // #5313 — command-pattern CWD-verify-loop detector. Compliance-independent:
+  // keyed on observed Bash command + result text, NOT a cooperative
+  // agent-emitted marker (the live agent ignored the prose "abort" contract).
+  // Returns true (and emits `worktree_enter_failed`) when `expectedPath`
+  // mismatches `observedCwd` for `CWD_VERIFY_LOOP_THRESHOLD` consecutive
+  // same-target commands. Routing through `emitWorkflowEnded` clears BOTH
+  // timers + sets `state.closed` (single-terminal invariant, FR2.4) — so the
+  // armed `runner_runaway` timer cannot double-fire a second WorkflowEnd.
+  function detectCwdVerifyLoop(
+    state: ActiveQuery,
+    command: string,
+    output: string,
+  ): boolean {
+    const expectedPath = parseCwdVerifyTarget(command);
+    if (expectedPath === null) {
+      // A real intervening command breaks the loop.
+      state.cwdVerifyLoop = null;
+      return false;
+    }
+    const observedCwd = output.trim();
+    if (observedCwd === expectedPath) {
+      // Verify succeeded — the sandbox entered the worktree. Reset.
+      state.cwdVerifyLoop = null;
+      return false;
+    }
+    if (
+      state.cwdVerifyLoop &&
+      state.cwdVerifyLoop.expectedPath === expectedPath
+    ) {
+      state.cwdVerifyLoop.count += 1;
+    } else {
+      state.cwdVerifyLoop = { expectedPath, count: 1 };
+    }
+    if (state.cwdVerifyLoop.count < CWD_VERIFY_LOOP_THRESHOLD) return false;
+    const attempts = state.cwdVerifyLoop.count;
+    state.cwdVerifyLoop = null;
+    log.warn(
+      { conversationId: state.conversationId, expectedPath, observedCwd, attempts },
+      "worktree_enter_failed (CWD-verify loop)",
+    );
+    // Operator-visible degraded-path error, not a write-boundary/GDPR breach
+    // → reportSilentFallback (error tier), NOT mirrorP0Deduped (fatal + page).
+    reportSilentFallback(
+      new Error("worktree enter failed: Bash sandbox could not enter the worktree"),
+      {
+        feature: "agent-sandbox",
+        op: "worktree_enter",
+        extra: { conversationId: state.conversationId, expectedPath, observedCwd, attempts },
+      },
+    );
+    emitWorkflowEnded(state, {
+      status: "worktree_enter_failed",
+      expectedPath,
+      observedCwd,
+      attempts,
+    });
+    return true;
+  }
+
   function handleUserMessage(state: ActiveQuery, msg: SDKUserMessage): void {
     if (msg.tool_use_result === undefined) return;
     if (state.closed || state.awaitingUser) return;
@@ -2084,6 +2184,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         for (const result of extractBashToolResults(msg, state.bashToolUses)) {
           state.bashToolUses.delete(result.toolUseId);
           state.events.onToolResult(result);
+          // #5313 — fire the bounded CWD-verify-loop guardrail. On fire the
+          // turn is terminated (emitWorkflowEnded sets state.closed) — stop
+          // processing further results this message.
+          if (detectCwdVerifyLoop(state, result.command, result.output)) return;
         }
       } catch (err) {
         reportSilentFallback(err, {
@@ -2482,6 +2586,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         chapterExtractionFailures: 0,
         _pendingPdfRotationNotice: false,
         bashToolUses: new Map(),
+        cwdVerifyLoop: null,
       };
       activeQueries.set(conversationId, state);
 
