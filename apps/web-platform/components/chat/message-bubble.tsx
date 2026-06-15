@@ -174,17 +174,18 @@ export const MessageBubble = memo(function MessageBubble({
     <div
       className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
     >
-      <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
-        {leader && (
-          <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" customIconPath={customIconPath} />
-        )}
-
+      <div className={`flex min-w-0 max-w-[90%] md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+        {/* Assistant card: `w-fit` shrinks to content so short routing chips
+            don't wrap prematurely; `min-w-[6rem]` floors the width (~96px > the
+            widest "Streaming" badge) so the absolute `right-3` status badges
+            never overhang the left edge. User card keeps `min-w-0` for long-
+            content / wide-`<pre>` overflow shrink. */}
         <div
           data-testid="message-bubble-card"
-          className={`relative min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed ${
+          className={`relative rounded-xl px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
-              : `bg-soleur-bg-surface-1 text-soleur-text-primary ${borderStyle} ${leader && !isActive && !isError ? `border-l-2 ${colorClass}` : ""}`
+              ? "min-w-0 bg-soleur-bg-surface-2 text-soleur-text-primary"
+              : `w-fit min-w-[6rem] max-w-full bg-soleur-bg-surface-1 text-soleur-text-primary ${borderStyle} ${leader && !isActive && !isError ? `border-l-2 ${colorClass}` : ""}`
           }`}
         >
           {(messageState === "tool_use" || messageState === "streaming") && (
@@ -209,6 +210,11 @@ export const MessageBubble = memo(function MessageBubble({
               className="mb-1 flex items-center gap-2"
               data-testid="message-bubble-header"
             >
+              {/* Avatar lives INSIDE the card header (not as a row-level
+                  sibling left of the card) so the card's left edge aligns with
+                  the wrapper edge — and thus with the Debug stream panel below
+                  it. `sm` (20px) fits the header line height. */}
+              <LeaderAvatar leaderId={leaderId!} size="sm" customIconPath={customIconPath} />
               <span className="whitespace-nowrap text-xs font-semibold text-soleur-text-secondary">
                 {headerPrimary}
               </span>
