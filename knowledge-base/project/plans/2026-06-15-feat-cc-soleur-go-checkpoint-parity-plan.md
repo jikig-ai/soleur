@@ -329,7 +329,7 @@ any turn-boundary lifecycle hook needs wiring on BOTH the `sendUserMessage`
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (issue re-eval criterion met):**
+- [x] **AC1 (issue re-eval criterion met):**
   `git grep -n checkpointInflightWork apps/web-platform/server/cc-dispatcher.ts apps/web-platform/server/soleur-go-runner.ts`
   returns ≥1 hit (the cc-path checkpoint is wired) — the exact grep from the
   issue's "Re-eval by (event-grep)". NOTE: the extraction (Phase 3a) means
@@ -337,32 +337,32 @@ any turn-boundary lifecycle hook needs wiring on BOTH the `sendUserMessage`
   `checkpointInflightWork`, so the issue's literal grep still returns ≥1. (If a
   future reviewer wants the bare `checkpointInflightWork(` call, that lives in the
   shared helper in `inflight-checkpoint.ts`; the cc path reaches it transitively.)
-- [ ] **AC2 (write-side only — no restore regression):** `restoreInflightCheckpoint`
+- [x] **AC2 (write-side only — no restore regression):** `restoreInflightCheckpoint`
   call site (`ws-handler.ts:1994`) is unchanged; `git diff` touches no read-side
   restore logic. The cc checkpoint produces a ref the existing gated restore
   consumes unchanged.
-- [ ] **AC3 (conversation-bound clone):** the cc checkpoint resolves its clone
+- [x] **AC3 (conversation-bound clone):** the cc checkpoint resolves its clone
   from `conversations.workspace_id` via `workspacePathForWorkspaceId`, NOT
   `resolveActiveWorkspacePath` — verified by T4 and by grep of the new block.
-- [ ] **AC4 (disconnect-only):** T3 proves natural completion + explicit
+- [x] **AC4 (disconnect-only):** T3 proves natural completion + explicit
   `closeConversation` do NOT checkpoint; only `reason === "disconnected"` does.
-- [ ] **AC5 (never breaks the close path):** T5 proves a checkpoint/resolve
+- [x] **AC5 (never breaks the close path):** T5 proves a checkpoint/resolve
   failure mirrors to Sentry and the bash-gate drain still completes; no throw
   escapes `onCloseQuery`.
-- [ ] **AC6 (dual-path terminal wired):** T6 proves the disconnect grace timer
+- [x] **AC6 (dual-path terminal wired):** T6 proves the disconnect grace timer
   signals BOTH `abortSession` (legacy) and
   `getSoleurGoRunner().closeConversation(convId, "disconnected")` (cc).
-- [ ] **AC7 (widening clean):** `tsc --noEmit` clean after the `closeConversation`/
+- [x] **AC7 (widening clean):** `tsc --noEmit` clean after the `closeConversation`/
   `closeQuery`/`onCloseQuery` `reason?` additions. The `onCloseQuery` type has one
   consumer (`cc-dispatcher.ts:1909`); `closeQuery`'s 3 internal callers are
   hand-verified (P1-2 — `tsc` does not exhaustively enumerate an internal helper's
   call sites). `emitWorkflowEnded` + `reapIdle` pass no `reason` (→ no checkpoint).
-- [ ] **AC8 (full suite green):** `./node_modules/.bin/vitest run` (apps/web-platform)
+- [x] **AC8 (full suite green):** `./node_modules/.bin/vitest run` (apps/web-platform)
   passes, including `cc-dispatcher-bash-gate.test.ts` and `inflight-checkpoint.test.ts`.
-- [ ] **AC9 (observability slug parity):** the new emit uses
+- [x] **AC9 (observability slug parity):** the new emit uses
   `op: "checkpoint-on-abort"` (grep the new block) — same slug the legacy +
   restore sites use; no new orphan slug.
-- [ ] **AC10 (PR body):** `Closes #5356`. (#5356 is resolved AT MERGE — the fix
+- [x] **AC10 (PR body):** `Closes #5356`. (#5356 is resolved AT MERGE — the fix
   is pure application code with no post-merge operator step, so `Closes` is
   correct here, unlike ops-remediation PRs.)
 
