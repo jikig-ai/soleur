@@ -102,7 +102,10 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
 import { getCurrentRepoUrl } from "./current-repo-url";
-import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+import {
+  ensureWorkspaceRepoCloned,
+  ensureWorkspaceDirExists,
+} from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1427,6 +1430,23 @@ export const realSdkQueryFactory: QueryFactory = async (
       userId: args.userId,
       installationId,
       repoUrl,
+    });
+
+    // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
+    // reprovision-ensure-dir-presandbox). The bwrap sandbox binds `cwd` to THIS
+    // factory's own resolved `workspacePath` (the `:1315` `fetchUserWorkspacePath`
+    // in the Promise.all above — NOT `args.workspacePath`, which is system-prompt-
+    // only) at `query()` construction below, and requires the dir to EXIST. After
+    // a reclaim it can be gone. The clone's mkdir (PR #5367) is CONDITIONAL — it
+    // sits past `ensureWorkspaceRepoCloned`'s not-connected / `.git`-present early-
+    // returns — so a reclaimed not-connected workspace would skip it and the
+    // sandbox would `chdir` into a missing dir. Ensuring the dir here, before the
+    // clone and before `buildAgentQueryOptions`, is the stronger precondition. On
+    // failure it surfaces a retryable error (rides the `query()`-construction catch
+    // below) rather than building a doomed sandbox.
+    await ensureWorkspaceDirExists(workspacePath, {
+      feature: "cc-dispatcher",
+      userId: args.userId,
     });
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the

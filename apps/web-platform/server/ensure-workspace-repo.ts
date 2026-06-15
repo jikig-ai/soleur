@@ -52,6 +52,59 @@ export interface EnsureWorkspaceRepoArgs {
 }
 
 /**
+ * Unconditional pre-sandbox workspace-dir guarantee.
+ *
+ * The agent runs inside an SDK bubblewrap sandbox whose `cwd` is frozen to
+ * `workspacePath` at `query()` construction (`agent-runner-query-options.ts`);
+ * bwrap `chdir`s into that path and REQUIRES it to EXIST. After a sandbox/host
+ * reclaim the dir can be gone — and dir-existence is a STRONGER precondition
+ * than clone-eligibility: `ensureWorkspaceRepoCloned` early-returns for
+ * not-connected (no `installationId`/`repoUrl`) and `.git`-present workspaces
+ * BEFORE it ever reaches `realGraftRepoClone`'s own mkdir, so a reclaimed
+ * not-connected (or `.git`-present-but-root-deleted) workspace would otherwise
+ * get NO dir re-creation and the sandbox builds against a non-existent CWD
+ * (the "configured CWD `/workspaces/<uuid>` doesn't exist" symptom). This mkdir
+ * is therefore UNCONDITIONAL and independent of the clone (PR #5367's conditional
+ * mkdir stays — it is correct for the clone; this is the wider precondition).
+ *
+ * Fail-soft-but-loud (per the not-connected fail-soft hazard): one bounded retry,
+ * then mirror to Sentry (`cq-silent-fallback-must-mirror-to-sentry`) and THROW.
+ * It must NOT silently proceed to construct a sandbox against a still-missing dir
+ * — for the not-connected case there is no clone to recover and no clone-`"failed"`
+ * to surface the honest "workspace reclaimed" message, so silent-proceed would
+ * reconstruct the exact original symptom with only a swallowed Sentry event. The
+ * throw rides the caller's existing `query()`-construction catch, which surfaces
+ * the retryable error envelope to the conversation.
+ *
+ * Creates ONLY the workspace root (`recursive: true`), never `.git` — so the
+ * clone's `.git`-absent no-op guard and `"failed"` honest-message path are
+ * unperturbed. Recursive mkdir on an existing dir is idempotent.
+ */
+export async function ensureWorkspaceDirExists(
+  workspacePath: string,
+  ctx: { feature: string; userId: string },
+): Promise<void> {
+  try {
+    await mkdir(workspacePath, { recursive: true });
+  } catch {
+    try {
+      await mkdir(workspacePath, { recursive: true }); // bounded single retry
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: ctx.feature,
+        op: "ensure-workspace-dir-presandbox",
+        extra: { userId: ctx.userId },
+        message:
+          "pre-sandbox workspace-dir ensure failed; surfacing a retryable error instead of building a sandbox against a non-existent CWD",
+      });
+      throw new Error(
+        "workspace directory could not be ensured before sandbox construction",
+      );
+    }
+  }
+}
+
+/**
  * Session-start self-heal: ensure the user's connected repo is cloned into their
  * workspace WHEN — and only when — the workspace has NO git repository at all.
  * Generic per-user/per-repo (owner/repo + installation token are the caller's

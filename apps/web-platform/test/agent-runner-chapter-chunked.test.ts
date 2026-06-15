@@ -65,6 +65,9 @@ vi.mock("fs", async (importOriginal) => {
 
 vi.mock("node:fs/promises", () => ({
   readFile: mockReadFile,
+  // startAgentSession now ensures the workspace dir before sandbox construction
+  // (ensureWorkspaceDirExists → mkdir); this partial mock must export it.
+  mkdir: vi.fn(async () => undefined),
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
