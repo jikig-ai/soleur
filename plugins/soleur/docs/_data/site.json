@@ -83,6 +83,7 @@
   "footerLegal": [
     { "label": "Legal", "url": "/legal/" },
     { "label": "Privacy Policy", "url": "/legal/privacy-policy/" },
-    { "label": "Terms of Service", "url": "/legal/terms-and-conditions/" }
+    { "label": "Terms of Service", "url": "/legal/terms-and-conditions/" },
+    { "label": "Acceptable Use", "url": "/legal/acceptable-use-policy/" }
   ]
 }

@@ -41,7 +41,7 @@ Authentication uses short-lived GitHub App installation tokens that expire after
 
 ## The Compounding Effect
 
-Repository connection is not a convenience feature. It is the infrastructure that makes [compound knowledge]({{ site.url }}blog/why-most-agentic-tools-plateau/) work in practice.
+Repository connection is not a convenience feature. It is the infrastructure that makes [compound knowledge]({{ site.url }}/blog/why-most-agentic-tools-plateau/) work in practice.
 
 Every Soleur session produces artifacts: brainstorm documents capture design decisions. Plans encode implementation strategy. Learnings record what worked and what did not. Legal agents generate compliance documents. Marketing agents produce content briefs. All of these accumulate in your knowledge base.
 
