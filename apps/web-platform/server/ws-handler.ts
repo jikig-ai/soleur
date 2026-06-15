@@ -2633,6 +2633,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "workflow_ended":
     case "error":
     case "revocation_notice":
+    // feat-reasoning-chat-boxes (#5370) — agent-emitted narration is
+    // server→client only (emitted from cc-dispatcher onToolResult).
+    case "reasoning_narration":
+    case "turn_summary":
     // feat-stream-since-disconnect (#5273) — server→client only.
     case "stream_replay": {
       sendToClient(userId, {

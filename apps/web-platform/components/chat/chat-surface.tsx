@@ -26,6 +26,7 @@ import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
+import { TurnSummaryBubble } from "@/components/chat/turn-summary-bubble";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
@@ -873,6 +874,12 @@ export function ChatSurface({
                   // NOT inline in the conversation. The case exists to satisfy
                   // the `: never` exhaustiveness rail; inline body is null.
                   body = null;
+                  break;
+                case "turn_summary":
+                  // feat-reasoning-chat-boxes (#5370) — durable per-turn summary
+                  // box, rendered INLINE in the main conversation (plain-text;
+                  // never MarkdownRenderer — see TurnSummaryBubble security note).
+                  body = <TurnSummaryBubble content={msg.content} />;
                   break;
                 default: {
                   const _exhaustive: never = msg;

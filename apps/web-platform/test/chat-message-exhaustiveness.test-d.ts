@@ -40,6 +40,8 @@ function assertExhaustive(msg: ChatMessage): string {
       return msg.reason;
     case "debug_event":
       return msg.body;
+    case "turn_summary":
+      return msg.content;
     default: {
       const _exhaustive: never = msg;
       void _exhaustive;

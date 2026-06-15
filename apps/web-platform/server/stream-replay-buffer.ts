@@ -33,6 +33,12 @@ export type BufferedWSMessage = Extract<
   | { type: "tool_progress" }
   | { type: "usage_update" }
   | { type: "session_ended" }
+  // feat-reasoning-chat-boxes (#5370) — the DURABLE per-turn summary IS buffered
+  // (unlike `reasoning_narration`, which stays live-only like debug_event): it
+  // must survive a within-grace reconnect replay so the confirmed box does not
+  // vanish mid-turn. Persistence (messages row) covers the reload case; buffering
+  // covers the reconnect case.
+  | { type: "turn_summary" }
 >;
 
 // Derived from a `Record<BufferedWSMessage["type"], true>` (NOT a bare array)
@@ -52,6 +58,7 @@ const BUFFERED_FRAME_TYPE_MAP: Record<BufferedWSMessage["type"], true> = {
   tool_progress: true,
   usage_update: true,
   session_ended: true,
+  turn_summary: true,
 };
 
 export const BUFFERED_FRAME_TYPES: ReadonlySet<WSMessage["type"]> = new Set(

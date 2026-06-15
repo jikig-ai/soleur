@@ -326,6 +326,20 @@ const debugEventSchema = z.strictObject({
   label: z.string().optional(),
   body: z.string().max(20000),
 });
+// feat-reasoning-chat-boxes (#5370) — agent-emitted user-facing narration.
+// `reasoning_narration` is the transient live status line (live-only, no seq,
+// excluded from the replay buffer). `turn_summary` is the durable per-turn
+// record (persisted + buffered, carries seq). Both text fields are redacted at
+// the server emit boundary; the max() admits redaction-marker expansion.
+const reasoningNarrationSchema = z.strictObject({
+  type: z.literal("reasoning_narration"),
+  message: z.string().max(20000),
+});
+const turnSummarySchema = z.strictObject({
+  type: z.literal("turn_summary"),
+  summary: z.string().max(20000),
+  seq: replaySeqSchema,
+});
 const reviewGateSchema = z.strictObject({
   type: z.literal("review_gate"),
   gateId: z.string(),
@@ -589,6 +603,8 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   commandStreamSchema,
   toolProgressSchema,
   debugEventSchema,
+  reasoningNarrationSchema,
+  turnSummarySchema,
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,
