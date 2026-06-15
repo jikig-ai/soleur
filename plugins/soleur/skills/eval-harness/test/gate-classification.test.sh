@@ -44,6 +44,27 @@ run "p2"                     "$TR" "true"  "in-enum P-level case-insensitive pas
 run "P9"                     "$TR" "false" "out-of-enum P-level fails"
 run "fix"                    "$TR" "false" "wrong-namespace label fails"
 
+# --- file:// enum shape (promptfoo passes defaultTest.vars file:// refs verbatim;
+#     the #5358 live-run bug). enum arrives as a RAW STRING, not a parsed array. ---
+fileref() {
+  local output="$1" enumref="$2" want_pass="$3" label="$4"
+  local got
+  got=$(node -e '
+    const fn = require(process.argv[1]);
+    const r = fn(process.argv[2], { vars: { enum: process.argv[3] } });
+    process.stdout.write(String(r.pass));
+  ' "$ASSERT" "$output" "$enumref")
+  if [[ "$got" != "$want_pass" ]]; then
+    echo "FAIL [$label]: output='$output' enum='$enumref' -> pass=$got (want $want_pass)"
+    fails=$((fails + 1))
+  else
+    echo "ok   [$label]: pass=$got"
+  fi
+}
+fileref "fix"    "file://enums/go-routes.json"     "true"  "file:// enum + in-enum route passes"
+fileref "banana" "file://enums/go-routes.json"     "false" "file:// enum + out-of-enum route fails"
+fileref "P1"     "file://enums/triage-levels.json" "true"  "file:// enum + in-enum P-level passes"
+
 if [[ "$fails" -gt 0 ]]; then
   echo "gate-classification: $fails assertion(s) failed"
   exit 1

@@ -77,6 +77,41 @@ run $'   \nfirst junk line\nsecond' "$GO" "first junk line" "tier3 first non-emp
 run_empty "$GO" "" "empty string output" ""
 run_empty "$GO" "" "null output" "__NULL__"
 
+# --- loadEnum: the var shapes promptfoo actually passes ---
+# Regression for the #5358 live-run bug: promptfoo passes a `defaultTest.vars`
+# `file://...` value to a custom JS assert as the LITERAL STRING, unresolved.
+# loadEnum must read the SSOT file itself. Also accepts a JSON array literal and
+# a direct array; returns [] (gate fails closed) on anything unreadable.
+loadenum() {
+  local enumval="$1" want_len="$2" want_first="$3" label="$4"
+  local got
+  got=$(node -e '
+    const { loadEnum } = require(process.argv[1]);
+    const v = process.argv[2] === "__ARRAY__"
+      ? ["a","b","c"]
+      : process.argv[2];
+    const e = loadEnum({ enum: v });
+    process.stdout.write(JSON.stringify({ len: e.length, first: (e[0] ?? null) }));
+  ' "$SKILL_DIR/scripts/parse-label.cjs" "$enumval")
+  local got_len got_first
+  got_len=$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).len))' "$got")
+  got_first=$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).first))' "$got")
+  if [[ "$got_len" != "$want_len" || "$got_first" != "$want_first" ]]; then
+    echo "FAIL [$label]: enum='$enumval' -> len=$got_len first=$got_first (want len=$want_len first=$want_first)"
+    fails=$((fails + 1))
+  else
+    echo "ok   [$label]: len=$got_len first=$got_first"
+  fi
+}
+
+loadenum "file://enums/go-routes.json"     7 "fix" "loadEnum file:// go-routes (promptfoo shape — the #5358 bug)"
+loadenum "file://enums/triage-levels.json" 3 "P1"  "loadEnum file:// triage-levels"
+loadenum "enums/go-routes.json"            7 "fix" "loadEnum bare relative path"
+loadenum '["fix","drain","review"]'        3 "fix" "loadEnum JSON array literal string"
+loadenum "__ARRAY__"                       3 "a"   "loadEnum direct array passthrough"
+loadenum "file://enums/does-not-exist.json" 0 "null" "loadEnum unreadable file -> [] (gate fails closed)"
+loadenum ""                                0 "null" "loadEnum empty string -> []"
+
 if [[ "$fails" -gt 0 ]]; then
   echo "parse-label: $fails assertion(s) failed"
   exit 1

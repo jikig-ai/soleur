@@ -13,7 +13,9 @@ prompts:
 
 defaultTest:
   vars:
-    # Closed P1/P2/P3 enum (single source) — the gate's allowed set.
+    # Closed P1/P2/P3 enum (single source). promptfoo passes this file:// ref to the
+    # custom asserts VERBATIM (it does not resolve defaultTest.vars file:// refs), so
+    # the asserts read the file themselves via loadEnum() in scripts/parse-label.cjs.
     enum: file://enums/triage-levels.json
   assert:
     # MEASUREMENT: always passes, records P-level-correct rate (1.0 / 0.0).
@@ -23,10 +25,10 @@ defaultTest:
     - type: javascript
       value: file://scripts/gate-classification.cjs
 
-# N runs per (prompt arm × model) cell. The classification-correct rate is the
-# mean of the measurement assert's per-run scores (promptfoo has no native median;
-# read the aggregate per-cell score or compute the median across these runs).
-repeat: 3
-
+# N runs per cell come from the `--repeat N` CLI flag (a config-level `repeat:` key
+# is NOT honored by promptfoo). The classification-correct rate is the mean of the
+# measurement assert's per-run scores; promptfoo has no native median, so read the
+# aggregate per-cell score or compute the median across the --repeat runs. See README.
+#
 # Golden tasks: { vars: { input, golden_label } } per line.
 tests: file://tasks/ticket-triage.jsonl

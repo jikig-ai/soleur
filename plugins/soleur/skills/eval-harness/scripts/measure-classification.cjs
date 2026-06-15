@@ -8,15 +8,16 @@
 //
 // Signature: module.exports = (output, context) => GradingResult
 //   context.vars.golden_label : the expected label (route or P-level)
-//   context.vars.enum         : the closed set of allowed labels (for parsing)
+//   context.vars.enum         : the closed set of allowed labels — array, JSON
+//   literal, or `file://`/relative path to the SSOT (resolved by loadEnum()).
 "use strict";
 
-const { extractLabel } = require("./parse-label.cjs");
+const { extractLabel, loadEnum } = require("./parse-label.cjs");
 
 module.exports = (output, context) => {
   const vars = (context && context.vars) || {};
   const golden = vars.golden_label;
-  const allowed = vars.enum;
+  const allowed = loadEnum(vars);
   const got = extractLabel(output, allowed);
   const correct = got === golden;
   return {
