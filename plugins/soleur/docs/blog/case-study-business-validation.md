@@ -36,7 +36,7 @@ A 3,627-word business validation document containing:
 - **Business model**: CONDITIONAL PASS. Four revenue model options evaluated with competitor pricing context.
 - **Minimum viable scope**: PASS. Breadth validated as minimum scope via coherence check.
 - **Final verdict**: PIVOT -- from building features to validating the thesis with real users. A 7-step action plan defined.
-- **Vision alignment check**: Validated that the pivot does not contradict the brand guide's positioning.
+- **Vision alignment check**: Validated that the pivot does not contradict the [brand guide's positioning](/blog/case-study-brand-guide-creation/).
 
 ## The Cost Comparison
 
