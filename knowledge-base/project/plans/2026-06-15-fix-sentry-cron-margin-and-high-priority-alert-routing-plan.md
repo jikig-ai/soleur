@@ -25,6 +25,26 @@ triggered by a production Sentry page received **2026-06-15 11:30 CEST** for mon
 monitor.incident `5546660`, "A missed check-in was detected", last successful
 check-in `2026-06-10T16:59:18+00:00`).
 
+## OUTCOME (2026-06-15, post-implementation)
+
+**CHANGE A shipped as planned** — margin 30→60 on the 12 `max_runtime_minutes=55` cohort monitors
++ substrate/inline comment updates. fmt clean, validate success, parity + destroy-guard tests green.
+
+**CHANGE B did NOT land as IaC — it moved to account-level Email Routing** after Phase-0 live
+verification falsified the plan's premises (see
+`knowledge-base/project/learnings/2026-06-15-sentry-alert-routing-to-an-email-needs-member-target-not-an-iac-rule.md`):
+(1) the `iac-terraform-prd` token lacks `member:read` (all 4 Sentry tokens 403 on the members API),
+so a `data.sentry_organization_member` lookup would 403 at plan time on every future apply and break
+the pipeline; (2) `ops@jikigai.com` is **not** a Sentry member (the org's only member is
+`jean.deruelle@jikigai.com`), so there was no member to resolve/target. Per the operator's choice,
+CHANGE B was implemented as: add `ops@jikigai.com` as a verified secondary email on the founder's
+account + route the `web-platform` project's notifications to it (Sentry → Account → Email Routing).
+No new `sentry_issue_alert`, no member resource, no workflow `-target`, no contract test. The
+`member:read` scope was toggled on only to verify membership, then **reverted** to the documented
+ADR-031 least-privilege set. **Remaining operator step:** verify `ops@jikigai.com` via the link Sentry
+emailed to that inbox (delivery to an unverified secondary email does not occur). The Phases 2-3 below
+(CHANGE B IaC) are therefore **superseded** and were not implemented.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-06-15
