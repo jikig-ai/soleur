@@ -450,8 +450,8 @@ logs:
   where: pino child loggers "ensure-workspace-repo", "cc-dispatcher"; Sentry
   retention: existing Better Stack / Sentry retention (unchanged)
 discoverability_test:
-  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/cc-dispatcher-reprovision-honest-message.test.ts
-  expected_output: all assertions pass (threading + both routing polarities)
+  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/cc-dispatcher.test.ts test/cc-workflow-end-messages.test.ts test/cc-reprovision.test.ts test/cc-effective-installation.test.ts
+  expected_output: all assertions pass (cc honest-message wiring both polarities + warm-query resolve + effective-install promotion)
 ```
 
 ## Risks & Mitigations
