@@ -1080,10 +1080,14 @@ export function applyStreamEvent(
       // non-thinking/tool_use bubbles, so a re-armed dangling timer is harmless.
       // Only `kind: "tool_use"` counts; `reasoning`/`result` are weaker / can
       // fire post-turn and are excluded to keep the ceiling tight.
-      // INVARIANT: debug events are LIVE-ONLY (they arrive over a healthy
-      // socket). #5290's stream-replay buffer must NEVER feed buffered
-      // debug_events through this reducer post-disconnect, or this heartbeat
-      // would falsely reset on a dead socket.
+      // INVARIANT (enforced, not just asserted): debug events are LIVE-ONLY, so
+      // this heartbeat can never fire on a dead socket. #5290's stream-replay
+      // buffer EXCLUDES `debug_event` from its `BufferedWSMessage` family
+      // (server/stream-replay-buffer.ts) — and that exclusion is compiler-
+      // enforced via `BUFFERED_FRAME_TYPE_MAP` (a `Record<BufferedWSMessage
+      // ["type"], true>`), so a buffered/replayed gap frame can never be a
+      // debug_event. If a future change adds debug_event to the buffered family
+      // it becomes a tsc error there AND re-opens this hole — keep it excluded.
       const debugMsg: ChatDebugEventMessage = {
         id: `debug-${crypto.randomUUID()}`,
         role: "assistant",
@@ -1103,22 +1107,28 @@ export function applyStreamEvent(
         };
       }
       // Sole active leader → its bubble index is the lone activeStreams value.
+      // Mirror `tool_progress`: only clone+rewrite when there is something to
+      // clear (a re-arm heartbeat fires every ~1-5s on a working turn; rewriting
+      // an already-clean bubble would churn the message array for no effect).
       const soleIdx = activeStreams.values().next().value as number | undefined;
+      const sole =
+        soleIdx !== undefined && soleIdx < prev.length ? prev[soleIdx] : undefined;
+      const needsClear =
+        sole !== undefined &&
+        (sole.state === "thinking" || sole.state === "tool_use") &&
+        (sole.retrying === true || (sole.livenessRearms ?? 0) !== 0);
       let messages: ChatMessage[];
-      if (
-        soleIdx !== undefined &&
-        soleIdx < prev.length &&
-        (prev[soleIdx].state === "thinking" || prev[soleIdx].state === "tool_use")
-      ) {
+      if (needsClear) {
         const updated = [...prev];
-        const { retrying: _retrying, livenessRearms: _rearms, ...rest } = updated[soleIdx];
+        const { retrying: _retrying, livenessRearms: _rearms, ...rest } = updated[soleIdx!];
         void _retrying;
         void _rearms;
-        updated[soleIdx] = { ...rest, livenessRearms: 0 };
+        updated[soleIdx!] = { ...rest, livenessRearms: 0 };
         messages = [...updated, debugMsg];
       } else {
-        // Terminal/non-transitional bubble (or stale index) — append only, no
-        // mutation (do not resurrect). reset_all still re-arms harmlessly.
+        // Already-clean / terminal / non-transitional bubble (or stale index) —
+        // append only, no mutation (do not resurrect). reset_all still re-arms
+        // harmlessly.
         messages = [...prev, debugMsg];
       }
       return {

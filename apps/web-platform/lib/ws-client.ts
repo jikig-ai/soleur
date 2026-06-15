@@ -627,6 +627,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     else if (ta.type === "clear") clearLeaderTimeout(ta.leaderId);
     else if (ta.type === "clear_all") clearAllTimeouts();
     else if (ta.type === "reset_all") resetAllTimeouts();
+    else {
+      // Exhaustiveness rail: this if-ladder (not an exhaustive switch) is the
+      // ONLY runtime consumer of the timerAction union, so tsc cannot otherwise
+      // catch a future member added without a branch here — it would silently
+      // no-op. A 6th member fails the build at this assignment instead.
+      const _exhaustive: never = ta;
+      void _exhaustive;
+    }
     dispatch({ type: "ack_timer_action" });
   }, [chatState.pendingTimerAction, resetLeaderTimeout, clearLeaderTimeout, clearAllTimeouts, resetAllTimeouts]);
 

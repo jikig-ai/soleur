@@ -866,6 +866,35 @@ describe("#5240 leader-liveness watchdog reset", () => {
     expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
   });
 
+  test("AC2-streaming: a sibling in `streaming` state (not tool_use) also grants the bounded grace", () => {
+    // `siblingActive` accepts thinking|tool_use|streaming. AC2 covers tool_use;
+    // this exercises the `streaming` disjunct so dropping it would go red.
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true }),
+      toolUseMessage("cto", { state: "streaming" }),
+    ];
+    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.messages[0].livenessRearms).toBe(1);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
+  });
+
+  test("AC1-thinking: debug heartbeat clears retrying on a sole `thinking` bubble too", () => {
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { state: "thinking", retrying: true, livenessRearms: 1 }),
+    ];
+    const streams = makeStreams([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, debugToolUse());
+
+    expect(result.timerAction).toEqual({ type: "reset_all" });
+    expect(result.messages[0].retrying).toBeUndefined();
+    expect(result.messages[0].livenessRearms).toBe(0);
+  });
+
   test("AC3: genuine hang — sole active leader still escalates to error (bracketed against AC2)", () => {
     // Same retrying bubble as AC2, but with NO sibling active → must escalate.
     const prev: ChatMessage[] = [toolUseMessage("cpo", { retrying: true })];
