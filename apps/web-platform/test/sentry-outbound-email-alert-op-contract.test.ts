@@ -71,7 +71,10 @@ describe("outbound-email-send-failure alert feature contract", () => {
     // Every call carrying the feature tag must be a reportSilentFallback(...)
     // invocation. We assert no info/warn helper appears anywhere paired with the
     // feature in this file (the file's only emit helper is reportSilentFallback).
-    expect(producer).not.toContain("reportSilentInfo");
+    // Helper names verified against server/observability.ts exports
+    // (reportSilentFallback / warnSilentFallback / infoSilentFallback) — a typo'd
+    // name here would make the guard a silent no-op.
+    expect(producer).not.toContain("infoSilentFallback");
     expect(producer).not.toContain("warnSilentFallback");
     // And the feature tag must never be introduced without the error helper
     // being imported (defense against a future refactor swapping helpers).
