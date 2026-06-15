@@ -121,7 +121,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -p "Proceed? Type 'yes': " ACK
+read -r -p "Proceed? Type 'yes': " ACK
 [[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
 
 # --- audit append (WORM) BEFORE any mutation --------------------------------
