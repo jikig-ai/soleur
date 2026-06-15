@@ -882,6 +882,53 @@ export async function exportSqlTable(
     });
   }
 
+  // -- outbound_sends (cold-outbound WORM audit; migration 104, #5325) --
+  // Art. 15: the founder is entitled to a copy of every cold send the platform
+  // recorded on their behalf. Recipient + body are persisted as a keyed HMAC /
+  // SHA-256 hashes only (raw values never enter the table); the founder still
+  // has access to the metadata (recipient_hash, approved/per_send body hashes,
+  // resend_id, action_class, sent_at). Art. 15-only — platform-generated audit
+  // evidence, not founder-provided content (portability does not apply).
+  {
+    const { data, error } = await service
+      .from("outbound_sends")
+      .select("*")
+      .eq("owner_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`outbound_sends read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "outbound_sends", {
+      ownerField: "owner_id",
+    });
+    results.push({
+      table: "outbound_sends",
+      spec: DSAR_TABLE_ALLOWLIST.outbound_sends,
+      rows,
+    });
+  }
+
+  // -- email_suppression (per-founder permanent suppression set; migration 104, #5325) --
+  // Art. 15: the founder can obtain which recipients they have suppressed
+  // (recipient_hash — keyed HMAC, never plaintext — reason, added_at). Art.
+  // 15-only: a derived control list, not portable founder-provided content.
+  {
+    const { data, error } = await service
+      .from("email_suppression")
+      .select("*")
+      .eq("owner_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`email_suppression read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "email_suppression", {
+      ownerField: "owner_id",
+    });
+    results.push({
+      table: "email_suppression",
+      spec: DSAR_TABLE_ALLOWLIST.email_suppression,
+      rows,
+    });
+  }
+
   // -- template_authorizations (per-template authorization ledger; migration 053, PR-I #4078) --
   // Art. 15+20: the founder explicitly authorised each template via the
   // first-send-IS-authorization pattern (the Send click on a labeled
