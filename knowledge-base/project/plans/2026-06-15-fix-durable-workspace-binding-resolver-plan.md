@@ -9,6 +9,20 @@ requires_cpo_signoff: true
 brand_survival_threshold: single-user incident
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+
+### Key Improvements (deepen-pass corrections)
+1. **Slot-path tenant-client scope bug caught.** The original plan claimed `tenantResume` (`ws-handler.ts:1626`) was in scope at the slot consumer (`:1682`); verified it is block-scoped inside `if (validResumePath && currentRepoUrl)` (closes `:1670`) and is OUT of scope. Plan now mints a fresh `tenantSlot` at the slot site with the canonical null-guard.
+2. **Resolver shape resolved to B′.** `awaitChain` is file-private to `workspace-resolver.ts` (`:531`), so the DB read can't be cleanly inlined in `ws-handler.ts`. Plan now exports a fail-loud `readWorkspaceIdFromDb(userId, supabase): Promise<string | null>` co-located with its precedent `resolveCurrentWorkspaceId`, returning `?? null` (never `?? userId`), passed as the injected closure to the registry resolver — keeping the registry Supabase-free.
+3. **Precedent-diff added.** Verified the canonical `user_session_state.current_workspace_id` read shape is unique (only 2 live chains, both in `workspace-resolver.ts`); the new reader copies it verbatim. Registry imports confirmed minimal (`review-gate` + `abort-classifier` only).
+4. **All 4 deepen halt gates pass:** User-Brand Impact (single-user incident, CPO sign-off flagged), Observability (5 fields, no SSH), no PAT-shaped vars, no UI surface (no `.pen` required). tasks.md re-synced to the corrected design.
+
+### New Considerations Discovered
+- The slot consumer needs its own tenant mint → one additional `tenantFor` call + null-guard (a real edit the original plan omitted).
+- The fail-loud reader must live in `workspace-resolver.ts` (not the registry), or `awaitChain` would need re-exporting.
+
 # 🐛 Durable workspace-binding resolver — eliminate `getUserWorkspace` "No workspace binding" throw sites
 
 > **Sub-issue of OPEN epic #5240** (durable session/workspace resume). **Ref #5240 — do NOT `Closes`.** This closes the epic's **AC4** ("No consumer of `getUserWorkspace` throws 'No workspace binding' after a reconnect") and the `getUserWorkspace`-throw-site half of **design item #1**. It does NOT close #5240 (physical re-provision #2, restart-surviving boot rehydration, and in-flight-work preservation #4 remain).
@@ -45,7 +59,7 @@ Per the FR status-map on #5240, the merged session-resume PRs are: #5256 (verifi
 | `setUserWorkspace` at ws-handler ~2681 | `ws-handler.ts:2734` (drifted +53) | Unchanged. |
 | Throw sites `847,850` and `1629,1632` | `847,850` ✅; slot path drifted to `1682,1685` | Edit `847-852` and `1682-1687`. |
 | `current_workspace_id` is the DB source `resolveActiveWorkspacePath` reads | `resolveCurrentWorkspaceId(userId, supabase)` reads `user_session_state.current_workspace_id` via tenant client (`workspace-resolver.ts:190-218`) ✅ | Reuse this read shape but **fail loud** instead of `?? userId`. |
-| Consumers throw on empty Map | Both consumers already mint a **tenant client** in-scope: `createConversation` mints `tenant` at `ws-handler.ts:840`; slot path mints `tenantResume` at `~:1627` | Pass the already-minted tenant client to the new resolver — no extra mint. |
+| Consumers throw on empty Map | `createConversation` mints `tenant` at `ws-handler.ts:840` (in scope at the `:847` consumer ✅). **Slot path**: `tenantResume` (`:1626`) is scoped INSIDE the `if (validResumePath && currentRepoUrl)` block that closes at `:1670` — it is **NOT in scope** at the `:1682` slot consumer (verified, deepen-pass). | Conversation consumer reuses `tenant`. **Slot consumer must mint its own tenant client** (`await tenantFor(userId, "handleMessage.slot-workspace-resolve")`) before calling the resolver — do NOT assume `tenantResume`. |
 
 **Premise Validation:** Checked #5240 (`gh issue view 5240`) — OPEN, AC4 🔴 Outstanding per the 2026-06-15 status-map comment; the four merged session-resume PRs verified not to touch the throw sites. Cited file/symbol paths (`getUserWorkspace`, `userWorkspaces`, `resolveCurrentWorkspaceId`, `current_workspace_id`, both throw sites) all confirmed present on `origin/main`. The mechanism (DB rehydrate from `user_session_state.current_workspace_id`) is the **same** source the merged #5256 rebind path and `resolveActiveWorkspacePath` already read — not a rejected alternative; it is the canonical ADR-044 source-of-truth read. No stale premise.
 
@@ -77,22 +91,21 @@ Therefore the durable resolver MUST distinguish three cases and treat them diffe
 
 ## Files to Edit
 
-- **`apps/web-platform/server/agent-session-registry.ts`** — add the durable resolver `resolveUserWorkspaceBinding(userId, readDbWorkspaceId)` (async). It reads the Map first (`userWorkspaces.get(userId)`), and on a miss delegates the DB read to a small injected reader so the registry stays dependency-light (it currently imports only `review-gate` + `abort-classifier` — pulling in `workspace-resolver`/Supabase would bloat its test surface, which the module docblock at `:1-28` explicitly exists to keep minimal). Two viable shapes (decide at /work, default = **A**):
-  - **A (preferred):** resolver signature `resolveUserWorkspaceBinding(userId: string, readDbWorkspaceId: (userId: string) => Promise<string | null>): Promise<string>`. The DB-read closure is supplied by the caller in `ws-handler.ts` (which already has the tenant client + `current_workspace_id` read shape). Keeps the registry free of a Supabase import; the resolver owns only the Map-hit / rehydrate-writeback / fail-loud-throw decision tree. Sentry mirror on the fail-loud throw lives in the registry via the existing `observability` import pattern OR is passed in.
-  - **B:** put the resolver in `workspace-resolver.ts` instead (it already imports Supabase + `reportSilentFallback`), exporting `resolveUserWorkspaceBindingFailLoud(userId, supabase)`, and have the registry's Map-writeback happen at the call site. Rejected-by-default because the Map (`userWorkspaces`) lives in the registry and the rehydrate-writeback wants to be co-located with it.
-  - Add a `__test_only__` seam if needed so the RED test can drive Map-empty + injected-DB-reader without spinning up Supabase.
+- **`apps/web-platform/server/agent-session-registry.ts`** — add the durable resolver `resolveUserWorkspaceBinding(userId: string, readDbWorkspaceId: (userId: string) => Promise<string | null>): Promise<string>` (async). It reads the Map first (`userWorkspaces.get(userId)`), and on a miss calls the **injected** `readDbWorkspaceId` closure so the registry stays dependency-light — it currently imports ONLY `./review-gate` + `./abort-classifier` (verified, `:30-31`); pulling in `workspace-resolver`/Supabase would bloat the test surface the module docblock at `:1-28` exists to keep minimal. Decision tree: Map hit → return; Map miss + closure returns a workspaceId → `setUserWorkspace(userId, id)` (rehydrate-writeback) + return; Map miss + closure returns `null` OR throws → **throw + `reportSilentFallback`** (fail-loud; NOT `?? userId`). The Sentry mirror is the one dependency this resolver needs — import `reportSilentFallback` from `./observability` (this is a one-symbol, test-mockable import, far lighter than Supabase; the docblock constraint is about Supabase/SDK init cost, which `observability` does not carry). Add a `__test_only__` seam (the module already exposes `__test_only__.clear()` at `:299`) so the RED test drives Map-empty + an injected-reader spy without Supabase.
+- **`apps/web-platform/server/workspace-resolver.ts`** — export a **fail-loud sibling** `readWorkspaceIdFromDb(userId, supabase): Promise<string | null>` co-located with `resolveCurrentWorkspaceId` (`:190`). It reuses the file-private `awaitChain` (`:531`) + `ChainShape` and the identical `from("user_session_state").select("current_workspace_id").eq("user_id", userId).maybeSingle()` chain, but returns `result.data?.current_workspace_id ?? null` on success and `null` on read error (caller decides fail-loud — do NOT `?? userId`, do NOT swallow). This is **shape B′** (chosen over the registry-owned closure because `awaitChain` is file-private and the chain belongs next to its precedent). `ws-handler.ts` passes `(uid) => readWorkspaceIdFromDb(uid, <tenant>)` as the `readDbWorkspaceId` argument.
 - **`apps/web-platform/server/ws-handler.ts`** —
-  - **`:847-852`** (`createConversation`): replace `const wsId = getUserWorkspace(userId); if (!wsId) throw …` with `const wsId = await resolveUserWorkspaceBinding(userId, <db-reader-bound-to-tenant>)`. The `tenant` client minted at `:840` is in scope. The resolver throws fail-loud on case 3, preserving the existing abort semantics but now only when the DB *also* has no binding.
-  - **`:1682-1687`** (slot acquire, deferred-creation `start_session`): replace `const slotWorkspaceId = getUserWorkspace(userId); if (!slotWorkspaceId) throw …` with `const slotWorkspaceId = await resolveUserWorkspaceBinding(userId, <db-reader-bound-to-tenantResume>)`. `tenantResume` minted at `~:1627` is in scope. **Invariant preserved:** the slot's `p_workspace_id` MUST equal the conversation's `workspace_id` (mig 059/093 — both now resolve through the same resolver, so they cannot diverge).
-  - The db-reader closure reads `user_session_state.current_workspace_id` via the tenant client (mirror `resolveCurrentWorkspaceId`'s select shape at `workspace-resolver.ts:203-207`) and returns `data?.current_workspace_id ?? null` — **null, not userId** (the fail-loud decision lives in the resolver, not the reader).
+  - **`:847-852`** (`createConversation`): replace `const wsId = getUserWorkspace(userId); if (!wsId) throw …` with `const wsId = await resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenant))`. The `tenant` client minted at `:840` IS in scope here (verified). The resolver throws fail-loud only when the DB *also* has no binding, preserving the existing abort semantics for the genuinely-unbound case.
+  - **`:1682-1687`** (slot acquire, deferred-creation `start_session`): replace `const slotWorkspaceId = getUserWorkspace(userId); if (!slotWorkspaceId) throw …` with `const slotWorkspaceId = await resolveUserWorkspaceBinding(userId, <db-reader>)`. **`tenantResume` (`:1626`) is NOT in scope here** (it lives inside the `if (validResumePath && currentRepoUrl)` block closing at `:1670`; the slot consumer at `:1682` is outside it) — **mint a fresh tenant client**: `const tenantSlot = await tenantFor(userId, "handleMessage.slot-workspace-resolve"); if (!tenantSlot) { sendToClient(userId, {type:"error", message:"Auth probe failed — please retry."}); return; }` (mirror the `:1630-1636` null-guard), then bind the db-reader to `tenantSlot`. **Invariant preserved:** the slot's `p_workspace_id` MUST equal the conversation's `workspace_id` (mig 059/093 — both now resolve through the same resolver, so they cannot diverge).
+  - The db-reader reads `user_session_state.current_workspace_id` via the tenant client and returns `data?.current_workspace_id ?? null` — **null, not userId** (the fail-loud decision lives in the resolver, not the reader). **Precedent (verified, deepen-pass):** the canonical read is `resolveCurrentWorkspaceId` at `workspace-resolver.ts:190-217` — chain `supabase.from("user_session_state") as ChainShape` → `.select("current_workspace_id").eq("user_id", userId).maybeSingle()`, wrapped in `awaitChain<…>(…)`. **`awaitChain` is file-private** (`workspace-resolver.ts:531`, no `export`). Therefore prefer **shape B′**: export a new fail-loud reader `readWorkspaceIdFromDb(userId, supabase): Promise<string | null>` (returns `?? null`, NOT `?? userId`) co-located with its precedent in `workspace-resolver.ts` (reusing `awaitChain` + `ChainShape` directly), and pass it as the `readDbWorkspaceId` closure to the registry resolver. This keeps the registry Supabase-free (shape A's win) AND avoids re-inlining the chain in `ws-handler.ts`. RLS: `user_session_state_owner_select` self-scopes to `auth.uid() = user_id`, so the tenant client reads only its own row.
 
 ## Implementation Phases
 
 ### Phase 0 — Preconditions (verify before any edit)
 - [ ] `grep -n "No workspace binding" apps/web-platform/server/ws-handler.ts` → expect exactly 2 hits (`:850`, `:1685`). If drifted, re-locate.
-- [ ] Confirm `tenant` (`:840`) and `tenantResume` (`~:1627`) are in lexical scope at the two consumer sites.
-- [ ] Confirm `resolveCurrentWorkspaceId`'s select shape (`from("user_session_state").select("current_workspace_id").eq("user_id", userId).maybeSingle()`, `workspace-resolver.ts:203-207`) so the db-reader closure mirrors it byte-for-byte (RLS: `user_session_state_owner_select` self-scopes to `auth.uid()`).
-- [ ] `./node_modules/.bin/vitest --version` (confirm runner) from `apps/web-platform/`.
+- [ ] Conversation site: confirm `tenant` (`:840`) is in scope at `:847` ✅ (verified deepen-pass).
+- [ ] **Slot site: `tenantResume` (`:1626`) is NOT in scope at `:1682`** (it closes at `:1670`) — the slot edit MUST mint its own `tenantSlot` via `tenantFor(userId, "handleMessage.slot-workspace-resolve")` with the `:1630-1636`-style null-guard. (verified deepen-pass)
+- [ ] Confirm the canonical read shape in `resolveCurrentWorkspaceId` (`workspace-resolver.ts:190-217`) and that `awaitChain` is file-private (`:531`, no `export`) — drives shape B′ (new `readWorkspaceIdFromDb` co-located there).
+- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest --version` (confirm runner).
 
 ### Phase 1 — RED (failing test first; TDD)
 - [ ] Write `test/durable-workspace-binding-resolver.test.ts`:
@@ -104,8 +117,10 @@ Therefore the durable resolver MUST distinguish three cases and treat them diffe
   - Confirm RED: at least test 2 fails against the un-edited consumer/resolver.
 
 ### Phase 2 — GREEN (implement)
-- [ ] Add `resolveUserWorkspaceBinding` to `agent-session-registry.ts` (shape A).
-- [ ] Rewire `ws-handler.ts:847-852` and `:1682-1687` to call it with the in-scope tenant client's db-reader.
+- [ ] Add `readWorkspaceIdFromDb(userId, supabase)` to `workspace-resolver.ts` (shape B′; reuse `awaitChain`/`ChainShape`; return `?? null`, NOT `?? userId`).
+- [ ] Add `resolveUserWorkspaceBinding(userId, readDbWorkspaceId)` to `agent-session-registry.ts` (Map-hit / rehydrate-writeback via `setUserWorkspace` / fail-loud-throw + `reportSilentFallback` from `./observability`).
+- [ ] Rewire `ws-handler.ts:847-852` (`createConversation`) → `resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenant))`.
+- [ ] Rewire `ws-handler.ts:1682-1687` (slot) → mint `tenantSlot` first (with null-guard), then `resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenantSlot))`.
 - [ ] Run the new test → GREEN.
 
 ### Phase 3 — Regression + verification
@@ -124,7 +139,7 @@ Therefore the durable resolver MUST distinguish three cases and treat them diffe
 ### Pre-merge (PR)
 - [ ] **AC1** — `grep -c "No workspace binding for user" apps/web-platform/server/ws-handler.ts` returns **0** (both throw sites replaced by the durable resolver; the resolver may carry its own fail-loud message but NOT this literal).
 - [ ] **AC2** — New test `test/durable-workspace-binding-resolver.test.ts` exists and `./node_modules/.bin/vitest run test/durable-workspace-binding-resolver.test.ts` passes; it includes the **Map-empty → DB-rehydrate → no throw** case (post-restart sim) as the load-bearing assertion.
-- [ ] **AC3** — Fail-loud preserved: the resolver throws + fires `reportSilentFallback` exactly once on a genuinely-absent binding (DB null/absent or read error); a unit assertion confirms the return value is **not** `userId` on those branches (no solo-fallback re-introduced).
+- [ ] **AC3** — Fail-loud preserved: the resolver throws + fires `reportSilentFallback` exactly once on a genuinely-absent binding (DB null/absent or read error); a unit assertion confirms the return value is **not** `userId` on those branches (no solo-fallback re-introduced). `readWorkspaceIdFromDb` returns `?? null` (grep `workspace-resolver.ts` confirms no `?? userId` in the new reader).
 - [ ] **AC4** — Map-hit branch returns byte-identical to today and issues **zero** DB reads (spy asserts 0 calls) — hot path unchanged.
 - [ ] **AC5** — `resolveUserWorkspaceBinding` is the **single** resolver both consumers call (`grep -c "resolveUserWorkspaceBinding" apps/web-platform/server/ws-handler.ts` ≥ 2; both consumer sites route through it).
 - [ ] **AC6** — Slot/conversation workspace parity invariant holds: both `conversations.workspace_id` (insert) and the slot's `p_workspace_id` resolve through the same resolver (re-read the two edited blocks; confirm neither bypasses it).
@@ -174,16 +189,28 @@ logs:
   where: structured pino logs in ws-handler consumer catch + Sentry event extra {userId}
   retention: existing Better Stack / Sentry retention (no change)
 discoverability_test:
-  command: "rg 'op:.*resolveUserWorkspaceBinding' apps/web-platform/server/"
-  expected_output: "op slug(s) present in the resolver's reportSilentFallback call(s); reachable from Sentry without ssh"
+  command: "rg -n 'resolveUserWorkspaceBinding' apps/web-platform/server/agent-session-registry.ts && rg -n 'op:' apps/web-platform/server/agent-session-registry.ts"
+  expected_output: "resolver present + its reportSilentFallback op slug grep-discoverable; the fail-loud event surfaces in Sentry (web-platform) with no ssh"
 ```
 
 ## Hypotheses
 
 N/A — the failure mechanism is fully traced in code (empty process-local Map after restart/disconnect → consumer throw). No network-outage / SSH hypothesis class applies.
 
+## Risks & Mitigations (Precedent-Diff)
+
+| Risk | Precedent / verification | Mitigation |
+|---|---|---|
+| Re-introducing the `?? userId` solo-fallback | `resolveCurrentWorkspaceId` (`workspace-resolver.ts:217`) returns `?? userId` — the forbidden pattern (verified) | New `readWorkspaceIdFromDb` returns `?? null`; fail-loud decision is centralized in the registry resolver. |
+| DB-read chain drift from the canonical shape | Only TWO live `.from("user_session_state")` chains exist, both in `workspace-resolver.ts` (`:57`, `:203`); all other refs are comments (verified) — chain shape is 100% consistent | Co-locate `readWorkspaceIdFromDb` in the same file, reuse `awaitChain` + `ChainShape` verbatim. |
+| Slot path mints/uses the wrong client | `tenantResume` (`:1626`) is block-scoped and out of scope at `:1682` (verified) | Mint `tenantSlot` at the slot site with the `:1630-1636` null-guard. |
+| Registry module bloat | Module imports only `review-gate` + `abort-classifier` (`:30-31`, verified); docblock `:1-28` guards init cost | Inject the DB reader as a closure; add only the lightweight `reportSilentFallback` import (no Supabase/SDK). |
+| Slot↔conversation `workspace_id` divergence | mig 059 (`workspace_id` NOT NULL) + mig 093 (23502 on null `p_workspace_id`) | Both consumers resolve through the *same* `resolveUserWorkspaceBinding`. |
+
 ## Sharp Edges
 
+- **`tenantResume` is NOT in scope at the slot consumer** — it is block-scoped inside `if (validResumePath && currentRepoUrl)` (`ws-handler.ts:1623-1670`); the slot consumer sits at `:1682` outside that block. The slot edit MUST mint its own `tenantSlot`. (The original plan claim that `tenantResume` was in scope was wrong — caught at deepen-pass.)
+- **`awaitChain` is file-private** to `workspace-resolver.ts` (`:531`, no `export`). The DB reader must live in that file (shape B′) or re-inline `await (chain as PromiseLike<…>)`. Shape B′ chosen so the chain stays next to its precedent.
 - **Do NOT reuse `resolveCurrentWorkspaceId` directly** — its `?? userId` solo-fallback (`workspace-resolver.ts:217`) is exactly the silent solo-fallback #5256 removed; the durable resolver here is a fail-loud sibling. The db-reader closure returns `null` (not `userId`) so the fail-loud decision lives in one place.
 - **Keep the registry dependency-light** — `agent-session-registry.ts:1-28` docblock exists to keep the module free of Supabase/SDK imports for unit-testability. Inject the DB-read closure (shape A) rather than importing `workspace-resolver`/Supabase into the registry.
 - **Slot↔conversation `workspace_id` parity is load-bearing** (mig 059/093) — both must resolve through the *same* resolver or a null `p_workspace_id` re-triggers the 23502 the slot path closes. Confirm neither consumer bypasses the resolver after the edit.

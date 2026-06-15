@@ -11,8 +11,8 @@ Derived from `2026-06-15-fix-durable-workspace-binding-resolver-plan.md`. Ref #5
 
 ## Phase 0 — Preconditions
 - [ ] 0.1 `grep -n "No workspace binding" apps/web-platform/server/ws-handler.ts` → exactly 2 hits (`:850`, `:1685`); re-locate if drifted.
-- [ ] 0.2 Confirm `tenant` (`ws-handler.ts:840`) and `tenantResume` (`~:1627`) are in scope at the two consumer sites.
-- [ ] 0.3 Confirm `resolveCurrentWorkspaceId` select shape at `workspace-resolver.ts:203-207` (mirror it in the db-reader closure; RLS `user_session_state_owner_select` self-scopes).
+- [ ] 0.2 Conversation site: `tenant` (`:840`) in scope at `:847` ✅. **Slot site: `tenantResume` (`:1626`) is OUT of scope at `:1682`** (closes `:1670`) → slot edit mints its own `tenantSlot`. (verified deepen-pass)
+- [ ] 0.3 Confirm canonical read in `resolveCurrentWorkspaceId` (`workspace-resolver.ts:190-217`) + that `awaitChain` is file-private (`:531`) → shape B′ (new reader co-located in `workspace-resolver.ts`).
 - [ ] 0.4 `cd apps/web-platform && ./node_modules/.bin/vitest --version`.
 
 ## Phase 1 — RED (failing test first)
@@ -24,10 +24,10 @@ Derived from `2026-06-15-fix-durable-workspace-binding-resolver-plan.md`. Ref #5
 - [ ] 1.6 Run → confirm RED (≥ test 1.3 fails).
 
 ## Phase 2 — GREEN
-- [ ] 2.1 Add `resolveUserWorkspaceBinding(userId, readDbWorkspaceId)` to `agent-session-registry.ts` (shape A; Map-hit / rehydrate-writeback via `setUserWorkspace` / fail-loud-throw decision tree; `__test_only__` seam if needed).
-- [ ] 2.2 Rewire `ws-handler.ts:847-852` (`createConversation`) → call resolver with db-reader bound to `tenant`.
-- [ ] 2.3 Rewire `ws-handler.ts:1682-1687` (slot acquire) → call resolver with db-reader bound to `tenantResume`.
-- [ ] 2.4 db-reader closure returns `data?.current_workspace_id ?? null` (NULL, not userId — fail-loud decision lives in the resolver).
+- [ ] 2.1 Add `readWorkspaceIdFromDb(userId, supabase): Promise<string|null>` to `workspace-resolver.ts` (shape B′; reuse `awaitChain`+`ChainShape`; return `?? null`, NOT `?? userId`).
+- [ ] 2.2 Add `resolveUserWorkspaceBinding(userId, readDbWorkspaceId)` to `agent-session-registry.ts` (Map-hit / rehydrate-writeback via `setUserWorkspace` / fail-loud-throw + `reportSilentFallback` from `./observability`; `__test_only__.clear()` already exists at `:299`).
+- [ ] 2.3 Rewire `ws-handler.ts:847-852` (`createConversation`) → `resolveUserWorkspaceBinding(userId, (uid)=>readWorkspaceIdFromDb(uid, tenant))` (`tenant` in scope at `:840`).
+- [ ] 2.4 Rewire `ws-handler.ts:1682-1687` (slot) → mint `tenantSlot = await tenantFor(userId, "handleMessage.slot-workspace-resolve")` with `:1630-1636` null-guard, then `resolveUserWorkspaceBinding(userId, (uid)=>readWorkspaceIdFromDb(uid, tenantSlot))`.
 - [ ] 2.5 Run new test → GREEN.
 
 ## Phase 3 — Regression + verification
@@ -36,7 +36,7 @@ Derived from `2026-06-15-fix-durable-workspace-binding-resolver-plan.md`. Ref #5
 
 ## Phase 4 — AC verification (pre-ship)
 - [ ] 4.1 AC1: `grep -c "No workspace binding for user" apps/web-platform/server/ws-handler.ts` → 0.
-- [ ] 4.2 AC5: `grep -c "resolveUserWorkspaceBinding" apps/web-platform/server/ws-handler.ts` → ≥ 2; both consumers route through it.
+- [ ] 4.2 AC5: `grep -c "resolveUserWorkspaceBinding" apps/web-platform/server/ws-handler.ts` → ≥ 2; both consumers route through it. Also `grep "?? userId" apps/web-platform/server/workspace-resolver.ts` shows the new `readWorkspaceIdFromDb` does NOT use it (only the pre-existing `resolveCurrentWorkspaceId` does).
 - [ ] 4.3 AC2/AC3/AC4 satisfied by the new test file.
 - [ ] 4.4 AC9: PR body uses `Ref #5240` (NOT `Closes`).
 
