@@ -75,11 +75,13 @@ Follow `knowledge-base/marketing/brand-guide.md` → `### X/Twitter` and its
   publisher's `extract_tweets` parses).
 - **X limit: 280 characters per tweet**, enforced during generation, not trimmed
   after.
-- **Bluesky shape + limit:** a parallel post (single post, or up-to-3 posts
-  prefixed `2/`, `3/` — same numbered format `post_bluesky` parses), **300
-  characters per post**. Adapt the copy to Bluesky — do NOT clone the X hook
-  verbatim: Bluesky carries no hashtags and has the larger limit (brand-guide
-  `### Bluesky`). Lead the same one buyer benefit in Bluesky's plainer register.
+- **Bluesky shape + limit:** a **single post**, **300 characters total** for the
+  whole `## Bluesky` section. The publisher (`post_bluesky`) posts the entire
+  section as ONE Bluesky post — it does NOT split a numbered thread (no
+  `extract_tweets` equivalent), and truncates the section at 300 chars. So write
+  one self-contained post; do NOT use `2/`/`3/` prefixes here. Adapt the copy to
+  Bluesky — do NOT clone the X hook verbatim: Bluesky carries no hashtags
+  (brand-guide `### Bluesky`). Lead the same one buyer benefit in plainer register.
 - **Sanitization (mandatory — benefit only), applied to BOTH channels:**
   - No implementation/diff detail. State the user-facing benefit, not how it was
     built.
@@ -124,9 +126,7 @@ issue_reference: "#<issue>"   # only if the PR closes one; else omit
 
 ## Bluesky
 
-<adapted hook post (≤300 chars, no hashtags)>
-
-2/ <body post, if a thread>
+<single adapted post — ≤300 chars total, no hashtags, no 2//3/ prefixes>
 ```
 
 `publish_date: ""` + `status: draft` is the intentionally-parked state
