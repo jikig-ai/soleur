@@ -414,8 +414,12 @@ else
 fi
 
 # ------------- Test 20 (AC10): fail-open on malformed .mcp.json --------
-# Invalid JSON → jq exit-5 swallowed by `|| true`; roster falls back to the
-# plugin.json keys only. This is the load-bearing test for the `|| true` guard.
+# Invalid JSON → jq exit-5 (writes nothing to stdout); the roster falls back to
+# the plugin.json keys only and the hook still exits 0. This proves the
+# malformed-config FAIL-OPEN behavior. Note: the `|| true` guards are
+# defense-in-depth, not load-bearing here — `set -e` is off in the hook and the
+# jq calls sit in assignment-position command-subs (ERR-exempt), so the fallback
+# holds with or without them; the value of this test is the fail-open contract.
 TOTAL=$((TOTAL+1))
 T20=$(mktemp -d); setup_repo "$T20" docs malformed
 out20_rc=0
@@ -431,6 +435,34 @@ if (( out20_rc == 0 )) \
   PASS=$((PASS+1))
 else
   echo "FAIL: AC10 malformed .mcp.json (rc=$out20_rc; mcp=$mcp20)"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 21 (AC11): control-char / newline sanitization ------
+# A JSON key may legally contain a newline or other control char. Without the
+# per-key gsub("[[:cntrl:]]") strip in the hook, an embedded newline splits one
+# server into two roster entries and a raw control char lands verbatim in the
+# agent's context. Assert the roster collapses to a single CLEAN token and the
+# session-context block stays exactly 3 lines (no envelope line-shift).
+TOTAL=$((TOTAL+1))
+T21=$(mktemp -d); setup_repo "$T21" docs
+# JSON-escaped key contains an embedded newline (valid JSON \n escape, not a
+# literal newline byte). Without the hook's per-key gsub("[[:cntrl:]]") strip the
+# newline would split this into two roster entries; after gsub it collapses to a
+# single clean token "abinjected".
+jq -nc '{mcpServers:{"ab\ninjected":{}}}' > "$T21/.mcp.json"
+out21=$(invoke_hook "$T21")
+ctx21=$(printf '%s' "$out21" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+mcp21=$(printf '%s' "$ctx21" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
+sc_count21=$(printf '%s' "$ctx21" | grep -cF '[session-context]' || true)
+l7_21=$(printf '%s' "$ctx21" | sed -n '7p')
+if printf '%s' "$mcp21" | grep -qE 'MCP\(committed-config\): abinjected$' \
+   && [[ "$sc_count21" == "3" ]] \
+   && [[ "$l7_21" != '[session-context]'* ]]; then
+  echo "PASS: AC11 control-char sanitization (single clean token, 3 session-context lines)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC11 control-char sanitization (mcp='$mcp21' sc_count=$sc_count21 l7='${l7_21:0:40}')"
   FAIL=$((FAIL+1))
 fi
 

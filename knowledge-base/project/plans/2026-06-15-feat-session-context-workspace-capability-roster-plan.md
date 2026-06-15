@@ -20,8 +20,9 @@ brand_survival_threshold: none
 1. **Fixed a real bug pre-implementation:** `git ... | wc -l || echo 0` produces a double `0\n0` under `pipefail` when git fails (wc emits `0`, then `|| echo 0` fires on the propagated pipe exit). Phase 2 now wraps git INSIDE the pipe (`{ git ... || true; } | wc -l`).
 2. **Corrected the fail-OPEN rationale:** command-substitution assignment failures do NOT fire the ERR trap (empirically verified); the `|| …` guards exist for fallback VALUES, and the real trap risk is bare statement-position commands — documented in the Phase 2 comment.
 3. **Relabeled `MCP(static):` → `MCP(committed-config):`** — `.claude/settings.json` mcpServers are also "static"; the new label names the source honestly.
-4. **Promoted malformed-JSON (the load-bearing `|| true` guard) to AC10 + a RED test** per `cq-write-failing-tests-before`.
+4. **Promoted malformed-JSON fail-open to AC10 + a RED test** per `cq-write-failing-tests-before`. (Post-review correction: the `|| true` guards are defense-in-depth, NOT load-bearing — `set -e` is off and the jq calls are assignment-position command-subs (ERR-exempt); AC10's real value is the malformed-config fail-open contract.)
 5. **AC7 now pins line POSITION (4-6), not just byte width**, guarding the "outside Test 11's `head -3` window" invariant against a newline-in-`REPO_ROOT` shift.
+6. **Post-review (PR #5332): control-char sanitization.** Per-key `gsub("[[:cntrl:]]";"")` on MCP server-name keys + a `tr -d '\000-\037'` clamp on the displayed worktree path, so a newline/control char in a committed-config key or worktree path cannot split a roster entry or shift the lines-4-6 envelope invariant. Covered by AC11; mirrors the file's existing symlink-rejection posture.
 
 ### New Considerations Discovered
 - The MCP roster spans TWO committed files, not one (issue's `.mcp.json`-only premise undercounts); confirmed `.mcp.json`={playwright}, `plugin.json`={context7,cloudflare,vercel,stripe}.
@@ -112,10 +113,17 @@ _threshold: none, reason: internal tooling hook that injects local repo metadata
 - [x] **AC8 — `shellcheck` clean.** `shellcheck .claude/hooks/session-rules-loader.sh` produces no
   new warnings vs. the pre-change baseline (capture baseline at Phase 0).
 - [x] **AC10 — Fail-open on malformed JSON.** Seed the fixture `.mcp.json` with literal
-  `{invalid json` (not valid JSON → jq exit-5). Assert the hook exits 0, the roster falls back to
-  the `plugin.json` keys only (the `|| true` on the first jq line swallows the parse error), and
-  rule bodies are present. This is the load-bearing test for the `|| true` guards — promoted from
-  Test Scenario 6 per `cq-write-failing-tests-before` (the guard must have a RED test).
+  `{invalid json` (not valid JSON → jq exit-5, no stdout). Assert the hook exits 0, the roster falls
+  back to the `plugin.json` keys only, and rule bodies are present. Proves the malformed-config
+  fail-open contract — promoted from Test Scenario 6 per `cq-write-failing-tests-before`. (Post-review
+  correction: the `|| true` guards are defense-in-depth, not load-bearing — `set -e` is off and the
+  jq calls are ERR-exempt assignment-position command-subs, so the fallback holds with or without them.)
+- [x] **AC11 — Control-char sanitization (post-review, PR #5332).** Seed `.mcp.json` with a
+  server-name key containing a JSON-escaped newline (`"ab\ninjected"`). Assert the per-key
+  `gsub("[[:cntrl:]]";"")` strip collapses it to a single clean token (`abinjected`), the
+  session-context block stays exactly 3 lines (no envelope line-shift), and line 7 is NOT a
+  session-context line. Guards the committed-config-content-into-agent-context surface; mirrors the
+  hook's symlink-rejection posture.
 
 ### Post-merge (operator)
 

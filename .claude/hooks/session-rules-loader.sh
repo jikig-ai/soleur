@@ -211,13 +211,26 @@ WS_DIRTY=$( { git -C "$REPO_ROOT" status --porcelain --ignore-submodules=all 2>/
 # declared in .claude/settings.json or registered dynamically (pencil via
 # pencil-setup, supabase via plugin) are also "static" but out of this read's
 # scope. The label names the SOURCE honestly rather than over-claiming the live set.
+# `gsub("[[:cntrl:]]";"")` strips control chars (incl. embedded newlines) from each
+# server-name key BEFORE the line-oriented sort/paste — a JSON key may legally
+# contain a newline, which would otherwise split one server into two roster
+# entries. Sanitizing per-key (not on the whole stream) preserves the inter-key
+# newlines sort/paste rely on. Mirrors the file's symlink-rejection posture:
+# committed config is a content surface that flows into agent context, so clamp it.
 MCP_SERVERS=$(
   {
-    jq -r '.mcpServers // {} | keys[]' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
-    jq -r '.mcpServers // {} | keys[]' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
   } | sort -u | paste -sd, - || true
 )
 [[ -z "$MCP_SERVERS" ]] && MCP_SERVERS="(none)"
+
+# Sanitize the worktree path for DISPLAY only (REPO_ROOT itself is used for the
+# manifest path + HINT and must stay verbatim). A literal newline in the absolute
+# path would otherwise inject a physical line into the block below, shifting the
+# rule bodies and breaking the lines-4-6 invariant. Near-impossible (the path is a
+# validated git worktree, lines 81-84), but the strip is one cheap defense-in-depth.
+WS_WORKTREE=$(printf '%s' "$REPO_ROOT" | tr -d '\000-\037')
 
 # Line-1 field order (branch | dirty) is LOAD-BEARING for the AC1 grep
 # `^\[session-context\] branch: … | dirty: N files`. Worktree path and roster
@@ -225,7 +238,7 @@ MCP_SERVERS=$(
 # would overflow the 200-byte stamp contract (these lines sit outside the
 # operator-glanceable header anyway — see OUT_BODY placement below).
 SESSION_CONTEXT="[session-context] branch: ${WS_BRANCH} | dirty: ${WS_DIRTY} files
-[session-context] worktree: ${REPO_ROOT}
+[session-context] worktree: ${WS_WORKTREE}
 [session-context] MCP(committed-config): ${MCP_SERVERS}"
 
 # Slim manifest (3 fields). Key by sanitized session_id; fallback to timestamp.
