@@ -16,15 +16,15 @@ Phases ordered by dependency (contract before consumer). Tests-first (`cq-write-
 - [ ] 0.3 Add `var.cf_jikigai_zone_id` (`variables.tf`) + 4 `cloudflare_record` resources (DKIM, SPF, MX-bounce, DMARC `p=quarantine`+`rua`) on `var.cf_jikigai_zone_id`.
 - [ ] 0.4 Verify Resend domain-count tier impact; disclose paid-tier bump (ledger).
 
-## Phase 1 — Data model (migration 104)
-- [ ] 1.1 (RED) RLS owner-SELECT + REVOKE INSERT/UPDATE + RPC append-only tests (`outbound-chokepoint.test.ts`).
-- [ ] 1.2 `104_outbound_email.sql` (+ `.down.sql`): flat append-only `outbound_sends` log + `email_suppression`. RLS SELECT-owner, REVOKE writes, SECURITY DEFINER RPCs `SET search_path = public, pg_temp`. NO multi-state machine.
+## Phase 1 — Data model (migration 104) [reworked per deepen-plan]
+- [ ] 1.1 (RED) RLS owner-SELECT + REVOKE writes + `auth.uid()` owner-pin + `email_suppression` upsert idempotency on `(owner_id, recipient_hash)` + `recipient_hash` stability + no-un-suppress tests.
+- [ ] 1.2 `104_outbound_email.sql` (+ `.down.sql`): **reuse `action_sends` (051)** for send-audit + body-hash approval (extend `action_class`); net-new = `email_suppression` only (`UNIQUE(owner_id,recipient_hash)`, upsert `ON CONFLICT DO NOTHING`, owner FK `ON DELETE RESTRICT`, `recipient_hash`=HMAC(`EMAIL_HASH_PEPPER`, normalize(email))). RLS SELECT-owner, REVOKE writes, RPCs `auth.uid()`-pinned + `SET search_path = public, pg_temp`. NO new `outbound_sends` table, NO un-suppress RPC.
 
 ## Phase 2 — Compliance chokepoint
-- [ ] 2.1 (RED) `outbound-compliance.test.ts`: C1–C4 absent → throw; suppressed → throw; unknown jurisdiction → EU/UK-strict; C3 = 6 discrete Art.14 element predicates.
-- [ ] 2.2 `outbound-compliance.ts`: pure C1–C5 validators; C3 = 6 element predicates.
-- [ ] 2.3 `outbound.ts`: `sendCompliantOutbound()` — only outbound→`getResend()` path, only holder of `mail.jikigai.com` FROM literal; validate→throw→send→append→Sentry-mirror.
-- [ ] 2.4 (RED) 2-invariant sentinel test: (a) FROM literal in one file; (b) `resend.emails.send` callers == allowlist `{notifications.ts, server/inngest/functions/cron-email-ingress-probe.ts, outbound.ts}`.
+- [ ] 2.1 (RED) `outbound-compliance.test.ts`: C1–C4 absent → throw; suppressed → throw; unknown jurisdiction → EU/UK-strict; C3 = 6 discrete Art.14 predicates; CR/LF/U+2028/U+2029 in `to`/`reply-to`/`subject` → throw; internal/own-domain/role recipient → reject.
+- [ ] 2.2 `outbound-compliance.ts`: pure C1–C5 validators (6 Art.14 predicates) + RFC-5322 header-field validator + recipient allow-list.
+- [ ] 2.3 `outbound.ts`: `sendCompliantOutbound()` — only outbound→`getResend()` path + only `mail.jikigai.com` FROM holder. Order: validate C1–C5 + header + recipient + domain-verified precondition + content-hash approval match (`action_sends`, written by review-gate) + in-txn suppression recheck → throw → Resend → record `action_sends` → Sentry-mirror. `email_reply` recipient from inbound `message_id`.
+- [ ] 2.4 (RED) 3-invariant sentinel test scoped to `apps/web-platform/server/**` excl. `**/*.test.ts`: (a) FROM literal in one file; (b) `resend.emails.send` caller allowlist `{notifications.ts, server/inngest/functions/cron-email-ingress-probe.ts, outbound.ts}`; (c) no non-`outbound.ts` reference to `mail.jikigai.com` (typed `FromDomain` discriminant).
 
 ## Phase 3 — Agent tools + tiers
 - [ ] 3.1 (RED) tools route through chokepoint; refuse without persisted `approved_at`.
