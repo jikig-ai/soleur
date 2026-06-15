@@ -12,7 +12,9 @@
 #   - a non-empty `title:` frontmatter value
 #   - `status: draft` (never write straight-through to scheduled)
 #   - a `channels:` value that includes the `x` token
+#   - a `channels:` value that includes the `bluesky` token (#5022)
 #   - a `## X/Twitter Thread` heading with a non-empty body
+#   - a `## Bluesky` heading with a non-empty body (#5022)
 #
 # Exit 0 when all hold. Exit 1 + "invalid: <reason>" on stderr on any miss.
 set -euo pipefail
@@ -71,6 +73,16 @@ if [[ "$channels_has_x" -ne 1 ]]; then
   echo "invalid: 'channels' must include the 'x' token (got '${channels:-<missing>}')" >&2
   exit 1
 fi
+# #5022 — feature-tweet cross-posts to Bluesky too. Reuse `_channels_clean`
+# (already punctuation-stripped above) to require the `bluesky` token.
+channels_has_bluesky=0
+for _tok in ${_channels_clean//,/ }; do
+  [[ "$_tok" == "bluesky" ]] && channels_has_bluesky=1
+done
+if [[ "$channels_has_bluesky" -ne 1 ]]; then
+  echo "invalid: 'channels' must include the 'bluesky' token (got '${channels:-<missing>}')" >&2
+  exit 1
+fi
 
 # `## X/Twitter Thread` heading present?
 if ! grep -qE '^## X/Twitter Thread[[:space:]]*$' "$file"; then
@@ -87,6 +99,24 @@ thread_body=$(awk '
 
 if [[ -z "$thread_body" ]]; then
   echo "invalid: '## X/Twitter Thread' section is empty" >&2
+  exit 1
+fi
+
+# `## Bluesky` heading present? (#5022 — parallel to the X thread gate)
+if ! grep -qE '^## Bluesky[[:space:]]*$' "$file"; then
+  echo "invalid: missing '## Bluesky' heading" >&2
+  exit 1
+fi
+
+# Bluesky body after the heading must be non-empty (up to the next `## ` or EOF).
+bluesky_body=$(awk '
+  /^## Bluesky[[:space:]]*$/ { grab=1; next }
+  grab && /^## / { exit }
+  grab { print }
+' "$file" | grep -vE '^[[:space:]]*$' || true)
+
+if [[ -z "$bluesky_body" ]]; then
+  echo "invalid: '## Bluesky' section is empty" >&2
   exit 1
 fi
 
