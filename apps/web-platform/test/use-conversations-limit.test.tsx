@@ -127,6 +127,23 @@ describe("useConversations({ limit })", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     limitSpy.mockClear();
+    // Repo scope now comes from GET /api/workspace/active-repo (ADR-044),
+    // not users.repo_url. Stub it to the same repo the conversation rows
+    // carry so the list query is reached.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaceId: "ws-1",
+            repoUrl: "https://github.com/acme/repo",
+            repoName: "acme/repo",
+            repoStatus: "connected",
+            fellBackToSolo: false,
+          }),
+      }),
+    );
   });
 
   it("threads limit through to the underlying Supabase query", async () => {
