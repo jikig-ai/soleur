@@ -7,7 +7,7 @@
  *   - the settings toggle is read-only (disabled) for a non-owner dev
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
 import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
@@ -131,6 +131,34 @@ describe("DebugStreamPanel — Copy control", () => {
     expect(copy.disabled).toBe(true);
     fireEvent.click(copy);
     expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("DebugStreamPanel — Show/Hide toggle affordance (regression #5241)", () => {
+  it("renders the Show/Hide label INSIDE the toggle button and clicking it toggles (AC1)", () => {
+    const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    const toggle = screen.getByRole("button", { name: /debug stream/i });
+    // (a) collapsed → the toggle button's own text carries the "Show" affordance.
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent).toMatch(/Show/);
+    // (b) clicking the word "Show" (inside the toggle) flips expanded false→true.
+    fireEvent.click(within(toggle).getByText(/Show/));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    // …and the label swaps to "Hide" (still inside the toggle).
+    expect(within(toggle).getByText(/Hide/)).toBeTruthy();
+    // (c) clicking "Hide" collapses again.
+    fireEvent.click(within(toggle).getByText(/Hide/));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("Copy is NOT a descendant of the toggle and never carries the Show/Hide label (AC1c)", () => {
+    const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    const toggle = screen.getByRole("button", { name: /debug stream/i });
+    const copy = screen.getByTestId("debug-stream-copy");
+    expect(toggle.querySelector('[data-testid="debug-stream-copy"]')).toBeNull();
+    expect(copy.textContent).not.toMatch(/Show|Hide/);
   });
 });
 

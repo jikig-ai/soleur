@@ -234,19 +234,19 @@ touched by #5241 / #5282 / #5208, all merged).
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (issue 3):** `debug-stream-panel.test.tsx` asserts: (a) the toggle button's `textContent`
+- [x] **AC1 (issue 3):** `debug-stream-panel.test.tsx` asserts: (a) the toggle button's `textContent`
   contains "Show" when collapsed; (b) clicking the "Show" text (via `within(toggle).getByText(/Show/)`)
   flips `aria-expanded` false→true; (c) the existing invariant still holds — Copy is NOT a descendant
   of the toggle and clicking Copy does not change `aria-expanded`.
-- [ ] **AC2 (issue 1, production contract):** In `message-bubble.tsx`, the assistant-side avatar
+- [x] **AC2 (issue 1, production contract):** In `message-bubble.tsx`, the assistant-side avatar
   renders inside the in-card header `div` (not as a row-level sibling left of the card), so the card's
   left edge is not offset. The user-side (`isUser`) layout is unchanged. (Visual outcome verified by
   AC6.)
-- [ ] **AC3 (issue 2, production contract):** The assistant card (`data-testid="message-bubble-card"`)
+- [x] **AC3 (issue 2, production contract):** The assistant card (`data-testid="message-bubble-card"`)
   className includes `w-fit` and a `min-w-[…]` floor sized for the absolute `right-3` badges. (Visual
   no-overhang outcome verified by AC6.)
-- [ ] **AC4 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] **AC5 (tests):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/components/debug-stream-panel.test.tsx` passes, including the existing Copy tests (Copy→Copied affordance, serializer redaction — no regression).
+- [x] **AC4 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] **AC5 (tests):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/components/debug-stream-panel.test.tsx` passes, including the existing Copy tests (Copy→Copied affordance, serializer redaction — no regression).
 
 ### Post-merge (operator)
 

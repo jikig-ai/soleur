@@ -193,6 +193,14 @@ export function DebugStreamPanel({
               disconnected
             </span>
           )}
+          {/* The "Show"/"Hide" word is the affordance the user reads as the
+              control, so it MUST live inside the toggle button — clicking it
+              has to toggle the panel. #5241 moved it into an inert sibling
+              span next to Copy, which broke clickability. `ml-auto` pins it to
+              the button's right end so its visual position is preserved. */}
+          <span className="ml-auto text-[10px] font-medium text-soleur-text-secondary">
+            {expanded ? "Hide" : "Show"}
+          </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
           <button
@@ -209,9 +217,7 @@ export function DebugStreamPanel({
           >
             {copied ? "Copied" : "Copy"}
           </button>
-          <span className="text-[10px] text-soleur-text-muted">
-            {expanded ? "Hide" : "Show"} · not saved
-          </span>
+          <span className="text-[10px] text-soleur-text-muted">not saved</span>
         </div>
       </div>
 
