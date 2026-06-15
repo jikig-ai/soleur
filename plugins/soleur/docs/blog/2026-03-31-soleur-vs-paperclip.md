@@ -44,7 +44,7 @@ Soleur is the [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platf
 
 These agents do not operate in silos. They share a git-tracked knowledge base -- a directory of structured Markdown files -- that accumulates institutional memory with every session. The brand guide the brand-architect writes informs what the content writer generates. The competitive intelligence scan the CPO runs updates the sales battlecards the deal-architect uses. The legal compliance audit references the privacy policy the CLO previously documented. Knowledge flows across domains because every agent reads from and writes to the same base.
 
-The orchestration model is the [compound workflow lifecycle]({{ site.url }}blog/why-most-agentic-tools-plateau/): brainstorm → plan → implement → review → compound. The compound step is what separates Soleur's approach architecturally: learnings from each session are routed back to the specific agents and workflows that were active, and critical failure patterns are promoted to mechanical enforcement hooks -- code-level guardrails that make known failure modes structurally impossible.
+The orchestration model is the [compound workflow lifecycle]({{ site.url }}/blog/why-most-agentic-tools-plateau/): brainstorm → plan → implement → review → compound. The compound step is what separates Soleur's approach architecturally: learnings from each session are routed back to the specific agents and workflows that were active, and critical failure patterns are promoted to mechanical enforcement hooks -- code-level guardrails that make known failure modes structurally impossible.
 
 Soleur runs inside Claude Code. It is source-available (BSL 1.1) and local-first: your knowledge base lives in your repository, your agents run in your environment, your credentials stay under your control.
 
@@ -64,7 +64,7 @@ The deepest distinction between the two platforms is not which features appear i
 
 Paperclip tracks tasks, budgets, and audit logs. This produces valuable operational data. It does not feed back into agent behavior. An agent that exceeded its budget and was automatically paused does not learn from the experience. The governance layer enforces rules it was given; it does not discover new rules through operation.
 
-Soleur's compound step changes this. [From the project's engineering log]({{ site.url }}blog/why-most-agentic-tools-plateau/):
+Soleur's compound step changes this. [From the project's engineering log]({{ site.url }}/blog/why-most-agentic-tools-plateau/):
 
 > An AI agent edited files outside its designated workspace. Two hours of work disappeared. The failure triggered a four-stage response: documentation, governance rule, enforcement hook, routing. The system can never make that mistake again.
 

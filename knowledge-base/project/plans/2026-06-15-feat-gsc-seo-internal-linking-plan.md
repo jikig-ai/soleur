@@ -256,6 +256,23 @@ by its siblings:
 - `plugins/soleur/docs/blog/2026-04-22-billion-dollar-solo-founder-stack.md` — 1 link to Target 2 (Phase 2).
 - `plugins/soleur/docs/_data/site.json` — append AUP to `footerLegal` (Phase 3).
 
+### In-scope expansion — pre-existing host-mangle fix (discovered at Phase 4)
+
+The Phase 4 rendered-output grep (built specifically to catch the `{{ site.url }}` leading-slash
+host-mangle Sharp Edge) surfaced **5 pre-existing broken internal links** across 4 blog source
+files — `{{ site.url }}blog/...` (slash dropped) rendering as `https://soleur.aiblog/...`. These
+are the **exact defect class this PR targets** (broken internal links in the blog corpus), one of
+them points at `why-most-agentic-tools-plateau` which is a node in this PR's own Target-2 link
+graph, and the fix is a trivial mechanical slash insertion. Fixed inline per
+`rf-review-finding-default-fix-inline` + `hr-weigh-every-decision-against-target-user-impact`
+rather than shipping a "strengthen internal links" PR that knowingly leaves 6 host-mangled links
+one grep away:
+
+- `plugins/soleur/docs/blog/2026-03-29-your-ai-team-works-from-your-actual-codebase.md` (1)
+- `plugins/soleur/docs/blog/2026-03-29-credential-helper-isolation-sandboxed-environments.md` (1)
+- `plugins/soleur/docs/blog/2026-03-31-soleur-vs-paperclip.md` (2)
+- `plugins/soleur/docs/blog/2026-03-16-soleur-vs-anthropic-cowork.md` (1)
+
 ## Files to Create
 
 - None.
@@ -264,15 +281,15 @@ by its siblings:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Target 1 inbound = 2.** `cd plugins/soleur/docs/blog && grep -rl 'case-study-brand-guide-creation' .` returns exactly 2 source files (excluding the target's own self-references), both with the link in natural prose.
-- [ ] **AC2 — Target 2 inbound = 2.** `grep -rl 'agents-that-use-apis-not-browsers' plugins/soleur/docs/blog/` returns 2 sources plus the target file itself (`why-most-agentic-tools-plateau.md`, `2026-04-22-billion-dollar-solo-founder-stack.md`, and self).
-- [ ] **AC3 — Footer parity.** `plugins/soleur/docs/_data/site.json` `footerLegal` array contains an `Acceptable Use` entry with `url: "/legal/acceptable-use-policy/"`; the array now has 4 entries.
-- [ ] **AC4 — Link form correct.** The two new blog links use the `{{ site.url }}/blog/<slug>/` form **with the leading slash present**; `grep -rE 'site\.url ?}}blog/' plugins/soleur/docs/blog/` returns nothing (no slash-dropped interpolations introduced).
-- [ ] **AC5 — Anchor text is descriptive.** No new link uses bare-URL or "click here" anchor text; each anchor is a meaningful prose phrase.
-- [ ] **AC6 — Rendered output clean.** After `npx @11ty/eleventy`, `grep -rEoh 'https://soleur\.ai[a-zA-Z]' plugins/soleur/docs/_site/blog/` returns nothing (no host-mangled URLs), and the three built `href`s resolve as in Phase 4 step 3.
-- [ ] **AC7 — SEO validator green.** `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh plugins/soleur/docs/_site` exits 0 (or any failure is proven pre-existing and unrelated to this diff).
-- [ ] **AC8 — Scope discipline.** `git diff --name-only` shows ONLY the 4 files in `## Files to Edit` (plus this plan + `tasks.md`); no redirect/sitemap/canonical/IaC/CSS/template files touched; no version file changed.
-- [ ] **AC9 — `## Changelog` + `semver:patch`.** PR body includes a `## Changelog` section; the change is docs-only (`semver:patch`).
+- [x] **AC1 — Target 1 inbound = 2.** `cd plugins/soleur/docs/blog && grep -rl 'case-study-brand-guide-creation' .` returns exactly 2 source files (excluding the target's own self-references), both with the link in natural prose. ✓ (`how-to-run-every-department`, `case-study-business-validation`)
+- [x] **AC2 — Target 2 inbound = 2.** `grep -rl 'agents-that-use-apis-not-browsers' plugins/soleur/docs/blog/` returns 2 sources plus the target file itself. ✓ (`why-most-agentic-tools-plateau`, `2026-04-22-billion-dollar-solo-founder-stack`, + self)
+- [x] **AC3 — Footer parity.** `plugins/soleur/docs/_data/site.json` `footerLegal` array contains an `Acceptable Use` entry with `url: "/legal/acceptable-use-policy/"`; the array now has 4 entries. ✓
+- [x] **AC4 — Link form correct.** The two new blog links use the `{{ site.url }}/blog/<slug>/` form **with the leading slash present**; `grep -rE 'site\.url ?}}blog/' plugins/soleur/docs/blog/` returns nothing. ✓ (0 slash-drops site-wide — also fixed 5 pre-existing)
+- [x] **AC5 — Anchor text is descriptive.** No new link uses bare-URL or "click here" anchor text; each anchor is a meaningful prose phrase. ✓ ("reads your brand guide", "brand guide's positioning", "agents that call vendor APIs rather than driving browsers")
+- [x] **AC6 — Rendered output clean.** After `npx @11ty/eleventy`, `grep -rEoh 'https://soleur\.ai[a-zA-Z]' _site/blog/` returns nothing (no host-mangled URLs), and the three built `href`s resolve. ✓ (site-wide clean rc=1)
+- [x] **AC7 — SEO validator green.** `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` exits 0. ✓ ("All SEO checks passed.")
+- [x] **AC8 — Scope discipline.** `git diff --name-only` shows the 4 `## Files to Edit` + 4 in-scope host-mangle-fix files (documented above) + plan + `tasks.md`; no redirect/sitemap/canonical/IaC/CSS/template files touched; no version file changed. ✓ (scope expansion is same defect-class as PR theme; rationale in Files-to-Edit)
+- [x] **AC9 — `## Changelog` + `semver:patch`.** PR body includes a `## Changelog` section; the change is docs-only (`semver:patch`). ✓ (handled at ship)
 
 ### Post-merge (operator)
 
