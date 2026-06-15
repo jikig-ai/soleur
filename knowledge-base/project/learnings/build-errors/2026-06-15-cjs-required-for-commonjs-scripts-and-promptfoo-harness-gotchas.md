@@ -41,21 +41,38 @@ In a `type:module` repo, **default to `.cjs` for any script using `module.export
 the script actually runs. promptfoo loads custom-assert files via `require`, so its
 asserts must be `.cjs` here.
 
-## promptfoo harness gotchas (verified live, PR #5358)
+## promptfoo harness gotchas (verified live, PR #5358 + corrected by the live run in PR B.1)
 
-- **`repeat:` IS a valid top-level config key** — `promptfoo validate config` accepts
-  it. If docs claim "N repeats" and quote a per-run cost that assumes N, the config
-  MUST set `repeat: N` or the run does 1 iteration and the cost/median methodology is
-  a lie. (Caught at review as a P1 cost-drift: configs lacked `repeat` while SKILL.md
-  claimed ×3.)
+- **CORRECTION (PR B.1): a config-level `repeat:` key is a NO-OP.** `promptfoo validate
+  config` *accepts* `repeat: N` (so it passes validation), but `promptfoo eval` IGNORES
+  it — each cell runs once. The first live run produced 18 results, not 54, despite
+  `repeat: 3` in the config. The ONLY working mechanism is the `--repeat N` CLI flag.
+  Lesson: `validate config` accepting a key does NOT mean the key is honored at eval
+  time — only a live run proves it. Document `npx promptfoo eval --repeat N`; do not put
+  `repeat:` in the YAML.
+- **CORRECTION (PR B.1): promptfoo passes a `defaultTest.vars` `file://...` value to a
+  custom JS assert as the LITERAL UNRESOLVED STRING** (`"file://enums/go-routes.json"`),
+  NOT the file contents and NOT a parsed array. The first live run failed 100% (0/36)
+  because the gate did `Array.isArray(vars.enum) ? vars.enum : []` → `[]` → every label
+  out-of-enum. Fix: the assert must read the SSOT file itself (strip `file://`, resolve
+  relative to the script, `JSON.parse`, fail closed to `[]`). The deterministic stub
+  tests missed this because they passed a real array — the exact fixture-realism gap.
+  **Always exercise the var shape promptfoo actually passes, not a convenient stand-in.**
+- **Golden tasks must DISCRIMINATE skill from baseline, not merely be answerable.** The
+  POC's first task set was too easy: the label-only baseline scored 89–100%, so the
+  skill-vs-baseline delta was ~0 and the harness proved nothing. Hardening to adversarial
+  cases (live outage→incident not fix; backlog sweep→drain; DSAR→legal-threshold;
+  `URGENT!!` cosmetic→P3; no-new-user-activation→P1) produced a real delta: go-routing
+  +19pts (skill 100% vs baseline 81%), ticket-triage +6pts. **A near-zero delta means the
+  tasks don't separate the arms — fix the tasks before concluding the prose is dead weight.**
 - **Providers can load from a generated file** — `providers: file://models.generated.json`
   (a JSON array of `"anthropic:messages:<id>"` strings) validates. This keeps model-ID
   literals out of config-class files (and off the model-launch-review auto-fixer);
   generate the file from the TS registry with a bash `grep`-based generator.
 - **Provider id prefix is `anthropic:messages:<id>`** — the bare `anthropic:<id>` form
   is wrong.
-- **No native median** — `repeat: N` yields N runs + per-cell aggregate pass rate;
-  compute the median/rate in the measurement assert + post-processing.
+- **No native median** — `--repeat N` (the CLI flag) yields N runs + per-cell aggregate
+  pass rate; compute the median/rate in the measurement assert + post-processing.
 - **`validate config` is the no-spend check** — bare `validate` / `validate target`
   spend API credits; `validate config` is config-only and free. Use it as the CI/QA
   gate; the live `eval` run is operator-gated (Anthropic spend).

@@ -1,3 +1,7 @@
-{"vars": {"input": "The dashboard throws a 500 error when I click Export. It worked yesterday — can you fix it?", "golden_label": "fix"}}
-{"vars": {"input": "Production has been returning 503s to customers for the last 10 minutes and Sentry is flooding with alerts. We need this classified and a post-incident review written.", "golden_label": "incident"}}
-{"vars": {"input": "I'd like to add a dark-mode toggle to the settings page. Where should we start?", "golden_label": "default"}}
+{"vars": {"input": "The dashboard throws a 500 when I click Export. It worked yesterday — can you fix it?", "golden_label": "fix"}}
+{"vars": {"input": "The checkout API has been returning 500s to every user for the last 20 minutes. Production is down right now and customers are stuck.", "golden_label": "incident"}}
+{"vars": {"input": "Go through every issue labeled stale-flaky and close them all out — clean up that whole backlog.", "golden_label": "drain"}}
+{"vars": {"input": "A customer emailed asking us to delete all of their personal data and send them a copy of everything we hold on them.", "golden_label": "legal-threshold"}}
+{"vars": {"input": "Before we vendor this dependency — is its AGPL license going to be a problem for our closed-source product?", "golden_label": "legal-threshold"}}
+{"vars": {"input": "Can you review PR #4502 and check whether the auth changes are sound?", "golden_label": "review"}}
+{"vars": {"input": "I'd like to add a dark-mode toggle to the settings page — where should we start?", "golden_label": "default"}}
