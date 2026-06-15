@@ -14,6 +14,7 @@ const {
   mockCp,
   mockRename,
   mockRm,
+  mockMkdir,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
   mockGitWithInstallationAuth: vi.fn(),
@@ -21,6 +22,7 @@ const {
   mockCp: vi.fn(),
   mockRename: vi.fn(),
   mockRm: vi.fn(),
+  mockMkdir: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({ existsSync: mockExistsSync }));
@@ -29,6 +31,7 @@ vi.mock("node:fs/promises", () => ({
   cp: mockCp,
   rename: mockRename,
   rm: mockRm,
+  mkdir: mockMkdir,
 }));
 vi.mock("@/server/git-auth", () => ({
   gitWithInstallationAuth: mockGitWithInstallationAuth,
@@ -50,9 +53,24 @@ beforeEach(() => {
   mockCp.mockResolvedValue(undefined);
   mockRename.mockResolvedValue(undefined);
   mockRm.mockResolvedValue(undefined);
+  mockMkdir.mockResolvedValue(undefined);
 });
 
 describe("realGraftRepoClone concurrency hardening", () => {
+  // Re-provision into a workspace dir that does NOT yet exist on disk (post
+  // host/sandbox reclaim). The clone targets <ws>/.ensure-repo-tmp-<uuid>, so
+  // the parent <ws> MUST exist first — git clone creates the leaf, not missing
+  // parents. RED on origin/main: realGraftRepoClone never mkdir's <ws>.
+  it("creates the workspace dir (recursive) BEFORE cloning", async () => {
+    mockExistsSync.mockReturnValue(false);
+    await realGraftRepoClone(WS, REPO, 123);
+    expect(mockMkdir).toHaveBeenCalledWith(WS, { recursive: true });
+    // ordering: mkdir must precede the clone (a mkdir after the clone is useless)
+    expect(mockMkdir.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGitWithInstallationAuth.mock.invocationCallOrder[0],
+    );
+  });
+
   it("clones into a UNIQUE per-attempt temp dir (not the fixed .ensure-repo-tmp)", async () => {
     mockExistsSync.mockReturnValue(false);
     await realGraftRepoClone(WS, REPO, 123);
