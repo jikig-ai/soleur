@@ -124,7 +124,7 @@ A founder using Cowork for six months has executed hundreds of expert tasks. Eac
 
 A founder using Soleur for six months has built something different: a knowledge base that encodes every architectural decision, every brand positioning choice, every competitive move, every legal precedent established across every project. That knowledge feeds every future session. The system does not just remember — it applies.
 
-This is what [compound engineering]({{ site.url }}blog/why-most-agentic-tools-plateau/) looks like at the company level. The knowledge base compounds. The agents get smarter. The system validates its own workflow. The 100th session is categorically more productive than the first.
+This is what [compound engineering]({{ site.url }}/blog/why-most-agentic-tools-plateau/) looks like at the company level. The knowledge base compounds. The agents get smarter. The system validates its own workflow. The 100th session is categorically more productive than the first.
 
 Cowork's session-scoped model is a valid design choice for executing expert tasks. It is not a design choice for running a company.
 

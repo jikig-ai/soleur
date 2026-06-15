@@ -13,7 +13,7 @@ tags:
 
 Sandboxed AI agents need to push and pull from git repositories. The agent runs in a constrained environment. It must not hold long-lived credentials. It must not be able to access repositories beyond its scope. And the authentication mechanism must be invisible to the agent — no interactive prompts, no manual token entry, no environment variable leakage.
 
-This is the credential helper isolation pattern we built for [Soleur's repository connection feature]({{ site.url }}blog/your-ai-team-works-from-your-actual-codebase/).
+This is the credential helper isolation pattern we built for [Soleur's repository connection feature]({{ site.url }}/blog/your-ai-team-works-from-your-actual-codebase/).
 
 ## The Problem
 

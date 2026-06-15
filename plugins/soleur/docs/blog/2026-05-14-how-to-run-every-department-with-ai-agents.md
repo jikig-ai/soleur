@@ -57,7 +57,7 @@ Marketing is where solo founders feel the most time pressure and the most uncert
 
 An AI marketing organization handles the full operational surface.
 
-**Content production:** Brand-consistent copy for landing pages, blog posts, email sequences, and social distribution. When the marketing agent reads your brand guide before generating, the output starts closer to final. When it reads prior content, it maintains voice consistency across months of output.
+**Content production:** Brand-consistent copy for landing pages, blog posts, email sequences, and social distribution. When the marketing agent [reads your brand guide]({{ site.url }}/blog/case-study-brand-guide-creation/) before generating, the output starts closer to final. When it reads prior content, it maintains voice consistency across months of output.
 
 **Competitive analysis:** Continuous monitoring of competitor announcements, pricing changes, and positioning shifts. The agent runs the search, produces the report, and routes findings to the relevant agents — product, sales, content — without a separate workflow.
 

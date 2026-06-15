@@ -7,7 +7,7 @@
  *   - the settings toggle is read-only (disabled) for a non-owner dev
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
 import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
@@ -132,6 +132,28 @@ describe("DebugStreamPanel — Copy control", () => {
     fireEvent.click(copy);
     expect(writeText).not.toHaveBeenCalled();
   });
+});
+
+describe("DebugStreamPanel — Show/Hide toggle affordance (regression #5241)", () => {
+  it("renders the Show/Hide label INSIDE the toggle button and clicking it toggles (AC1)", () => {
+    const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    const toggle = screen.getByRole("button", { name: /debug stream/i });
+    // (a) collapsed → the toggle button's own text carries the "Show" affordance
+    //     (#5241 had moved it into an inert sibling span outside the button).
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(within(toggle).getByText("Show")).toBeTruthy();
+    // (b) clicking the word "Show" (inside the toggle) flips expanded false→true.
+    fireEvent.click(within(toggle).getByText("Show"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    // …and the label swaps to "Hide" (still inside the toggle).
+    expect(within(toggle).getByText("Hide")).toBeTruthy();
+    // (c) clicking "Hide" collapses again.
+    fireEvent.click(within(toggle).getByText("Hide"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+  // The "Copy is NOT a descendant of the toggle / does not toggle" invariant is
+  // already owned by the AC4/AC6 test above — not duplicated here.
 });
 
 describe("DebugModeToggle (AC8 — owner-write, member read-only)", () => {
