@@ -183,6 +183,51 @@ STAMP="[rules-loader] loaded: ${CLASSES_DISPLAY} (${RULE_COUNT} of ${TOTAL_RULES
 # cwd → re-classification against the wrong tree.
 HINT="[rules-loader] scope shift? LOADER_FAIL_CLOSED=1 bash .claude/hooks/session-rules-loader.sh < <(printf '{\"cwd\":\"%s\"}' \"$REPO_ROOT\")"
 
+# --- Session-context snapshot (#5319) — workspace state + committed-config MCP roster. ---
+# Computed HERE, before the manifest write below, on purpose: `git status
+# --porcelain` must run BEFORE the hook creates .claude/.session-manifests/,
+# otherwise that fresh dir would count as an untracked entry and inflate the
+# dirty count in any tree where it is not gitignored (it IS gitignored in this
+# repo, but computing early keeps the count correct regardless). The snapshot is
+# placed into OUT_BODY *after* the manifest line so it lands on envelope lines 4-6.
+#
+# Fail-OPEN value contract: every query yields a usable fallback so the snapshot
+# never blanks out. NOTE on the ERR trap (verified 2026-06-15): a plain
+# assignment `VAR=$(failing_cmd)` does NOT fire the trap — command-substitution
+# failure in assignment position is ERR-exempt. The `|| …` guards here exist to
+# produce FALLBACK VALUES, not for trap-safety. The genuine trap risk is a BARE
+# non-zero-returning command at statement position — keep every external call
+# inside a command-sub with a `|| …` fallback.
+WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
+# Guard git's non-zero exit INSIDE the pipe, not after it. `… | wc -l || echo 0`
+# is a double-output bug under pipefail: when git fails, `wc -l` already emits
+# "0" AND the pipeline's non-zero exit fires `|| echo 0`, yielding "0\n0" → a
+# 2-line dirty field that breaks the format. Wrapping git in `{ …; || true; }`
+# keeps the pipe success so wc's single "0" is the only output.
+WS_DIRTY=$( { git -C "$REPO_ROOT" status --porcelain --ignore-submodules=all 2>/dev/null || true; } | wc -l | tr -d ' ')
+
+# Committed-config MCP roster = .mcp.json ∪ plugins/soleur/.claude-plugin/plugin.json
+# mcpServers. Label is MCP(committed-config) — NOT MCP(static) — because servers
+# declared in .claude/settings.json or registered dynamically (pencil via
+# pencil-setup, supabase via plugin) are also "static" but out of this read's
+# scope. The label names the SOURCE honestly rather than over-claiming the live set.
+MCP_SERVERS=$(
+  {
+    jq -r '.mcpServers // {} | keys[]' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[]' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+  } | sort -u | paste -sd, - || true
+)
+[[ -z "$MCP_SERVERS" ]] && MCP_SERVERS="(none)"
+
+# Line-1 field order (branch | dirty) is LOAD-BEARING for the AC1 grep
+# `^\[session-context\] branch: … | dirty: N files`. Worktree path and roster
+# get their own lines so no single line approaches the 287-byte worst case that
+# would overflow the 200-byte stamp contract (these lines sit outside the
+# operator-glanceable header anyway — see OUT_BODY placement below).
+SESSION_CONTEXT="[session-context] branch: ${WS_BRANCH} | dirty: ${WS_DIRTY} files
+[session-context] worktree: ${REPO_ROOT}
+[session-context] MCP(committed-config): ${MCP_SERVERS}"
+
 # Slim manifest (3 fields). Key by sanitized session_id; fallback to timestamp.
 # SESSION_ID has already been stripped of any non-alphanum (see top of file);
 # if it ends up empty after sanitization (e.g., the envelope sent `../`), the
@@ -209,7 +254,9 @@ jq -nc \
   '{timestamp: $ts, change_class: $cls, rule_ids_loaded: $ids}' \
   > "$MANIFEST"
 
-# Final output envelope.
-OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${CONTEXT}"
+# Final output envelope. SESSION_CONTEXT lands on lines 4-6 — after the
+# operator-glanceable header (STAMP/HINT/manifest, lines 1-3, which Test 11
+# byte-budgets via `head -3`) and before the rule bodies.
+OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { additionalContext: $out } }'
 exit 0
