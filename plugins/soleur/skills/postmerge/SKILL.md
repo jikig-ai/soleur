@@ -85,8 +85,10 @@ echo "${PRODUCTION_URL:-not_set}"
 If a production URL is available, verify the deployment:
 
 ```bash
-curl -sf --max-time 10 "<production-url>/api/health" | jq .
+curl -sf --max-time 10 "<production-url>/health" | jq .
 ```
+
+Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. The `build_sha` field also confirms the merge commit is the live build.
 
 **If health check succeeds:** Record the response, set `HEALTH_VERIFIED=true`, and proceed.
 

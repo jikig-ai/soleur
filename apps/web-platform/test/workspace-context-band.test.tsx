@@ -135,6 +135,36 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     expect(back.className).toContain("pt-2");
   });
 
+  it("Bug fix (sidebar collapse-toggle overlap): the TOP-LEVEL pill wrapper reserves md:min-h-[64px] so the not-yet-loaded band cannot collapse under the floated toggle", () => {
+    // The floated collapse toggle (layout.tsx, `absolute right-3 top-10`, h-6) has
+    // a 64px footprint from the aside top (top-10 = 40px + h-6 = 24px). On the
+    // top-level route the band's only content is the async pill, which renders
+    // null until /api/workspace/list-memberships resolves (OrgSwitcherContainer
+    // returns null). With no reserved height the band collapses to ~8px and the
+    // nav rises into the toggle's footprint — the toggle paints over "Dashboard".
+    // Reserving md:min-h-[64px] on the pill wrapper holds the band open through
+    // the in-flight state. jsdom has NO layout engine, so this is a TOKEN tripwire
+    // only — the binding overlap proof is the e2e rect-non-intersection gate in
+    // nav-states-shell.e2e.ts (ADR-049). Intentionally implementation-coupled
+    // (literal token + firstElementChild): if the reserve is re-expressed via a
+    // different utility/wrapper, update or delete this tripwire — the e2e is the
+    // source of truth.
+    render(<WorkspaceContextBand pathname="/dashboard" />);
+    const band = screen.getByTestId("workspace-context-band");
+    const pillWrapper = band.firstElementChild as HTMLElement;
+    expect(pillWrapper.className).toContain("md:min-h-[64px]");
+  });
+
+  it("does NOT reserve the min-height on a DRILLED band (drill !== null already exceeds 64px via back-link + section title)", async () => {
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    await screen.findByRole("button", { name: /switch workspace/i });
+    const band = screen.getByTestId("workspace-context-band");
+    const pillWrapper = band.firstElementChild as HTMLElement;
+    // drill === "settings" → the reserve is scoped out (the guard avoids
+    // inflating drilled bands that are already tall).
+    expect(pillWrapper.className).not.toContain("md:min-h-[64px]");
+  });
+
   it("Sidebar-UX Issue 3: the section title is spaced off the 'Back to menu' link (pt-3)", () => {
     render(<WorkspaceContextBand pathname="/dashboard/settings" />);
     // The back link (pt-2) and the section heading used to sit in one cramped
