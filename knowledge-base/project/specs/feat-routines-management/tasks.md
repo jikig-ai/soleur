@@ -35,9 +35,9 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 5 — Agent MCP tools (parity)
 
-- [ ] 5.1 `server/routines-tools.ts` — `routines_list`/`routine_runs_list` (shared read fns) + `routine_run` (runRoutine actor=agent).
-- [ ] 5.2 `server/tool-tiers.ts` — FQ keys: reads `auto-approve`, `routine_run` `gated`.
-- [ ] 5.3 `buildGateMessage` `routine_run` case (routine name + policy); agent confirm = review-gate (call runRoutine confirmed:true post-approve); no double-gate.
+- [x] 5.1 `server/routines-tools.ts` — `routines_list`/`routine_runs_list` (shared read fns) + `routine_run` (runRoutine actor=agent).
+- [x] 5.2 `server/tool-tiers.ts` — FQ keys: reads `auto-approve`, `routine_run` `gated`.
+- [x] 5.3 `buildGateMessage` `routine_run` case (routine name + policy); agent confirm = review-gate (call runRoutine confirmed:true post-approve); no double-gate.
 
 ## Phase 6 — UI
 

@@ -86,6 +86,14 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_triage_list": "auto-approve",
   "mcp__soleur_platform__email_triage_get": "auto-approve",
 
+  // Routines management (#5345): reads auto-approve; run-now is a write →
+  // gated. The review gate is the SINGLE confirmation for the agent path
+  // (the routine_run tool dispatches confirmed=true post-approval — no
+  // double-gate with the in-band 409). buildGateMessage names the routine.
+  "mcp__soleur_platform__routines_list": "auto-approve",
+  "mcp__soleur_platform__routine_runs_list": "auto-approve",
+  "mcp__soleur_platform__routine_run": "gated",
+
   // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
   // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
   // map — the legacy `startAgentSession` path relies on `getToolTier()`'s
@@ -160,6 +168,8 @@ export function buildGateMessage(
       const preview = raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
       return `Agent wants to revoke share token **${preview}**. This is permanent. Allow?`;
     }
+    case "routine_run":
+      return `Agent wants to run routine **${toolInput.fnId ?? "unknown"}** now, off-schedule. This fires real production work. Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }
