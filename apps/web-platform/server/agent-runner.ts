@@ -44,7 +44,10 @@ import type { Provider } from "@/lib/types";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
-import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+import {
+  ensureWorkspaceRepoCloned,
+  ensureWorkspaceDirExists,
+} from "./ensure-workspace-repo";
 import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { createRateLimiter } from "./trigger-workflow";
@@ -997,6 +1000,20 @@ export async function startAgentSession(
     // provisioning guard above keys only on the `users` row existing.
     const workspacePath = await resolveActiveWorkspacePath(userId, sessionTenant);
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
+
+    // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
+    // reprovision-ensure-dir-presandbox). The leader's bwrap sandbox binds
+    // `cwd: workspacePath` at `buildAgentQueryOptions` below and requires the dir
+    // to EXIST. The leader shares the Concierge gap: its `.git`-absent reprovision
+    // (below) calls `ensureWorkspaceRepoCloned`, which early-returns for
+    // not-connected / `.git`-present workspaces BEFORE its clone-mkdir — so a
+    // reclaimed not-connected leader workspace gets no dir re-creation. Ensure the
+    // dir unconditionally here (independent of the clone). On failure it surfaces a
+    // retryable error rather than building a sandbox against a missing CWD.
+    await ensureWorkspaceDirExists(workspacePath, {
+      feature: "agent-runner",
+      userId,
+    });
 
     // Extract MCP server names from plugin.json for canUseTool allowlisting.
     // Uses explicit server-name matching (not blanket mcp__ prefix).

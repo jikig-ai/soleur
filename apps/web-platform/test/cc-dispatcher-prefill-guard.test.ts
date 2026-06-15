@@ -104,6 +104,7 @@ vi.mock("@/server/current-repo-url", () => ({
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
+  ensureWorkspaceDirExists: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/permission-callback", () => ({

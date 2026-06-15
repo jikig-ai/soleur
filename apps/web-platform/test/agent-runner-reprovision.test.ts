@@ -31,6 +31,7 @@ const {
   mockReadFileSync,
   mockExistsSync,
   mockEnsureWorkspaceRepoCloned,
+  mockEnsureWorkspaceDirExists,
   mockResolveInstallationId,
   mockGetCurrentRepoUrl,
   mockResolveEffectiveInstallationId,
@@ -42,6 +43,7 @@ const {
   mockReadFileSync: vi.fn(),
   mockExistsSync: vi.fn(),
   mockEnsureWorkspaceRepoCloned: vi.fn(),
+  mockEnsureWorkspaceDirExists: vi.fn(),
   mockResolveInstallationId: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
   mockResolveEffectiveInstallationId: vi.fn(),
@@ -149,6 +151,7 @@ vi.mock("../server/vision-helpers", () => ({
 // The recovery under test + its lazily-resolved inputs.
 vi.mock("../server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: mockEnsureWorkspaceRepoCloned,
+  ensureWorkspaceDirExists: mockEnsureWorkspaceDirExists,
 }));
 vi.mock("../server/resolve-installation-id", () => ({
   resolveInstallationId: mockResolveInstallationId,
@@ -240,6 +243,7 @@ beforeEach(() => {
   // call sites are unaffected; the per-test override decides the `.git` probe.
   mockExistsSync.mockReturnValue(true);
   mockEnsureWorkspaceRepoCloned.mockResolvedValue("ok");
+  mockEnsureWorkspaceDirExists.mockResolvedValue(undefined);
   mockResolveInstallationId.mockResolvedValue(INSTALL);
   mockGetCurrentRepoUrl.mockResolvedValue(REPO);
   // Effective-install promotion pass-through by default (stored === owner).
@@ -289,6 +293,38 @@ describe("agent-runner leader — deterministic workspace re-provision on reconn
 
     expect(mockExistsSync).toHaveBeenCalledWith(GIT_PATH);
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // AC8 (feat-one-shot-warm-reprovision-ensure-dir-presandbox) — the leader
+  // shares the Concierge conditional-mkdir gap: a reclaimed NOT-CONNECTED
+  // workspace skips `ensureWorkspaceRepoCloned`'s clone-mkdir, so the leader must
+  // ensure the dir UNCONDITIONALLY before its bwrap sandbox is built. RED on
+  // origin/main: the leader never calls `ensureWorkspaceDirExists`.
+  test("AC8: ensures the workspace dir BEFORE the sandbox build (unconditional, not-connected reclaimed fixture)", async () => {
+    setupSupabaseMock();
+    createQueryMock(mockQuery);
+    // Not-connected + `.git`-absent reclaimed workspace: the clone is skipped,
+    // so only the unconditional dir-ensure protects the sandbox CWD.
+    mockExistsSync.mockImplementation((p: unknown) => String(p) !== GIT_PATH);
+    mockResolveInstallationId.mockResolvedValue(null);
+    mockGetCurrentRepoUrl.mockResolvedValue(null);
+
+    await startAgentSession(MEMBER_ID, "conv-1", "cpo");
+
+    // `objectContaining` on the ctx so adding a future breadcrumb field (e.g.
+    // conversationId) does not break a test that is really about ordering.
+    expect(mockEnsureWorkspaceDirExists).toHaveBeenCalledTimes(1);
+    expect(mockEnsureWorkspaceDirExists).toHaveBeenCalledWith(
+      ACTIVE_DIR,
+      expect.objectContaining({ feature: "agent-runner", userId: MEMBER_ID }),
+    );
+    // Ordering: the dir guarantee must precede the SDK query() / sandbox build.
+    // `toHaveBeenCalledTimes(1)` above already guards non-vacuity for the helper;
+    // pin the query() side too so the invocationCallOrder comparison is real.
+    expect(mockQuery).toHaveBeenCalled();
+    const ensureOrder = mockEnsureWorkspaceDirExists.mock.invocationCallOrder[0];
+    const queryOrder = mockQuery.mock.invocationCallOrder[0];
+    expect(ensureOrder).toBeLessThan(queryOrder);
   });
 
   test("NO bespoke leader honest-message path — a failed recovery does NOT emit a reclaim message (rides the existing catch)", async () => {
