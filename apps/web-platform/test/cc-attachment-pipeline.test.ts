@@ -263,8 +263,8 @@ describe("persistAndDownloadAttachments", () => {
     });
 
     expect(writeFileMock).toHaveBeenCalledTimes(1);
-    expect(attachmentContext).toContain("a.png");
-    expect(attachmentContext).not.toContain("z.png");
+    expect(attachmentContext).toMatch(/^- a\.png\b/m);
+    expect(attachmentContext).not.toMatch(/^- z\.png\b/m);
   });
 
   it("writes attachments under the resolver's ACTIVE workspace path for a stale-own-row caller (#5005 divergent-id)", async () => {
