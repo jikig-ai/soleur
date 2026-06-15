@@ -38,10 +38,15 @@ The Concierge runs Bash and file tools in **two categorically different executio
   - `apps/web-platform/server/agent-runner-sandbox-config.ts:94` — `denyRead: ["/workspaces",
     "/proc"]`; only the specific `allowWrite: [workspacePath]` is mounted into the namespace (the
     `/workspaces` parent is excluded for cross-tenant isolation).
-- **`EnterWorktree` is an SDK-native Claude Code tool with NO Soleur server-side handler.** It
-  flips a logical/file-tool CWD notion but **cannot rebind the bwrap mount or the Bash subprocess
-  cwd**. A worktree created after session start (separate working tree + a `.git` pointer into the
-  bare repo's gitdir) is therefore unreachable from Bash even though file tools see it.
+- **`EnterWorktree` is a CLI-harness concept, NOT present in the Concierge's
+  `@anthropic-ai/claude-agent-sdk` surface** (grep of `sdk.d.ts` + the runners returns zero hits) — so
+  it is not a signal the backend can even key on. Either way, nothing rebinds the bwrap mount or the Bash
+  subprocess cwd after `query()` construction. A worktree created after session start (separate working
+  tree + a `.git` pointer into the bare repo's gitdir) is reachable from Bash ONLY when `workspacePath`
+  resolves correctly — worktrees land *inside* `workspacePath` (`/workspaces/<uuid>/.worktrees/<b>`), so
+  the failure reduces to **binding drift** (mount/cwd computed from a wrong-`workspace_id` path). The loop
+  is observable purely as repeated Bash `cd … && pwd` tool-calls — the compliance-independent signal a
+  guardrail should key on, not any worktree event.
 
 `/home/soleur` is the container HOME (`Dockerfile` `useradd ... soleur`, UID 1001), passed through
 to the agent env allowlist. When bwrap can't `chdir` to the requested path it falls back to `$HOME`.
