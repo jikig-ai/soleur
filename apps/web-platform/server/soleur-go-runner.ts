@@ -1112,7 +1112,14 @@ export interface SoleurGoRunnerDeps {
    * The cc-dispatcher uses this to drain its `_ccBashGates` Map on idle
    * reap (a path that does NOT fire `onWorkflowEnded`).
    */
-  onCloseQuery?: (args: { conversationId: string; userId: string }) => void;
+  onCloseQuery?: (args: {
+    conversationId: string;
+    userId: string;
+    // #5356 — only a disconnect grace-abort carries a reason; the cc dispatcher
+    // hook checkpoints in-flight work iff `reason === "disconnected"`. Natural
+    // completion / idle reap / bare close leave it undefined (→ no checkpoint).
+    reason?: "disconnected";
+  }) => void;
 }
 
 export interface SoleurGoRunner {
@@ -1120,7 +1127,7 @@ export interface SoleurGoRunner {
   hasActiveQuery(conversationId: string): boolean;
   activeQueriesSize(): number;
   reapIdle(): number;
-  closeConversation(conversationId: string): void;
+  closeConversation(conversationId: string, reason?: "disconnected"): void;
   /**
    * Push a `tool_result` content-block back into the SDK for an in-flight
    * interactive tool_use. Used by the `interactive_prompt_response`
@@ -1939,7 +1946,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeQuery(state);
   }
 
-  function closeQuery(state: ActiveQuery): void {
+  function closeQuery(state: ActiveQuery, reason?: "disconnected"): void {
     clearRunaway(state);
     clearTurnHardCap(state);
     // #3040 Finding 4 — defense-in-depth: reset paused fields so a stale
@@ -1971,6 +1978,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         deps.onCloseQuery({
           conversationId: state.conversationId,
           userId: state.userId,
+          // #5356 — only the grace-timer's `closeConversation(convId,
+          // "disconnected")` threads a reason this far; the other two callers
+          // (`emitWorkflowEnded`, `reapIdle`) pass none → no checkpoint.
+          reason,
         });
       } catch (err) {
         reportSilentFallback(err, {
@@ -3112,11 +3123,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     return reaped;
   }
 
-  function closeConversation(conversationId: string): void {
+  function closeConversation(
+    conversationId: string,
+    reason?: "disconnected",
+  ): void {
     const state = activeQueries.get(conversationId);
     if (!state) return;
     state.closed = true;
-    closeQuery(state);
+    closeQuery(state, reason);
   }
 
   function respondToToolUse(args: {

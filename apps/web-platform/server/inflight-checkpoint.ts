@@ -33,6 +33,8 @@ import { rm } from "node:fs/promises";
 import { reportSilentFallback } from "./observability";
 import { withWorkspacePermissionLock } from "./workspace-permission-lock";
 import { createChildLogger } from "./logger";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { workspacePathForWorkspaceId } from "./workspace-resolver";
 
 const log = createChildLogger("inflight-checkpoint");
 
@@ -245,6 +247,60 @@ export async function checkpointInflightWork(
       feature: "inflight-checkpoint",
       op: "checkpoint-on-abort",
       extra: { userId, conversationId },
+    });
+  }
+}
+
+/**
+ * #5356 — resolve the conversation-bound checkpoint clone and checkpoint its
+ * in-flight work. Extracted from `agent-runner.ts`'s disconnect branch so BOTH
+ * the legacy path AND the cc-soleur-go dispatcher hook (`cc-dispatcher.ts`)
+ * drive ONE enforcement point for the load-bearing clone-resolution invariant.
+ *
+ * The clone is resolved from the CONVERSATION's bound `workspace_id`
+ * (`conversations.workspace_id` → `workspacePathForWorkspaceId`), the same
+ * source the resume restore reads — NEVER the mutable active-workspace resolver
+ * (`resolveActiveWorkspacePath`), which can drift during the 30s grace window
+ * and write the ref onto a clone the restore never consults (silent
+ * no-checkpoint + a stranded ref).
+ *
+ * Fire-and-forget: NEVER throws. A resolve or checkpoint failure mirrors to
+ * Sentry (`cq-silent-fallback-must-mirror-to-sentry`) but must not break the
+ * caller's terminal path (the legacy abort branch's partial-text persist, or
+ * the cc close hook's unconditional bash-gate drain). `stage` distinguishes the
+ * cc vs legacy call site in the Sentry extra while keeping both on the shared
+ * `op: "checkpoint-on-abort"` monitor.
+ */
+export async function checkpointInflightWorkForConversation(
+  userId: string,
+  conversationId: string,
+  stage:
+    | "resolve-workspace-path"
+    | "cc-resolve-workspace-path" = "resolve-workspace-path",
+): Promise<void> {
+  try {
+    const checkpointTenant = await getFreshTenantClient(userId);
+    const { data: convRow, error: convErr } = await checkpointTenant
+      .from("conversations")
+      .select("workspace_id")
+      .eq("id", conversationId)
+      .single();
+    const checkpointWorkspaceId =
+      (convRow as { workspace_id?: string | null } | null)?.workspace_id ??
+      null;
+    if (convErr || !checkpointWorkspaceId) {
+      throw new Error(
+        `checkpoint: could not resolve conversation workspace_id${convErr ? `: ${convErr.message}` : ""}`,
+      );
+    }
+    const checkpointWorkspacePath =
+      workspacePathForWorkspaceId(checkpointWorkspaceId);
+    await checkpointInflightWork(checkpointWorkspacePath, conversationId, userId);
+  } catch (checkpointErr) {
+    reportSilentFallback(checkpointErr, {
+      feature: "inflight-checkpoint",
+      op: "checkpoint-on-abort",
+      extra: { userId, conversationId, stage },
     });
   }
 }

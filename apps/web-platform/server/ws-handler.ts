@@ -87,6 +87,7 @@ import {
   drainAutonomousDisclosureGates,
   markConversationAcked,
   resolveConciergeDocumentContext,
+  closeCcConversation,
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
@@ -206,6 +207,37 @@ async function emitRevocationNotice(userId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 /** Grace period before aborting session on disconnect (allows reconnection). */
 const DISCONNECT_GRACE_MS = 30_000;
+
+/**
+ * Body of the disconnect grace-timer (extracted for unit-testability — #5356).
+ * The reconnect window is over, so terminate the in-flight turn on BOTH
+ * turn-boundary lineages:
+ *   - `abortSession` (legacy `sendUserMessage` path — registered in
+ *     `activeSessions`), which already checkpoints in-flight work on disconnect.
+ *   - `closeCcConversation(convId, "disconnected")` (cc-soleur-go /
+ *     `dispatchSoleurGoForConversation` path — tracked in its own
+ *     `activeQueries` Map and never registered in `activeSessions`), which now
+ *     checkpoints in-flight work on disconnect too.
+ * Both calls are idempotent no-ops for the path that does not own the
+ * conversation; the registries are mutually exclusive by construction (per-turn
+ * routing sends a conversation to cc XOR legacy), so this never
+ * double-checkpoints. See the dual-path-terminal learning
+ * (`2026-06-14-ws-lifecycle-hook-must-cover-both-legacy-and-cc-soleur-go-turn-boundaries.md`):
+ * any turn-boundary lifecycle hook needs wiring on BOTH lineages.
+ */
+export function runDisconnectGraceAbort(uid: string, convId: string): void {
+  log.info(
+    { userId: uid, conversationId: convId },
+    "Grace period expired, aborting session",
+  );
+  abortSession(uid, convId);
+  closeCcConversation(convId, "disconnected");
+  // feat-stream-since-disconnect (#5273) — grace expired: the reconnect window
+  // is over, so drop the replay frames (counter preserved). A later reconnect
+  // now resolves `incomplete` → honest v1 history refetch, never a stale-replay
+  // lie. See ADR-059.
+  streamReplayBuffer.clear(convId);
+}
 
 /** Deferred conversation state — exists XOR conversationId exists. */
 export interface PendingConversation {
@@ -2920,15 +2952,10 @@ export function setupWebSocket(server: HTTPServer) {
           if (current.conversationId) {
             const convId = current.conversationId;
             const uid = userId;
-            const timer = setTimeout(() => {
-              log.info({ userId: uid, conversationId: convId }, "Grace period expired, aborting session");
-              abortSession(uid, convId);
-              // feat-stream-since-disconnect (#5273) — grace expired: the
-              // reconnect window is over, so drop the replay frames (counter
-              // preserved). A later reconnect now resolves `incomplete` →
-              // honest v1 history refetch, never a stale-replay lie. See ADR-059.
-              streamReplayBuffer.clear(convId);
-            }, DISCONNECT_GRACE_MS);
+            const timer = setTimeout(
+              () => runDisconnectGraceAbort(uid, convId),
+              DISCONNECT_GRACE_MS,
+            );
             timer.unref();
             // Store timer so reconnecting user can cancel it
             pendingDisconnects.set(`${uid}:${convId}`, timer);
