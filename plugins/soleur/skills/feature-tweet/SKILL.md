@@ -63,18 +63,26 @@ Read the author identity for any copy that references a person from
 `plugins/soleur/docs/_data/site.json` → `author.name` ("Jean Deruelle"). **Never
 infer a name** from the PR; contributor names are PII and are excluded.
 
-## Step 4 — Generate the thread (sanitized, voice-aligned)
+## Step 4 — Generate the X thread AND the Bluesky post (sanitized, voice-aligned)
 
+Generate copy for BOTH channels (the publisher cross-posts to X and Bluesky).
 Follow `knowledge-base/marketing/brand-guide.md` → `### X/Twitter` and its
 `#### Ship Tweets (feature-launch)` sub-section. Hard rules:
 
-- **Shape:** single tweet (hook only) OR a numbered thread of **at most 3**
+- **X shape:** single tweet (hook only) OR a numbered thread of **at most 3**
   tweets. Tweet 1 = the hook (no prefix, no "thread" announcement). Tweets 2–3
   are prefixed `2/`, `3/` on a fresh line (the canonical numbered format the
   publisher's `extract_tweets` parses).
-- **280-character limit per tweet**, enforced during generation, not trimmed
+- **X limit: 280 characters per tweet**, enforced during generation, not trimmed
   after.
-- **Sanitization (mandatory — benefit only):**
+- **Bluesky shape + limit:** a **single post**, **300 characters total** for the
+  whole `## Bluesky` section. The publisher (`post_bluesky`) posts the entire
+  section as ONE Bluesky post — it does NOT split a numbered thread (no
+  `extract_tweets` equivalent), and truncates the section at 300 chars. So write
+  one self-contained post; do NOT use `2/`/`3/` prefixes here. Adapt the copy to
+  Bluesky — do NOT clone the X hook verbatim: Bluesky carries no hashtags
+  (brand-guide `### Bluesky`). Lead the same one buyer benefit in plainer register.
+- **Sanitization (mandatory — benefit only), applied to BOTH channels:**
   - No implementation/diff detail. State the user-facing benefit, not how it was
     built.
   - **No contributor names or author attribution** (PII; no marketing consent).
@@ -84,8 +92,8 @@ Follow `knowledge-base/marketing/brand-guide.md` → `### X/Twitter` and its
     omitted.
 - Present-tense "just shipped X" framing; lead the build-in-public peer voice,
   land one concrete buyer benefit. General register (plain language).
-- Links (if any) go in the **final** tweet only. A ship tweet has no blog, so
-  `blog_url` is omitted entirely.
+- Links (if any) go in the **final** post of each channel only. A ship tweet has
+  no blog, so `blog_url` is omitted entirely.
 
 ## Step 5 — Write the draft file
 
@@ -100,7 +108,7 @@ Frontmatter + body:
 title: "<concise benefit-framed title>"
 type: feature-launch
 publish_date: ""
-channels: x
+channels: x, bluesky
 status: draft
 pr_reference: "#<pr>"
 issue_reference: "#<issue>"   # only if the PR closes one; else omit
@@ -115,11 +123,17 @@ issue_reference: "#<issue>"   # only if the PR closes one; else omit
 2/ <body tweet>
 
 3/ <final tweet, link only if applicable>
+
+## Bluesky
+
+<single adapted post — ≤300 chars total, no hashtags, no 2//3/ prefixes>
 ```
 
 `publish_date: ""` + `status: draft` is the intentionally-parked state
-(`content-publisher.sh` skips it). `channels: x` only — Bluesky is deferred
-(the publisher needs one body section per channel).
+(`content-publisher.sh` skips it). `channels: x, bluesky` cross-posts to both —
+the publisher requires one body section per channel, so the `## X/Twitter Thread`
+AND `## Bluesky` sections are BOTH mandatory (the structural gate in Step 6
+rejects a draft missing either).
 
 ## Step 6 — Structural assertion (skill-owned gate — NOT lint)
 
@@ -127,10 +141,11 @@ issue_reference: "#<issue>"   # only if the PR closes one; else omit
 bash scripts/lib/validate-tweet-draft.sh <file>
 ```
 
-Asserts a non-empty `title`, `status: draft`, a `channels` value including `x`,
-and a non-empty `## X/Twitter Thread` section. On non-zero exit, **delete the
-file** (`rm -f <file>`) and abort — leave no partial draft. This is the field/
-heading gate; the Liquid linter validates neither.
+Asserts a non-empty `title`, `status: draft`, a `channels` value including BOTH
+`x` and `bluesky`, and non-empty `## X/Twitter Thread` AND `## Bluesky` sections.
+On non-zero exit, **delete the file** (`rm -f <file>`) and abort — leave no
+partial draft. This is the field/heading gate; the Liquid linter validates
+neither.
 
 ## Step 7 — Lint (Liquid markers)
 
