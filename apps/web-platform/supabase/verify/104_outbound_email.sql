@@ -1,0 +1,112 @@
+-- Verify 104_outbound_email.sql.
+--
+-- Contract: every row returns `check_name` + `bad`. Any `bad > 0` row
+-- fails CI verify-migrations.
+--
+-- Sentinels confirm post-apply state from migration 104
+-- (feat-agent-native-outbound-email Phase 1, #5325):
+--   * email_suppression exists with RLS enabled and NO INSERT/UPDATE/DELETE
+--     policies (writes go through the SECURITY DEFINER upsert RPC only; an
+--     owner-write policy beside the RPC is a bypass path — learning
+--     2026-05-21 / security-issues/2026-06-01)
+--   * the UNIQUE(owner_id, recipient_hash) upsert target index exists
+--   * suppress_recipient + is_recipient_suppressed ARE EXECUTE-able by
+--     `authenticated` but NOT by `anon` (owner-pinned send-time RPCs)
+--   * anonymise_email_suppression IS EXECUTE-able by `service_role`
+--     (Art-17 erasure path; mirrors anonymise_action_sends)
+--   * all three RPCs are SECURITY DEFINER
+--
+-- The send-audit + body-hash approval binding reuses action_sends (mig 051),
+-- which has its own verify sentinel (verify/051_*.sql) — 104 makes no
+-- action_sends/scope_grants change, so this file asserts only email_suppression.
+
+-- (1) email_suppression exists with RLS enabled
+SELECT 'email_suppression_rls_enabled' AS check_name,
+       CASE WHEN EXISTS (
+         SELECT 1 FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND c.relname = 'email_suppression'
+           AND c.relrowsecurity
+       ) THEN 0 ELSE 1 END::int AS bad
+UNION ALL
+-- (2) no INSERT/UPDATE/DELETE policies on email_suppression
+SELECT 'email_suppression_no_write_policies',
+       (SELECT count(*) FROM pg_policy p
+        JOIN pg_class c ON c.oid = p.polrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'email_suppression'
+          AND p.polcmd IN ('a', 'w', 'd'))::int
+UNION ALL
+-- (3) owner-only SELECT policy present
+SELECT 'email_suppression_owner_select_policy_present',
+       CASE WHEN EXISTS (
+         SELECT 1 FROM pg_policy p
+         JOIN pg_class c ON c.oid = p.polrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND c.relname = 'email_suppression'
+           AND p.polname = 'email_suppression_owner_select'
+           AND p.polcmd = 'r'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (4) UNIQUE(owner_id, recipient_hash) upsert-target index exists
+SELECT 'email_suppression_owner_recipient_unique_index',
+       CASE WHEN EXISTS (
+         SELECT 1 FROM pg_class i
+         JOIN pg_namespace n ON n.oid = i.relnamespace
+         WHERE n.nspname = 'public'
+           AND i.relname = 'email_suppression_owner_recipient_unique'
+           AND i.relkind = 'i'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (5) suppress_recipient IS executable by authenticated
+SELECT 'suppress_recipient_granted_to_authenticated',
+       CASE WHEN has_function_privilege(
+         'authenticated',
+         'public.suppress_recipient(text, text)',
+         'EXECUTE'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (6) suppress_recipient NOT executable by anon
+SELECT 'suppress_recipient_not_granted_to_anon',
+       CASE WHEN has_function_privilege(
+         'anon',
+         'public.suppress_recipient(text, text)',
+         'EXECUTE'
+       ) THEN 1 ELSE 0 END::int
+UNION ALL
+-- (7) is_recipient_suppressed IS executable by authenticated
+SELECT 'is_recipient_suppressed_granted_to_authenticated',
+       CASE WHEN has_function_privilege(
+         'authenticated',
+         'public.is_recipient_suppressed(text)',
+         'EXECUTE'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (8) is_recipient_suppressed NOT executable by anon
+SELECT 'is_recipient_suppressed_not_granted_to_anon',
+       CASE WHEN has_function_privilege(
+         'anon',
+         'public.is_recipient_suppressed(text)',
+         'EXECUTE'
+       ) THEN 1 ELSE 0 END::int
+UNION ALL
+-- (9) anonymise_email_suppression IS executable by service_role
+SELECT 'anonymise_email_suppression_granted_to_service_role',
+       CASE WHEN has_function_privilege(
+         'service_role',
+         'public.anonymise_email_suppression(uuid)',
+         'EXECUTE'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (10) all three RPCs are SECURITY DEFINER (prosecdef)
+SELECT 'email_suppression_rpcs_security_definer',
+       CASE WHEN (
+         SELECT count(*) FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('suppress_recipient', 'is_recipient_suppressed', 'anonymise_email_suppression')
+           AND p.prosecdef
+       ) = 3 THEN 0 ELSE 1 END::int;

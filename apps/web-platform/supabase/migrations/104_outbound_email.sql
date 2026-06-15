@@ -111,8 +111,12 @@ BEGIN
 END;
 $$;
 
+-- REVOKE from authenticated too (then re-GRANT below): Supabase's
+-- ALTER DEFAULT PRIVILEGES grants EXECUTE to authenticated by default, so the
+-- named-role REVOKE is load-bearing (2026-05-06-supabase-default-privileges-
+-- defeat-revoke-from-public.md). Mirrors mig 051 grant_action_class.
 REVOKE ALL ON FUNCTION public.suppress_recipient(text, text)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.suppress_recipient(text, text)
   TO authenticated;
 
@@ -149,7 +153,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.is_recipient_suppressed(text)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.is_recipient_suppressed(text)
   TO authenticated;
 
@@ -201,7 +205,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.anonymise_email_suppression(uuid)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.anonymise_email_suppression(uuid)
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.anonymise_email_suppression(uuid)

@@ -1,0 +1,170 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+// Migration-shape test for 104 (agent-native outbound email, #5325 pilot).
+//
+// 104_outbound_email.sql adds ONLY the email_suppression table + its three
+// SECURITY DEFINER RPCs. The send-audit + body-hash approval binding reuses
+// public.action_sends (migration 051) unchanged — so this migration MUST NOT
+// create an outbound_sends table or widen any enum.
+//
+// File-parse test, not a live-DB test — pins the SQL contract. Live behaviour
+// (RLS owner-isolation, upsert idempotency, auth.uid() owner-pin) is verified
+// against dev-DB at apply time and recorded in
+// knowledge-base/project/specs/feat-agent-native-outbound-email/migration-checklist.md.
+// The generalised SECURITY DEFINER grant + search_path lint is in
+// test/migration-rpc-grants.test.ts; this file pins 104-specific invariants.
+// Mirrors 103-github-events-retention-7day.test.ts.
+//
+// Plan: knowledge-base/project/plans/2026-06-15-feat-agent-native-outbound-email-pilot-plan.md
+
+const MIG_DIR = path.join(__dirname, "../../supabase/migrations");
+const stripComments = (sql: string) => sql.replace(/--[^\n]*/g, "");
+
+const raw = readFileSync(path.join(MIG_DIR, "104_outbound_email.sql"), "utf8");
+const executable = stripComments(raw);
+const down = stripComments(
+  readFileSync(path.join(MIG_DIR, "104_outbound_email.down.sql"), "utf8"),
+);
+
+describe("migration 104_outbound_email — email_suppression table", () => {
+  it("creates public.email_suppression", () => {
+    expect(executable).toMatch(
+      /create\s+table\s+if\s+not\s+exists\s+public\.email_suppression/i,
+    );
+  });
+
+  it("owner_id FKs users(id) ON DELETE RESTRICT (no accidental erasure)", () => {
+    expect(executable).toMatch(
+      /owner_id\s+uuid\s+null\s+references\s+public\.users\(id\)\s+on\s+delete\s+restrict/i,
+    );
+  });
+
+  it("reason is constrained to the four suppression causes", () => {
+    expect(executable).toMatch(
+      /reason\s+text\s+not\s+null\s+check\s*\(\s*reason\s+in\s*\(\s*'opt_out',\s*'decline',\s*'bounce',\s*'manual'\s*\)\s*\)/i,
+    );
+  });
+
+  it("enforces a UNIQUE (owner_id, recipient_hash) upsert target", () => {
+    expect(executable).toMatch(
+      /create\s+unique\s+index\s+if\s+not\s+exists\s+email_suppression_owner_recipient_unique\s+on\s+public\.email_suppression\s*\(\s*owner_id,\s*recipient_hash\s*\)/i,
+    );
+  });
+
+  it("enables RLS with an owner-only SELECT policy (no FOR ALL USING)", () => {
+    expect(executable).toMatch(
+      /alter\s+table\s+public\.email_suppression\s+enable\s+row\s+level\s+security/i,
+    );
+    expect(executable).toMatch(
+      /create\s+policy\s+email_suppression_owner_select\s+on\s+public\.email_suppression\s+for\s+select\s+to\s+authenticated\s+using\s*\(\s*owner_id\s*=\s*auth\.uid\(\)\s*\)/i,
+    );
+    expect(executable).not.toMatch(/for\s+all\s+using/i);
+  });
+
+  it("REVOKEs direct INSERT/UPDATE/DELETE from authenticated (RPC-only writes)", () => {
+    expect(executable).toMatch(
+      /revoke\s+insert,\s*update,\s*delete\s+on\s+public\.email_suppression\s+from\s+authenticated/i,
+    );
+    // No INSERT/UPDATE/DELETE policy exists — writes go through the SD RPC only.
+    expect(executable).not.toMatch(/for\s+insert\s+to\s+authenticated/i);
+  });
+});
+
+describe("migration 104_outbound_email — suppress_recipient RPC (monotonic upsert)", () => {
+  it("is SECURITY DEFINER with the pinned search_path", () => {
+    expect(executable).toMatch(
+      /create\s+or\s+replace\s+function\s+public\.suppress_recipient[\s\S]*?security\s+definer[\s\S]*?set\s+search_path\s*=\s*public,\s*pg_temp/i,
+    );
+  });
+
+  it("pins the caller to auth.uid() and rejects NULL (28000)", () => {
+    expect(executable).toMatch(
+      /v_owner_id\s+uuid\s*:=\s*auth\.uid\(\)/i,
+    );
+    expect(executable).toMatch(/errcode\s*=\s*'28000'/i);
+  });
+
+  it("upserts ON CONFLICT DO NOTHING (idempotent, monotonic add)", () => {
+    expect(executable).toMatch(
+      /insert\s+into\s+public\.email_suppression[\s\S]*?on\s+conflict\s*\(\s*owner_id,\s*recipient_hash\s*\)\s+do\s+nothing/i,
+    );
+  });
+});
+
+describe("migration 104_outbound_email — is_recipient_suppressed RPC (send-time check)", () => {
+  it("is SECURITY DEFINER, auth.uid()-pinned, owner-scoped EXISTS", () => {
+    expect(executable).toMatch(
+      /create\s+or\s+replace\s+function\s+public\.is_recipient_suppressed[\s\S]*?security\s+definer[\s\S]*?set\s+search_path\s*=\s*public,\s*pg_temp/i,
+    );
+    expect(executable).toMatch(
+      /return\s+exists\s*\([\s\S]*?from\s+public\.email_suppression\s+where\s+owner_id\s*=\s*v_owner_id\s+and\s+recipient_hash\s*=\s*p_recipient_hash/i,
+    );
+  });
+});
+
+describe("migration 104_outbound_email — Art-17 erasure", () => {
+  it("provides anonymise_email_suppression granted to service_role", () => {
+    expect(executable).toMatch(
+      /create\s+or\s+replace\s+function\s+public\.anonymise_email_suppression\(p_user_id\s+uuid\)/i,
+    );
+    expect(executable).toMatch(
+      /grant\s+execute\s+on\s+function\s+public\.anonymise_email_suppression\(uuid\)\s+to\s+service_role/i,
+    );
+  });
+
+  it("tombstones rather than deletes (owner_id NULL + recipient_hash scrub)", () => {
+    expect(executable).toMatch(
+      /update\s+public\.email_suppression\s+set\s+owner_id\s*=\s*null,\s*recipient_hash\s*=\s*'__anonymised__:'/i,
+    );
+  });
+});
+
+describe("migration 104_outbound_email — negative-space invariants", () => {
+  it("does NOT create an outbound_sends table (reuses action_sends)", () => {
+    expect(executable).not.toMatch(/create\s+table[\s\S]*?outbound_sends/i);
+  });
+
+  it("does NOT widen any enum or alter action_sends/scope_grants", () => {
+    expect(executable).not.toMatch(/alter\s+table\s+public\.action_sends/i);
+    expect(executable).not.toMatch(/alter\s+table\s+public\.scope_grants/i);
+    expect(executable).not.toMatch(/alter\s+type/i);
+  });
+
+  it("has NO un-suppress path (suppression is permanent/monotonic)", () => {
+    // No RPC that removes a row from email_suppression. The ONLY DELETE on the
+    // table is the down-migration's DROP TABLE, never a per-row un-suppress.
+    expect(executable).not.toMatch(
+      /delete\s+from\s+public\.email_suppression/i,
+    );
+    expect(executable).not.toMatch(/function\s+public\.(un)?un_?suppress/i);
+  });
+
+  it("pins the HMAC algorithm + pepper source in the header (deterministic key)", () => {
+    // recipient_hash determinism is the load-bearing anti-incident property:
+    // a per-row/random salt would break cross-campaign suppression lookup.
+    expect(raw).toMatch(/HMAC-SHA-256\(EMAIL_HASH_PEPPER/i);
+    expect(raw).toMatch(/NOT a per-row\/random salt/i);
+  });
+});
+
+describe("migration 104_outbound_email — down", () => {
+  it("drops the three RPCs before the table they reference", () => {
+    expect(down).toMatch(
+      /drop\s+function\s+if\s+exists\s+public\.anonymise_email_suppression\(uuid\)/i,
+    );
+    expect(down).toMatch(
+      /drop\s+function\s+if\s+exists\s+public\.is_recipient_suppressed\(text\)/i,
+    );
+    expect(down).toMatch(
+      /drop\s+function\s+if\s+exists\s+public\.suppress_recipient\(text,\s*text\)/i,
+    );
+    expect(down).toMatch(/drop\s+table\s+if\s+exists\s+public\.email_suppression/i);
+  });
+
+  it("makes NO action_sends/scope_grants reversions (none were applied)", () => {
+    expect(down).not.toMatch(/action_sends/i);
+    expect(down).not.toMatch(/scope_grants/i);
+  });
+});
