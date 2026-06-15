@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, within } from "@testing-library/react";
 
 vi.mock("@/lib/client-observability", () => ({
   reportSilentFallback: vi.fn(),
@@ -136,8 +136,9 @@ describe("MessageBubble header substring suppression (Bug 2 #3225)", () => {
       />,
     );
     const header = getHeader(container);
-    const primarySpan = header.querySelector("span");
-    expect(primarySpan).not.toBeNull();
-    expect(primarySpan?.className).toContain("whitespace-nowrap");
+    // The avatar now renders as the header's first <span>, so target the
+    // leader-name span by its text rather than by document order.
+    const primarySpan = within(header).getByText("Soleur Concierge");
+    expect(primarySpan.className).toContain("whitespace-nowrap");
   });
 });
