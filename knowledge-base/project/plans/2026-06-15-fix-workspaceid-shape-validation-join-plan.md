@@ -11,6 +11,20 @@ requires_cpo_signoff: true
 
 # Validate workspaceId shape before `join()` in workspace path construction (CWE-22 defense-in-depth)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Passes run:** security-sentinel review, 2× learnings-relevance, verify-the-negative (sonnet), all always-on gates (4.6 User-Brand / 4.7 Observability / 4.8 PAT / 4.9 UI — all pass/skip).
+
+### Key Improvements
+1. Added a multiline-`$`-evasion RED test case (`<uuid>\n../etc`) — security-sentinel LOW; pins regex against a future `m`-flag edit.
+2. Folded the security-sentinel MEDIUM (raw-value echo into the Sentry-bound Error message = log-injection vector) into Risks with a preferred `JSON.stringify(workspaceId)` sanitize option (non-blocking, consistent-with-precedent).
+3. Cited the two governing learnings: `2026-04-11` (point-of-use validation = the two-guard rationale; allowlist > denylist) and `2026-04-07` (CWE-59 symlink-traversal under the resolved path is explicitly out of scope).
+
+### New Considerations Discovered
+- Verify-the-negative pass CONFIRMED all 5 external callers pass DB UUIDs (guard is a no-op on the happy path) and that the broad KB/attachment surface is transitively protected via `resolveActiveWorkspaceKbRoot` → `workspacePathForWorkspaceId`.
+- The all-zero UUID is shape-valid (passes); existence/membership is a separate downstream concern, unchanged.
+
 🐛 / 🔒 Closes #5344.
 
 `semgrep-sast` rule `path-join-resolve-traversal` (CWE-22 / OWASP A01:2021) flags three sites in `apps/web-platform/server/workspace-resolver.ts` where a `workspaceId` (DB-sourced, typed `string | null`) flows into `join()` to build a bwrap filesystem mount path (ADR-038) with **no UUID-shape / path-containment validation**:
@@ -63,7 +77,7 @@ const workspacePath = join(getWorkspacesRoot(), workspaceId);
 ### Phase 0 — Preconditions (grep verification, no edits)
 
 1. `grep -n 'UUID_RE' apps/web-platform/server/workspace.ts apps/web-platform/server/api-usage.ts` — confirm the canonical regex literal to copy verbatim.
-2. `git grep -nE 'workspacePathForWorkspaceId|resolveWorkspacePathForUser' -- apps/web-platform | grep -v workspace-resolver.ts` — confirm all callers pass a DB UUID or `user.id` (verified: `shared/[token]/route.ts:195`, `shared/[token]/c4/route.ts:86`, `dsar-export.ts:95` (`subjectUserId`), `inngest/.../workspace-reconcile-on-push.ts:303` (`ws.id`), `kb-share.ts:878` (`row.workspace_id`)). None pass a non-UUID → guard is a no-op on the happy path.
+2. `git grep -nE 'workspacePathForWorkspaceId|resolveWorkspacePathForUser' -- apps/web-platform | grep -v workspace-resolver.ts` — confirm all callers pass a DB UUID or `user.id` (verified via verify-the-negative pass: `shared/[token]/route.ts:195` (`shareLink.workspace_id`, DB `string`), `shared/[token]/c4/route.ts:86` (`shareLink.workspace_id`), `dsar-export.ts:95` (`resolveDsarWorkspacePath(subjectUserId)` — a wrapper around `workspacePathForWorkspaceId`, `subjectUserId` is a `user_id` UUID), `inngest/.../workspace-reconcile-on-push.ts:303` (`ws.id`), `kb-share.ts:878` (`row.workspace_id`)). None pass a non-UUID → guard is a no-op on the happy path. Note: the broad KB/attachment caller surface (`attachment-pipeline.ts`, `agent-runner.ts`, `app/api/kb/*`) reaches `join` only through `resolveActiveWorkspaceKbRoot`/`resolveActiveWorkspacePath`, which themselves route `activeWorkspaceId` through `workspacePathForWorkspaceId` — so the single `workspacePathForWorkspaceId` guard protects them transitively too.
 3. Confirm test env glob: `apps/web-platform/vitest.config.ts:44` → `test/**/*.test.ts` (node env). New test lands in `apps/web-platform/test/`.
 
 ### Phase 1 — RED: write failing tests first (`cq-write-failing-tests-before`)
@@ -78,6 +92,7 @@ Test cases:
 - `workspacePathForWorkspaceId("/absolute")` throws (absolute prefix — defeats `join`).
 - `workspacePathForWorkspaceId("")` throws (empty).
 - `workspacePathForWorkspaceId("not-a-uuid")` throws.
+- `workspacePathForWorkspaceId("00000000-0000-0000-0000-000000000000\n../etc")` throws (multiline `$` evasion — the classic CWE-22 newline-suffix bypass; verified empirically safe because the regex has no `m` flag and the `{12}` group is saturated, but pin a test so a future regex edit that adds `m` fails loudly). Added per security-sentinel LOW finding.
 - `resolveWorkspacePathForUser(userId, mockSupabase)` where the mock's `getDefaultWorkspaceForUser` resolves a **non-UUID** `workspace_id` → throws `Invalid workspaceId format` (proves the guard fires on the DB-sourced value, the actual threat vector). Use a recursive supabase chain mock matching the `getDefaultWorkspaceForUser` shape at `workspace-resolver.ts:597-627`.
 - `resolveWorkspacePathForUser` with a valid-UUID `workspace_id` → returns the joined path (no throw).
 
@@ -124,7 +139,7 @@ Run the RED test again → expect GREEN.
 
 - [ ] `UUID_RE` constant added to `workspace-resolver.ts` matching `workspace.ts:67` byte-for-byte: `grep -c '\^\[0-9a-f\]{8}-\[0-9a-f\]{4}-\[0-9a-f\]{4}-\[0-9a-f\]{4}-\[0-9a-f\]{12}\$' apps/web-platform/server/workspace-resolver.ts` returns ≥ 1.
 - [ ] Both boundary functions throw `Invalid workspaceId format` on non-UUID input: `grep -c 'Invalid workspaceId format' apps/web-platform/server/workspace-resolver.ts` returns 2.
-- [ ] New test file exists and passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/workspace-resolver-id-shape-guard.test.ts` → 0 failures, ≥ 8 assertions covering: valid UUID passes, `..`/slash/absolute/empty/`not-a-uuid` each throw, and the `resolveWorkspacePathForUser` DB-sourced-non-UUID case throws.
+- [ ] New test file exists and passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/workspace-resolver-id-shape-guard.test.ts` → 0 failures, ≥ 9 assertions covering: valid UUID passes, `..`/slash/absolute/empty/`not-a-uuid`/newline-suffix-evasion each throw, and the `resolveWorkspacePathForUser` DB-sourced-non-UUID case throws.
 - [ ] Happy-path callers stay GREEN: the Phase 3 step-2 vitest invocation returns 0 failures.
 - [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → 0 errors.
 - [ ] `semgrep-sast` `path-join-resolve-traversal` returns 0 findings for `apps/web-platform/server/workspace-resolver.ts` (down from 3).
@@ -141,7 +156,7 @@ Run the RED test again → expect GREEN.
 ### Engineering
 
 **Status:** reviewed (inline — single-domain security hardening; no leader spawn warranted for a 2-guard mirror of an existing precedent)
-**Assessment:** This is a textbook defense-in-depth boundary guard. The change introduces no new control flow, no new dependency, and reuses an established in-repo pattern (`workspace.ts` `UUID_RE`). The only architectural note: the guard must be placed at the **id→path boundary functions** (not at every call site), and `:486` is covered transitively via `:481` — verified by tracing the call graph from the kbRoot construction back to `workspacePathForWorkspaceId`. CTO/CLO concerns (cross-tenant filesystem isolation = the ADR-038 bwrap boundary) are addressed by closing the exact CWE-22 vector; no residual concern.
+**Assessment:** This is a textbook defense-in-depth boundary guard. The change introduces no new control flow, no new dependency, and reuses an established in-repo pattern (`workspace.ts` `UUID_RE`). The guard is placed at the **id→path boundary functions** (point-of-use validation per learning `2026-04-11-service-role-idor-untrusted-ws-attachments.md` — not at every call site, not relying on the upstream DB-writer/`provisionWorkspace` guard), and `:486` is covered transitively via `:481` — verified by tracing the call graph from the kbRoot construction back to `workspacePathForWorkspaceId` (and confirmed by the deepen-plan security pass: no `join` sink in the file bypasses the two guarded functions). CTO/CLO concerns (cross-tenant filesystem isolation = the ADR-038 bwrap boundary) are addressed by closing the exact CWE-22 vector; no residual concern. Scope note: CWE-59 symlink-traversal under the resolved path is a separate, out-of-scope boundary (see Risks).
 
 ### Product/UX Gate
 
@@ -214,7 +229,10 @@ None. (Queried `gh issue list --label code-review --state open`; no other open s
 - **Precedent diff (per deepen-plan Phase 4.4):** the guard is a verbatim mirror of `workspace.ts:104-107` (`provisionWorkspace`) and `api-usage.ts:94`. No novel pattern. Both precedents throw `Error` synchronously before `join`; this plan adopts the identical shape and the identical `Invalid workspaceId format: ${id}` message string from `provisionWorkspace` so a single Sentry signature covers all provisioning + resolution paths.
 - **Behavioral risk on happy path:** zero — every current caller passes a DB UUID or `user.id` (itself a UUID). Verified via Phase 0 step 2 caller grep. The all-zero UUID is shape-valid and still passes (existence/membership is enforced elsewhere and unchanged).
 - **Regex false-reject:** the `i` flag + standard 8-4-4-4-12 hex shape matches `randomUUID()` (lowercase) and any uppercase variant. Pinned to the established repo literal — not re-authored.
-- **Throw vs. fail-soft:** the precedent throws (does not return null / a sentinel path). Throwing is correct here — a non-UUID reaching this boundary is an integrity violation (the deferral's exact hypothesis), and silently returning a fallback path would mask it. Callers already handle resolver throws (try/catch → Sentry → status contract).
+- **Throw vs. fail-soft:** the precedent throws (does not return null / a sentinel path). Throwing is correct here — a non-UUID reaching this boundary is an integrity violation (the deferral's exact hypothesis), and silently returning a fallback path would mask it. Callers already handle resolver throws (try/catch → Sentry → status contract). Throwing is strictly MORE available than a fallback: the only inputs that throw are malformed ones that would otherwise escape the mount; there is no input that is both valid-for-service and rejected-by-guard. The Inngest reconcile fan-out (`workspace-reconcile-on-push.ts:303`) iterates per-workspace and a throw would abort that step, but its input is `ws.id` (a DB UUID) so the guard is a no-op there.
+- **Message-echo / log-injection (security-sentinel MEDIUM, non-blocking, consistent with precedent):** the thrown `Invalid workspaceId format: ${workspaceId}` echoes the raw offending value, which the Observability section routes to Sentry via the callers' catch → `reportSilentFallback`. In the threat scenario the value is attacker-influenced, so embedding ` `/` `/control chars becomes a log-injection vector into the Sentry JSON viewer. The existing precedent (`workspace.ts:106`) has the identical exposure, so this is consistent-with-precedent, NOT a regression, and the value is a non-PII id — do NOT block merge. **Implementer option (preferred):** sanitize the interpolated value with `JSON.stringify(workspaceId)` (escapes control chars + quotes the value) OR drop the value from the message entirely and rely on the `extra` bag the callers already attach. If sanitizing, do NOT propagate the raw-echo form to `workspace.ts` — leave that precedent for a separate `beforeSend` hardening pass.
+- **Point-of-use validation (learning `2026-04-11-service-role-idor-untrusted-ws-attachments.md`):** the two-guard decision (not one, not relying on `provisionWorkspace`'s upstream guard) is the direct application of "if a service-role client will act on data, validate it at the point of use, not just the point of generation." Each `join` site is an independent point of use; the DB writer's invariant does not transfer to the resolver path. The chosen `UUID_RE` is an ALLOWLIST (positive 8-4-4-4-12 shape) which is strictly stronger than that learning's denylist (`reject ..`) — it rejects every separator/traversal token as a side-effect.
+- **Scope boundary (learning `2026-04-07-symlink-escape-recursive-directory-traversal.md`):** this guard closes the id→path *root-join* boundary only. Symlink-following during any recursive traversal UNDER the resolved `workspacePath`/`kbRoot` is a separate CWE-59 boundary (handled by `!entry.isSymbolicLink()` / `isPathInWorkspace` at enumeration sites) and is explicitly OUT OF SCOPE for #5344. The UUID guard does not make the whole bwrap mount traversal-proof — it makes the mount-root construction traversal-proof.
 
 ## Sharp Edges
 

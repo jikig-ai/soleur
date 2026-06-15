@@ -18,15 +18,15 @@ Derived from `knowledge-base/project/plans/2026-06-15-fix-workspaceid-shape-vali
 ## Phase 1 — RED (failing tests first)
 
 - [ ] 1.1 Create `apps/web-platform/test/workspace-resolver-id-shape-guard.test.ts` (node env), importing `randomUUID` from `crypto` and the two functions from `../server/workspace-resolver`.
-- [ ] 1.2 Add cases: valid UUID passes; `"../etc"`, `"a/b"`, `"/absolute"`, `""`, `"not-a-uuid"` each throw `Invalid workspaceId format`.
+- [ ] 1.2 Add cases: valid UUID passes; `"../etc"`, `"a/b"`, `"/absolute"`, `""`, `"not-a-uuid"`, and the newline-suffix evasion `"<valid-uuid>\n../etc"` each throw `Invalid workspaceId format` (≥9 assertions total).
 - [ ] 1.3 Add `resolveWorkspacePathForUser` cases with a recursive supabase chain mock (shape per `workspace-resolver.ts:597-627`): DB returns non-UUID → throws; DB returns valid UUID → returns joined path.
 - [ ] 1.4 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/workspace-resolver-id-shape-guard.test.ts` → expect FAIL.
 
 ## Phase 2 — GREEN (add guards)
 
 - [ ] 2.1 Add `UUID_RE` constant to `workspace-resolver.ts` near `getWorkspacesRoot` (mirror `workspace.ts:67` byte-for-byte) with a comment citing ADR-038 / CWE-22.
-- [ ] 2.2 Add `if (!UUID_RE.test(workspaceId)) throw new Error(\`Invalid workspaceId format: ${workspaceId}\`)` in `workspacePathForWorkspaceId` before the `join` (`:718-720`).
-- [ ] 2.3 Add the same guard in `resolveWorkspacePathForUser` after `getDefaultWorkspaceForUser` and before the `join` (`:707-708`).
+- [ ] 2.2 Add `if (!UUID_RE.test(workspaceId)) throw new Error(\`Invalid workspaceId format: ${JSON.stringify(workspaceId)}\`)` in `workspacePathForWorkspaceId` before the `join` (`:718-720`). Use `JSON.stringify(workspaceId)` to escape control chars in the Sentry-bound message (security-sentinel MEDIUM); the test asserts the `Invalid workspaceId format` prefix, not the exact tail, so sanitizing is compatible.
+- [ ] 2.3 Add the same guard (with `JSON.stringify(workspaceId)` in the message) in `resolveWorkspacePathForUser` after `getDefaultWorkspaceForUser` and before the `join` (`:707-708`).
 - [ ] 2.4 Add a one-line comment at `:481`/`:486` noting the `kbRoot` finding is covered by the guard in `workspacePathForWorkspaceId`.
 - [ ] 2.5 Re-run the Phase 1 test → expect GREEN.
 
