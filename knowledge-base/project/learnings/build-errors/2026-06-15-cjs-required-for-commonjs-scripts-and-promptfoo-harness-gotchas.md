@@ -50,14 +50,24 @@ asserts must be `.cjs` here.
   Lesson: `validate config` accepting a key does NOT mean the key is honored at eval
   time — only a live run proves it. Document `npx promptfoo eval --repeat N`; do not put
   `repeat:` in the YAML.
-- **CORRECTION (PR B.1): promptfoo passes a `defaultTest.vars` `file://...` value to a
-  custom JS assert as the LITERAL UNRESOLVED STRING** (`"file://enums/go-routes.json"`),
-  NOT the file contents and NOT a parsed array. The first live run failed 100% (0/36)
-  because the gate did `Array.isArray(vars.enum) ? vars.enum : []` → `[]` → every label
-  out-of-enum. Fix: the assert must read the SSOT file itself (strip `file://`, resolve
-  relative to the script, `JSON.parse`, fail closed to `[]`). The deterministic stub
-  tests missed this because they passed a real array — the exact fixture-realism gap.
-  **Always exercise the var shape promptfoo actually passes, not a convenient stand-in.**
+- **promptfoo's `defaultTest.vars` `file://*.json` handling is VERSION-DEPENDENT — it may
+  pass EITHER the literal unresolved ref string (`"file://enums/go-routes.json"`) OR the
+  RESOLVED FILE CONTENTS (the JSON array text as a string).** A custom JS assert must handle
+  both, plus a direct array, and fail closed to `[]`. (B.1's first run got the literal-ref
+  shape and failed 100% with `Array.isArray(vars.enum)?vars.enum:[]`→`[]`; a later run got
+  the resolved-contents shape.) `loadEnum` must: return a direct array; else if the string
+  starts with `[`, `JSON.parse` it (resolved contents / array literal); else strip `file://`
+  and read the file. **The stub tests must exercise EVERY shape promptfoo can send — a test
+  that passes only one shape (or a convenient stand-in array) hides the others.**
+- **A "no caller produces this shape" simplification is unsafe when the caller is an external
+  tool's undocumented / version-dependent behavior.** In B.1 a reviewer flagged loadEnum's
+  JSON-array-text branch as YAGNI ("nothing passes a JSON literal string") and it was dropped;
+  promptfoo's resolved-contents shape IS exactly that input, so dropping it silently vacuumed
+  the gate on the already-merged go/triage targets (100% out-of-enum) — caught only when the
+  next target was eval'd live. The unit tests passed (they used the OTHER shape). **Verify a
+  "dead branch" against the real external caller's actual output, not against the unit-test
+  fixtures, before deleting it.** Fixed in the follow-up that restored the branch + added a
+  contents-shape regression guard.
 - **Golden tasks must DISCRIMINATE skill from baseline, not merely be answerable.** The
   POC's first task set was too easy: the label-only baseline scored 89–100%, so the
   skill-vs-baseline delta was ~0 and the harness proved nothing. Hardening to adversarial
@@ -65,6 +75,17 @@ asserts must be `.cjs` here.
   `URGENT!!` cosmetic→P3; no-new-user-activation→P1) produced a real delta: go-routing
   +19pts (skill 100% vs baseline 81%), ticket-triage +6pts. **A near-zero delta means the
   tasks don't separate the arms — fix the tasks before concluding the prose is dead weight.**
+- **But after a genuine hardening attempt, a persistent +0 IS a valid finding — the harness is
+  saying this surface's prose adds no measurable model-behavior signal.** Two attempted expansion
+  targets (incident brand-survival threshold, ship semver bump) came back +0 / +0 even with
+  deliberately adversarial tasks (40-line-new-skill→`minor`, 600-line-refactor→`patch`,
+  token-in-logs→`single-user incident`): the models classify these correctly from the input
+  description alone, so the criteria/rules prose isn't producing the behavior. The
+  enum-LLM-classifier space worth harnessing is SMALL (routing discriminates strongly, triage
+  modestly, others not) — and the disciplined response to a +0 target is to NOT ship it as
+  permanent fixture-sync debt, per the "verify it pays off before investing in coverage" gate.
+  Also: most Soleur "classifiers" are deterministic scripts (gdpr-gate, skill-security-scan,
+  brainstorm lane) — already unit-tested; an LLM-arm eval there tests the wrong thing.
 - **Providers can load from a generated file** — `providers: file://models.generated.json`
   (a JSON array of `"anthropic:messages:<id>"` strings) validates. This keeps model-ID
   literals out of config-class files (and off the model-launch-review auto-fixer);
