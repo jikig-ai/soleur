@@ -131,7 +131,7 @@ function parsePorcelainChanges(porcelainZ: string): string[] {
     if (entry.length < 4) continue; // status (2) + space + path
     const status = entry.slice(0, 2);
     const path = entry.slice(3);
-    paths.push(path);
+    if (path !== "") paths.push(path);
     // R (rename) / C (copy) emit the SOURCE path as a separate bare token —
     // capture it too (so a rename's source-deletion is in the snapshot), then
     // advance past it.
@@ -251,22 +251,37 @@ export async function checkpointInflightWork(
 
 export type RestoreResult = {
   restored: boolean;
-  reason?: "no-checkpoint" | "dirty" | "sibling-active" | "restore-failed";
+  reason?: "no-checkpoint" | "dirty" | "sibling-active" | "stale-base";
 };
 
 /**
  * Gated restore of a prior in-flight checkpoint into the SAME physical
  * workspace. Materializes the snapshot ONLY when it provably cannot overwrite
- * newer work:
- *   - working tree CLEAN (`git status --porcelain` empty) — PRIMARY guarantor;
- *     necessary AND sufficient for the solo case, AND
- *   - no sibling slot active — secondary belt, meaningful only for team
- *     workspaces (the caller passes `false` for solo without a DB read).
+ * newer work — ALL of:
+ *   - working tree CLEAN (`git status --porcelain` empty), AND
+ *   - the checkpoint's parent still equals current HEAD (HEAD-parity) — the
+ *     clean-tree check alone is NOT sufficient: the workspace clone's HEAD can
+ *     advance between checkpoint and resume (`git pull --autostash` runs on every
+ *     `startAgentSession` via `gitWithInstallationAuth` in `session-sync.ts`, and
+ *     `workspace-sync.ts` does `pull --ff-only` / `reset --hard`). A clean tree at
+ *     HEAD=B does not make a HEAD=A-based snapshot safe to materialize — the
+ *     full-tree write would revert every file changed between A and B, AND
+ *   - no sibling slot active — a concurrent sibling conversation on the SAME
+ *     shared clone (per-user concurrency can be >1, including the solo two-tab
+ *     case) means the snapshot may carry the sibling's dirt; restoring it over a
+ *     now-clean tree would clobber the sibling. The caller probes this for EVERY
+ *     resume (no solo skip — `workspace_id === userId` still permits concurrency 2).
  * Otherwise it refuses-and-reports (no overwrite, ref retained) so the user's
  * newer work is never clobbered.
  *
+ * Materialization handles deletions: `checkout-index` only WRITES index entries,
+ * so a file the in-flight work DELETED would be resurrected; we explicitly `rm`
+ * the paths the checkpoint dropped vs its parent after the checkout.
+ *
  * The real index is never staged (temp-index materialization). On a successful
- * restore the ref is CONSUMED so a later resume does not re-restore.
+ * restore the ref is CONSUMED so a later resume does not re-restore. A
+ * materialization failure AFTER the precondition passes THROWS (the caller
+ * surfaces an honest retryable error) — never a silent path.
  */
 export async function restoreInflightCheckpoint(
   workspacePath: string,
@@ -287,42 +302,58 @@ export async function restoreInflightCheckpoint(
       return { restored: false, reason: "no-checkpoint" };
     }
 
-    const status = await runPlumbingGit(workspacePath, [
-      "status",
-      "--porcelain",
-    ]);
+    // Safety-precondition reads. A read failure here means we cannot PROVE the
+    // restore is safe → throw so the caller surfaces an honest retryable error
+    // (matching the materialization-failure path; never a silent return).
+    const status = await runPlumbingGit(workspacePath, ["status", "--porcelain"]);
     if (!status.ok) {
-      reportSilentFallback(new Error(`status failed: ${status.stderr}`), {
+      const err = new Error(`status failed: ${status.stderr}`);
+      reportSilentFallback(err, {
         feature: "inflight-checkpoint",
         op: "restore-failed",
-        extra: { conversationId },
+        extra: { conversationId, stage: "status-probe" },
       });
-      return { restored: false, reason: "restore-failed" };
+      throw err;
     }
-
     const treeDirty = status.stdout.trim() !== "";
-    if (treeDirty || opts.siblingSlotActive) {
+
+    // HEAD-parity: the checkpoint's first parent is the HEAD it was taken over.
+    const refParent = await runPlumbingGit(workspacePath, ["rev-parse", `${ref}^1`]);
+    const head = await runPlumbingGit(workspacePath, ["rev-parse", "HEAD"]);
+    if (!refParent.ok || !head.ok) {
+      const err = new Error(
+        `head-parity probe failed: ${refParent.stderr || head.stderr}`,
+      );
+      reportSilentFallback(err, {
+        feature: "inflight-checkpoint",
+        op: "restore-failed",
+        extra: { conversationId, stage: "head-parity-probe" },
+      });
+      throw err;
+    }
+    const staleBase = refParent.stdout.trim() !== head.stdout.trim();
+
+    if (treeDirty || opts.siblingSlotActive || staleBase) {
       // Refuse-and-report: do NOT overwrite. One honest user message (the
       // caller emits CHECKPOINT_REFUSED_MESSAGE); reason feeds only the op
       // extra for triage. Ref is retained so the work stays recoverable.
+      const reason = treeDirty
+        ? "dirty"
+        : opts.siblingSlotActive
+          ? "sibling-active"
+          : "stale-base";
       reportSilentFallback(null, {
         feature: "inflight-checkpoint",
         op: "restore-refused",
         message: "in-flight checkpoint not auto-applied (newer work present)",
-        extra: {
-          conversationId,
-          reason: treeDirty ? "dirty" : "sibling-active",
-        },
+        extra: { conversationId, reason },
       });
-      return {
-        restored: false,
-        reason: treeDirty ? "dirty" : "sibling-active",
-      };
+      return { restored: false, reason };
     }
 
-    // Safe → materialize via a temp index OUTSIDE the worktree (a `read-tree`
-    // into the REAL index would leave the snapshot staged, breaking the
-    // "index untouched" invariant — plan-review P0-2).
+    // Safe (clean tree, HEAD unmoved, no sibling) → materialize via a temp index
+    // OUTSIDE the worktree (a `read-tree` into the REAL index would leave the
+    // snapshot staged, breaking the "index untouched" invariant — plan-review P0-2).
     const tmpIndex = tempIndexPath();
     const indexEnv = { GIT_INDEX_FILE: tmpIndex };
     try {
@@ -340,16 +371,30 @@ export async function restoreInflightCheckpoint(
       );
       if (!checkout.ok) throw new Error(`checkout-index failed: ${checkout.stderr}`);
 
-      // Consume the ref — one-shot restore.
-      const del = await runPlumbingGit(workspacePath, [
-        "update-ref",
-        "-d",
+      // `checkout-index` only writes — it never deletes. Re-apply the in-flight
+      // deletions: paths present in the parent (= current HEAD, guaranteed by the
+      // HEAD-parity gate) but dropped in the checkpoint tree. Without this, a file
+      // the user deleted mid-turn is silently resurrected on restore.
+      const deleted = await runPlumbingGit(workspacePath, [
+        "diff",
+        "--name-only",
+        "-z",
+        "--diff-filter=D",
+        `${ref}^1`,
         ref,
       ]);
+      if (!deleted.ok) throw new Error(`diff (deletions) failed: ${deleted.stderr}`);
+      const deletedPaths = deleted.stdout.split("\0").filter((p) => p !== "");
+      for (const rel of deletedPaths) {
+        await rm(join(workspacePath, rel), { force: true });
+      }
+
+      // Consume the ref — one-shot restore.
+      const del = await runPlumbingGit(workspacePath, ["update-ref", "-d", ref]);
       if (!del.ok) throw new Error(`update-ref -d failed: ${del.stderr}`);
 
       log.info(
-        { op: "restore-inflight", conversationId, ref },
+        { op: "restore-inflight", conversationId, ref, deletedCount: deletedPaths.length },
         "inflight-checkpoint: restored and consumed checkpoint ref",
       );
       return { restored: true };
@@ -362,7 +407,7 @@ export async function restoreInflightCheckpoint(
       reportSilentFallback(err, {
         feature: "inflight-checkpoint",
         op: "restore-failed",
-        extra: { conversationId },
+        extra: { conversationId, stage: "materialize" },
       });
       throw err;
     } finally {

@@ -1955,37 +1955,40 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         {
           const restoreWorkspacePath =
             workspacePathForWorkspaceId(resumeWorkspaceId);
-          // Solo workspace (`workspace_id === userId`): clean-tree alone is the
-          // sufficient no-clobber guarantor — skip the slot DB read entirely
-          // (no round-trip on the dominant resume path). Team workspaces
-          // (`workspace_id !== userId`) are cross-user shared trees, so probe
-          // for a LIVE sibling slot (liveness-filtered — stale slots are swept
-          // lazily/by pg_cron but NOT on this read path).
+          // Probe for a LIVE sibling conversation slot on the SAME shared clone
+          // — for EVERY resume, including solo (`workspace_id === userId`). Solo
+          // is NOT single-tenant-at-rest: per-user concurrency can be >1 (free=1
+          // but solo=2 / startup=5 / scale=50), so a solo user with two tabs
+          // shares one working tree. A checkpoint taken by one tab can carry the
+          // OTHER tab's in-flight edits (the wide path predicate snapshots the
+          // whole dirty tree); restoring it over a now-clean tree would clobber
+          // the sibling. The clean-tree gate proves "nothing uncommitted to
+          // lose" but NOT "this snapshot belongs to this conversation" — the slot
+          // probe is what supplies the latter. Liveness-filtered: stale slots are
+          // swept lazily / by pg_cron but NOT on this read path.
           let siblingSlotActive = false;
-          if (resumeWorkspaceId !== userId) {
-            const liveCutoff = new Date(Date.now() - 120_000).toISOString();
-            const { data: siblingSlots, error: slotErr } = await tenantResumeConv
-              .from("user_concurrency_slots")
-              .select("conversation_id")
-              .eq("workspace_id", resumeWorkspaceId)
-              .neq("conversation_id", msg.conversationId)
-              .gte("last_heartbeat_at", liveCutoff);
-            if (slotErr) {
-              // Fail SAFE: an unreadable slot table means we cannot prove the
-              // tree is sole-tenant, so treat a sibling as present (refuse the
-              // restore rather than risk clobbering a teammate's work).
-              siblingSlotActive = true;
-              reportSilentFallback(
-                { code: slotErr.code, message: slotErr.message },
-                {
-                  feature: "inflight-checkpoint",
-                  op: "restore-slot-probe",
-                  extra: { userId, conversationId: msg.conversationId },
-                },
-              );
-            } else {
-              siblingSlotActive = (siblingSlots?.length ?? 0) > 0;
-            }
+          const liveCutoff = new Date(Date.now() - 120_000).toISOString();
+          const { data: siblingSlots, error: slotErr } = await tenantResumeConv
+            .from("user_concurrency_slots")
+            .select("conversation_id")
+            .eq("workspace_id", resumeWorkspaceId)
+            .neq("conversation_id", msg.conversationId)
+            .gte("last_heartbeat_at", liveCutoff);
+          if (slotErr) {
+            // Fail SAFE: an unreadable slot table means we cannot prove the tree
+            // is sole-tenant, so treat a sibling as present (refuse the restore
+            // rather than risk clobbering a teammate's / sibling tab's work).
+            siblingSlotActive = true;
+            reportSilentFallback(
+              { code: slotErr.code, message: slotErr.message },
+              {
+                feature: "inflight-checkpoint",
+                op: "restore-slot-probe",
+                extra: { userId, conversationId: msg.conversationId },
+              },
+            );
+          } else {
+            siblingSlotActive = (siblingSlots?.length ?? 0) > 0;
           }
 
           const restoreResult = await restoreInflightCheckpoint(
@@ -1996,7 +1999,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           if (
             !restoreResult.restored &&
             (restoreResult.reason === "dirty" ||
-              restoreResult.reason === "sibling-active")
+              restoreResult.reason === "sibling-active" ||
+              restoreResult.reason === "stale-base")
           ) {
             // Honest refuse-and-report: reuse the FR1 honest-status surface
             // (an `error`-family frame carrying human copy — the

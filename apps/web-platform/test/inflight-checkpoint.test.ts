@@ -214,6 +214,68 @@ describe("RED-C: refuse-and-report (unsafe), no clobber", () => {
   });
 });
 
+describe("RED-D: refuse on a MOVED HEAD (stale base), no clobber of newer commits", () => {
+  it("refuses when HEAD advanced past the checkpoint's parent (e.g. a pull landed)", async () => {
+    const repo = await newRepo();
+    await writeFile(join(repo, "shared.txt"), "inflight-edit\n");
+    await checkpointInflightWork(repo, "conv-HEAD", "user-H");
+
+    // Simulate a pull/commit advancing HEAD between checkpoint and resume:
+    // shared.txt is now committed with NEWER content, the tree is clean, but
+    // HEAD != the checkpoint's parent.
+    await rm(join(repo, "shared.txt"));
+    await writeFile(join(repo, "shared.txt"), "v2-NEWER-COMMITTED\n");
+    await git(repo, "add", "shared.txt");
+    await git(repo, "commit", "-m", "newer work");
+    expect(await porcelain(repo)).toBe("");
+
+    const result = await restoreInflightCheckpoint(repo, "conv-HEAD", {
+      siblingSlotActive: false,
+    });
+
+    expect(result.restored).toBe(false);
+    expect(result.reason).toBe("stale-base");
+    // The newer committed content was NOT reverted by the stale snapshot.
+    const onDisk = await execFileP("cat", [join(repo, "shared.txt")]);
+    expect(onDisk.stdout).toBe("v2-NEWER-COMMITTED\n");
+    // Ref retained (recoverable).
+    expect(await refExists(repo, "conv-HEAD")).toBe(true);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        op: "restore-refused",
+        extra: expect.objectContaining({ reason: "stale-base" }),
+      }),
+    );
+  });
+});
+
+describe("RED-E: in-flight DELETIONS are re-applied on restore (not resurrected)", () => {
+  it("removes a file the checkpoint dropped vs its parent", async () => {
+    const repo = await newRepo();
+    // In-flight work: add feature.ts AND delete the tracked base.txt.
+    await writeFile(join(repo, "feature.ts"), "export const x = 1;\n");
+    await rm(join(repo, "base.txt"));
+    await checkpointInflightWork(repo, "conv-DEL", "user-D");
+
+    // Resume scenario: clean tree at HEAD (base.txt back, feature.ts gone).
+    await git(repo, "checkout", "--", "base.txt");
+    await rm(join(repo, "feature.ts"));
+    expect(await porcelain(repo)).toBe("");
+    expect(existsSync(join(repo, "base.txt"))).toBe(true);
+
+    const result = await restoreInflightCheckpoint(repo, "conv-DEL", {
+      siblingSlotActive: false,
+    });
+
+    expect(result.restored).toBe(true);
+    // The added file came back...
+    expect(existsSync(join(repo, "feature.ts"))).toBe(true);
+    // ...and the in-flight deletion was re-applied (base.txt NOT resurrected).
+    expect(existsSync(join(repo, "base.txt"))).toBe(false);
+  });
+});
+
 describe("AC4: no checkpoint over a clean tree", () => {
   it("is a no-op when there are no uncommitted changes", async () => {
     const repo = await newRepo();
