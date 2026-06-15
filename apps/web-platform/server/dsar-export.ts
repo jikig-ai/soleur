@@ -426,6 +426,11 @@ export const MESSAGE_NON_REDACT_ALLOWLIST = [
   "created_at",
   "cache_read_input_tokens",
   "cache_creation_input_tokens",
+  // message_kind (mig 105) — structural discriminator ('turn_summary' vs
+  // NULL='text'); describes the row's own shape, not third-party content,
+  // so it is safe to surface on a foreign-author row. The summary BODY
+  // lives in `content` (already redacted above), not here.
+  "message_kind",
 ] as const;
 
 export { MESSAGE_REDACT_FIELDS };
