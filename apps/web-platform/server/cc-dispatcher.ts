@@ -52,7 +52,12 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
-import { WORKFLOW_END_USER_MESSAGES } from "./cc-workflow-end-messages";
+import {
+  WORKFLOW_END_USER_MESSAGES,
+  resolveWorktreeEnterFailedMessage,
+} from "./cc-workflow-end-messages";
+import { reprovisionWorkspaceOnDispatch } from "./cc-reprovision";
+import type { ReprovisionOutcome } from "./ensure-workspace-repo";
 import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
@@ -90,12 +95,8 @@ import {
 // per-workspace resolver (ADR-044) — NOT the soleur-monorepo-hardcoded
 // `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
 import { resolveInstallationId } from "./resolve-installation-id";
-import {
-  generateInstallationToken,
-  findRepoOwnerInstallationForUser,
-  getInstallationAccount,
-} from "./github-app";
-import { mirrorSelfHealSkip } from "./cc-self-heal-observability";
+import { generateInstallationToken } from "./github-app";
+import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -1381,72 +1382,18 @@ export const realSdkQueryFactory: QueryFactory = async (
     // solo-vs-active-workspace clobber risk) — the override re-applies on each
     // cold dispatch, which is bounded (cold-conversation factory). Best-effort:
     // any probe failure keeps the stored install and never blocks the chat.
-    let effectiveInstallationId = installationId;
-    if (installationId !== null && connectedOwner) {
-      try {
-        const storedAccount = await getInstallationAccount(installationId);
-        const alreadyCorrect =
-          storedAccount.login.toLowerCase() === connectedOwner.toLowerCase();
-        // `alreadyCorrect` is a no-op (the stored install already owns the
-        // connected repo), NOT a skip — do not mirror it. Every other
-        // not-already-correct branch either promotes (success log.info) or
-        // KEEPS the stored install, and a keep must be a queryable Sentry event
-        // (Bug B — cq-silent-fallback-must-mirror-to-sentry).
-        if (!alreadyCorrect) {
-          if (storedAccount.type === "User") {
-            // Only derive the user's login from a personal (User) install.
-            const { installationId: ownerInstall, outcome } =
-              await findRepoOwnerInstallationForUser(
-                connectedOwner,
-                storedAccount.login,
-              );
-            if (ownerInstall !== null && ownerInstall !== installationId) {
-              log.info(
-                {
-                  userId: args.userId,
-                  storedInstallationId: installationId,
-                  ownerInstallationId: ownerInstall,
-                  owner: connectedOwner,
-                },
-                "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
-              );
-              effectiveInstallationId = ownerInstall;
-            } else if (ownerInstall === null) {
-              // Promotion denied (not-member / transient-indeterminate /
-              // token-mint-failed / no-owner-install) — keep the stored
-              // (possibly-wrong) install + surface the skip so a residual 403
-              // is explainable from Sentry without SSH.
-              mirrorSelfHealSkip({
-                userId: args.userId,
-                storedInstallationId: installationId,
-                owner: connectedOwner,
-                membershipProbeOutcome: outcome,
-                effectiveInstallationId: installationId,
-              });
-            }
-          } else {
-            // Org-type stored install whose account != the connected-repo
-            // owner: the user's login is not derivable without a service-role
-            // admin lookup, so keep the stored install (fail-safe). Mirror it.
-            mirrorSelfHealSkip({
-              userId: args.userId,
-              storedInstallationId: installationId,
-              owner: connectedOwner,
-              membershipProbeOutcome: "org-type-stored-install",
-              effectiveInstallationId: installationId,
-            });
-          }
-        }
-      } catch (probeErr) {
-        reportSilentFallback(probeErr, {
-          feature: "cc-dispatcher",
-          op: "installation-self-heal-probe",
-          extra: { userId: args.userId },
-          message:
-            "Repo-owner installation probe failed; keeping stored installation",
-        });
-      }
-    }
+    // Self-heal SELECTION extracted to `resolveEffectiveInstallationId`
+    // (cc-effective-installation.ts) so the per-dispatch warm re-provision
+    // (cc-reprovision.ts) selects the SAME promoted install as this cold factory
+    // — otherwise the warm re-clone would use the raw (possibly 403-ing) stored
+    // install and falsely report "workspace reclaimed — couldn't restore" for an
+    // org repo a cold turn could recover (#5340 review finding). Best-effort:
+    // returns the stored install on any probe failure, never widening access.
+    const effectiveInstallationId = await resolveEffectiveInstallationId({
+      userId: args.userId,
+      installationId,
+      repoUrl,
+    });
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
@@ -2357,6 +2304,37 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // #5340 / #5240 design item #2 — deterministic workspace re-provision on
+  // reconnect. After a sandbox/host reclaim the resolved workspace path can be a
+  // fresh filesystem with no repo. The factory-internal self-heal
+  // (`ensureWorkspaceRepoCloned` in `realSdkQueryFactory`) runs ONLY on a COLD conversation;
+  // warm-query reconnect (the epic's headline scenario) never re-invokes the
+  // factory. Re-provision per-dispatch here — same fire-and-forget pattern as the
+  // `setBashAutonomous` warm-query resolve above — so BOTH cold and warm turns
+  // recover AND publish the outcome the honest-message branch reads.
+  //
+  // `reprovisionOutcome` is the POST-recovery signal: `onWorkflowEnded` shows the
+  // honest "workspace reclaimed" message ONLY when a `worktree_enter_failed` turn
+  // is paired with `"failed"` here — the message is gated AFTER the recovery
+  // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
+  // recovery-it-gates.md), never before. Idempotent with the cold factory call
+  // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  let reprovisionOutcome: ReprovisionOutcome | undefined;
+  void reprovisionWorkspaceOnDispatch(userId)
+    .then((outcome) => {
+      reprovisionOutcome = outcome;
+    })
+    .catch((err) => {
+      // reprovisionWorkspaceOnDispatch is already fail-soft (returns "ok" on a
+      // resolver error); this catch is belt-and-suspenders for an unexpected
+      // synchronous throw and leaves the outcome unresolved (generic message).
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "reprovision-on-dispatch-publish",
+        extra: { userId, conversationId },
+      });
+    });
+
   // feat-debug-mode-stream — per-dispatch debug-stream gate. Two INDEPENDENT
   // conditions, BOTH required for any debug_event to emit (read as `let`
   // bindings, mirroring `bashAutonomousPosture`'s fire-and-forget resolve so
@@ -2783,6 +2761,22 @@ export async function dispatchSoleurGo(
           runnerRunawayReason: end.reason,
           runnerRunawayLastBlockKind: end.lastBlockKind,
           runnerRunawayLastBlockToolName: end.lastBlockToolName,
+        });
+      } else if (end.status === "worktree_enter_failed") {
+        // #5340 / #5240 design item #2 — post-recovery-failure honest message.
+        // `worktree_enter_failed` is NOT terminal (see
+        // TERMINAL_WORKFLOW_END_STATUSES), so it routes HERE to a
+        // `{ type: "error", message }` frame. When the per-dispatch
+        // re-provision genuinely failed (`reprovisionOutcome === "failed"`),
+        // surface the honest "workspace reclaimed" copy; otherwise the generic
+        // retryable copy. The recovery already ran (factory `ensureWorkspaceRepoCloned` cold +
+        // `reprovisionWorkspaceOnDispatch` cold/warm) — this branch sits AFTER
+        // it (placement learning 2026-06-14-short-circuit-guard-must-sit-after-
+        // the-recovery-it-gates.md), so the message never lies in the
+        // recoverable case.
+        sendToClient(userId, {
+          type: "error",
+          message: resolveWorktreeEnterFailedMessage(reprovisionOutcome),
         });
       } else {
         sendToClient(userId, {

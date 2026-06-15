@@ -31,6 +31,17 @@ export function __setGraftForTests(fn: GraftFn): void {
   graftFn = fn;
 }
 
+/**
+ * Result of a session-start re-provision attempt (#5340 / #5240 design item #2).
+ * Deliberately 2-variant: the only consumer (the cc reconnect honest-message
+ * branch) branches solely on `"failed"`. `"ok"` folds every benign exit
+ * (not-connected, `.git`-present no-op, skipped-bad-url, cloned) — four success
+ * shades nobody reads were cut at plan-review. `"failed"` is ONLY the genuine
+ * clone-catch, i.e. the post-recovery-failure signal that gates the honest
+ * "workspace reclaimed" message.
+ */
+export type ReprovisionOutcome = "failed" | "ok";
+
 export interface EnsureWorkspaceRepoArgs {
   userId: string;
   workspacePath: string;
@@ -69,13 +80,13 @@ export interface EnsureWorkspaceRepoArgs {
  */
 export async function ensureWorkspaceRepoCloned(
   args: EnsureWorkspaceRepoArgs,
-): Promise<void> {
+): Promise<ReprovisionOutcome> {
   const { userId, workspacePath, installationId, repoUrl } = args;
-  if (installationId === null || !repoUrl) return; // not connected → nothing to ensure
+  if (installationId === null || !repoUrl) return "ok"; // not connected → nothing to ensure
 
   // NEVER touch an existing repo (Start-Fresh, already-cloned, or a different
   // origin the user is intentionally using). Only heal the no-`.git` symptom.
-  if (existsSync(join(workspacePath, ".git"))) return;
+  if (existsSync(join(workspacePath, ".git"))) return "ok";
 
   if (!GITHUB_HTTPS_REPO_RE.test(repoUrl)) {
     reportSilentFallback(new Error("repo_url failed github-https allowlist"), {
@@ -84,7 +95,7 @@ export async function ensureWorkspaceRepoCloned(
       extra: { userId, hasInstallation: true },
       message: "connected repo_url is not a github.com HTTPS URL; skipping self-heal",
     });
-    return;
+    return "ok"; // benign skip — a malformed URL is NOT a recovery failure
   }
 
   try {
@@ -95,6 +106,7 @@ export async function ensureWorkspaceRepoCloned(
     // userId), so this is source-hygiene. The two reportSilentFallback sites
     // are guard-allowlisted (they hash via hashExtraUserId) and keep userId.
     log.info({ action: "cloned" }, "ensure-workspace-repo: cloned connected repo");
+    return "ok";
   } catch (err) {
     // Fail-soft: surface to Sentry, never crash the conversation. The token is
     // env-only inside gitWithInstallationAuth (never in argv/URL/stderr), so it
@@ -105,6 +117,10 @@ export async function ensureWorkspaceRepoCloned(
       extra: { userId, hasInstallation: true },
       message: "ensure-workspace-repo clone failed; Concierge proceeds degraded (no clone)",
     });
+    // The ONLY non-benign outcome: a genuine clone failure (token expired /
+    // network / repo gone). This is the post-recovery-failure signal the cc
+    // reconnect path threads to the honest "workspace reclaimed" message.
+    return "failed";
   }
 }
 

@@ -1,6 +1,6 @@
 import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
-import { readFileSync, mkdirSync } from "fs";
+import { readFileSync, mkdirSync, existsSync } from "fs";
 import { readFile } from "node:fs/promises";
 import path from "path";
 
@@ -44,6 +44,8 @@ import type { Provider } from "@/lib/types";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
+import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
@@ -1017,6 +1019,53 @@ export async function startAgentSession(
           extra: { userId },
         });
       }
+    }
+
+    // Deterministic workspace re-provision on reconnect (#5340 / #5240 design
+    // item #2). After a sandbox/host reclaim the resolved active-workspace path
+    // can be a fresh filesystem where the connected repo was never cloned (the
+    // "No Git repository / no worktrees" symptom). The Concierge (cc) path
+    // already self-heals via `ensureWorkspaceRepoCloned`; the LEADER path never
+    // did — so a leader turn dead-ended with no recovery. Add the recovery here.
+    //
+    // PLACEMENT (load-bearing — learning 2026-06-14-short-circuit-guard-must-
+    // sit-after-the-recovery-it-gates.md): this is the RECOVERY, placed BEFORE
+    // `patchWorkspacePermissions`/`syncPull` (both need a real repo on disk) and
+    // gated on `.git`-ABSENT so it no-ops on the common binding-drift case where
+    // the repo IS present. There is deliberately NO bespoke leader "it's gone"
+    // message — the leader has no `worktree_enter_failed` guardrail, so a failed
+    // recovery rides the existing `startAgentSession` catch (the honest reclaimed
+    // message is a Concierge-path post-recovery-failure concept). The leader
+    // gains the recovery it was missing; failures degrade exactly as today.
+    //
+    // The installation + repo are resolved LAZILY inside this `.git`-absent gate
+    // (NOT hoisted ~300 lines above the canonical `resolveInstallationId` /
+    // `getCurrentRepoUrl` reads later in this function) — they re-resolve the
+    // active workspace claim independently (documented drift caveat at those
+    // canonical reads), so resolving them only on the rare missing-repo
+    // path minimizes exposure. `ensureWorkspaceRepoCloned` is fail-soft (never
+    // throws), membership-scoped (`repoUrl`/`installationId` are server-resolved,
+    // never request input — ADR-044), and runs host-side outside the sandbox.
+    if (!existsSync(path.join(workspacePath, ".git"))) {
+      const [storedInstallationId, reprovRepoUrl] = await Promise.all([
+        resolveInstallationId(userId),
+        getCurrentRepoUrl(userId),
+      ]);
+      // Promote to the entitled repo-owner install (same selection the Concierge
+      // cold factory + per-dispatch re-provision make) so a cross-account org
+      // repo re-clones with the right credential instead of 403-ing. Fail-soft:
+      // returns the stored install on any probe failure, never widening access.
+      const reprovInstallationId = await resolveEffectiveInstallationId({
+        userId,
+        installationId: storedInstallationId,
+        repoUrl: reprovRepoUrl,
+      });
+      await ensureWorkspaceRepoCloned({
+        userId,
+        workspacePath,
+        installationId: reprovInstallationId,
+        repoUrl: reprovRepoUrl,
+      });
     }
 
     // Migrate existing workspaces: remove pre-approved permissions that
