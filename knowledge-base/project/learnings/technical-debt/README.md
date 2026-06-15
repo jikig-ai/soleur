@@ -54,6 +54,35 @@ status: open
 
 `/soleur:resolve-debt` and `--list` handle both shapes. Mutation preserves whichever shape it finds.
 
+## Inline Markers (SOLEUR-DEBT)
+
+The ledger above tracks **consolidated** debt as `.md` entries. Deliberate shortcuts taken
+**in code** are documented in place with an inline marker, so a deferral cannot quietly become
+permanent without being grep-discoverable:
+
+```text
+// SOLEUR-DEBT: <ceiling>; <upgrade trigger>
+```
+
+- All-caps `SOLEUR-DEBT:` — never a bare `soleur:` prefix (which collides with skill references
+  like `soleur:go`). Text before the first `;` is the **ceiling**; text after is the **upgrade
+  trigger**. Example: `// SOLEUR-DEBT: global lock; switch to per-account locks if throughput matters`.
+- A marker with no `;`-delimited trigger is the rot-prone case.
+
+This marker is the canonical, grep-discoverable form of the in-place deferral that the
+`wg-when-deferring-a-capability` gate prefers over filing speculative backlog issues.
+
+**How the surfaces fit together** (each complements, none duplicates):
+
+| Surface | Skill | Role |
+|---------|-------|------|
+| Inline `SOLEUR-DEBT:` markers in source | [/soleur:harvest-debt](../../../../plugins/soleur/skills/harvest-debt/SKILL.md) | SURFACE markers, grouped by file; flag `no-trigger` |
+| `.md` ledger entries (this directory) | [/soleur:compound](../../../../plugins/soleur/skills/compound-capture/SKILL.md) | PROMOTE a worth-tracking marker into an entry |
+| `.md` ledger entries (this directory) | [/soleur:resolve-debt](../../../../plugins/soleur/skills/resolve-debt/SKILL.md) | CLOSE an entry with a linked GitHub issue |
+
+`harvest-debt` is read-only — it never writes ledger entries or closes anything. Promotion and
+closure stay deliberate acts so the ledger does not fill with un-triaged noise.
+
 ## Archive
 
 `archive/` holds entries that are no longer surfaced for triage. `/soleur:resolve-debt` does not scan it. To restore an archived entry, move the file back to the parent directory (no other change needed).
@@ -71,6 +100,7 @@ These are explicit deferrals, not gaps:
 
 ## Related
 
+- Skill: [/soleur:harvest-debt](../../../../plugins/soleur/skills/harvest-debt/SKILL.md) (surfaces inline `SOLEUR-DEBT:` markers)
 - Skill: [/soleur:resolve-debt](../../../../plugins/soleur/skills/resolve-debt/SKILL.md)
 - Compound write path: [/soleur:compound](../../../../plugins/soleur/skills/compound-capture/SKILL.md) (template at `assets/resolution-template.md`)
 - Deferred sibling: issue #3650 (scheduled scanner)
