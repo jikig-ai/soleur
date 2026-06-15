@@ -313,7 +313,7 @@ function setupSupabaseMockWithStatusCapture(opts: {
           const selectChain: Record<string, unknown> = {
             eq: vi.fn(),
             single: vi.fn(() => ({
-              data: { workspace_id: "ws-final" },
+              data: { workspace_id: "33333333-3333-4333-8333-333333333333" },
               error: null,
             })),
           };
@@ -359,7 +359,7 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     const { updates } = setupSupabaseMockWithStatusCapture();
     mockQuery.mockReturnValue(buildSdkIterator() as never);
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Find the conversation status write — should be waiting_for_user.
     const statusUpdates = updates.filter((u) => "status" in u.patch);
@@ -375,16 +375,16 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     // The assistant-row INSERT in `saveMessage` must carry `workspace_id`
     // read from the parent conversation so `messages_workspace_member_insert`
     // WITH CHECK (is_workspace_member(workspace_id, auth.uid())) is satisfied.
-    // The conversations SELECT mock returns "ws-final".
+    // The conversations SELECT mock returns "33333333-3333-4333-8333-333333333333".
     const { messageInserts } = setupSupabaseMockWithStatusCapture();
     mockQuery.mockReturnValue(buildSdkIterator() as never);
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const assistantRows = messageInserts.filter((r) => r.role === "assistant");
     expect(assistantRows.length).toBeGreaterThan(0);
     for (const row of assistantRows) {
-      expect(row.workspace_id).toBe("ws-final");
+      expect(row.workspace_id).toBe("33333333-3333-4333-8333-333333333333");
     }
   });
 
@@ -406,7 +406,7 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
 
     // The wrap should re-throw the original error so the outer catch at
     // ~line 1165 still fires the existing failed-path side effects.
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Status was finalized to waiting_for_user (assistant text was saved).
     // The outer catch may also write "failed" — accept either as the final
@@ -421,7 +421,7 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     // DELETEs and idempotent — assert the call happened, not the exact
     // count, since the second call is the safety-net and may be 1 or 2
     // depending on whether the result-branch catch landed.
-    expect(mockReleaseSlot).toHaveBeenCalledWith("user-1", "conv-1");
+    expect(mockReleaseSlot).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "conv-1");
     expect(mockReleaseSlot.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -435,7 +435,7 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     const { updates } = setupSupabaseMockWithStatusCapture();
     mockQuery.mockReturnValue(buildSdkIterator() as never);
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const waitingWrite = updates.find(
       (u) => u.patch.status === "waiting_for_user",
@@ -458,7 +458,7 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     });
     mockQuery.mockReturnValue(buildSdkIterator() as never);
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Find a `failed` write — the cascade target. There may be more
     // than one (defense-in-depth between result-branch catch and outer
@@ -492,13 +492,13 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     });
     mockQuery.mockReturnValue(buildSdkIterator() as never);
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Slot is released even though the intended status write failed. This
     // is the load-bearing assertion: a wedge in the status update must not
     // strand the slot. The outer catch (P2-A) provides defense-in-depth,
     // so the call count may be 1 (result-branch only) or 2 (both layers).
-    expect(mockReleaseSlot).toHaveBeenCalledWith("user-1", "conv-1");
+    expect(mockReleaseSlot).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "conv-1");
     expect(mockReleaseSlot.mock.calls.length).toBeGreaterThanOrEqual(1);
 
     // Some attempt at status finalization happened (waiting_for_user OR

@@ -137,13 +137,13 @@ Run the RED test again → expect GREEN.
 
 ### Pre-merge (PR)
 
-- [ ] `UUID_RE` constant added to `workspace-resolver.ts` matching `workspace.ts:67` byte-for-byte: `grep -c '\^\[0-9a-f\]{8}-\[0-9a-f\]{4}-\[0-9a-f\]{4}-\[0-9a-f\]{4}-\[0-9a-f\]{12}\$' apps/web-platform/server/workspace-resolver.ts` returns ≥ 1.
-- [ ] Both boundary functions throw `Invalid workspaceId format` on non-UUID input: `grep -c 'Invalid workspaceId format' apps/web-platform/server/workspace-resolver.ts` returns 2.
-- [ ] New test file exists and passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/workspace-resolver-id-shape-guard.test.ts` → 0 failures, ≥ 9 assertions covering: valid UUID passes, `..`/slash/absolute/empty/`not-a-uuid`/newline-suffix-evasion each throw, and the `resolveWorkspacePathForUser` DB-sourced-non-UUID case throws.
-- [ ] Happy-path callers stay GREEN: the Phase 3 step-2 vitest invocation returns 0 failures.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → 0 errors.
-- [ ] `semgrep-sast` `path-join-resolve-traversal` returns 0 findings for `apps/web-platform/server/workspace-resolver.ts` (down from 3).
-- [ ] PR body uses `Closes #5344` (this is a code fix that resolves at merge — NOT an ops-remediation deferred to post-merge).
+- [x] `UUID_RE` constant added to `workspace-resolver.ts` matching `workspace.ts:67` byte-for-byte: `grep -c '\^\[0-9a-f\]{8}-\[0-9a-f\]{4}-\[0-9a-f\]{4}-\[0-9a-f\]{4}-\[0-9a-f\]{12}\$' apps/web-platform/server/workspace-resolver.ts` returns ≥ 1.
+- [x] Both boundary functions throw `Invalid workspaceId format` on non-UUID input: `grep -c 'Invalid workspaceId format' apps/web-platform/server/workspace-resolver.ts` returns 2.
+- [x] New test file exists and passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/workspace-resolver-id-shape-guard.test.ts` → 0 failures, ≥ 9 assertions covering: valid UUID passes, `..`/slash/absolute/empty/`not-a-uuid`/newline-suffix-evasion each throw, and the `resolveWorkspacePathForUser` DB-sourced-non-UUID case throws. (10 assertions, all pass.)
+- [x] Happy-path callers stay GREEN: full `apps/web-platform` vitest suite returns 0 failures (795 files passed; the guard's stricter id contract required a UUID-fixture sweep across 34 test files + a shared `test/helpers/workspace-tmpdir.ts` helper — scope expansion beyond the plan's 1+1 estimate, the test suite pervasively used short non-UUID ids like `"user-1"`).
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → 0 errors.
+- [ ] `semgrep-sast` `path-join-resolve-traversal` returns 0 findings for `apps/web-platform/server/workspace-resolver.ts` (down from 3). (Verified at review phase via the semgrep-sast agent.)
+- [ ] PR body uses `Closes #5344` (set at ship phase) (this is a code fix that resolves at merge — NOT an ops-remediation deferred to post-merge).
 
 ### Post-merge (operator)
 

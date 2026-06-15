@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -58,7 +58,7 @@ function hex(buf: Buffer): string {
 let workspacesRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
-const TEST_USER_ID = "user-1";
+const TEST_USER_ID = randomUUID();
 let insertSpy: ReturnType<
   typeof vi.fn<(payload: { content_sha256: string }) => Promise<{ error: null }>>
 >;

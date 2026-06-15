@@ -163,8 +163,8 @@ vi.mock("../server/cc-effective-installation", () => ({
 import { startAgentSession } from "../server/agent-runner";
 import { createApiKeysMock, createQueryMock } from "./helpers/agent-runner-mocks";
 
-const MEMBER_ID = "member-1";
-const ACTIVE_WS_ID = "team-workspace-99";
+const MEMBER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACTIVE_WS_ID = "44444444-4444-4444-8444-444444444444";
 const ROOT = "/tmp/soleur-leader-reprovision-root";
 const ACTIVE_DIR = `${ROOT}/${ACTIVE_WS_ID}`;
 const GIT_PATH = `${ACTIVE_DIR}/.git`;

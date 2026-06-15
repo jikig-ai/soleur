@@ -132,7 +132,7 @@ describe("agent-runner sandbox hardening (#2634)", () => {
   });
 
   test("passes hardened sandbox config (incl. failIfUnavailable=true) to SDK query()", async () => {
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
@@ -171,7 +171,7 @@ describe("agent-runner sandbox hardening (#2634)", () => {
       throw: vi.fn(),
     }));
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Filter to the agent-sandbox call — other features (e.g. kb-share
     // baseUrl warning) may also fire reportSilentFallback during init.
@@ -183,7 +183,7 @@ describe("agent-runner sandbox hardening (#2634)", () => {
     expect(errArg).toBe(sandboxErr);
     expect(optsArg.op).toBe("sdk-startup");
     expect(optsArg.extra).toMatchObject({
-      userId: "user-1",
+      userId: "11111111-1111-4111-8111-111111111111",
       conversationId: "conv-1",
       leaderId: "cpo",
     });
@@ -201,7 +201,7 @@ describe("agent-runner sandbox hardening (#2634)", () => {
       throw: vi.fn(),
     }));
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const sandboxCalls = mockReportSilentFallback.mock.calls.filter(
       ([, opts]) => opts?.feature === "agent-sandbox",
