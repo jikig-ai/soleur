@@ -38,7 +38,12 @@ vi.mock("@/lib/supabase/tenant", () => {
   }
   const tenantClient = {
     from: () => ({
-      select: () => ({ eq: () => ({ eq: () => ({ single: singleSpy }) }) }),
+      // resume_stream's conversation lookup uses .maybeSingle() (zero rows ⇒
+      // {data:null,error:null}); the legacy resume_session path uses .single().
+      // Both terminate the same chain → the shared singleSpy.
+      select: () => ({
+        eq: () => ({ eq: () => ({ single: singleSpy, maybeSingle: singleSpy }) }),
+      }),
     }),
     rpc: vi.fn(async () => ({ error: null })),
   };
@@ -46,6 +51,19 @@ vi.mock("@/lib/supabase/tenant", () => {
     getFreshTenantClient: vi.fn(async () => tenantClient),
     getMyRevocationStatus: vi.fn(async () => null),
     RuntimeAuthError,
+  };
+});
+
+// Spy the severity helpers without clobbering the rest of observability (the
+// module graph below transitively imports other exports). reportSilentFallback
+// = error level; warnSilentFallback = warning level — asserting WHICH helper
+// fired encodes the severity contract.
+vi.mock("@/server/observability", async (importActual) => {
+  const actual = await importActual<typeof import("@/server/observability")>();
+  return {
+    ...actual,
+    reportSilentFallback: vi.fn(),
+    warnSilentFallback: vi.fn(),
   };
 });
 
@@ -60,6 +78,8 @@ import {
   setActiveTurnConversation,
   __test_only__ as registryTestOnly,
 } from "@/server/agent-session-registry";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { WSMessage } from "@/lib/types";
 
 function makeSession(conversationId?: string): ClientSession {
@@ -237,6 +257,141 @@ describe("ws-handler resume_stream — reattach + replay (#5273)", () => {
     const frames = sentFrames(session);
     expect(frames.some((f) => f.type === "stream")).toBe(false);
     expect(frames.some((f) => f.type === "stream_replay")).toBe(true);
+  });
+});
+
+describe("ws-handler resume_stream — severity-by-cause (#5290 false-positive fix)", () => {
+  beforeEach(() => {
+    singleSpy.mockClear();
+    streamReplayBuffer.reset();
+    vi.mocked(reportSilentFallback).mockClear();
+    vi.mocked(warnSilentFallback).mockClear();
+    // Default: owner-verified conv + resolvable repo (overridden per-test).
+    singleSpy.mockResolvedValue({
+      data: { id: CONV_ID, repo_url: REPO_URL },
+      error: null,
+    });
+    vi.mocked(getCurrentRepoUrl).mockResolvedValue(REPO_URL);
+  });
+  afterEach(() => {
+    sessions.delete(USER_ID);
+    streamReplayBuffer.reset();
+    vi.mocked(getCurrentRepoUrl).mockResolvedValue(REPO_URL);
+  });
+
+  function streamFeatureCalls(
+    spy: typeof reportSilentFallback | typeof warnSilentFallback,
+  ): Array<Record<string, unknown>> {
+    return vi
+      .mocked(spy)
+      .mock.calls.map((c) => c[1] as unknown as Record<string, unknown>)
+      .filter((opts) => opts.feature === "stream-replay");
+  }
+
+  it("transient currentRepoUrl null → NO handler mirror (upstream owns detection), fallback sent", async () => {
+    vi.mocked(getCurrentRepoUrl).mockResolvedValueOnce(null);
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_stream", conversationId: CONV_ID }),
+    );
+
+    // No double-emit: neither severity helper fires a stream-replay mirror.
+    expect(streamFeatureCalls(reportSilentFallback)).toHaveLength(0);
+    expect(streamFeatureCalls(warnSilentFallback)).toHaveLength(0);
+    // Honest fallback still delivered.
+    const frames = sentFrames(session);
+    expect(
+      frames.some(
+        (f) => f.type === "stream_replay" && (f as { status: string }).status === "incomplete",
+      ),
+    ).toBe(true);
+    expect(frames.some((f) => f.type === "stream")).toBe(false);
+  });
+
+  it("deferred row not-materialized (maybeSingle → null/null) → WARNING ownership-mismatch cause=not-materialized", async () => {
+    singleSpy.mockResolvedValueOnce({ data: null as never, error: null });
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_stream", conversationId: CONV_ID }),
+    );
+
+    // Benign race → WARNING, not error.
+    expect(streamFeatureCalls(reportSilentFallback)).toHaveLength(0);
+    const warns = streamFeatureCalls(warnSilentFallback);
+    expect(warns).toHaveLength(1);
+    expect(warns[0].op).toBe("ownership-mismatch");
+    expect((warns[0].extra as Record<string, unknown>).cause).toBe("not-materialized");
+    // Lock the operator-facing string (parallels the db-error message), not just
+    // truthiness — a wrong-but-non-empty message must fail.
+    expect(warns[0].message).toContain("not found or not owned");
+    expect(sentFrames(session).some((f) => f.type === "stream_replay")).toBe(true);
+  });
+
+  it("genuine DB/transport error → ERROR ownership-mismatch cause=db-error (stays loud, pg_code forwarded)", async () => {
+    // A coded error (here 42501) exercises pg_code forwarding. NOTE: an RLS
+    // row-denial does NOT actually reach this branch — RLS filters to zero rows
+    // (→ the not-materialized warning branch); this asserts the error-class
+    // handling + that the SQLSTATE-carrying object is forwarded for the pg_code tag.
+    const dbErr = Object.assign(new Error("connection terminated"), { code: "42501" });
+    singleSpy.mockResolvedValueOnce({ data: null as never, error: dbErr });
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_stream", conversationId: CONV_ID }),
+    );
+
+    expect(streamFeatureCalls(warnSilentFallback)).toHaveLength(0);
+    const errs = streamFeatureCalls(reportSilentFallback);
+    expect(errs).toHaveLength(1);
+    expect(errs[0].op).toBe("ownership-mismatch");
+    expect((errs[0].extra as Record<string, unknown>).cause).toBe("db-error");
+    // The SQLSTATE-carrying error object is forwarded so the helper's pg_code
+    // tag stays queryable.
+    expect(vi.mocked(reportSilentFallback).mock.calls[0][0]).toBe(dbErr);
+  });
+
+  it("genuine cross-repo mismatch (both URLs non-null, differ) → ERROR repo-scope-mismatch cause=url-differs", async () => {
+    singleSpy.mockResolvedValueOnce({
+      data: { id: CONV_ID, repo_url: "https://github.com/other/repo.git" },
+      error: null,
+    });
+    vi.mocked(getCurrentRepoUrl).mockResolvedValueOnce(REPO_URL);
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_stream", conversationId: CONV_ID }),
+    );
+
+    expect(streamFeatureCalls(warnSilentFallback)).toHaveLength(0);
+    const errs = streamFeatureCalls(reportSilentFallback);
+    expect(errs).toHaveLength(1);
+    expect(errs[0].op).toBe("repo-scope-mismatch");
+    expect((errs[0].extra as Record<string, unknown>).cause).toBe("url-differs");
+  });
+
+  it("owner-verified + repo match → replays, NO mirror of either severity", async () => {
+    stamp("a"); // seq 0
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_stream", conversationId: CONV_ID, ackSeq: -1 }),
+    );
+
+    expect(streamFeatureCalls(reportSilentFallback)).toHaveLength(0);
+    expect(streamFeatureCalls(warnSilentFallback)).toHaveLength(0);
+    expect(sentFrames(session).some((f) => f.type === "stream")).toBe(true);
   });
 });
 
