@@ -29,6 +29,7 @@
 
 import type { AgentSession } from "./review-gate";
 import { SessionAbortError, type AbortKind } from "./abort-classifier";
+import { reportSilentFallback } from "./observability";
 
 const activeSessions = new Map<string, AgentSession>();
 
@@ -251,6 +252,78 @@ export function clearUserWorkspace(userId: string): void {
  *  unbound (pre-Phase 5.5 sessions, or post-WS-close). */
 export function getUserWorkspace(userId: string): string | undefined {
   return userWorkspaces.get(userId);
+}
+
+/**
+ * Durable workspace-binding resolver (AC4, #5240). Resolve the user's active
+ * workspace id, preferring the hot in-memory Map and falling back to a DURABLE
+ * DB read when the Map is empty (the post-restart / pre-WS-open window).
+ *
+ * The in-memory `userWorkspaces` Map is process-local and ephemeral: it is
+ * cleared on disconnect (`clearUserWorkspace`) and only re-populated at WS-open
+ * (`setUserWorkspace`). A backend process restart wipes it entirely, so any
+ * consumer that runs before re-population used to abort with
+ * "No workspace binding for user". This resolver eliminates those throw sites
+ * by rehydrating lazily from `user_session_state.current_workspace_id` (the
+ * ADR-044 source-of-truth that `resolveCurrentWorkspaceId`/
+ * `resolveActiveWorkspacePath` already read).
+ *
+ * The DB read is INJECTED as a closure (`readDbWorkspaceId`) so this module
+ * stays free of Supabase/SDK imports (see the module docblock) and unit-tests
+ * can drive every branch with a bare spy. `ws-handler` passes
+ * `(uid) => readWorkspaceIdFromDb(uid, tenant)`.
+ *
+ * Three cases, treated differently from `resolveCurrentWorkspaceId` (which
+ * `?? userId` solo-falls-back — wrong here, because both consumers WRITE the
+ * resolved id as a durable cross-tenant `conversations.workspace_id` /
+ * slot `p_workspace_id`):
+ *   1. Map hit                → return it (hot path, zero DB cost).
+ *   2. Map miss + DB binding  → rehydrate-writeback via `setUserWorkspace`,
+ *                               then return it (the new durable path).
+ *   3. Map miss + DB absent/null OR DB read error → THROW + Sentry mirror.
+ *      Never returns `userId` — a genuinely-unbound user is an honest,
+ *      retryable failure (the fail-loud contract #5256 adopted), not a
+ *      silent solo-fallback that could cross a tenant boundary.
+ */
+export async function resolveUserWorkspaceBinding(
+  userId: string,
+  readDbWorkspaceId: (userId: string) => Promise<string | null>,
+): Promise<string> {
+  const cached = userWorkspaces.get(userId);
+  if (cached) return cached;
+
+  let dbWorkspaceId: string | null;
+  try {
+    dbWorkspaceId = await readDbWorkspaceId(userId);
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "agent-session-registry",
+      op: "resolveUserWorkspaceBinding.db-read",
+      extra: { userId },
+    });
+    throw new Error(
+      "Unable to resolve workspace binding for user — durable DB read failed.",
+    );
+  }
+
+  if (dbWorkspaceId) {
+    // Rehydrate-writeback: subsequent consumers on the same connection skip the
+    // DB. setUserWorkspace no-ops on a falsy id, so the writeback is safe.
+    setUserWorkspace(userId, dbWorkspaceId);
+    return dbWorkspaceId;
+  }
+
+  reportSilentFallback(
+    new Error("user_session_state.current_workspace_id absent or null"),
+    {
+      feature: "agent-session-registry",
+      op: "resolveUserWorkspaceBinding.unresolvable",
+      extra: { userId },
+    },
+  );
+  throw new Error(
+    "Unable to resolve workspace binding for user — no durable binding found.",
+  );
 }
 
 /**

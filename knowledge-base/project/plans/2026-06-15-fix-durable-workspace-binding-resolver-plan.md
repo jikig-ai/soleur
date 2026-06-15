@@ -101,14 +101,14 @@ Therefore the durable resolver MUST distinguish three cases and treat them diffe
 ## Implementation Phases
 
 ### Phase 0 — Preconditions (verify before any edit)
-- [ ] `grep -n "No workspace binding" apps/web-platform/server/ws-handler.ts` → expect exactly 2 hits (`:850`, `:1685`). If drifted, re-locate.
-- [ ] Conversation site: confirm `tenant` (`:840`) is in scope at `:847` ✅ (verified deepen-pass).
-- [ ] **Slot site: `tenantResume` (`:1626`) is NOT in scope at `:1682`** (it closes at `:1670`) — the slot edit MUST mint its own `tenantSlot` via `tenantFor(userId, "handleMessage.slot-workspace-resolve")` with the `:1630-1636`-style null-guard. (verified deepen-pass)
-- [ ] Confirm the canonical read shape in `resolveCurrentWorkspaceId` (`workspace-resolver.ts:190-217`) and that `awaitChain` is file-private (`:531`, no `export`) — drives shape B′ (new `readWorkspaceIdFromDb` co-located there).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest --version` (confirm runner).
+- [x] `grep -n "No workspace binding" apps/web-platform/server/ws-handler.ts` → expect exactly 2 hits (`:850`, `:1685`). If drifted, re-locate.
+- [x] Conversation site: confirm `tenant` (`:840`) is in scope at `:847` ✅ (verified deepen-pass).
+- [x] **Slot site: `tenantResume` (`:1626`) is NOT in scope at `:1682`** (it closes at `:1670`) — the slot edit MUST mint its own `tenantSlot` via `tenantFor(userId, "handleMessage.slot-workspace-resolve")` with the `:1630-1636`-style null-guard. (verified deepen-pass)
+- [x] Confirm the canonical read shape in `resolveCurrentWorkspaceId` (`workspace-resolver.ts:190-217`) and that `awaitChain` is file-private (`:531`, no `export`) — drives shape B′ (new `readWorkspaceIdFromDb` co-located there).
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest --version` (confirm runner).
 
 ### Phase 1 — RED (failing test first; TDD)
-- [ ] Write `test/durable-workspace-binding-resolver.test.ts`:
+- [x] Write `test/durable-workspace-binding-resolver.test.ts`:
   - **Resolver unit tests** (drive `resolveUserWorkspaceBinding` directly with `__test_only__.clear()`'d Map):
     1. Map hit → returns Map value, **no** DB read invoked (spy asserts 0 calls).
     2. **Map miss + DB returns a workspaceId** (post-restart sim) → returns the DB value, AND `getUserWorkspace(userId)` now returns it (writeback assertion). **This is the test that fails today** because today's `getUserWorkspace` returns `undefined` and the consumer throws.
@@ -117,15 +117,15 @@ Therefore the durable resolver MUST distinguish three cases and treat them diffe
   - Confirm RED: at least test 2 fails against the un-edited consumer/resolver.
 
 ### Phase 2 — GREEN (implement)
-- [ ] Add `readWorkspaceIdFromDb(userId, supabase)` to `workspace-resolver.ts` (shape B′; reuse `awaitChain`/`ChainShape`; return `?? null`, NOT `?? userId`).
-- [ ] Add `resolveUserWorkspaceBinding(userId, readDbWorkspaceId)` to `agent-session-registry.ts` (Map-hit / rehydrate-writeback via `setUserWorkspace` / fail-loud-throw + `reportSilentFallback` from `./observability`).
-- [ ] Rewire `ws-handler.ts:847-852` (`createConversation`) → `resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenant))`.
-- [ ] Rewire `ws-handler.ts:1682-1687` (slot) → mint `tenantSlot` first (with null-guard), then `resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenantSlot))`.
-- [ ] Run the new test → GREEN.
+- [x] Add `readWorkspaceIdFromDb(userId, supabase)` to `workspace-resolver.ts` (shape B′; reuse `awaitChain`/`ChainShape`; return `?? null`, NOT `?? userId`).
+- [x] Add `resolveUserWorkspaceBinding(userId, readDbWorkspaceId)` to `agent-session-registry.ts` (Map-hit / rehydrate-writeback via `setUserWorkspace` / fail-loud-throw + `reportSilentFallback` from `./observability`).
+- [x] Rewire `ws-handler.ts:847-852` (`createConversation`) → `resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenant))`.
+- [x] Rewire `ws-handler.ts:1682-1687` (slot) → mint `tenantSlot` first (with null-guard), then `resolveUserWorkspaceBinding(userId, (uid) => readWorkspaceIdFromDb(uid, tenantSlot))`.
+- [x] Run the new test → GREEN.
 
 ### Phase 3 — Regression + verification
-- [ ] Run the existing suites that exercise these paths: `ws-deferred-creation.test.ts`, `ws-start-session-cap-hit.test.ts`, `ws-resume-by-context-path.test.ts`, `concurrency-acquire-slot-workspace-id.integration.test.ts`, `api-conversations.test.ts`, `conversation-writer.test.ts`. They mock the Map-warm path; assert they still pass (the Map-hit branch returns identically to today).
-- [ ] Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] Run the existing suites that exercise these paths: `ws-deferred-creation.test.ts`, `ws-start-session-cap-hit.test.ts`, `ws-resume-by-context-path.test.ts`, `concurrency-acquire-slot-workspace-id.integration.test.ts`, `api-conversations.test.ts`, `conversation-writer.test.ts`. They mock the Map-warm path; assert they still pass (the Map-hit branch returns identically to today).
+- [x] Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 
 ## Test Strategy
 
@@ -137,18 +137,18 @@ Therefore the durable resolver MUST distinguish three cases and treat them diffe
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **AC1** — `grep -c "No workspace binding for user" apps/web-platform/server/ws-handler.ts` returns **0** (both throw sites replaced by the durable resolver; the resolver may carry its own fail-loud message but NOT this literal).
-- [ ] **AC2** — New test `test/durable-workspace-binding-resolver.test.ts` exists and `./node_modules/.bin/vitest run test/durable-workspace-binding-resolver.test.ts` passes; it includes the **Map-empty → DB-rehydrate → no throw** case (post-restart sim) as the load-bearing assertion.
-- [ ] **AC3** — Fail-loud preserved: the resolver throws + fires `reportSilentFallback` exactly once on a genuinely-absent binding (DB null/absent or read error); a unit assertion confirms the return value is **not** `userId` on those branches (no solo-fallback re-introduced). `readWorkspaceIdFromDb` returns `?? null` (grep `workspace-resolver.ts` confirms no `?? userId` in the new reader).
-- [ ] **AC4** — Map-hit branch returns byte-identical to today and issues **zero** DB reads (spy asserts 0 calls) — hot path unchanged.
-- [ ] **AC5** — `resolveUserWorkspaceBinding` is the **single** resolver both consumers call (`grep -c "resolveUserWorkspaceBinding" apps/web-platform/server/ws-handler.ts` ≥ 2; both consumer sites route through it).
-- [ ] **AC6** — Slot/conversation workspace parity invariant holds: both `conversations.workspace_id` (insert) and the slot's `p_workspace_id` resolve through the same resolver (re-read the two edited blocks; confirm neither bypasses it).
-- [ ] **AC7** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] **AC8** — Existing regression suites (Phase 3 list) pass unchanged.
-- [ ] **AC9** — PR body uses **`Ref #5240`** (NOT `Closes`) — epic stays open for #2 / boot-rehydration / #4.
+- [x] **AC1** — `grep -c "No workspace binding for user" apps/web-platform/server/ws-handler.ts` returns **0** (both throw sites replaced by the durable resolver; the resolver may carry its own fail-loud message but NOT this literal).
+- [x] **AC2** — New test `test/durable-workspace-binding-resolver.test.ts` exists and `./node_modules/.bin/vitest run test/durable-workspace-binding-resolver.test.ts` passes; it includes the **Map-empty → DB-rehydrate → no throw** case (post-restart sim) as the load-bearing assertion.
+- [x] **AC3** — Fail-loud preserved: the resolver throws + fires `reportSilentFallback` exactly once on a genuinely-absent binding (DB null/absent or read error); a unit assertion confirms the return value is **not** `userId` on those branches (no solo-fallback re-introduced). `readWorkspaceIdFromDb` returns `?? null` (grep `workspace-resolver.ts` confirms no `?? userId` in the new reader).
+- [x] **AC4** — Map-hit branch returns byte-identical to today and issues **zero** DB reads (spy asserts 0 calls) — hot path unchanged.
+- [x] **AC5** — `resolveUserWorkspaceBinding` is the **single** resolver both consumers call (`grep -c "resolveUserWorkspaceBinding" apps/web-platform/server/ws-handler.ts` ≥ 2; both consumer sites route through it).
+- [x] **AC6** — Slot/conversation workspace parity invariant holds: both `conversations.workspace_id` (insert) and the slot's `p_workspace_id` resolve through the same resolver (re-read the two edited blocks; confirm neither bypasses it).
+- [x] **AC7** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] **AC8** — Existing regression suites (Phase 3 list) pass unchanged.
+- [x] **AC9** — PR body uses **`Ref #5240`** (NOT `Closes`) — epic stays open for #2 / boot-rehydration / #4.
 
 ### Post-merge (operator)
-- [ ] None. Pure code change against an already-provisioned surface; no migration, no new infra, no new secret. (`web-platform-release.yml` restarts the container on merge touching `apps/web-platform/**` — that IS the deploy.)
+- [x] None. Pure code change against an already-provisioned surface; no migration, no new infra, no new secret. (`web-platform-release.yml` restarts the container on merge touching `apps/web-platform/**` — that IS the deploy.)
 
 ## Out of Scope (deferred — tracked under #5240, do NOT fold in)
 

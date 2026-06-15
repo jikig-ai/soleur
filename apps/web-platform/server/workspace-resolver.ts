@@ -217,6 +217,56 @@ export async function resolveCurrentWorkspaceId(
   return result.data?.current_workspace_id ?? userId;
 }
 
+/**
+ * Fail-loud sibling of {@link resolveCurrentWorkspaceId}: read the user's
+ * CURRENT workspace id from `user_session_state.current_workspace_id` (ADR-044
+ * source-of-truth) and return it, or `null` when the row is absent / the column
+ * is null.
+ *
+ * Unlike `resolveCurrentWorkspaceId` this NEVER falls back to `userId` (the
+ * solo workspace) and NEVER swallows a read error. Callers here WRITE the
+ * resolved id as a durable `conversations.workspace_id` / slot `p_workspace_id`
+ * (a cross-tenant boundary): a silent solo-fallback to the caller's own id —
+ * the exact pattern #5256 removed from the resume-rebind path — could bind one
+ * tenant's write into another's workspace. So the fail-loud decision is centralized in
+ * the caller's durable resolver (`resolveUserWorkspaceBinding`): this reader
+ * returns `null` on an absent binding and THROWS on a DB read error, letting
+ * the resolver distinguish the two (Sentry op `unresolvable` vs `db-read`) and
+ * abort honestly.
+ *
+ * RLS: `user_session_state_owner_select` allows `auth.uid() = user_id`, so a
+ * tenant client reads only its own row.
+ */
+export async function readWorkspaceIdFromDb(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<string | null> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    maybeSingle: () => ChainShape;
+  } & PromiseLike<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("user_session_state") as ChainShape;
+  const result = await awaitChain<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>(chain.select("current_workspace_id").eq("user_id", userId).maybeSingle());
+
+  if (result.error) {
+    // Do NOT swallow — the resolver owns the fail-loud Sentry mirror + abort
+    // and reports this as op `db-read`. Returning null here would collapse a
+    // transient read failure into "user genuinely unbound".
+    throw result.error instanceof Error
+      ? result.error
+      : new Error(String(result.error));
+  }
+  return result.data?.current_workspace_id ?? null; // null, never userId
+}
+
 interface WorkspaceMemberRow {
   workspace_id: string;
 }

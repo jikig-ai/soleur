@@ -43,7 +43,7 @@ import { validateContextPath } from "./validate-context-path";
 import {
   setUserWorkspace,
   clearUserWorkspace,
-  getUserWorkspace,
+  resolveUserWorkspaceBinding,
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
@@ -56,6 +56,7 @@ import {
   resolveCurrentOrganizationId,
   getDefaultWorkspaceForUser,
   getWorkspaceForUserInOrganization,
+  readWorkspaceIdFromDb,
 } from "./workspace-resolver";
 import { effectiveCap, nextTier } from "@/lib/plan-limits";
 import { closeWithPreamble } from "@/lib/ws-close-helper";
@@ -844,12 +845,15 @@ async function createConversation(
     );
   }
 
-  const wsId = getUserWorkspace(userId);
-  if (!wsId) {
-    throw new Error(
-      "No workspace binding for user — conversation insert aborted.",
-    );
-  }
+  // Durable binding resolution (AC4, #5240): prefer the hot in-memory Map, then
+  // rehydrate from `user_session_state.current_workspace_id` (the `tenant`
+  // client minted at :840 is in scope) on an empty Map — the post-restart /
+  // pre-WS-open window that used to throw "No workspace binding". The resolver
+  // throws fail-loud (and mirrors to Sentry) only when the DB ALSO has no
+  // binding, preserving the abort semantics for the genuinely-unbound case.
+  const wsId = await resolveUserWorkspaceBinding(userId, (uid) =>
+    readWorkspaceIdFromDb(uid, tenant),
+  );
 
   // visibility-sweep-audit: INSERT — owner-scoped (user creates own conversation with workspace_id)
   const { error } = await tenant.from("conversations").insert({
@@ -1675,16 +1679,34 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         // Resolve the session-active workspace once. The slot's workspace_id
         // (NOT NULL since mig 059) MUST equal the conversation's workspace_id,
-        // which createConversation writes as getUserWorkspace(userId)
-        // (see :808-819). Fail loud (mirrors createConversation:809-812)
-        // rather than passing null/undefined to acquireSlot — a null
-        // p_workspace_id would re-trigger the 23502 this path closes (mig 093).
-        const slotWorkspaceId = getUserWorkspace(userId);
-        if (!slotWorkspaceId) {
-          throw new Error(
-            "No workspace binding for user — slot acquire aborted.",
-          );
-        }
+        // which createConversation now also resolves via
+        // resolveUserWorkspaceBinding — so the two cannot diverge (mig 093).
+        // Durable binding resolution (AC4, #5240): prefer the hot Map, then
+        // rehydrate from `user_session_state.current_workspace_id` on an empty
+        // Map (post-restart / pre-WS-open) instead of throwing. The resolver
+        // fails loud (throw + Sentry) only when the DB ALSO has no binding —
+        // a null p_workspace_id would re-trigger the 23502 this path closes.
+        //
+        // The tenant client for the durable read is minted LAZILY inside the
+        // closure: on the hot path (Map warm) the closure never runs, so this
+        // adds zero tenantFor/DB cost (AC4 hot-path-identical). `tenantResume`
+        // (:1626) is block-scoped to the resume branch (closes :1670) and is
+        // out of scope here, so the closure mints its own tenant.
+        const slotWorkspaceId = await resolveUserWorkspaceBinding(
+          userId,
+          async (uid) => {
+            const tenantSlot = await tenantFor(
+              uid,
+              "handleMessage.slot-workspace-resolve",
+            );
+            if (!tenantSlot) {
+              throw new Error(
+                "Tenant auth-probe failed — slot workspace resolve aborted.",
+              );
+            }
+            return readWorkspaceIdFromDb(uid, tenantSlot);
+          },
+        );
 
         // Plan-based concurrency gate. Acquire a slot keyed on (userId,
         // pendingId). A cap_hit result denies before we mutate any session
