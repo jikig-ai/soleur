@@ -10,6 +10,27 @@ requires_cpo_signoff: false
 
 # fix: Concierge chat box layout (avatar alignment · bubble width · debug Show toggle) 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Agents:** architecture-strategist (CSS correctness), code-simplicity-reviewer (YAGNI).
+
+### Key changes from deepen-pass
+1. **Issue 1 — replaced the negative-margin/absolute avatar (old Option A) with moving the avatar
+   INTO the existing card header row.** The negative-margin approach (P1) clips the avatar off-screen
+   on viewports narrower than `max-w-3xl`+gutters (`-left-9`=36px vs `px-4`=16px), and the `md:`-only
+   fallback would leave mobile unaligned. Rendering `<LeaderAvatar size="sm">` as the first child of
+   the existing in-card header `div` (`flex items-center gap-2`, message-bubble.tsx L207-219) makes
+   the card's left edge = row edge = wrapper edge = Debug-panel edge, with zero negative margins and
+   no clipping on any viewport.
+2. **Issue 2 — add a `min-w` floor alongside `w-fit`** so the absolute `-top-2.5 right-3`
+   "Working"/"Streaming"/checkmark badges (L191/L197) don't overhang the left edge on very short
+   (1-word / empty `done`) bubbles. Scope the width treatment to the assistant side; `max-w-full` is
+   redundant-but-harmless.
+3. **Cut the new `test/components/message-bubble.test.tsx`** — class-token presence assertions are
+   tautological under happy-dom (no layout); Playwright QA (AC9) is the real verification for issues
+   1+2. Dropped AC5 and AC1's grep-gate (ceremony). Net: 9 ACs → 6 meaningful ones; phases 2+3 merge.
+
 ## Overview
 
 Three independent layout/interaction defects on the **full-variant Command Center chat surface**
@@ -107,91 +128,101 @@ Files to Edit:
 - `apps/web-platform/components/chat/debug-stream-panel.tsx` — move `Show/Hide` text into the toggle
   button; keep Copy + "· not saved" as siblings.
 
-### Phase 2 — Issue 1: align the Concierge box left edge with the Debug panel (message-bubble.tsx)
+### Phase 2 — Issues 1 + 2: Concierge box left-edge alignment + shrink-to-fit (message-bubble.tsx)
+
+Both edits are in `message-bubble.tsx`; land in one pass. (Phase 1 edits `debug-stream-panel.tsx`
+independently.)
+
+**Issue 1 — align the card left edge with the Debug panel (avatar into the card header).**
 
 The assistant-side row is `flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%]` (L177) with the avatar
 (`LeaderAvatar`, `shrink-0`) as the first child and the card second. The avatar consumes 28px + 12px
-gap at the row's start, offsetting the card's left edge.
+gap at the row's START, offsetting the card's left edge right of the wrapper (and thus right of the
+Debug panel below it).
 
-Chosen approach — render the avatar so it does NOT consume left-edge flow on the assistant side, so
-the card's left edge coincides with the row's (and wrapper's) left edge:
-- Option A (preferred): position the avatar with a negative left margin / absolute offset so it sits
-  in the gutter left of the card without pushing the card right. e.g. wrap the assistant card's
-  positioning context and render the avatar with `absolute -left-9 top-1` (or `-ml-9`) so the card's
-  left edge aligns to the wrapper edge while the avatar floats in the left margin.
-- Option B (simpler, evaluate at /work): drop the avatar from the row for the Concierge/assistant
-  full-variant and rely on the in-bubble header (`headerPrimary`, L207-219) for identity — but this
-  removes the avatar entirely; only adopt if the design owner accepts no avatar.
+Chosen approach (revised at deepen-pass — rejected the negative-margin/absolute variant): **move the
+avatar OUT of the row's left-edge flow and INTO the existing in-card header row.** The card already
+renders a header `div` (`mb-1 flex items-center gap-2`, L207-219) holding `headerPrimary`. Prepend
+`<LeaderAvatar size="sm" leaderId={leaderId!} customIconPath={customIconPath} />` as the first child
+of that header `div`, and remove the row-level avatar (L178-180) on the assistant side. The card's
+left edge then coincides with the row's (and wrapper's, and Debug panel's) left edge — no negative
+margins, no off-screen clipping on any viewport.
 
-Decision: implement Option A — keep the avatar visible (brand presence) but move it out of the
-card's left-edge flow so the card aligns. Guard so the **user** side (`isUser`, right-aligned,
-`flex-row-reverse`) is unaffected — the alignment requirement is assistant-side only.
+- Use `size="sm"` (20px) so the avatar fits the header line height; `md` (28px) row avatar becomes
+  the smaller in-header mark. Acceptable minor visual change, not a regression.
+- Guard the **user** side (`isUser`, right-aligned, `flex-row-reverse`) — leave its layout untouched.
+- The card already renders the header only `{leader && (...)}` (L207), which is exactly the
+  Concierge/leader case — so the avatar moves cleanly into that conditional. Non-leader/system
+  bubbles that today render no avatar are unaffected.
+- **Why not negative-margin (rejected):** an `-left-9`/`-ml-9` (36px) offset clips the avatar
+  off-screen on viewports narrower than `max-w-3xl`+gutters (wrapper hugs `px-4`=16px at L689); the
+  `md:`-only fallback would leave mobile misaligned and create two avatar layouts. Moving into the
+  header avoids all of this and reuses an existing flex container (no novel positioning precedent).
 
-Constraints to preserve:
-- `LeaderAvatar` is `shrink-0` and only rendered when `leader` is truthy (L178). The alignment edit
-  must not regress the user-bubble layout or the sidebar variant.
-- The mobile narrow viewport must not clip the avatar into the scroll container's padding — verify
-  the negative offset against `px-4` (16px) / `md:px-6` (24px) wrapper padding so the avatar does
-  not overflow the viewport edge on mobile. If 36px (`-left-9`) exceeds available gutter on mobile,
-  scope the offset to `md:` and keep the current in-flow avatar on mobile (mobile alignment is not
-  in the bug report).
-
-Files to Edit:
-- `apps/web-platform/components/chat/message-bubble.tsx` — assistant-side avatar positioning.
-
-### Phase 3 — Issue 2: shrink-to-fit the Concierge bubble card (message-bubble.tsx)
+**Issue 2 — shrink-to-fit the card so short content does not wrap.**
 
 The card (`data-testid="message-bubble-card"`, L182-189) has no natural-width sizing, so flex
-pressure can wrap short content prematurely.
+pressure can wrap short content (`"Routing to the right experts..."`) prematurely.
 
-Chosen approach:
-- Add `w-fit max-w-full` to the card's className so it sizes to content up to the row cap
-  (`max-w-[90%] md:max-w-[80%]` already lives on the parent row). `w-fit` = `width: fit-content`,
-  `max-w-full` keeps it inside the row cap; `min-w-0` (already present) keeps long content wrapping
-  correctly. This makes `"Routing to the right experts..."` render on one line at sensible widths.
-- Verify this does not break: (a) long markdown / code blocks (must still wrap, not overflow —
-  `min-w-0` + the inner `[overflow-wrap:anywhere]` handle this), (b) the user bubble (apply the
-  width treatment to both sides or scope to assistant — evaluate at /work; the report is about the
-  Concierge/assistant bubble, so scope to assistant if user-side regresses), (c) the streaming
-  cursor + "Working"/"Streaming" absolute badges (positioned `right-3` — unaffected by `w-fit`).
+- Add `w-fit max-w-full` to the assistant-side card className. `w-fit` = `width: fit-content` sizes
+  the card to content up to the row cap (`max-w-[90%] md:max-w-[80%]` on the parent row, which still
+  applies transitively); `min-w-0` (already present) keeps LONG content wrapping correctly (no
+  conflict with `w-fit` — `min-w-0` lowers the flex floor, `fit-content` resolves above it).
+  `max-w-full` is redundant-but-harmless (parent row already caps width) — keep as a cheap guard.
+- **Add a `min-w` floor** (e.g. `min-w-[7rem]` on the assistant card, or scope to active/done state)
+  so `fit-content` never collapses the card narrower than the absolutely-positioned
+  `-top-2.5 right-3` badges ("Working"/"Streaming" L191, done-checkmark L197). Without a floor, a
+  1-word `done` bubble or the `Used:` chip-list (L394-405) shrinks the card below badge width and the
+  `right-3`-anchored badge overhangs the left card edge. The exact floor value is tuned at /work
+  against the widest badge; the QA matrix MUST screenshot a short `done` bubble, not only the wide
+  routing chip.
+- Scope the width treatment to the assistant side (the report is about the Concierge bubble); leave
+  the user bubble unchanged unless QA shows it benefits.
 
 Files to Edit:
-- `apps/web-platform/components/chat/message-bubble.tsx` — card `w-fit max-w-full`.
+- `apps/web-platform/components/chat/message-bubble.tsx` — avatar into card header (issue 1); card
+  `w-fit max-w-full min-w-[…]` on the assistant side (issue 2).
 
-> Phases 2 and 3 both edit `message-bubble.tsx`; land them in one pass. Phase 1 edits
-> `debug-stream-panel.tsx` independently.
-
-### Phase 4 — Regression tests
+### Phase 3 — Regression test (issue 3) + visual QA (issues 1, 2, 3)
 
 vitest component project includes ONLY `test/**/*.test.tsx` (happy-dom) — co-located
-`components/**/*.test.tsx` is silently NOT run (see Sharp Edges). All new tests live under
-`apps/web-platform/test/components/`.
+`components/**/*.test.tsx` is silently NOT run (see Sharp Edges).
 
-- **Issue 3 (extend existing `test/components/debug-stream-panel.test.tsx`):** add a test asserting
-  the `Show`/`Hide` text is INSIDE the toggle button and that clicking it toggles `aria-expanded`.
-  Concretely: `const toggle = screen.getByRole("button", { name: /debug stream/i })` then
-  `expect(toggle.textContent).toMatch(/Show/)` (before expand) and
+- **Issue 3 — extend existing `test/components/debug-stream-panel.test.tsx`** (real behavioral
+  regression guard for the #5241 defect): assert the `Show`/`Hide` text is INSIDE the toggle button
+  and clicking it toggles the panel. Concretely:
+  `const toggle = screen.getByRole("button", { name: /debug stream/i })`, then
+  `expect(toggle.textContent).toMatch(/Show/)` (collapsed) and
   `fireEvent.click(within(toggle).getByText(/Show/)); expect(toggle.getAttribute("aria-expanded")).toBe("true")`.
-  Keep the existing AC4/AC6 assertion that Copy is NOT a descendant of the toggle and does not toggle.
-- **Issues 1 + 2 (new `test/components/message-bubble.test.tsx`):** render a Concierge/assistant
-  `MessageBubble` and assert the card carries the width class (`w-fit`) and the assistant-side avatar
-  offset class is present (assert the className tokens, not pixel geometry — happy-dom does not lay
-  out). This is a class-presence guard, not a visual-geometry test; visual confirmation is the
-  Playwright/manual step below.
-- **Visual confirmation (Playwright MCP, not a unit test):** at /work QA, drive the full chat surface
+  Keep the existing AC4/AC6 invariant (Copy is NOT a descendant of the toggle and does not toggle).
+- **Issues 1 + 2 — NO new unit test.** Class-token presence assertions are tautological under
+  happy-dom (no layout engine), so a `message-bubble.test.tsx` that greps for `w-fit` only restates
+  the diff. The real verification is the Playwright visual step below — it owns issues 1 and 2.
+- **Visual confirmation (Playwright MCP, automated at /work QA — AC9):** drive the full chat surface
   with the routing chip visible and screenshot to confirm (a) Concierge box left edge aligns with the
-  Debug panel left edge, (b) `"Routing to the right experts..."` is one line, (c) clicking the word
-  "Show" toggles the debug panel. Use `mcp__playwright__*` against the dev surface.
+  Debug panel left edge, (b) `"Routing to the right experts..."` renders on one line, (c) a SHORT
+  `done` bubble's badge does not overhang the left card edge, (d) clicking the word "Show" toggles the
+  debug panel. Use `mcp__playwright__*` against the dev surface.
 
 ## Files to Edit
 
 - `apps/web-platform/components/chat/debug-stream-panel.tsx` (issue 3)
-- `apps/web-platform/components/chat/message-bubble.tsx` (issues 1, 2)
+- `apps/web-platform/components/chat/message-bubble.tsx` (issues 1, 2 — avatar into card header; card `w-fit min-w-[…]`)
 - `apps/web-platform/test/components/debug-stream-panel.test.tsx` (issue 3 regression test — extend)
 
 ## Files to Create
 
-- `apps/web-platform/test/components/message-bubble.test.tsx` (issues 1, 2 class-presence guards)
+None. (The deepen-pass cut the planned `test/components/message-bubble.test.tsx`: class-token
+assertions are tautological under happy-dom; Playwright QA owns issues 1+2.)
+
+## Precedent
+
+- `w-fit` / `min-w-[…]`: Tailwind v4.1 (`apps/web-platform/package.json` → `tailwindcss: ^4.1.0`);
+  utilities present. No existing `w-fit` usage in `components/chat/**` — pattern is novel here but
+  trivial and framework-standard.
+- Moving the avatar into the in-card header reuses the existing `flex items-center gap-2` header row
+  (message-bubble.tsx L207-219) rather than inventing an absolute-positioning pattern — preferred
+  precisely because no negative-margin-avatar precedent exists in the chat components.
 
 ## Open Code-Review Overlap
 
@@ -203,33 +234,27 @@ touched by #5241 / #5282 / #5208, all merged).
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (issue 3):** In `debug-stream-panel.tsx`, the `Show`/`Hide` text is rendered inside the
-  toggle `<button>` (the one with `aria-expanded`), not in the right-side sibling `<div>`. Verify:
-  `grep -n "Show" apps/web-platform/components/chat/debug-stream-panel.tsx` shows the ternary within
-  the toggle button's JSX block (between the `<button ... onClick={() => setExpanded` open tag and
-  its close).
-- [ ] **AC2 (issue 3):** `debug-stream-panel.test.tsx` asserts: (a) the toggle button's `textContent`
-  contains "Show" when collapsed; (b) clicking the "Show" text flips `aria-expanded` false→true;
-  (c) the existing AC4/AC6 invariant still holds — Copy is NOT a descendant of the toggle and clicking
-  Copy does not change `aria-expanded`.
-- [ ] **AC3 (issue 1):** In `message-bubble.tsx`, the assistant-side avatar is positioned so the
-  card's left edge is not offset by the avatar (negative-margin / absolute offset on the assistant
-  branch). The user-side (`isUser`) layout is unchanged.
-- [ ] **AC4 (issue 2):** The card (`data-testid="message-bubble-card"`) className includes a
-  shrink-to-fit width (`w-fit`) with `max-w-full`, so short content does not wrap.
-- [ ] **AC5:** `message-bubble.test.tsx` asserts the card carries the `w-fit` token and the
-  assistant-avatar offset token is present.
-- [ ] **AC6 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] **AC7 (tests):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/components/debug-stream-panel.test.tsx test/components/message-bubble.test.tsx` passes.
-- [ ] **AC8 (no regression to Copy):** the existing debug-stream Copy tests (Copy→Copied affordance,
-  serializer redaction) still pass.
+- [ ] **AC1 (issue 3):** `debug-stream-panel.test.tsx` asserts: (a) the toggle button's `textContent`
+  contains "Show" when collapsed; (b) clicking the "Show" text (via `within(toggle).getByText(/Show/)`)
+  flips `aria-expanded` false→true; (c) the existing invariant still holds — Copy is NOT a descendant
+  of the toggle and clicking Copy does not change `aria-expanded`.
+- [ ] **AC2 (issue 1, production contract):** In `message-bubble.tsx`, the assistant-side avatar
+  renders inside the in-card header `div` (not as a row-level sibling left of the card), so the card's
+  left edge is not offset. The user-side (`isUser`) layout is unchanged. (Visual outcome verified by
+  AC6.)
+- [ ] **AC3 (issue 2, production contract):** The assistant card (`data-testid="message-bubble-card"`)
+  className includes `w-fit` and a `min-w-[…]` floor sized for the absolute `right-3` badges. (Visual
+  no-overhang outcome verified by AC6.)
+- [ ] **AC4 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [ ] **AC5 (tests):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/components/debug-stream-panel.test.tsx` passes, including the existing Copy tests (Copy→Copied affordance, serializer redaction — no regression).
 
 ### Post-merge (operator)
 
-- [ ] **AC9 (visual QA):** via Playwright MCP against the dev chat surface (debug-mode cohort),
-  confirm (a) Concierge box left edge aligns to the Debug panel left edge, (b)
-  `"Routing to the right experts..."` renders on one line, (c) clicking the word "Show" toggles the
-  panel. Automation: feasible via `mcp__playwright__*` — run at /work QA, not deferred to a human.
+- [ ] **AC6 (visual QA — automated):** via Playwright MCP against the dev chat surface (debug-mode
+  cohort), confirm (a) Concierge box left edge aligns to the Debug panel left edge, (b)
+  `"Routing to the right experts..."` renders on one line, (c) a SHORT `done` bubble's badge does not
+  overhang the left card edge, (d) clicking the word "Show" toggles the panel. Automation: feasible
+  via `mcp__playwright__*` — run at /work QA, not deferred to a human.
 
 ## Domain Review
 
@@ -241,9 +266,13 @@ touched by #5241 / #5282 / #5208, all merged).
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** none
 **Skipped specialists:** none — no NEW user-facing page/flow/component file is created (only
-existing components are modified and one co-located test file added), so the BLOCKING `.pen`
-wireframe requirement does not fire (`wg-ui-feature-requires-pen-wireframe` applies to new UI
-surfaces; this is a layout/interaction correction to existing surfaces).
+existing components are modified; no files are created). The deepen-plan Phase 4.9 UI-wireframe
+mechanical glob matches (`components/chat/*.tsx` is edited), but per the shared UI-surface term list
+this change falls in the **Excluded** category ("Pure copy or style tweaks with no structural/layout
+change" — here a layout/CSS correction + re-parenting an existing toggle handler, no new structural
+surface, flow, screen, or persuasive copy). No `.pen` wireframe adds design value for moving an
+avatar, shrink-to-fitting a card, and restoring a toggle's clickability; recording the determination
+explicitly here rather than skipping silently (`wg-ui-feature-requires-pen-wireframe`).
 **Pencil available:** N/A (no new UI surface)
 
 #### Findings
@@ -271,22 +300,23 @@ infrastructure surface. No new error path, log site, or failure mode is introduc
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan`
   Phase 4.6 — this plan fills it (threshold: none, with reason).
-- **vitest discovery:** the component project collects ONLY `test/**/*.test.tsx`. A co-located
-  `components/chat/message-bubble.test.tsx` would be silently skipped. Both the new test and the
-  extended test live under `apps/web-platform/test/components/`.
+- **vitest discovery:** the component project collects ONLY `test/**/*.test.tsx`. The extended
+  `debug-stream-panel.test.tsx` already lives under `apps/web-platform/test/components/`. (No new
+  message-bubble unit test — happy-dom cannot verify the layout outcomes that matter.)
 - **Typecheck command:** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — NOT
   `npm run -w apps/web-platform typecheck` (no root `workspaces` field; the `-w` form aborts).
-- **happy-dom does not lay out.** Unit tests can only assert class-token presence, not pixel
-  alignment. The actual "left edges align" and "one line" outcomes are verified via Playwright MCP
-  at QA, not in vitest.
+- **happy-dom does not lay out.** This is why issues 1+2 are verified via Playwright MCP (AC6), not
+  vitest — a class-token assertion would be tautological.
 - **Alignment in both toggle states:** issue 3's toggle has collapsed/expanded states. Verify the
   "Show"↔"Hide" swap toggles correctly in BOTH states (the same `expanded` ternary now lives in the
   button); confirm clicking works after expanding too (clicking "Hide" collapses).
-- **Mobile gutter clip (issue 1):** a negative-margin/absolute avatar offset can push the avatar past
-  the scroll container's `px-4` (16px) padding on mobile. Verify the offset against viewport padding;
-  if it overflows, scope the alignment to `md:` and leave mobile avatar in-flow (mobile alignment is
-  not in the bug report).
-- **`w-fit` interaction with absolute badges:** the "Working"/"Streaming" badge and done-checkmark
-  are `absolute right-3 -top-2.5` on the card — `w-fit` shrinks the card, so confirm the badges still
-  sit inside the (now narrower) card and don't clip; very short content (e.g. a 1-word bubble) must
-  still leave room for the `right-3` badge.
+- **Avatar moves into the header — verify identity rendering.** Moving `LeaderAvatar` into the
+  `{leader && (...)}` header block (L207) means non-leader/system assistant bubbles (which render no
+  header today) still render no avatar — confirm that's acceptable (it matches today's behavior: the
+  row-level avatar was also `{leader && ...}`-gated at L178). Confirm `customIconPath` is still
+  threaded to the relocated avatar.
+- **`w-fit` + absolute badges need a `min-w` floor.** The "Working"/"Streaming" badge and
+  done-checkmark are `absolute right-3 -top-2.5` on the card — `w-fit` shrinks the card, so a 1-word
+  `done` bubble (or the `Used:` chip-list) can collapse the card narrower than the `right-3`-anchored
+  badge, which then overhangs the left card edge. The `min-w-[…]` floor (tuned at /work to the widest
+  badge) prevents this; QA MUST screenshot a short `done` bubble, not only the wide routing chip.
