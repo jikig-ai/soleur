@@ -17,6 +17,15 @@ import { z } from "zod/v4";
 
 export const EDIT_C4_DIAGRAM_TOOL = "edit_c4_diagram";
 
+// #5388: the soleur_platform FQN of the flag+repo-gated edit_c4_diagram tool.
+// Colocated with the bare tool name (mirroring narrate-tool.ts's
+// NARRATE_TOOL/NARRATE_TOOL_FQN pairing). SINGLE source of truth for the FQN —
+// consumed by realSdkQueryFactory (sets c4ToolName when it builds the tool),
+// the per-dispatch registeredPlatformToolNames resolve (advertises it to the
+// unregistered-tool mirror predicate), and pinned by
+// test/cc-mcp-tier-allowlist.test.ts against drift.
+export const C4_TOOL_FQN = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
+
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
   isError?: true;
