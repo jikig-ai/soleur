@@ -29,11 +29,11 @@ Brand-survival threshold: single-user incident (requires CPO sign-off before /wo
 
 - [x] 3.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0 (AC9).
 - [x] 3.2 `cd apps/web-platform && ./node_modules/.bin/vitest run` green (full suite 9881 passed) for `test/c4-project-route.test.ts` (existing + new) and the three existing C4 suites (`c4-code-panel.test.tsx`, `c4-writer-rerender.test.ts`, `c4-workspace.test.tsx`) (AC9).
-- [ ] 3.3 File an explicit tracked follow-up (a #5221 sub-item or new issue) for the public `app/api/shared/[token]/c4/route.ts:85,123` stale-clone bug (identical root cause, external viewers). Do NOT leave as a soft note.
+- [x] 3.3 Filed #5309 (public shared/[token]/c4 stale-clone follow-up) (a #5221 sub-item or new issue) for the public `app/api/shared/[token]/c4/route.ts:85,123` stale-clone bug (identical root cause, external viewers). Do NOT leave as a soft note.
 
 ## Phase 4 — Tracking-issue update (NOT close)
 
-- [ ] 4.1 Comment on #5221: (a) C4 read slice mitigated by F-D's GitHub-primary read; (b) `tree`/`content`/`search`/`share` + public `shared/[token]/c4` read the same stale clone and need the same policy (ideally a reusable helper) in the reconcile redesign; (c) write/reconcile liveness gap + `rev-list→reset` TOCTOU mutex remain the core open work. Use `Ref #5221` in the PR body, never `Closes #5221`. (AC10)
+- [x] 4.1 Commented on #5221 (scope-narrowing, NOT closed): (a) C4 read slice mitigated by F-D's GitHub-primary read; (b) `tree`/`content`/`search`/`share` + public `shared/[token]/c4` read the same stale clone and need the same policy (ideally a reusable helper) in the reconcile redesign; (c) write/reconcile liveness gap + `rev-list→reset` TOCTOU mutex remain the core open work. Use `Ref #5221` in the PR body, never `Closes #5221`. (AC10)
 
 ## Phase 5 — Post-merge (operator)
 
