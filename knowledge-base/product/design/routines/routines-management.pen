@@ -2481,6 +2481,1905 @@
     },
     {
       "type": "frame",
+      "id": "nnHpp",
+      "x": 4680,
+      "y": 0,
+      "name": "Screen 4 — Concierge Tab",
+      "width": 1440,
+      "height": "fit_content(1410)",
+      "fill": "$bg-base",
+      "children": [
+        {
+          "type": "frame",
+          "id": "c6UeA",
+          "name": "leftRail",
+          "width": 220,
+          "height": "fill_container",
+          "fill": "$bg-surface",
+          "stroke": {
+            "thickness": {
+              "right": 1
+            },
+            "fill": "$border-default"
+          },
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            20,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "fPijG",
+              "name": "logoRow",
+              "width": "fill_container",
+              "gap": 10,
+              "padding": [
+                0,
+                0,
+                16,
+                4
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "hmyCZ",
+                  "name": "logoMark",
+                  "innerRadius": 0.55,
+                  "fill": "$gold",
+                  "width": 22,
+                  "height": 22
+                },
+                {
+                  "type": "text",
+                  "id": "5kxKy",
+                  "name": "wordmark",
+                  "fill": "$text-primary",
+                  "content": "SOLEUR",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500",
+                  "letterSpacing": 4
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "iy3Hb",
+              "name": "navHome",
+              "width": "fill_container",
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "0uAR4",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "layout-dashboard",
+                  "iconFontFamily": "lucide",
+                  "fill": "$text-tertiary"
+                },
+                {
+                  "type": "text",
+                  "id": "gAYIL",
+                  "fill": "$text-secondary",
+                  "content": "Command Center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ip1wt",
+              "name": "navChat",
+              "width": "fill_container",
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Frtul",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "messages-square",
+                  "iconFontFamily": "lucide",
+                  "fill": "$text-tertiary"
+                },
+                {
+                  "type": "text",
+                  "id": "CrjFR",
+                  "fill": "$text-secondary",
+                  "content": "Chat",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "En6cQ",
+              "name": "navRoutines",
+              "width": "fill_container",
+              "fill": "$bg-surface-2",
+              "stroke": {
+                "thickness": {
+                  "left": 2
+                },
+                "fill": "$gold"
+              },
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "fPPMX",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "repeat",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                },
+                {
+                  "type": "text",
+                  "id": "3UleG",
+                  "fill": "$text-primary",
+                  "content": "Routines",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ANucp",
+              "name": "navAudit",
+              "width": "fill_container",
+              "gap": 10,
+              "padding": [
+                8,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "MYNKs",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "scroll-text",
+                  "iconFontFamily": "lucide",
+                  "fill": "$text-tertiary"
+                },
+                {
+                  "type": "text",
+                  "id": "MGFUS",
+                  "fill": "$text-secondary",
+                  "content": "Audit log",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "vPmID",
+          "name": "main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "padding": [
+            28,
+            32
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "2ySgP",
+              "name": "titleRow",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "LNFrY",
+                  "name": "titleCol",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "CxYk5",
+                      "fill": "$text-primary",
+                      "content": "Routines",
+                      "fontFamily": "Inter",
+                      "fontSize": 24,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "125EK",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Recurring work definitions that materialize into auditable execution issues.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rRUJL",
+              "name": "tabBar",
+              "width": "fill_container",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$border-default"
+              },
+              "padding": [
+                24,
+                0,
+                0,
+                0
+              ],
+              "alignItems": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "j6Tcz",
+                  "name": "tabRoutines",
+                  "padding": [
+                    0,
+                    2,
+                    12,
+                    2
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xtGIf",
+                      "fill": "$text-secondary",
+                      "content": "Routines",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "F0sXK",
+                  "name": "tabRunsWrap",
+                  "padding": [
+                    0,
+                    20,
+                    12,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "3EXz5",
+                      "fill": "$text-secondary",
+                      "content": "Recent Runs",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "6NqMu",
+                  "name": "tabConciergeWrap",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 2
+                    },
+                    "fill": "$gold"
+                  },
+                  "gap": 7,
+                  "padding": [
+                    0,
+                    2,
+                    12,
+                    2
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "lCh0H",
+                      "width": 15,
+                      "height": 15,
+                      "iconFontName": "sparkles",
+                      "iconFontFamily": "lucide",
+                      "fill": "$gold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zbFLZ",
+                      "fill": "$text-primary",
+                      "content": "Concierge",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "8SRUJ",
+              "name": "chatArea",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "wEF2n",
+                  "name": "convScroll",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "layout": "vertical",
+                  "gap": 20,
+                  "padding": [
+                    24,
+                    0,
+                    20,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "znTUx",
+                      "name": "convColumn",
+                      "width": 820,
+                      "layout": "vertical",
+                      "gap": 22,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "adQdg",
+                          "name": "userRow",
+                          "width": "fill_container",
+                          "justifyContent": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "ccFQW",
+                              "name": "userBubble",
+                              "width": 540,
+                              "fill": "$bg-surface-2",
+                              "stroke": {
+                                "thickness": 1,
+                                "fill": "$border-default"
+                              },
+                              "layout": "vertical",
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "mbXCG",
+                                  "name": "ub1",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Create a routine that posts a weekly LinkedIn engagement summary every Monday 09:00 UTC.",
+                                  "lineHeight": 1.4,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nUOlf",
+                          "name": "agentRow",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "uMvHk",
+                              "name": "agentAvatar",
+                              "width": 30,
+                              "height": 30,
+                              "fill": "$bg-surface",
+                              "stroke": {
+                                "thickness": 1,
+                                "fill": "$gold"
+                              },
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon_font",
+                                  "id": "86xIE",
+                                  "name": "aav",
+                                  "width": 16,
+                                  "height": 16,
+                                  "iconFontName": "sparkles",
+                                  "iconFontFamily": "lucide",
+                                  "fill": "$gold"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "VwqIi",
+                              "name": "agentCol",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 12,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "VXOIx",
+                                  "name": "agentName",
+                                  "width": "fill_container",
+                                  "gap": 8,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "ncpPu",
+                                      "name": "an1",
+                                      "fill": "$text-primary",
+                                      "content": "Concierge",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 13,
+                                      "fontWeight": "600"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "JAWRr",
+                                      "name": "an2",
+                                      "fill": "$text-tertiary",
+                                      "content": "COO",
+                                      "fontFamily": "JetBrains Mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "600"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "nGxdo",
+                                  "name": "ac1",
+                                  "fill": "$text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Here's a routine that fits. Routines are deployed code, so I'll scaffold a cron function and open a PR — nothing goes live until it merges. Review the draft:",
+                                  "lineHeight": 1.45,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "1o5p3",
+                                  "name": "reviewCard",
+                                  "width": "fill_container",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "layout": "vertical",
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "qgspy",
+                                      "name": "cardHead",
+                                      "width": "fill_container",
+                                      "stroke": {
+                                        "thickness": {
+                                          "bottom": 1
+                                        },
+                                        "fill": "$border-default"
+                                      },
+                                      "padding": [
+                                        14,
+                                        18
+                                      ],
+                                      "justifyContent": "space_between",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "Eht82",
+                                          "name": "chLeft",
+                                          "gap": 10,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "hkk9t",
+                                              "name": "chIcon",
+                                              "width": 16,
+                                              "height": 16,
+                                              "iconFontName": "file-code",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "$gold"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "oaLzC",
+                                              "name": "chTitle",
+                                              "fill": "$text-primary",
+                                              "content": "LinkedIn Weekly Engagement Summary",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 15,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "QtDUd",
+                                          "name": "chRight",
+                                          "gap": 8,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "frame",
+                                              "id": "bciBS",
+                                              "name": "domainBadge",
+                                              "fill": "$bg-surface-2",
+                                              "stroke": {
+                                                "thickness": 1,
+                                                "fill": "$border-default"
+                                              },
+                                              "gap": 6,
+                                              "padding": [
+                                                3,
+                                                9
+                                              ],
+                                              "alignItems": "center",
+                                              "children": [
+                                                {
+                                                  "type": "ellipse",
+                                                  "id": "LyOoL",
+                                                  "name": "dbDot",
+                                                  "fill": "$role-cmo",
+                                                  "width": 7,
+                                                  "height": 7
+                                                },
+                                                {
+                                                  "type": "text",
+                                                  "id": "7LNTy",
+                                                  "name": "dbTxt",
+                                                  "fill": "$text-secondary",
+                                                  "content": "marketing",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 12,
+                                                  "fontWeight": "500"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "xIY2i",
+                                              "name": "roleChip",
+                                              "fill": "$bg-surface-2",
+                                              "stroke": {
+                                                "thickness": 1,
+                                                "fill": "$border-default"
+                                              },
+                                              "gap": 6,
+                                              "padding": [
+                                                3,
+                                                9
+                                              ],
+                                              "alignItems": "center",
+                                              "children": [
+                                                {
+                                                  "type": "text",
+                                                  "id": "iPvq5",
+                                                  "name": "rcTxt",
+                                                  "fill": "$role-cmo",
+                                                  "content": "owner: CMO",
+                                                  "fontFamily": "JetBrains Mono",
+                                                  "fontSize": 11,
+                                                  "fontWeight": "600"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "T9PUB",
+                                      "name": "cardBody",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 16,
+                                      "padding": [
+                                        16,
+                                        18
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "fotPG",
+                                          "name": "freqRow",
+                                          "width": "fill_container",
+                                          "gap": 24,
+                                          "children": [
+                                            {
+                                              "type": "frame",
+                                              "id": "C5MRU",
+                                              "name": "freqHuman",
+                                              "layout": "vertical",
+                                              "gap": 5,
+                                              "children": [
+                                                {
+                                                  "type": "text",
+                                                  "id": "9PU8v",
+                                                  "name": "faLbl",
+                                                  "fill": "$text-tertiary",
+                                                  "content": "FREQUENCY",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 10,
+                                                  "fontWeight": "600",
+                                                  "letterSpacing": 1
+                                                },
+                                                {
+                                                  "type": "text",
+                                                  "id": "HBOWU",
+                                                  "name": "faVal",
+                                                  "fill": "$text-primary",
+                                                  "content": "Every Monday at 09:00 UTC",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 13,
+                                                  "fontWeight": "500"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "Fw5XB",
+                                              "name": "freqCron",
+                                              "layout": "vertical",
+                                              "gap": 5,
+                                              "children": [
+                                                {
+                                                  "type": "text",
+                                                  "id": "SSZiN",
+                                                  "name": "fbLbl",
+                                                  "fill": "$text-tertiary",
+                                                  "content": "RAW CRON",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 10,
+                                                  "fontWeight": "600",
+                                                  "letterSpacing": 1
+                                                },
+                                                {
+                                                  "type": "frame",
+                                                  "id": "jZ1Nr",
+                                                  "name": "cronChip",
+                                                  "fill": "$bg-base",
+                                                  "stroke": {
+                                                    "thickness": 1,
+                                                    "fill": "$border-default"
+                                                  },
+                                                  "padding": [
+                                                    3,
+                                                    9
+                                                  ],
+                                                  "children": [
+                                                    {
+                                                      "type": "text",
+                                                      "id": "vkPfe",
+                                                      "name": "fbVal",
+                                                      "fill": "$status-running",
+                                                      "content": "0 9 * * 1",
+                                                      "fontFamily": "JetBrains Mono",
+                                                      "fontSize": 12,
+                                                      "fontWeight": "500"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "UBVIR",
+                                          "name": "doRow",
+                                          "width": "fill_container",
+                                          "layout": "vertical",
+                                          "gap": 6,
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "nACnB",
+                                              "name": "doLbl",
+                                              "fill": "$text-tertiary",
+                                              "content": "WHAT IT WILL DO",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 10,
+                                              "fontWeight": "600",
+                                              "letterSpacing": 1
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "qGwoK",
+                                              "name": "doVal",
+                                              "fill": "$text-secondary",
+                                              "textGrowth": "fixed-width",
+                                              "width": "fill_container",
+                                              "content": "Pulls the last 7 days of LinkedIn post metrics (impressions, reactions, comments, reposts), ranks the top 3 posts, and drafts a summary to the #marketing channel for the CMO to review.",
+                                              "lineHeight": 1.5,
+                                              "fontFamily": "Inter",
+                                              "fontSize": 13,
+                                              "fontWeight": "normal"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "ObvYf",
+                                          "name": "fileRow",
+                                          "width": "fill_container",
+                                          "gap": 8,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "GE8mI",
+                                              "name": "frLbl",
+                                              "fill": "$text-tertiary",
+                                              "content": "TARGET FILE",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 10,
+                                              "fontWeight": "600",
+                                              "letterSpacing": 1
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "L3Eug",
+                                              "name": "fileChip",
+                                              "fill": "$bg-base",
+                                              "stroke": {
+                                                "thickness": 1,
+                                                "fill": "$border-default"
+                                              },
+                                              "gap": 7,
+                                              "padding": [
+                                                3,
+                                                9
+                                              ],
+                                              "alignItems": "center",
+                                              "children": [
+                                                {
+                                                  "type": "icon_font",
+                                                  "id": "ZQdT7",
+                                                  "name": "frIcon",
+                                                  "width": 13,
+                                                  "height": 13,
+                                                  "iconFontName": "plus",
+                                                  "iconFontFamily": "lucide",
+                                                  "fill": "$status-completed"
+                                                },
+                                                {
+                                                  "type": "text",
+                                                  "id": "9Ryub",
+                                                  "name": "frVal",
+                                                  "fill": "$text-primary",
+                                                  "content": "src/inngest/cron/cron-linkedin-weekly-summary.ts",
+                                                  "fontFamily": "JetBrains Mono",
+                                                  "fontSize": 12,
+                                                  "fontWeight": "normal"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "mVqjZ",
+                                      "name": "cardFoot",
+                                      "width": "fill_container",
+                                      "stroke": {
+                                        "thickness": {
+                                          "top": 1
+                                        },
+                                        "fill": "$border-default"
+                                      },
+                                      "padding": [
+                                        12,
+                                        18
+                                      ],
+                                      "justifyContent": "space_between",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "DuwC8",
+                                          "name": "cfHint",
+                                          "gap": 7,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "16cc2",
+                                              "name": "cfhIcon",
+                                              "width": 13,
+                                              "height": 13,
+                                              "iconFontName": "git-pull-request",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "$text-tertiary"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "2C1RA",
+                                              "name": "cfhTxt",
+                                              "fill": "$text-tertiary",
+                                              "content": "Will open a PR after you confirm",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 12,
+                                              "fontWeight": "normal"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "Rf0kn",
+                                          "name": "cfBtns",
+                                          "gap": 10,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "frame",
+                                              "id": "xCLSw",
+                                              "name": "editBtn",
+                                              "fill": "$bg-surface-2",
+                                              "stroke": {
+                                                "thickness": 1,
+                                                "fill": "$border-default"
+                                              },
+                                              "gap": 7,
+                                              "padding": [
+                                                8,
+                                                14
+                                              ],
+                                              "alignItems": "center",
+                                              "children": [
+                                                {
+                                                  "type": "icon_font",
+                                                  "id": "d1RbR",
+                                                  "name": "ebIcon",
+                                                  "width": 13,
+                                                  "height": 13,
+                                                  "iconFontName": "pencil-line",
+                                                  "iconFontFamily": "lucide",
+                                                  "fill": "$text-secondary"
+                                                },
+                                                {
+                                                  "type": "text",
+                                                  "id": "GtaRk",
+                                                  "name": "ebTxt",
+                                                  "fill": "$text-secondary",
+                                                  "content": "Edit",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 13,
+                                                  "fontWeight": "500"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "JvFnf",
+                                              "name": "testBtn",
+                                              "fill": {
+                                                "type": "gradient",
+                                                "gradientType": "linear",
+                                                "enabled": true,
+                                                "rotation": 90,
+                                                "size": {
+                                                  "height": 1
+                                                },
+                                                "colors": [
+                                                  {
+                                                    "color": "$gold-grad-start",
+                                                    "position": 0
+                                                  },
+                                                  {
+                                                    "color": "$gold-grad-end",
+                                                    "position": 1
+                                                  }
+                                                ]
+                                              },
+                                              "gap": 7,
+                                              "padding": [
+                                                8,
+                                                16
+                                              ],
+                                              "alignItems": "center",
+                                              "children": [
+                                                {
+                                                  "type": "icon_font",
+                                                  "id": "fBx0G",
+                                                  "name": "tbIcon",
+                                                  "width": 14,
+                                                  "height": 14,
+                                                  "iconFontName": "play",
+                                                  "iconFontFamily": "lucide",
+                                                  "fill": "#1A1612"
+                                                },
+                                                {
+                                                  "type": "text",
+                                                  "id": "Jd6Z0",
+                                                  "name": "tbTxt",
+                                                  "fill": "#1A1612",
+                                                  "content": "Looks good — test it",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 13,
+                                                  "fontWeight": "600"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "X7euB",
+                          "name": "agentRow2",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "XJ6LW",
+                              "name": "agentAvatar2",
+                              "width": 30,
+                              "height": 30,
+                              "fill": "$bg-surface",
+                              "stroke": {
+                                "thickness": 1,
+                                "fill": "$gold"
+                              },
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon_font",
+                                  "id": "JMrqf",
+                                  "name": "av2i",
+                                  "width": 16,
+                                  "height": 16,
+                                  "iconFontName": "sparkles",
+                                  "iconFontFamily": "lucide",
+                                  "fill": "$gold"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "GntZ5",
+                              "name": "agentCol2",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 12,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "l63Va",
+                                  "name": "verifyCard",
+                                  "width": "fill_container",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "layout": "vertical",
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "v8WrC",
+                                      "name": "vcHead",
+                                      "width": "fill_container",
+                                      "stroke": {
+                                        "thickness": {
+                                          "bottom": 1
+                                        },
+                                        "fill": "$border-default"
+                                      },
+                                      "gap": 9,
+                                      "padding": [
+                                        12,
+                                        16
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "9zOJj",
+                                          "name": "vchIcon",
+                                          "width": 15,
+                                          "height": 15,
+                                          "iconFontName": "flask-conical",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "$status-running"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "H5WJP",
+                                          "name": "vchTitle",
+                                          "fill": "$text-primary",
+                                          "content": "Testing routine (dry-run)",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 14,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "GCalT",
+                                          "name": "dryTag",
+                                          "fill": "$bg-surface-2",
+                                          "stroke": {
+                                            "thickness": 1,
+                                            "fill": "$status-running"
+                                          },
+                                          "padding": [
+                                            2,
+                                            8
+                                          ],
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "Oih3p",
+                                              "name": "vchTagT",
+                                              "fill": "$status-running",
+                                              "content": "DRY-RUN",
+                                              "fontFamily": "JetBrains Mono",
+                                              "fontSize": 10,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "cJvZZ",
+                                      "name": "vcBody",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 10,
+                                      "padding": [
+                                        14,
+                                        16
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "FtbGE",
+                                          "name": "vl1",
+                                          "gap": 8,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "AlAQ8",
+                                              "name": "vl1i",
+                                              "width": 14,
+                                              "height": 14,
+                                              "iconFontName": "check",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "$status-completed"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "VnGZ7",
+                                              "name": "vl1t",
+                                              "fill": "$text-secondary",
+                                              "content": "Ran drafted logic in sandbox — no external posts made.",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 13,
+                                              "fontWeight": "normal"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "mnbGu",
+                                          "name": "vl2",
+                                          "gap": 8,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "EbRvH",
+                                              "name": "vl2i",
+                                              "width": 14,
+                                              "height": 14,
+                                              "iconFontName": "check",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "$status-completed"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "ilxli",
+                                              "name": "vl2t",
+                                              "fill": "$text-secondary",
+                                              "content": "Read back output. Sample:",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 13,
+                                              "fontWeight": "normal"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "QVvZA",
+                                          "name": "sampleBox",
+                                          "width": "fill_container",
+                                          "fill": "$bg-base",
+                                          "stroke": {
+                                            "thickness": 1,
+                                            "fill": "$border-default"
+                                          },
+                                          "layout": "vertical",
+                                          "gap": 4,
+                                          "padding": [
+                                            12,
+                                            14
+                                          ],
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "TLmHd",
+                                              "name": "sb1",
+                                              "fill": "$text-secondary",
+                                              "textGrowth": "fixed-width",
+                                              "width": "fill_container",
+                                              "content": "📊 LinkedIn — week of Jun 9–15",
+                                              "lineHeight": 1.5,
+                                              "fontFamily": "JetBrains Mono",
+                                              "fontSize": 12,
+                                              "fontWeight": "normal"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "lrjCM",
+                                              "name": "sb2",
+                                              "fill": "$text-secondary",
+                                              "textGrowth": "fixed-width",
+                                              "width": "fill_container",
+                                              "content": "Impressions 24,318 · Reactions 612 · Comments 88 · Reposts 41",
+                                              "lineHeight": 1.5,
+                                              "fontFamily": "JetBrains Mono",
+                                              "fontSize": 12,
+                                              "fontWeight": "normal"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "r8mvZ",
+                                              "name": "sb3",
+                                              "fill": "$text-secondary",
+                                              "textGrowth": "fixed-width",
+                                              "width": "fill_container",
+                                              "content": "Top post: \"Why we deploy routines as code\" — 9,204 impressions",
+                                              "lineHeight": 1.5,
+                                              "fontFamily": "JetBrains Mono",
+                                              "fontSize": 12,
+                                              "fontWeight": "normal"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "0rYOj",
+                                          "name": "vl3",
+                                          "gap": 8,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "vnO89",
+                                              "name": "vl3i",
+                                              "width": 14,
+                                              "height": 14,
+                                              "iconFontName": "check-check",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "$status-completed"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "Ts9Df",
+                                              "name": "vl3t",
+                                              "fill": "$text-primary",
+                                              "content": "Verified correct.",
+                                              "fontFamily": "Inter",
+                                              "fontSize": 13,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "3XbH3",
+                                      "name": "vcCaption",
+                                      "width": "fill_container",
+                                      "stroke": {
+                                        "thickness": {
+                                          "top": 1
+                                        },
+                                        "fill": "$border-default"
+                                      },
+                                      "gap": 7,
+                                      "padding": [
+                                        10,
+                                        16
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "RC40x",
+                                          "name": "capIcon",
+                                          "width": 13,
+                                          "height": 13,
+                                          "iconFontName": "info",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "$text-tertiary"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "OKJhV",
+                                          "name": "capTxt",
+                                          "fill": "$text-tertiary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "For a brand-new routine the dry-run executes the drafted logic in a sandbox. The live cron only exists after the PR merges and deploys.",
+                                          "lineHeight": 1.45,
+                                          "fontFamily": "Inter",
+                                          "fontSize": 12,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "5Ue3w",
+                                  "name": "prCard",
+                                  "width": "fill_container",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$gold"
+                                  },
+                                  "layout": "vertical",
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "IOvZN",
+                                      "name": "prTop",
+                                      "width": "fill_container",
+                                      "gap": 11,
+                                      "padding": [
+                                        14,
+                                        18,
+                                        12,
+                                        18
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "SjE6a",
+                                          "name": "prIconWrap",
+                                          "width": 26,
+                                          "height": 26,
+                                          "fill": "$bg-surface-2",
+                                          "stroke": {
+                                            "thickness": 1,
+                                            "fill": "$status-completed"
+                                          },
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "8zFXS",
+                                              "name": "prIconI",
+                                              "width": 15,
+                                              "height": 15,
+                                              "iconFontName": "shield-check",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "$status-completed"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "7ebpj",
+                                          "name": "prTitle",
+                                          "fill": "$text-primary",
+                                          "content": "Verification passed",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 15,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "q9EwJ",
+                                      "name": "prBody",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 14,
+                                      "padding": [
+                                        0,
+                                        18,
+                                        16,
+                                        18
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "HDXx7",
+                                          "name": "prCopy",
+                                          "fill": "$text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "This opens a pull request scaffolding the cron function (and its registry entries). It goes live on merge + deploy — not before.",
+                                          "lineHeight": 1.5,
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "iDbhs",
+                                          "name": "prActions",
+                                          "width": "fill_container",
+                                          "gap": 10,
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "frame",
+                                              "id": "mxEo0",
+                                              "name": "openPrBtn",
+                                              "fill": {
+                                                "type": "gradient",
+                                                "gradientType": "linear",
+                                                "enabled": true,
+                                                "rotation": 90,
+                                                "size": {
+                                                  "height": 1
+                                                },
+                                                "colors": [
+                                                  {
+                                                    "color": "$gold-grad-start",
+                                                    "position": 0
+                                                  },
+                                                  {
+                                                    "color": "$gold-grad-end",
+                                                    "position": 1
+                                                  }
+                                                ]
+                                              },
+                                              "gap": 8,
+                                              "padding": [
+                                                9,
+                                                18
+                                              ],
+                                              "alignItems": "center",
+                                              "children": [
+                                                {
+                                                  "type": "icon_font",
+                                                  "id": "Nic6Y",
+                                                  "name": "oprIcon",
+                                                  "width": 15,
+                                                  "height": 15,
+                                                  "iconFontName": "git-pull-request",
+                                                  "iconFontFamily": "lucide",
+                                                  "fill": "#1A1612"
+                                                },
+                                                {
+                                                  "type": "text",
+                                                  "id": "bMvL7",
+                                                  "name": "oprTxt",
+                                                  "fill": "#1A1612",
+                                                  "content": "Open PR",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 13,
+                                                  "fontWeight": "600"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "frame",
+                                              "id": "NAcIY",
+                                              "name": "prCancelBtn",
+                                              "fill": "$bg-surface-2",
+                                              "stroke": {
+                                                "thickness": 1,
+                                                "fill": "$border-default"
+                                              },
+                                              "padding": [
+                                                9,
+                                                16
+                                              ],
+                                              "children": [
+                                                {
+                                                  "type": "text",
+                                                  "id": "gh3HZ",
+                                                  "name": "prCancelT",
+                                                  "fill": "$text-secondary",
+                                                  "content": "Discard draft",
+                                                  "fontFamily": "Inter",
+                                                  "fontSize": 13,
+                                                  "fontWeight": "500"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Z9koB",
+                          "name": "moreSection",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 12,
+                          "padding": [
+                            8,
+                            0,
+                            0,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "HajJM",
+                              "name": "moreHdr",
+                              "width": "fill_container",
+                              "gap": 10,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "f1zUo",
+                                  "name": "mhLineL",
+                                  "width": 36,
+                                  "height": 1,
+                                  "fill": "$border-default"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "RAep7",
+                                  "name": "mhTxt",
+                                  "fill": "$text-tertiary",
+                                  "content": "THE SAME CHAT ALSO HANDLES",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 10,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 1.2
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "n2EC9",
+                                  "name": "mhLineR",
+                                  "width": "fill_container",
+                                  "height": 1,
+                                  "fill": "$border-default"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "81kHf",
+                              "name": "chipRow",
+                              "width": "fill_container",
+                              "gap": 10,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "6TUBT",
+                                  "name": "chipEdit",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "gap": 8,
+                                  "padding": [
+                                    8,
+                                    13
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon_font",
+                                      "id": "xmoI6",
+                                      "name": "ceIcon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "iconFontName": "pencil-line",
+                                      "iconFontFamily": "lucide",
+                                      "fill": "$gold"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "xIbLE",
+                                      "name": "ceTxt",
+                                      "fill": "$text-secondary",
+                                      "content": "\"Change the daily digest to 07:30 instead of 08:00\"",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 12,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "qYLGt",
+                                  "name": "chipRemove",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "gap": 8,
+                                  "padding": [
+                                    8,
+                                    13
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon_font",
+                                      "id": "aNRlO",
+                                      "name": "crIcon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "iconFontName": "trash-2",
+                                      "iconFontFamily": "lucide",
+                                      "fill": "$status-failed"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "z0lGb",
+                                      "name": "crTxt",
+                                      "fill": "$text-secondary",
+                                      "content": "\"Remove the stale Twitter backfill routine\"",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 12,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "1K3tG",
+                              "name": "noteRow",
+                              "width": "fill_container",
+                              "gap": 10,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "jVjEU",
+                                  "name": "noteEdit",
+                                  "width": "fill_container",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "layout": "vertical",
+                                  "gap": 6,
+                                  "padding": [
+                                    12,
+                                    14
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "wEoeR",
+                                      "name": "neHd",
+                                      "gap": 7,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "WCpDb",
+                                          "name": "neHi",
+                                          "width": 13,
+                                          "height": 13,
+                                          "iconFontName": "pencil-line",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "$gold"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "UaFpZ",
+                                          "name": "neHt",
+                                          "fill": "$text-primary",
+                                          "content": "Edit an existing routine",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "7cgdJ",
+                                      "name": "neB",
+                                      "fill": "$text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "Concierge re-runs the updated logic and verifies output against the live routine before opening the PR.",
+                                      "lineHeight": 1.45,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 12,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "6YNOs",
+                                  "name": "noteRemove",
+                                  "width": "fill_container",
+                                  "fill": "$bg-surface",
+                                  "stroke": {
+                                    "thickness": 1,
+                                    "fill": "$border-default"
+                                  },
+                                  "layout": "vertical",
+                                  "gap": 6,
+                                  "padding": [
+                                    12,
+                                    14
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "XbOB8",
+                                      "name": "nrHd",
+                                      "gap": 7,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "QtltS",
+                                          "name": "nrHi",
+                                          "width": 13,
+                                          "height": 13,
+                                          "iconFontName": "trash-2",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "$status-failed"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "6eJHC",
+                                          "name": "nrHt",
+                                          "fill": "$text-primary",
+                                          "content": "Remove a routine",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "65lWy",
+                                      "name": "nrB",
+                                      "fill": "$text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "Opens a PR deleting the cron function and its 5 registry entries. The schedule stops only after merge + deploy.",
+                                      "lineHeight": 1.45,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 12,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "9Kg0j",
+                  "name": "composer",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "$border-default"
+                  },
+                  "padding": [
+                    16,
+                    0,
+                    4,
+                    0
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "oy2tJ",
+                      "name": "inputWrap",
+                      "width": 820,
+                      "fill": "$bg-surface",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border-emphasized"
+                      },
+                      "gap": 12,
+                      "padding": [
+                        10,
+                        12,
+                        10,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "NT8Xn",
+                          "name": "phTxt",
+                          "fill": "$text-tertiary",
+                          "content": "Ask the Concierge to create, edit, or remove a routine…",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "MB7v8",
+                          "name": "sendBtn",
+                          "width": 32,
+                          "height": 32,
+                          "fill": {
+                            "type": "gradient",
+                            "gradientType": "linear",
+                            "enabled": true,
+                            "rotation": 90,
+                            "size": {
+                              "height": 1
+                            },
+                            "colors": [
+                              {
+                                "color": "$gold-grad-start",
+                                "position": 0
+                              },
+                              {
+                                "color": "$gold-grad-end",
+                                "position": 1
+                              }
+                            ]
+                          },
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "p3A5A",
+                              "name": "sendIcon",
+                              "width": 16,
+                              "height": 16,
+                              "iconFontName": "arrow-up",
+                              "iconFontFamily": "lucide",
+                              "fill": "#1A1612"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ddRHc",
+                  "name": "composerHint",
+                  "width": "fill_container",
+                  "padding": [
+                    6,
+                    0,
+                    0,
+                    0
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "nCJLA",
+                      "name": "chTxt",
+                      "fill": "$text-tertiary",
+                      "content": "Concierge drafts and verifies. You approve the PR. Routines go live on merge + deploy.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
       "id": "q9Phj",
       "x": 0,
       "y": 1120,
