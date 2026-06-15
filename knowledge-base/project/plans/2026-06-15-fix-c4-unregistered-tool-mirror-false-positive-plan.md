@@ -12,6 +12,37 @@ created: 2026-06-15
 
 Closes #5388.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Mandatory gates:** 4.6 User-Brand Impact ✅ (threshold `none` + sensitive-path scope-out bullet present — `apps/web-platform/server/` matches the canonical sensitive regex), 4.7 Observability ✅ (5 fields, no ssh in discoverability_test), 4.8 PAT-shaped vars ✅ none, 4.9 UI-wireframe ✅ N/A (no UI surface).
+
+### Verification pass (Phase 4.45 verify-the-negative + Phase 4.4 precedent-diff)
+
+A sonnet verification agent checked all 10 load-bearing code claims + the learning citation against `cc-dispatcher.ts` / `soleur-go-runner.ts` on this branch. **All CONFIRM; zero contradictions.** Key confirmations:
+
+- `CC_REGISTERED_PLATFORM_TOOL_NAMES` = `[NARRATE_TOOL_FQN, SUMMARIZE_TOOL_FQN]` at `cc-dispatcher.ts:270-273`; consumed at `:2852`.
+- c4 registration gate is **two-step**: `effectiveInstallationId !== null && owner && repo` (`:1724`) THEN `c4Enabled` (`:1748`) → `c4ToolName` set `:1756`. The plan's "resolve the FULL precondition set (installation + owner/repo + flag)" guidance already reflects this — do not collapse to a flag-only check.
+- `c4ToolName` already threaded into `canUseTool` as `platformToolNames` at `:2064` (existing cross-boundary precedent for the c4 value).
+- **Warm-query factory non-invocation CONFIRMED**: `deps.queryFactory` runs only inside `if (!state)` (`soleur-go-runner.ts:2484-2539`); no other call site. This is the load-bearing fact behind rejecting the issue's factory-publish suggestion.
+
+### Phase 4.4 precedent-diff (per-dispatch re-resolution is the canonical form in THIS file)
+
+The chosen mechanism is NOT novel — it is the established pattern in the same function:
+
+| Cell | Resolver | Cold path | Warm path | "COLD conversation" comment |
+|---|---|---|---|---|
+| `bashAutonomousPosture` | `resolveBashAutonomous(userId)` | factory publishes via `setBashAutonomous` | per-dispatch `void resolveBashAutonomous` (`:2615`) | `:2603-2614` verbatim |
+| `reprovisionOutcome` | `reprovisionWorkspaceOnDispatch(userId)` | factory self-heal | per-dispatch `void reprovision…` (`:2643`) | `:2627-2642` verbatim |
+| `registeredPlatformToolNames` (this plan) | shared `resolveC4Eligible`/`resolveRegisteredPlatformToolNames(userId)` | factory reuses helper to build tool | per-dispatch resolve appends c4 FQN | to be added (mirror the above) |
+
+The factory-publish-only pattern (`setDelegationContext`) is cold-only and was correctly rejected. No precedent for a factory-publish-only registered-tool cell exists; the per-dispatch resolve has two in-file precedents.
+
+### Key improvements over the v1 plan
+1. Confirmed (not assumed) the warm-query factory-non-invocation that makes the issue's suggested mechanism insufficient.
+2. Confirmed the two-step c4 gate so the implementer resolves installation+owner+repo+flag, not flag-only (the AC2 false-suppression regression guard).
+3. Tabulated the two in-file precedents for the chosen per-dispatch pattern so /work has copy-from references.
+
 ## Overview
 
 The cc-router's SDK iterator hook (`onToolUse` inside `dispatchSoleurGo`, `apps/web-platform/server/cc-dispatcher.ts:2852`) mirrors a `feature: "cc-mcp-tier", op: "unregistered-tool-invoked"` Sentry event (debounced per-`(userId, errorClass)` at a 5-min TTL) plus a pino line whenever a `mcp__soleur_platform__*` tool name is not in the module constant `CC_REGISTERED_PLATFORM_TOOL_NAMES` (`cc-dispatcher.ts:270`).
