@@ -69,6 +69,24 @@ IS_IN_WORKTREE=false
 if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]]; then
   IS_IN_WORKTREE=true
 fi
+# Concierge repo-readiness gate: fail LOUD when there is no git repository at
+# all. In the Soleur web (Concierge) env the workspace is /workspaces/<id>; a
+# connected repo is cloned in the background (or self-healed at session start),
+# so a session that opens during the clone window — or after a clone failure —
+# lands in a repo-less dir. Without this guard the `else` branch below dies
+# silently on `git rev-parse --show-toplevel` under `set -e`, giving the
+# calling skill (go/one-shot) no clear signal; the agent then improvises dozens
+# of varied exploration commands (which evade the narrow cd-&&-pwd-loop runtime
+# detector from #5313) until the session hangs. Emit a distinct, machine-
+# detectable marker + non-zero exit so the skill stops with an honest, no-wait
+# message instead. Runs before the bare/worktree branch so every subcommand
+# (create, cleanup-merged, list, …) fails the same clear way in a repo-less env.
+if [[ "$IS_IN_WORKTREE" != "true" \
+      && "$(git rev-parse --is-bare-repository 2>/dev/null)" != "true" ]]; then
+  echo -e "${RED}Error: No git repository in this workspace.${NC}" >&2
+  echo "NO_GIT_REPOSITORY: cannot run a worktree operation — the workspace has no git checkout. If your repository is still being set up, try again in a moment; if it keeps failing, reconnect your repository." >&2
+  exit 3
+fi
 if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
   IS_BARE=true
   _git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
