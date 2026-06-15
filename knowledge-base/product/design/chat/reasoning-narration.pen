@@ -1,0 +1,1391 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "ASMMa",
+      "x": 0,
+      "y": 0,
+      "name": "A — Live Narration (mid-turn)",
+      "width": 760,
+      "height": 1060,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "8pwwz",
+          "name": "cap",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "gZ0tO",
+              "name": "capL",
+              "fill": "#C9A962",
+              "content": "FRAME A · LIVE NARRATION (TRANSIENT)",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "ctTkC",
+              "name": "capD",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Plain-language status of what Soleur is doing now. Lives next to the Working badge. Updates as the turn progresses — gone the instant the turn completes (see Frame B).",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "1VVuw",
+          "name": "hdr",
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "sn0Iw",
+              "name": "hdrT",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "wT5NG",
+              "name": "hstat",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "g5rAH",
+                  "name": "hdot",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "X2mbQ",
+                  "name": "hstatT",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Z12yp",
+          "name": "thread",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "vBMRl",
+              "name": "urow",
+              "width": "fill_container",
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "1gsuV",
+                  "name": "ubub",
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "RNEgk",
+                      "name": "ububT",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "content": "The side panel keeps jumping back to the top when I click around. Can you sort that out?",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "jseeM",
+              "name": "arow",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "uYCaC",
+                  "name": "abub",
+                  "fill": "#141414",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 2,
+                    "fill": "#B45309"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    14,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "1gine",
+                      "layoutPosition": "absolute",
+                      "x": 250,
+                      "y": -10,
+                      "name": "abadge",
+                      "height": 20,
+                      "fill": "#141414",
+                      "cornerRadius": 10,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#B45309"
+                      },
+                      "padding": [
+                        0,
+                        8
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "yBqdQ",
+                          "name": "abadgeT",
+                          "fill": "#D97706",
+                          "content": "Working",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "rWL70",
+                      "name": "ahdr",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "nHegh",
+                          "name": "aav",
+                          "fill": "#1E1E1E",
+                          "width": 20,
+                          "height": 20,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#C9A962"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "unw9L",
+                          "name": "ahdrT",
+                          "fill": "#848484",
+                          "content": "Soleur Concierge",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "u18M8",
+                      "name": "narr",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "BS98b",
+                          "name": "ndot",
+                          "fill": "#D97706",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "nAFMK",
+                          "name": "narrT",
+                          "fill": "#FFFFFF",
+                          "content": "Looking into why the side panel resets…",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "V8Go2",
+                      "name": "chip",
+                      "fill": "#141414",
+                      "cornerRadius": 14,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "gap": 8,
+                      "padding": [
+                        5,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "UyNpt",
+                          "name": "chipT",
+                          "fill": "#848484",
+                          "content": "Reading the navigation settings",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "J0s76",
+              "name": "note1",
+              "fill": "#1A160C",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#C9A962"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "xGeZz",
+                  "name": "note1L",
+                  "fill": "#C9A962",
+                  "content": "↑ THE LIVE NARRATION LINE",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "AXgUI",
+                  "name": "note1B",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": 440,
+                  "content": "One plain-language sentence, agent-emitted. Replaces in place as the turn advances (\"Looking into…\" → \"Fixing it now…\"). No jargon, no skill names, no issue numbers. It is transient: never written to history.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ZCSQC",
+          "name": "inbar",
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "umK7q",
+              "name": "inbox",
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "oJ60S",
+                  "name": "inboxT",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question…",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "BU6CQ",
+              "name": "stopbtn",
+              "height": 40,
+              "fill": "#1E1E1E",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#B45309"
+              },
+              "padding": [
+                0,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qHtsK",
+                  "name": "stopbtnT",
+                  "fill": "#D97706",
+                  "content": "Stop",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "7ie7p",
+      "x": 840,
+      "y": 0,
+      "name": "B — After Completion (summary persisted, live line gone)",
+      "width": 760,
+      "height": 1060,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "bN06G",
+          "name": "capB",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "vuDMY",
+              "name": "capBL",
+              "fill": "#C9A962",
+              "content": "FRAME B · AFTER THE TURN COMPLETES",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "8Mij3",
+              "name": "capBD",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "The live narration line and the Working badge are GONE. In their place: one durable summary box, left in the thread. This is what stays on reload (Frame C).",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "PPTNB",
+          "name": "hdrB",
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "P2sso",
+              "name": "hdrBT",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "WtCnf",
+              "name": "hstatB",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "IjDZG",
+                  "name": "hdotB",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "yHCgF",
+                  "name": "hstatBT",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "2bSDz",
+          "name": "threadB",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "kwYXk",
+              "name": "urowB",
+              "width": "fill_container",
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "adbjh",
+                  "name": "ububB",
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "gg0Az",
+                      "name": "ububBT",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "content": "The side panel keeps jumping back to the top when I click around. Can you sort that out?",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "lD4Mn",
+              "name": "srow",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "wIbrX",
+                  "name": "sbox",
+                  "fill": "#10160F",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1,
+                      "right": 1,
+                      "bottom": 1,
+                      "left": 3
+                    },
+                    "fill": "#34D399"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    16,
+                    18
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "lqELX",
+                      "name": "shdr",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "blD0T",
+                          "name": "scheck",
+                          "fill": "#0F2417",
+                          "width": 20,
+                          "height": 20,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#34D399"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "iQdRT",
+                          "name": "shdrT",
+                          "fill": "#34D399",
+                          "content": "Done",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "GvboC",
+                      "name": "sbody",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 420,
+                      "content": "Fixed the side panel — it now stays where you left it instead of jumping back to the top each time you click around.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "P7nAY",
+                      "name": "sfoot",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "CRxOr",
+                          "name": "sfootAv",
+                          "fill": "#1E1E1E",
+                          "width": 16,
+                          "height": 16,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#C9A962"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "lhRHl",
+                          "name": "sfootT",
+                          "fill": "#6A6A6A",
+                          "content": "Soleur Concierge · just now",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "DiKNC",
+              "name": "note2",
+              "fill": "#0E1410",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#34D399"
+              },
+              "layout": "vertical",
+              "gap": 6,
+              "padding": [
+                10,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ifXZT",
+                  "name": "note2L",
+                  "fill": "#34D399",
+                  "content": "↑ PERSISTED TURN SUMMARY — A NEW MESSAGE VARIANT",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "M6pEv",
+                  "name": "note2B",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": 440,
+                  "content": "Distinct from a normal grey assistant bubble: emerald \"Done\" checkmark, green left-accent rail, slightly larger confident type. Reads as a finished statement. One per turn. Stays in history on reload.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "EZxdl",
+              "name": "note3",
+              "fill": "#141414",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 6,
+              "padding": [
+                10,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "jee9w",
+                  "name": "note3L",
+                  "fill": "#6A6A6A",
+                  "content": "WHERE DID THE LIVE LINE GO?",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "V85Dy",
+                  "name": "note3B",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": 440,
+                  "content": "The \"Looking into…\" line and the Working badge from Frame A vanished the moment the turn ended. They are transient by design — only the summary box above survives.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "jibpH",
+          "name": "inbarB",
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "bX163",
+              "name": "inboxB",
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UaolG",
+                  "name": "inboxBT",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question…",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qXwWO",
+              "name": "sendbtn",
+              "width": 40,
+              "height": 40,
+              "fill": "#C9A962",
+              "cornerRadius": 10,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "dUFGX",
+                  "name": "sendbtnT",
+                  "fill": "#1A1612",
+                  "content": "↑",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "V9GQH",
+      "x": 1680,
+      "y": 0,
+      "name": "C — On Reload (durable history + multi-turn)",
+      "width": 760,
+      "height": 1060,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Ql1F7",
+          "name": "capC",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "vWxt6",
+              "name": "capCL",
+              "fill": "#C9A962",
+              "content": "FRAME C · ON RELOAD (DURABLE HISTORY)",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "H4L3J",
+              "name": "capCD",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Reopen the conversation tomorrow: each completed turn left exactly one summary box. The live narration never persisted. Summaries read as a confident record of what got done.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "taDe0",
+          "name": "hdrC",
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "fYbDK",
+              "name": "hdrCT",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "q2PYH",
+              "name": "hstatC",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "tfwOF",
+                  "name": "hdotC",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "LoIv4",
+                  "name": "hstatCT",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "eLUOy",
+          "name": "threadC",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "NO6nT",
+              "name": "c_u1row",
+              "width": "fill_container",
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "QQCfK",
+                  "name": "c_u1",
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "k2nIX",
+                      "name": "c_u1t",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "content": "The side panel keeps jumping back to the top when I click around. Can you sort that out?",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "USgdb",
+              "name": "c_s1row",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "BqMId",
+                  "name": "c_s1",
+                  "fill": "#10160F",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1,
+                      "right": 1,
+                      "bottom": 1,
+                      "left": 3
+                    },
+                    "fill": "#34D399"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    16,
+                    18
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "4dkpp",
+                      "name": "c_s1h",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "Wr576",
+                          "name": "c_s1c",
+                          "fill": "#0F2417",
+                          "width": 20,
+                          "height": 20,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#34D399"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "qWK20",
+                          "name": "c_s1hl",
+                          "fill": "#34D399",
+                          "content": "Done",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Lu6CL",
+                      "name": "c_s1b",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 420,
+                      "content": "Fixed the side panel — it now stays where you left it instead of jumping back to the top each time you click around.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "7j65V",
+                      "name": "c_s1f",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "Lqb7S",
+                          "name": "c_s1fa",
+                          "fill": "#1E1E1E",
+                          "width": 16,
+                          "height": 16,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#C9A962"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "xFSMC",
+                          "name": "c_s1ft",
+                          "fill": "#6A6A6A",
+                          "content": "Soleur Concierge · yesterday, 4:12 PM",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "i1mcG",
+              "name": "c_u2row",
+              "width": "fill_container",
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "HIM0u",
+                  "name": "c_u2",
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "G2u1m",
+                      "name": "c_u2t",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 340,
+                      "content": "Great. While you're at it — can people see the panel on their phones too?",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mlno0",
+              "name": "c_s2row",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "m1Z1z",
+                  "name": "c_s2",
+                  "fill": "#10160F",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1,
+                      "right": 1,
+                      "bottom": 1,
+                      "left": 3
+                    },
+                    "fill": "#34D399"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    16,
+                    18
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "MZw4c",
+                      "name": "c_s2h",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "oQm9H",
+                          "name": "c_s2c",
+                          "fill": "#0F2417",
+                          "width": 20,
+                          "height": 20,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#34D399"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "GPzEe",
+                          "name": "c_s2hl",
+                          "fill": "#34D399",
+                          "content": "Done",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "imH9m",
+                      "name": "c_s2b",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": 420,
+                      "content": "Made the side panel work on phones too — it now slides in from the edge and tucks away when you're done, so it never covers your screen.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dIs4I",
+                      "name": "c_s2f",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "pBUQG",
+                          "name": "c_s2fa",
+                          "fill": "#1E1E1E",
+                          "width": 16,
+                          "height": 16,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#C9A962"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "zgq5x",
+                          "name": "c_s2ft",
+                          "fill": "#6A6A6A",
+                          "content": "Soleur Concierge · yesterday, 4:15 PM",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "mVAuI",
+          "name": "inbarC",
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "epIUm",
+              "name": "inboxC",
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "gEDqx",
+                  "name": "inboxCT",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question…",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "sR1gZ",
+              "name": "sendbtnC",
+              "width": 40,
+              "height": 40,
+              "fill": "#C9A962",
+              "cornerRadius": 10,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "3c8JJ",
+                  "name": "sendbtnCT",
+                  "fill": "#1A1612",
+                  "content": "↑",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
