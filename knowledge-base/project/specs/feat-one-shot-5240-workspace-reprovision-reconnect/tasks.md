@@ -30,9 +30,9 @@ created: 2026-06-15
 - [ ] 2.3 GREEN. Verify pass-through and recovery cases.
 
 ## Phase 3 — Thread reprovision result out of the cc factory
-- [ ] 3.1 RED: `test/cc-dispatcher-reprovision-honest-message.test.ts` — threading + routing (cc path).
-- [ ] 3.2 Add `setReprovisionResult?` to `QueryFactoryArgs` (`:1029`) AND the forward (`:2512-2516`); capture outcome at `:1469`, publish via sink; add dispatcher cell + setter + deps-wiring (mirror `setBashAutonomous`).
-- [ ] 3.3 GREEN for threading assertions.
+- [ ] 3.1 RED: `test/cc-dispatcher-reprovision-honest-message.test.ts` — threading + routing (cc path), INCLUDING a warm-query reconnect case.
+- [ ] 3.2 Add `setReprovisionResult?` to `QueryFactoryArgs` (`:1029`) AND the forward (`:2512-2516`); add dispatcher cell + setter + deps-wiring (mirror `setBashAutonomous` `:2332`/`:2893`). **COLD-vs-WARM (deepen finding):** `realSdkQueryFactory` runs only on cold turns — do the re-provision + result publish via the per-dispatch fire-and-forget re-resolve in `dispatchSoleurGo` (mirror `setBashAutonomous` warm resolve at `:2348`), so warm reconnects are covered. Keep idempotent (`.git`-absent-gated). The `:1469` factory call may stay as the cold-path self-heal.
+- [ ] 3.3 GREEN for threading assertions (cold + warm).
 
 ## Phase 4 — Honest post-recovery-failure message (cc path)
 - [ ] 4.1 Add `WORKSPACE_RECLAIMED_MESSAGE` to `cc-workflow-end-messages.ts` (copywriter copy; NOT a new status).

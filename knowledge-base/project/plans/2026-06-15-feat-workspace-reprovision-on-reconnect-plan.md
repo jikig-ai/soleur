@@ -1,4 +1,5 @@
 ---
+deepened: 2026-06-15
 title: Deterministic workspace re-provision on reconnect (#5240 design item #2)
 issue: 5340
 epic: 5240
@@ -11,6 +12,38 @@ status: draft
 ---
 
 # Deterministic workspace re-provision on reconnect
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Sections enhanced:** Files to Edit, Sharp Edges, Risks, Implementation Phases
+
+### Key improvements from the deepen pass
+1. **COLD-vs-WARM factory gap (load-bearing — caught at deepen).** The cc
+   `realSdkQueryFactory` (and therefore both `ensureWorkspaceRepoCloned` at
+   `:1469` AND the new `setReprovisionResult` publish) runs **only on a COLD
+   conversation** — on warm-query reuse it is NOT re-invoked
+   (`cc-dispatcher.ts:2336-2347`, the "FIX 6 warm-query posture" comment, which
+   re-resolves `setBashAutonomous` per-dispatch *precisely because* the factory
+   doesn't fire on warm turns). A reconnect that resumes a warm Query therefore
+   never re-runs the re-provision. **Design response:** the re-provision +
+   threaded result must follow the same per-dispatch fire-and-forget re-resolve
+   pattern as `setBashAutonomous`/`debugPosture` (`:2348`), OR be explicitly
+   scoped to cold turns with a documented rationale. See Sharp Edges.
+2. **Two type-hops confirmed** for the new sink (`soleur-go-runner.ts:1006`
+   runner-options interface AND `:1059` `QueryFactoryArgs`, forwarded at `:2516`)
+   — mirror `setBashAutonomous` exactly.
+3. **Name collisions checked:** `setReprovisionResult`, `ReprovisionOutcome`,
+   `WORKSPACE_RECLAIMED_MESSAGE` are unused in `apps/web-platform/` — safe to add.
+4. **Negative claim verified:** `denyRead: ["/workspaces", "/proc"]` lives at
+   `agent-runner-sandbox-config.ts:94`; none of the Files to Edit touch that file
+   — the "no isolation-boundary change" claim holds.
+
+### New consideration discovered
+- The reconnect case the epic targets is *by construction* often a warm-query
+  resume on the cc path. The re-provision must fire on that path or the feature
+  is a no-op for its headline scenario — this is the single most important
+  finding of the deepen pass.
 
 > Refs #5240 (do **NOT** `Closes` — epic stays open for design items #1-deeper, #3, #4).
 > Closes #5340 (the focused sub-issue for this design item).
@@ -251,13 +284,23 @@ touch `denyRead: ["/workspaces"]`.
 
 ### Phase 3 — Thread the reprovision result out of the cc factory (RED→GREEN)
 1. Write `test/cc-dispatcher-reprovision-honest-message.test.ts` (RED) for
-   threading + routing (cc path).
+   threading + routing (cc path), **including a warm-query reconnect case**
+   (the headline scenario) that asserts the re-provision + result fire even when
+   the factory body does not re-run.
 2. Add `setReprovisionResult?` to `QueryFactoryArgs` (`:1029`) AND its forward
-   at `:2512-2516` (two type-hops, mirror `setBashAutonomous`); capture the
-   outcome at `cc-dispatcher.ts:1469` and publish via the sink; add the
+   at `:2512-2516` (two type-hops, mirror `setBashAutonomous`); add the
    dispatcher closure cell + setter + deps-wiring (mirror `setBashAutonomous`
-   cell `:2332` / wiring `:2893`).
-3. GREEN for the threading assertions.
+   cell `:2332` / wiring `:2893`). **COLD-vs-WARM decision (deepen finding):**
+   because `realSdkQueryFactory` runs only on cold turns, do the re-provision +
+   result publish via the **per-dispatch fire-and-forget re-resolve** pattern in
+   the `dispatchSoleurGo` body (mirror `setBashAutonomous`'s warm-query resolve
+   at `:2348`), so warm reconnects are covered — NOT only inside the factory at
+   `:1469`. (The factory-internal `:1469` call may remain as the cold-path
+   self-heal; the per-dispatch resolve is what publishes the result for the
+   honest-message branch on both cold and warm turns. Keep them idempotent —
+   `ensureWorkspaceRepoCloned` is `.git`-absent-gated, so a double-invocation
+   no-ops on the second call.)
+3. GREEN for the threading assertions (cold + warm).
 
 ### Phase 4 — Honest post-recovery-failure message (cc path only) (RED→GREEN)
 1. Add `WORKSPACE_RECLAIMED_MESSAGE` to `cc-workflow-end-messages.ts`
@@ -306,6 +349,11 @@ touch `denyRead: ["/workspaces"]`.
 - [ ] No bespoke leader honest-message path is added (failed leader recovery
       rides the existing `startAgentSession` catch). *Verify:* no new
       `sendToClient` for a reclaim message in `agent-runner.ts`.
+- [ ] The cc re-provision + result publish fire on a **warm-query reconnect**
+      (not only cold turns) — covering the epic's headline scenario. *Verify:*
+      `cc-dispatcher-reprovision-honest-message.test.ts` includes a warm-query
+      case where the factory body does not re-run yet the result is still
+      published (mirrors `setBashAutonomous`'s per-dispatch resolve at `:2348`).
 - [ ] No change to `denyRead`/`allowWrite` in
       `agent-runner-sandbox-config.ts`. *Verify:*
       `git diff --stat origin/main -- apps/web-platform/server/agent-runner-sandbox-config.ts`
@@ -437,6 +485,17 @@ discoverability_test:
 - New test files MUST live under `apps/web-platform/test/` (vitest include globs
   `test/**/*.test.ts` / `test/**/*.test.tsx`) — a co-located server test would be
   silently skipped.
+- **COLD-vs-WARM factory gap (deepen-pass finding):** `realSdkQueryFactory` runs
+  ONLY on a cold conversation; warm-query reuse does not re-invoke it
+  (`cc-dispatcher.ts:2336-2347`). So `ensureWorkspaceRepoCloned` (`:1469`) and any
+  `setReprovisionResult` publish inside the factory body fire ONLY on cold turns.
+  The reconnect scenario the epic targets is frequently a *warm* resume — so the
+  re-provision + result publish MUST follow the per-dispatch fire-and-forget
+  re-resolve pattern that `setBashAutonomous` (`:2348`) and `debugPosture` use
+  (resolve in `dispatchSoleurGo` body, not only in the factory), OR be explicitly
+  scoped to cold turns with a documented rationale and a test asserting the
+  scope. Phase 3 step 2 must decide and encode this — do not assume the factory
+  body alone covers reconnect.
 
 ## Open Code-Review Overlap
 
