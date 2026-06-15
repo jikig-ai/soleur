@@ -7,10 +7,7 @@ import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { resolveEffectiveInstallationId } from "./cc-effective-installation";
-
-// Mirrors `cc-dispatcher.ts`'s CC_GITHUB_NAME_RE — the owner/repo segment guard
-// applied before a repoUrl is trusted for the c4 write tool.
-const C4_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+import { parseConnectedRepo } from "./github-repo-parse";
 
 /**
  * Resolve the `c4-visualizer` Flagsmith flag for the dispatch user's real role
@@ -27,8 +24,11 @@ const C4_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
  * surface). Role is read from the SAME `users.role` shape as the debug-mode and
  * (pre-extraction) inline c4 gates.
  *
- * Throws on a tenant/flag resolution error — callers fail closed (treat as
- * NOT eligible and mirror the failure).
+ * Throws on a tenant/role-read error — callers fail closed (treat as NOT eligible
+ * and mirror the failure). The Flagsmith dimension does NOT throw: `getRuntimeFlag`
+ * catches an upstream outage internally and degrades to the `RUNTIME_FLAGS`
+ * env-fallback — the SAME value both call sites get, so parity is preserved even
+ * on a Flagsmith outage.
  */
 export async function resolveC4FlagEnabled(userId: string): Promise<boolean> {
   const tenant = await getFreshTenantClient(userId);
@@ -43,9 +43,9 @@ export async function resolveC4FlagEnabled(userId: string): Promise<boolean> {
 
 /**
  * Resolve the FULL edit_c4_diagram eligibility for a user from `userId` alone —
- * the same precondition set `realSdkQueryFactory` gates the tool build on
- * (`effectiveInstallationId !== null && owner && repo && c4Enabled`,
- * cc-dispatcher.ts:1724-1748), but reachable WITHOUT factory-scoped state.
+ * the same precondition set `realSdkQueryFactory`'s c4 gate requires
+ * (`effectiveInstallationId !== null && owner && repo && c4Enabled`), but
+ * reachable WITHOUT factory-scoped state.
  *
  * Why userId-only matters: the factory runs ONLY on a COLD conversation
  * (`soleur-go-runner.ts` `if (!state)`); on warm-query reuse it is not
@@ -53,7 +53,7 @@ export async function resolveC4FlagEnabled(userId: string): Promise<boolean> {
  * BOTH cold and warm turns, so it cannot read the factory's `c4ToolName` — it
  * re-resolves here using the SAME userId-keyed primitives the factory uses
  * (`getCurrentRepoUrl`, `resolveInstallationId`, `resolveEffectiveInstallationId`,
- * the owner/repo parse, and the shared `resolveC4FlagEnabled`).
+ * the shared `parseConnectedRepo`, and the shared `resolveC4FlagEnabled`).
  *
  * Precondition parity is load-bearing (the #5388 AC2 guard): this MUST NOT report
  * eligible more permissively than the factory registers the tool, or the
@@ -69,22 +69,8 @@ export async function resolveC4Eligible(userId: string): Promise<boolean> {
     resolveInstallationId(userId),
   ]);
 
-  let owner = "";
-  let repo = "";
-  if (repoUrl) {
-    try {
-      const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
-      const o = parts[0];
-      const r = parts[1]?.replace(/\.git$/, "");
-      if (o && r && C4_GITHUB_NAME_RE.test(o) && C4_GITHUB_NAME_RE.test(r)) {
-        owner = o;
-        repo = r;
-      }
-    } catch {
-      /* malformed repoUrl → not eligible (degrade silently, not security) */
-    }
-  }
-  if (!owner || !repo) return false;
+  const parsed = parseConnectedRepo(repoUrl);
+  if (!parsed) return false;
 
   const effectiveInstallationId = await resolveEffectiveInstallationId({
     userId,

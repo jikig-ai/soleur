@@ -18,9 +18,12 @@ import { describe, test, expect } from "vitest";
 import {
   readCcMcpAllowlist,
   shouldMirrorUnregisteredPlatformToolUse,
-  C4_TOOL_FQN,
+  CC_REGISTERED_PLATFORM_TOOL_NAMES,
 } from "../server/cc-dispatcher";
-import { EDIT_C4_DIAGRAM_TOOL } from "../server/c4-concierge-tools";
+import {
+  EDIT_C4_DIAGRAM_TOOL,
+  C4_TOOL_FQN,
+} from "../server/c4-concierge-tools";
 import { NARRATE_TOOL_FQN, SUMMARIZE_TOOL_FQN } from "../server/narrate-tool";
 
 describe("readCcMcpAllowlist (#2909 FR1)", () => {
@@ -191,6 +194,14 @@ describe("edit_c4_diagram registration (#5388)", () => {
   // rather than silently re-introducing the false-positive.
   test("C4_TOOL_FQN equals the soleur_platform edit_c4_diagram FQN", () => {
     expect(C4_TOOL_FQN).toBe(`mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`);
+  });
+
+  // Anti-fix guard: the c4 FQN must NEVER be seeded into the always-registered
+  // base constant — it is flag+repo-gated and appended per-dispatch only when
+  // eligible. Seeding it here would suppress the genuine unregistered-tool mirror
+  // when the c4 flag is OFF (the #2909 FR2 / AC2 silent-failure surface).
+  test("base constant does NOT contain the c4 FQN (append is per-dispatch)", () => {
+    expect(CC_REGISTERED_PLATFORM_TOOL_NAMES).not.toContain(C4_TOOL_FQN);
   });
 
   // AC1 — c4 registered (per-dispatch set includes the c4 FQN) ⇒ no mirror.

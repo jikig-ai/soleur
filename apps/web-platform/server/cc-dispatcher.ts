@@ -21,7 +21,7 @@ import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import {
   buildC4ConciergeTools,
-  EDIT_C4_DIAGRAM_TOOL,
+  C4_TOOL_FQN,
 } from "@/server/c4-concierge-tools";
 import {
   isDebugModeAvailable,
@@ -120,6 +120,7 @@ import {
   resolveC4Eligible,
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
+import { parseConnectedRepo } from "./github-repo-parse";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -277,23 +278,19 @@ export function shouldMirrorUnregisteredPlatformToolUse(
 // `registeredPlatformToolNames` resolve) rather than listed here. Adding it
 // unconditionally here would suppress the GENUINE unregistered-tool mirror when
 // the c4 flag is OFF — the exact silent-failure surface #2909 FR2 catches.
-const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [
+// Exported so `test/cc-mcp-tier-allowlist.test.ts` can assert the c4 FQN is NOT
+// in the base (the regression guard against the naive "just add it to the
+// constant" anti-fix — c4 must be appended per-dispatch, never seeded here).
+export const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [
   NARRATE_TOOL_FQN,
   SUMMARIZE_TOOL_FQN,
 ];
 
-// #5388: the soleur_platform FQN of the flag+repo-gated edit_c4_diagram tool.
-// SINGLE source of truth for the FQN — consumed by `realSdkQueryFactory` (sets
-// `c4ToolName` when it builds the tool) AND the per-dispatch
-// `registeredPlatformToolNames` resolve (advertises it to the mirror predicate).
-// Exported so `test/cc-mcp-tier-allowlist.test.ts` can assert it never drifts
-// from `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`.
-export const C4_TOOL_FQN = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
-
-// Validates a GitHub owner/repo segment before it is closed over into the
-// edit_c4_diagram tool + system prompt — defense against a malformed/injected
-// repoUrl (mirrors agent-runner.ts's GITHUB_NAME_RE).
-const CC_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+// #5388: `C4_TOOL_FQN` (the soleur_platform FQN of the flag+repo-gated
+// edit_c4_diagram tool) is the single source of truth, colocated with the bare
+// tool name in `@/server/c4-concierge-tools` and imported above. It is APPENDED
+// to a per-dispatch copy of the base list (see the `registeredPlatformToolNames`
+// resolve) when c4 is eligible for the user this dispatch.
 
 // feat-one-shot-concierge-gh-403 — kills the model's FALSE-CONFIDENCE 403
 // diagnosis. The Concierge runs `gh` inside the sandbox and, seeing a bare 403,
@@ -372,8 +369,9 @@ const NARRATION_PROMPT_DIRECTIVE =
 // two in lock-step.
 //
 // The `${owner}/${repo}` interpolation is safe because both are validated
-// against CC_GITHUB_NAME_RE at the call site before assignment (see
-// connectedOwner/connectedRepo resolution below) — no whitespace, backticks,
+// by `parseConnectedRepo` (github-repo-parse.ts, GITHUB_NAME_RE) before
+// assignment (see connectedOwner/connectedRepo resolution below) — no
+// whitespace, backticks,
 // `$`, `{`, newlines, or markdown fences can slip through. If that regex ever
 // relaxes, this becomes a prompt-injection sink.
 //
@@ -1577,23 +1575,12 @@ export const realSdkQueryFactory: QueryFactory = async (
 
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below
-    // and the C4 write-tool gate further down. CC_GITHUB_NAME_RE rejects any
-    // path-shaping characters.
-    let connectedOwner = "";
-    let connectedRepo = "";
-    if (repoUrl) {
-      try {
-        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
-        const o = parts[0];
-        const r = parts[1]?.replace(/\.git$/, "");
-        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
-          connectedOwner = o;
-          connectedRepo = r;
-        }
-      } catch {
-        /* malformed repoUrl → no owner/repo (degrade silently, not security) */
-      }
-    }
+    // and the C4 write-tool gate further down. #5388: shares `parseConnectedRepo`
+    // with `resolveC4Eligible` so the factory's c4-build gate and the dispatcher's
+    // c4-advertise gate parse owner/repo identically (AC2 parity by construction).
+    const connected = parseConnectedRepo(repoUrl);
+    const connectedOwner = connected?.owner ?? "";
+    const connectedRepo = connected?.repo ?? "";
 
     // feat-one-shot-concierge-gh-403 — installation self-heal. The stored
     // installation id (workspaces.github_installation_id, resolved above) can
@@ -1745,7 +1732,10 @@ export const realSdkQueryFactory: QueryFactory = async (
         // #5388: the role-read + Flagsmith resolve is extracted to
         // `resolveC4FlagEnabled` so the factory (tool-build decision) and the
         // dispatcher's per-dispatch `registeredPlatformToolNames` resolve share
-        // ONE flag decision and cannot drift.
+        // ONE flag decision and cannot drift. Flag-only here (NOT the full
+        // `resolveC4Eligible`) because owner/repo/installation are already
+        // resolved in this factory scope — calling the full helper would
+        // redundantly re-resolve them.
         c4Enabled = await resolveC4FlagEnabled(args.userId);
       } catch (err) {
         reportSilentFallback(err, {
@@ -1844,7 +1834,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   }
   // feat-one-shot-concierge-workspace-repo-context — name the server-resolved
   // connected repo so the agent uses it for `-R owner/repo` instead of probing
-  // a (possibly absent) git remote. Guarded ONLY on the CC_GITHUB_NAME_RE-
+  // a (possibly absent) git remote. Guarded ONLY on the parseConnectedRepo-
   // validated owner/repo truthiness — NOT a `.git` presence check, which is
   // the exact dependency the bug stems from. Fed only connectedOwner/
   // connectedRepo (validated above), never raw repoUrl or tool input.
