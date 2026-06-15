@@ -745,13 +745,18 @@ function flattenToolResultText(content: unknown): string {
 }
 
 /** #5313 — extract the target path from a CWD-verification command of the
- *  one-shot/plan gate's canonical shape `cd <path> && pwd`. Returns null for
- *  any other command (a real intervening command breaks the loop). Tolerates
- *  surrounding whitespace and an optional trailing `&& …` continuation (the
- *  live loop ran `cd <wt> && pwd && git branch …`). Pure — unit-tested
- *  directly and exercised by the detector. */
+ *  one-shot/plan gate's canonical shape `cd <path> && pwd` (END-ANCHORED — the
+ *  gate at one-shot/SKILL.md is exactly this form, no trailing continuation).
+ *  Returns null for any other command — including a `cd … && pwd && <more>`
+ *  variant, which (correctly) breaks the loop and resets the counter. The
+ *  end-anchor is load-bearing for correctness, not just tightness: a successful
+ *  `cd <p> && pwd` prints exactly `<p>`, so the detector's `output.trim() ===
+ *  expectedPath` success-reset fires. A tolerated trailing `&& git branch`
+ *  would make a HEALTHY worktree's output a multi-line superset that never
+ *  equals the path, falsely accumulating mismatches toward the threshold
+ *  (review P2). Pure — unit-tested directly and exercised by the detector. */
 export function parseCwdVerifyTarget(command: string): string | null {
-  const m = command.match(/^\s*cd\s+(\S+)\s*&&\s*pwd\b/);
+  const m = command.match(/^\s*cd\s+(\S+)\s*&&\s*pwd\s*$/);
   return m ? m[1] : null;
 }
 
@@ -2127,7 +2132,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state.cwdVerifyLoop = null;
       return false;
     }
-    const observedCwd = output.trim();
+    // Cap at 256 (this file's log-field convention) — a real `pwd` is always
+    // short; a pathological huge output is bounded in the log/Sentry `extra`
+    // and correctly treated as a mismatch (fail-safe, not fail-open). (review P3)
+    const observedCwd = output.trim().slice(0, 256);
     if (observedCwd === expectedPath) {
       // Verify succeeded — the sandbox entered the worktree. Reset.
       state.cwdVerifyLoop = null;
@@ -2186,7 +2194,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           state.events.onToolResult(result);
           // #5313 — fire the bounded CWD-verify-loop guardrail. On fire the
           // turn is terminated (emitWorkflowEnded sets state.closed) — stop
-          // processing further results this message.
+          // processing further results this message. NOTE: this whole block is
+          // gated on `onToolResult` being wired, which today only the cc-soleur-go
+          // (Concierge) path does — exactly the surface that hit the 4826 loop.
+          // A future runner consumer that streams tool-results must wire
+          // onToolResult to inherit this guard; the legacy agent-runner path
+          // relies on its own runaway breaker.
           if (detectCwdVerifyLoop(state, result.command, result.output)) return;
         }
       } catch (err) {

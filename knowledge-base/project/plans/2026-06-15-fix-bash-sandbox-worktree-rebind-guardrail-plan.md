@@ -56,6 +56,24 @@ speculative FR1.3 pre-built fix (→ a gated decision tree), dropped the `WSErro
 sweep (→ reuse `WorkflowEnd` error path), scoped the prose gate to one-shot only, added the Zod-enum
 duplicate (C2) and the two render surfaces (C3) to Files-to-Edit, fixed citations (I1/I2).
 
+## As-Built Reconciliation (post-implementation, 2026-06-15)
+
+The implemented design is simpler than C2/C3 anticipated — those plan sections are retained for
+provenance but are **stale vs. the shipped diff** (do not "restore" the edits they describe):
+- **C2 (Zod-enum duplicate):** dissolved. `WORKFLOW_END_STATUSES` (`lib/types.ts`) is a single-source
+  tuple that `ws-zod-schemas.ts:501` consumes via `z.enum(...)` — NO duplicate enum to update. The new
+  status propagates automatically; `_AssertWorkflowEndStatusMatches` + 2 exhaustive `Record` rails are
+  tsc-enforced.
+- **C3 (two render-surface edits):** not needed. `worktree_enter_failed` is intentionally NOT in
+  `TERMINAL_WORKFLOW_END_STATUSES`, so cc-dispatcher routes it through the existing *recoverable* `error`
+  frame carrying the `WORKFLOW_END_USER_MESSAGES` honest copy — no `chat-surface.tsx` /
+  `message-bubble.tsx` edit was required to displace the false "Agent stopped responding" banner.
+- **I2 (WSErrorCode if-chain):** N/A — the design uses a `WorkflowEnd` status, not a `WSErrorCode`
+  variant, so the `ws-client.ts:883` if-chain Kieran flagged is not a consumer.
+
+Verified by the 4-agent post-implementation review (security-sentinel + CTO APPROVE; user-impact +
+code-quality CONCUR after the one P2 regex-tightening fix). Net new issues filed: 0.
+
 ## User-Brand Impact
 
 **If this lands broken:** a worktree-creating turn loops and dies with "Agent stopped responding" — the

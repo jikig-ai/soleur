@@ -80,8 +80,12 @@ Distinct from #5256 (reconnect logical rebind, merged) and #5306 (UI false-posit
   from the Bash sandbox; the one-shot CWD gate passes.
 - **AC2 (FR2):** An unenterable worktree triggers `WorktreeEnterFailed` after ≤3 attempts; no
   infinite loop; the genuine-hang exit is preserved (no permanent suppression).
-- **AC3 (FR3):** The failure renders the honest "unrecoverable" status, not "Agent stopped
-  responding"/fresh-session greeting.
+- **AC3 (FR3):** The failure renders the honest, **retryable** status ("Couldn't open a workspace
+  to run that step. Try sending your message again."), not "Agent stopped responding"/fresh-session
+  greeting. [Reconciled at review: as-built routes `worktree_enter_failed` through cc-dispatcher's
+  *recoverable* `else` branch — intentionally NOT in `TERMINAL_WORKFLOW_END_STATUSES` — since the
+  failure is per-turn and retryable. The original "unrecoverable" wording was looser; recoverable-
+  retry is the endorsed UX (CTO + user-impact review).]
 - **AC4 (FR4):** The failure path emits a Sentry event with `worktreeId/expectedPath/observedCwd`.
 - **AC5 (G3):** `denyRead: ["/workspaces", "/proc"]` and the seccomp/AppArmor profiles are unchanged
   for the cross-tenant boundary; security-sentinel confirms no new cross-tenant read surface.
