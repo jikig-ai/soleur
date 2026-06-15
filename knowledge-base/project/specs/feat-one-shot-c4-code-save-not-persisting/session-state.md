@@ -1,20 +1,19 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-06-12-fix-c4-code-save-not-persisting-plan.md
+- Plan file: knowledge-base/project/plans/2026-06-15-fix-c4-code-save-not-persisting-across-refresh-plan.md
 - Status: complete
 
 ### Errors
-None. (CWD verified equal to the worktree on first tool call; branch confirmed feat-one-shot-c4-save-not-persisting.)
+- Plan file initially landed in bare-root synced mirror instead of worktree; caught at deepen-plan halt-gate, recovered by copying into worktree and deleting stray. Both artifacts committed/pushed on the worktree branch. No stray remains (verified).
 
 ### Decisions
-- Regression / residual failure mode, not a new build. Prior plan (2026-06-05-fix-likec4-code-editor-save-noop) and PRs #4963/#4965/#4967/#4979/#5007/#5027 already shipped; user's distinct symptom (model.c4 itself reverts) points at the workspace-sync/reconcile layer, not the render layer.
-- Root cause: a diverged shared clone whose `git pull --ff-only` aborts, leaving the on-disk .c4 un-advanced so the editor's reload() re-reads stale text. Two competing hypotheses (write/read clone path-mismatch; render dirties tree) falsified by reading code.
-- Committed fix: F-A1 (optimistic editor apply) + F-B (honest error). F-B already satisfied on the 500 path; real silent revert is the 200-but-stale-clone case. F-A2 demoted to contingency.
-- Promoted concurrency finding H3: no mutex serializes working-tree git ops; self-heal rev-list→reset has a TOCTOU that can destroy un-pushed session-sync work. F-C deferred as a workspace-wide liveness gap with a required tracking issue.
-- All deepen-plan halt gates passed (User-Brand Impact + scope-out, Observability 5-field no-SSH, no PAT vars, wireframe-gate Excluded carve-out); all 7 KB/pen citations resolve.
+- Premise validated NOT stale: PR #5220 fixed only in-session client visual revert; cross-refresh revert is the deferred server-side root cause (tracking issue #5221, OPEN). Plan supersedes 2026-06-12 plan and closes that slice.
+- Root cause: GET /api/kb/c4/project reads .c4 + model.likec4.json only from the on-disk git workspace clone, which can be permanently diverged. GitHub holds committed truth; read path never consults it.
+- Design reworked to GitHub-PRIMARY read (drop clone read + D1 detect-then-fallback).
+- B2 hazard caught: GitHub Contents API omits content for files >1MB; model.likec4.json capped at 4MB — use Git Blobs API. Reuse resolveActiveWorkspaceRepoMeta; append to existing test file.
+- All deepen-plan halt gates passed; AC1–AC11 contiguous.
 
 ### Components Invoked
 - Skills: soleur:plan, soleur:deepen-plan
-- Agents (plan research): repo-research-analyst, learnings-researcher, Explore
-- Agents (deepen-plan review): Explore, dhh-rails-reviewer, kieran-rails-reviewer, architecture-strategist
+- Agents: repo-research-analyst, learnings-researcher, Explore, architecture-strategist, kieran-rails-reviewer, code-simplicity-reviewer
