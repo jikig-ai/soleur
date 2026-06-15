@@ -110,3 +110,16 @@ GRANT EXECUTE ON FUNCTION public.write_routine_run(text, text, text, text, text,
 COMMENT ON TABLE public.routine_runs IS
   'Append-only WORM run-log for EXPECTED_CRON_FUNCTIONS crons (#5345). One row '
   'per terminal run; written by the run-log Inngest middleware on final attempt.';
+
+-- Latest run per routine (DISTINCT ON). security_invoker so the underlying
+-- routine_runs RLS (operator-select) is enforced for the querying session —
+-- the dashboard Routines tab reads this for each row's last-run summary.
+CREATE VIEW public.routine_runs_latest
+  WITH (security_invoker = true) AS
+  SELECT DISTINCT ON (routine_id)
+    id, routine_id, run_id, status, trigger_source, actor_class,
+    actor_id, delegating_principal, started_at, ended_at, duration_ms, error_summary
+  FROM public.routine_runs
+  ORDER BY routine_id, started_at DESC;
+
+GRANT SELECT ON public.routine_runs_latest TO authenticated;

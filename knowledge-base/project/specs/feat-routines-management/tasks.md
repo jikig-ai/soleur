@@ -29,9 +29,9 @@ PR-2 (Concierge authoring) is gated on #5346 and gets its own plan — not taske
 
 ## Phase 4 — Session routes (thin adapters)
 
-- [ ] 4.1 `GET /api/dashboard/routines` + shared `listRoutinesWithLastRun()` (metadata ⋈ latest run; null-guard missing metadata).
-- [ ] 4.2 `GET /api/dashboard/routines/runs?cursor=` + shared keyset reader (empty-state shape).
-- [ ] 4.3 `POST /api/dashboard/routines/run` → `runRoutine(actorClass:'human', actorId:user.id, confirmed)`; 401 unauth; 409 confirmation_required. NOT in PUBLIC_PATHS.
+- [x] 4.1 `GET /api/dashboard/routines` + shared `listRoutinesWithLastRun()` (metadata ⋈ latest run; null-guard missing metadata).
+- [x] 4.2 `GET /api/dashboard/routines/runs?cursor=` + shared keyset reader (empty-state shape).
+- [x] 4.3 `POST /api/dashboard/routines/run` → `runRoutine(actorClass:'human', actorId:user.id, confirmed)`; 401 unauth; 409 confirmation_required. NOT in PUBLIC_PATHS.
 
 ## Phase 5 — Agent MCP tools (parity)
 
