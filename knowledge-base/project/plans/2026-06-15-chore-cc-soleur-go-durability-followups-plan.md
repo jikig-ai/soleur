@@ -11,6 +11,25 @@ date: 2026-06-15
 
 Closes #5371. Ref #5356 (parent review, CLOSED), PR #5362 (MERGED — made the cc disconnect terminal real).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-15
+**Plan-review (4 agents):** DHH, Kieran, code-simplicity, spec-flow-analyzer.
+**Deepen-plan passes:** verify-the-negative + precedent-diff (Explore, sonnet), architecture-strategist.
+
+### Key improvements applied from review
+1. **Corrected a factually-wrong precondition (verified):** `startStuckActiveReaper` DOES `timer.unref()` (`agent-runner.ts:848`); the original plan said it did not. The cc reaper must `unref()` too.
+2. **Idempotency hardening:** `closeQuery` body has no `state.closed` early-return (caller-guarded only). The drain must skip already-closed entries — defends the grace-abort overlap (both reaper and drain are synchronous, so the real risk is grace-abort double-close, not a concurrent tick). Added AC6.
+3. **awaitingUser asymmetry made explicit:** the reaper skips `awaitingUser` queries; the drain must NOT (added AC7).
+4. **Trimmed ceremony (DHH + Simplicity consensus):** `reapIdle` does zero I/O, so the Observability section was cut to one defensive `reportSilentFallback` (no alert rule, no `curl` discoverability test); the cadence constant is a local literal (not an exported knob); tests consolidated into the existing lifecycle file (no new file).
+5. **AC4 made checkable:** assert `reason === undefined` via an injected `onCloseQuery` spy, not a same-module `vi.spyOn` on the checkpoint helper.
+6. **Stale line-number anchors replaced with symbol anchors.**
+
+### New considerations discovered
+- **Inngest is architecturally impossible here (precedent-diff):** all 43 Inngest cron functions run in a separate execution context (ADR-033 scopes them to agent-loop crons that `spawn` claude-code) and cannot reach the in-process `activeQueries` Map. An in-process `setInterval` is the only option — matching the 5 existing in-process reapers (agent-runner, rate-limiter, ws-handler, dsar-export, cc-dispatcher).
+- **Drain async tail is safe:** `cleanupCcBashGatesForConversation` does only in-memory Map cleanup + sync `abort()`, no awaited DB write, so `process.exit(0)` truncates nothing; next-boot `cleanupOrphanedConversations` is the status-row backstop.
+- **Deferred (out of scope):** this is the 6th in-process reaper; an ADR codifying "in-process Map lifecycle → in-process `setInterval` + SIGTERM `clearInterval`; Inngest for DB-backed crons only" is worth writing but is not required for this chore.
+
 ## Overview
 
 Two pre-existing latent cc-soleur-go durability gaps surfaced while building the cc disconnect-checkpoint parity (#5356 / PR #5362). Neither was introduced by #5362 — #5362 only made the cc disconnect terminal real, which exposed these adjacent gaps. Both are pure-backend wiring changes against the already-provisioned `apps/web-platform` runtime: no new infrastructure, no new vendor, no schema, no UI surface.
@@ -19,9 +38,9 @@ Two pre-existing latent cc-soleur-go durability gaps surfaced while building the
 
 **Gap 2 — SIGTERM does not drain cc `activeQueries`.** The SIGTERM handler (`apps/web-platform/server/index.ts:216`) calls `abortAllSessions()` (`agent-session-registry.ts:359`) which drains only the legacy `activeSessions` map; the cc runner's `activeQueries` are not touched on deploy-time shutdown. **Design constraint from the issue:** the legacy path *intentionally* does not checkpoint on `server_shutdown` (the abort reason `server_shutdown` is classified non-`disconnected`, so the checkpoint branch at `agent-runner.ts:2358` is skipped — legacy conversations "own their terminal state"). cc parity therefore = **match legacy = abort without checkpoint**. The value of this change is bounded: stop API credit consumption + flip conversation status cleanly on shutdown, NOT preserve uncommitted work (that is the `disconnected` grace-abort terminal's job, already shipped in #5362).
 
-The implementation mirrors two existing precedents 1:1:
-- **Gap 1** mirrors `startStuckActiveReaper()` (`agent-runner.ts:773`) — a `setInterval` returning `NodeJS.Timeout`, started at `index.ts:120`, cleared at `index.ts:231`.
-- **Gap 2** mirrors the legacy `abortAllSessions()` drain slot at `index.ts:235`, adding a sibling cc-drain that aborts-without-checkpoint.
+The implementation mirrors two existing precedents 1:1 (anchor by symbol, not line number — the SIGTERM handler region shifts as the file evolves):
+- **Gap 1** mirrors `startStuckActiveReaper()` (`agent-runner.ts:773`) — a `setInterval` returning `NodeJS.Timeout`, `timer.unref()`'d before return, started at boot next to the existing `startStuckActiveReaper()` call, cleared inside the SIGTERM handler next to the existing `clearInterval(stuckActiveReaperTimer)`.
+- **Gap 2** mirrors the legacy `abortAllSessions()` drain inside the SIGTERM handler, adding a sibling cc-drain that aborts-without-checkpoint.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -79,7 +98,7 @@ Sub-steps are ordered contract-first (interface method before its dispatcher cal
 
 1. **`apps/web-platform/server/soleur-go-runner.ts`** — add `closeAllForShutdown(): number` to the `SoleurGoRunner` interface (`:1125`), to the returned object (`:3240`), and implement it near `closeConversation` (`:3126`). It iterates `activeQueries`, and for each entry where `state.closed !== true` sets `state.closed = true` and calls `closeQuery(state)` **with no reason** (no checkpoint — legacy parity), returning the count closed. It does **NOT** skip `awaitingUser` (unlike `reapIdle`) — a deploy must tear down review-gate-parked queries too. Encapsulating the iteration in the runner is required because `activeQueries` is closure-private (`:1704`); exposing a raw id-iterator + looping `closeConversation` from the dispatcher would leak that internal and still need the same closed-guard, so the single method is the smaller surface.
 2. **`apps/web-platform/server/cc-dispatcher.ts`** — add an exported `drainCcQueriesForShutdown(): number` accessor with the `if (!_runner) return 0;` guard, delegating to `_runner.closeAllForShutdown()`.
-3. **`apps/web-platform/server/index.ts`** — inside the SIGTERM handler, call `drainCcQueriesForShutdown()` immediately after `abortAllSessions()` (before `streamReplayBuffer.clearAll()`). Final SIGTERM order: `clearInterval(stuckActiveReaperTimer)` → `clearInterval(ccIdleReaperTimer)` → `abortAllSessions()` → `drainCcQueriesForShutdown()` → `streamReplayBuffer.clearAll()` → connection close. The drain is synchronous in-memory (the only async tail is the `void cleanupCcBashGatesForConversation` inside `handleCcCloseQuery`, which is best-effort in-memory registry cleanup, NOT awaited DB I/O — so `process.exit(0)` does not truncate persisted state; next-boot `cleanupOrphanedConversations` (`index.ts:106`) is the status-row backstop).
+3. **`apps/web-platform/server/index.ts`** — inside the SIGTERM handler, call `const drained = drainCcQueriesForShutdown()` immediately after `abortAllSessions()` (before `streamReplayBuffer.clearAll()`), and add `log.info({ drained }, "cc drain on shutdown")` so a stuck deploy can distinguish "drain ran, closed N" from "drain never reached" without SSH. Final SIGTERM order: `clearInterval(stuckActiveReaperTimer)` → `clearInterval(ccIdleReaperTimer)` → `abortAllSessions()` → `drainCcQueriesForShutdown()` (+ log) → `streamReplayBuffer.clearAll()` → connection close. The drain is synchronous in-memory (the only async tail is the `void cleanupCcBashGatesForConversation` inside `handleCcCloseQuery`, which — verified — does only in-memory `_ccBashGates`/`_bashApprovalCache`/`_ccAutonomousAckPosture` Map cleanup + sync `abort()`, NOT awaited DB I/O — so `process.exit(0)` does not truncate persisted state; next-boot `cleanupOrphanedConversations` (`index.ts:106`) is the status-row backstop).
 
 ### Phase 3 — Tests (RED → GREEN)
 
@@ -158,10 +177,21 @@ No cross-domain implications detected — backend runtime/lifecycle change with 
 - **Lazy-singleton creation from shutdown.** Calling `getSoleurGoRunner(sendToClient)` from index.ts would *create* a runner at shutdown (wrong, and requires a sendToClient closure). Mitigation: new accessors use the `if (!_runner) return` guard exactly like `closeCcConversation`; never call `getSoleurGoRunner` from the scheduler or SIGTERM path.
 - **Leaked setInterval in tests.** Per `2026-03-20-bun-segfault-leaked-setinterval-timers.md`, an uncleaned `setInterval` in a test segfaults/hangs the runner. Mitigation: `afterEach(() => { vi.useRealTimers(); clearInterval(timer) })`.
 
+## Research Insights — Precedent Diff (Phase 4.4)
+
+**Scheduled-work pattern (Inngest vs in-process) — verified.** The repo has 43 Inngest cron functions (`apps/web-platform/server/inngest/functions/cron-*.ts`). Per the Phase 4.4 scheduled-work check, a new recurring job would normally route to Inngest (ADR-033). **This reaper is the exception and MUST be in-process**, because:
+- ADR-033 scopes Inngest crons to *agent-loop* work that `child_process.spawn`s `claude-code` in an ephemeral runner; the decision is about moving agent execution off GitHub Actions, not about every recurring tick.
+- The idle reaper mutates **process-local in-memory state** — the runner's `activeQueries` closure (`soleur-go-runner.ts:1704`, private to the factory). An Inngest function runs in a separate execution context and `git grep` confirms zero Inngest functions reference `activeQueries`/`activeSessions`; they cannot reach the live Map.
+- The established in-repo precedent is in-process `setInterval`: `startStuckActiveReaper` (`agent-runner.ts:773`, `unref`'d at `:848`), plus reapers in `rate-limiter.ts`, `ws-handler.ts`, `dsar-export.ts`, `cc-dispatcher.ts`. This change matches that pattern exactly.
+
+**Idempotency precedent (verified).** All three existing `activeQueries` iterators set `state.closed = true` before calling `closeQuery`: `emitWorkflowEnded` (`:1935`), `reapIdle` (`:3118`), `closeConversation` (`:3132`). `closeAllForShutdown` adopts the same form (skip-if-closed, else set-closed-then-close). No novel pattern introduced.
+
+**Checkpoint-gate precedent (verified).** `handleCcCloseQuery` (`cc-dispatcher.ts:1204`) gates checkpoint on `if (reason === "disconnected")`; legacy `abortAllSessions` passes `server_shutdown` (`abort-classifier.ts:81` → `isDisconnected: kind === "disconnected"` → false). Both confirm "no reason = no checkpoint = legacy parity".
+
 ## Sharp Edges
 
 - **The drain MUST NOT pass `reason: "disconnected"`.** `closeAllForShutdown` must call `closeQuery(state)` with no reason. `handleCcCloseQuery` (`cc-dispatcher.ts:1194`) gates the checkpoint on `reason === "disconnected"`; passing it on a shutdown drain would diverge from legacy parity (the entire point of Gap 2 is *match legacy = no checkpoint*). AC4 spy-asserts `reason === undefined`.
-- **`closeQuery` is NOT idempotent (verified).** Its body (`soleur-go-runner.ts:1949`) has no `if (state.closed) return` — the guard lives only in its three callers (`emitWorkflowEnded`, `reapIdle`, `closeConversation`). So `closeAllForShutdown` MUST check `state.closed !== true` before closing and set `state.closed = true` itself; otherwise a conversation mid-grace-abort (`closeConversation(id,"disconnected")` already ran, `activeQueries.delete` not yet completed) or mid-reaper-tick gets a second `onCloseQuery` + `query.close()`. The `clearInterval` ordering on SIGTERM is necessary-but-insufficient: an already-entered async reaper tick survives `clearInterval` and can mutate the map during the drain — the `state.closed` skip is the actual race fix, not the ordering. AC6 tests this.
+- **`closeQuery` is NOT idempotent (verified).** Its body (`soleur-go-runner.ts:1949`) has no `if (state.closed) return` — the guard lives only in its three callers (`emitWorkflowEnded` `:1935`, `reapIdle` `:3118`, `closeConversation` `:3132`), each of which sets `state.closed = true` *before* calling `closeQuery`. So `closeAllForShutdown` MUST follow the same pattern: skip entries where `state.closed === true`, else set `state.closed = true` and call `closeQuery(state)`. **The real double-close surface is the grace-abort overlap, not a concurrent reaper:** `reapIdle` and the SIGTERM handler are both fully synchronous (no `await` between the `activeQueries` iteration and `closeQuery`), so Node's single-threaded event loop cannot interleave a reaper tick with the drain. The case the guard defends is a conversation that already ran `closeConversation(id,"disconnected")` from the ws-handler grace timer (set `closed=true`, fired `onCloseQuery`) — without the skip, the drain would fire a second `onCloseQuery` + `query.close()` on it. AC6 tests exactly this overlap.
 - **`.unref()` the reaper timer (verified).** The legacy `startStuckActiveReaper` calls `timer.unref()` (`agent-runner.ts:848`); `index.ts` comments confirm `.unref()` already prevents shutdown blocking. The cc reaper must match — do NOT ship an un-unref'd timer relying on `clearInterval` alone.
 - **The drain closes `awaitingUser` queries; the reaper skips them.** `reapIdle` deliberately `continue`s on `state.awaitingUser` (`:3110`) so a human-review gate is never reaped mid-read. `closeAllForShutdown` must NOT copy that skip — a deploy tears down every query, including review-gate-parked ones. AC7 tests both behaviors.
 - **Do not force runner creation at the SIGTERM/scheduler layer.** Only `_runner`-direct guarded accessors may be used; `getSoleurGoRunner` instantiates and requires a `sendToClient` closure. The scheduler calls the guarded `reapIdleCcQueries()`, never `_runner.reapIdle()` directly.

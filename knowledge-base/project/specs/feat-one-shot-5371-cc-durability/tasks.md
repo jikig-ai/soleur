@@ -30,7 +30,7 @@ idle-reaper scheduling + SIGTERM cc-drain. Both match existing precedents.
 
 - [ ] 2.1 In `soleur-go-runner.ts`: add `closeAllForShutdown(): number` to interface (`:1125`) + return object (`:3240`) + impl (near `:3126`). Iterate `activeQueries`; for each `state.closed !== true`, set `state.closed = true` and `closeQuery(state)` (NO reason). Do NOT skip `awaitingUser`. Return count.
 - [ ] 2.2 In `cc-dispatcher.ts`: add exported `drainCcQueriesForShutdown(): number` with `if (!_runner) return 0;` → `_runner.closeAllForShutdown()`.
-- [ ] 2.3 In `index.ts` SIGTERM handler: call `drainCcQueriesForShutdown()` right after `abortAllSessions()` (before `streamReplayBuffer.clearAll()`).
+- [ ] 2.3 In `index.ts` SIGTERM handler: `const drained = drainCcQueriesForShutdown()` right after `abortAllSessions()` (before `streamReplayBuffer.clearAll()`); add `log.info({ drained }, "cc drain on shutdown")`.
 
 ## Phase 3 — Tests (extend existing lifecycle file, RED → GREEN)
 
