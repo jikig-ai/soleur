@@ -23,5 +23,10 @@ defaultTest:
     - type: javascript
       value: file://scripts/gate-classification.cjs
 
+# N runs per (prompt arm × model) cell. The classification-correct rate is the
+# mean of the measurement assert's per-run scores (promptfoo has no native median;
+# read the aggregate per-cell score or compute the median across these runs).
+repeat: 3
+
 # Golden tasks: { vars: { input, golden_label } } per line.
 tests: file://tasks/ticket-triage.jsonl

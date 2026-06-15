@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic unit test for the MEASUREMENT assert (scripts/measure-classification.js).
+# Deterministic unit test for the MEASUREMENT assert (scripts/measure-classification.cjs).
 # No live LLM: every "model output" is a stubbed string. Asserts the contract:
 #   - ALWAYS pass: true (the measurement records, never gates)
 #   - score 1.0 when the parsed label matches golden_label, 0.0 otherwise

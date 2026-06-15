@@ -52,6 +52,13 @@ Both asserts share one parser, [parse-label.cjs](./scripts/parse-label.cjs). Gol
 synthesized fixtures only (no real user data): [go-routing.jsonl](./tasks/go-routing.jsonl),
 [ticket-triage.jsonl](./tasks/ticket-triage.jsonl).
 
+> **Fixture-sync caveat.** The skill-arm prompts hand-copy the production classifier prose — the
+> `/go` routing table (`plugins/soleur/commands/go.md`) and the ticket-triage priority rubric
+> (`plugins/soleur/agents/support/ticket-triage.md`). There is no mechanical link, so when either
+> production surface changes, re-sync the matching `prompts/<target>-skill.txt` (and the enum SSOT
+> if routes/levels change) or the harness silently measures a stale classifier. Re-syncing on a
+> production-classifier edit is the maintenance contract for this skill.
+
 ## Run it
 
 See [README.md](./README.md) for the reproduce commands, how to read the baseline-vs-skill delta,

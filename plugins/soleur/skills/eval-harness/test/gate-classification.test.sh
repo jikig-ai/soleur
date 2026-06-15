@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic unit test for the GATE assert (scripts/gate-classification.js).
+# Deterministic unit test for the GATE assert (scripts/gate-classification.cjs).
 # No live LLM: every "model output" is a stubbed string. Asserts the contract:
 #   - pass: true  when the parsed label IS a member of the target's enum
 #   - pass: false when the parsed label is NOT in the enum (malformed/hallucinated)

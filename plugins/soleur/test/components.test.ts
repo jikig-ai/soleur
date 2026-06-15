@@ -250,7 +250,7 @@ describe("Autonomous-loop API-budget disclosure", () => {
     "eval-harness",
   ];
 
-  // Sentinel chosen for distinctiveness + verbatim across all 6 disclosures.
+  // Sentinel chosen for distinctiveness + verbatim across all 7 disclosures.
   // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
   const SENTINEL = "disclaims warranty for runtime cost";
 
