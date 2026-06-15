@@ -488,6 +488,9 @@ export async function resolveActiveWorkspaceKbRoot(
 
   // The id-shape guard (CWE-22 #5344) lives in workspacePathForWorkspaceId, so
   // both workspacePath and the kbRoot built from it below are covered here.
+  // NOTE: paths built from the pre-stored `users.workspace_path` column
+  // (kb-route-helpers / kb upload route) are a SEPARATE boundary, mitigated by
+  // their own downstream `isPathInWorkspace` containment — not by this guard.
   const workspacePath = workspacePathForWorkspaceId(activeWorkspaceId);
   return {
     ok: true,

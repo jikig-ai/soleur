@@ -37,6 +37,12 @@ describe("workspace-resolver: workspacePathForWorkspaceId id-shape guard (#5344)
     expect(workspacePathForWorkspaceId(zero)).toBe(`${ROOT}/${zero}`);
   });
 
+  it("accepts an uppercase UUID (the `i` flag is load-bearing — pins it against a regex tighten)", () => {
+    process.env.WORKSPACES_ROOT = ROOT;
+    const id = "ABCDEF01-2345-4678-89AB-CDEF01234567";
+    expect(workspacePathForWorkspaceId(id)).toBe(`${ROOT}/${id}`);
+  });
+
   it("throws on a parent-traversal id (`../etc`)", () => {
     expect(() => workspacePathForWorkspaceId("../etc")).toThrow(
       /Invalid workspaceId format/,
