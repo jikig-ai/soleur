@@ -149,6 +149,10 @@ interface UseWebSocketReturn {
    *  `activeLeaderIds.length > 0` — a multi-leader dispatch may have
    *  leaders responding while we are already `"stopping"`. */
   streamState: StreamState;
+  /** feat-reasoning-chat-boxes (#5370) — the transient live narration line for
+   *  the in-flight turn, or null. Rendered near the "Working…" badge; torn down
+   *  by the reducer on every turn-end path. Live-only (never persisted). */
+  liveNarration: string | null;
   /** User-initiated Stop. Sends `{ type: "abort_turn", conversationId }` and
    *  optimistically transitions `streamState` to `"stopping"`. No-op when
    *  `streamState !== "streaming"` (idempotent under double-click) or when
@@ -1469,12 +1473,32 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       message_attachments?: RawAttachment[] | null;
       status?: "complete" | "aborted" | null;
       usage?: RawUsage | null;
-    }) => ({
+      message_kind?: string | null;
+    }): ChatMessage => {
+      // feat-reasoning-chat-boxes (#5370) — a persisted turn_summary row
+      // (message_kind, migration 105) rehydrates as the durable confirmed box
+      // (plain-text render), NOT a generic text bubble. Branch BEFORE the text
+      // mapping so the discriminator is honored on reload. A future unknown
+      // message_kind falls through to the text mapping (forward-compatible
+      // read; the render switch is the authoritative throw-on-unknown gate).
+      if (m.message_kind === "turn_summary") {
+        return {
+          id: m.id,
+          role: "assistant" as const,
+          content: m.content,
+          type: "turn_summary" as const,
+        };
+      }
+      return {
       id: m.id,
       role: m.role as "user" | "assistant",
       content: m.content,
       type: "text" as const,
-      leaderId: m.leader_id ?? undefined,
+      // Trusted DB-sourced leader id; the column is unconstrained text but is
+      // only ever written from the DomainLeaderId set. (The explicit return
+      // annotation above makes this cast necessary; pre-annotation it was an
+      // implicit widening.)
+      leaderId: (m.leader_id ?? undefined) as DomainLeaderId | undefined,
       // History messages intentionally leave state undefined so the
       // completion checkmark only appears on messages that completed via a
       // WS stream event in the current session. renderBubbleContent handles
@@ -1520,7 +1544,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
                 completed_actions: m.usage.completed_actions,
               }
           : null,
-    }));
+      };
+    });
 
     const costData: UsageData | null =
       json.totalCostUsd > 0
@@ -1862,6 +1887,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     conversationCreatedAt,
     historyLoading,
     streamState: chatState.streamState,
+    liveNarration: chatState.liveNarration,
     abort,
     connection: chatState.connection,
     resumeAfterUnrecoverable,

@@ -224,6 +224,7 @@ export function ChatSurface({
     conversationCreatedAt,
     historyLoading,
     streamState,
+    liveNarration,
     abort,
     connection,
     resumeAfterUnrecoverable,
@@ -913,6 +914,29 @@ export function ChatSurface({
                 getIconPath={getIconPath}
                 variant={variant}
               />
+            </div>
+          )}
+
+          {/* feat-reasoning-chat-boxes (#5370) — transient live narration line.
+              Shows the agent's deliberate plain-language status near the
+              Working badge while a turn is in flight. On reconnect mid-turn the
+              live-only frame is gone (not buffered) but the turn continues — so
+              fall back to "Still working…" rather than a dead blank (spec-flow
+              Finding 4). Torn down automatically when streamState leaves
+              "streaming" (the reducer also nulls liveNarration on turn-end). */}
+          {streamState === "streaming" && (
+            <div
+              data-testid="live-narration"
+              aria-live="polite"
+              className="flex items-center gap-2 px-1 text-sm text-soleur-text-secondary"
+            >
+              <span
+                aria-hidden="true"
+                className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+              />
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {liveNarration ?? "Still working…"}
+              </span>
             </div>
           )}
 
