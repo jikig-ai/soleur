@@ -8,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.njk (renders at /skills/)
-// Last verified: 2026-06-15 (4 categories, 85 skills)
+// Last verified: 2026-06-15 (4 categories, 86 skills)
 const SKILL_CATEGORIES = {
   // Content & Release (22)
   "brainstorm-techniques": "Review & Planning",
@@ -91,6 +91,7 @@ const SKILL_CATEGORIES = {
   rclone: "Workflow",
   schedule: "Workflow",
   "reproduce-bug": "Workflow",
+  "harvest-debt": "Workflow",
   "resolve-debt": "Workflow",
   "resolve-parallel": "Workflow",
   "resolve-pr-parallel": "Workflow",

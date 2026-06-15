@@ -11,6 +11,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Always
 
+- **Minimalism ladder (stop at the first rung that holds):** (1) Does it need to exist at all? (YAGNI -- delete the requirement.) (2) Does the stdlib do it? (3) Does a native platform feature cover it? (4) Does an already-installed dependency solve it? (5) Can it be one line? (6) Only then, write the minimum code that works. **Carve-out -- never simplify away:** input validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, or anything the user explicitly requested. This biases generation up front; the `code-simplicity-reviewer` agent is the post-hoc check. (ex-ponytail YAGNI ladder)
 - Skill descriptions must use third person ("This skill should be used when..." NOT "Use this skill when...")
 - Reference files in skills must use markdown links, not backticks (e.g., `[file.md](./references/file.md)`)
 - All skill, command, and agent markdown files must include YAML frontmatter with `name` and `description` fields
