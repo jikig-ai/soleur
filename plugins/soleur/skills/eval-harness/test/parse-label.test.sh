@@ -78,10 +78,12 @@ run_empty "$GO" "" "empty string output" ""
 run_empty "$GO" "" "null output" "__NULL__"
 
 # --- loadEnum: the var shapes promptfoo actually passes ---
-# Regression for the #5358 live-run bug: promptfoo passes a `defaultTest.vars`
-# `file://...` value to a custom JS assert as the LITERAL STRING, unresolved.
-# loadEnum must read the SSOT file itself. Also accepts a JSON array literal and
-# a direct array; returns [] (gate fails closed) on anything unreadable.
+# promptfoo's handling of a `defaultTest.vars` `file://*.json` value is
+# version-dependent: it may pass the RESOLVED FILE CONTENTS (JSON array text as a
+# string) OR the literal unresolved `file://...` ref. loadEnum must handle BOTH
+# (plus a direct array), returning [] (gate fails closed) on anything else. The
+# resolved-contents case is the one a prior simplification dropped, vacuuming the
+# gate — these cases lock both shapes so it cannot recur.
 loadenum() {
   local enumval="$1" want_len="$2" want_first="$3" label="$4"
   local got
