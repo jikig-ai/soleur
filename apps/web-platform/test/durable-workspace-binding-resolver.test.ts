@@ -58,7 +58,9 @@ describe("resolveUserWorkspaceBinding — durable binding resolution (AC4, #5240
   it("Map miss + DB returns null → throws fail-loud, fires reportSilentFallback once (op=unresolvable), and does NOT bind to userId", async () => {
     const dbRead = vi.fn(async () => null);
 
-    await expect(resolveUserWorkspaceBinding(USER, dbRead)).rejects.toThrow();
+    await expect(resolveUserWorkspaceBinding(USER, dbRead)).rejects.toThrow(
+      /no durable binding found/,
+    );
 
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
@@ -73,13 +75,27 @@ describe("resolveUserWorkspaceBinding — durable binding resolution (AC4, #5240
       throw new Error("boom");
     });
 
-    await expect(resolveUserWorkspaceBinding(USER, dbRead)).rejects.toThrow();
+    await expect(resolveUserWorkspaceBinding(USER, dbRead)).rejects.toThrow(
+      /durable DB read failed/,
+    );
 
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
       op: "resolveUserWorkspaceBinding.db-read",
     });
     expect(getUserWorkspace(USER)).toBeUndefined();
+  });
+
+  it("rehydrated binding is consumed by the next caller — a second resolve hits the Map and issues no DB read (durable-path writeback contract)", async () => {
+    const firstRead = vi.fn(async () => WS);
+    expect(await resolveUserWorkspaceBinding(USER, firstRead)).toBe(WS);
+    expect(firstRead).toHaveBeenCalledTimes(1);
+
+    // The writeback from the first resolve must make the second a hot Map hit:
+    // the second consumer on the same connection never touches the DB.
+    const secondRead = vi.fn(async () => "should-not-be-read");
+    expect(await resolveUserWorkspaceBinding(USER, secondRead)).toBe(WS);
+    expect(secondRead).toHaveBeenCalledTimes(0);
   });
 });
 

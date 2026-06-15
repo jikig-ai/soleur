@@ -846,11 +846,12 @@ async function createConversation(
   }
 
   // Durable binding resolution (AC4, #5240): prefer the hot in-memory Map, then
-  // rehydrate from `user_session_state.current_workspace_id` (the `tenant`
-  // client minted at :840 is in scope) on an empty Map — the post-restart /
-  // pre-WS-open window that used to throw "No workspace binding". The resolver
-  // throws fail-loud (and mirrors to Sentry) only when the DB ALSO has no
-  // binding, preserving the abort semantics for the genuinely-unbound case.
+  // rehydrate from `user_session_state.current_workspace_id` (reusing the
+  // `tenant` client minted above for the conversation INSERT) on an empty Map —
+  // the post-restart / pre-WS-open window that used to throw "No workspace
+  // binding". The resolver throws fail-loud (and mirrors to Sentry) only when
+  // the DB ALSO has no binding, preserving the abort semantics for the
+  // genuinely-unbound case.
   const wsId = await resolveUserWorkspaceBinding(userId, (uid) =>
     readWorkspaceIdFromDb(uid, tenant),
   );
@@ -1677,10 +1678,15 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
 
-        // Resolve the session-active workspace once. The slot's workspace_id
-        // (NOT NULL since mig 059) MUST equal the conversation's workspace_id,
-        // which createConversation now also resolves via
-        // resolveUserWorkspaceBinding — so the two cannot diverge (mig 093).
+        // Resolve the session-active workspace. The slot's workspace_id (NOT
+        // NULL since mig 059) must match the conversation's workspace_id, which
+        // createConversation also resolves via resolveUserWorkspaceBinding:
+        // both read the same source-of-truth column (`current_workspace_id`),
+        // so within one connection they read the same value (the Map-writeback
+        // makes the later read a hot hit). They can still differ only if the
+        // user switches active workspace BETWEEN start_session and the first
+        // chat message — the same pre-existing mid-session-switch behavior the
+        // process-local Map already had, not a regression introduced here.
         // Durable binding resolution (AC4, #5240): prefer the hot Map, then
         // rehydrate from `user_session_state.current_workspace_id` on an empty
         // Map (post-restart / pre-WS-open) instead of throwing. The resolver
@@ -1689,9 +1695,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         //
         // The tenant client for the durable read is minted LAZILY inside the
         // closure: on the hot path (Map warm) the closure never runs, so this
-        // adds zero tenantFor/DB cost (AC4 hot-path-identical). `tenantResume`
-        // (:1626) is block-scoped to the resume branch (closes :1670) and is
-        // out of scope here, so the closure mints its own tenant.
+        // adds zero tenantFor/DB cost (AC4 hot-path-identical). The resume-path
+        // tenant client is block-scoped to the resume branch above and is out
+        // of scope here, so the closure mints its own tenant.
         const slotWorkspaceId = await resolveUserWorkspaceBinding(
           userId,
           async (uid) => {
