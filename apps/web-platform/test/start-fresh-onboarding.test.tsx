@@ -89,6 +89,16 @@ function buildMockTree(
 
 let fetchMock: Mock;
 
+// useConversations resolves its repo scope from GET /api/workspace/active-repo
+// (ADR-044), not users.repo_url. Connected-repo payload for that route.
+const ACTIVE_REPO_RESPONSE = {
+  workspaceId: "ws-1",
+  repoUrl: "https://github.com/acme/repo",
+  repoName: "acme/repo",
+  repoStatus: "connected",
+  fellBackToSolo: false,
+};
+
 beforeEach(() => {
   vi.resetModules();
   mockPush.mockClear();
@@ -100,7 +110,21 @@ beforeEach(() => {
     singleRow: { repo_url: "https://github.com/acme/repo" },
   });
   fetchMock = vi.fn();
-  globalThis.fetch = fetchMock;
+  // Route the active-repo call to a fixed payload via an outer wrapper so it
+  // never consumes the per-test KB-tree `mockResolvedValueOnce` queue on
+  // `fetchMock` (the two fetches fire in non-deterministic effect order).
+  globalThis.fetch = vi
+    .fn()
+    .mockImplementation((url: string, ...rest: unknown[]) => {
+      if (typeof url === "string" && url.startsWith("/api/workspace/active-repo")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(ACTIVE_REPO_RESPONSE),
+        });
+      }
+      return (fetchMock as (...a: unknown[]) => unknown)(url, ...rest);
+    });
 });
 
 describe("Start Fresh Onboarding - KB State Derivation", () => {

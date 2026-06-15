@@ -42,6 +42,12 @@ export const WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string> = {
   // founder's perspective without context.
   session_revoked:
     "Your session was revoked by an operator. Contact support to restore access.",
+  // #5313 (deferred #5240 FR-half) — honest copy for the worktree-rebind
+  // loop. Routing this through the WorkflowEnd error path (not the client
+  // activity-watchdog) is what displaces the misleading "Agent stopped
+  // responding" banner: the operator sees an accurate, actionable status.
+  worktree_enter_failed:
+    "Couldn't open a workspace to run that step. Try sending your message again.",
 };
 
 // Compile-time exhaustiveness rail. If a new variant lands in

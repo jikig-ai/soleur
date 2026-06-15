@@ -395,6 +395,121 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.lastError).toBeNull();
   });
 
+  // #5290 — resume_stream reconnect gate: only a "resumed" (materialized,
+  // owned) session may request replay. A "fresh" deferred conversation has no
+  // DB row yet, so a resume_stream for it triggers the server's
+  // op=ownership-mismatch false positive. Paired positive/negative under the
+  // same harness so the negative is non-vacuous (the send mechanism is proven
+  // to fire for "resumed").
+  function sentTypes(): string[] {
+    return (wsInstance?.send.mock.calls ?? []).map(
+      (c) => (JSON.parse(c[0] as string) as { type: string }).type,
+    );
+  }
+
+  it("reconnect with sessionKind='resumed' SENDS resume_stream (happy-path regression guard, FR)", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result); // auth_ok #1 → hasConnectedBefore=true
+
+    serverSend({
+      type: "session_resumed",
+      conversationId: "conv-resumed-gate",
+      resumedFromTimestamp: "2026-04-16T14:15:00Z",
+      messageCount: 3,
+    });
+    await waitFor(() => {
+      expect(result.current.realConversationId).toBe("conv-resumed-gate");
+    });
+
+    wsInstance?.send.mockClear();
+    // Simulate a transient reconnect: a second auth_ok on the live socket.
+    serverSend({ type: "auth_ok" });
+
+    await waitFor(() => {
+      const sent = (wsInstance?.send.mock.calls ?? []).map(
+        (c) => JSON.parse(c[0] as string) as { type: string; conversationId?: string },
+      );
+      expect(
+        sent.some(
+          (f) => f.type === "resume_stream" && f.conversationId === "conv-resumed-gate",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("reconnect with sessionKind='fresh' does NOT send resume_stream (the false-positive fix, FR)", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result); // auth_ok #1 → hasConnectedBefore=true
+
+    serverSend({
+      type: "session_started",
+      conversationId: "conv-fresh-gate",
+    });
+    await waitFor(() => {
+      expect(result.current.realConversationId).toBe("conv-fresh-gate");
+    });
+
+    wsInstance?.send.mockClear();
+    // Reconnect (second auth_ok). The fresh deferred conv has no DB row → the
+    // gate must SKIP the resume_stream send.
+    serverSend({ type: "auth_ok" });
+
+    // Settle the handler deterministically: status stays connected and the
+    // microtask queue flushes. (The companion "resumed" test proves the send
+    // mechanism fires under this exact harness, so this absence is meaningful.)
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(sentTypes()).not.toContain("resume_stream");
+  });
+
+  it("reconnect with sessionKind='fresh' that has STREAMED a frame SENDS resume_stream (mid-turn drop recovery, review P2)", async () => {
+    // A brand-new conversation whose first turn is already streaming: the
+    // deferred row has materialized (the agent only streams after it persists),
+    // proven client-side by a rendered server-stamped frame (seq >= 0). A
+    // mid-turn socket drop must still recover its gap frames — the gate keys on
+    // "row provably exists", not merely sessionKind === "resumed".
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result); // auth_ok #1 → hasConnectedBefore=true
+
+    serverSend({ type: "session_started", conversationId: "conv-fresh-streamed" });
+    await waitFor(() => {
+      expect(result.current.realConversationId).toBe("conv-fresh-streamed");
+    });
+
+    // Agent streams a server-stamped frame → lastRenderedSeq advances to 0,
+    // proving the row materialized.
+    serverSend({ type: "stream_start", leaderId: "cto", messageId: "m1" });
+    serverSend({
+      type: "stream",
+      content: "hello",
+      partial: true,
+      leaderId: "cto",
+      seq: 0,
+    });
+
+    wsInstance?.send.mockClear();
+    serverSend({ type: "auth_ok" }); // reconnect
+
+    await waitFor(() => {
+      const sent = (wsInstance?.send.mock.calls ?? []).map(
+        (c) => JSON.parse(c[0] as string) as { type: string; conversationId?: string },
+      );
+      expect(
+        sent.some(
+          (f) => f.type === "resume_stream" && f.conversationId === "conv-fresh-streamed",
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("does NOT fetch history when conversationId is not 'new'", async () => {
     const { useWebSocket } = await import("@/lib/ws-client");
     // Using a real conversation ID (not "new") — the existing effect handles this

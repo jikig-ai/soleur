@@ -1362,20 +1362,59 @@ async function handleResumeStream(
       return;
     }
     // visibility-sweep-audit: owner-scoped — WS replay binds to the user's own conversation.
+    //
+    // Deliberate asymmetry with the sibling `resume_session` lookup (which uses
+    // .single()): here a zero-row result is a RECOVERABLE benign race (deferred-
+    // creation — the row materializes lazily on the first chat message — or a
+    // client reconnect before that write lands), NOT a user-facing error.
+    // .maybeSingle() yields {data:null,error:null} for zero rows so we can
+    // classify a genuine DB error (convErr) apart from not-materialized (!conv)
+    // by SEVERITY. Do NOT "consistency-fix" this back to .single() — that
+    // re-conflates PGRST116 into convErr and recreates the error-level flood
+    // (#5290 / ADR-059 false-positive; see plan
+    // fix-stream-replay-ownership-mismatch-false-positive).
     const { data: conv, error: convErr } = await tenant
       .from("conversations")
       .select("id, repo_url")
       .eq("id", msg.conversationId)
       .eq("user_id", userId)
-      .single();
-    if (convErr || !conv) {
-      // Not owned / not found — potential cross-user attempt. No replay.
-      reportSilentFallback(
-        convErr ?? new Error("resume_stream: conversation not found or not owned"),
+      .maybeSingle();
+    if (convErr) {
+      // Genuine DB/transport error (outage, connection drop, PostgREST shape
+      // error) — stays LOUD at error level. NOTE: an RLS *row*-denial does NOT
+      // land here: `conversations` visibility is enforced by RLS policies while
+      // `authenticated` holds the table SELECT grant, so a row owned by another
+      // user returns ZERO ROWS (→ the `!conv` branch below), never SQLSTATE
+      // 42501. The pg_code tag (observability helper) keeps SQLSTATE queryable
+      // for the genuine DB error classes that DO surface here.
+      reportSilentFallback(convErr, {
+        feature: "stream-replay",
+        op: "ownership-mismatch",
+        message: "resume_stream: conversation not found or not owned",
+        extra: { userId, conversationId: msg.conversationId, cause: "db-error" },
+      });
+      fallback(msg.conversationId);
+      return;
+    }
+    if (!conv) {
+      // Row absent. Post the Phase-2 client gate (resume_stream is only sent for
+      // sessionKind==="resumed"), the benign deferred-not-yet-materialized race
+      // dominates this branch — WARNING, not error. A genuine cross-user
+      // conversationId also returns !conv via the .eq("user_id", userId) filter
+      // (indistinguishable here without a privileged query), so this stays
+      // OBSERVABLE (not silenced); the owned-by-another enumeration is deferred
+      // behind the AC14 warning-volume-drop criterion.
+      warnSilentFallback(
+        new Error("resume_stream: conversation not found or not owned"),
         {
           feature: "stream-replay",
           op: "ownership-mismatch",
-          extra: { userId, conversationId: msg.conversationId },
+          message: "resume_stream: conversation not found or not owned",
+          extra: {
+            userId,
+            conversationId: msg.conversationId,
+            cause: "not-materialized",
+          },
         },
       );
       fallback(msg.conversationId);
@@ -1383,13 +1422,27 @@ async function handleResumeStream(
     }
     const verifiedConvId = (conv as { id: string }).id;
     const convRepoUrl = (conv as { repo_url?: string | null }).repo_url ?? null;
+    if (currentRepoUrl === null) {
+      // getCurrentRepoUrl returns null for TWO reasons (see its docstring): a
+      // transient resolve failure (tenant-mint blip / workspaces query error)
+      // OR a workspace that genuinely has no repo connected. Neither is a
+      // repo-scope mismatch, and replaying into a repo-less / unresolvable
+      // workspace would be unsound — so fail closed to an honest fallback. No
+      // handler-side emit: the transient-error paths ALREADY mirror upstream
+      // (feature=repo-scope, current-repo-url.ts) before returning null, so
+      // re-mirroring here would double-count; the repo-less case is not a
+      // degradation worth an event.
+      fallback(verifiedConvId);
+      return;
+    }
     if (convRepoUrl !== currentRepoUrl) {
-      // Cross-repo stale cursor — same indistinguishable-from-not-found posture
-      // as resume_session; mirror as a potential cross-scope attempt.
+      // Genuine cross-repo stale cursor (currentRepoUrl is non-null here, so
+      // both sides are real and differ) — stays LOUD at error level.
       reportSilentFallback(new Error("resume_stream: repo-scope mismatch"), {
         feature: "stream-replay",
-        op: "ownership-mismatch",
-        extra: { userId, conversationId: verifiedConvId },
+        op: "repo-scope-mismatch",
+        message: "resume_stream: repo-scope mismatch",
+        extra: { userId, conversationId: verifiedConvId, cause: "url-differs" },
       });
       fallback(verifiedConvId);
       return;

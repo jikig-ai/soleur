@@ -15,6 +15,7 @@ vi.mock("@/lib/supabase/tenant", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
 }));
 
 const { mockResolveWs } = vi.hoisted(() => ({ mockResolveWs: vi.fn() }));
@@ -78,15 +79,29 @@ describe("getCurrentRepoUrl (workspace read-cutover)", () => {
     );
   });
 
-  it("returns null on RuntimeAuthError from tenant mint", async () => {
+  it("returns null on RuntimeAuthError from tenant mint, mirrored at WARNING (transient, retryable)", async () => {
     const { RuntimeAuthError, getFreshTenantClient } = await import(
       "@/lib/supabase/tenant"
+    );
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
     );
     vi.mocked(getFreshTenantClient).mockRejectedValueOnce(
       new RuntimeAuthError("jwt_mint", "expired"),
     );
     const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
     expect(await getCurrentRepoUrl("user-1")).toBeNull();
+    // The tenant-mint blip is a transient retryable auth failure on a hot
+    // reconnect path — WARNING, not error (the highest-volume contributor to
+    // the stream-replay false-positive flood; #5290 follow-up).
+    expect(warnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "repo-scope",
+        op: "read-current-repo-url.tenant-mint",
+      }),
+    );
+    expect(reportSilentFallback).not.toHaveBeenCalled();
   });
 
   it("never reads the users table (no dual-ownership fallback)", async () => {

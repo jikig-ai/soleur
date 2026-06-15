@@ -1,11 +1,19 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 
-// #4307 plan §2.5 / AC1+AC2+AC3+AC8. Verifies the middleware revocation
-// gate: on `check_my_revocation` returning revoked=true, redirects to
-// /login?revoked=<reason> with cleared sb-* cookies (dual-shape, F8) and
-// Cache-Control: no-store. RPC error fails CLOSED (503). Malformed JWT
-// fails CLOSED (302 to /login). PUBLIC_PATHS (/login) skip the gate.
+// #4307 plan §2.5 / AC1+AC2+AC3+AC8, hardened by the 2026-06-15
+// session-disconnect fix. Verifies the middleware revocation gate:
+//   * genuine revoked=true → redirect to /login?revoked=<reason> with
+//     cleared sb-* cookies (dual-shape, F8) + Cache-Control: no-store
+//     (security boundary — UNCHANGED, AC2).
+//   * transient `check_my_revocation` RPC error → GRACE: the otherwise-valid
+//     session is allowed through (NO 503, NO logout); op
+//     `revocation_gate.transient_grace` is emitted so operators see DB
+//     degradation without SSH (AC1). Previously fail-CLOSED to 503-for-all.
+//   * malformed / no-iat JWT (getUser() already validated the session) →
+//     GRACE: allowed through (NO logout); op `malformed_jwt` / `no_iat`
+//     still emitted. Previously fail-CLOSED to /login?revoked=session-error.
+//   * PUBLIC_PATHS (/login) skip the gate.
 
 const {
   mockGetUser,
@@ -163,20 +171,30 @@ describe("middleware #4307 revocation gate", () => {
     expect(accessTokenClears.some((c) => !/Domain=/i.test(c))).toBe(true);
   });
 
-  test("check_my_revocation RPC error → 503 (fail-CLOSED)", async () => {
+  test("transient check_my_revocation RPC error → GRACE (no 503, no logout) + transient_grace mirror (AC1)", async () => {
     mockRpc.mockResolvedValue({
       data: null,
       error: { message: "ECONNRESET", code: "53000" },
     });
     const res = await middleware(makeRequest("/dashboard"));
-    expect(res.status).toBe(503);
+    // A transient DB blip must NOT 503-for-all and must NOT log the user out:
+    // the otherwise-valid session grace-falls-through to the normal flow and
+    // re-checks on the next request.
+    expect(res.status).not.toBe(503);
+    expect(res.headers.get("location") ?? "").not.toContain("revoked=");
+    // Positive grace-landing contract: the request reaches the downstream T&C
+    // gate (mock returns tc_accepted_version "v0" ≠ live TC_VERSION), so it
+    // lands on /accept-terms — proving "allowed through", not merely "not 503"
+    // (guards against a future regression to a 500/401 that not.toBe(503) misses).
+    expect(res.headers.get("location") ?? "").toContain("/accept-terms");
+    // Operators still see the degradation without SSH via a distinct op slug.
     expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
       expect.objectContaining({ message: "ECONNRESET" }),
-      expect.objectContaining({ op: "revocation_gate.db_error" }),
+      expect.objectContaining({ op: "revocation_gate.transient_grace" }),
     );
   });
 
-  test("malformed JWT (no iat) → 302 /login?revoked=session-error + Sentry mirror", async () => {
+  test("no-iat JWT (getUser validated) → GRACE (no logout) + no_iat mirror", async () => {
     const header = btoa(JSON.stringify({ alg: "ES256" })).replace(/=/g, "");
     const payload = btoa(JSON.stringify({ sub: USER_ID })).replace(/=/g, "");
     mockGetSession.mockResolvedValue({
@@ -184,29 +202,31 @@ describe("middleware #4307 revocation gate", () => {
       error: null,
     });
     const res = await middleware(makeRequest("/dashboard"));
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toContain("/login");
-    // Neutral copy — not user-hostile "owner removed you" attribution.
-    expect(res.headers.get("location")).toContain("revoked=session-error");
+    // getUser() already validated the session upstream; a missing-iat decode
+    // is a decoder hiccup, NOT a revocation — do not force a logout.
+    expect(res.status).not.toBe(503);
+    expect(res.headers.get("location") ?? "").not.toContain("revoked=");
     expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "revocation_gate.no_iat" }),
     );
+    // The revocation RPC is never reached without a usable iat.
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  test("malformed JWT (only 2 segments) → 302 /login?revoked=session-error + malformed_jwt mirror", async () => {
+  test("malformed JWT (only 2 segments) → GRACE (no logout) + malformed_jwt mirror", async () => {
     mockGetSession.mockResolvedValue({
       data: { session: { access_token: "only.twoparts" } },
       error: null,
     });
     const res = await middleware(makeRequest("/dashboard"));
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toContain("/login");
-    expect(res.headers.get("location")).toContain("revoked=session-error");
+    expect(res.status).not.toBe(503);
+    expect(res.headers.get("location") ?? "").not.toContain("revoked=");
     expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "revocation_gate.malformed_jwt" }),
     );
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   test("not revoked → revocation gate falls through to T&C check (NOT redirected to /login)", async () => {
