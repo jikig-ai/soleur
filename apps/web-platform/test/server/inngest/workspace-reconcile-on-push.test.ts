@@ -222,9 +222,9 @@ async function importHandler() {
 
 describe("reconcile — happy path (single workspace)", () => {
   it("syncs the matching workspace and appends {ok:true} for its owner", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
@@ -234,26 +234,26 @@ describe("reconcile — happy path (single workspace)", () => {
     expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
     expect(syncWorkspaceSpy).toHaveBeenCalledWith(
       42,
-      wsPath("ws-A"),
+      wsPath("77777777-7777-4777-8777-777777777777"),
       expect.anything(),
-      expect.objectContaining({ userId: "owner-A", op: "push" }),
+      expect.objectContaining({ userId: "55555555-5555-4555-8555-555555555555", op: "push" }),
     );
-    const rows = APPENDS.get("owner-A")!;
+    const rows = APPENDS.get("55555555-5555-4555-8555-555555555555")!;
     expect(rows.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
     // #4728 — the ok:true reconcile row carries the workspace discriminator.
-    expect(rows.at(-1)).toEqual(expect.objectContaining({ workspace_id: "ws-A" }));
+    expect(rows.at(-1)).toEqual(expect.objectContaining({ workspace_id: "77777777-7777-4777-8777-777777777777" }));
   });
 });
 
 describe("reconcile — fan-out (AC6)", () => {
   it("syncs BOTH workspaces that share one installation_id + repo", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }, { id: "ws-B" }];
-    OWNERS.set("ws-A", "owner-A");
-    OWNERS.set("ws-B", "owner-B");
-    EXISTING_DIRS.add(wsPath("ws-A"));
-    EXISTING_DIRS.add(wsPath("ws-B"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }, { id: "88888888-8888-4888-8888-888888888888" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    OWNERS.set("88888888-8888-4888-8888-888888888888", "66666666-6666-4666-8666-666666666666");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
+    EXISTING_DIRS.add(wsPath("88888888-8888-4888-8888-888888888888"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
@@ -262,27 +262,27 @@ describe("reconcile — fan-out (AC6)", () => {
     expect(result).toEqual({ ok: true, synced: 2 });
     expect(syncWorkspaceSpy).toHaveBeenCalledTimes(2);
     expect(syncWorkspaceSpy.mock.calls.map((c) => c[1]).sort()).toEqual(
-      [wsPath("ws-A"), wsPath("ws-B")].sort(),
+      [wsPath("77777777-7777-4777-8777-777777777777"), wsPath("88888888-8888-4888-8888-888888888888")].sort(),
     );
-    expect(APPENDS.get("owner-A")).toHaveLength(1);
-    expect(APPENDS.get("owner-B")).toHaveLength(1);
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")).toHaveLength(1);
+    expect(APPENDS.get("66666666-6666-4666-8666-666666666666")).toHaveLength(1);
     // #4728 — each owner's row carries ITS OWN workspace discriminator. Guards
     // against a producer bug that writes a single captured id to every row (the
     // exact multi-workspace attribution #4728 exists to enable).
-    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ workspace_id: "ws-A" }),
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "77777777-7777-4777-8777-777777777777" }),
     );
-    expect(APPENDS.get("owner-B")!.at(-1)).toEqual(
-      expect.objectContaining({ workspace_id: "ws-B" }),
+    expect(APPENDS.get("66666666-6666-4666-8666-666666666666")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "88888888-8888-4888-8888-888888888888" }),
     );
   });
 });
 
 describe("reconcile — slug→URL parity (AC7)", () => {
   it("composes https://github.com/<fullName> and normalizes BEFORE the repo_url filter", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
@@ -301,7 +301,7 @@ describe("reconcile — slug→URL parity (AC7)", () => {
 
 describe("reconcile — schema gate (v=1 drains)", () => {
   it("deadletters a v=1 in-flight event without syncing", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
     const handler = await importHandler();
     const result = (await handler({
       event: { ...makeEvent(), v: "1" },
@@ -382,9 +382,9 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     // became a per-push alert flood with zero signal. Now the ignored repo is
     // reconciled because it has a workspace, and the shadowed-workspace state is
     // recorded at pino `info` (Better Stack audit trail) instead of paging Sentry.
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
@@ -398,11 +398,11 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
     expect(syncWorkspaceSpy).toHaveBeenCalledWith(
       42,
-      wsPath("ws-A"),
+      wsPath("77777777-7777-4777-8777-777777777777"),
       expect.anything(),
-      expect.objectContaining({ userId: "owner-A", op: "push" }),
+      expect.objectContaining({ userId: "55555555-5555-4555-8555-555555555555", op: "push" }),
     );
-    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
     // Shadowed-workspace state is recorded at info, NOT mirrored to Sentry.
@@ -442,20 +442,20 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
 
 describe("reconcile — workspace dir not provisioned", () => {
   it("skips the workspace, appends {workspace_not_ready}, returns no-workspace-synced", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
     // EXISTING_DIRS intentionally empty → dir missing.
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
-    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
       expect.objectContaining({
         ok: false,
         error_class: "workspace_not_ready",
         // #4728 — failure rows also carry the workspace discriminator.
-        workspace_id: "ws-A",
+        workspace_id: "77777777-7777-4777-8777-777777777777",
       }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
@@ -467,9 +467,9 @@ describe("reconcile — workspace dir not provisioned", () => {
 
 describe("reconcile — sync failure", () => {
   it("propagates the REAL error_class from syncResult (sync_failed) + Sentry mirror op=sync", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({
       ok: false,
       error: new Error("auth failed"),
@@ -480,12 +480,12 @@ describe("reconcile — sync failure", () => {
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
-    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
       expect.objectContaining({
         ok: false,
         error_class: "sync_failed",
         // #4728 — failure rows also carry the workspace discriminator.
-        workspace_id: "ws-A",
+        workspace_id: "77777777-7777-4777-8777-777777777777",
       }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
@@ -495,9 +495,9 @@ describe("reconcile — sync failure", () => {
   });
 
   it("propagates error_class:non_fast_forward when syncResult classifies a diverged clone (AC-B2)", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({
       ok: false,
       error: new Error("Not possible to fast-forward, aborting."),
@@ -508,30 +508,30 @@ describe("reconcile — sync failure", () => {
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
-    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
       expect.objectContaining({
         ok: false,
         error_class: "non_fast_forward",
-        workspace_id: "ws-A",
+        workspace_id: "77777777-7777-4777-8777-777777777777",
       }),
     );
   });
 
   it("records recovered:true ok-row when syncWorkspace self-healed a diverged clone (AC-B4)", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
 
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: true, synced: 1 });
-    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+    expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
       expect.objectContaining({
         ok: true,
         recovered: true,
-        workspace_id: "ws-A",
+        workspace_id: "77777777-7777-4777-8777-777777777777",
       }),
     );
   });
@@ -544,8 +544,8 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
   // now it writes via the workspace-keyed path and emits an owner-drift warn.
 
   it("AC-T1 (AC5): owner-less + {ok:true, recovered:true} → workspace-keyed row, owner path NOT called", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-orphan" }]; // no OWNERS entry → ownerId null
-    EXISTING_DIRS.add(wsPath("ws-orphan"));
+    WORKSPACE_ROWS = [{ id: "99999999-9999-4999-8999-999999999999" }]; // no OWNERS entry → ownerId null
+    EXISTING_DIRS.add(wsPath("99999999-9999-4999-8999-999999999999"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
 
     const handler = await importHandler();
@@ -556,19 +556,19 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
     // The recovery lands on the workspace-keyed path, keyed by ws.id.
     expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledTimes(1);
-    expect(WS_APPENDS.get("ws-orphan")!.at(-1)).toEqual(
+    expect(WS_APPENDS.get("99999999-9999-4999-8999-999999999999")!.at(-1)).toEqual(
       expect.objectContaining({
         trigger: "webhook_push",
         ok: true,
         recovered: true,
-        workspace_id: "ws-orphan",
+        workspace_id: "99999999-9999-4999-8999-999999999999",
       }),
     );
   });
 
   it("AC-T2 (AC3): owner-less + {ok:false, sync_failed} → workspace-keyed failure row AND reportSilentFallback op=sync still fires", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-orphan" }];
-    EXISTING_DIRS.add(wsPath("ws-orphan"));
+    WORKSPACE_ROWS = [{ id: "99999999-9999-4999-8999-999999999999" }];
+    EXISTING_DIRS.add(wsPath("99999999-9999-4999-8999-999999999999"));
     syncWorkspaceSpy.mockResolvedValue({
       ok: false,
       error: new Error("auth failed"),
@@ -580,11 +580,11 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
-    expect(WS_APPENDS.get("ws-orphan")!.at(-1)).toEqual(
+    expect(WS_APPENDS.get("99999999-9999-4999-8999-999999999999")!.at(-1)).toEqual(
       expect.objectContaining({
         ok: false,
         error_class: "sync_failed",
-        workspace_id: "ws-orphan",
+        workspace_id: "99999999-9999-4999-8999-999999999999",
       }),
     );
     // The genuine failure is still paged — unchanged from the owner path.
@@ -595,8 +595,8 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
   });
 
   it("AC-T3 (AC4): owner-less → exactly one debounced warn op=ownerless-reconcile keyed on workspace_id; no error mirror for the benign recovery", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-orphan" }];
-    EXISTING_DIRS.add(wsPath("ws-orphan"));
+    WORKSPACE_ROWS = [{ id: "99999999-9999-4999-8999-999999999999" }];
+    EXISTING_DIRS.add(wsPath("99999999-9999-4999-8999-999999999999"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
 
     const handler = await importHandler();
@@ -610,17 +610,17 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(ctx).toEqual(
       expect.objectContaining({
         op: "ownerless-reconcile",
-        extra: expect.objectContaining({ workspaceId: "ws-orphan" }),
+        extra: expect.objectContaining({ workspaceId: "99999999-9999-4999-8999-999999999999" }),
       }),
     );
-    expect(key).toBe("ws-orphan");
+    expect(key).toBe("99999999-9999-4999-8999-999999999999");
     expect(errorClass).toBe("ownerless-reconcile");
     // The benign recovery must NOT page an error-level Sentry issue.
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
   it("AC-T4 (AC4 / skip-not-ready): owner-less + dir not provisioned → workspace-keyed workspace_not_ready row", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-orphan" }];
+    WORKSPACE_ROWS = [{ id: "99999999-9999-4999-8999-999999999999" }];
     // EXISTING_DIRS intentionally empty → dir missing.
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
@@ -628,11 +628,11 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
-    expect(WS_APPENDS.get("ws-orphan")!.at(-1)).toEqual(
+    expect(WS_APPENDS.get("99999999-9999-4999-8999-999999999999")!.at(-1)).toEqual(
       expect.objectContaining({
         ok: false,
         error_class: "workspace_not_ready",
-        workspace_id: "ws-orphan",
+        workspace_id: "99999999-9999-4999-8999-999999999999",
       }),
     );
     // skip-not-ready still mirrors its own (non-owner-drift) signal.
@@ -642,13 +642,13 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     );
     // …and the owner-drift warn fires exactly once for this workspace.
     expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
-    expect(mirrorWarnWithDebounceSpy.mock.calls[0]![2]).toBe("ws-orphan");
+    expect(mirrorWarnWithDebounceSpy.mock.calls[0]![2]).toBe("99999999-9999-4999-8999-999999999999");
   });
 
   it("AC-T5 (AC8): owner-PRESENT workspaces are unaffected — owner path fires, workspace-keyed path does NOT", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }];
-    OWNERS.set("ws-A", "owner-A");
-    EXISTING_DIRS.add(wsPath("ws-A"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
@@ -663,20 +663,20 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
 
 describe("reconcile — cross-tenant isolation (fan-out per workspace)", () => {
   it("each workspace syncs ONLY its own derived path", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }, { id: "ws-B" }];
-    OWNERS.set("ws-A", "owner-A");
-    OWNERS.set("ws-B", "owner-B");
-    EXISTING_DIRS.add(wsPath("ws-A"));
-    EXISTING_DIRS.add(wsPath("ws-B"));
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }, { id: "88888888-8888-4888-8888-888888888888" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    OWNERS.set("88888888-8888-4888-8888-888888888888", "66666666-6666-4666-8666-666666666666");
+    EXISTING_DIRS.add(wsPath("77777777-7777-4777-8777-777777777777"));
+    EXISTING_DIRS.add(wsPath("88888888-8888-4888-8888-888888888888"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
     await handler({ event: makeEvent(), step: makeStep(), logger });
 
-    const aCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "owner-A")!;
-    const bCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "owner-B")!;
-    expect(aCall[1]).toBe(wsPath("ws-A"));
-    expect(bCall[1]).toBe(wsPath("ws-B"));
+    const aCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "55555555-5555-4555-8555-555555555555")!;
+    const bCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "66666666-6666-4666-8666-666666666666")!;
+    expect(aCall[1]).toBe(wsPath("77777777-7777-4777-8777-777777777777"));
+    expect(bCall[1]).toBe(wsPath("88888888-8888-4888-8888-888888888888"));
     expect(aCall[1]).not.toBe(bCall[1]);
   });
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { randomUUID } from "node:crypto";
 
 import { hashBytes } from "@/server/kb-content-hash";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
@@ -73,6 +74,8 @@ const PARITY_HEADERS = [
   "Accept-Ranges",
 ] as const;
 
+const TEST_USER_ID = randomUUID();
+
 let tmpWorkspace: string;
 let kbRoot: string;
 
@@ -116,7 +119,7 @@ function callSharedHEAD(token: string) {
  */
 function primeMocks(documentPath: string, fixture: Buffer) {
   mocks.mockGetUser.mockResolvedValue({
-    data: { user: { id: "user-1" } },
+    data: { user: { id: TEST_USER_ID } },
     error: null,
   });
   mocks.mockServiceFrom.mockImplementation(
@@ -125,7 +128,7 @@ function primeMocks(documentPath: string, fixture: Buffer) {
       kb_share_links: {
         shareRow: {
           document_path: documentPath,
-          user_id: "user-1",
+          user_id: TEST_USER_ID,
           revoked: false,
           content_sha256: hashBytes(fixture),
         },
@@ -147,7 +150,7 @@ beforeEach(() => {
   // for byte parity.
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "parity-root-"));
   process.env.WORKSPACES_ROOT = tmpRoot;
-  tmpWorkspace = path.join(tmpRoot, "user-1");
+  tmpWorkspace = path.join(tmpRoot, TEST_USER_ID);
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });

@@ -146,6 +146,7 @@ fi
 if want_bun; then
   run_suite "test/content-publisher" bun test test/content-publisher.test.ts
   run_suite "test/x-community" bun test test/x-community.test.ts
+  run_suite "test/linkedin-community" bun test test/linkedin-community.test.ts
   run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
 fi
 

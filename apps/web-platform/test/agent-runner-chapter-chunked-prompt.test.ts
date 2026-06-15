@@ -176,7 +176,7 @@ describe("agent-runner leader chapter-chunked branch (#3436 Phase 3.B PRESENT)",
     });
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-1",
       "cpo",
       undefined,
@@ -208,7 +208,7 @@ describe("agent-runner leader chapter-chunked branch (#3436 Phase 3.B PRESENT)",
     });
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-2",
       "cpo",
       undefined,

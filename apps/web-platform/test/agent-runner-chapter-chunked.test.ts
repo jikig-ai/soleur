@@ -214,7 +214,7 @@ describe("agent-runner leader chapter-chunked dispatch (Phase 3.B)", () => {
     });
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-route",
       "cpo",
       undefined,
@@ -260,7 +260,7 @@ describe("agent-runner leader chapter-chunked dispatch (Phase 3.B)", () => {
     });
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-ambig",
       "cpo",
       undefined,
@@ -305,7 +305,7 @@ describe("agent-runner leader chapter-chunked dispatch (Phase 3.B)", () => {
     mockReadFile.mockRejectedValueOnce(enoent);
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-enoent",
       "cpo",
       undefined,
