@@ -39,11 +39,22 @@ import {
   isValidIsoInstant,
   type ReminderEventData,
 } from "@/lib/inngest/scheduled-reminder-action";
+import {
+  parseSentryRateParams,
+  buildSentryUrl,
+  computeRatePerDay,
+} from "@/lib/inngest/sentry-issue-rate";
 
 const FUNCTION_NAME = "event-scheduled-reminder";
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
+const SENTRY_FETCH_TIMEOUT_MS = 10_000;
 
-type CheckResult = { verdict: "pass" | "fail" | "info"; body: string };
+// `close?: boolean` is the v1→v1.1 capability: a check may REQUEST that the
+// handler close `action.report_to_issue`. It is deliberately a boolean, NOT a
+// `close_issue: number` — the close target is structurally the action's own
+// report_to_issue, so a check can never name an arbitrary issue to close (the
+// scope-violation is unrepresentable). See ADR-063.
+type CheckResult = { verdict: "pass" | "fail" | "info"; body: string; close?: boolean };
 type OctokitClient = { request: (route: string, params?: unknown) => Promise<unknown> };
 type CheckFn = (
   octokit: OctokitClient,
@@ -70,6 +81,107 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
       verdict: "info" as const,
       body: `\`open-silence-issue-count\`: ${count} open \`cloud-task-silence\` issue(s) at ${new Date().toISOString()}.`,
     };
+  },
+
+  // Reusable, parametric Sentry-rate verification (#5417 follow-on). Reads the
+  // events/day of the Sentry issue matched by `tag` over `window_hours`; PASS
+  // (and optionally close report_to_issue) iff rate <= max_per_day. Uses fetch
+  // (Sentry REST), NOT octokit — `octokit` is unused here. Reads fire-time prd
+  // env (the whole point: a GHA runner could not). Fail-CLOSED (`info`, no
+  // close) on any inability to verify: missing env, invalid params, Sentry HTTP
+  // error, 0-or->1 matching issues, or a malformed stats shape. Errors are
+  // constructed TOKEN-FREE (reportSilentFallback forwards err.message raw).
+  "sentry-issue-rate": async (_octokit, params) => {
+    const failClosed = (reason: string): CheckResult => ({
+      verdict: "info" as const,
+      body: `\`sentry-issue-rate\`: fail-closed — ${reason}. No action taken.`,
+      close: false,
+    });
+
+    const parsed = parseSentryRateParams(params);
+    if (!parsed.ok) return failClosed(parsed.reason);
+    const { tag, maxPerDay, windowHours, closeOnPass } = parsed.value;
+
+    const host = process.env.SENTRY_API_HOST;
+    const org = process.env.SENTRY_ORG;
+    const project = process.env.SENTRY_PROJECT;
+    // The live Phase-0 probe established that SENTRY_AUTH_TOKEN/SENTRY_API_TOKEN
+    // 403 on the org issues endpoint; SENTRY_ISSUE_RW_TOKEN is the issue-scoped
+    // token with the required read. (We READ here; the close is a GitHub PATCH.)
+    const token = process.env.SENTRY_ISSUE_RW_TOKEN;
+    if (!host || !org || !project || !token) {
+      return failClosed("Sentry env not configured");
+    }
+
+    // Single bounded fetch helper. The token lives ONLY in the Authorization
+    // header — never in the URL or any thrown/returned string — so error text
+    // is token-free by construction.
+    const sentryGet = async (url: string): Promise<unknown> => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), SENTRY_FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: ctrl.signal,
+        });
+        if (!res.ok) {
+          throw new Error(`Sentry GET returned HTTP ${res.status}`);
+        }
+        return await res.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    try {
+      const searchUrl = buildSentryUrl(
+        host,
+        `/api/0/organizations/${encodeURIComponent(org)}/issues/`,
+        { query: tag, project },
+      );
+      const issues = await sentryGet(searchUrl);
+      if (!Array.isArray(issues) || issues.length !== 1) {
+        const n = Array.isArray(issues) ? issues.length : 0;
+        return failClosed(`expected exactly 1 issue for tag \`${tag}\`, found ${n}`);
+      }
+      const issueId = (issues[0] as { id?: unknown }).id;
+      if (typeof issueId !== "string" && typeof issueId !== "number") {
+        return failClosed("matched issue has no id");
+      }
+
+      const statsUrl = buildSentryUrl(
+        host,
+        `/api/0/organizations/${encodeURIComponent(org)}/issues/${encodeURIComponent(String(issueId))}/stats/`,
+        { stat: "14d" },
+      );
+      const stats = await sentryGet(statsUrl);
+      if (!Array.isArray(stats)) {
+        return failClosed("unexpected stats shape");
+      }
+      const { sum, days, ratePerDay } = computeRatePerDay(
+        stats as Array<[number, number]>,
+        windowHours,
+      );
+
+      const pass = ratePerDay <= maxPerDay;
+      const rateStr = ratePerDay.toFixed(2);
+      const verdict = pass ? ("pass" as const) : ("fail" as const);
+      const tail = pass
+        ? closeOnPass
+          ? " Closing the report issue (close_on_pass)."
+          : " Threshold met (close_on_pass not set — leaving open)."
+        : " Still above threshold — leaving open.";
+      return {
+        verdict,
+        close: pass && closeOnPass,
+        body: `\`sentry-issue-rate\` **${verdict}**: tag \`${tag}\` ~${rateStr}/day over ${windowHours}h (sum ${sum} events / ${days}d; threshold ${maxPerDay}/day).${tail}`,
+      };
+    } catch (err) {
+      // Token-free message: `err.message` is either our `HTTP <code>` string or
+      // an AbortError/network error — none contain the Authorization header.
+      const msg = err instanceof Error ? err.message : String(err);
+      return failClosed(`Sentry query failed (${msg.slice(0, 80)})`);
+    }
   },
 };
 
@@ -196,6 +308,35 @@ export async function eventScheduledReminderHandler({
         extra: { fn: FUNCTION_NAME, issue: action.report_to_issue },
       });
       return { ok: false as const, reason: "named-check-report-failed" };
+    }
+
+    // v1.1 close capability: when the check REQUESTS a close (result.close ===
+    // true), close THIS action's report_to_issue — never a check-returned
+    // number (the boolean shape makes an arbitrary-issue close unrepresentable).
+    if (result.close === true) {
+      try {
+        await octokit.request(
+          "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
+          {
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            issue_number: action.report_to_issue,
+            state: "closed",
+            state_reason: "completed",
+          },
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: FUNCTION_NAME,
+          op: "named-check-close",
+          message: `failed to close #${action.report_to_issue}`,
+          extra: { fn: FUNCTION_NAME, issue: action.report_to_issue },
+        });
+        return {
+          ok: true as const,
+          reason: `named-check-${result.verdict}-close-failed`,
+        };
+      }
     }
 
     // A failing verdict is a real signal — route to Sentry at error level even
