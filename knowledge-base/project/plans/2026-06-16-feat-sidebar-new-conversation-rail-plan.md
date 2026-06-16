@@ -138,21 +138,21 @@ scope-leak classes here.)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Persistent "+ New conversation" affordance renders in the rail header.** A
+- [x] **AC1 — Persistent "+ New conversation" affordance renders in the rail header.** A
   vitest test renders the **real `ConversationsRail`** with a NON-empty conversation list and
   asserts a "+ New conversation" control is present in the rail header (queryable by role
   `link` with accessible name "New conversation", `href="/dashboard/chat/new"`), i.e. it is
   visible even when conversations exist (not only the empty-state CTA). File:
   `apps/web-platform/test/conversations-rail.test.tsx` (extend the existing suite — verify
   the existing rail-render harness there is the real component, not a mock).
-- [ ] **AC2 — Affordance hidden in the collapsed rail.** When `useRailCollapsed()` is true the
+- [x] **AC2 — Affordance hidden in the collapsed rail.** When `useRailCollapsed()` is true the
   rail returns `null` (`conversations-rail.tsx:101-102`); assert the "+ New conversation"
   control is absent in the collapsed state (no icon-only form is added — the whole rail is
   DOM-removed when collapsed, matching the existing rich-row collapse behavior; do not
   manufacture a partial collapsed render). This is the both-toggle-states alignment check
   (`learnings/2026-04-17-alignment-fixes-must-verify-both-toggle-states.md`): expanded shows
   it, collapsed removes it.
-- [ ] **AC3 — Deterministic appearance via the now-unconditional scope-resolve backfill (no
+- [x] **AC3 — Deterministic appearance via the now-unconditional scope-resolve backfill (no
   recorded drop required).** A vitest test renders the **real `ConversationsRail`**, drives the
   mock so (a) the rail mounts and subscribes, (b) the row does NOT exist at first fetch /
   `SUBSCRIBED` time, (c) `workspaceId` transitions `null → id`, and (d) the refetch triggered by
@@ -162,7 +162,7 @@ scope-leak classes here.)
   armed) — proving the recovery is now **unconditional** on the `null→id` transition. File:
   `apps/web-platform/test/conversations-rail-connect-race.test.tsx` (extend; reuse the
   channel-mock-chain + deferred-`active-repo` harness already there).
-- [ ] **AC4 — Backfill fires exactly once per `null→id` transition (bounded, no amplification).**
+- [x] **AC4 — Backfill fires exactly once per `null→id` transition (bounded, no amplification).**
   A test asserts the unconditional scope-resolve refetch fires **once** when `workspaceId`
   transitions `null → id` and does NOT re-fire on subsequent re-renders (transition-gated via
   `prevWorkspaceIdRef`). Assert the `active-repo`/conversations call count after resolve is exactly
@@ -171,7 +171,7 @@ scope-leak classes here.)
   `conversations-rail-connect-race.test.tsx:329-360`). **No `setTimeout`/retry loop is introduced**
   — if /work's falsification gate (Overview) cannot exhibit an ordering that survives the
   unconditional-backfill + `SUBSCRIBED` + steady-state-INSERT triad, this AC is the whole bound.
-- [ ] **AC4b — Quiet refetch: the backfill never blanks or error-flashes the rail.** `fetchConversations`
+- [x] **AC4b — Quiet refetch: the backfill never blanks or error-flashes the rail.** `fetchConversations`
   calls `setLoading(true)`/`setError(null)` at `use-conversations.ts:157-158`; the unconditional
   backfill MUST use a **quiet-refetch** path that skips that toggle (e.g. a `{ background: true }`
   arg to `fetchConversations`, or a dedicated background fetch) so a reconcile with last-known rows
@@ -179,7 +179,7 @@ scope-leak classes here.)
   133`). Test: render the real rail with existing rows, fire the `null→id` backfill, assert the
   rail never renders the `conversations-rail-empty` or `conversations-rail-error` branch across the
   refetch (architecture-strategist P1).
-- [ ] **AC5 — Scope-guard parity preserved (the cross-scope-leak containment).** Every insert
+- [x] **AC5 — Scope-guard parity preserved (the cross-scope-leak containment).** Every insert
   AND refetch path (realtime INSERT, the now-unconditional scope-resolve backfill) remains gated by
   `shouldDropForScope` / the scoped list query — the rail never shows a row the list query
   (`.eq(repo_url).eq(workspace_id)`) would exclude. Tests: (a) an out-of-(repo|workspace)-scope
@@ -190,7 +190,7 @@ scope-leak classes here.)
   `workspaceId !== null`, so it can never run a `repo_url`-only-scoped query. This is the F3
   cross-tenant-context-exposure invariant — non-negotiable at the single-user threshold. The
   existing isolation case (`conversations-rail-connect-race.test.tsx:362-381`) stays green.
-- [ ] **AC6 — UPDATE path unchanged; armed-drop path removed cleanly.** The completion UPDATE handler
+- [x] **AC6 — UPDATE path unchanged; armed-drop path removed cleanly.** The completion UPDATE handler
   stays `map`-only (cannot resurrect an absent row — regression test stays green). Removing the
   `pendingScopeRecoveryRef` gate also removes its arming branch and the existing
   `own-insert-deferred-unresolved-workspace` Sentry mirror (`use-conversations.ts:357-366`); per
@@ -199,7 +199,7 @@ scope-leak classes here.)
   gate `:456`) — no dangling reads. Update the existing connect-race test that asserted the armed
   drop + Sentry mirror to reflect the new unconditional behavior (the row now recovers via the
   unconditional refetch instead of the armed-drop path).
-- [ ] **AC7 — No new silent-fallback surface (the v1 bound-exhaustion mirror is cut).** With no
+- [x] **AC7 — No new silent-fallback surface (the v1 bound-exhaustion mirror is cut).** With no
   timer/bound there is nothing to exhaust; do NOT add a new Sentry slug. "The user-paced INSERT
   hasn't arrived yet" is normal latency, not a silent fallback (code-simplicity-reviewer). A
   genuine refetch FAILURE still surfaces via the existing `useConversations` error state
@@ -208,14 +208,14 @@ scope-leak classes here.)
   bound-exhaustion mirror with a distinct `op` slug — NOT reusing
   `own-insert-deferred-unresolved-workspace` — preserving an explicit `message:` string per
   `learnings/2026-05-13-helper-migration-must-preserve-operator-dashboard-message-strings.md`.)
-- [ ] **AC8 — Hook-source-swap / real-renderer test sweep.** Per
+- [x] **AC8 — Hook-source-swap / real-renderer test sweep.** Per
   `learnings/best-practices/2026-06-15-hook-source-swap-sweep-all-real-hook-renderers-not-name-filtered.md`,
   derive the blast radius via
   `git grep -l 'useConversations' apps/web-platform/test/` **minus**
   `git grep -l 'vi.mock("@/hooks/use-conversations"' apps/web-platform/test/`; every real-hook
   renderer (and the channel-mock-chain renderers) still passes. Paste both grep outputs in the
   PR body.
-- [ ] **AC9 — Typecheck + suite green.** `cd apps/web-platform && ./node_modules/.bin/tsc
+- [x] **AC9 — Typecheck + suite green.** `cd apps/web-platform && ./node_modules/.bin/tsc
   --noEmit` exits 0 (NOT `npm run -w … typecheck` — the repo root declares no `workspaces`,
   per `learnings/2026-05-13-npm-workspaces-flag-fails-without-root-workspaces-declaration.md`),
   and `cd apps/web-platform && ./node_modules/.bin/vitest run

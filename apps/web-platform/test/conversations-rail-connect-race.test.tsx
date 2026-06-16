@@ -22,13 +22,18 @@ import type { Conversation } from "@/lib/types";
 //     and cannot ADD a missing one. So the row surfaces only on the next full
 //     refetch ("appears only after it completes").
 //
-// Contract (this fix), all on the rail's OWN hook instance:
-//   1. Backfill when `workspaceId` resolves (null → id): a row dropped during
-//      the null-workspace window is recovered by a bounded refetch (fires once
-//      on the transition, not per render).
-//   2. An own-channel INSERT dropped for an unresolved (null) workspace is NOT
-//      lost: it schedules the recovery backfill AND mirrors the silent drop to
-//      Sentry (cq-silent-fallback-must-mirror-to-sentry).
+// Contract (this fix — plan 2026-06-16-feat-sidebar-new-conversation-rail), all
+// on the rail's OWN hook instance:
+//   1. UNCONDITIONAL backfill when `workspaceId` resolves (null → id): the
+//      scope-resolve refetch now fires once on the transition REGARDLESS of
+//      whether an own-channel INSERT was dropped — so a row that surfaces only
+//      via a later commit / a pre-SUBSCRIBED-buffered INSERT (no drop recorded)
+//      is still recovered. The previous `pendingScopeRecoveryRef` gate and its
+//      `own-insert-deferred-unresolved-workspace` Sentry mirror are REMOVED:
+//      "the user-paced first message hasn't arrived yet" is normal latency, not
+//      a silent fallback (code-simplicity-reviewer).
+//   2. The backfill is a QUIET refetch (skips setLoading/setError) so a
+//      background reconcile cannot blank or error-flash the rail (AC4b).
 //   3. Scope-guard parity preserved: a second workspace's rail never shows this
 //      workspace's new conversation (F3 cross-scope-leak containment).
 //   4. The UPDATE path stays map-only (membership is owned by insert/backfill).
@@ -81,6 +86,10 @@ const state: {
   // to let it resolve (workspaceId → id).
   deferFirstActiveRepo: boolean;
   releaseActiveRepo: (() => void) | null;
+  // Gate the SECOND active-repo fetch (the scope-resolve backfill) so we can
+  // observe loading state WHILE the backfill is in flight (AC4b quiet-refetch).
+  deferBackfillActiveRepo: boolean;
+  releaseBackfillActiveRepo: (() => void) | null;
 } = {
   convResultByCall: [],
   fallbackConvResult: [],
@@ -92,6 +101,8 @@ const state: {
   repoUrlResponse: ACTIVE_REPO_URL,
   deferFirstActiveRepo: false,
   releaseActiveRepo: null,
+  deferBackfillActiveRepo: false,
+  releaseBackfillActiveRepo: null,
 };
 
 function buildChannel(name: string): ChannelMock {
@@ -213,6 +224,8 @@ beforeEach(() => {
   state.repoUrlResponse = ACTIVE_REPO_URL;
   state.deferFirstActiveRepo = false;
   state.releaseActiveRepo = null;
+  state.deferBackfillActiveRepo = false;
+  state.releaseBackfillActiveRepo = null;
 
   vi.stubGlobal(
     "fetch",
@@ -233,6 +246,11 @@ beforeEach(() => {
         if (state.activeRepoCalls === 1 && state.deferFirstActiveRepo) {
           return new Promise((resolve) => {
             state.releaseActiveRepo = () => resolve(body);
+          });
+        }
+        if (state.activeRepoCalls === 2 && state.deferBackfillActiveRepo) {
+          return new Promise((resolve) => {
+            state.releaseBackfillActiveRepo = () => resolve(body);
           });
         }
         return Promise.resolve(body);
@@ -293,7 +311,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     });
   });
 
-  it("AC2/AC3: a null-workspace own INSERT is recovered by the scope-resolve backfill (and mirrored to Sentry)", async () => {
+  it("AC2/AC3: a null-workspace own INSERT is recovered by the scope-resolve backfill (NO Sentry mirror — normal latency, not a silent fallback)", async () => {
     state.deferFirstActiveRepo = true;
     // Initial query (call 1) returns empty; the recovery backfill (call 2)
     // returns the new row — so the backfill is provably what lands it.
@@ -306,16 +324,16 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
 
     await waitFor(() => expect(state.channels.some((c) => c.name === "command-center-own")).toBe(true));
 
-    // INSERT while workspaceId is still null → dropped, but recovery scheduled
-    // + silent drop mirrored to Sentry.
+    // INSERT while workspaceId is still null → dropped (shouldDropForScope:
+    // workspace_id !== null). No silent-fallback mirror is emitted anymore — the
+    // pendingScopeRecoveryRef arming branch + its Sentry slug were removed.
     await act(async () => {
       handlerOn("command-center-own", "INSERT")({ new: newRow, eventType: "INSERT" });
     });
     expect(view.result.current.conversations.map((c) => c.id)).not.toContain("conv-recovered");
-    expect(warnSilentFallbackMock).toHaveBeenCalledTimes(1);
-    expect(warnSilentFallbackMock.mock.calls[0]?.[1]).toMatchObject({ feature: "conversations-rail" });
+    expect(warnSilentFallbackMock).not.toHaveBeenCalled();
 
-    // Resolve scope → recovery backfill lands the row.
+    // Resolve scope → the unconditional null→id backfill lands the row.
     await act(async () => {
       state.releaseActiveRepo?.();
     });
@@ -324,6 +342,74 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
       () => expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-recovered"),
       { timeout: 3000 },
     );
+    // Still no silent-fallback mirror after recovery.
+    expect(warnSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("AC3 (unconditional): the new row appears via the null→id backfill even when NO own INSERT was dropped", async () => {
+    // The reported residual gap: no own-channel INSERT is dropped in the connect
+    // window (row created later / INSERT buffered pre-SUBSCRIBED), so the OLD
+    // pendingScopeRecoveryRef gate would NEVER arm and the backfill would never
+    // fire. The unconditional null→id backfill must still land the row. This is
+    // the test that distinguishes gated-from-unconditional: with the gate intact
+    // there is no call 2, the row never surfaces, and the waitFor times out.
+    state.deferFirstActiveRepo = true;
+    const newRow = makeRow({ id: "conv-unconditional" });
+    state.convResultByCall = [[] /* initial: empty */, [newRow] /* backfill */];
+    state.fallbackConvResult = [newRow];
+
+    const { useConversations } = await import("@/hooks/use-conversations");
+    const view = renderHook(() => useConversations({ limit: 15 }));
+
+    await waitFor(() => expect(state.channels.some((c) => c.name === "command-center-own")).toBe(true));
+
+    // NO INSERT fired — nothing arms a recovery in the old gated path.
+    // Resolve scope → the UNCONDITIONAL backfill must fetch and land the row.
+    await act(async () => {
+      state.releaseActiveRepo?.();
+    });
+
+    await waitFor(
+      () => expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-unconditional"),
+      { timeout: 3000 },
+    );
+    expect(warnSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("AC4b: the scope-resolve backfill is a QUIET refetch — loading is never toggled while it is in flight", async () => {
+    // The initial fetch returns a row and settles (loading=false). The null→id
+    // transition fires the backfill; defer its active-repo call so it stays in
+    // flight. A QUIET refetch must NOT flip loading back to true (which would
+    // re-enter the rail's !loading-gated empty/error branches and blank/flash
+    // the rail). A non-quiet refetch would flip loading=true → this fails.
+    const row = makeRow({ id: "existing-row" });
+    state.convResultByCall = [[row] /* initial returns the row */];
+    state.fallbackConvResult = [row];
+    state.deferBackfillActiveRepo = true;
+
+    const { useConversations } = await import("@/hooks/use-conversations");
+    const view = renderHook(() => useConversations({ limit: 15 }));
+
+    // Initial fetch settles: row present, loading false.
+    await waitFor(() =>
+      expect(view.result.current.conversations.map((c) => c.id)).toContain("existing-row"),
+    );
+    expect(view.result.current.loading).toBe(false);
+
+    // The backfill (call 2) is now dispatched and deferred (in flight). Flush a
+    // few microtasks; loading must remain false (quiet).
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(state.activeRepoCalls).toBe(2); // initial + backfill both dispatched
+    expect(view.result.current.loading).toBe(false);
+
+    // Release the backfill; the row stays and loading is still false.
+    await act(async () => {
+      state.releaseBackfillActiveRepo?.();
+    });
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(view.result.current.conversations.map((c) => c.id)).toContain("existing-row");
   });
 
   it("AC2 (bounded): the scope-resolve backfill fires once, not per render", async () => {

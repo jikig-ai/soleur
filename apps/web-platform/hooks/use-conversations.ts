@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { warnSilentFallback } from "@/lib/client-observability";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
@@ -146,16 +145,17 @@ export function useConversations(
   useEffect(() => {
     repoUrlRef.current = repoUrl;
   }, [repoUrl]);
-  // Set when an own-channel INSERT is dropped because the rail's scope has not
-  // resolved yet (workspaceId still null in the fresh-mount connect window).
-  // Consumed by the scope-resolve backfill effect below: the dropped row is
-  // recovered by a single refetch once workspaceId lands. See plan
-  // 2026-06-16-fix-recent-conversations-rail-optimistic-insert.
-  const pendingScopeRecoveryRef = useRef(false);
 
-  const fetchConversations = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // `background: true` runs a QUIET refetch — it skips the loading/error toggle
+  // so a reconcile that already has last-known rows present cannot re-enter the
+  // rail's `!loading`-gated empty/error branches and blank/flash the list. Used
+  // by the unconditional scope-resolve backfill below. A genuine refetch FAILURE
+  // still surfaces via setError on the error paths within.
+  const fetchConversations = useCallback(async (opts: { background?: boolean } = {}) => {
+    if (!opts.background) {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
       const supabase = createClient();
@@ -343,27 +343,16 @@ export function useConversations(
     ) => {
       const created = payload.new as Conversation;
       if (shouldDropForScope(created, { repoUrl: repoUrlRef.current, workspaceId, channel, archiveFilter })) {
-        // An own-channel INSERT already matched this user server-side (the WAL
-        // filter is user_id). If it is dropped ONLY because workspaceId has not
-        // resolved yet — the fresh-mount connect window, since the rail portals
-        // per-drill (ADR-047) and workspaceId is set inside the async
-        // fetchConversations — then losing it with no recovery is the reported
-        // bug: the row would surface only after the conversation completes (the
-        // completion UPDATE is map-only and cannot add a missing row). Schedule
-        // the bounded scope-resolve backfill and mirror the silent drop to
-        // Sentry so the no-op is observable (cq-silent-fallback-must-mirror-to-sentry).
-        // A drop while scope is already resolved is a genuine cross-(repo|
+        // Out of the rail's current scope. An own-channel INSERT dropped ONLY
+        // because workspaceId has not resolved yet (the fresh-mount connect
+        // window, since the rail portals per-drill — ADR-047 — and workspaceId
+        // is set inside the async fetchConversations) is recovered by the
+        // UNCONDITIONAL scope-resolve backfill below, which refetches once on
+        // the null→id transition regardless of whether a drop was recorded. So
+        // there is nothing to arm and nothing to mirror here: "the row isn't in
+        // scope yet" is normal connect-window latency, not a silent fallback. A
+        // drop while scope is already resolved is a genuine cross-(repo|
         // workspace) row — correctly silent (the F3 isolation invariant).
-        if (channel === "own" && workspaceId === null) {
-          pendingScopeRecoveryRef.current = true;
-          warnSilentFallback(null, {
-            feature: "conversations-rail",
-            op: "own-insert-deferred-unresolved-workspace",
-            message:
-              "own-channel conversation INSERT dropped while workspaceId unresolved; scheduled scope-resolve backfill recovery",
-            extra: { conversationId: created.id },
-          });
-        }
         return;
       }
 
@@ -433,29 +422,36 @@ export function useConversations(
     };
   }, [userId, workspaceId, archiveFilter, limit, fetchConversations]);
 
-  // Scope-resolve recovery backfill. The conversations rail portals per-drill
-  // (ADR-047) and mounts fresh on entry to /dashboard/chat/*, so its realtime
-  // own-channel can subscribe while `workspaceId` is still null (it is set
-  // inside the async fetchConversations). An own-channel INSERT arriving in that
-  // window is dropped by shouldDropForScope (workspace_id !== null) — and the
-  // completion UPDATE is map-only and cannot add the missing row, so it would
-  // surface only "after it completes" (the reported bug). When workspaceId
-  // transitions null → id AND such a drop was recorded, refetch ONCE to recover
-  // the row deterministically (independent of the realtime SUBSCRIBED-callback
-  // timing). Transition-gated via a ref — fires once per resolve, not per
-  // render — same shape as the canonical use-kb-layout-state.tsx:232-240 idiom.
-  // (That idiom seeds the ref with the CURRENT value; here we seed null because
-  // `workspaceId` always starts null — its useState init above is null and it is
-  // only set inside the async fetchConversations — so the null→id transition
-  // still fires exactly once and no spurious mount transition is manufactured.)
+  // Unconditional scope-resolve backfill. The conversations rail portals
+  // per-drill (ADR-047) and mounts fresh on entry to /dashboard/chat/*, so its
+  // realtime own-channel can subscribe while `workspaceId` is still null (it is
+  // set inside the async fetchConversations). An own-channel INSERT arriving in
+  // that window is dropped by shouldDropForScope (workspace_id !== null), and a
+  // pre-SUBSCRIBED-buffered INSERT is never delivered at all (supabase-js does
+  // not replay them) — and the completion UPDATE is map-only and cannot add the
+  // missing row, so the freshly-started conversation would surface only "after
+  // it completes" (the reported bug). Refetch ONCE — UNCONDITIONALLY — when
+  // workspaceId transitions null → id, regardless of whether a drop was
+  // recorded: the freshly-created row is created lazily server-side on the first
+  // WS message (ws-handler.ts), which can land before OR after this transition,
+  // so keying recovery on "a drop was observed" missed the no-drop orderings
+  // (the residual flakiness #5421 left). This is strictly simpler and MORE
+  // deterministic than a timed retry — it does not race the user-paced first
+  // message. The refetch is QUIET (background: true) so a reconcile with rows
+  // present cannot blank/flash the rail. Transition-gated via a ref — fires once
+  // per resolve, not per render — same shape as the canonical
+  // use-kb-layout-state.tsx:232-240 idiom. (That idiom seeds the ref with the
+  // CURRENT value; here we seed null because `workspaceId` always starts null —
+  // its useState init above is null and it is only set inside the async
+  // fetchConversations — so the null→id transition still fires exactly once and
+  // no spurious mount transition is manufactured.)
   const prevWorkspaceIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (prevWorkspaceIdRef.current === workspaceId) return; // no transition
     const prev = prevWorkspaceIdRef.current;
     prevWorkspaceIdRef.current = workspaceId;
-    if (prev === null && workspaceId !== null && pendingScopeRecoveryRef.current) {
-      pendingScopeRecoveryRef.current = false;
-      fetchConversations();
+    if (prev === null && workspaceId !== null) {
+      fetchConversations({ background: true });
     }
   }, [workspaceId, fetchConversations]);
 
