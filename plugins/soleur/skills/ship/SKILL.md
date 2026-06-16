@@ -273,6 +273,7 @@ Ship Checklist for [branch name]:
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
+- [ ] Recurring-vendor-expense gate passed (Phase 5.5 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
@@ -522,6 +523,57 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 **If not triggered:** Skip silently.
 
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
+
+### Recurring-Vendor-Expense Gate (mandatory)
+
+Enforces workflow gate `wg-record-recurring-vendor-expense-before-ready` at the `gh pr ready` boundary. This is the **deterministic, blocking** counterpart to the COO Expense-Tracking Gate above: the COO gate *discovers and recommends* (soft, advisory), this gate *blocks PR-ready* until a detected recurring vendor cost is either recorded in `knowledge-base/operations/expenses.md` in the same change OR carried as a tracked operator-driven follow-up. The two are complementary — run the COO gate first to surface costs, this gate to enforce that they landed.
+
+Emit rule-application telemetry (records the gate fired):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-record-recurring-vendor-expense-before-ready applied \
+  '`/ship` Phase 5.5 blocks PR-ready on an unrecorded recurring vendor expense'
+```
+
+**Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` that the agent judges to be a *paid* vendor (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'`), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or a plan-tier string in the PR body. Capture the PR body and **strip fenced code blocks** before grepping — this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count. The block below is **self-contained**: it captures + strips the body itself rather than depending on the Undeferred Operator-Step Gate's `$PR_BODY_FILE` (defined later in this file — running these blocks in document order would otherwise leave it unset and the grep would silently no-op). Bash ERE has no `(?i)` — use `grep -iE`.
+
+```bash
+# (a) Is the ledger already touched in this same change? If so the gate is satisfied.
+LEDGER_TOUCHED=$(git diff origin/main...HEAD --name-only | grep -c 'knowledge-base/operations/expenses.md' || true)
+
+# (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
+# unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
+PR_BODY_FILE=$(mktemp); trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
+PR_BODY=$(gh pr view --json body --jq .body)
+printf '%s' "$PR_BODY" | awk '
+  /^```/ { in_fence = !in_fence; next }
+  !in_fence { print }
+  END { if (in_fence) exit 2 }
+' > "$PR_BODY_FILE" || printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+
+# (c) Vendor-cost keyword scan over the fence-stripped body. Intentionally a
+# BROAD keyword match (NOT list-anchored like the Undeferred gate) — a PR often
+# describes a subscription in prose, not a bullet, so over-detection is preferred
+# here; false positives are absorbed by the LEDGER_TOUCHED branch and the
+# operator-attestation override below.
+SIGNAL_RE='(^|[^a-z])[Pp]ro\b|subscription|upgrade|paid[[:space:]]+tier|\$[0-9]+(\.[0-9]+)?/mo'
+SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
+```
+
+**Rule.** If a vendor-cost signal fires (plan-tier string, new paid dependency, or new vendor credential) AND `LEDGER_TOUCHED` is `0`, the change MUST carry a `(Tracks|Refs) #NNNN` companion pointing at an OPEN `type/chore` issue whose body contains the `deferred-automation` sentinel — the operator-driven-billing branch (same verification loop as the Undeferred Operator-Step Gate: state OPEN + label `type/chore` + sentinel). Absent both the ledger edit and a valid tracked follow-up, the gate is **triggered**.
+
+**If not triggered:** Skip silently (no signal, or the ledger was edited in this change, or a valid tracked follow-up exists).
+
+**If triggered:** Halt and present the structured 3-option prompt. The operator chooses one:
+
+1. **Record the expense now.** Edit `knowledge-base/operations/expenses.md` (and refresh `knowledge-base/finance/cost-model.md` if the change shifts any category subtotal >10% per the ledger's Downstream-Consumers rule) in this same change, then re-run detection. Mirror the estimate-with-verify Notes shape (Sentry PAYG / Resend Pro rows) when the exact amount is not yet billed.
+2. **File / cite an operator-driven follow-up.** When the billing action is genuinely operator-driven (a billing-portal plan upgrade behind dashboard auth that no API/CLI can perform — e.g. the Resend free→Pro upgrade), `gh issue create --label type/chore` with a body carrying the `deferred-automation` sentinel and a re-evaluation criterion, then add `Tracks #NNNN` to the PR body. Re-run detection.
+3. **Override with operator-attestation** (false positive — e.g. a free-tier SDK with no recurring cost, or a plan-tier string that is documentation not a real subscription). Append `<!-- gate-override: wg-record-recurring-vendor-expense-before-ready -->` followed by a one-line justification to the PR body, then proceed.
+
+**Headless mode.** Abort with the structured error. No auto-file / auto-override in headless — the paid-vs-free and operator-driven-vs-automatable judgments require an interactive run.
+
+**Why:** #5325 — the 2026-06-15 outbound-email go-live added a second Resend sending domain, forcing a Resend free→Pro upgrade ($20/mo), but the cost reached the ledger only after the operator noticed it missing. The COO gate's advisory recommendation did not block merge; this gate moves recurring-vendor-cost capture from honor-system to a mechanical block-before-ready, with an explicit operator-driven-billing branch for upgrades no API can self-apply.
 
 ### gdpr-gate `compliance/critical` Auto-Label Gate
 
@@ -1152,6 +1204,43 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 **Step 4:** Generate a `## Changelog` section from the changes and update the PR body to include it. The changelog should describe what changed in user-facing terms (not file paths). If the PR body already has a `## Changelog` section, update it. Include app changes alongside plugin changes — group by component if multiple components changed (e.g., "### Plugin", "### Web Platform").
 
 **Step 5:** Validate consistency -- if new agents, skills, or commands were detected in Step 1 but the label is `semver:patch`, warn the user that the label may be incorrect. New components typically warrant `semver:minor`.
+
+### Feature-Tweet Draft (pre-merge bundle)
+
+Generate any eligible feature-tweet draft NOW — after the semver/`app:*` labels
+are applied (eligibility reads the PR labels + title) — and **commit it to the
+feature branch** so it rides this PR into `main`, where `content-publisher.sh`
+reads from. This replaces the old post-merge generation, which wrote the draft
+into a worktree that `cleanup-merged` reaps before it ever reaches `main` (so
+the cron never saw it). The draft is **inert** (`status: draft`, empty
+`publish_date`) and never posts until the operator sets `publish_date` +
+`status: scheduled` — their post-deploy confirmation gate — so bundling it
+pre-merge does NOT weaken the "only tweet what actually deployed" property;
+`/soleur:postmerge` Phase 3.8 still verifies deploy health and warns before the
+operator schedules.
+
+1. **Eligibility (fail-closed):** `bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>`.
+   Ineligible (exit non-zero, `excluded: <reason>`) → **skip silently** (most PRs
+   land here: fixes, infra, non-product). Do not surface the exclusion.
+2. **Eligible →** invoke `skill: soleur:feature-tweet #<PR_NUMBER>` (writes +
+   displays the draft for approval per its §Output contract).
+3. **Commit + push the draft to the feature branch** so it lands on `main` with
+   the squash merge (stage ONLY the draft file — never `git add -A`):
+
+   ```bash
+   git add knowledge-base/marketing/distribution-content/<draft-file>.md
+   git commit -m "content: feature-tweet draft for #<PR_NUMBER> (inert — operator schedules post-deploy)"
+   git push
+   ```
+
+   The draft is a NEW commit, so the Phase 6.4 Unpushed-Commits Gate re-checks
+   clean before merge. Headless mode: same — generate + commit + push; never
+   schedule (the inert draft + operator gate are the publish control).
+
+If `/ship` is hand-rolled and this step is skipped, the draft never reaches
+`main`; `/soleur:postmerge` Phase 3.8 detects the missing on-`main` draft and
+runs the standalone catch-up (which then needs its own follow-up commit to land
+on `main`).
 
 ## Phase 6.5: Verify PR Mergeability
 
