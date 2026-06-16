@@ -4,6 +4,8 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLa
 
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
+import Link from "next/link";
+import { SpinnerIcon } from "@/components/icons";
 import type { AttachmentRef } from "@/lib/types";
 import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
@@ -57,6 +59,14 @@ interface ChatInputProps {
   /** #3448 PR2: invoked when the user clicks Stop. Wired to
    *  `useWebSocket.abort()` by ChatSurface. */
   onStop?: () => void;
+  /** #5394 Layer B: the active workspace's repo-setup state, mapped by
+   *  `<ChatSurface>` from `useActiveRepo().data.repoStatus`. While `"cloning"`
+   *  the composer is disabled and shows a "Setting up your repository…" state;
+   *  on `"error"` it shows a reconnect CTA to Settings → Repository. `null`/
+   *  undefined (ready / not-connected) is the normal composer. Server-side the
+   *  dispatch is gated independently (Layer A); this is the UX so a founder
+   *  never types into a composer whose turn will be blocked. */
+  repoSetupState?: "cloning" | "error" | null;
 }
 
 export function ChatInput({
@@ -74,6 +84,7 @@ export function ChatInput({
   workflowEnded = false,
   streamState = "idle",
   onStop,
+  repoSetupState = null,
 }: ChatInputProps) {
   // #3448 PR2 (review fix): exhaustive narrowing on the StreamState union
   // per AGENTS.md `cq-union-widening-grep-three-patterns`. A future widening
@@ -96,10 +107,19 @@ export function ChatInput({
   })();
   const showStop = buttonMode !== "send";
   const isStopping = buttonMode === "stopping";
-  const disabled = rawDisabled || workflowEnded;
+  // #5394 — repo-setup gates. Cloning AND error both disable the composer (the
+  // server-side Layer A gate would block the turn anyway); error additionally
+  // surfaces a reconnect CTA. Cloning swaps the placeholder to the setting-up
+  // copy. These take precedence over the normal placeholder but not over the
+  // workflow-ended terminal state.
+  const repoCloning = repoSetupState === "cloning";
+  const repoError = repoSetupState === "error";
+  const disabled = rawDisabled || workflowEnded || repoCloning || repoError;
   const placeholder = workflowEnded
     ? "This conversation has ended"
-    : rawPlaceholder;
+    : repoCloning
+      ? "Setting up your repository…"
+      : rawPlaceholder;
   const [value, setValue] = useState<string>(() => {
     // Rehydrate from sessionStorage on mount when a draftKey is given.
     if (!draftKey) return "";
@@ -592,6 +612,35 @@ export function ChatInput({
       {attachError && (
         <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           {attachError}
+        </div>
+      )}
+
+      {/* #5394 — repo cloning: slim inline "setting up" indicator (voice from
+          the connect-repo SettingUpState). Static "less than a minute" copy
+          satisfies the issue's "elapsed indicator" without a per-second timer. */}
+      {repoCloning && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-xs text-soleur-text-secondary">
+          <SpinnerIcon className="h-4 w-4 shrink-0 text-soleur-accent-gold-fg/70" />
+          <span>
+            Setting up your repository…{" "}
+            <span className="text-soleur-text-muted">
+              This usually takes less than a minute.
+            </span>
+          </span>
+        </div>
+      )}
+
+      {/* #5394 — repo setup error: inline reconnect CTA (voice from the
+          connect-repo FailedState) to Settings → Repository. */}
+      {repoError && (
+        <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+          Your repository setup failed.{" "}
+          <Link
+            href="/dashboard/settings"
+            className="font-medium text-red-200 underline hover:text-red-100"
+          >
+            Reconnect in Settings → Repository
+          </Link>
         </div>
       )}
 

@@ -10,6 +10,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
+import { useActiveRepo } from "@/hooks/use-active-repo";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
 import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
@@ -546,6 +547,19 @@ export function ChatSurface({
   // persisted DB column (reload of an already-ended conversation).
   const workflowEnded = workflow.state === "ended" || workflowEndedAt !== null;
 
+  // #5394 Layer B — drive the composer's repo-setup state from the active
+  // workspace's repo_status (workspaces-backed, same source as the Layer A
+  // gate). While `cloning` the hook polls every 2s so this auto-transitions to
+  // ready (prop → null, composer re-enables) WITHOUT a manual refresh; `error`
+  // surfaces the reconnect CTA. Any other status (ready / not_connected) → null.
+  const { data: activeRepo } = useActiveRepo();
+  const repoSetupState: "cloning" | "error" | null =
+    activeRepo?.repoStatus === "cloning"
+      ? "cloning"
+      : activeRepo?.repoStatus === "error"
+        ? "error"
+        : null;
+
   function handleSend(message: string, attachments?: AttachmentRef[]) {
     if (status !== "connected") return;
     onBeforeSend?.(message);
@@ -1024,6 +1038,7 @@ export function ChatSurface({
             draftKey={draftKey}
             streamState={streamState}
             onStop={abort}
+            repoSetupState={repoSetupState}
           />
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (

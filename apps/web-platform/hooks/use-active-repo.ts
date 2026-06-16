@@ -68,5 +68,21 @@ export function useActiveRepo(): { data: ActiveRepo | null } {
     return () => window.removeEventListener("focus", onFocus);
   }, [poll]);
 
+  // #5394 — while the repo is `cloning`, poll every 2s so the chat composer
+  // auto-transitions to ready (or error) WITHOUT a manual refresh (AC4). The
+  // interval is keyed on `repoStatus`: it starts only while cloning and the
+  // effect cleanup clears it the moment the status leaves cloning (ready /
+  // error / not_connected) — self-stopping, no fetch after settle. Cleared on
+  // unmount too. The module-level `inFlight` latch keeps this coalesced with the
+  // mount+focus revalidation (no fetch multiplication with the nav badge).
+  const repoStatus = data?.repoStatus;
+  useEffect(() => {
+    if (repoStatus !== "cloning") return;
+    const id = setInterval(() => {
+      poll();
+    }, 2_000);
+    return () => clearInterval(id);
+  }, [repoStatus, poll]);
+
   return { data };
 }
