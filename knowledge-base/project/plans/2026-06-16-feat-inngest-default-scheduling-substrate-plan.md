@@ -201,8 +201,9 @@ logs:
   where: "Sentry (jikigai-eu) + pino stdout in the web-platform container (reportSilentFallback mirrors both)"
   retention: "Sentry project default"
 discoverability_test:
-  command: "gh issue view <report_to_issue> --comments (reads the evidence comment); or query Sentry (jikigai-eu/web-platform) feature:event-scheduled-reminder op:named-check-close-failed. No remote-shell access needed."
-  expected_output: "the evidence comment on report_to_issue, or a Sentry event for any failure op"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: "401"
+  note: "401 = the Inngest serve endpoint requires a signed request; a bare GET proves the function-serving substrate (where event-scheduled-reminder + the sentry-issue-rate check are registered) is LIVE and reachable with NO remote-shell access. The per-arm operational liveness signal remains the evidence comment posted to report_to_issue at fire time (gh issue view <report_to_issue> --comments) plus the reportSilentFallback Sentry ops above for any failure path."
 ```
 
 ## Domain Review
