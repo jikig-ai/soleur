@@ -695,7 +695,7 @@ resource "sentry_issue_alert" "egress_blocked" {
 # both miss), so paging on its event is the host-authoritative restart-rate
 # signal. The monitor does the rate thresholding host-side, so a first-seen page
 # is correct (no event_frequency condition needed — and beta2's conditions_v2
-# has no verified event_frequency support; see ADR-061).
+# has no verified event_frequency support; see ADR-062).
 #
 # op-SCOPED filter (op IS_IN, NOT feature-only): the monitor also emits
 # op=recovered (a "storm cleared" event) under the SAME feature tag; scoping to

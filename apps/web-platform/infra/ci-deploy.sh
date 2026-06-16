@@ -43,7 +43,7 @@ readonly MIN_DISK_KB=$((5 * 1024 * 1024))  # 5GB for image pull + extraction
 # unless-stopped churned the container ~10-60x/day, killing in-flight crons and
 # flushing the DOCKER-USER egress jump. Capping --memory converts that into a
 # DETERMINISTIC cgroup-OOM that kills only this container, sparing the rest of
-# the host. Derivation + sizing rationale in ADR-061 and the #5417 plan (AC1).
+# the host. Derivation + sizing rationale in ADR-062 and the #5417 plan (AC1).
 #
 # The cap is a STARTING value bounded by the deploy-window constraint
 # (canary + prod run concurrently): CANARY_MEMORY_CAP + PROD_MEMORY_CAP +
