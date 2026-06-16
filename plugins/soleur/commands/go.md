@@ -16,6 +16,20 @@ Unified entry point for all Soleur workflows. Classify the user's intent and rou
 
 Do not proceed until there is input from the user.
 
+## Step 0.0: Workspace Readiness Gate
+
+Before the session-start preamble and before any routing, confirm a usable git repository exists. Run:
+
+```bash
+git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true
+```
+
+If **neither** command prints `true` (no bare repo to make a worktree from AND not inside a working tree), the workspace has no git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed — the CWD is then a repo-less `/workspaces/<id>` and **every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
+
+> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**.
+
+This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge `#4826` session hit.)
+
 ## Step 0: Session-Start Preamble
 
 Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
