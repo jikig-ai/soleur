@@ -396,12 +396,12 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     );
     expect(view.result.current.loading).toBe(false);
 
-    // The backfill (call 2) is now dispatched and deferred (in flight). Flush a
-    // few microtasks; loading must remain false (quiet).
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(state.activeRepoCalls).toBe(2); // initial + backfill both dispatched
+    // The backfill (call 2) dispatches via the null→id transition effect. Await
+    // it deterministically (waitFor, not a bare microtask flush — the effect may
+    // need more than one turn to schedule + run), then assert loading stayed
+    // false the whole time it was in flight (quiet). A non-quiet refetch would
+    // have flipped loading=true synchronously before the deferred await.
+    await waitFor(() => expect(state.activeRepoCalls).toBe(2)); // initial + backfill
     expect(view.result.current.loading).toBe(false);
 
     // Release the backfill; the row stays and loading is still false.
