@@ -168,6 +168,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "byok-delegations": false,
       "c4-visualizer": false,
       "debug-mode": false,
+      "c4-edit": false,
     });
   });
 
@@ -186,6 +187,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "byok-delegations": true,
       "c4-visualizer": false,
       "debug-mode": false,
+      "c4-edit": false,
     });
   });
 
@@ -204,7 +206,14 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "byok-delegations": false,
       "c4-visualizer": false,
       "debug-mode": false,
+      "c4-edit": false,
     });
+  });
+
+  it("AC1 — c4-edit is a member of the runtime snapshot", async () => {
+    delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    const flags = await getFeatureFlags(ANON_IDENTITY);
+    expect("c4-edit" in flags).toBe(true);
   });
 });
 
@@ -383,6 +392,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "byok-delegations": false,
       "c4-visualizer": false,
       "debug-mode": false,
+      "c4-edit": false,
     });
   });
 

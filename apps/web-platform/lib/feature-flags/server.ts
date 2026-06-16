@@ -48,6 +48,12 @@ const RUNTIME_FLAGS = {
   // which hard-gates `role === "dev"` BEFORE this flag so the role-blind
   // env-fallback cannot open the stream to `prd` on a Flagsmith outage.
   "debug-mode": "FLAG_DEBUG_MODE",
+  // feat-c4-viewer-remove-code-panel-gate-edit — gates ONLY the user-direct
+  // C4 edit surface (PUT /api/kb/c4 + the Code panel UI). Default OFF for all
+  // roles; user editing is removed pending substrate fixes, re-enabled later by
+  // flipping the Flagsmith flag. Does NOT gate view (c4-visualizer) or the
+  // Concierge edit tool (also c4-visualizer). Fail-closed: FLAG_C4_EDIT=0 mirror.
+  "c4-edit": "FLAG_C4_EDIT",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
