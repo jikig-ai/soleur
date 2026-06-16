@@ -79,6 +79,11 @@ const LATEST_COLS =
 const RUN_COLS =
   "id,routine_id,run_id,status,trigger_source,actor_class,started_at,ended_at,duration_ms,error_summary";
 
+// Cursor-half validators (the cursor is server-minted: ISO ts + UUID id). Used
+// to reject a tampered cursor before it reaches the PostgREST `.or()` string.
+const CURSOR_TS_RE = /^\d{4}-\d{2}-\d{2}T[\d:.]+(?:[+-]\d{2}:\d{2}|Z)?$/;
+const CURSOR_ID_RE = /^[0-9A-Za-z_-]+$/;
+
 /** All routines (grouped/sorted client-side) with each one's latest run. */
 export async function listRoutinesWithLastRun(
   supabase: SupabaseLike,
@@ -140,11 +145,21 @@ export async function listRecentRuns(
     // timestamp and fall back to a plain started_at row-comparison.
     const ts = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
     const id = sep === -1 ? null : opts.cursor.slice(sep + 1);
-    q = base.or(
-      id === null
-        ? `started_at.lt.${ts}`
-        : `started_at.lt.${ts},and(started_at.eq.${ts},id.lt.${id})`,
-    );
+    // The cursor is server-minted (`${last.started_at}|${last.id}`), so a
+    // legitimate value is always an ISO timestamp + a UUID. Validate both
+    // halves before interpolating into the PostgREST `.or()` predicate —
+    // commas/parens in a tampered cursor would otherwise inject extra OR
+    // clauses (RLS + the fixed projection still bound the blast radius, but
+    // this rejects the malformed query outright). A bad cursor → first page.
+    if (!CURSOR_TS_RE.test(ts) || (id !== null && !CURSOR_ID_RE.test(id))) {
+      q = base;
+    } else {
+      q = base.or(
+        id === null
+          ? `started_at.lt.${ts}`
+          : `started_at.lt.${ts},and(started_at.eq.${ts},id.lt.${id})`,
+      );
+    }
   }
   const { data, error } = await q.limit(limit + 1);
   if (error) throw error;

@@ -200,6 +200,40 @@ describe("RoutinesSurface", () => {
     );
   });
 
+  it("Recent Runs date-range preset wires a since= query param", async () => {
+    render(<RoutinesSurface />);
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Runs" }));
+    await waitFor(() => expect(runsRequests.urls.length).toBeGreaterThan(0));
+    runsRequests.urls = [];
+    fireEvent.click(screen.getByTestId("runs-filter-range-7d"));
+    await waitFor(() =>
+      expect(runsRequests.urls.some((u) => u.includes("since="))).toBe(true),
+    );
+  });
+
+  it("Recent Runs surfaces an error state (not an empty table) on a failed fetch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/dashboard/routines/runs")) {
+          return { ok: false, status: 502, json: async () => ({}) } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ routines: [] }),
+        } as Response;
+      }),
+    );
+    render(<RoutinesSurface />);
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Runs" }));
+    await waitFor(() =>
+      expect(screen.getByText(/Failed to load runs/)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/No runs yet/)).toBeNull();
+  });
+
   // #5412 — tab renamed to "Draft a routine with Concierge" (no ✨, no "new").
   it("shows the Concierge draft tab with the renamed label (no sparkles / new badge)", async () => {
     render(<RoutinesSurface />);
@@ -247,6 +281,9 @@ describe("RoutinesSurface", () => {
         ),
       ).toBe(true),
     );
+    // The drawer's scoped log is a second surface rendering RecentRun rows —
+    // the no-operator-PII-framing contract must hold here too.
+    expect(drawer.textContent).not.toContain("(you)");
   });
 
   it("Draft tab renders the intro (capability cards + suggestion chips) and mounts the chat in routine-authoring mode", async () => {

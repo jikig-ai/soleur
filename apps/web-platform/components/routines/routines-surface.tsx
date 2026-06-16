@@ -557,6 +557,7 @@ function RunLogView({
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecentRun | null>(null);
 
   const buildUrl = useCallback(
@@ -590,13 +591,22 @@ function RunLogView({
       setLoading(true);
       try {
         const res = await fetch(buildUrl(reset ? null : cursor));
-        if (!res.ok) return;
+        if (!res.ok) {
+          // Surface the failure instead of leaving an empty table that reads
+          // as "no runs" — the route mirrors the real error to Sentry; the
+          // operator sees a distinct error state here.
+          setError(`Failed to load runs (HTTP ${res.status})`);
+          return;
+        }
         const json = (await res.json()) as {
           runs: RecentRun[];
           nextCursor: string | null;
         };
+        setError(null);
         setRuns((prev) => (reset ? json.runs : [...prev, ...json.runs]));
         setCursor(json.nextCursor);
+      } catch {
+        setError("Failed to load runs");
       } finally {
         setLoading(false);
         setLoaded(true);
@@ -629,7 +639,18 @@ function RunLogView({
         />
       )}
 
-      {loaded && runs.length === 0 ? (
+      {error ? (
+        <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-5 text-sm text-red-400">
+          {error}{" "}
+          <button
+            type="button"
+            onClick={() => loadMore(true)}
+            className="ml-1 underline hover:text-red-300"
+          >
+            Retry
+          </button>
+        </div>
+      ) : loaded && runs.length === 0 ? (
         <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-8 text-center text-sm text-soleur-text-muted">
           {hasActiveFilters
             ? "No runs match these filters."

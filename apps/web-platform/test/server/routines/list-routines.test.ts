@@ -124,6 +124,25 @@ describe("listRecentRuns", () => {
     expect(capture.orFilter).toBe("started_at.lt.2026-06-15T01:00:00Z");
   });
 
+  it("rejects a tampered cursor (injection chars) without building an .or() predicate", async () => {
+    const capture: { orFilter?: string } = {};
+    // A crafted id with PostgREST logic chars must not reach the .or() string.
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      cursor: "2026-06-15T01:00:00Z|r1),or(actor_id.not.is.null",
+    });
+    expect(capture.orFilter).toBeUndefined();
+  });
+
+  it("rejects a cursor with a non-ISO timestamp half", async () => {
+    const capture: { orFilter?: string } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      cursor: "not-a-timestamp|r1",
+    });
+    expect(capture.orFilter).toBeUndefined();
+  });
+
   // #5412 — filters + projection.
   it("projects run_id + actor_class but NEVER actor_id / delegating_principal (PII)", async () => {
     const capture: { runCols?: string } = {};

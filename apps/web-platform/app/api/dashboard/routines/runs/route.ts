@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   // Validate filters: drop anything outside its domain (no injection, no noise).
   const routineIdRaw = url.searchParams.get("routineId");
   const routineId =
-    routineIdRaw && (EXPECTED_CRON_FUNCTIONS as readonly string[]).includes(routineIdRaw)
+    routineIdRaw && EXPECTED_CRON_FUNCTIONS.includes(routineIdRaw)
       ? routineIdRaw
       : null;
   const status = pickEnum(url.searchParams.get("status"), STATUS_VALUES);
