@@ -7,7 +7,7 @@ describe("ROUTINE_AUTHORING_DIRECTIVE", () => {
     expect(ROUTINE_AUTHORING_DIRECTIVE).toMatch(/\{ cron:/); // schedule literal
     expect(ROUTINE_AUTHORING_DIRECTIVE).toContain("EXPECTED_CRON_FUNCTIONS");
     expect(ROUTINE_AUTHORING_DIRECTIVE).toContain("ROUTINE_METADATA");
-    expect(ROUTINE_AUTHORING_DIRECTIVE).toMatch(/Inngest client/i);
+    expect(ROUTINE_AUTHORING_DIRECTIVE).toMatch(/Inngest serve route|app\/api\/inngest/i);
   });
 
   it("frames create as propose-as-PR and never-fabricate-for-unmerged", () => {
