@@ -216,23 +216,33 @@ describe("POST /api/internal/trigger-cron — optional event data pass-through (
     expect(() => new Date(envelope.data.at as string).toISOString()).not.toThrow();
   });
 
-  // AC-A3: back-compat — with NO `data` key, the envelope carries EXACTLY the
-  // two route-controlled keys and nothing else (gated explicitly, not assumed:
-  // the legacy dispatch test uses permissive toMatchObject).
-  it("dispatches exactly {trigger, at} when data is absent (back-compat, exact keys) (AC-A3)", async () => {
+  // AC-A3: with NO `data` key, the envelope carries EXACTLY the route-controlled
+  // keys. As of #5345 the secret route dispatches through the runRoutine
+  // chokepoint, so the envelope also carries the system-tier attribution keys
+  // (actor_class/actor_id/delegating_principal) — additive + ignored by
+  // consuming crons, required by the run-log middleware for WORM attribution.
+  const SYSTEM_ENVELOPE_KEYS = [
+    "actor_class",
+    "actor_id",
+    "at",
+    "delegating_principal",
+    "trigger",
+  ];
+  it("dispatches the system-tier envelope when data is absent (exact keys) (AC-A3)", async () => {
     const res = await POST(makeRequest({ event: ALLOWED_EVENT }));
     expect(res.status).toBe(202);
     const envelope = mockInngestSend.mock.calls[0][0];
-    expect(Object.keys(envelope.data).sort()).toEqual(["at", "trigger"]);
+    expect(Object.keys(envelope.data).sort()).toEqual(SYSTEM_ENVELOPE_KEYS);
     expect(envelope.data.trigger).toBe("manual-api");
+    expect(envelope.data.actor_class).toBe("system");
   });
 
   // AC-A3 (null variant): explicit `data: null` is treated as no-data, same as absent.
-  it("treats explicit data:null as no-data (exact {trigger, at}) (AC-A3)", async () => {
+  it("treats explicit data:null as no-data (system-tier envelope) (AC-A3)", async () => {
     const res = await POST(makeRequest({ event: ALLOWED_EVENT, data: null }));
     expect(res.status).toBe(202);
     const envelope = mockInngestSend.mock.calls[0][0];
-    expect(Object.keys(envelope.data).sort()).toEqual(["at", "trigger"]);
+    expect(Object.keys(envelope.data).sort()).toEqual(SYSTEM_ENVELOPE_KEYS);
   });
 
   // AC-A4: a present-but-non-plain-object `data` is rejected 400 before dispatch.

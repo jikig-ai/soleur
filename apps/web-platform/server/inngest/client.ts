@@ -15,6 +15,7 @@
 import { Inngest } from "inngest";
 
 import { sentryCorrelationMiddleware } from "@/server/inngest/middleware/sentry-correlation";
+import { runLogMiddleware } from "@/server/inngest/middleware/run-log";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 const EVENT_KEY = process.env.INNGEST_EVENT_KEY;
@@ -65,6 +66,10 @@ export const inngest = new Inngest({
   // stream via the middleware's `transformOutput` hook. Applied once
   // here so every existing AND future Inngest function is covered without
   // per-handler instrumentation.
-  middleware: [sentryCorrelationMiddleware],
+  // routine-run-log middleware (#5345) writes one terminal row per
+  // EXPECTED_CRON_FUNCTIONS run to public.routine_runs (final-attempt-gated,
+  // fail-soft). Ordered after sentry-correlation so a run-log write failure
+  // still inherits the tagged Sentry scope.
+  middleware: [sentryCorrelationMiddleware, runLogMiddleware],
   ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
 });
