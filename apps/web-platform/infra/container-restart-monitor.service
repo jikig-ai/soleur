@@ -1,0 +1,17 @@
+[Unit]
+Description=soleur-web-platform container restart/OOM churn monitor (#5417)
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+# Doppler env wiring (mirrors cron-egress-resolve.service): the monitor's Sentry
+# channel needs SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY (doppler prd config),
+# and RESEND_API_KEY comes from doppler too. /etc/default/container-restart-monitor
+# is the doppler-less fallback (RESEND only). DOPPLER_TOKEN lives in
+# /etc/default/inngest-server. The script degrades per-channel when any env is
+# absent, so a doppler-less run still logs to the journal and exits 0.
+EnvironmentFile=-/etc/default/inngest-server
+EnvironmentFile=-/etc/default/container-restart-monitor
+Environment=HOME=/root
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/container-restart-monitor.sh; else exec /usr/local/bin/container-restart-monitor.sh; fi'
