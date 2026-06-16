@@ -62,10 +62,22 @@ const log = createChildLogger("byok-lease");
 export type UserId = string;
 
 /**
- * feat-operator-cc-oauth (CLO Guardrail 1). The `oauth_token` execution
- * path fails closed before this instant. Single source of truth for the
- * date gate — `getAgentCredential()`'s oauth-read branch is the only
- * reader. Exported so the lease test can derive before/after boundaries.
+ * feat-operator-cc-oauth — a SPENT date gate. This was gated to a *predicted*
+ * 2026-06-15 Anthropic policy transition: a per-user monthly "Agent SDK
+ * credit" that would have explicitly permitted third-party apps to authenticate
+ * with a Claude subscription. Anthropic PAUSED that change (2026-06-16; live
+ * article still reads "Agent SDK ... usage still draw from your subscription's
+ * usage limits"). See
+ * knowledge-base/legal/audits/2026-06-16-clo-re-review-cc-oauth.md. The date
+ * therefore no longer corresponds to any policy transition. The `oauth_token`
+ * path still fails closed before this instant, but since the date has passed
+ * the gate is a historical fail-closed artifact — the LIVE load-bearing gates
+ * are the `CC_OAUTH_ENABLED` kill-switch + owner-only routing
+ * (`OauthDelegationForbiddenError`). Corrected legal basis: tolerated / metered
+ * subscription use, owner-only no-share enforced in code, operator-borne
+ * risk-acceptance (NOT the once-predicted explicit permission). Retained as the
+ * single source of truth for the gate and because the lease test derives its
+ * before/after boundaries from it.
  */
 export const CC_OAUTH_EFFECTIVE_DATE = Date.parse("2026-06-15T00:00:00Z");
 
@@ -82,10 +94,12 @@ function isCcOauthEnabled(): boolean {
 }
 
 /**
- * CLO Guardrail 1 — raised when an `anthropic_oauth` credential is selected
- * before `CC_OAUTH_EFFECTIVE_DATE`. Fail-closed (the run does NOT silently
- * fall back to the api_key, which would defeat the policy gate). Operator-
- * only surface (only the operator can hold an oauth row).
+ * Raised when an `anthropic_oauth` credential is selected before
+ * `CC_OAUTH_EFFECTIVE_DATE`. Fail-closed (the run does NOT silently fall back
+ * to the api_key). The gated date is now spent (it has passed — see the
+ * `CC_OAUTH_EFFECTIVE_DATE` note above), so this guard is historically inert,
+ * but it is retained fail-closed rather than removed. Operator-only surface
+ * (only the operator can hold an oauth row).
  */
 export class OauthNotYetPermittedError extends Error {
   constructor() {
@@ -103,9 +117,13 @@ export class OauthNotYetPermittedError extends Error {
 }
 
 /**
- * CLO Guardrail 2 — raised when an `anthropic_oauth` credential would fund a
- * run it does not own (delegated lease, or keyOwner ≠ workspace context).
- * The subscription credit may fund ONLY its owner's own runs; fail-closed.
+ * The surviving load-bearing guardrail. Raised when an `anthropic_oauth`
+ * credential would fund a run it does not own (delegated lease, or keyOwner ≠
+ * workspace context). This enforces Anthropic's per-user / no-pooling /
+ * no-share constraint — the real risk axis, which did NOT change when the
+ * predicted June-15 Agent SDK credit was paused. It is the gate the corrected
+ * "tolerated, owner-only, no-share enforced in code" basis rests on; the
+ * subscription token may fund ONLY its owner's own runs. Fail-closed.
  */
 export class OauthDelegationForbiddenError extends Error {
   constructor() {
@@ -490,8 +508,8 @@ async function fetchAgentCredentialIntoSlot(
     const oauthRow = await fetchProviderRow(slot, "anthropic_oauth");
     if (oauthRow) {
       // ---- Gates fire ONLY on the oauth read (plan §Phase 2.3) ----
-      // CLO G1 — date gate. Fail-closed; NEVER silently fall back to the
-      // api_key (that would defeat the policy gate).
+      // CLO G1 — spent date gate. Fail-closed; NEVER silently fall back to the
+      // api_key. (The gated date has passed; retained fail-closed, not removed.)
       if (Date.now() < CC_OAUTH_EFFECTIVE_DATE) {
         throw new OauthNotYetPermittedError();
       }
