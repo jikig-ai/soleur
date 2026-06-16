@@ -61,13 +61,14 @@ import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
-import { getCurrentRepoUrl } from "./current-repo-url";
+import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
+import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
 import { resolveActiveWorkspacePath } from "./workspace-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, hashUserId } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
 import { extractPdfText } from "./pdf-text-extract";
@@ -869,6 +870,66 @@ export async function startAgentSession(
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
 ): Promise<void> {
+  // #5399 — legacy-leader repo-readiness gate (AC10 follow-up to #5395).
+  //
+  // This MUST be the FIRST statement of startAgentSession — ABOVE the
+  // supersede-abort (`const existing = getSession(...)` below) and ABOVE
+  // registerSession — so a blocked not-ready dispatch does NOT abort the
+  // user's in-flight prior session or register a dangling one before bailing
+  // (architecture review P1). It is also ABOVE the outer `try` further down,
+  // so the status read needs its OWN fail-open try/catch (silent-failure F1).
+  //
+  // getCurrentRepoStatus self-mints its tenant client, so this runs WITHOUT
+  // the BYOK lease: a `cloning`/`error` workspace never acquires a key, never
+  // spawns an agent, never attempts a clone. Server-authoritative for the
+  // WHOLE legacy surface (ws-handler pendingLeader + sendUserMessage call
+  // sites + dispatchToLeaders fan-out all funnel through startAgentSession).
+  // Mirrors the cc-dispatcher gate (#5395) — reuses the same primitives; no
+  // new predicate, error class, or copy.
+  let repoReadiness: RepoReadiness;
+  try {
+    const { repoStatus, repoError } = await getCurrentRepoStatus(userId);
+    repoReadiness = evaluateRepoReadiness(repoStatus, repoError);
+  } catch (err) {
+    // The read sits above the outer `try`, so a non-RuntimeAuthError throw
+    // from getCurrentRepoStatus would otherwise escape uncaught (no Sentry,
+    // no client error). Mirror and fail OPEN (proceed; degrade to the
+    // existing repo-less / #5392 path) — never block a dispatch on a
+    // readiness-read blip. (silent-failure review F1, HIGH.)
+    reportSilentFallback(err, {
+      feature: "agent-runner",
+      op: "repo-readiness-gate.read",
+      extra: { userId, conversationId },
+    });
+    repoReadiness = { ok: true };
+  }
+  if (!repoReadiness.ok) {
+    // Honest client message; SKIP Sentry (an expected transient/benign state,
+    // not an incident) and do NOT mark the conversation failed (a transient
+    // block must not nuke a resumable conversation — the early `return` never
+    // reaches the outer catch's failed-status write). The info breadcrumb
+    // keeps the rate observable in Better Stack (alert on a code=error spike,
+    // never on cloning). hashUserId for log parity with cc-dispatcher.ts.
+    log.info(
+      {
+        feature: "agent-runner",
+        op: "repo-readiness-gate",
+        code: repoReadiness.code,
+        userIdHash: hashUserId(userId),
+        conversationId,
+        leaderId,
+        reason: repoReadiness.message,
+      },
+      "repo-readiness gate: blocked legacy-leader dispatch (repo not ready)",
+    );
+    sendToClient(userId, {
+      type: "error",
+      message: repoReadiness.message,
+      ...(repoReadiness.errorCode ? { errorCode: repoReadiness.errorCode } : {}),
+    });
+    return; // no lease, no agent, no clone, no session mutation
+  }
+
   // Abort any existing session for this specific leader (or un-keyed
   // session). Tagged `superseded` so the existing session's
   // for-await catch branch classifies via the same code path as an
