@@ -1,1 +1,477 @@
-{"version": "1.0", "children": []}
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "Mjsrs",
+      "x": 0,
+      "y": 80,
+      "name": "01 — Expanded rail (NEW affordance)",
+      "width": 280,
+      "height": 640,
+      "fill": "$bg-base",
+      "stroke": {
+        "align": "inside",
+        "thickness": {
+          "right": 1
+        },
+        "fill": "$border-default"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "s8OC4",
+          "name": "Header",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "$border-default"
+          },
+          "gap": 8,
+          "padding": [
+            14,
+            16
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "n4NXo",
+              "name": "Section label",
+              "fill": "$text-secondary",
+              "content": "RECENT CONVERSATIONS",
+              "fontFamily": "$font-ui",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "tXCpW",
+              "name": "+ New conversation (gradient)",
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 135,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "$gradient-start",
+                    "position": 0
+                  },
+                  {
+                    "color": "$gradient-end",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": 6,
+              "gap": 5,
+              "padding": [
+                5,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "qJZaB",
+                  "name": "newIcon",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "plus",
+                  "iconFontFamily": "lucide",
+                  "fill": "$bg-base"
+                },
+                {
+                  "type": "text",
+                  "id": "0IG9b",
+                  "name": "New label",
+                  "fill": "$bg-base",
+                  "content": "New",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "b2MNr",
+          "name": "Conversation list",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "7VZaq",
+              "name": "Row — Quarterly report",
+              "width": "fill_container",
+              "fill": "$bg-surface-1",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "left": 2
+                },
+                "fill": "$gold-accent"
+              },
+              "gap": 10,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "rpFuY",
+                  "name": "r1body",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "R54Rb",
+                      "name": "r1title",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Quarterly report draft",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "UYQnF",
+                      "name": "r1meta",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "mwUrB",
+                          "name": "r1badge",
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 10,
+                          "padding": [
+                            2,
+                            7
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "EpS5C",
+                              "name": "r1badgetxt",
+                              "fill": "$status-done",
+                              "content": "Done",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 10,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "UHjuP",
+                          "name": "r1time",
+                          "fill": "$text-tertiary",
+                          "content": "2h ago",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "0IW8H",
+              "name": "Row — Onboarding flow",
+              "width": "fill_container",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "left": 2
+                },
+                "fill": "$border-default"
+              },
+              "gap": 10,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ypghO",
+                  "name": "r2body",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "quOSg",
+                      "name": "r2title",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Onboarding flow ideas",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "NFWH6",
+                      "name": "r2meta",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "mqhcY",
+                          "name": "r2badge",
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 10,
+                          "padding": [
+                            2,
+                            7
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "5jFpV",
+                              "name": "r2badgetxt",
+                              "fill": "$status-progress",
+                              "content": "In progress",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 10,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "niHlv",
+                          "name": "r2time",
+                          "fill": "$text-tertiary",
+                          "content": "Yesterday",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ch7qR",
+          "name": "Footer",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$border-default"
+          },
+          "gap": 6,
+          "padding": [
+            12,
+            16
+          ],
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "uYcbV",
+              "name": "footerlink",
+              "fill": "$text-secondary",
+              "content": "View all in Dashboard",
+              "fontFamily": "$font-ui",
+              "fontSize": 12,
+              "fontWeight": "500"
+            },
+            {
+              "type": "icon_font",
+              "id": "qetSZ",
+              "name": "footericon",
+              "width": 13,
+              "height": 13,
+              "iconFontName": "arrow-right",
+              "iconFontFamily": "lucide",
+              "fill": "$text-secondary"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "XCS0B",
+      "x": 360,
+      "y": 80,
+      "name": "02 — Collapsed rail (affordance ABSENT)",
+      "width": 56,
+      "height": 640,
+      "fill": "$bg-base",
+      "stroke": {
+        "align": "inside",
+        "thickness": {
+          "right": 1
+        },
+        "fill": "$border-default"
+      },
+      "layout": "vertical",
+      "gap": 8,
+      "padding": [
+        16,
+        0
+      ],
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Im2cp",
+          "name": "Empty (content removed)",
+          "width": 32,
+          "height": 220,
+          "cornerRadius": 6,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$border-default"
+          },
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "SrX3X",
+              "name": "slash",
+              "width": 16,
+              "height": 16,
+              "iconFontName": "minus",
+              "iconFontFamily": "lucide",
+              "fill": "$text-tertiary"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "id": "WHsVR",
+      "x": 0,
+      "y": 30,
+      "name": "Doc title",
+      "width": 640,
+      "height": 0,
+      "content": "Recent Conversations rail — '+ New conversation' affordance (ADR-047 secondary nav slot). Wireframe, desktop."
+    },
+    {
+      "type": "note",
+      "id": "bYNZJ",
+      "x": 0,
+      "y": 740,
+      "name": "Note — expanded",
+      "width": 280,
+      "height": 0,
+      "content": "EXPANDED: header label left, gradient '+ New' affordance right -> navigates to /dashboard/chat/new. Mirrors dashboard '+ New conversation' button. Persistent (does not vanish like the empty-state 'Start one' CTA)."
+    },
+    {
+      "type": "note",
+      "id": "DROzx",
+      "x": 360,
+      "y": 740,
+      "name": "Note — collapsed",
+      "width": 240,
+      "height": 0,
+      "content": "COLLAPSED (56px): rail returns null -- entire content DOM-removed, so the '+ New' affordance is ABSENT. Documents both toggle states."
+    }
+  ],
+  "variables": {
+    "bg-base": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "bg-surface-1": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "bg-surface-2": {
+      "type": "color",
+      "value": "#1E1E1E"
+    },
+    "border-default": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "border-emphasized": {
+      "type": "color",
+      "value": "#9B8857"
+    },
+    "gold-accent": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "gradient-start": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "gradient-end": {
+      "type": "color",
+      "value": "#9B8857"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "text-tertiary": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "status-done": {
+      "type": "color",
+      "value": "#34D399"
+    },
+    "status-progress": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "font-ui": {
+      "type": "string",
+      "value": "Inter"
+    }
+  }
+}
