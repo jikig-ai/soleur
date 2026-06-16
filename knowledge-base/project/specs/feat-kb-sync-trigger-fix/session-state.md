@@ -9,10 +9,17 @@
 - Tasks: `knowledge-base/project/specs/feat-kb-sync-trigger-fix/tasks.md`
 - Deferred: #5428 (recovery-branch sweep), #5429 (in-product status surface UI).
 
-## Done (committed `887f6b210`)
-**Phase 1** — `classifyPushError` in `apps/web-platform/server/session-sync.ts` (exported, after `FORBIDDEN_GIT_FLAGS`): returns `protected_branch | persistent_other | other`. 7 RED→GREEN tests in `apps/web-platform/test/server/session-sync-protected-fallback.test.ts`. `tsc --noEmit` clean.
+## Done
+**Phase 1** (committed `887f6b210`) — `classifyPushError` in `session-sync.ts`: returns `protected_branch | persistent_other | other`. 7 RED→GREEN tests.
 
-## Resume — Phase 2 (the git-mechanics fallback in `syncPush`)
+**Phase 2+3+4** (committed `bac536137`) — protected-fallback fully implemented:
+- `runProtectedFallback` in `session-sync.ts`: resolve default + owner/repo → fetch → tree-overlay accretion onto `soleur/kb-sync` (checkout -B from existing side branch else origin/default; `git checkout <defaultHead> -- knowledge-base`; commit-if-diff) → push refspec ff (bail on non-ff) → `findOpenPullRequest`-or-`createPullRequest` (non-draft) → **then** `reset --hard origin/<default>` + restore HEAD. Failure restores HEAD to default WITHOUT reset (writes preserved). All git via `gitWithInstallationAuth`.
+- `syncPush` wraps the bare push; routes protected_branch→fallback, persistent_other→failure-op+return, other→outer catch (retry).
+- new `github-app.findOpenPullRequest` (mirrors `createPullRequest` auth). Chose this over plan's `getInstallationOctokit` — simpler, no founderId audit baggage.
+- Observability: `kb-sync.push-protected-fallback` (warn, PR url+commit count) + `kb-sync.protected-fallback-failed` (error, paging). Sentry `sentry_issue_alert.kb_sync_protected_fallback_failed` (op-scoped IS_IN, freq=17) in `infra/sentry/issue-alerts.tf`, wired to `apply-sentry-infra.yml` -target, op-contract test.
+- Tests: 17 in `session-sync-protected-fallback.test.ts` (AC2-AC7 + routing + observability), 7 in `sentry-kb-sync-protected-fallback-alert-op-contract.test.ts`. tsc clean; full web-platform vitest suite green (10411 passed, 0 failed).
+
+## (historical) Phase 2 spec — the git-mechanics fallback in `syncPush`
 Implement the protected-fallback path in `syncPush` (`session-sync.ts:551`, the `catch` at ~`:623`). On `classifyPushError(err) === "protected_branch"`:
 1. Resolve `defaultBranch` (mirror `resolveDefaultBranch` — `git symbolic-ref --short refs/remotes/origin/HEAD`, via `gitWithInstallationAuth`) and the user `{owner, repo}` from the workspace `repo_url` (ADR-044 canonical read; parse per `agent-runner.ts:1525-1538` — `new URL(repoUrl).pathname.split("/")` + `GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/`; strip a trailing `.git` from `repo`).
 2. **All branch/fetch/checkout/reset/push via `gitWithInstallationAuth`** — `runConnectedRepoGit` forbids them (allowlist = status/add/commit/remote/rev-list only, `session-sync.ts:39-45`).
