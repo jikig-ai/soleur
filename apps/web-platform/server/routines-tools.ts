@@ -46,9 +46,10 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
       tool(
         "routines_list",
         "List all Inngest routines (scheduled crons). Returns a flat array; " +
-          "each entry carries domain (for grouping), ownerRole, a human-" +
-          "readable schedule, the manualTrigger policy (allowed|confirm), and " +
-          "the latest run summary (status, timestamps, duration). Read-only.",
+          "each entry carries a one-line description (what the routine does), " +
+          "domain (for grouping), ownerRole, a human-readable schedule, the " +
+          "manualTrigger policy (allowed|confirm), and the latest run summary " +
+          "(status, timestamps, duration). Read-only.",
         {},
         async () => {
           try {

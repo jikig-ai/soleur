@@ -553,6 +553,17 @@ describe("syncWorkspace", () => {
     revList?: () => Promise<unknown>;
     reset?: () => Promise<unknown>;
     symbolicRef?: () => Promise<unknown>;
+    // `git rev-parse --abbrev-ref HEAD` — which branch HEAD is on. Drives the
+    // recover-vs-protect decision on a diverged clone (default branch →
+    // branch-aside + reset; feature branch → abort; "HEAD" → detached abort).
+    // Defaults to the resolved default branch ("main\n") so a diverged
+    // default-branch clone recovers unless a test scripts otherwise. MUST be
+    // set explicitly in feature-branch / detached tests so they pass because
+    // the branch was detected, not via a fall-through (Kieran P1-3).
+    revParse?: () => Promise<unknown>;
+    // `git branch <recovery> HEAD` — the branch-aside that preserves un-pushed
+    // commits before the reset.
+    branch?: () => Promise<unknown>;
   }) {
     mockGitWithAuth.mockImplementation((args: string[]) => {
       const verb = args[0];
@@ -566,6 +577,11 @@ describe("syncWorkspace", () => {
           ? handlers.symbolicRef()
           : Promise.resolve(Buffer.from("origin/main\n"));
       }
+      if (verb === "rev-parse") {
+        return handlers.revParse
+          ? handlers.revParse()
+          : Promise.resolve(Buffer.from("main\n"));
+      }
       if (verb === "fetch") {
         return handlers.fetch
           ? handlers.fetch()
@@ -575,6 +591,11 @@ describe("syncWorkspace", () => {
         return handlers.revList
           ? handlers.revList()
           : Promise.resolve(Buffer.from("0\n"));
+      }
+      if (verb === "branch") {
+        return handlers.branch
+          ? handlers.branch()
+          : Promise.resolve(Buffer.from(""));
       }
       if (verb === "reset") {
         return handlers.reset
@@ -718,10 +739,14 @@ describe("syncWorkspace", () => {
     );
   });
 
-  test("#4886-followup: dirty-tree + un-pushed commits → NO reset (gate protects work), {ok:false}", async () => {
+  test("#4886-followup: dirty-tree + un-pushed commits on a FEATURE branch → NO reset (gate protects work), {ok:false}", async () => {
+    // HEAD on a non-default named branch = genuine agent work targeting a PR.
+    // The branch-aside recovery applies ONLY to default-branch divergence; a
+    // feature branch must keep aborting to protect un-pushed work.
     scriptGit({
       pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revParse: () => Promise.resolve(Buffer.from("feat-session-work\n")),
       revList: () => Promise.resolve(Buffer.from("2\n")),
     });
 
@@ -735,6 +760,8 @@ describe("syncWorkspace", () => {
     expect(result.ok).toBe(false);
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
     expect(calls.some((a) => a[0] === "reset")).toBe(false);
+    // No branch-aside either — a feature branch is protected, not recovered.
+    expect(calls.some((a) => a[0] === "branch")).toBe(false);
   });
 
   test("classifies an auth/IO error as sync_failed (no self-heal attempted)", async () => {
@@ -782,10 +809,14 @@ describe("syncWorkspace", () => {
     expect(verbs.indexOf("rev-list")).toBeLessThan(verbs.indexOf("reset"));
   });
 
-  test("self-heal AC-B6: non-FF + NON-ZERO local commits → NO reset, returns {ok:false, errorClass:non_fast_forward}", async () => {
+  test("self-heal AC3: non-FF + NON-ZERO local commits on a FEATURE branch → NO reset/branch, returns {ok:false, errorClass:non_fast_forward}", async () => {
+    // revParse returns a feature branch EXPLICITLY so the abort is reached
+    // because a non-default branch was detected, not via an empty-string
+    // fall-through (Kieran P1-3).
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revParse: () => Promise.resolve(Buffer.from("feat-something\n")),
       revList: () => Promise.resolve(Buffer.from("3\n")), // un-pushed agent work
     });
 
@@ -803,11 +834,235 @@ describe("syncWorkspace", () => {
       (c: unknown[]) => (c[0] as string[])[0],
     );
     expect(verbs).not.toContain("reset");
+    expect(verbs).not.toContain("branch");
     // Dirty-abort is observable + fail_loud.
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Diverged-clone-with-un-pushed-commits recovery (THIS plan). A clone on the
+  // DEFAULT branch with un-pushable auto-sync orphan commits is recovered by
+  // branching the commits aside (preserve) then resetting to origin — the
+  // permanent dead-end behind the prod Sentry `self-heal-aborted-dirty` cluster.
+  // ---------------------------------------------------------------------------
+
+  test("AC1/AC2 recovery: non-FF + un-pushed commits on the DEFAULT branch → branch-aside BEFORE reset, returns {ok:true, recovered:true}", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      // resolved default branch (symbolic-ref → origin/main → "main")
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      // HEAD is ON the default branch — compared against the RESOLVED default,
+      // not a hardcoded literal, so the test passes for the right reason.
+      revParse: () => Promise.resolve(Buffer.from("main\n")),
+      revList: () => Promise.resolve(Buffer.from("2\n")), // un-pushable orphans
+      branch: () => Promise.resolve(Buffer.from("")),
+      reset: () => Promise.resolve(Buffer.from("")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    // AC1 — recovered, not aborted.
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+
+    const calls = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => c[0] as string[],
+    );
+    // The branch-aside targets HEAD and resets to the RESOLVED default.
+    const branchCall = calls.find((a) => a[0] === "branch");
+    expect(branchCall).toBeDefined();
+    // `git branch <recovery> HEAD` — preserves the un-pushed commits on a ref.
+    expect(branchCall?.[2]).toBe("HEAD");
+    expect(branchCall?.[1]).toMatch(/^soleur\/recovered-kb-sync-\d+$/);
+    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+
+    // AC2 — non-destructive ordering: branch-aside is issued BEFORE the reset
+    // so the commit objects live on a named ref before the default ref moves.
+    const verbs = calls.map((a) => a[0]);
+    expect(verbs.indexOf("branch")).toBeGreaterThan(-1);
+    expect(verbs.indexOf("branch")).toBeLessThan(verbs.indexOf("reset"));
+
+    // Recovery is observable as a distinct WARN op (queryable recovery rate,
+    // does not page) and NOT bucketed into the abort/phantom-reset slugs.
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-recovered-diverged" }),
+    );
+    // It is a recovery, not a failure — no error-level mirror.
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("AC4 detached HEAD: rev-parse → literal \"HEAD\" + un-pushed commits → abort with DISTINCT op, no branch/reset", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      // `git rev-parse --abbrev-ref HEAD` emits the literal "HEAD" when detached.
+      revParse: () => Promise.resolve(Buffer.from("HEAD\n")),
+      revList: () => Promise.resolve(Buffer.from("1\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+
+    const verbs = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => (c[0] as string[])[0],
+    );
+    expect(verbs).not.toContain("branch");
+    expect(verbs).not.toContain("reset");
+    // Distinct, queryable slug — never silently bucketed into aborted-dirty.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-aborted-detached-head" }),
+    );
+    expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-aborted-dirty" }),
+    );
+  });
+
+  test("AC5a observability: recovery payload carries pseudonymized userId and NO raw workspacePath", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revParse: () => Promise.resolve(Buffer.from("main\n")),
+      revList: () => Promise.resolve(Buffer.from("2\n")),
+    });
+    await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
+      userId: TEST_USER_ID,
+      op: "push",
+    });
+    expect(mockWarnSilentFallback.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mockWarnSilentFallback.mock.calls) {
+      const opts = call[1] as { extra?: Record<string, unknown> };
+      expect(opts.extra).not.toHaveProperty("workspacePath");
+      expect(opts.extra?.userId).toBe(TEST_USER_ID);
+    }
+  });
+
+  test("AC5b observability: detached-abort payload carries pseudonymized userId and NO raw workspacePath", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revParse: () => Promise.resolve(Buffer.from("HEAD\n")),
+      revList: () => Promise.resolve(Buffer.from("1\n")),
+    });
+    await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
+      userId: TEST_USER_ID,
+      op: "push",
+    });
+    expect(mockReportSilentFallback.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mockReportSilentFallback.mock.calls) {
+      const opts = call[1] as { extra?: Record<string, unknown> };
+      expect(opts.extra).not.toHaveProperty("workspacePath");
+      expect(opts.extra?.userId).toBe(TEST_USER_ID);
+    }
+  });
+
+  test("AC6 phantom path unchanged: ZERO local commits → self-heal-reset, issues NO branch", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+
+    const verbs = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => (c[0] as string[])[0],
+    );
+    // The new branch-aside is gated on localCommits > 0 — a phantom (zero
+    // commit) reset must NOT create a recovery branch.
+    expect(verbs).not.toContain("branch");
+    // It stays the phantom-reset slug, NOT the diverged-recovery one.
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-reset" }),
+    );
+    expect(mockWarnSilentFallback).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-recovered-diverged" }),
+    );
+  });
+
+  test("recovery is keyed on the RESOLVED default branch, not a hardcoded \"main\" (default = trunk)", async () => {
+    // The HEAD comparison must use the symbolic-ref-resolved default, so a
+    // repo whose default is `trunk` recovers and resets to origin/trunk. A
+    // buggy `headRef === "main"` impl would abort here instead of recovering.
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/trunk\n")),
+      revParse: () => Promise.resolve(Buffer.from("trunk\n")),
+      revList: () => Promise.resolve(Buffer.from("1\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+    const calls = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => c[0] as string[],
+    );
+    expect(calls.some((a) => a[0] === "branch")).toBe(true);
+    expect(calls).toContainEqual(["reset", "--hard", "origin/trunk"]);
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-recovered-diverged" }),
+    );
+  });
+
+  test("un-countable rev-list (NaN) → fail safe: abort, NO branch/reset", async () => {
+    // A malformed rev-list count must NOT branch-aside or reset — the
+    // recovery is gated on a COUNTABLE divergence (`!Number.isNaN`). Empty
+    // output → parseInt(...) === NaN → abort, preserve work.
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revParse: () => Promise.resolve(Buffer.from("main\n")),
+      revList: () => Promise.resolve(Buffer.from("")), // unparseable → NaN
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+    const verbs = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => (c[0] as string[])[0],
+    );
+    expect(verbs).not.toContain("branch");
+    expect(verbs).not.toContain("reset");
   });
 
   test("self-heal failure: non-FF + reset rejects → fail_loud + {ok:false}", async () => {
