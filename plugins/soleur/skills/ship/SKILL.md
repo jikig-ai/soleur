@@ -1153,6 +1153,43 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 
 **Step 5:** Validate consistency -- if new agents, skills, or commands were detected in Step 1 but the label is `semver:patch`, warn the user that the label may be incorrect. New components typically warrant `semver:minor`.
 
+### Feature-Tweet Draft (pre-merge bundle)
+
+Generate any eligible feature-tweet draft NOW — after the semver/`app:*` labels
+are applied (eligibility reads the PR labels + title) — and **commit it to the
+feature branch** so it rides this PR into `main`, where `content-publisher.sh`
+reads from. This replaces the old post-merge generation, which wrote the draft
+into a worktree that `cleanup-merged` reaps before it ever reaches `main` (so
+the cron never saw it). The draft is **inert** (`status: draft`, empty
+`publish_date`) and never posts until the operator sets `publish_date` +
+`status: scheduled` — their post-deploy confirmation gate — so bundling it
+pre-merge does NOT weaken the "only tweet what actually deployed" property;
+`/soleur:postmerge` Phase 3.8 still verifies deploy health and warns before the
+operator schedules.
+
+1. **Eligibility (fail-closed):** `bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>`.
+   Ineligible (exit non-zero, `excluded: <reason>`) → **skip silently** (most PRs
+   land here: fixes, infra, non-product). Do not surface the exclusion.
+2. **Eligible →** invoke `skill: soleur:feature-tweet #<PR_NUMBER>` (writes +
+   displays the draft for approval per its §Output contract).
+3. **Commit + push the draft to the feature branch** so it lands on `main` with
+   the squash merge (stage ONLY the draft file — never `git add -A`):
+
+   ```bash
+   git add knowledge-base/marketing/distribution-content/<draft-file>.md
+   git commit -m "content: feature-tweet draft for #<PR_NUMBER> (inert — operator schedules post-deploy)"
+   git push
+   ```
+
+   The draft is a NEW commit, so the Phase 6.4 Unpushed-Commits Gate re-checks
+   clean before merge. Headless mode: same — generate + commit + push; never
+   schedule (the inert draft + operator gate are the publish control).
+
+If `/ship` is hand-rolled and this step is skipped, the draft never reaches
+`main`; `/soleur:postmerge` Phase 3.8 detects the missing on-`main` draft and
+runs the standalone catch-up (which then needs its own follow-up commit to land
+on `main`).
+
 ## Phase 6.5: Verify PR Mergeability
 
 After pushing (or after any subsequent push), verify the PR has no merge conflicts with the base branch:
