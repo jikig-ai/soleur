@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { existsSync } from "fs";
 import { join } from "path";
-import { isGitErrorCode } from "@/server/git-auth";
+import { parseErrorPayload } from "@/server/git-auth";
 import { resolveActiveWorkspacePath } from "@/server/workspace-resolver";
 
 /**
@@ -97,27 +97,4 @@ export async function GET() {
     errorMessage,
     errorCode,
   });
-}
-
-function parseErrorPayload(raw: string | null | undefined): {
-  errorMessage: string | null;
-  errorCode: string | undefined;
-} {
-  if (!raw) return { errorMessage: null, errorCode: undefined };
-  try {
-    const parsed = JSON.parse(raw) as {
-      code?: unknown;
-      message?: unknown;
-    };
-    // Allowlist-validate the code so an unknown/typo'd value coerces to
-    // undefined and the UI falls back to the generic copy rather than
-    // rendering a blank headline from a missing ERROR_COPY key.
-    const code = isGitErrorCode(parsed.code) ? parsed.code : undefined;
-    const message =
-      typeof parsed.message === "string" ? parsed.message : raw;
-    return { errorMessage: message, errorCode: code };
-  } catch {
-    // Legacy row: plain stderr string.
-    return { errorMessage: raw, errorCode: undefined };
-  }
 }
