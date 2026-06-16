@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
+import { useReconnect } from "@/components/repo/use-reconnect";
 
 export type RepoStatus = "not_connected" | "ready" | "error" | "cloning";
 
@@ -83,17 +84,7 @@ export function ProjectSetupCard({
         )}
 
         {repoStatus === "error" && (
-          <div>
-            <p className="mb-4 text-sm text-red-400">
-              Something went wrong during project setup.
-            </p>
-            <a
-              href="/connect-repo?return_to=/dashboard/settings"
-              className="inline-block rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300"
-            >
-              Retry Setup
-            </a>
-          </div>
+          <RepoErrorRecovery repoUrl={repoUrl} />
         )}
 
         {repoStatus === "cloning" && (
@@ -104,5 +95,53 @@ export function ProjectSetupCard({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * FIX 1b — the recovery affordance for a broken (`error`) checkout. This is the
+ * state that actually renders for a broken workspace (`ReconnectNotice` only
+ * mounts for `ready`). The button does what the error copy promises: re-verify
+ * the GitHub App, then re-trigger the canonical `POST /api/repo/setup`
+ * (wipe-and-reclone) for the connected repo and poll status to terminal —
+ * rather than only bouncing the user to `/connect-repo`.
+ *
+ * On a terminal background-clone failure (`resetupError`) it surfaces an
+ * actionable terminal state with a `/connect-repo` escape hatch, so the user is
+ * never stuck on a spinner-forever (only the connect-repo page polls otherwise).
+ */
+function RepoErrorRecovery({ repoUrl }: { repoUrl: string | null }) {
+  const router = useRouter();
+  const { reconnect, isPending, resetupError } = useReconnect(
+    () => router.refresh(),
+    { repoUrl, repoStatus: "error" },
+  );
+
+  return (
+    <div>
+      <p className="mb-4 text-sm text-red-400">
+        {resetupError
+          ? "We couldn't finish setting up your project. Try reconnecting, or re-select the repository."
+          : "Something went wrong during project setup."}
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        {repoUrl ? (
+          <button
+            type="button"
+            onClick={reconnect}
+            disabled={isPending}
+            className="inline-flex items-center justify-center rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isPending ? "Reconnecting…" : "Reconnect"}
+          </button>
+        ) : null}
+        <a
+          href="/connect-repo?return_to=/dashboard/settings"
+          className="inline-block rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300"
+        >
+          Retry Setup
+        </a>
+      </div>
+    </div>
   );
 }

@@ -16,6 +16,7 @@ import { GitOperationError, sanitizeGitStderr } from "@/server/git-auth";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
+import { triggerHeadlessSync } from "@/server/auto-sync-trigger";
 
 /**
  * POST /api/repo/setup
@@ -219,66 +220,21 @@ export async function POST(request: Request) {
         "Repo setup completed",
       );
 
-      // Auto-trigger headless sync — fire-and-forget with .catch().
-      // Skip entirely for users without a usable key (#4642): the sync agent
-      // rejects at getUserApiKey enforcement, which would otherwise leave an
-      // orphaned "active" conversation behind a "ready" screen. Fail-open
-      // (onErrorReturn: true) on a resolver error so keyed/delegated users are
-      // never blocked — getUserApiKey stays the authoritative backstop.
-      const { userHasEffectiveByokKey } = await import("@/server/byok-resolver");
-      const hasEffectiveKey = await userHasEffectiveByokKey(user.id, {
-        onErrorReturn: true,
+      // Auto-trigger headless sync — fire-and-forget. Resilience (BYOK-lease /
+      // tenant-JWT-mint race → bounded retry; keyless skip; single conversation
+      // INSERT outside the retry boundary) lives in triggerHeadlessSync so it is
+      // unit-testable without the agent SDK. The helper never rethrows and never
+      // mutates repo_status (the clone already succeeded).
+      //
+      // Dynamic import: agent-runner.ts pulls in @anthropic-ai/claude-agent-sdk
+      // which breaks Next.js build-time route validation when statically imported,
+      // so startAgentSession is injected at the call site.
+      const { startAgentSession } = await import("@/server/agent-runner");
+      await triggerHeadlessSync(user.id, repoUrl, {
+        startAgentSession,
+        serviceClient,
+        resolveWorkspaceId: resolveCurrentWorkspaceId,
       });
-      if (hasEffectiveKey) {
-        // `repoUrl` is the freshly-set value from the request body — stamp it
-        // on the sync conversation so the Command Center scopes correctly.
-        const conversationId = crypto.randomUUID();
-        // conversations.workspace_id is NOT NULL (migration 059); resolve the
-        // active workspace (solo fallback = user.id) or the INSERT 23502s and
-        // the sync conversation is never created.
-        const conversationWorkspaceId = await resolveCurrentWorkspaceId(
-          user.id,
-          serviceClient,
-        );
-        const { error: convError } = await serviceClient
-          .from("conversations")
-          .insert({
-            id: conversationId,
-            user_id: user.id,
-            workspace_id: conversationWorkspaceId,
-            repo_url: repoUrl,
-            domain_leader: "system",
-            status: "active",
-            session_id: crypto.randomUUID(),
-          });
-
-        if (convError) {
-          logger.error(
-            { err: convError, userId: user.id },
-            "Failed to create sync conversation",
-          );
-          Sentry.captureException(convError);
-          return;
-        }
-
-        // Dynamic import: agent-runner.ts pulls in @anthropic-ai/claude-agent-sdk
-        // which breaks Next.js build-time route validation when statically imported.
-        import("@/server/agent-runner").then(({ startAgentSession }) =>
-          startAgentSession(
-            user.id,
-            conversationId,
-            undefined,
-            undefined,
-            "/soleur:sync --headless",
-          ),
-        ).catch((syncErr) => {
-          logger.error(
-            { err: syncErr, userId: user.id },
-            "Auto-triggered sync failed",
-          );
-          Sentry.captureException(syncErr);
-        });
-      }
     })
     .catch(async (err) => {
       Sentry.withIsolationScope(() => {
