@@ -247,38 +247,52 @@ ROLLBACK_REASON=$(gh run view "$RELEASE_RUN_ID" --log 2>/dev/null \
 
 **Why a watch and not a pre-merge block:** the only faithful validation of a deploy gate is a real deploy, which by definition happens post-merge. The pre-merge half of the rule — ship the gate non-blocking first — lives in `wg-dark-launch-deploy-gates`; this phase is the safety net that catches a gate shipped blocking-first anyway, turning "every deploy silently rolls back" into a named, one-revert recovery. **Why:** #4932 — a canary bwrap probe validated only against an always-succeeding test mock failed on a healthy host and rolled back every web-platform deploy until reverted (#4941).
 
-## Phase 3.8: Feature-Tweet Draft (green-gated)
+## Phase 3.8: Feature-Tweet Draft (verify + display)
 
-Convert a feature **confirmed live** into a draft short-form X post. Runs
-eligibility FIRST, then gates the draft on `HEALTH_VERIFIED` (set in Phase 3).
+The draft is now generated **pre-merge by `/ship`** (Phase 6 "Feature-Tweet
+Draft (pre-merge bundle)") and committed to the feature branch, so for the
+normal `/one-shot` / `/ship` flow it ALREADY landed on `main` with this PR —
+where `content-publisher.sh` reads from. This phase **verifies** that on-`main`
+draft, **displays** it for approval, and warns when deploy health is unverified.
+It only *generates* a draft as a catch-up when `/ship` was hand-rolled and the
+draft never landed.
 
 ```bash
 bash scripts/lib/tweet-eligibility.sh <merged-pr-number>
 ```
 
-Branch on the result:
+Branch on eligibility, then on whether the draft is already on `main`:
 
 - **Ineligible** (exit non-zero, `excluded: <reason>`) → **silent no-op.** Most
   PRs land here (fixes, infra, non-product); exclusion is the designed outcome,
   not a fault. Do not surface it in the report.
-- **Eligible AND `HEALTH_VERIFIED=true`** → invoke the draft generator:
+- **Eligible AND a draft for this PR is on `main`** (the `/ship` pre-merge
+  bundle worked — detect via
+  `git grep -l 'pr_reference: "#<merged-pr-number>"' origin/main -- knowledge-base/marketing/distribution-content/`):
+  **display the draft's full content** (title + every X tweet + the Bluesky
+  post) inline for operator approval — read it back from `main`
+  (`git show origin/main:<path>`), never reproduce from memory. Then:
+  - `HEALTH_VERIFIED=true` → operator instruction: "the draft is on `main`; set
+    BOTH `publish_date` and `status: scheduled` to publish."
+  - `HEALTH_VERIFIED=false` → **warn, do not block:** "the draft is on `main`
+    but production health was NOT verified — do NOT set `status: scheduled`
+    until you confirm the deploy is live." (The draft is inert until then.)
+
+  The display-for-approval contract is owned by `feature-tweet` SKILL.md
+  §Output; the path alone is insufficient (the operator cannot approve copy they
+  cannot see).
+- **Eligible BUT no draft on `main`** (a hand-rolled `/ship` skipped the
+  pre-merge bundle) → catch-up: invoke the draft generator, display it, and note
+  it needs a follow-up commit to reach `main`:
 
   ```
   /soleur:feature-tweet #<merged-pr-number>
   ```
 
-  Display the resulting draft's **full content** (title + every X tweet + the
-  Bluesky post) inline for operator approval — not just the path — then surface
-  the path in the Phase 7 report with the operator instruction: "set BOTH
-  `publish_date` and `status: scheduled` to publish." The path alone is
-  insufficient: the operator cannot approve copy they cannot see, and a
-  worktree-resident draft can be discarded by cleanup before they open it
-  (`feature-tweet` SKILL.md §Output owns the display-for-approval contract).
-- **Eligible AND `HEALTH_VERIFIED=false`** → do NOT draft (no verified-live
-  signal). Print a catch-up instruction instead of silently skipping:
-
-  > Eligible PR #N shipped but no production-health signal was verified — no
-  > draft written. After confirming the deploy, run `/soleur:feature-tweet #N`.
+  > Eligible PR #N had no feature-tweet draft on `main` (the `/ship` pre-merge
+  > bundle was skipped). Generated a catch-up draft — commit it to `main` via a
+  > follow-up PR so `content-publisher.sh` can drain it, then set `publish_date`
+  > + `status: scheduled` once the deploy is confirmed.
 
 **Multi-PR contract (explicit v1):** one tweet per eligible PR, using postmerge's
 single bound PR number. If a deploy bundled multiple PRs, only the bound PR is
