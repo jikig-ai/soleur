@@ -10,6 +10,34 @@ lane: single-domain
 
 # 🐛 fix(chat): Recent Conversations rail does not show a freshly-started conversation immediately
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-16
+**Passes run:** spec-flow-analyzer (Product gate), CPO sign-off, verify-the-negative
+(10/10 claims confirmed), precedent-diff + Realtime best-practices research.
+
+### Key Improvements (vs. v1 plan)
+1. **Ruled out the naive client-optimistic insert** — spec-flow confirmed the rail and
+   dashboard page are separate `useConversations` instances and the chat surface holds none,
+   so a client insert has no in-process writer path to the rail. Re-scoped to Realtime +
+   backfill hardening on the rail's own instance; the zero-latency optimistic insert is
+   deferred (tracked).
+2. **Converted proxy ACs to invariant ACs** — AC1/AC8 now render the real
+   `ConversationsRail` and assert the **row**, not a refetch call; AC2/AC3 assert the
+   resulting `conversations` array; AC4 adds the cross-workspace isolation case.
+3. **Grounded the implementation idiom** — the transition-gated backfill should reuse the
+   canonical `prevRef.current !== x` guard pattern from
+   `apps/web-platform/hooks/use-kb-layout-state.tsx:232-240` (the single in-repo precedent
+   for "fire once on an async-resolved value transition").
+
+### New Considerations Discovered
+- All 10 load-bearing negative claims verified against `origin/main` (visibility gating,
+  map-only UPDATE, single-shot SUBSCRIBED backfill, null-workspaceId drop, two-instance
+  reality, deferred lazy INSERT with no `visibility:` key).
+- supabase-js confirmed: INSERTs buffered before `SUBSCRIBED` are NOT replayed (the exact
+  gap this fix closes); fetch-after-subscribe + fill-only de-dup is the canonical pattern,
+  already present and to be extended (not rewritten).
+
 ## Overview
 
 When a user starts a new conversation in the web platform, it does **not** appear in the
@@ -32,10 +60,11 @@ the conversations rail is **portaled per-drill** (it mounts fresh on entry to
 "start a new conversation" path frequently does this:
 
 1. User clicks "New conversation" on `/dashboard` → `router.push("/dashboard/chat/new")`
-   (`app/(dashboard)/dashboard/page.tsx:622, :741`). The conversations rail is mounted by
-   `chat/layout.tsx:71` (it wraps `/dashboard/chat/*` ONLY — it is **not present on
-   `/dashboard`**), so it **mounts fresh on this entry**. Within `/dashboard/chat/*` it then
-   stays mounted; the fresh mount + connect-race happens **once**, on entry from `/dashboard`.
+   (`app/(dashboard)/dashboard/page.tsx:622, :741`). The conversations rail is mounted (via
+   `ConversationsRailPortal`) by `chat/layout.tsx:71` (it wraps `/dashboard/chat/*` ONLY —
+   it is **not present on `/dashboard`**), so it **mounts fresh on this entry**. Within
+   `/dashboard/chat/*` it then stays mounted; the fresh mount + connect-race happens
+   **once**, on entry from `/dashboard`.
 2. `useConversations` runs `fetchConversations()` (`hooks/use-conversations.ts:288-290`):
    `auth.getUser()` → `/api/workspace/active-repo` round-trip → sets `userId`, then
    `workspaceId`, then `repoUrl`, then the list query. The realtime effect subscribes only
@@ -221,10 +250,32 @@ row the list query would not (the #5391 workspace_id-guard-parity invariant —
    the connect-race actually arises). Reuse the channel-mock-chain harness.
 3. **Phase 2 (GREEN) — hook fix.** In `hooks/use-conversations.ts`:
    - Re-run the bounded backfill when `workspaceId` resolves (Race B). Transition-gate it
-     (fire once on `null → id`), not per-render; add a guard ref.
+     (fire once on `null → id`), not per-render; add a guard ref. **Reuse the canonical
+     in-repo idiom** from `apps/web-platform/hooks/use-kb-layout-state.tsx:232-240`
+     (`prevRef.current !== x` guard, update the ref inside the effect, dep on the transitioned
+     value) — it is the single established precedent for "fire once on an async-resolved
+     value transition". Mirror the existing `repoUrlRef` ref-mirror pattern
+     (`use-conversations.ts:140-147`).
    - On an own-channel INSERT with unresolved scope, schedule a bounded recovery refetch
      instead of a silent drop with no recovery (Race A/B residue). If a drop with no recovery
      is ever taken, mirror to Sentry (`cq-silent-fallback-must-mirror-to-sentry`).
+
+   ### Research Insights (precedent + supabase-js semantics)
+
+   - **Transition-gate precedent** (`use-kb-layout-state.tsx:232-240`):
+     ```ts
+     const prevWorkspaceIdRef = useRef<string | null>(null);
+     useEffect(() => {
+       if (prevWorkspaceIdRef.current === workspaceId) return; // no transition
+       prevWorkspaceIdRef.current = workspaceId;
+       if (workspaceId !== null) fetchConversations();        // fire once on null → id
+     }, [workspaceId, fetchConversations]);
+     ```
+   - **supabase-js Realtime:** INSERTs buffered before `SUBSCRIBED` are NOT replayed (the
+     exact gap). Canonical pattern = subscribe → backfill on `SUBSCRIBED` → fill-only de-dup
+     by id (`use-conversations.ts:340-351`) → route every insert through `shouldDropForScope`.
+     The fix **extends** this (adds the scope-resolve + null-scope-recovery backfill triggers),
+     it does not rewrite it.
 4. **Phase 3 (REFACTOR).** Collapse the backfill triggers (SUBSCRIBED + scope-resolve +
    null-scope-recovery) behind one bounded helper; keep `shouldDropForScope`/`deriveRailTitle`
    as the single guard/title source so INSERT/UPDATE/backfill cannot drift.
