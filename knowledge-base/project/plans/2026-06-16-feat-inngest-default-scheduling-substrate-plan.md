@@ -160,21 +160,21 @@ A new entry `"sentry-issue-rate": async (octokit, params) => { … }` that:
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `CHECK_REGISTRY` has a `sentry-issue-rate` entry; `CheckResult` widened with optional `close?: boolean` (NOT `close_issue?: number`); `ReminderAction` union UNCHANGED (still `issue-comment | named-check`).
-- [ ] Handler closes `action.report_to_issue` via `PATCH …/issues/{n}` (state=closed, state_reason=completed) IFF `result.close === true`; PATCH target is `action.report_to_issue`, never a check-returned number. No scope-violation guard exists (boolean shape makes it unrepresentable).
-- [ ] Sentry base URL built via `new URL`+`URLSearchParams` from `SENTRY_API_HOST` (test asserts host `jikigai-eu.sentry.io`, NOT `eu.sentry.io`); `project=` filter uses slug `SENTRY_PROJECT` (NOT empty `SENTRY_PROJECT_ID`); auth via `SENTRY_AUTH_TOKEN`; fetch timeout-bounded.
-- [ ] `tag` strict-regex validated (`^[A-Za-z0-9_.-]+:[A-Za-z0-9_.\-/]+$`); rejects `&`/`?`/`#`/whitespace/`..` → `info`. `window_hours ∈ [1,168]`; `max_per_day` finite `>0`.
-- [ ] Token-non-leak: the Sentry-fetch-failure report message contains neither the token value nor `Bearer` (test-asserted); the check constructs a token-free error.
-- [ ] Fail-closed (`info`, no close) on: missing Sentry env, invalid/out-of-bounds params, 0 or >1 matching issues.
-- [ ] /work Phase 2 live-probed the Sentry stats endpoint and documented which (issue-stats vs project-stats `resolution=1d`) returns a sum-able shape.
-- [ ] `function-registry-count.test.ts` asserts `=== 56` UNCHANGED (confirmed, not bumped).
-- [ ] All new tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/event-scheduled-reminder.test.ts test/server/internal/schedule-reminder-route.test.ts` (confirm runner against `apps/web-platform/package.json scripts.test` + `vitest.config.ts` include globs at /work Phase 0).
-- [ ] Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] `plugins/soleur/skills/schedule/SKILL.md` has a "Step 0: Execution-substrate routing gate" BEFORE Step 0a; preamble references the gate as primary + hook as backstop + sweeper; `description:` frontmatter UNCHANGED.
-- [ ] `bun test plugins/soleur/test/components.test.ts` green (skill-description budget still 2250/2250; no description edit).
+- [x] `CHECK_REGISTRY` has a `sentry-issue-rate` entry; `CheckResult` widened with optional `close?: boolean` (NOT `close_issue?: number`); `ReminderAction` union UNCHANGED (still `issue-comment | named-check`).
+- [x] Handler closes `action.report_to_issue` via `PATCH …/issues/{n}` (state=closed, state_reason=completed) IFF `result.close === true`; PATCH target is `action.report_to_issue`, never a check-returned number. No scope-violation guard exists (boolean shape makes it unrepresentable).
+- [x] Sentry base URL built via `new URL`+`URLSearchParams` from `SENTRY_API_HOST` (test asserts host `jikigai-eu.sentry.io`, NOT `eu.sentry.io`); `project=` filter uses slug `SENTRY_PROJECT` (NOT empty `SENTRY_PROJECT_ID`); auth via `SENTRY_AUTH_TOKEN`; fetch timeout-bounded.
+- [x] `tag` strict-regex validated (`^[A-Za-z0-9_.-]+:[A-Za-z0-9_.\-/]+$`); rejects `&`/`?`/`#`/whitespace/`..` → `info`. `window_hours ∈ [1,168]`; `max_per_day` finite `>0`.
+- [x] Token-non-leak: the Sentry-fetch-failure report message contains neither the token value nor `Bearer` (test-asserted); the check constructs a token-free error.
+- [x] Fail-closed (`info`, no close) on: missing Sentry env, invalid/out-of-bounds params, 0 or >1 matching issues.
+- [x] /work Phase 2 live-probed the Sentry stats endpoint and documented which (issue-stats vs project-stats `resolution=1d`) returns a sum-able shape.
+- [x] `function-registry-count.test.ts` asserts `=== 56` UNCHANGED (confirmed, not bumped).
+- [x] All new tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/event-scheduled-reminder.test.ts test/server/internal/schedule-reminder-route.test.ts` (confirm runner against `apps/web-platform/package.json scripts.test` + `vitest.config.ts` include globs at /work Phase 0).
+- [x] Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] `plugins/soleur/skills/schedule/SKILL.md` has a "Step 0: Execution-substrate routing gate" BEFORE Step 0a; preamble references the gate as primary + hook as backstop + sweeper; `description:` frontmatter UNCHANGED.
+- [x] `bun test plugins/soleur/test/components.test.ts` green (skill-description budget still 2250/2250; no description edit).
 - [ ] (If Phase 5 done) hook + `.test.sh` updated; bare-marker-without-reason → `deny`; fail-open/exit-0 invariants intact. Else: scoped out with a tracking issue.
-- [ ] Runbook amended with `sentry-issue-rate` + Step 0 routing + close-mutation invariant; terse ADR created (v1→v1.1 boundary + substrate-default).
-- [ ] PR body uses `Ref #5417` (NOT `Closes #5417`); #5417 stays OPEN.
+- [x] Runbook amended with `sentry-issue-rate` + Step 0 routing + close-mutation invariant; terse ADR created (v1→v1.1 boundary + substrate-default).
+- [x] PR body uses `Ref #5417` (NOT `Closes #5417`); #5417 stays OPEN.
 - [ ] `security-sentinel` ran at review (close-capability + Sentry-read surface).
 
 ### Post-merge (operator — zero-deploy follow-up, NOT this PR)
