@@ -13,6 +13,13 @@ export interface ConversationWithPreview extends Conversation {
 
 export type ArchiveFilter = "active" | "archived";
 
+// Cross-instance signal: chat-surface dispatches this window event the moment a
+// freshly-started conversation gets its real id; the rail's useConversations
+// listens and refetches once. A shared constant (not a raw literal in two
+// files) so a typo cannot silently break the wiring — mirrors the codebase's
+// RAIL_EXPAND_EVENT / OPEN_UPGRADE_MODAL_EVENT convention.
+export const CONVERSATION_CREATED_EVENT = "soleur:conversation-created";
+
 interface UseConversationsOptions {
   statusFilter?: ConversationStatus | null;
   domainFilter?: DomainLeaderId | "general" | null;
@@ -474,8 +481,8 @@ export function useConversations(
     const onCreated = () => {
       fetchConversations({ background: true });
     };
-    window.addEventListener("soleur:conversation-created", onCreated);
-    return () => window.removeEventListener("soleur:conversation-created", onCreated);
+    window.addEventListener(CONVERSATION_CREATED_EVENT, onCreated);
+    return () => window.removeEventListener(CONVERSATION_CREATED_EVENT, onCreated);
   }, [fetchConversations]);
 
   // Note: there is no cross-tab `users` UPDATE channel. Repo scope now comes

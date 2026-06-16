@@ -435,9 +435,10 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     // A new conversation now exists server-side; chat-surface fires the signal.
     // NO own-channel INSERT is delivered to the rail (the missed-realtime case).
     state.fallbackConvResult = [created, existing];
+    const { CONVERSATION_CREATED_EVENT } = await import("@/hooks/use-conversations");
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent("soleur:conversation-created", {
+        new CustomEvent(CONVERSATION_CREATED_EVENT, {
           detail: { conversationId: "conv-created-via-event" },
         }),
       );

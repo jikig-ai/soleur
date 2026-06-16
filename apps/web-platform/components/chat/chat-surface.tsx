@@ -11,6 +11,7 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { useActiveRepo } from "@/hooks/use-active-repo";
+import { CONVERSATION_CREATED_EVENT } from "@/hooks/use-conversations";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
 import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
@@ -390,7 +391,9 @@ export function ChatSurface({
       typeof window !== "undefined"
     ) {
       window.dispatchEvent(
-        new CustomEvent("soleur:conversation-created", {
+        new CustomEvent(CONVERSATION_CREATED_EVENT, {
+          // `detail` is informational only — the rail listener ignores it and
+          // refetches its full scoped list (more robust than trusting a payload).
           detail: { conversationId: realConversationId },
         }),
       );
