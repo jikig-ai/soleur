@@ -24,6 +24,7 @@ const runsRequests = vi.hoisted(() => ({ urls: [] as string[] }));
 
 const ALLOWED = {
   fnId: "cron-daily-triage",
+  description: "Triages open GitHub issues each morning by priority, type and domain.",
   domain: "Operations",
   ownerRole: "COO",
   scheduleLabel: "Daily 04:00 UTC",
@@ -39,6 +40,7 @@ const ALLOWED = {
 };
 const PROTECTED = {
   fnId: "cron-content-publisher",
+  description: "Publishes scheduled distribution content daily to Discord, X, LinkedIn and Bluesky.",
   domain: "Marketing",
   ownerRole: "CMO",
   scheduleLabel: "Daily 14:00 UTC",
@@ -97,6 +99,10 @@ describe("RoutinesSurface", () => {
     expect(screen.getAllByText("Operations").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Marketing").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Daily triage")).toBeTruthy();
+    // #5424 — each row shows the routine's description.
+    expect(
+      screen.getByText(/Triages open GitHub issues each morning/),
+    ).toBeTruthy();
     // protected routine shows the protected marker
     expect(screen.getByText("⚠ protected")).toBeTruthy();
   });
@@ -270,7 +276,8 @@ describe("RoutinesSurface", () => {
     runsRequests.urls = [];
     fireEvent.click(screen.getByTestId("routine-open-cron-daily-triage"));
     const drawer = await screen.findByTestId("routine-detail-drawer");
-    // Metadata shows the schedule + owner.
+    // Metadata shows the description + schedule + owner.
+    expect(drawer.textContent).toContain("Triages open GitHub issues");
     expect(drawer.textContent).toContain("Daily 04:00 UTC");
     expect(drawer.textContent).toContain("COO");
     // The scoped log fetch is filtered to this routine.

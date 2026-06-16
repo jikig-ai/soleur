@@ -13,6 +13,8 @@ import {
   C4Diagnostics,
   C4CodePanel,
 } from "@/components/kb/c4-shared";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
+import { C4_EDIT_FLAG } from "@/lib/c4-constants";
 
 export default function C4Diagram({
   viewId,
@@ -35,6 +37,10 @@ export default function C4Diagram({
     fetchUrl ? { url: fetchUrl } : undefined,
   );
   const [tab, setTab] = useState<"diagram" | "code">("diagram");
+  // feat-c4-viewer-remove-code-panel-gate-edit: the Code tab + `.c4` editor is
+  // gated behind `c4-edit` (default OFF), composing with the existing `readOnly`
+  // gate — the Code tab shows only when `!readOnly && c4EditEnabled`.
+  const c4EditEnabled = useOptionalFeatureFlag(C4_EDIT_FLAG);
   // See c4-workspace.tsx: stale flips true only when the server's post-save
   // re-render (#4964) failed; on success the reloaded dump is fresh.
   const [stale, setStale] = useState(false);
@@ -43,9 +49,14 @@ export default function C4Diagram({
     <div className="mb-4 overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/40">
       <div className="flex items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-2/40 px-2 py-1.5">
         {/* Read-only (public share): no Code tab — the .c4 editor + save path is
-            owner-only and must never reach an anonymous recipient. */}
+            owner-only and must never reach an anonymous recipient. The Code tab
+            is ALSO dropped when `c4-edit` is OFF (user-edit gated off), leaving
+            only the Diagram tab — composes with `readOnly`. */}
         {!readOnly &&
-          (["diagram", "code"] as const).map((t) => (
+          (c4EditEnabled
+            ? (["diagram", "code"] as const)
+            : (["diagram"] as const)
+          ).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -77,7 +88,7 @@ export default function C4Diagram({
               <C4Canvas dump={data.dump} initialViewId={viewId} />
             </div>
           )}
-          {!readOnly && tab === "code" && (
+          {!readOnly && c4EditEnabled && tab === "code" && (
             <div className="h-[600px]">
               <C4CodePanel
                 data={data}

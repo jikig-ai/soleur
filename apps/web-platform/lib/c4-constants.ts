@@ -34,8 +34,24 @@ export const LIKEC4_VIEW_LANG = "likec4-view";
  */
 export const MAX_C4_BYTES = 4 * 1024 * 1024;
 
-/** Runtime feature flag gating the whole visualizer. */
+/**
+ * Runtime feature flag gating diagram **viewing** (the LikeC4 render path:
+ * `GET /api/kb/c4/project`, the markdown embed) **and** Concierge edit-tool
+ * eligibility (`resolveC4FlagEnabled` → `edit_c4_diagram`). It does NOT gate
+ * the user-direct edit surface — that is `C4_EDIT_FLAG` below.
+ */
 export const C4_VISUALIZER_FLAG = "c4-visualizer" as const;
+
+/**
+ * Runtime feature flag gating ONLY the user-direct C4 edit surface: the
+ * in-browser Code panel (`C4CodePanel`, two render sites) and the
+ * `PUT /api/kb/c4/[...path]` write route. Default OFF for all roles — user
+ * editing is removed pending substrate fixes and re-enabled later by flipping
+ * the Flagsmith flag. It does NOT gate diagram viewing (`C4_VISUALIZER_FLAG`)
+ * or the Concierge `edit_c4_diagram` tool (also `C4_VISUALIZER_FLAG`), so the
+ * Concierge remains the only live KB writer while this flag is OFF.
+ */
+export const C4_EDIT_FLAG = "c4-edit" as const;
 
 /**
  * True when `relativePath` (KB-relative, forward-slashed) is a writable

@@ -139,4 +139,35 @@ describe("buildC4ConciergeTools", () => {
     expect(call.repo).toBe("soleur");
     expect(call.installationId).toBe(42);
   });
+
+  it("AC9 — Concierge edit_c4_diagram writes on the happy path (live writer; independence pinned by the structural grep test below)", async () => {
+    // Behavioral happy-path: the tool handler reaches writeC4Diagram. This does
+    // NOT by itself prove c4-edit independence (the module imports no flag
+    // module, so it passes regardless) — the structural grep test below is the
+    // load-bearing independence guard. Kept as the live-writer smoke for the
+    // prod state (c4-edit OFF, Concierge must keep writing).
+    mocks.writeC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123" });
+    const res = await handler()({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    expect(mocks.writeC4Diagram).toHaveBeenCalledTimes(1);
+    expect(res.isError).toBeUndefined();
+  });
+
+  it("AC9 — the Concierge tool module never references the c4-edit flag (structural independence)", async () => {
+    const fs = await import("node:fs");
+    const url = await import("node:url");
+    const pathMod = await import("node:path");
+    const here = pathMod.dirname(url.fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(
+      pathMod.join(here, "../server/c4-concierge-tools.ts"),
+      "utf8",
+    );
+    // Gating the Concierge write path on c4-edit would re-couple the two
+    // surfaces. The module must not mention the edit flag in any form.
+    expect(src).not.toContain("c4-edit");
+    expect(src).not.toContain("C4_EDIT_FLAG");
+    expect(src).not.toContain("FLAG_C4_EDIT");
+  });
 });
