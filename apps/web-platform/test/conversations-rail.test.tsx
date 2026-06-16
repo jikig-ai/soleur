@@ -165,6 +165,43 @@ describe("ConversationsRail", () => {
     expect(other).not.toHaveAttribute("aria-current", "page");
   });
 
+  it("renders a persistent '+ New conversation' affordance in the header when conversations exist (AC1)", async () => {
+    // The rail's ONLY new-conversation entry point used to be the empty-state
+    // CTA, which vanishes the moment one conversation exists. A persistent
+    // header affordance must be present even with a non-empty list.
+    setRailHook([makeConversation({ id: "c1", title: "Existing one" })]);
+
+    const { ConversationsRail } = await import(
+      "@/components/chat/conversations-rail"
+    );
+    render(<ConversationsRail />);
+
+    const newConv = screen.getByRole("link", { name: "New conversation" });
+    expect(newConv).toHaveAttribute("href", "/dashboard/chat/new");
+  });
+
+  it("does NOT render the '+ New conversation' affordance when collapsed (AC2)", async () => {
+    // The whole rail is DOM-removed when collapsed (returns null before the
+    // header), so the affordance must be absent — the both-toggle-states check.
+    setRailHook([makeConversation({ id: "c1", title: "Row alpha" })]);
+
+    const { ConversationsRail } = await import(
+      "@/components/chat/conversations-rail"
+    );
+    const { RailCollapsedProvider } = await import(
+      "@/components/dashboard/rail-slot"
+    );
+    render(
+      <RailCollapsedProvider value={true}>
+        <ConversationsRail />
+      </RailCollapsedProvider>,
+    );
+
+    expect(
+      screen.queryByRole("link", { name: "New conversation" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders 'View all in Dashboard' footer link to /dashboard", async () => {
     setRailHook([makeConversation()]);
 
