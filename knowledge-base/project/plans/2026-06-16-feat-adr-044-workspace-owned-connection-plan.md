@@ -222,19 +222,19 @@ PR-1 changes no schema-drop/DSAR/erasure path; deepen-plan's brand-survival tria
 ## Acceptance Criteria
 
 ### Pre-merge (PR-1)
-- [ ] `resolveActiveWorkspace`: `ok(userId)` for solo/unbound; `ok(team)` for member; `ok(userId, resetFromClaim)` for non-member team claim; `{ok:false,"db-error"}` on probe error.
-- [ ] **TR1 cross-tenant test:** probe db-error returns `{ok:false}`, NEVER the claim id; no `MIN(created_at)`/first-membership fallback.
-- [ ] Path/repo/install resolve to the same id for a team member; assert **no raw `resolveCurrentWorkspaceId` remains on the dispatch path** (incl `:1703`), AND **no caller of the silent `resolveActiveWorkspaceIdWithMembership` remains** (it was refactored into `resolveActiveWorkspace`).
-- [ ] **Reset clone-dir test:** claim=team-not-member → all of `workspacePath`/install/repo/`:1703` derive from one `resolveActiveWorkspace` result; the clone dir is `/workspaces/<userId>` (not `/workspaces/<team>`).
-- [ ] **Owner-gate confused-deputy:** `p_workspace_id` === the workspace id every UPDATE/`deleteWorkspace`/mirror in the handler targets (= `user.id` in PR-1).
-- [ ] **Breadcrumb fingerprint:** deduped by `(userId, resetFromClaim)` (not just `op`) — does not re-fire per dispatch; `extra` keys are exactly `{activeClaimWorkspaceId, resolvedWorkspaceId}` (no repoUrl/installationId/raw-userId).
-- [ ] db-error renders transient copy — asserts NO switcher, NO reconnect.
-- [ ] Member-solo-no-repo renders a switcher deep link carrying the **target team id** (multi-team-safe); unresolvable team name → name-omitted fallback.
-- [ ] `disconnect` + `setup` routes 403 non-owner; member repo card read-only.
-- [ ] Breadcrumb fires on non-member-claim-reset + self-heal-failed only; NOT on db-error/cloning.
-- [ ] FR5: Phase 2 count recorded; residual backfill shipped iff count > 0 (idempotent).
-- [ ] FR7: ADR-044 amended (`status: adopting`); C4 connection-owner edge updated via `/soleur:architecture`.
-- [ ] `tsc --noEmit` clean; vitest green.
+- [x] `resolveActiveWorkspace`: `ok(userId)` for solo/unbound; `ok(team)` for member; `ok(userId, resetFromClaim)` for non-member team claim; `{ok:false,"db-error"}` on probe error.
+- [x] **TR1 cross-tenant test:** probe db-error returns `{ok:false}`, NEVER the claim id; no `MIN(created_at)`/first-membership fallback.
+- [x] Path/repo/install resolve to the same id for a team member; assert **no raw `resolveCurrentWorkspaceId` remains on the dispatch path** (incl `:1703`), AND **no caller of the silent `resolveActiveWorkspaceIdWithMembership` remains** (it was refactored into `resolveActiveWorkspace`).
+- [x] **Reset clone-dir test:** claim=team-not-member → all of `workspacePath`/install/repo/`:1703` derive from one `resolveActiveWorkspace` result; the clone dir is `/workspaces/<userId>` (not `/workspaces/<team>`).
+- [x] **Owner-gate confused-deputy:** `p_workspace_id` === the workspace id every UPDATE/`deleteWorkspace`/mirror in the handler targets (= `user.id` in PR-1).
+- [x] **Breadcrumb fingerprint:** deduped by `(userId, resetFromClaim)` (not just `op`) — does not re-fire per dispatch; `extra` keys are exactly `{activeClaimWorkspaceId, resolvedWorkspaceId}` (no repoUrl/installationId/raw-userId).
+- [x] db-error renders transient copy — asserts NO switcher, NO reconnect.
+- [x] Member-solo-no-repo renders a switcher deep link carrying the **target team id** (multi-team-safe); unresolvable team name → name-omitted fallback.
+- [x] `disconnect` + `setup` routes 403 non-owner; member repo card read-only.
+- [x] Breadcrumb fires on non-member-claim-reset + self-heal-failed only; NOT on db-error/cloning.
+- [x] FR5: Phase 2 count recorded; residual backfill shipped iff count > 0 (idempotent).
+- [x] FR7: ADR-044 amended (`status: adopting`); C4 connection-owner edge updated via `/soleur:architecture`.
+- [x] `tsc --noEmit` clean; vitest green.
 
 ### Post-merge (operator/automated)
 - [ ] Phase 2 backfill (if any) verified: membership-null count returns 0 (read-only).

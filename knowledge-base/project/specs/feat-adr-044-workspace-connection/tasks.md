@@ -33,11 +33,11 @@ plan: knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-conne
 - [x] 6.2 Update C4 Container + Component views via `/soleur:architecture` (c4-edit flag) — edge semantics captured in the committed ADR-044 amendment (read=Workspace/write=User during `adopting`); the graphical per-workspace C4 view edit is Concierge-runtime-gated (`c4-edit` flag), not reachable from a CLI /work session
 
 ## Phase 7 — Tests
-- [ ] 7.1 Resolver unit tests (4 outcomes incl TR1 db-error-not-claim-id)
-- [ ] 7.2 Threading test: all consumers + `:1703` same id; no raw `resolveCurrentWorkspaceId` on dispatch path
-- [ ] 7.3 Copy tests (db-error transient; member switcher deep link; owner reconnect)
-- [ ] 7.4 Route 403 non-owner; breadcrumb branch-correctness
-- [ ] 7.5 `tsc --noEmit` + vitest green
+- [x] 7.1 Resolver unit tests (4 outcomes incl TR1 db-error-not-claim-id)
+- [x] 7.2 Threading test: all consumers + `:1703` same id; no raw `resolveCurrentWorkspaceId` on dispatch path
+- [x] 7.3 Copy tests (db-error transient; member switcher deep link; owner reconnect)
+- [x] 7.4 Route 403 non-owner; breadcrumb branch-correctness
+- [x] 7.5 `tsc --noEmit` + vitest green
 
 ## Post-merge
 - [ ] Backfill verified (membership-null = 0); breadcrumb queryable; `Ref #5437`; fast-follow filed for Sentry alert routing
