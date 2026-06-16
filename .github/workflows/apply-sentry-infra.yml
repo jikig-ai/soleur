@@ -250,6 +250,7 @@ jobs:
             -target=sentry_issue_alert.outbound_email_send_failure \
             -target=sentry_issue_alert.kb_sync_silent_failure \
             -target=sentry_issue_alert.container_restart_burst \
+            -target=sentry_issue_alert.kb_sync_protected_fallback_failed \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
