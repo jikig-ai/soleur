@@ -267,8 +267,13 @@ Branch on the result:
   /soleur:feature-tweet #<merged-pr-number>
   ```
 
-  Surface the resulting draft path in the Phase 7 report with the operator
-  instruction: "set BOTH `publish_date` and `status: scheduled` to publish."
+  Display the resulting draft's **full content** (title + every X tweet + the
+  Bluesky post) inline for operator approval — not just the path — then surface
+  the path in the Phase 7 report with the operator instruction: "set BOTH
+  `publish_date` and `status: scheduled` to publish." The path alone is
+  insufficient: the operator cannot approve copy they cannot see, and a
+  worktree-resident draft can be discarded by cleanup before they open it
+  (`feature-tweet` SKILL.md §Output owns the display-for-approval contract).
 - **Eligible AND `HEALTH_VERIFIED=false`** → do NOT draft (no verified-live
   signal). Print a catch-up instruction instead of silently skipping:
 

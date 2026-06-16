@@ -157,12 +157,29 @@ On non-zero exit, delete the file and abort.
 
 ## Output
 
-On success, print the draft path and the explicit operator instruction:
+On success, **display the full draft content inline for operator approval** —
+the path alone is not enough, because the operator cannot judge or approve copy
+they cannot see (and a worktree-resident draft may be discarded by cleanup
+before they open the file). Print, in this order:
 
-> Draft written to `<path>`. To publish: set BOTH `publish_date` and
-> `status: scheduled`. The existing content-publisher cron posts it on date.
+1. The draft path.
+2. The complete rendered draft: the `title`, every `## X/Twitter Thread` tweet,
+   and the full `## Bluesky` post — verbatim, exactly as written to the file
+   (read it back with the Read tool rather than reproducing from memory, so what
+   the operator approves is what is on disk).
+3. The explicit operator instruction:
 
-Headless mode never posts — it only writes the draft and prints the path.
+   > Draft written to `<path>`. To publish: set BOTH `publish_date` and
+   > `status: scheduled`. The existing content-publisher cron posts it on date.
+
+This display-for-approval step is mandatory in BOTH interactive and headless
+modes (headless still surfaces the copy in its returned summary so the
+orchestrator/operator sees it) — the draft is operator-gated content, and the
+approval gate is meaningless if the content is never shown. Never reduce the
+output to "draft written to `<path>`" without the copy.
+
+Headless mode never posts — it only writes the draft, displays it, and prints
+the path.
 
 ## Multi-PR contract (v1)
 
