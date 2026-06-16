@@ -47,6 +47,21 @@ describe("sync.md — headless execution contract (FIX 2)", () => {
     expect(section).toMatch(/git push|protected|default branch/);
   });
 
+  test("no IMPERATIVE raw push to the default branch slips in alongside the prohibition", () => {
+    // The keyword-presence checks above catch DELETION of the contract but not
+    // an ADDITIVE regression: a `git push origin main` step re-introduced while
+    // the forbidding prose is left intact would still pass them. This negative
+    // assertion is contradiction-resistant — it matches an imperative push to a
+    // concrete default-branch ref (`git push [flags] [origin] main|master|HEAD`)
+    // but NOT the prohibition's prose ("git push to the protected default
+    // branch", "NEVER raw `git push` the checked-out default branch"), which put
+    // a non-ref word after `git push`.
+    const section = headlessSection();
+    expect(section).not.toMatch(
+      /git\s+push\s+(-{1,2}\S+\s+)*(origin\s+)?(main|master|HEAD)\b/i,
+    );
+  });
+
   test("GH013 / remote-rejected push is handled as a degraded status, not a hard error", () => {
     const section = headlessSection();
     expect(section).toMatch(/GH013|remote rejected|branch protection|push-rule|push rule/i);

@@ -86,6 +86,14 @@ BEGIN
   -- is deliberately untouched — the loser honest-waits. This is NOT a
   -- `.neq('cloning')` predicate (which can never re-acquire a 'cloning' row and
   -- would strand a dead winner forever).
+  --
+  -- NULL repo_last_synced_at counts as stale. Every live clone-writer
+  -- (/api/repo/setup AND this RPC) now stamps repo_last_synced_at = now() on its
+  -- 'cloning' flip, so a fresh clone is never NULL. A NULL clock therefore only
+  -- arises on a row stranded at 'cloning' before this migration's deploy (or any
+  -- future writer that forgets to stamp) — those MUST stay recoverable, never
+  -- permanently stuck. `NULL < now() - interval` is NULL (not TRUE), so the
+  -- explicit `IS NULL` arm is required to reach them.
   UPDATE public.workspaces
      SET repo_status         = 'cloning',
          repo_last_synced_at = now()
@@ -94,7 +102,10 @@ BEGIN
        repo_status = 'error'
        OR (
          repo_status = 'cloning'
-         AND repo_last_synced_at < now() - interval '5 minutes'
+         AND (
+           repo_last_synced_at IS NULL
+           OR repo_last_synced_at < now() - interval '5 minutes'
+         )
        )
      );
 
@@ -158,6 +169,13 @@ BEGIN
   -- solo-only (workspace.id = user.id, ADR-038 N2), so the dispatching user
   -- IS the solo workspace owner; write their users.repo_error. On 'ready'
   -- clear it; on 'error' set the framed reason.
+  -- SOLEUR-DEBT: this users.repo_error write targets the CALLER (auth.uid()),
+  -- which equals the workspace owner only under the solo-only invariant. When
+  -- shared-workspace repo flows land (#4560 / Phase 5) the readiness gate will
+  -- read the OWNER's users.repo_error while a non-owner dispatcher writes their
+  -- own row — a split-write. Re-target to the workspace owner (or move the reason
+  -- onto workspaces.repo_error) before enabling shared repo-setup.
+  -- upgrade-trigger: #4560 shared-workspace repo-setup
   UPDATE public.users
      SET repo_error = CASE WHEN p_status = 'ready' THEN NULL ELSE p_error END
    WHERE id = v_user_id;

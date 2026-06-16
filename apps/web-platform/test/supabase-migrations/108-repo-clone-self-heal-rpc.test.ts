@@ -112,12 +112,19 @@ describe("migration 108_repo_clone_self_heal_rpc", () => {
       expect(body()).toMatch(/repo_last_synced_at\s*=\s*now\(\)/i);
     });
 
-    it("acquires on error OR stale-cloning (>5 min), never a `.neq('cloning')` trap", () => {
+    it("acquires on error OR stale-cloning (>5 min OR NULL clock), never a `.neq('cloning')` trap", () => {
       const b = body();
       // error OR (cloning AND stale)
       expect(b).toMatch(/repo_status\s*=\s*'error'/i);
       expect(b).toMatch(
         /repo_status\s*=\s*'cloning'[\s\S]*?repo_last_synced_at\s*<\s*now\(\)\s*-\s*interval\s*'5 minutes'/i,
+      );
+      // NULL-clock arm: a 'cloning' row with no recorded sync time (legacy
+      // pre-deploy strand, or any writer that forgot to stamp) MUST be
+      // recoverable — `NULL < now()-interval` is NULL, so an explicit IS NULL
+      // arm is required or the row is permanently stuck.
+      expect(b).toMatch(
+        /repo_status\s*=\s*'cloning'[\s\S]*?repo_last_synced_at\s+IS\s+NULL/i,
       );
       // The terminal trap must NOT appear.
       expect(b).not.toMatch(/!=\s*'cloning'|<>\s*'cloning'|neq/i);

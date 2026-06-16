@@ -3,9 +3,12 @@
 import { useRouter } from "next/navigation";
 import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
-import { useReconnect } from "@/components/repo/use-reconnect";
+import { useReconnect, type ReconnectRepoStatus } from "@/components/repo/use-reconnect";
 
-export type RepoStatus = "not_connected" | "ready" | "error" | "cloning";
+// Single-sourced from use-reconnect.ts (the lower-level module) so the union
+// can't drift across the two files. Re-exported under the existing name for
+// settings-content.tsx / dashboard/settings/page.tsx consumers.
+export type RepoStatus = ReconnectRepoStatus;
 
 interface ProjectSetupCardProps {
   repoUrl: string | null;

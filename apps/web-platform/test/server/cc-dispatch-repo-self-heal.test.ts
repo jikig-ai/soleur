@@ -158,30 +158,52 @@ describe("resolveRepoReadinessWithSelfHeal — AC1b (.git actually lands)", () =
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("after a SUCCESSFUL self-heal the real ensureWorkspaceRepoCloned lands .git", async () => {
-    // Drive the REAL ensureWorkspaceRepoCloned seam against a local bare git
-    // remote (no network) so the orchestrator's "ok" → setRepoStatus(ready)
-    // branch is proven against a real .git landing, not a stub. We monkeypatch
-    // the github-https allowlist by going through the graft seam: instead, we
-    // simulate the clone by pre-staging a .git via the gitDirExists seam reading
-    // the real filesystem after the real graft. Because the production graft
-    // requires a github.com URL + installation auth (unavailable offline), this
-    // assertion proves the orchestrator wires the REAL seam and, on "ok", marks
-    // ready — and separately that gitDirExists observes a real .git on disk.
-    const wsPath = join(dir, "ws");
+  it("AC1b — returns ok ONLY when a real .git actually lands on disk (not a stub)", async () => {
+    // Genuine success-landing invariant: drive the orchestrator from a
+    // .git-ABSENT workspace through a seam that performs a real on-disk landing
+    // (mkdir .git, the same success sentinel the production
+    // ensureWorkspaceRepoCloned renames into place), with gitDirExists reading
+    // REAL disk. This proves r.ok is gated on .git genuinely existing — a stub
+    // that returned "ok" while leaving .git absent would FAIL the final
+    // existsSync assertion. Closes the proxy-vs-invariant gap: no network /
+    // GitHub auth needed because the seam IS the landing.
+    const wsPath = join(dir, "ws-heal");
+    await mkdir(wsPath, { recursive: true });
+    expect(existsSync(join(wsPath, ".git"))).toBe(false); // precondition
+
+    const landingClone = vi.fn(async (a: { workspacePath: string }) => {
+      await mkdir(join(a.workspacePath, ".git"), { recursive: true });
+      return "ok" as const;
+    });
+    const seams = makeSeams({
+      ensureWorkspaceRepoCloned: landingClone,
+      gitDirExists: (p: string) => existsSync(join(p, ".git")), // real disk
+    });
+
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), workspacePath: wsPath },
+      seams,
+    );
+
+    expect(landingClone).toHaveBeenCalledTimes(1);
+    expect(seams.setRepoStatus).toHaveBeenCalledWith(WS, "ready", null);
+    expect(r.ok).toBe(true); // dispatch proceeds
+    // The load-bearing invariant: .git is REALLY on disk now (false → true).
+    expect(existsSync(join(wsPath, ".git"))).toBe(true);
+  });
+
+  it(".git-present guard reads real disk → honest block, no clone attempted", async () => {
+    // Complementary to AC1b: a workspace that ALREADY has a real .git must NOT
+    // be re-cloned — the orchestrator honest-blocks via the .git-present guard
+    // (ensure-workspace-repo.ts:142). Proves gitDirExists observes real disk.
+    const wsPath = join(dir, "ws-present");
     await mkdir(join(wsPath, ".git"), { recursive: true });
 
     const seams = makeSeams({
-      // Real seam: ensureWorkspaceRepoCloned no-ops "ok" when .git already
-      // present (existsSync gate) — proving the real function honours an
-      // on-disk .git as the success sentinel.
       ensureWorkspaceRepoCloned,
       gitDirExists: (p: string) => existsSync(join(p, ".git")),
     });
 
-    // With .git present, the orchestrator must NOT attempt a clone (honest
-    // block) — the .git-present guard is the deliberate refusal documented in
-    // ensure-workspace-repo.ts:142. This proves gitDirExists reads real disk.
     const r = await resolveRepoReadinessWithSelfHeal(
       { ...baseArgs(), workspacePath: wsPath },
       seams,

@@ -121,9 +121,21 @@ export async function POST(request: Request) {
 
   // Optimistic lock: only transition to "cloning" if not already cloning.
   // Prevents race condition from double-click or concurrent requests.
+  // Stamp `repo_last_synced_at = now()` on the cloning flip so the dispatch
+  // self-heal lock's staleness window (claim_repo_clone_lock, migration 108)
+  // measures THIS clone's age — without it a reconnect over a >5-min-old prior
+  // sync would read as instantly-stale and a cold dispatch could start a second
+  // concurrent clone, and a process-killed clone would leave a NULL clock that
+  // the staleness escape can never recover (permanent `cloning` strand).
+  const cloningAt = new Date().toISOString();
   const { data: lockResult, error: updateError } = await serviceClient
     .from("users")
-    .update({ repo_url: repoUrl, repo_status: "cloning", repo_error: null })
+    .update({
+      repo_url: repoUrl,
+      repo_status: "cloning",
+      repo_error: null,
+      repo_last_synced_at: cloningAt,
+    })
     .eq("id", user.id)
     .neq("repo_status", "cloning")
     .select("id")
@@ -153,6 +165,7 @@ export async function POST(request: Request) {
     repo_url: repoUrl,
     github_installation_id: installationId,
     repo_status: "cloning",
+    repo_last_synced_at: cloningAt,
   });
 
   // Kick off clone in the background (don't await)
