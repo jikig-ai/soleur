@@ -29,16 +29,50 @@ and `plan` (Phase 2.5) plus one agent-body cross-reference and one test. It **di
 but ships zero user-facing runtime UI → Product/UX Gate tier NONE** (no recursion into the
 wireframe workflow it documents).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-16
+**Halt gates cleared:** 4.6 (User-Brand Impact, threshold `none` + scope-out) · 4.7 (Observability,
+docs-only skip rationale) · 4.8 (no PAT-shaped vars) · 4.9 (no UI-surface files → skips).
+**Realism passes:** verify-the-negative + precedent-diff (Phase 4.4 / 4.45).
+
+### Key corrections from the deepen pass
+
+1. **Subagent-pause premise sharpened.** The literal "a subagent cannot pause" is imprecise —
+   AskUserQuestion *does* appear in directly-invoked agent bodies. The load-bearing fact is narrower:
+   an agent invoked **via the Task tool** runs autonomously and cannot collect AskUserQuestion input
+   (operative precedent: `competitive-intelligence.md:81`). ux-design-lead is Task-spawned from
+   brainstorm/plan, so the orchestrator-pause architecture holds. Overview updated.
+2. **Citation fix.** Plan Phase 2.5 ADVISORY auto-accept is at `plan/SKILL.md:334`, not `:340`
+   (`:340` is the NONE branch). Corrected in 3 places.
+3. **Precedent match confirmed.** The proposed gate matches the canonical interactive-vs-headless
+   shape (always-run, branch on mode, `**Why:**` block) used at `one-shot/SKILL.md:35–41`,
+   `brainstorm/SKILL.md:101`, and `plan/SKILL.md:334–335`. Both new gates must carry a `**Why:**`
+   block (already prescribed in Phases 2–3).
+
+### Verified-live facts
+
+- `B_ALWAYS = 22994/23000` bytes (`wc -c AGENTS.md` 5792 + `AGENTS.core.md` 17202) — confirms the
+  no-new-rule descope. 6 bytes of headroom; a new pointer cannot land without a `wg-*` demotion.
+- `one-shot/SKILL.md:11` verbatim: "there are no per-phase approval gates after that" — confirms the
+  headless-suppression branch is mandatory, not optional.
+- `ux-design-lead.md:83` `xdg-open` and `:27` AskUserQuestion (direct-invocation Step-1 brief), and
+  `brainstorm/SKILL.md:411` / `plan/SKILL.md:327` insertion anchors all confirmed exact.
+
 ## Overview
 
 ### The gap
 
 `ux-design-lead.md:83` (Step 3 item 5) runs `xdg-open <screenshots-directory>` and says "the
 founder must visually review wireframes before proceeding." But this happens **inside the
-ux-design-lead subagent**, which structurally cannot pause for operator `AskUserQuestion`
-input (`2026-05-12-task-subagent-prompt-text-only.md`: Task subagents inherit prompt text
-only; they have no operator-interaction channel and return control to the orchestrator when
-done). So today: the subagent opens the folder, says "review this," then immediately returns,
+ux-design-lead subagent**. An agent invoked **via the Task tool runs autonomously and cannot
+collect operator `AskUserQuestion` input** — the operative precedent is
+`competitive-intelligence.md:81` ("Do not use AskUserQuestion — this agent runs autonomously
+when invoked via Task tool"); the agents that DO use AskUserQuestion (e.g., `ux-design-lead.md:27`,
+`business-validator.md`) are invoked *directly*, not via Task. ux-design-lead is spawned via Task
+from brainstorm/plan, so it is in the autonomous-via-Task case. It also inherits prompt text only
+(`2026-05-12-task-subagent-prompt-text-only.md`) and returns control to the orchestrator when
+done. So today: the subagent opens the folder, says "review this," then immediately returns,
 and the orchestrator (`brainstorm` Phase 3.55 / `plan` Phase 2.5) barrels straight into the
 next phase (spec creation / Domain Review write) with **no actual pause and no feedback loop**.
 
@@ -172,7 +206,7 @@ invocation at `:327`). Insert **step 4b — Wireframe review pause** with the sa
 - **Interactive arm:** same AskUserQuestion approve / request-changes loop; on approve continue to
   step 5 (Content Review Gate); on request-changes re-invoke ux-design-lead with feedback, re-ask.
 - **Headless/pipeline arm:** plan Phase 2.5 already auto-accepts in pipeline context (e.g., ADVISORY
-  auto-accept at `:340`). Mirror that: when the plan was invoked as a subagent / file-path argument
+  auto-accept at `:334`). Mirror that: when the plan was invoked as a subagent / file-path argument
   / `--headless`, do NOT pause — record `wireframes ready for async review at <dir>` and continue.
   **Load-bearing:** the one-shot path chains plan inside a Task subagent (`one-shot/SKILL.md:70`),
   which is itself non-interactive — the headless arm MUST fire there or the autonomous pipeline
@@ -276,7 +310,7 @@ freezing).
 
 - **Risk: headless arm doesn't fire on the one-shot path → autonomous pipeline hangs on
   AskUserQuestion.** Mitigation: the headless predicate reuses the exact pattern already proven at
-  brainstorm Phase 0.4 (`:101`) and plan Phase 2.5 ADVISORY auto-accept (`:340`); plan runs inside a
+  brainstorm Phase 0.4 (`:101`) and plan Phase 2.5 ADVISORY auto-accept (`:334`); plan runs inside a
   Task subagent under one-shot (`:70`), which is inherently non-interactive. AC3 + the headless test
   scenario gate this. **Plan-review must confirm the predicate covers the subagent-context case**,
   not just `--headless`.

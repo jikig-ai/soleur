@@ -38,7 +38,7 @@ headless.
 
 - [ ] 3.1 In `plugins/soleur/skills/plan/SKILL.md` after step 4 (`:327`), add **step 4b — Wireframe
   review pause**: interactive approve / request-changes loop (approve → continue to step 5).
-- [ ] 3.2 Add the headless/pipeline arm mirroring the ADVISORY auto-accept (`:340`): subagent / file-path
+- [ ] 3.2 Add the headless/pipeline arm mirroring the ADVISORY auto-accept (`plan/SKILL.md:334`): subagent / file-path
   / `--headless` context → do NOT pause, log, continue. Confirm it fires on the one-shot Task-subagent
   path (`:70`).
 - [ ] 3.3 Add one-line `**Why:**` cross-reference (same two learnings).
