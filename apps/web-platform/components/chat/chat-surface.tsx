@@ -11,6 +11,7 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { useActiveRepo } from "@/hooks/use-active-repo";
+import { CONVERSATION_CREATED_EVENT } from "@/hooks/use-conversations";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
 import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
@@ -373,7 +374,31 @@ export function ChatSurface({
     if (realConversationId && onRealConversationId) {
       onRealConversationId(realConversationId);
     }
-  }, [realConversationId, onRealConversationId]);
+    // Deterministic rail-refresh signal for a FRESHLY-started conversation
+    // (conversationId === "new"): the server has just created the row and
+    // assigned this real id. The Recent Conversations rail is a SEPARATE
+    // `useConversations` instance whose realtime own-channel INSERT can miss the
+    // create — it lands in the rail's navigation/re-subscribe window, which
+    // supabase-js does not replay, and the rail's mount-time backfills already
+    // ran before the row existed. So the new conversation surfaces only after a
+    // reload (the reported bug; #5391/#5421/#5436 tuned the realtime timing but
+    // could not close a race they cannot observe). Emit a window event the rail
+    // listens for and refetches once — deterministic, independent of realtime.
+    // See knowledge-base learning 2026-06-17 rail-realtime-race.
+    if (
+      realConversationId &&
+      conversationId === "new" &&
+      typeof window !== "undefined"
+    ) {
+      window.dispatchEvent(
+        new CustomEvent(CONVERSATION_CREATED_EVENT, {
+          // `detail` is informational only — the rail listener ignores it and
+          // refetches its full scoped list (more robust than trusting a payload).
+          detail: { conversationId: realConversationId },
+        }),
+      );
+    }
+  }, [realConversationId, onRealConversationId, conversationId]);
 
   useEffect(() => {
     // Skip the zero-write while a hydration is genuinely pending — either the
