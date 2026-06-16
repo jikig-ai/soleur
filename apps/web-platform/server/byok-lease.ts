@@ -62,22 +62,18 @@ const log = createChildLogger("byok-lease");
 export type UserId = string;
 
 /**
- * feat-operator-cc-oauth — a SPENT date gate. This was gated to a *predicted*
- * 2026-06-15 Anthropic policy transition: a per-user monthly "Agent SDK
- * credit" that would have explicitly permitted third-party apps to authenticate
- * with a Claude subscription. Anthropic PAUSED that change (2026-06-16; live
- * article still reads "Agent SDK ... usage still draw from your subscription's
- * usage limits"). See
- * knowledge-base/legal/audits/2026-06-16-clo-re-review-cc-oauth.md. The date
- * therefore no longer corresponds to any policy transition. The `oauth_token`
- * path still fails closed before this instant, but since the date has passed
- * the gate is a historical fail-closed artifact — the LIVE load-bearing gates
- * are the `CC_OAUTH_ENABLED` kill-switch + owner-only routing
- * (`OauthDelegationForbiddenError`). Corrected legal basis: tolerated / metered
+ * feat-operator-cc-oauth — a SPENT date gate. It was gated to a predicted
+ * 2026-06-15 Anthropic policy transition that Anthropic PAUSED (2026-06-16);
+ * the date no longer corresponds to any policy change. The `oauth_token` path
+ * still fails closed before this instant, but since the date has passed the
+ * gate is a historical fail-closed artifact — the LIVE load-bearing gates are
+ * the `CC_OAUTH_ENABLED` kill-switch + owner-only routing
+ * (`OauthDelegationForbiddenError`). Legal basis: tolerated / metered
  * subscription use, owner-only no-share enforced in code, operator-borne
- * risk-acceptance (NOT the once-predicted explicit permission). Retained as the
- * single source of truth for the gate and because the lease test derives its
- * before/after boundaries from it.
+ * risk-acceptance. Full record (incl. the article text):
+ * knowledge-base/legal/audits/2026-06-16-clo-re-review-cc-oauth.md. Retained as
+ * the gate's single source of truth (the lease test derives its before/after
+ * boundaries from it).
  */
 export const CC_OAUTH_EFFECTIVE_DATE = Date.parse("2026-06-15T00:00:00Z");
 
@@ -119,11 +115,9 @@ export class OauthNotYetPermittedError extends Error {
 /**
  * The surviving load-bearing guardrail. Raised when an `anthropic_oauth`
  * credential would fund a run it does not own (delegated lease, or keyOwner ≠
- * workspace context). This enforces Anthropic's per-user / no-pooling /
- * no-share constraint — the real risk axis, which did NOT change when the
- * predicted June-15 Agent SDK credit was paused. It is the gate the corrected
- * "tolerated, owner-only, no-share enforced in code" basis rests on; the
- * subscription token may fund ONLY its owner's own runs. Fail-closed.
+ * workspace context). Enforces Anthropic's per-user / no-pooling / no-share
+ * constraint — the real risk axis the "tolerated, owner-only" basis rests on.
+ * The subscription token may fund ONLY its owner's own runs. Fail-closed.
  */
 export class OauthDelegationForbiddenError extends Error {
   constructor() {
