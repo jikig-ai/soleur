@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { authenticateAndResolveKbPath } from "@/server/kb-route-helpers";
 import { writeC4Diagram } from "@/server/c4-writer";
+import { createClient } from "@/lib/supabase/server";
+import { resolveIdentity } from "@/lib/feature-flags/identity";
+import { getRuntimeFlag } from "@/lib/feature-flags/server";
+import { C4_EDIT_FLAG } from "@/lib/c4-constants";
 
 export const runtime = "nodejs";
 // A .c4 save commits the source, then re-renders model.likec4.json out-of-process
@@ -28,6 +32,25 @@ export async function PUT(
   });
   if (!resolved.ok) return resolved.response;
   const { ctx } = resolved;
+
+  // SECURITY BOUNDARY (feat-c4-viewer-remove-code-panel-gate-edit): the
+  // user-direct edit surface is gated behind `c4-edit`, default OFF for all
+  // roles. `ctx` carries no identity, so resolve the caller's real identity
+  // here — `resolveIdentity` is request-cache-deduped and fails CLOSED to a
+  // `prd`/anon identity on any read error, so a Flagsmith outage (env mirror
+  // FLAG_C4_EDIT=0) or an identity-read error can only ever DENY. The Concierge
+  // `edit_c4_diagram` path (gated on the separate `c4-visualizer` flag) is the
+  // only live KB writer while this flag is OFF.
+  const identity = await resolveIdentity(await createClient());
+  if (!(await getRuntimeFlag(C4_EDIT_FLAG, identity))) {
+    return NextResponse.json(
+      {
+        error:
+          "Diagram editing is currently disabled. Ask the Concierge to edit this diagram.",
+      },
+      { status: 403 },
+    );
+  }
 
   let content: string;
   try {

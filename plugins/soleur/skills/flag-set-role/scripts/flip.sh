@@ -57,6 +57,7 @@ declare -A FLAG_ENV_VARS=(
   ["byok-delegations"]="FLAG_BYOK_DELEGATIONS"
   ["c4-visualizer"]="FLAG_C4_VISUALIZER"
   ["debug-mode"]="FLAG_DEBUG_MODE"
+  ["c4-edit"]="FLAG_C4_EDIT"
 )
 
 # --- arg parsing ------------------------------------------------------------

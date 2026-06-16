@@ -17,6 +17,8 @@ import {
   C4Diagnostics,
   C4CodePanel,
 } from "@/components/kb/c4-shared";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
+import { C4_EDIT_FLAG } from "@/lib/c4-constants";
 
 function ResizeHandle() {
   return (
@@ -44,6 +46,11 @@ export default function C4Workspace({
   notes?: string;
 }) {
   const { data, error, loading, reload } = useC4Project(dirPath);
+  // feat-c4-viewer-remove-code-panel-gate-edit: the user-direct Code editor is
+  // gated behind `c4-edit` (default OFF). When OFF, the Code tab + panel are not
+  // rendered and a hint points users to the Concierge (the only live KB writer).
+  // Non-throwing read so provider-less render surfaces treat "no flag" as off.
+  const c4EditEnabled = useOptionalFeatureFlag(C4_EDIT_FLAG);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
   // True only when the server FAILED to re-render after a save (#4964). On a
   // successful save the server regenerates model.likec4.json out-of-process and
@@ -130,24 +137,34 @@ export default function C4Workspace({
         <Panel defaultSize="38%" minSize="28%" maxSize="60%">
           <div className="flex h-full min-h-0 flex-col border-l border-soleur-border-default">
             <div className="flex shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-2/40 px-2 py-1.5">
-              {(
-                [
-                  ["concierge", "Concierge"],
-                  ["code", "Code"],
-                ] as const
-              ).map(([t, label]) => (
-                <button
-                  key={t}
-                  onClick={() => setRightTab(t)}
-                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                    rightTab === t
-                      ? "bg-soleur-bg-base text-soleur-text-primary"
-                      : "text-soleur-text-muted hover:text-soleur-text-secondary"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+              {c4EditEnabled ? (
+                (
+                  [
+                    ["concierge", "Concierge"],
+                    ["code", "Code"],
+                  ] as const
+                ).map(([t, label]) => (
+                  <button
+                    key={t}
+                    onClick={() => setRightTab(t)}
+                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                      rightTab === t
+                        ? "bg-soleur-bg-base text-soleur-text-primary"
+                        : "text-soleur-text-muted hover:text-soleur-text-secondary"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))
+              ) : (
+                // Discoverability hint (AC10): the Code editor is gated OFF, so
+                // tell the user the Concierge is how diagrams are edited. A
+                // single muted line — no new component/flow. The lone "Concierge"
+                // tab is dropped (single tab = noise) but the collapse chevron stays.
+                <span className="px-1 text-xs text-soleur-text-muted">
+                  To change this diagram, ask the Concierge.
+                </span>
+              )}
               <div className="ml-auto flex items-center gap-1.5 pr-1">
                 <button
                   type="button"
@@ -173,7 +190,7 @@ export default function C4Workspace({
                   visible={rightTab === "concierge"}
                 />
               </div>
-              {rightTab === "code" && (
+              {c4EditEnabled && rightTab === "code" && (
                 <div className="h-full">
                   {data ? (
                     <C4CodePanel

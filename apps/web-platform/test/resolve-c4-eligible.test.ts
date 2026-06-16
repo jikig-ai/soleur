@@ -33,6 +33,7 @@ import { resolveInstallationId } from "../server/resolve-installation-id";
 import { resolveEffectiveInstallationId } from "../server/cc-effective-installation";
 import { getRuntimeFlag } from "@/lib/feature-flags/server";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { C4_VISUALIZER_FLAG, C4_EDIT_FLAG } from "@/lib/c4-constants";
 
 const USER = "user-7f3a9c2e-1d4b-4a5c-9e8f-0b1c2d3e4f5a";
 
@@ -128,6 +129,23 @@ describe("resolveC4FlagEnabled (#5388 shared flag decision)", () => {
     expect(getRuntimeFlag).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ role: "dev" }),
+    );
+  });
+
+  test("AC9 — Concierge eligibility resolves c4-visualizer, NEVER c4-edit (no cross-wiring)", async () => {
+    mockTenantWithRole("dev");
+    vi.mocked(getRuntimeFlag).mockResolvedValue(true);
+
+    await resolveC4FlagEnabled(USER);
+    // The flag NAME passed must be the visualizer flag — gating the Concierge on
+    // c4-edit would couple the two surfaces and re-break the deliberate split.
+    expect(getRuntimeFlag).toHaveBeenCalledWith(
+      C4_VISUALIZER_FLAG,
+      expect.anything(),
+    );
+    expect(getRuntimeFlag).not.toHaveBeenCalledWith(
+      C4_EDIT_FLAG,
+      expect.anything(),
     );
   });
 });
