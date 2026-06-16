@@ -8,19 +8,35 @@ import {
 function makeClient(opts: {
   latest?: unknown[];
   runs?: unknown[];
-  capture?: { orFilter?: string };
+  capture?: {
+    orFilter?: string;
+    runCols?: string;
+    eq?: Array<[string, string]>;
+    gte?: Array<[string, string]>;
+  };
 }) {
   return {
     from(table: string) {
       return {
-        select() {
+        select(cols: string) {
           if (table === "routine_runs_latest") {
             return Promise.resolve({ data: opts.latest ?? [], error: null });
           }
+          if (opts.capture) opts.capture.runCols = cols;
           const resolve = () =>
             Promise.resolve({ data: opts.runs ?? [], error: null });
           const chain: Record<string, unknown> = {
             order() {
+              return chain;
+            },
+            // #5412 — optional filters chain (recursive: return chain) and must
+            // precede the keyset .or()/.limit().
+            eq(col: string, val: string) {
+              if (opts.capture) (opts.capture.eq ??= []).push([col, val]);
+              return chain;
+            },
+            gte(col: string, val: string) {
+              if (opts.capture) (opts.capture.gte ??= []).push([col, val]);
               return chain;
             },
             limit: resolve,
@@ -106,5 +122,80 @@ describe("listRecentRuns", () => {
       cursor: "2026-06-15T01:00:00Z",
     });
     expect(capture.orFilter).toBe("started_at.lt.2026-06-15T01:00:00Z");
+  });
+
+  it("rejects a tampered cursor (injection chars) without building an .or() predicate", async () => {
+    const capture: { orFilter?: string } = {};
+    // A crafted id with PostgREST logic chars must not reach the .or() string.
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      cursor: "2026-06-15T01:00:00Z|r1),or(actor_id.not.is.null",
+    });
+    expect(capture.orFilter).toBeUndefined();
+  });
+
+  it("rejects a cursor with a non-ISO timestamp half", async () => {
+    const capture: { orFilter?: string } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      cursor: "not-a-timestamp|r1",
+    });
+    expect(capture.orFilter).toBeUndefined();
+  });
+
+  // #5412 — filters + projection.
+  it("projects run_id + actor_class but NEVER actor_id / delegating_principal (PII)", async () => {
+    const capture: { runCols?: string } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), { limit: 50 });
+    const cols = (capture.runCols ?? "").split(",");
+    expect(cols).toContain("run_id");
+    expect(cols).toContain("actor_class");
+    expect(cols).not.toContain("actor_id");
+    expect(cols).not.toContain("delegating_principal");
+  });
+
+  it("applies routineId as .eq('routine_id')", async () => {
+    const capture: { eq?: Array<[string, string]> } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      routineId: "cron-daily-triage",
+    });
+    expect(capture.eq).toContainEqual(["routine_id", "cron-daily-triage"]);
+  });
+
+  it("applies status + triggerSource as .eq()", async () => {
+    const capture: { eq?: Array<[string, string]> } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      status: "failed",
+      triggerSource: "manual",
+    });
+    expect(capture.eq).toContainEqual(["status", "failed"]);
+    expect(capture.eq).toContainEqual(["trigger_source", "manual"]);
+  });
+
+  it("applies since as .gte('started_at')", async () => {
+    const capture: { gte?: Array<[string, string]> } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      since: "2026-06-01T00:00:00.000Z",
+    });
+    expect(capture.gte).toContainEqual([
+      "started_at",
+      "2026-06-01T00:00:00.000Z",
+    ]);
+  });
+
+  it("preserves the tuple cursor .or() when a filter is also applied", async () => {
+    const capture: { orFilter?: string; eq?: Array<[string, string]> } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      routineId: "cron-daily-triage",
+      cursor: "2026-06-15T01:00:00Z|r1",
+    });
+    expect(capture.eq).toContainEqual(["routine_id", "cron-daily-triage"]);
+    expect(capture.orFilter).toBe(
+      "started_at.lt.2026-06-15T01:00:00Z,and(started_at.eq.2026-06-15T01:00:00Z,id.lt.r1)",
+    );
   });
 });
