@@ -474,6 +474,10 @@ const errorSchema = z.strictObject({
       "too_many_files",
       "interactive_prompt_rejected",
       "image_paste_lost",
+      // #5394 — Concierge dispatch blocked because the active workspace repo
+      // setup errored (repo_status === "error"). Client renders the reconnect
+      // CTA. The cloning block carries no errorCode.
+      "repo_setup_failed",
       "delegation_revoked_post_grace",
       "delegation_expired",
       "delegation_hourly_cap_exceeded",

@@ -162,6 +162,11 @@ export type WSErrorCode =
   // image bytes were never attached. Client renders a non-blocking
   // banner asking the user to re-attach the image directly.
   | "image_paste_lost"
+  // #5394 — Concierge dispatch blocked because the active workspace's repo
+  // setup `error`'d (repo_status === "error"). Client renders the reconnect
+  // CTA to Settings → Repository. The `cloning` block carries NO errorCode
+  // (a benign transient state, not a failure).
+  | "repo_setup_failed"
   | "delegation_revoked_post_grace"
   | "delegation_expired"
   | "delegation_hourly_cap_exceeded"

@@ -137,6 +137,11 @@ vi.mock("@/server/workspace-resolver", async () => {
 
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
+  // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
+  getCurrentRepoStatus: vi.fn(async () => ({
+    repoStatus: "ready",
+    repoError: null,
+  })),
 }));
 
 // DELIBERATE: keep the REAL `ensureWorkspaceDirExists` (the mkdir under test)
