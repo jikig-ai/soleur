@@ -122,7 +122,14 @@ import {
 import {
   evaluateRepoReadiness,
   RepoNotReadyError,
+  type RepoReadiness,
 } from "./repo-readiness";
+// FIX 1a — dispatch self-heal orchestrator. Wraps the PURE evaluateRepoReadiness
+// with the on-disk re-clone recovery (under an optimistic clone lock) so a
+// `repo_status=error` workspace heals + re-evaluates instead of dead-ending at
+// the gate (short-circuit-guard-must-sit-after-the-recovery-it-gates).
+import { resolveRepoReadinessWithSelfHeal } from "./repo-readiness-self-heal";
+import { resolveCurrentWorkspaceId } from "./workspace-resolver";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1560,17 +1567,18 @@ export const realSdkQueryFactory: QueryFactory = async (
     // .git-gone reclaim never reaches a cloning/error branch). The dispatch
     // catch (below) routes this to an honest client message and SKIPS the
     // Sentry mirror (an expected transient state, not an incident).
+    // #5394 Layer A — ZERO-AWAIT fast path. `ready`/`not_connected` (and any
+    // unknown future status) are `{ ok:true }` and flow through UNCHANGED — no
+    // extra probe, no JWT round-trip on the cold-start hot path. Only the
+    // recoverable `error`/`cloning` branch falls through to the post-
+    // `effectiveInstallationId` / post-`ensureWorkspaceDirExists` self-heal
+    // below (FIX 1a) — applying the
+    // `short-circuit-guard-must-sit-after-the-recovery-it-gates` correction for
+    // the branch that the legacy throw amputated.
     const repoReadiness = evaluateRepoReadiness(
       repoReadinessRow.repoStatus,
       repoReadinessRow.repoError,
     );
-    if (!repoReadiness.ok) {
-      throw new RepoNotReadyError(
-        repoReadiness.code,
-        repoReadiness.message,
-        repoReadiness.errorCode,
-      );
-    }
     // Normalize the ack to epoch-ms | null for the permission-callback deps
     // (the wire/db value is an ISO timestamptz string). P2 — fail-CLOSED on an
     // unparseable timestamp: `Date.parse` of garbage returns NaN, and the
@@ -1675,6 +1683,83 @@ export const realSdkQueryFactory: QueryFactory = async (
       feature: "cc-dispatcher",
       userId: args.userId,
     });
+
+    // #5394 Layer A (FIX 1a) — gate-reordering self-heal. For the recoverable
+    // branch only (`repoReadiness.ok === false`), attempt the existing
+    // idempotent re-clone under an optimistic lock and RE-EVALUATE before
+    // honestly blocking. `ready`/`not_connected` already returned `{ ok:true }`
+    // above and skip this block (zero extra work on the hot path).
+    //
+    // Write boundary (AC5b): the lock + status writes go ONLY via the tenant
+    // `.rpc()` to the SECURITY DEFINER fns `claim_repo_clone_lock` /
+    // `set_repo_status` (migration 108) — `workspaces` has no UPDATE RLS for
+    // `authenticated`, so a direct tenant UPDATE silently no-ops; cc-dispatcher
+    // stays OFF the service-role allowlist. The self-heal reuses
+    // `effectiveInstallationId` (AC6), not the raw stored `installationId`.
+    if (!repoReadiness.ok) {
+      let healed: RepoReadiness = repoReadiness;
+      try {
+        const tenant = await getFreshTenantClient(args.userId);
+        const activeWorkspaceId = await resolveCurrentWorkspaceId(
+          args.userId,
+          tenant,
+        );
+        healed = await resolveRepoReadinessWithSelfHeal(
+          {
+            userId: args.userId,
+            workspaceId: activeWorkspaceId,
+            workspacePath,
+            installationId: effectiveInstallationId,
+            repoUrl,
+            status: repoReadinessRow.repoStatus,
+            repoError: repoReadinessRow.repoError,
+          },
+          {
+            evaluateRepoReadiness,
+            claimCloneLock: async (workspaceId) => {
+              const { data, error } = await tenant.rpc("claim_repo_clone_lock", {
+                p_workspace_id: workspaceId,
+              });
+              if (error) throw error;
+              return data === true;
+            },
+            setRepoStatus: async (workspaceId, status, repoError) => {
+              const { error } = await tenant.rpc("set_repo_status", {
+                p_workspace_id: workspaceId,
+                p_status: status,
+                p_error: repoError,
+              });
+              if (error) throw error;
+            },
+            ensureWorkspaceRepoCloned,
+            gitDirExists: (p) => existsSync(path.join(p, ".git")),
+          },
+        );
+      } catch (err) {
+        // Self-heal infra failure (tenant mint / RPC) must NOT widen access or
+        // crash the dispatch — mirror to Sentry and fall back to the honest
+        // block the gate would have produced (the original readiness result).
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "repo-readiness-self-heal",
+          extra: { userId: args.userId },
+          message:
+            "dispatch repo self-heal orchestration failed; falling back to the honest readiness block",
+        });
+        healed = repoReadiness;
+      }
+
+      if (!healed.ok) {
+        throw new RepoNotReadyError(
+          healed.code,
+          healed.message,
+          healed.errorCode,
+        );
+      }
+      // healed.ok === true → the self-heal landed `.git` (or the row was already
+      // recoverable into ready). Dispatch proceeds; the `ensureWorkspaceRepoCloned`
+      // below now no-ops because `.git` is present.
+    }
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
