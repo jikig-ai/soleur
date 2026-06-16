@@ -42,9 +42,9 @@ describe("evaluateRepoReadiness", () => {
     if (r.ok) throw new Error("unreachable");
     expect(r.code).toBe("error");
     expect(r.message).toContain("Reconnect in Settings → Repository");
-    expect(r.message.length).toBeGreaterThan(
-      "Reconnect in Settings → Repository".length,
-    );
+    // Pin the actual fallback literal (not just "non-empty") so a future change
+    // to the fallback string is caught rather than silently passing length-only.
+    expect(r.message).toContain("setup failed");
   });
 
   it("AC3: ready → ok (dispatch proceeds, no regression)", () => {

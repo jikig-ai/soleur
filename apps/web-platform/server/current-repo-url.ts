@@ -93,6 +93,15 @@ export async function getCurrentRepoUrl(
  * tenant-mint blip — worst case a genuinely `cloning`/`error` workspace falls
  * through to the existing repo-less path / #5392 fallback (the safety net this
  * gate layers on top of).
+ *
+ * Source-key note (forward-looking, for the #4560 team-workspace author): the
+ * `repo_status` key is the active WORKSPACE while the `repo_error` key is the
+ * dispatching USER. Today connect/disconnect is solo-only
+ * (`workspace.id === user.id`), so the two keys coincide. Once team-invite repo
+ * flows land (#4560), a member dispatching against a workspace whose `error`
+ * status was caused by ANOTHER member reads their own (null) `repo_error` → the
+ * gate's message degrades to the generic `"setup failed"` fallback (NOT a
+ * misclassification and NOT a cross-member leak — readiness is still correct).
  */
 export async function getCurrentRepoStatus(
   userId: string,

@@ -61,6 +61,25 @@ describe("useActiveRepo — while-cloning poll (#5394)", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
+  it("self-stops on the error branch too (cloning → error clears the interval)", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse({ workspaceId: "w", repoStatus: "cloning" }))
+      .mockResolvedValue(jsonResponse({ workspaceId: "w", repoStatus: "error" }));
+
+    const { result } = renderHook(() => useActiveRepo());
+    await vi.waitFor(() => expect(result.current.data?.repoStatus).toBe("cloning"));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Tick 2s → poll #2 returns error → the `repoStatus !== "cloning"` guard
+    // clears the interval (error is a terminal state, not a poll-forever one).
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(result.current.data?.repoStatus).toBe("error"));
+
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("does NOT start a poll when the first read is already ready", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({ workspaceId: "w", repoStatus: "ready" }),
