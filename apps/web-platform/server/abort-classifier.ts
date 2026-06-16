@@ -64,6 +64,13 @@ export interface AbortReasonClassification {
    *  abort branch used; folded into the classifier so there is one
    *  decoding site. */
   isSuperseded: boolean;
+  /** Convenience: `kind === "disconnected"` — the grace-timer tab-close
+   *  terminus. Gates the in-flight checkpoint (#5275): only a `disconnected`
+   *  abort opens the irrecoverable window where the workspace's uncommitted
+   *  work would otherwise vanish. `user_requested_stop` keeps the conversation
+   *  continuable; `superseded`/`account_deleted`/`server_shutdown`/
+   *  `workspace_membership_revoked` own their terminal state. */
+  isDisconnected: boolean;
 }
 
 function buildResult(kind: AbortKind | "unknown"): AbortReasonClassification {
@@ -71,6 +78,7 @@ function buildResult(kind: AbortKind | "unknown"): AbortReasonClassification {
     kind,
     isUserRequested: kind === "user_requested_stop",
     isSuperseded: kind === "superseded",
+    isDisconnected: kind === "disconnected",
   };
 }
 

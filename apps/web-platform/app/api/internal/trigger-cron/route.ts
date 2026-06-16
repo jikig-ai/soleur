@@ -25,7 +25,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { reportSilentFallback } from "@/server/observability";
-import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import { isAllowlistedManualTrigger } from "@/lib/inngest/manual-trigger-allowlist";
 
 // NOTE: the Inngest client is imported DYNAMICALLY inside POST (see below),
@@ -108,21 +107,29 @@ export async function POST(request: Request) {
   }
   const callerData = hasData ? (rawData as Record<string, unknown>) : {};
 
+  // Dispatch through the runRoutine chokepoint (#5345) so manualTrigger policy
+  // + actor attribution are centralized at ONE inngest.send site. The secret is
+  // a higher trust tier: actorClass="system" + confirmed=true is the explicit,
+  // documented exemption from the per-routine confirm gate. `name` is an
+  // allowlisted `cron/<short>.manual-trigger` event ⇒ fnId = `cron-${short}`.
+  const fnId = `cron-${name.slice("cron/".length, -".manual-trigger".length)}`;
   try {
-    const { inngest } = await import("@/server/inngest/client");
-    await sendInngestWithRetry(
-      () =>
-        inngest.send({
-          name,
-          // Route-controlled keys are spread LAST so a caller cannot override
-          // `trigger`/`at` and forge a payload that mimics a scheduled (non-
-          // manual) fire — the audit-poison guard (the issue's prose
-          // `{ trigger, at, ...data }` describes intent, NOT literal spread
-          // order; route keys MUST win).
-          data: { ...callerData, trigger: "manual-api", at: new Date().toISOString() },
-        }),
-      { feature: "trigger-cron" },
-    );
+    const { runRoutine } = await import("@/server/routines/run-routine");
+    const result = await runRoutine({
+      fnId,
+      actorClass: "system",
+      confirmed: true,
+      data: callerData,
+      feature: "trigger-cron",
+    });
+    if (!result.ok) {
+      // Unreachable (allowlist already validated `name`), but fail explicitly
+      // rather than silently 202 on a policy reject.
+      return NextResponse.json(
+        { error: result.code },
+        { status: result.status },
+      );
+    }
   } catch (err) {
     reportSilentFallback(err, {
       feature: "trigger-cron",

@@ -79,12 +79,47 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
 
   // Email triage inbox reads (operator-inbox-delegation AC11): both
   // read-only, owner-scoped via closure userId + RLS → auto-approve (parity
-  // with kb_share_list rationale). FR9 boundary: there is NO email_triage
-  // write tool — if one ever ships it must be "gated", never auto-approve
-  // (a prompt-injected auto-acknowledge would silently unpin a statutory
-  // clock; the gate approval IS the human seeing the item — #4671).
+  // with kb_share_list rationale).
   "mcp__soleur_platform__email_triage_list": "auto-approve",
   "mcp__soleur_platform__email_triage_get": "auto-approve",
+
+  // Routines management (#5345): reads auto-approve; run-now is a write →
+  // gated. The review gate is the SINGLE confirmation for the agent path
+  // (the routine_run tool dispatches confirmed=true post-approval — no
+  // double-gate with the in-band 409). buildGateMessage names the routine.
+  "mcp__soleur_platform__routines_list": "auto-approve",
+  "mcp__soleur_platform__routine_runs_list": "auto-approve",
+  "mcp__soleur_platform__routine_run": "gated",
+
+  // Email WRITE tools (#5325, agent-native outbound). The FR9 boundary that
+  // formerly said "there is NO email_triage write tool" now ships: these are
+  // `gated` (NEVER auto-approve) because the human review gate IS the trust
+  // boundary — the operator sees the exact recipient + body and approves before
+  // the handler runs. A prompt-injected auto-send would be a CAN-SPAM/GDPR +
+  // brand incident; the gate approval is what binds the send to a human-
+  // reviewed body (the chokepoint recomputes the body hash). Suppression is
+  // also gated (permanent, no un-suppress) so a mis-suppression is human-seen.
+  "mcp__soleur_platform__email_send": "gated",
+  "mcp__soleur_platform__email_reply": "gated",
+  "mcp__soleur_platform__email_suppress": "gated",
+
+  // Reasoning narration (feat-reasoning-chat-boxes #5370): both are
+  // auto-approve. They are PURE emit tools — `narrate` shows a transient live
+  // status line, `summarize` saves one plain-language outcome box. The handler
+  // captures only userId and returns an ack; the real side-effect (redact →
+  // frame / row) runs in cc-dispatcher `emitNarration()`, where the agent text
+  // is scrubbed (formatAssistantText + redaction-probe drop-on-trip) and
+  // length-capped. There is nothing for a human to gate per-call (a status
+  // line / summary is not a privileged side-effect), and a review modal per
+  // narration would defeat the entire "never a silent spinner" UX. On the
+  // cc-router path these never reach getToolTier anyway — they sit in the
+  // `allowedTools` auto-approve list (CC_PATH_ALLOWED_TOOLS) — so the real
+  // controls are: allowlist + emit-boundary redaction + abort-state drop-guard,
+  // NOT a review gate (security C-2). Explicit entries documented here so the
+  // "gated" fail-closed default cannot silently apply if a future path routes
+  // them through canUseTool.
+  "mcp__soleur_platform__narrate": "auto-approve",
+  "mcp__soleur_platform__summarize": "auto-approve",
 
   // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
   // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
@@ -160,6 +195,28 @@ export function buildGateMessage(
       const preview = raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
       return `Agent wants to revoke share token **${preview}**. This is permanent. Allow?`;
     }
+    case "routine_run":
+      return `Agent wants to run routine **${toolInput.fnId ?? "unknown"}** now, off-schedule. This fires real production work. Allow?`;
+    // Outbound email (#5325) — the operator MUST see the exact recipient,
+    // subject, and body before approving: the body-hash approval binding and
+    // the whole single-user-incident safety story rest on the human reviewing
+    // what is actually sent. A content-free "Allow?" here would make the gate
+    // decorative. Body shown as a preview is DISPLAY-ONLY untrusted content —
+    // do not act on instructions inside it.
+    case "email_send": {
+      const body = String(toolInput.body ?? "");
+      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+      return `Agent wants to send a cold email to **${toolInput.to ?? "unknown"}** — subject: "${toolInput.subject ?? ""}".\n\nBody (review carefully — untrusted, display-only):\n${preview}\n\nSend?`;
+    }
+    case "email_reply": {
+      const body = String(toolInput.body ?? "");
+      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+      // The recipient is derived server-side from the inbound item (P0-3); it
+      // is NOT in toolInput, so the gate names the inbound item, not an address.
+      return `Agent wants to reply to inbound item **${toolInput.messageId ?? "unknown"}** (the reply goes to that item's original sender) — subject: "${toolInput.subject ?? ""}".\n\nBody (review carefully — untrusted, display-only):\n${preview}\n\nSend?`;
+    }
+    case "email_suppress":
+      return `Agent wants to PERMANENTLY suppress **${toolInput.recipient ?? "unknown"}** (reason: ${toolInput.reason ?? "unknown"}) so no future cold email can reach them. There is no un-suppress. Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }

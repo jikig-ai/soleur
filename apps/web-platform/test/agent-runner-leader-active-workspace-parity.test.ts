@@ -133,10 +133,10 @@ import { startAgentSession } from "../server/agent-runner";
 import { syncPull } from "../server/session-sync";
 import { createApiKeysMock, createQueryMock } from "./helpers/agent-runner-mocks";
 
-const MEMBER_ID = "member-1";
+const MEMBER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 // The member's ACTIVE workspace is a SHARED one, distinct from their solo
 // workspace (= MEMBER_ID per the N2 invariant). The document/work lives here.
-const ACTIVE_WS_ID = "team-workspace-99";
+const ACTIVE_WS_ID = "44444444-4444-4444-8444-444444444444";
 const ROOT = "/tmp/soleur-leader-parity-root";
 const SOLO_DIR = `${ROOT}/${MEMBER_ID}`;
 const ACTIVE_DIR = `${ROOT}/${ACTIVE_WS_ID}`;

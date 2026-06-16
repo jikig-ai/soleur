@@ -683,6 +683,160 @@ resource "sentry_issue_alert" "egress_blocked" {
   }
 }
 
+# container-restart-monitor.sh (#5417): the host systemd-timer detector posts a
+# Sentry error EVENT tagged feature=container-restart-monitor when the
+# soleur-web-platform container's restart rate breaches RESTART_THRESHOLD
+# (op=restart_storm) or a freshly-deployed container is already crash-looping
+# (op=fresh_crash_loop). This rule is the no-SSH NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself) for the restart-churn root cause:
+# the monitor reads docker inspect RestartCount + the cgroup memory.events
+# oom_kill counter directly on the host (authoritative — catches the cgroup-v2
+# child-cgroup OOM that .State.OOMKilled and the "Server startup" event-frequency
+# both miss), so paging on its event is the host-authoritative restart-rate
+# signal. The monitor does the rate thresholding host-side, so a first-seen page
+# is correct (no event_frequency condition needed — and beta2's conditions_v2
+# has no verified event_frequency support; see ADR-062).
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): the monitor also emits
+# op=recovered (a "storm cleared" event) under the SAME feature tag; scoping to
+# {restart_storm, fresh_crash_loop} keeps the recovery note from paging as an
+# incident. Mirrors chat_message_save_failure / kb_db_error op-scoping. A new
+# alertable monitor op MUST be added to BOTH this IS_IN value AND the op-contract
+# test (test/sentry-container-restart-alert-op-contract.test.ts).
+#
+# `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
+# mutually exclusive (a captured event is exactly one) so "all" is never
+# satisfiable; reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. Distinct `frequency=17` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,30,60,61,62; keyed on
+# action_match+filter_match+frequency+actions-shape, NOT conditions). Events
+# carry only container id / counts / exit code — no user content.
+resource "sentry_issue_alert" "container_restart_burst" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "container-restart-burst"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 17
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "container-restart-monitor"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "restart_storm,fresh_crash_loop"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure / egress_blocked):
+  # IssueOwners has no ownership rule on this project → falls through to
+  # ActiveMembers, paging the solo founder. Events carry only container id +
+  # restart counts + exit code — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── KB-sync protected-branch fallback failure (#5426) — APPLY-CREATED ───────
+# server/session-sync.ts `syncPush`: when the user's default branch is
+# protected, the post-session KB commit can't be pushed onto it, so the fallback
+# accretes the latest KB tree onto a durable `soleur/kb-sync` side branch and
+# opens/updates a PR. The fallback is ORDERED so the local default is reset only
+# AFTER the side-branch push + PR succeed — on any failure the un-pushed commit
+# stays on default for next-session retry, and `op=kb-sync.protected-fallback-
+# failed` is emitted (covers side-branch push reject / Octokit error /
+# persistent_other like `shallow update not allowed`). This rule is the
+# NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself): without it a
+# user whose KB writes silently fail to deliver (the divergence-treadmill class
+# #5426 fixes) goes unnoticed. The signal already exists (reportSilentFallback →
+# captureException with feature/op tags); no app change beyond the emit.
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): `feature=session-sync` spans
+# many routine ops (syncPull, syncPush, recordKbSyncHistory, appendKbSyncRow,
+# auth-probe.*, AND the warn-level success entry op kb-sync.push-protected-
+# fallback). A feature-only filter would over-page on every transient sync blip.
+# Scoped to the single FAILURE op so only an undelivered-writes incident pages;
+# the success entry op (kb-sync.push-protected-fallback) is warn-level and
+# deliberately excluded. Mirrors kb_sync_silent_failure / chat_message_save_failure.
+#
+# `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
+# mutually exclusive (a captured event is exactly one) so "all" is never
+# satisfiable; reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. Distinct `frequency=18` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,30,60,61,62; 18 free
+# 2026-06-16 — 17 taken by container_restart_burst #5417) — dedup keys on
+# action_match+filter_match+frequency+actions-shape, NOT conditions. `IS_IN`
+# proven in beta2 at byok_cap_exceeded above. Cross-artifact op/feature contract
+# pinned by test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "kb_sync_protected_fallback_failed" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "kb-sync-protected-fallback-failed"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 18
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "session-sync"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "kb-sync.protected-fallback-failed"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, correctly
+  # paging the solo founder. These events carry only hashed userId + op tags —
+  # no cross-tenant content — so the fallthrough does not over-disclose. Revisit
+  # recipient pinning (target_type="Member") before the first non-founder seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
 # watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
 # ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge
@@ -736,6 +890,78 @@ resource "sentry_issue_alert" "stale_bot_pr" {
       }
     },
   ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/email-triage/outbound.ts: agent-native cold-outbound email (#5325).
+# Pages on ANY failure in `sendCompliantOutbound`. The four emit sites all call
+# reportSilentFallback with `feature=outbound-email`:
+#   - outbound.suppression_check — suppression-lookup DB error (fail-closed: the
+#     send is BLOCKED, so a recurring failure silently halts all outbound).
+#   - outbound.dedup_check       — dedup-lookup DB error (also fail-closed).
+#   - outbound.send_error        — Resend API send failure (the email never went).
+#   - outbound.record_error      — record_outbound_send failed AFTER a successful
+#     send: the email WENT OUT but the WORM `outbound_sends` audit row is missing.
+#     This is a GDPR Art. 30 accountability gap (an un-logged send), so it must
+#     page even though the user-visible send "succeeded".
+# Detection already exists (reportSilentFallback → captureException); this is the
+# missing NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself).
+#
+# feature-ONLY filter (no `op` IS_IN): `feature=outbound-email` is dedicated to
+# outbound.ts and EVERY emit site is an operator-actionable failure (all four are
+# reportSilentFallback — there is NO routine info/warn emit under this feature;
+# pinned by test/sentry-outbound-email-alert-op-contract.test.ts, which fails
+# closed if a non-error emit is ever added). Mirrors workspace_sync_health's
+# feature-only rationale and future-proofs new failure ops. A NEW non-error emit
+# under feature=outbound-email would over-page — the contract test guards that.
+#
+# `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
+# mutually exclusive (a captured event is exactly one) so "all" is never
+# satisfiable; reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. Distinct `frequency=16` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,30,60,61,62; 16 free
+# 2026-06-15) — dedup keys on action_match+filter_match+frequency+actions-shape,
+# NOT conditions.
+resource "sentry_issue_alert" "outbound_email_send_failure" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "outbound-email-send-failure"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 16
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "outbound-email"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure / chat_message_save_failure):
+  # IssueOwners has no ownership rule on this project → falls through to
+  # ActiveMembers, paging the active founder + the ops@soleur.ai seat (added for
+  # this feature). The events carry only a recipient HASH (keyed HMAC), op, and
+  # pg_code/Resend-error tags — NO plaintext recipient or body — so the
+  # fallthrough does not over-disclose. Revisit recipient pinning
+  # (target_type="Member") before the first non-ops Sentry seat.
   actions_v2 = [
     {
       notify_email = {

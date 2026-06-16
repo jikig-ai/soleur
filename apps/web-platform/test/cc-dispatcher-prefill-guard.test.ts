@@ -101,9 +101,15 @@ vi.mock("@/server/resolve-workspace-owner", () => ({
 // Session-start ensure-repo self-heal (cold-path deps) — default no-op.
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: vi.fn(async () => null),
+  // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
+  getCurrentRepoStatus: vi.fn(async () => ({
+    repoStatus: "ready",
+    repoError: null,
+  })),
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
+  ensureWorkspaceDirExists: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/permission-callback", () => ({

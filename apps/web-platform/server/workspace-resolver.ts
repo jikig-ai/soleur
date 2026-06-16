@@ -27,6 +27,14 @@ export {
 
 const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
+// Mirrors workspace.ts:67 / api-usage.ts:46 — id-shape gate before any value
+// flows into join() to build a bwrap mount path (ADR-038, CWE-22 #5344). The
+// workspaceId column is typed `string | null`, not a validated UUID; this
+// allowlist (8-4-4-4-12 hex) rejects every traversal/separator token (`..`,
+// `/`, absolute prefix, newline-suffix) as a side-effect. `userId` is itself a
+// UUID, so the solo-workspace case (workspaceId === userId, N2) passes.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
 }
@@ -215,6 +223,56 @@ export async function resolveCurrentWorkspaceId(
     return userId; // fail to solo workspace, never a sibling
   }
   return result.data?.current_workspace_id ?? userId;
+}
+
+/**
+ * Fail-loud sibling of {@link resolveCurrentWorkspaceId}: read the user's
+ * CURRENT workspace id from `user_session_state.current_workspace_id` (ADR-044
+ * source-of-truth) and return it, or `null` when the row is absent / the column
+ * is null.
+ *
+ * Unlike `resolveCurrentWorkspaceId` this NEVER falls back to `userId` (the
+ * solo workspace) and NEVER swallows a read error. Callers here WRITE the
+ * resolved id as a durable `conversations.workspace_id` / slot `p_workspace_id`
+ * (a cross-tenant boundary): a silent solo-fallback to the caller's own id —
+ * the exact pattern #5256 removed from the resume-rebind path — could bind one
+ * tenant's write into another's workspace. So the fail-loud decision is centralized in
+ * the caller's durable resolver (`resolveUserWorkspaceBinding`): this reader
+ * returns `null` on an absent binding and THROWS on a DB read error, letting
+ * the resolver distinguish the two (Sentry op `unresolvable` vs `db-read`) and
+ * abort honestly.
+ *
+ * RLS: `user_session_state_owner_select` allows `auth.uid() = user_id`, so a
+ * tenant client reads only its own row.
+ */
+export async function readWorkspaceIdFromDb(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<string | null> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    maybeSingle: () => ChainShape;
+  } & PromiseLike<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("user_session_state") as ChainShape;
+  const result = await awaitChain<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>(chain.select("current_workspace_id").eq("user_id", userId).maybeSingle());
+
+  if (result.error) {
+    // Do NOT swallow — the resolver owns the fail-loud Sentry mirror + abort
+    // and reports this as op `db-read`. Returning null here would collapse a
+    // transient read failure into "user genuinely unbound".
+    throw result.error instanceof Error
+      ? result.error
+      : new Error(String(result.error));
+  }
+  return result.data?.current_workspace_id ?? null; // null, never userId
 }
 
 interface WorkspaceMemberRow {
@@ -428,6 +486,11 @@ export async function resolveActiveWorkspaceKbRoot(
     return { ok: false, status: 503 };
   }
 
+  // The id-shape guard (CWE-22 #5344) lives in workspacePathForWorkspaceId, so
+  // both workspacePath and the kbRoot built from it below are covered here.
+  // NOTE: paths built from the pre-stored `users.workspace_path` column
+  // (kb-route-helpers / kb upload route) are a SEPARATE boundary, mitigated by
+  // their own downstream `isPathInWorkspace` containment — not by this guard.
   const workspacePath = workspacePathForWorkspaceId(activeWorkspaceId);
   return {
     ok: true,
@@ -655,6 +718,12 @@ export async function resolveWorkspacePathForUser(
   supabase: SupabaseLike,
 ): Promise<string> {
   const workspaceId = await getDefaultWorkspaceForUser(userId, supabase);
+  if (!UUID_RE.test(workspaceId)) {
+    // JSON.stringify escapes control chars (the value is Sentry-bound via the
+    // callers' catch → reportSilentFallback): closes the log-injection vector
+    // a crafted/corrupted id would otherwise open (#5344).
+    throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
+  }
   return join(getWorkspacesRoot(), workspaceId);
 }
 
@@ -666,5 +735,8 @@ export async function resolveWorkspacePathForUser(
  * the legacy `<WORKSPACES_ROOT>/<user_id>` path (N2: workspace_id == user_id).
  */
 export function workspacePathForWorkspaceId(workspaceId: string): string {
+  if (!UUID_RE.test(workspaceId)) {
+    throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
+  }
   return join(getWorkspacesRoot(), workspaceId);
 }

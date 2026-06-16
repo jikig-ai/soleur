@@ -296,3 +296,22 @@ apps/web-platform/server/kb-route-helpers.ts
 #     and reads the probe row — all account-level maintenance with no tenant session.
 apps/web-platform/server/inngest/functions/email-on-received.ts
 apps/web-platform/server/inngest/functions/cron-email-ingress-probe.ts
+
+# Routines run-log middleware (#5345): writes the routine_runs WORM audit
+# row via the write_routine_run RPC. System writer — no per-tenant key
+# (routine runs are operator-global operational records).
+apps/web-platform/server/inngest/middleware/run-log.ts
+
+# Routines agent MCP tools (#5345): routines_list / routine_runs_list read
+# operator-global routine_runs via the service client (the agent acts for the
+# operator; routine_runs is not tenant-scoped data). routine_run dispatches
+# via the runRoutine chokepoint (no DB write here).
+apps/web-platform/server/routines-tools.ts
+
+# Auto-sync trigger (#5409): extracted from app/api/repo/setup/route.ts. INSERTs
+# the post-clone headless-sync `conversations` row via the service client — the
+# same service-role write the route legitimately performed inline before the
+# extraction (conversations has no authenticated INSERT path for this system-
+# initiated sync; the row is written FOR the user by the post-clone background
+# task, which runs after the response with no live tenant session to lease).
+apps/web-platform/server/auto-sync-trigger.ts

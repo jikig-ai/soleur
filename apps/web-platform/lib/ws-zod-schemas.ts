@@ -80,7 +80,10 @@ const attachmentRefSchema = z.strictObject({
 });
 
 const conversationContextSchema = z.strictObject({
-  path: z.string(),
+  // path optional: mode-flag context types (e.g. "routine-authoring", #5402)
+  // carry no document. validateConversationContext enforces path-required for
+  // document-context types.
+  path: z.string().optional(),
   type: z.string(),
   content: z.string().optional(),
 });
@@ -326,6 +329,20 @@ const debugEventSchema = z.strictObject({
   label: z.string().optional(),
   body: z.string().max(20000),
 });
+// feat-reasoning-chat-boxes (#5370) — agent-emitted user-facing narration.
+// `reasoning_narration` is the transient live status line (live-only, no seq,
+// excluded from the replay buffer). `turn_summary` is the durable per-turn
+// record (persisted + buffered, carries seq). Both text fields are redacted at
+// the server emit boundary; the max() admits redaction-marker expansion.
+const reasoningNarrationSchema = z.strictObject({
+  type: z.literal("reasoning_narration"),
+  message: z.string().max(20000),
+});
+const turnSummarySchema = z.strictObject({
+  type: z.literal("turn_summary"),
+  summary: z.string().max(20000),
+  seq: replaySeqSchema,
+});
 const reviewGateSchema = z.strictObject({
   type: z.literal("review_gate"),
   gateId: z.string(),
@@ -460,6 +477,10 @@ const errorSchema = z.strictObject({
       "too_many_files",
       "interactive_prompt_rejected",
       "image_paste_lost",
+      // #5394 — Concierge dispatch blocked because the active workspace repo
+      // setup errored (repo_status === "error"). Client renders the reconnect
+      // CTA. The cloning block carries no errorCode.
+      "repo_setup_failed",
       "delegation_revoked_post_grace",
       "delegation_expired",
       "delegation_hourly_cap_exceeded",
@@ -589,6 +610,8 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   commandStreamSchema,
   toolProgressSchema,
   debugEventSchema,
+  reasoningNarrationSchema,
+  turnSummarySchema,
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,

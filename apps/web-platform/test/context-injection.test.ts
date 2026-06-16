@@ -192,7 +192,7 @@ describe("document context injection (#2428)", () => {
       // no content — resolver reads it
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("Vision du projet");
@@ -215,7 +215,7 @@ describe("document context injection (#2428)", () => {
       type: "kb-viewer",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("Au Chat Pôtan - Pitch Projet.pdf");
@@ -238,7 +238,7 @@ describe("document context injection (#2428)", () => {
       type: "kb-viewer",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("large-file.md");
@@ -260,7 +260,7 @@ describe("document context injection (#2428)", () => {
       type: "kb-viewer",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("Do not ask which document");
@@ -279,7 +279,7 @@ describe("document context injection (#2428)", () => {
       type: "kb-viewer",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).not.toContain("/tmp/test-workspace");
@@ -297,7 +297,7 @@ describe("document context injection (#2428)", () => {
       type: "kb-viewer",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
     // Should NOT inject any file content or Read instruction for traversal path
@@ -314,7 +314,7 @@ describe("document context injection (#2428)", () => {
       content: "Already provided content",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", context);
 
     // readFile should NOT be called — content was provided by the client
     expect(mockReadFile).not.toHaveBeenCalled();

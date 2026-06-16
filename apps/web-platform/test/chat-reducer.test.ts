@@ -10,6 +10,7 @@ function emptyState(): ChatState {
     spawnIndex: new Map(),
     streamState: "idle",
     connection: { phase: "live" },
+    liveNarration: null,
   };
 }
 
@@ -57,6 +58,7 @@ describe("chatReducer", () => {
       spawnIndex: new Map(),
       streamState: "idle",
       connection: { phase: "unrecoverable" },
+      liveNarration: null,
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -87,6 +89,7 @@ describe("chatReducer", () => {
       ]),
       streamState: "idle",
       connection: { phase: "live" },
+      liveNarration: null,
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -101,6 +104,7 @@ describe("chatReducer", () => {
   test("ack_timer_action clears pendingTimerAction", () => {
     const state: ChatState = {
       ...emptyState(),
+      liveNarration: null,
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -126,6 +130,7 @@ describe("chatReducer", () => {
       spawnIndex: new Map(),
       streamState: "idle",
       connection: { phase: "live" },
+      liveNarration: null,
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 

@@ -5,6 +5,7 @@
 // bidirectional `_AssertWorkflowEndStatusMatches` rail in `soleur-go-runner.ts`.
 
 import type { WorkflowEnd } from "./soleur-go-runner";
+import type { ReprovisionOutcome } from "./ensure-workspace-repo";
 
 type WorkflowEndStatus = WorkflowEnd["status"];
 
@@ -56,3 +57,41 @@ export const WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string> = {
 const _workflowEndExhaustive: Record<WorkflowEndStatus, string> =
   WORKFLOW_END_USER_MESSAGES;
 void _workflowEndExhaustive;
+
+/**
+ * Honest "workspace reclaimed" copy (#5340 / #5240 design item #2). Fires ONLY
+ * when a `worktree_enter_failed` turn is paired with a GENUINELY-failed
+ * re-provision recovery (`ReprovisionOutcome === "failed"`) — i.e. the repo was
+ * gone and the automatic re-clone could not restore it (token expired / network
+ * / repo deleted). NOT a new `WorkflowEndStatus` (that would trip the
+ * exhaustiveness rails) — just a distinct message for the existing status.
+ *
+ * Voice mirrors the existing honest copy: the `worktree_enter_failed` generic
+ * line above and the held-place reclaim banner in `chat-surface.tsx`
+ * ("Your place is held — your full conversation is intact. Start a new message
+ * to resume with full context."). Honest about the failure, actionable, and
+ * never leaks the internal status enum.
+ */
+export const WORKSPACE_RECLAIMED_MESSAGE =
+  "Your workspace was reclaimed and couldn't be restored automatically. Your conversation is intact — start a new message to resume with full context.";
+
+/**
+ * Routing decision for a `worktree_enter_failed` turn (the cc `onWorkflowEnded`
+ * else-branch — `worktree_enter_failed` is NOT terminal, so it emits a
+ * `{ type: "error", message }` frame, never `session_ended`).
+ *
+ * PLACEMENT (load-bearing — learning 2026-06-14-short-circuit-guard-must-sit-
+ * after-the-recovery-it-gates.md): the honest reclaimed message is a
+ * POST-recovery-failure concept. It is gated on `reprovisionOutcome === "failed"`
+ * — evaluated AFTER the recovery ran — so a successful/benign recovery ("ok") or
+ * an unresolved outcome (`undefined`, e.g. the per-dispatch resolve had not
+ * settled before the turn failed) falls through to the generic, retryable copy.
+ * This is what keeps the message from lying in the recoverable case.
+ */
+export function resolveWorktreeEnterFailedMessage(
+  reprovisionOutcome: ReprovisionOutcome | undefined,
+): string {
+  return reprovisionOutcome === "failed"
+    ? WORKSPACE_RECLAIMED_MESSAGE
+    : WORKFLOW_END_USER_MESSAGES.worktree_enter_failed;
+}

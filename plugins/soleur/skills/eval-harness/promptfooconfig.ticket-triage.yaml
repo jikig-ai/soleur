@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "ticket-triage P-level accuracy — skill arm (priority rubric) vs baseline (no rubric)"
+
+# Model IDs are single-sourced — shared with the go-routing config. Run
+# `bash scripts/gen-models.sh` to (re)generate models.generated.json from the TS registry.
+providers: file://models.generated.json
+
+# Two arms become two grid columns. The skill arm embeds the P-level priority rubric;
+# the baseline arm knows only the P1/P2/P3 token set (the control).
+prompts:
+  - file://prompts/triage-skill.txt
+  - file://prompts/triage-baseline.txt
+
+defaultTest:
+  vars:
+    # Closed P1/P2/P3 enum (single source). promptfoo passes this file:// ref to the
+    # custom asserts VERBATIM (it does not resolve defaultTest.vars file:// refs), so
+    # the asserts read the file themselves via loadEnum() in scripts/parse-label.cjs.
+    enum: file://enums/triage-levels.json
+  assert:
+    # MEASUREMENT: always passes, records P-level-correct rate (1.0 / 0.0).
+    - type: javascript
+      value: file://scripts/measure-classification.cjs
+    # GATE: fails if the emitted label is not a member of the enum.
+    - type: javascript
+      value: file://scripts/gate-classification.cjs
+
+# N runs per cell come from the `--repeat N` CLI flag (a config-level `repeat:` key
+# is NOT honored by promptfoo). The classification-correct rate is the mean of the
+# measurement assert's per-run scores; promptfoo has no native median, so read the
+# aggregate per-cell score or compute the median across the --repeat runs. See README.
+#
+# Golden tasks: { vars: { input, golden_label } } per line.
+tests: file://tasks/ticket-triage.jsonl

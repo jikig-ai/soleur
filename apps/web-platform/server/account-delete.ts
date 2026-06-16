@@ -112,6 +112,14 @@ export interface DeleteAccountResult {
  *                             anonymised per Art. 17(3)(b). Required:
  *                             email_triage_items.user_id REFERENCES
  *                             users(id) ON DELETE RESTRICT.
+ *   5.14 anonymise-routine-runs —
+ *                             anonymise_routine_runs RPC (migration 107,
+ *                             #5345 / #5372). Nulls actor_id +
+ *                             delegating_principal under the GUC-gated WORM
+ *                             bypass (app.worm_bypass); the append-only run-log
+ *                             row is retained anonymised. Required:
+ *                             routine_runs.actor_id / .delegating_principal
+ *                             REFERENCE users(id) ON DELETE RESTRICT.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -179,6 +187,11 @@ export async function deleteAccount(
   // their own workspace at this point (Phase 7 anonymise_workspace_members
   // strips any team memberships earlier in the cascade). `userId` ===
   // `workspaces.id` per migration 053 §1.1.7 N2 invariant.
+  //
+  // #5275 erasure cascade: in-flight checkpoint refs (`refs/checkpoints/*`) live
+  // ON this clone, so removing the directory reaps them with no extra step. The
+  // unreferenced git objects they pointed at are reclaimed by the clone's normal
+  // gc — moot here since the whole directory is removed.
   try {
     await deleteWorkspace(userId);
   } catch (err) {
@@ -925,6 +938,96 @@ export async function deleteAccount(
       "anonymise_email_triage_items threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed at anonymise-email-triage-items. Please try again." };
+  }
+
+  // 3.98 Anonymise email_suppression rows for this user BEFORE auth-delete
+  //      (migration 104, #5325). email_suppression.owner_id → users(id) is ON
+  //      DELETE RESTRICT, so auth-delete would FK-block (23503) without this.
+  //      service_role-only RPC (no self-service erasure). Idempotent.
+  try {
+    const { error: anonSuppErr } = await service.rpc(
+      "anonymise_email_suppression",
+      { p_user_id: userId },
+    );
+    if (anonSuppErr) {
+      reportSilentFallback(anonSuppErr, {
+        feature: "account-delete",
+        op: "anonymise-email-suppression",
+        extra: { userId },
+        message: "anonymise_email_suppression failed — aborting deletion to avoid FK-block",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-email-suppression. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-email-suppression",
+      extra: { userId },
+      message: "anonymise_email_suppression threw — aborting deletion to avoid FK-block",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-email-suppression. Please try again." };
+  }
+
+  // 3.99 Anonymise outbound_sends rows for this user BEFORE auth-delete
+  //      (migration 104, #5325). outbound_sends.owner_id → users(id) is ON
+  //      DELETE RESTRICT; the RPC bypasses the WORM trigger via SET LOCAL
+  //      session_replication_role. service_role-only (no self-service erasure
+  //      of the third-party accountability audit). Idempotent.
+  try {
+    const { error: anonOutErr } = await service.rpc(
+      "anonymise_outbound_sends",
+      { p_user_id: userId },
+    );
+    if (anonOutErr) {
+      reportSilentFallback(anonOutErr, {
+        feature: "account-delete",
+        op: "anonymise-outbound-sends",
+        extra: { userId },
+        message: "anonymise_outbound_sends failed — aborting deletion to avoid FK-block",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-outbound-sends. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-outbound-sends",
+      extra: { userId },
+      message: "anonymise_outbound_sends threw — aborting deletion to avoid FK-block",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-outbound-sends. Please try again." };
+  }
+
+  // 3.995 Anonymise routine_runs (migration 107, #5345 / #5372).
+  //      routine_runs.actor_id / .delegating_principal reference users(id)
+  //      ON DELETE RESTRICT — without this step the auth-delete cascade aborts
+  //      with FK 23503 (and the WORM no-mutate trigger would block a SET NULL/
+  //      CASCADE anyway). The RPC NULLs both columns under the GUC-gated WORM
+  //      bypass (app.worm_bypass), preserving the append-only run-log row
+  //      (Art. 17 = scrub the subject's PII, keep the operational-audit row).
+  //      MUST run BEFORE auth.admin.deleteUser. Idempotent: re-runs no-op once
+  //      every row referencing this user is anonymised.
+  try {
+    const { error: anonRoutineErr } = await service.rpc(
+      "anonymise_routine_runs",
+      { p_user_id: userId },
+    );
+    if (anonRoutineErr) {
+      reportSilentFallback(anonRoutineErr, {
+        feature: "account-delete",
+        op: "anonymise-routine-runs",
+        extra: { userId },
+        message: "anonymise_routine_runs failed — aborting deletion to avoid FK-block",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-routine-runs. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-routine-runs",
+      extra: { userId },
+      message: "anonymise_routine_runs threw — aborting deletion to avoid FK-block",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-routine-runs. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

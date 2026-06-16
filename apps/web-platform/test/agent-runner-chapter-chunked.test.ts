@@ -65,6 +65,9 @@ vi.mock("fs", async (importOriginal) => {
 
 vi.mock("node:fs/promises", () => ({
   readFile: mockReadFile,
+  // startAgentSession now ensures the workspace dir before sandbox construction
+  // (ensureWorkspaceDirExists → mkdir); this partial mock must export it.
+  mkdir: vi.fn(async () => undefined),
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
@@ -214,7 +217,7 @@ describe("agent-runner leader chapter-chunked dispatch (Phase 3.B)", () => {
     });
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-route",
       "cpo",
       undefined,
@@ -260,7 +263,7 @@ describe("agent-runner leader chapter-chunked dispatch (Phase 3.B)", () => {
     });
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-ambig",
       "cpo",
       undefined,
@@ -305,7 +308,7 @@ describe("agent-runner leader chapter-chunked dispatch (Phase 3.B)", () => {
     mockReadFile.mockRejectedValueOnce(enoent);
 
     await startAgentSession(
-      "user-1",
+      "11111111-1111-4111-8111-111111111111",
       "conv-enoent",
       "cpo",
       undefined,

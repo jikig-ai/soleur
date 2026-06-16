@@ -15,7 +15,14 @@ function isSafePath(path: string): boolean {
   return filename.lastIndexOf(".") > 0;
 }
 /** Allowed context types */
-const ALLOWED_CONTEXT_TYPES = new Set(["kb-viewer"]);
+const ALLOWED_CONTEXT_TYPES = new Set(["kb-viewer", "routine-authoring"]);
+
+/**
+ * Mode-flag context types carry NO document (no path) — they only scope agent
+ * behavior via a system-prompt directive. Document-context types (kb-viewer)
+ * still require a valid path. #5402.
+ */
+const MODE_FLAG_CONTEXT_TYPES = new Set(["routine-authoring"]);
 
 /**
  * Validate a ConversationContext payload from the client.
@@ -33,14 +40,22 @@ export function validateConversationContext(
 
   const obj = raw as Record<string, unknown>;
 
-  // path: required, must be a safe file path (no traversal)
-  if (typeof obj.path !== "string" || !isSafePath(obj.path)) {
-    throw new Error("Invalid context: path must be a valid file path (no '..' or leading '/')");
-  }
-
-  // type: required, must be from allowed set
+  // type: required, must be from allowed set (checked first so a bad type fails
+  // before the type-conditional path rule below).
   if (typeof obj.type !== "string" || !ALLOWED_CONTEXT_TYPES.has(obj.type)) {
     throw new Error(`Invalid context: type must be one of ${[...ALLOWED_CONTEXT_TYPES].join(", ")}`);
+  }
+
+  const isModeFlag = MODE_FLAG_CONTEXT_TYPES.has(obj.type);
+
+  // path: required for document-context types; absent for mode-flag types.
+  // When present (either case), it must be a safe file path (no traversal).
+  if (isModeFlag) {
+    if (obj.path !== undefined && (typeof obj.path !== "string" || !isSafePath(obj.path))) {
+      throw new Error("Invalid context: path must be a valid file path (no '..' or leading '/')");
+    }
+  } else if (typeof obj.path !== "string" || !isSafePath(obj.path)) {
+    throw new Error("Invalid context: path must be a valid file path (no '..' or leading '/')");
   }
 
   // content: optional, but bounded
@@ -54,7 +69,7 @@ export function validateConversationContext(
   }
 
   return {
-    path: obj.path,
+    path: obj.path as string | undefined,
     type: obj.type,
     content: obj.content as string | undefined,
   };

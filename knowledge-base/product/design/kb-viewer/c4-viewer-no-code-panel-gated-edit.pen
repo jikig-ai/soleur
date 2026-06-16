@@ -1,0 +1,1203 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "v4ly8",
+      "x": 0,
+      "y": 0,
+      "name": "AFTER - C4 workspace (c4-edit OFF)",
+      "width": 1200,
+      "height": 760,
+      "fill": "#0c0c0d",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#1f1f24"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "3fPrw",
+          "name": "page top bar",
+          "width": "fill_container",
+          "height": 48,
+          "fill": "#0f0f10",
+          "padding": [
+            0,
+            16
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "NxrGg",
+              "fill": "#9b9ba3",
+              "content": "Architecture / C4 Diagram",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "ti69V",
+              "name": "actions",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "a9LzY",
+                  "name": "Share button",
+                  "height": 28,
+                  "fill": "#1a1a1d",
+                  "cornerRadius": 6,
+                  "padding": [
+                    0,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "fflYm",
+                      "fill": "#c8c8d0",
+                      "content": "Share",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "9uitM",
+          "name": "workspace body",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "#0c0c0d",
+          "children": [
+            {
+              "type": "frame",
+              "id": "CqJNy",
+              "name": "LEFT pane - diagram canvas (UNCHANGED)",
+              "width": 744,
+              "height": "fill_container",
+              "fill": "#0f1115",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#16161a"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "XML1H",
+                  "name": "DiagramCanvas (.soleur-c4)",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "#0f1115",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f3meK",
+                      "x": 12,
+                      "y": 12,
+                      "name": "LikeC4 controls",
+                      "width": 36,
+                      "height": 108,
+                      "fill": "#15171d",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2a2d36"
+                      },
+                      "layout": "vertical",
+                      "justifyContent": "space_around",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "HnbeZ",
+                          "fill": "#9aa3b2",
+                          "content": "+",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "16hBT",
+                          "fill": "#9aa3b2",
+                          "content": "–",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "icon_font",
+                          "id": "P5Pew",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "maximize",
+                          "iconFontFamily": "lucide",
+                          "fill": "#9aa3b2"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Ud2iG",
+                      "x": 696,
+                      "y": 12,
+                      "name": "Expand to fullscreen button",
+                      "width": 36,
+                      "height": 36,
+                      "fill": "#15171d",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2a2d36"
+                      },
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "gY8g0",
+                          "width": 18,
+                          "height": 18,
+                          "iconFontName": "expand",
+                          "iconFontFamily": "lucide",
+                          "fill": "#9aa3b2"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ptLqv",
+                      "x": 286,
+                      "y": 110,
+                      "name": "node A",
+                      "width": 172,
+                      "height": 74,
+                      "fill": "#1d2230",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#3a4358"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "MDZpI",
+                          "fill": "#e7e9ee",
+                          "content": "Web Platform",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Tvaf5",
+                          "fill": "#9aa3b2",
+                          "content": "[Next.js app]",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "GiIoV",
+                      "x": 130,
+                      "y": 300,
+                      "name": "node B",
+                      "width": 172,
+                      "height": 74,
+                      "fill": "#1d2230",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#3a4358"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "TFTI5",
+                          "fill": "#e7e9ee",
+                          "content": "Supabase",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "3FB52",
+                          "fill": "#9aa3b2",
+                          "content": "[Postgres + Auth]",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "MQg4R",
+                      "x": 442,
+                      "y": 300,
+                      "name": "node C",
+                      "width": 172,
+                      "height": 74,
+                      "fill": "#1d2230",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#3a4358"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "aDNhv",
+                          "fill": "#e7e9ee",
+                          "content": "Inngest",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "YIoAj",
+                          "fill": "#9aa3b2",
+                          "content": "[Durable jobs]",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "sXaBf",
+                      "x": 250,
+                      "y": 194,
+                      "name": "edge A-B",
+                      "width": 2,
+                      "height": 106,
+                      "fill": "#3a4358"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "NRXfu",
+                      "x": 470,
+                      "y": 194,
+                      "name": "edge A-C",
+                      "width": 2,
+                      "height": 106,
+                      "fill": "#3a4358"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Kmz9G",
+                      "x": 210,
+                      "y": 540,
+                      "name": "canvas hint",
+                      "fill": "#6b7280",
+                      "content": "Interactive LikeC4 diagram — drag to pan, scroll to zoom",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "BWDjv",
+                  "name": "Notes strip (collapsible)",
+                  "width": "fill_container",
+                  "height": 40,
+                  "fill": "#0c0c0e",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "#16161a"
+                  },
+                  "padding": [
+                    0,
+                    16
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "l4860",
+                      "name": "notesL",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "X3Aei",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "chevron-up",
+                          "iconFontFamily": "lucide",
+                          "fill": "#6b7280"
+                        },
+                        {
+                          "type": "text",
+                          "id": "szhiJ",
+                          "fill": "#9b9ba3",
+                          "content": "Notes",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "i6MaU",
+                      "fill": "#5a5a62",
+                      "content": "2 notes",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "OoWaK",
+              "name": "RIGHT pane - Concierge (Code tab REMOVED)",
+              "width": 456,
+              "height": "fill_container",
+              "fill": "#0f0f10",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "left": 1
+                },
+                "fill": "#1f1f24"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "gk5oM",
+                  "name": "Concierge header (no tab strip)",
+                  "width": "fill_container",
+                  "height": 44,
+                  "fill": "#161619",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1f1f24"
+                  },
+                  "padding": [
+                    0,
+                    14
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "mDoWN",
+                      "name": "rheadL",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "QXq73",
+                          "width": 15,
+                          "height": 15,
+                          "iconFontName": "sparkles",
+                          "iconFontFamily": "lucide",
+                          "fill": "#d4b36a"
+                        },
+                        {
+                          "type": "text",
+                          "id": "jAqAj",
+                          "fill": "#e6e6ea",
+                          "content": "Concierge",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "ZqlDM",
+                      "name": "collapse chevron",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "chevrons-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#9b9ba3"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "SqwD9",
+                  "name": "discoverability hint",
+                  "width": "fill_container",
+                  "fill": "#121214",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1c1c20"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    10,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "PV950",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "info",
+                      "iconFontFamily": "lucide",
+                      "fill": "#8a8a92"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zjFJA",
+                      "name": "hint text",
+                      "fill": "#8a8a92",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "To change this diagram, ask the Concierge.",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "nSXoi",
+                  "name": "chat thread",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "#0f0f10",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qO1Lx",
+                      "name": "assistant bubble",
+                      "width": "fill_container",
+                      "fill": "#17171b",
+                      "cornerRadius": 8,
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "rwjBm",
+                          "fill": "#8a8a92",
+                          "content": "Concierge",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "aMNIi",
+                          "fill": "#d6d6da",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "This diagram shows the Web Platform talking to Supabase and Inngest. Ask me to add an element or change a relationship.",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "6U5kP",
+                      "name": "user bubble row",
+                      "width": "fill_container",
+                      "justifyContent": "end",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "So9tw",
+                          "name": "user bubble",
+                          "width": 280,
+                          "fill": "#23211a",
+                          "cornerRadius": 8,
+                          "layout": "vertical",
+                          "padding": 12,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "AgCQ3",
+                              "fill": "#e6e0d2",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Add a Redis cache between the app and Supabase.",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "f0UbD",
+                  "name": "composer",
+                  "width": "fill_container",
+                  "fill": "#0f0f10",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "#1f1f24"
+                  },
+                  "layout": "vertical",
+                  "padding": [
+                    10,
+                    14,
+                    14,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "rj3yg",
+                      "name": "input box",
+                      "width": "fill_container",
+                      "height": 42,
+                      "fill": "#161619",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2a2a30"
+                      },
+                      "padding": [
+                        0,
+                        12
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "tMk1W",
+                          "fill": "#5a5a62",
+                          "content": "Ask about this document…",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "UhnPX",
+                          "name": "send",
+                          "width": 26,
+                          "height": 26,
+                          "fill": {
+                            "type": "gradient",
+                            "gradientType": "linear",
+                            "enabled": true,
+                            "rotation": 0,
+                            "size": {
+                              "height": 1
+                            },
+                            "colors": [
+                              {
+                                "color": "#d4b36a",
+                                "position": 0
+                              },
+                              {
+                                "color": "#b8923e",
+                                "position": 1
+                              }
+                            ]
+                          },
+                          "cornerRadius": 6,
+                          "layout": "vertical",
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "vsdxl",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "arrow-up",
+                              "iconFontFamily": "lucide",
+                              "fill": "#1a1408"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "UehJJ",
+      "x": 1280,
+      "y": 0,
+      "name": "BEFORE (removed) - Concierge | Code two-tab",
+      "width": 460,
+      "height": 520,
+      "fill": "#0f0f10",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#4a4a52"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "6MWqr",
+          "name": "blabel",
+          "width": "fill_container",
+          "fill": "#1a1410",
+          "gap": 6,
+          "padding": [
+            8,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "Qu28n",
+              "name": "b1",
+              "width": 13,
+              "height": 13,
+              "iconFontName": "trash-2",
+              "iconFontFamily": "lucide",
+              "fill": "#c98b6a"
+            },
+            {
+              "type": "text",
+              "id": "2Pe9B",
+              "name": "b2",
+              "fill": "#c98b6a",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "BEFORE — this entire surface is now hidden (c4-edit OFF)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "5yui3",
+          "name": "Concierge | Code tab strip",
+          "width": "fill_container",
+          "height": 40,
+          "fill": "#161619",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#1f1f24"
+          },
+          "padding": [
+            0,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ngQXi",
+              "name": "tab Concierge",
+              "height": 40,
+              "layout": "vertical",
+              "padding": [
+                0,
+                12
+              ],
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "0iAXT",
+                  "name": "t1",
+                  "fill": "#9b9ba3",
+                  "content": "Concierge",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "b6yHP",
+              "name": "tab Code (active)",
+              "height": 40,
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 2
+                },
+                "fill": "#d4b36a"
+              },
+              "layout": "vertical",
+              "padding": [
+                0,
+                12
+              ],
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hHKUz",
+                  "name": "t2",
+                  "fill": "#e6e6ea",
+                  "content": "Code",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "b5mXL",
+          "name": "CodeMirror .c4 editor",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "#0b0d12",
+          "children": [
+            {
+              "type": "frame",
+              "id": "PIxMb",
+              "name": "gutter",
+              "width": 34,
+              "height": "fill_container",
+              "fill": "#0d0f15",
+              "layout": "vertical",
+              "gap": 6,
+              "padding": [
+                10,
+                0,
+                0,
+                0
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "m4THg",
+                  "name": "g1",
+                  "fill": "#3f4350",
+                  "content": "1",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "yCdux",
+                  "name": "g2",
+                  "fill": "#3f4350",
+                  "content": "2",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "HKEwJ",
+                  "name": "g3",
+                  "fill": "#3f4350",
+                  "content": "3",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "reAye",
+                  "name": "g4",
+                  "fill": "#3f4350",
+                  "content": "4",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "u7qwl",
+                  "name": "g5",
+                  "fill": "#3f4350",
+                  "content": "5",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "xV0eZ",
+              "name": "code lines",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "#0b0d12",
+              "layout": "vertical",
+              "gap": 6,
+              "padding": [
+                10,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "D0ter",
+                  "name": "c1",
+                  "fill": "#9aa3b2",
+                  "content": "specification {",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "wn2in",
+                  "name": "c2",
+                  "fill": "#7fae8f",
+                  "content": "  element system",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "hgplP",
+                  "name": "c3",
+                  "fill": "#9aa3b2",
+                  "content": "}",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "oSQs8",
+                  "name": "c4",
+                  "fill": "#9aa3b2",
+                  "content": "model {",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "9LSfV",
+                  "name": "c5",
+                  "fill": "#c2a5d6",
+                  "content": "  webapp = system 'Web Platform'",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "B4Tvw",
+          "name": "editor footer",
+          "width": "fill_container",
+          "fill": "#0f0f10",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#1f1f24"
+          },
+          "padding": [
+            10,
+            12
+          ],
+          "justifyContent": "end",
+          "children": [
+            {
+              "type": "frame",
+              "id": "dYPTG",
+              "name": "Save button",
+              "height": 28,
+              "fill": "#1a1a1d",
+              "cornerRadius": 6,
+              "layout": "vertical",
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "eUjD9",
+                  "name": "s1",
+                  "fill": "#c8c8d0",
+                  "content": "Save",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "rYBfN",
+      "x": 1280,
+      "y": 560,
+      "name": "callout - code tab removed",
+      "width": 460,
+      "fill": "#1a1410",
+      "cornerRadius": 6,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#5a4326"
+      },
+      "layout": "vertical",
+      "gap": 4,
+      "padding": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "h0F0j",
+          "name": "co1a",
+          "fill": "#e0b878",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "① Code tab REMOVED",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "y5F16",
+          "name": "co1b",
+          "fill": "#b8a07e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Gated behind c4-edit flag (default OFF for all users). The Concierge | Code tab toggle and the CodeMirror .c4 editor are hidden. Re-enabled later.",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "AbMuJ",
+      "x": 1280,
+      "y": 660,
+      "name": "callout - discoverability hint",
+      "width": 460,
+      "fill": "#101418",
+      "cornerRadius": 6,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#2a3a46"
+      },
+      "layout": "vertical",
+      "gap": 4,
+      "padding": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "Iv9nv",
+          "name": "co2a",
+          "fill": "#7fb3cc",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "② New: discoverability hint",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "0ux39",
+          "name": "co2b",
+          "fill": "#90a8b4",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "The only additive element. \"To change this diagram, ask the Concierge.\" — edits now route through the Concierge since the raw .c4 editor is gone.",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "QUGLD",
+      "x": 1280,
+      "y": 760,
+      "name": "callout - unchanged",
+      "width": 460,
+      "fill": "#101410",
+      "cornerRadius": 6,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#2a3a2a"
+      },
+      "layout": "vertical",
+      "gap": 4,
+      "padding": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "hy3dX",
+          "name": "co3a",
+          "fill": "#8fbf8f",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "③ Unchanged",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "nnQse",
+          "name": "co3b",
+          "fill": "#9bb89b",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Diagram VIEW unchanged (c4-visualizer flag). Concierge edit path unchanged — only the raw-source editor surface is hidden.",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "i4FtF",
+      "x": 0,
+      "y": -72,
+      "name": "wireframe title",
+      "width": 1200,
+      "height": 56,
+      "fill": "#0a0a0b",
+      "cornerRadius": 6,
+      "layout": "vertical",
+      "gap": 2,
+      "padding": [
+        0,
+        16
+      ],
+      "justifyContent": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "Uhi0n",
+          "name": "tt1",
+          "fill": "#e6e6ea",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "C4 viewer — Code panel removed, C4 editing gated behind c4-edit (default OFF)",
+          "fontFamily": "Inter",
+          "fontSize": 15,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "Uj8LT",
+          "name": "tt2",
+          "fill": "#8a8a92",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Wireframe · desktop · end-user state when c4-edit is OFF (the default) · domain: kb-viewer",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}

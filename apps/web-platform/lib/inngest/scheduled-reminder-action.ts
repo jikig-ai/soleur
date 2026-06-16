@@ -8,9 +8,11 @@
 // CHECK_REGISTRY membership check lives in the handler, not here (see the handler
 // header for the intentional route↔handler asymmetry).
 
-// Discriminated union, ALLOWLISTED. Any other `type` is rejected. v1 performs no
-// issue close/edit/label mutation — only a comment (issue-comment) or a
-// read-or-reviewed registered check (named-check).
+// Discriminated union, ALLOWLISTED. Any other `type` is rejected. issue-comment
+// only posts a comment; named-check runs a registered check that may post a
+// comment AND (v1.1) close — but ONLY the action's own report_to_issue, via the
+// boolean `close` on the check result (an arbitrary-issue close is structurally
+// unrepresentable; see the handler's close-PATCH and ADR-063).
 export type ReminderAction =
   | { type: "issue-comment"; issue: number; body: string }
   | {

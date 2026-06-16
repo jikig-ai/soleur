@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { hashBytes } from "@/server/kb-content-hash";
 import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
+import { makeUuidWorkspaceTmpdir } from "./helpers/workspace-tmpdir";
 
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
@@ -89,7 +90,7 @@ function mockShareNotFound() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mockIsAllowed.mockReturnValue(true);
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "shared-page-bin-"));
+  tmpWorkspace = makeUuidWorkspaceTmpdir("shared-page-bin-").workspacePath;
   // ADR-044: the route resolves kbRoot via workspacePathForWorkspaceId
   // (`<WORKSPACES_ROOT>/<workspace_id>`). The mock derives workspace_id from
   // this dir's basename, so point WORKSPACES_ROOT at its parent.

@@ -14,6 +14,7 @@ function emptyState(): ChatState {
     spawnIndex: new Map(),
     streamState: "idle",
     connection: { phase: "live" },
+    liveNarration: null,
   };
 }
 

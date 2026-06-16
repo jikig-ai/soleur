@@ -4,14 +4,26 @@
 # Usage: linkedin-community.sh <command> [args]
 # Commands:
 #   post-content --text "<text>" [--author "<urn>"]  - Post to LinkedIn (person or company page)
-#   fetch-metrics                  - Fetch account metrics (requires Marketing API)
-#   fetch-activity                 - Fetch account activity (requires Marketing API)
+#   fetch-metrics                  - Fetch aggregate Company Page metrics (org read scopes)
+#   fetch-activity                 - Fetch recent Company Page post metadata (org read scopes)
+#
+# fetch-metrics / fetch-activity history: implemented 2026-06-15. The prior
+# "requires Marketing Developer Platform (MDP) partner approval" premise was
+# incorrect — the org token already carries the read scopes
+# (r_organization_social, rw_organization_admin, r_organization_followers).
+# Collection is aggregate-only: share statistics + a single follower total +
+# recent org-authored post metadata. NO per-member data, NO follower-list
+# extraction, NO demographic facets.
 #
 # Environment variables (required):
 #   LINKEDIN_ACCESS_TOKEN      - OAuth 2.0 Bearer token for personal posts (60-day TTL)
-#   LINKEDIN_ORG_ACCESS_TOKEN  - OAuth 2.0 Bearer token for organization/company page posts
-#                                (requires w_organization_social scope; required when
-#                                --author is urn:li:organization:*)
+#   LINKEDIN_ORG_ACCESS_TOKEN  - OAuth 2.0 Bearer token for organization/company page
+#                                operations. Required for fetch-metrics/fetch-activity
+#                                (org read scopes: r_organization_social,
+#                                rw_organization_admin) and for org posts
+#                                (w_organization_social, --author urn:li:organization:*).
+#   LINKEDIN_ORG_ID            - Numeric organization id. Required for
+#                                fetch-metrics/fetch-activity (builds the org URN).
 #   LINKEDIN_PERSON_URN    - Person URN for posting (urn:li:person:{id}), optional if --author provided
 #   LINKEDIN_ALLOW_POST    - Set to "true" to enable posting (safety guard, default: disabled)
 #
@@ -49,6 +61,37 @@ require_credentials() {
     echo "  1. Run: linkedin-setup.sh generate-token" >&2
     echo "  2. Or set LINKEDIN_ACCESS_TOKEN manually" >&2
     echo "  3. Run: linkedin-setup.sh verify" >&2
+    exit 1
+  fi
+}
+
+# Require the organization read credentials for fetch-metrics/fetch-activity.
+# Fails LOUD with `exit 1` (NOT `return 1`): the script runs `set -euo pipefail`,
+# and a `return 1` consumed in a conditional/pipeline does NOT terminate, which
+# would re-open the silent fall-through. Mirrors require_credentials (exit 1),
+# NOT cmd_post_content's return-1 guard.
+#
+# NEVER silent-fallback to the personal LINKEDIN_ACCESS_TOKEN — that token is
+# live in the cron spawn env and lacks the org read scopes; falling back yields
+# an opaque 401/400 instead of a clear "missing org creds" error
+# (learning 2026-04-26-linkedin-org-token-fallback-silent-400.md).
+require_org_credentials() {
+  local missing=()
+  [[ -n "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]] || missing+=("LINKEDIN_ORG_ACCESS_TOKEN")
+  # Fail-closed numeric check: a non-numeric (or unset) org id must never be
+  # interpolated into the request URL. When unset/empty the message names the
+  # bare var (matching the existing unset path); when set-but-non-numeric it
+  # names the constraint so the operator can fix it.
+  if [[ -z "${LINKEDIN_ORG_ID:-}" ]]; then
+    missing+=("LINKEDIN_ORG_ID")
+  elif [[ ! "${LINKEDIN_ORG_ID}" =~ ^[0-9]+$ ]]; then
+    missing+=("LINKEDIN_ORG_ID (must be numeric)")
+  fi
+  if (( ${#missing[@]} > 0 )); then
+    echo "Error: Missing LinkedIn organization credentials: ${missing[*]}" >&2
+    echo "fetch-metrics/fetch-activity read the operator's own Company Page" >&2
+    echo "aggregate insights and require the org token + org id." >&2
+    echo "Set LINKEDIN_ORG_ACCESS_TOKEN (org read scopes) and LINKEDIN_ORG_ID." >&2
     exit 1
   fi
 }
@@ -113,11 +156,16 @@ handle_response() {
 # --- GET request helper ---
 
 # Make an authenticated GET request to the LinkedIn API
-# Arguments: endpoint [depth]
+# Arguments: endpoint [depth] [extra_header]
+#   extra_header - optional single "Name: value" header (e.g. the
+#                  "X-RestLi-Method: FINDER" header the Posts author-finder
+#                  requires). Forwarded on the 429-retry recursion so a retry
+#                  never silently drops it.
 # Retries on 429 up to 3 times
 get_request() {
   local endpoint="$1"
   local depth="${2:-0}"
+  local extra_header="${3:-}"
 
   if (( depth >= 3 )); then
     echo "Error: LinkedIn API rate limit exceeded after 3 retries for ${endpoint}." >&2
@@ -126,11 +174,17 @@ get_request() {
 
   local url="${LINKEDIN_API}${endpoint}"
 
+  local -a header_args=()
+  if [[ -n "$extra_header" ]]; then
+    header_args=(-H "$extra_header")
+  fi
+
   local response http_code body
   if ! response=$(curl -s -w "\n%{http_code}" \
     -H "Authorization: Bearer ${LINKEDIN_ACCESS_TOKEN}" \
     -H "X-Restli-Protocol-Version: 2.0.0" \
     -H "LinkedIn-Version: ${LINKEDIN_API_VERSION}" \
+    "${header_args[@]}" \
     "$url" 2>/dev/null); then
     echo "Error: Failed to connect to LinkedIn API." >&2
     echo "Check your network connection and try again." >&2
@@ -141,7 +195,7 @@ get_request() {
   body=$(echo "$response" | sed '$d')
 
   handle_response "$http_code" "$body" "$endpoint" "$depth" \
-    get_request "$endpoint" "$((depth + 1))"
+    get_request "$endpoint" "$((depth + 1))" "$extra_header"
 }
 
 # --- POST request helper ---
@@ -359,16 +413,131 @@ cmd_post_content() {
   echo "Post created successfully." >&2
 }
 
+# Fetch aggregate Company Page metrics: lifetime share statistics + a single
+# follower total. Aggregate-only — no demographic facets, no per-member data.
 cmd_fetch_metrics() {
-  echo "Error: fetch-metrics requires Marketing API credentials (MDP partner approval)." >&2
-  echo "Apply at: https://learn.microsoft.com/en-us/linkedin/marketing/" >&2
-  exit 1
+  # Defense-in-depth: re-check org creds as the FIRST line (dispatch also checks).
+  # The personal LINKEDIN_ACCESS_TOKEN is live in the spawn env, so a direct
+  # call to this function must not be able to fall through to it.
+  require_org_credentials
+
+  # Scope the org token function-locally so get_request's Bearer header uses it
+  # WITHOUT leaking into the personal path (safer than cmd_post_content's global
+  # mutation at the org-post branch).
+  local LINKEDIN_ACCESS_TOKEN="$LINKEDIN_ORG_ACCESS_TOKEN"
+
+  local org_urn="urn%3Ali%3Aorganization%3A${LINKEDIN_ORG_ID}"
+
+  # --- Aggregate share statistics (lifetime). ---
+  local share_body
+  share_body=$(get_request \
+    "/rest/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=${org_urn}")
+
+  # Shape validation BEFORE any `// 0` fallbacks (silent-failure HIGH-1):
+  # handle_response validated only JSON parseability, not shape. An empty
+  # `.elements` (e.g. token lacks ADMINISTRATOR role) or a wrong shape must NOT
+  # render as fake zeros — emit an explicit error and exit 1.
+  if ! echo "$share_body" | jq -e '(.elements[0].totalShareStatistics | type) == "object"' >/dev/null 2>&1; then
+    echo "Error: organizationalEntityShareStatistics returned no usable totalShareStatistics for org ${LINKEDIN_ORG_ID}." >&2
+    echo "The org token may lack the ADMINISTRATOR role, or the response shape changed." >&2
+    exit 1
+  fi
+
+  local share_statistics
+  share_statistics=$(echo "$share_body" | jq '
+    .elements[0].totalShareStatistics as $s |
+    {
+      impressions: ($s.impressionCount // 0),
+      unique_impressions: ($s.uniqueImpressionsCount // 0),
+      clicks: ($s.clickCount // 0),
+      likes: ($s.likeCount // 0),
+      comments: ($s.commentCount // 0),
+      shares: ($s.shareCount // 0),
+      engagement: ($s.engagement // 0)
+    }')
+
+  # --- Single follower total via networkSizes. ---
+  # Partial-failure policy (silent-failure HIGH-2): the networkSizes call must
+  # not abort the (more important) share-stats result. Run it in a subshell whose
+  # non-zero exit is tolerated; on failure total_followers degrades to null with
+  # a stderr warning rather than get_request's default `exit`.
+  local total_followers="null"
+  local network_body
+  if network_body=$(get_request \
+    "/rest/networkSizes/${org_urn}?edgeType=COMPANY_FOLLOWED_BY_MEMBER" 2>/dev/null); then
+    local size
+    size=$(echo "$network_body" | jq -r '.firstDegreeSize // empty' 2>/dev/null || true)
+    if [[ "$size" =~ ^[0-9]+$ ]]; then
+      # Only a clean non-negative integer is trusted: it is injected via
+      # `--argjson total_followers` into the final emit, where a non-numeric
+      # value would crash jq under set -e and defeat the degrade-to-null
+      # contract. Anything else degrades to null (same path as a failed fetch).
+      total_followers="$size"
+    elif [[ -n "$size" ]]; then
+      echo "Warning: networkSizes returned non-numeric firstDegreeSize ('${size}') for org ${LINKEDIN_ORG_ID}; total_followers=null." >&2
+    else
+      echo "Warning: networkSizes returned no firstDegreeSize for org ${LINKEDIN_ORG_ID}; total_followers=null." >&2
+    fi
+  else
+    echo "Warning: networkSizes call failed for org ${LINKEDIN_ORG_ID}; total_followers=null." >&2
+  fi
+
+  jq -n \
+    --arg org_id "$LINKEDIN_ORG_ID" \
+    --argjson total_followers "$total_followers" \
+    --argjson share_statistics "$share_statistics" \
+    '{
+      org_id: $org_id,
+      total_followers: $total_followers,
+      share_statistics: $share_statistics
+    }'
 }
 
+# Fetch recent Company Page post metadata via the Posts author-finder.
+# Aggregate-only — post metadata, no commenter/liker identities.
 cmd_fetch_activity() {
-  echo "Error: fetch-activity requires Marketing API credentials (MDP partner approval)." >&2
-  echo "Apply at: https://learn.microsoft.com/en-us/linkedin/marketing/" >&2
-  exit 1
+  require_org_credentials
+
+  local LINKEDIN_ACCESS_TOKEN="$LINKEDIN_ORG_ACCESS_TOKEN"
+
+  local org_urn="urn%3Ali%3Aorganization%3A${LINKEDIN_ORG_ID}"
+
+  # The Posts author-finder requires the X-RestLi-Method: FINDER header, threaded
+  # through get_request's optional 3rd arg (forwarded on the 429 recursion).
+  local posts_body
+  posts_body=$(get_request \
+    "/rest/posts?author=${org_urn}&q=author&count=10&sortBy=LAST_MODIFIED" \
+    0 \
+    "X-RestLi-Method: FINDER")
+
+  # Shape validation BEFORE the `.elements[]` iteration: mirrors
+  # cmd_fetch_metrics's guard. A missing/null `.elements` (e.g. token lacks the
+  # required role, or the response shape changed) makes `.elements[]` crash jq
+  # ("Cannot iterate over null", exit 5) under set -e — emit an explicit error
+  # and exit 1 instead. A present-but-empty `elements: []` still succeeds and
+  # yields `{"posts": []}`.
+  if ! echo "$posts_body" | jq -e '(.elements | type) == "array"' >/dev/null 2>&1; then
+    echo "Error: posts author-finder returned no usable elements array for org ${LINKEDIN_ORG_ID}." >&2
+    echo "The org token may lack the required role, or the response shape changed." >&2
+    exit 1
+  fi
+
+  # commentary is operator-authored Page-public post text. If a post @mentions a
+  # member it flows to the digest, but the LIA's no-@mention posting TOM bounds
+  # this — no inbound filter needed. Emit metadata only; no author/commenter/
+  # liker identities. `//` fallbacks preserve each post even if a field is absent
+  # (learning 2026-03-10-jq-generator-silent-data-loss.md).
+  echo "$posts_body" | jq '
+    {
+      posts: [
+        .elements[] | {
+          id: .id,
+          commentary: (.commentary // null),
+          published_at: (.publishedAt // .createdAt // null),
+          lifecycle_state: (.lifecycleState // null)
+        }
+      ]
+    }'
 }
 
 # --- Main ---
@@ -382,17 +551,22 @@ main() {
     echo "" >&2
     echo "Commands:" >&2
     echo "  post-content --text \"<text>\" [--author \"<urn>\"]  - Post to LinkedIn" >&2
-    echo "  fetch-metrics                 - Fetch account metrics (Marketing API)" >&2
-    echo "  fetch-activity                - Fetch account activity (Marketing API)" >&2
+    echo "  fetch-metrics                 - Fetch aggregate Company Page metrics (org read scopes)" >&2
+    echo "  fetch-activity                - Fetch recent Company Page post metadata (org read scopes)" >&2
     exit 1
   fi
 
   require_jq
 
-  # Stubs don't need credentials -- they exit before calling any API
   case "$command" in
-    fetch-metrics)   cmd_fetch_metrics ;;
-    fetch-activity)  cmd_fetch_activity ;;
+    fetch-metrics)
+      require_org_credentials
+      cmd_fetch_metrics
+      ;;
+    fetch-activity)
+      require_org_credentials
+      cmd_fetch_activity
+      ;;
     post-content)
       require_credentials
       cmd_post_content "$@"

@@ -37,6 +37,7 @@ const {
   mockCleanupAskpassScript,
   mockResolveActiveWorkspacePath,
   mockGetCurrentRepoUrl,
+  mockGetCurrentRepoStatus,
   mockGetInstallationAccount,
   mockFindRepoOwnerInstallationForUser,
   mockEnsureWorkspaceRepoCloned,
@@ -60,6 +61,7 @@ const {
   mockCleanupAskpassScript: vi.fn(),
   mockResolveActiveWorkspacePath: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
+  mockGetCurrentRepoStatus: vi.fn(),
   mockGetInstallationAccount: vi.fn(),
   mockFindRepoOwnerInstallationForUser: vi.fn(),
   // Hoisted to a named spy (was an inline anonymous vi.fn) so the
@@ -76,8 +78,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   // behavior asserted by the prefill-guard test file's empty-history
   // scenario.
   getSessionMessages: vi.fn().mockResolvedValue([]),
-  tool: vi.fn(),
-  createSdkMcpServer: vi.fn(),
+  // Return inspectable shapes so the soleur_platform always-build assertion
+  // (#5370 T2) can read tool names off the registered server. `tool(name,…)`
+  // → `{ name }`; `createSdkMcpServer(cfg)` → cfg (passthrough).
+  tool: vi.fn((name: string) => ({ name })),
+  createSdkMcpServer: vi.fn((cfg: unknown) => cfg),
 }));
 
 vi.mock("@/server/agent-runner", () => ({
@@ -119,10 +124,20 @@ vi.mock("@/server/github-app", () => ({
 // Plan item 1 — cc-dispatcher now imports the in-sandbox askpass writer from
 // git-auth. MUST be mocked here AND in cc-dispatcher-prefill-guard.test.ts or
 // the cold-start suite throws on import (Phase 0.4 sweep).
-vi.mock("@/server/git-auth", () => ({
-  writeAskpassScriptTo: mockWriteAskpassScriptTo,
-  cleanupAskpassScript: mockCleanupAskpassScript,
-}));
+// #5394 — keep the pure sanitizers real (repo-readiness.ts consumes
+// parseErrorPayload + sanitizeGitStderr for the error-branch gate); override
+// only the askpass writers (the in-sandbox FS side effects).
+vi.mock("@/server/git-auth", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/server/git-auth")>(
+      "@/server/git-auth",
+    );
+  return {
+    ...actual,
+    writeAskpassScriptTo: mockWriteAskpassScriptTo,
+    cleanupAskpassScript: mockCleanupAskpassScript,
+  };
+});
 
 // Issue B part 2 — autonomous toggle. Default off (false) so factory-shape
 // tests dispatch with the review-gate intact.
@@ -154,9 +169,14 @@ vi.mock("@/server/workspace-resolver", async () => {
 
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
+  getCurrentRepoStatus: mockGetCurrentRepoStatus,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: mockEnsureWorkspaceRepoCloned,
+  // Unconditional pre-sandbox dir guarantee — no-op here (these tests assert
+  // option shape, not real dir existence). The dedicated invariant coverage
+  // lives in cc-dispatcher-warm-presandbox-mkdir.test.ts (real mkdir).
+  ensureWorkspaceDirExists: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/permission-callback", () => ({
@@ -360,6 +380,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // the self-heal branch is skipped for every pre-existing test. The
     // dedicated describe block overrides these per-test.
     mockGetCurrentRepoUrl.mockResolvedValue(null);
+    // #5394 — default repo readiness is `ready` so the gate never blocks the
+    // pre-existing factory-shape tests; the dedicated gate describe overrides it.
+    mockGetCurrentRepoStatus.mockResolvedValue({
+      repoStatus: "ready",
+      repoError: null,
+    });
     mockGetInstallationAccount.mockResolvedValue({ login: "owner", id: 1, type: "Organization" });
     mockFindRepoOwnerInstallationForUser.mockResolvedValue({ installationId: null, outcome: "not-member" });
     // Item 1 — in-sandbox askpass writer returns a deterministic path under
@@ -385,11 +411,24 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // -------------------------------------------------------------------------
   // T2: factory options omit / empty mcpServers (V1; V2-13 widens)
   // -------------------------------------------------------------------------
-  it("T2: mcpServers is empty for V1 (V2-13 will widen)", async () => {
+  it("T2: soleur_platform server is ALWAYS built with narrate/summarize (#5370)", async () => {
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
-    // Either undefined or {} is acceptable. Assert no servers registered.
-    expect(opts.mcpServers === undefined || Object.keys(opts.mcpServers).length === 0).toBe(true);
+    // feat-reasoning-chat-boxes (#5370): the soleur_platform server is now
+    // built unconditionally so the always-on narrate/summarize tools are
+    // reachable on every cc dispatch (was empty for V1; the C4 write tool is
+    // still flag+repo-gated and merged into the SAME server when eligible).
+    // makeArgs() has no connected repo / c4 flag, so ONLY narrate/summarize
+    // are present — edit_c4_diagram is absent.
+    expect(opts.mcpServers).toBeDefined();
+    expect(Object.keys(opts.mcpServers)).toEqual(["soleur_platform"]);
+    const toolNames = (opts.mcpServers.soleur_platform.tools ?? []).map(
+      (t: { name: string }) => t.name,
+    );
+    expect(toolNames).toEqual(
+      expect.arrayContaining(["narrate", "summarize"]),
+    );
+    expect(toolNames).not.toContain("edit_c4_diagram");
   });
 
   // -------------------------------------------------------------------------
@@ -474,8 +513,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // it so it routes through canUseTool → safe-bash auto-approve for
     // read-only verbs. Pinning the negative-space invariant.
     expect(opts.disallowedTools).not.toContain("Bash");
-    // Auto-approve list narrows to read-only safe tools — order-tolerant
-    // closed-set match so widening the list requires an explicit test edit.
+    // Auto-approve list narrows to read-only safe tools + the always-on
+    // narrate/summarize emit tools (feat-reasoning-chat-boxes #5370 — pure
+    // emit tools auto-approved so a narration never pays a canUseTool
+    // round-trip / surfaces a review modal). Order-tolerant closed-set match
+    // so widening the list requires an explicit test edit.
     expect(Array.isArray(opts.allowedTools)).toBe(true);
     const sorted = [...opts.allowedTools].sort();
     expect(sorted).toEqual(
@@ -487,6 +529,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         "NotebookRead",
         "Read",
         "TodoWrite",
+        "mcp__soleur_platform__narrate",
+        "mcp__soleur_platform__summarize",
       ],
     );
   });
@@ -1029,6 +1073,94 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(opts.systemPrompt).not.toContain(
         "GitHub access unavailable in this session",
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // #5394 — repo-readiness gate (Layer A). The factory throws RepoNotReadyError
+  // for a cloning/error workspace BEFORE ensureWorkspaceRepoCloned and before
+  // the SDK query() spawn (AC1 no-spawn); a `ready` workspace flows UNCHANGED
+  // into the self-heal (AC6 — proves the reclaim path is not short-circuited).
+  // The gate keys on repo_status, never `.git` presence.
+  // -------------------------------------------------------------------------
+  describe("repo-readiness gate (#5394)", () => {
+    it("AC1: cloning → throws RepoNotReadyError BEFORE ensureWorkspaceRepoCloned and BEFORE query() (no spawn)", async () => {
+      const { RepoNotReadyError } = await import("@/server/repo-readiness");
+      mockGetCurrentRepoStatus.mockResolvedValueOnce({
+        repoStatus: "cloning",
+        repoError: null,
+      });
+
+      await expect(realSdkQueryFactory(makeArgs())).rejects.toBeInstanceOf(
+        RepoNotReadyError,
+      );
+
+      // The load-bearing AC1 assertion — the agent is never spawned and the
+      // self-heal clone is never attempted against a not-ready workspace.
+      expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("AC1: the thrown cloning error carries code=cloning and NO errorCode", async () => {
+      const { RepoNotReadyError } = await import("@/server/repo-readiness");
+      mockGetCurrentRepoStatus.mockResolvedValueOnce({
+        repoStatus: "cloning",
+        repoError: null,
+      });
+
+      let err: unknown;
+      try {
+        await realSdkQueryFactory(makeArgs());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(RepoNotReadyError);
+      const cloningErr = err as InstanceType<typeof RepoNotReadyError>;
+      expect(cloningErr.code).toBe("cloning");
+      expect(cloningErr.errorCode).toBeUndefined();
+      expect(cloningErr.message).toContain("still being set up");
+    });
+
+    it("AC2: error → throws with code=error + errorCode=repo_setup_failed (reason from users.repo_error)", async () => {
+      const { RepoNotReadyError } = await import("@/server/repo-readiness");
+      mockGetCurrentRepoStatus.mockResolvedValueOnce({
+        repoStatus: "error",
+        repoError: JSON.stringify({
+          code: "AUTH_FAILED",
+          message: "Authentication failed",
+        }),
+      });
+
+      let err: unknown;
+      try {
+        await realSdkQueryFactory(makeArgs());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(RepoNotReadyError);
+      const errorErr = err as InstanceType<typeof RepoNotReadyError>;
+      expect(errorErr.code).toBe("error");
+      expect(errorErr.errorCode).toBe("repo_setup_failed");
+      expect(errorErr.message).toContain("Authentication failed");
+      expect(errorErr.message).toContain("Reconnect in Settings → Repository");
+      expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("AC6: ready → gate does NOT throw; ensureWorkspaceRepoCloned IS reached (reclaim/self-heal not short-circuited)", async () => {
+      // beforeEach default is `ready`; assert it flows into the self-heal.
+      await realSdkQueryFactory(makeArgs());
+      expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledOnce();
+      expect(mockQuery).toHaveBeenCalledOnce();
+    });
+
+    it("fail-open: a not_connected workspace is NOT blocked (flows to the existing repo-less path)", async () => {
+      mockGetCurrentRepoStatus.mockResolvedValueOnce({
+        repoStatus: "not_connected",
+        repoError: null,
+      });
+      await realSdkQueryFactory(makeArgs());
+      expect(mockQuery).toHaveBeenCalledOnce();
     });
   });
 

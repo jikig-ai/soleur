@@ -6,6 +6,21 @@ import {
   type KbChatContextValue,
 } from "@/components/kb/kb-chat-context";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
+import { FeatureFlagProvider } from "@/components/feature-flags/provider";
+import type { FlagName } from "@/lib/feature-flags/server";
+
+/** Full TS-exhaustive flag snapshot with only `c4-edit` parametrized. */
+function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
+  return {
+    "dev-signin": false,
+    "kb-chat-sidebar": false,
+    "team-workspace-invite": false,
+    "byok-delegations": false,
+    "c4-visualizer": false,
+    "debug-mode": false,
+    "c4-edit": c4Edit,
+  };
+}
 
 // react-resizable-panels (this fork) needs real layout/ResizeObserver; mock it
 // to plain divs so the collapse/reveal *logic* (conditional render driven by
@@ -125,18 +140,20 @@ function ProviderHarness({
   return <KbChatContext.Provider value={value}>{children}</KbChatContext.Provider>;
 }
 
-async function renderC4WithHeader(suppressSidebar = true) {
+async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
   const { default: C4Workspace } = await import("@/components/kb/c4-workspace");
   return render(
-    <ProviderHarness suppressSidebar={suppressSidebar}>
-      {/* The shared top-bar trigger (as KbContentHeader renders it on C4). */}
-      <KbChatTrigger fallbackHref="/dashboard/chat/new" />
-      <C4Workspace
-        viewId="index"
-        dirPath="knowledge-base/diagrams"
-        contextPath={CONTEXT_PATH}
-      />
-    </ProviderHarness>,
+    <FeatureFlagProvider flags={flagSnapshot(c4Edit)}>
+      <ProviderHarness suppressSidebar={suppressSidebar}>
+        {/* The shared top-bar trigger (as KbContentHeader renders it on C4). */}
+        <KbChatTrigger fallbackHref="/dashboard/chat/new" />
+        <C4Workspace
+          viewId="index"
+          dirPath="knowledge-base/diagrams"
+          contextPath={CONTEXT_PATH}
+        />
+      </ProviderHarness>
+    </FeatureFlagProvider>,
   );
 }
 
@@ -245,5 +262,35 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     );
     fireEvent.click(screen.getByRole("button", { name: /ask about this document/i }));
     expect(openedSide).toBe(true);
+  });
+});
+
+describe("C4Workspace — c4-edit flag gates the Code tab (AC3/AC10)", () => {
+  it("AC3: flag OFF ⇒ no Code tab button, C4CodePanel never mounts, Concierge is default", async () => {
+    await renderC4WithHeader(true, false);
+    // No "Code" tab button.
+    expect(screen.queryByRole("button", { name: "Code" })).toBeNull();
+    // The C4CodePanel save affordances never render (panel not mounted).
+    expect(screen.queryByTestId("c4-save-ok")).toBeNull();
+    expect(screen.queryByTestId("c4-save-fail")).toBeNull();
+    // The Concierge is present and is the default surface.
+    expect(screen.getByTestId("kb-chat-content")).toBeTruthy();
+  });
+
+  it("AC3: flag ON ⇒ the Code tab button is present", async () => {
+    await renderC4WithHeader(true, true);
+    expect(screen.getByRole("button", { name: "Code" })).toBeTruthy();
+  });
+
+  it("AC10: flag OFF ⇒ a discoverability hint points users to the Concierge", async () => {
+    await renderC4WithHeader(true, false);
+    expect(
+      screen.getByText(/ask the Concierge/i),
+    ).toBeTruthy();
+  });
+
+  it("AC10: flag ON ⇒ the discoverability hint is absent (Code tab handles editing)", async () => {
+    await renderC4WithHeader(true, true);
+    expect(screen.queryByText(/ask the Concierge/i)).toBeNull();
   });
 });

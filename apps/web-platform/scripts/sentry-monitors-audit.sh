@@ -220,12 +220,20 @@ if [[ -n "$host_region" && "$host_region" != "$dsn_cluster" ]]; then
 fi
 
 # --- Fetch monitors (org-wide) -------------------------------------------
+# Both fetches use curl_retry (not bare curl): a transient timeout here under
+# `set -euo pipefail` would propagate curl's exit 28 and abort the whole audit
+# step, which in the apply-sentry-infra.yml workflow SKIPS the plan+apply steps —
+# a transient Sentry-EU blip silently darks the apply (observed on the #5325
+# go-live: the #5380 apply failed exit 28 on this exact path and only succeeded
+# on re-run). curl_retry always returns 0 (last attempt's output), so a genuine
+# persistent failure surfaces at the JSON-shape validation below with a clear
+# "response is not a JSON array" message + exit 1 — never a cryptic exit 28.
 fetch_monitors() {
   if [[ -n "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     cat "$SENTRY_FIXTURE_MONITORS"
     return
   fi
-  curl -s --max-time 10 \
+  curl_retry -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/monitors/"
 }
@@ -237,11 +245,11 @@ fetch_rules() {
   fi
   if [[ -z "$SENTRY_PROJECT" ]]; then
     # Org-wide alert-rules endpoint (metric alerts) — best-effort fallback.
-    curl -s --max-time 10 \
+    curl_retry -s --max-time 10 \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${api_host}/api/0/organizations/${SENTRY_ORG}/alert-rules/"
   else
-    curl -s --max-time 10 \
+    curl_retry -s --max-time 10 \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/"
   fi

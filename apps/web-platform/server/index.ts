@@ -16,8 +16,13 @@ import {
   startInactivityTimer,
   startStuckActiveReaper,
 } from "./agent-runner";
+import {
+  drainCcQueriesForShutdown,
+  startCcIdleReaper,
+} from "./cc-dispatcher";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
+import { installCrashHandlers } from "./crash-handlers";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
 import { assertSingleReplicaInvariant } from "./single-replica-assertion";
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
@@ -47,6 +52,13 @@ function isLoopbackHost(hostHeader: string | undefined): boolean {
 }
 
 const log = createChildLogger("startup");
+
+// #5417 — attribute crash-driven restarts. Installed at module scope (before any
+// async server setup that could itself throw) so a fatal at any point is
+// captured to Sentry and turned into a clean process.exit(1) restart instead of
+// an un-attributable churn. sentry.server.config.ts disables Sentry's auto
+// OnUncaughtException/OnUnhandledRejection integrations so these report once.
+installCrashHandlers();
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -118,6 +130,14 @@ app.prepare().then(() => {
   // .unref() already prevents shutdown blocking, but explicit cleanup
   // avoids in-flight releaseSlot calls during shutdown.
   const stuckActiveReaperTimer = startStuckActiveReaper();
+
+  // #5371 — start the cc-soleur-go idle reaper. `reapIdle()` existed on the
+  // runner but nothing wired it at runtime, so idle cc queries persisted in
+  // `activeQueries` until container restart (memory leak + a second
+  // disconnect-class gap: a tab abandoned WITHOUT a socket close never fires
+  // the ws-handler grace timer). Capture the timer so SIGTERM can stop it;
+  // .unref() already prevents shutdown blocking (see startCcIdleReaper).
+  const ccIdleReaperTimer = startCcIdleReaper();
 
   // Self-arm the one-time #4650 monitor-close oneshot (#4654). boot == deploy
   // (web-platform-release.yml restarts the container on every apps/web-platform/**
@@ -202,9 +222,13 @@ app.prepare().then(() => {
     }, "Sentry status");
 
     if (process.env.SENTRY_DSN) {
+      // #5417 — tag the startup event so the restart-rate signal (the Sentry
+      // "Server startup" issue) can be filtered/queried precisely: the
+      // container-restart-monitor is the authoritative host-side rate alarm,
+      // and AC12 reads this issue's stats API to verify the post-fix rate drop.
       Sentry.captureMessage(
         `Server startup v${process.env.BUILD_VERSION || "dev"}`,
-        "info",
+        { level: "info", tags: { event_type: "server-startup" } },
       );
     }
   });
@@ -229,10 +253,19 @@ app.prepare().then(() => {
     // Stop the stuck-active reaper before aborting sessions — otherwise an
     // in-flight reaper tick could issue releaseSlot writes during shutdown.
     clearInterval(stuckActiveReaperTimer);
+    // #5371 — stop the cc idle reaper before draining for the same reason.
+    clearInterval(ccIdleReaperTimer);
 
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".
     abortAllSessions();
+    // #5371 — drain in-flight cc-soleur-go queries on shutdown. Aborts
+    // WITHOUT checkpoint (legacy abortAllSessions parity); the disconnect
+    // grace-abort terminal (#5362) is what preserves uncommitted work. Log
+    // the count so a stuck deploy can tell "drain ran, closed N" from "drain
+    // never reached" without SSH.
+    const drained = drainCcQueriesForShutdown();
+    log.info({ drained }, "cc drain on shutdown");
     // feat-stream-since-disconnect (#5273) — drain the in-memory replay buffer
     // on shutdown (process-local; nothing to persist). See ADR-059.
     streamReplayBuffer.clearAll();

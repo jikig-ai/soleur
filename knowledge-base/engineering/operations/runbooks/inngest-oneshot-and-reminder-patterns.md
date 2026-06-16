@@ -14,7 +14,7 @@ the integration steps for whichever mechanism fits.
 
 | Mechanism | Autonomous? | Needs a deploy? | Fire-time secrets / repo write? | Dies with session? | Use when |
 |-----------|-------------|-----------------|---------------------------------|--------------------|----------|
-| **Session cron** (`CronCreate`, `/loop`) | no — needs the Claude session alive | no | no | **YES** | Never for anything durable. Only for in-session polling you'll watch. |
+| **Session cron** (`CronCreate`, `/loop`, `ScheduleWakeup`) | no — needs the Claude session alive | no | no | **YES** | Never for anything durable (even `durable:true` — it persists the job but still fires only while a CC REPL is live). Only for in-session polling you'll watch. **Hook-enforced:** `.claude/hooks/durable-reminder-prefer-inngest.sh` denies a `CronCreate` with `durable:true` or `recurring:false` and redirects here. |
 | **GitHub-Actions follow-through sweeper** (`scripts/sweep-followthroughs.sh`, `/ship` Step 3.5) | semi — CI-driven | no (script + `earliest` in an issue) | no fire-time Doppler secret (CI env only) | no | A check expressible as a shell script run by CI on/after a date; operator-confirmable gates. |
 | **Self-armed Inngest oneshot** (ADR-046) | **yes** — server-side | **yes** — a new reviewed `oneshot-*.ts` per action | **yes** — full prd env + installation token | no | A one-off verification with bespoke logic that needs fire-time secrets / repo writes (e.g. `oneshot-4650-monitor-close`, `oneshot-heartbeat-recovery-verify`). |
 | **Generic reminder primitive** (`event-scheduled-reminder`) | **yes** — server-side | **NO per-reminder deploy** (only the one-time function deploy) | **yes** — installation token, allowlisted | no | A one-off **issue comment** or a **registered check** — arm via `POST /api/internal/schedule-reminder`, no code change. |
@@ -50,14 +50,51 @@ curl -fsS -X POST "https://app.soleur.ai/api/internal/schedule-reminder" \
 To add a new check, add a code-reviewed entry to `CHECK_REGISTRY` (this IS a deploy,
 once) — thereafter that check is schedulable by name with no further deploy.
 
+### Worked example: `sentry-issue-rate` (the reusable verification check)
+
+`{ type: "named-check", check: "sentry-issue-rate", report_to_issue, params: {
+tag, max_per_day, window_hours, close_on_pass? } }` reads the events/day of the
+Sentry issue matched by `tag` (a single `key:value` search term) over
+`window_hours` and posts a `pass`/`fail` verdict to `report_to_issue`. PASS iff
+`events/day <= max_per_day`. The rate is computed from the issue-DETAIL GET's
+`.stats["30d"]` **daily** series (the `/stats/?stat=…` sub-resource returns only
+24 hourly buckets and cannot express a multi-day rate — confirmed by the
+2026-06-16 live probe); `window_hours` is bounded **[24,168]** and rounded to
+whole days. Reuses fire-time prd env (`SENTRY_API_HOST`, `SENTRY_ORG`,
+`SENTRY_PROJECT`, and **`SENTRY_ISSUE_RW_TOKEN`** — the issue-scoped token;
+`SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` 403 on the org issues endpoint, per the
+2026-06-16 live probe). Every future "did Sentry issue X drop below N/day?"
+verification is now a **zero-deploy POST** (no new code). Example arm:
+
+```
+POST /api/internal/schedule-reminder   (Bearer INNGEST_MANUAL_TRIGGER_SECRET)
+{ "reminder_id": "verify-server-startup-rate-5417", "fire_at": "2026-06-19T09:00:00Z",
+  "actor": "platform",
+  "action": { "type": "named-check", "check": "sentry-issue-rate", "report_to_issue": 5417,
+    "params": { "tag": "event_type:server-startup", "max_per_day": 1, "window_hours": 72, "close_on_pass": true } } }
+```
+
+**Close-mutation invariant (v1.1).** A check may set `close: boolean` on its
+result; the handler then closes **`action.report_to_issue`** (state=closed,
+state_reason=completed) — NEVER a check-returned issue number. The boolean shape
+makes an arbitrary-issue close structurally unrepresentable. Fail-closed (`info`,
+never close) on missing env / invalid params / Sentry HTTP error / 0-or->1
+matching issues. See ADR-063.
+
 **Security model:** the endpoint is gated by `INNGEST_MANUAL_TRIGGER_SECRET`
 (operator-held in Doppler), the same trust boundary as `trigger-cron`. A
 secret-holder gains the **same capability the operator already has** (`gh issue
-comment` / a registered check), time-delayed. No arbitrary code; v1 performs no
-issue close/edit/label mutation. The action allowlist is validated at BOTH the
-endpoint (pre-send 400) and the handler (post-receive guard) — defense-in-depth.
-The route↔handler `CHECK_REGISTRY` asymmetry (route accepts any string `check`;
-handler owns the membership reject at fire time) is intentional.
+comment` / a registered check / close the check's own report issue),
+time-delayed. No arbitrary code; v1.1 close is scoped to `report_to_issue` only.
+The action allowlist is validated at BOTH the endpoint (pre-send 400) and the
+handler (post-receive guard) — defense-in-depth. The route↔handler
+`CHECK_REGISTRY` asymmetry (route accepts any string `check`; handler owns the
+membership reject at fire time) is intentional.
+
+**`soleur:schedule` routes here automatically.** That skill's `create` Step 0
+execution-substrate gate sends any fire-time-secret / server-side scheduled task
+to this primitive (named-check for verification shapes) instead of generating
+GHA-cron — Inngest is the structural default; GHA is the pure-GH-ops exception.
 
 ## B. Self-armed Inngest oneshot (bespoke logic, one deploy)
 

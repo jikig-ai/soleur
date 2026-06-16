@@ -182,6 +182,12 @@ vi.mock("@/server/agent-session-registry", async (importOriginal) => {
   return {
     ...actual,
     getUserWorkspace: vi.fn(() => "ws-mock-workspace-1"),
+    // AC4 (#5240): consumers now resolve the workspace binding durably via
+    // resolveUserWorkspaceBinding (Map → DB rehydrate) rather than reading the
+    // raw Map. Stub it to the fixed workspace so the deferred-creation flow
+    // under test is decoupled from workspace resolution (covered by
+    // durable-workspace-binding-resolver.test.ts).
+    resolveUserWorkspaceBinding: vi.fn(async () => "ws-mock-workspace-1"),
   };
 });
 

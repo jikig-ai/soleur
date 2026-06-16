@@ -181,7 +181,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
       documentExtractMeta: { numPages: 403 },
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
 
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
     expect(prompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
@@ -205,7 +205,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
         documentExtractError: errorClass,
       });
 
-      await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+      await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
 
       const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
       expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
@@ -231,7 +231,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
         documentExtractError: errorClass,
       });
 
-      await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+      await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
 
       const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
       expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
@@ -249,7 +249,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
       documentContent: "Chapter 1\nContents extracted from PDF",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
 
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
     expect(prompt).toContain("<document>");
@@ -268,7 +268,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
       content: "Hello body content",
     };
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, ctx);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, ctx);
 
     expect(resolveLeaderDocumentContextSpy).not.toHaveBeenCalled();
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
@@ -286,7 +286,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
       documentExtractMeta: { numPages: 403 },
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
 
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
     // AC14: the leader-path too-long directive MUST NOT mention any of the
@@ -329,7 +329,7 @@ describe("agent-runner leader PDF partition (#3437)", () => {
       documentKind: "pdf",
     });
 
-    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
 
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
     expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);

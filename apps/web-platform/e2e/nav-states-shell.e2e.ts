@@ -284,6 +284,26 @@ async function setupNavMocks(page: Page): Promise<void> {
   );
 }
 
+/**
+ * Hold /api/workspace/list-memberships PENDING for the test's duration so
+ * OrgSwitcherContainer never leaves its `memberships === null` state
+ * (org-switcher-container.tsx:214 → returns null). This reproduces the
+ * "page isn't fully loaded" height-collapse the overlap bug depends on: the
+ * top-level band has no other content, so without a reserved min-height it
+ * shrinks under the floated toggle. Registered AFTER setupNavMocks so
+ * Playwright (most-recently-added wins) matches this in-flight handler first.
+ *
+ * A never-resolving promise (NOT route.abort()) is deliberate: aborting/erroring
+ * would drive the .catch() branch which sets memberships to [] (a RESOLVED empty
+ * state), collapsing the repro. Pending = genuinely in-flight. Playwright drops
+ * the held request at context teardown.
+ */
+async function mockMembershipsInFlight(page: Page): Promise<void> {
+  await page.route("**/api/workspace/list-memberships", async () => {
+    await new Promise(() => {});
+  });
+}
+
 /** Seed the rail into the collapsed state before any page script runs. */
 async function seedCollapsed(page: Page): Promise<void> {
   await page.addInitScript((key) => {
@@ -376,6 +396,12 @@ const asideWidth = (page: Page) =>
 // sidebar` collapsed), so match either label — it is the only `… sidebar` button.
 const collapseToggle = (page: Page) =>
   page.getByRole("button", { name: /^(Collapse|Expand) sidebar$/ });
+// The first PRIMARY nav item ("Dashboard", href="/dashboard"). On the top-level
+// route (drill === null) there is no "Back to menu" chevron (also href
+// "/dashboard"), so this exact-href locator inside the aside resolves uniquely to
+// the nav link the floated toggle was reported to overlap.
+const dashboardNavLink = (page: Page) =>
+  page.locator("aside").first().locator('a[href="/dashboard"]');
 type Rect = { x: number; y: number; width: number; height: number };
 const intersects = (a: Rect, b: Rect): boolean =>
   a.x < b.x + b.width &&
@@ -572,6 +598,72 @@ test.describe("nav-states visual gate — desktop", () => {
       chipBox!,
       "floated collapse toggle is not vertically centered on the identity chip",
     );
+  });
+
+  test("expanded, list-memberships IN-FLIGHT: floated toggle does NOT overlap the Dashboard nav link (height-collapse overlap bug)", async ({ page }) => {
+    // THE reported bug: while the membership fetch is in flight, the band's pill
+    // (its only top-level content) renders null, the band height-collapses, and
+    // the floated toggle (`absolute right-3 top-10`) paints over the "Dashboard"
+    // nav link below it. RED on main (no reserved band height); GREEN after the
+    // md:min-h-[64px] reserve holds the band open through the in-flight state.
+    await setupNavMocks(page);
+    await mockMembershipsInFlight(page); // registered after setup → matched first
+    await gotoOrSkip(page, "/dashboard");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
+    // The toggle + the nav both render synchronously (layout is not gated on the
+    // membership fetch); only the band's PILL is async. So both are present even
+    // though the identity chip never resolves in this test.
+    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
+    await expect(dashboardNavLink(page)).toBeVisible({ timeout: 15_000 });
+
+    // Poll the rect-intersection so the two boundingBox reads settle on the same
+    // layout frame (min-h has no transition, but a late font/metrics shift could
+    // otherwise sample the toggle and nav rects one frame apart).
+    await expect
+      .poll(
+        async () => {
+          const toggleBox = await collapseToggle(page).boundingBox();
+          const navBox = await dashboardNavLink(page).boundingBox();
+          if (!toggleBox || !navBox) return true; // not-ready → keep polling (treat as "overlapping")
+          return intersects(toggleBox, navBox);
+        },
+        {
+          timeout: 7_000,
+          message:
+            "floated collapse toggle overlaps the Dashboard nav link while the band is height-collapsed (in-flight membership fetch)",
+        },
+      )
+      .toBe(false);
+  });
+
+  test("collapsed, list-memberships IN-FLIGHT: collapsed toggle does NOT overlap the Dashboard nav (both-toggle-states companion)", async ({ page }) => {
+    // Both-toggle-states rule (2026-04-17-alignment-fixes-must-verify-both-toggle
+    // -states): a fix for the expanded state does not carry to collapsed. The
+    // collapsed band already reserves pt-16 top clearance, so this is expected
+    // GREEN on main too — it locks the collapsed contract against future drift.
+    // NON-GATING by design: it does not go RED for this fix (it guards a
+    // different, pre-existing code path); the expanded test above is the
+    // gating proof.
+    await setupNavMocks(page);
+    await mockMembershipsInFlight(page);
+    await seedCollapsed(page);
+    await gotoOrSkip(page, "/dashboard");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
+    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
+    await expect(dashboardNavLink(page)).toBeVisible({ timeout: 15_000 });
+
+    const toggleBox = await collapseToggle(page).boundingBox();
+    const navBox = await dashboardNavLink(page).boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(navBox).not.toBeNull();
+    expect(
+      intersects(toggleBox!, navBox!),
+      "collapsed toggle overlaps the Dashboard nav while the band is in-flight",
+    ).toBe(false);
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {

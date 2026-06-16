@@ -43,7 +43,7 @@ import { validateContextPath } from "./validate-context-path";
 import {
   setUserWorkspace,
   clearUserWorkspace,
-  getUserWorkspace,
+  resolveUserWorkspaceBinding,
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
@@ -56,7 +56,13 @@ import {
   resolveCurrentOrganizationId,
   getDefaultWorkspaceForUser,
   getWorkspaceForUserInOrganization,
+  readWorkspaceIdFromDb,
+  workspacePathForWorkspaceId,
 } from "./workspace-resolver";
+import {
+  restoreInflightCheckpoint,
+  CHECKPOINT_REFUSED_MESSAGE,
+} from "./inflight-checkpoint";
 import { effectiveCap, nextTier } from "@/lib/plan-limits";
 import { closeWithPreamble } from "@/lib/ws-close-helper";
 import { retrieveSubscriptionTier } from "@/lib/stripe";
@@ -81,6 +87,7 @@ import {
   drainAutonomousDisclosureGates,
   markConversationAcked,
   resolveConciergeDocumentContext,
+  closeCcConversation,
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
@@ -200,6 +207,37 @@ async function emitRevocationNotice(userId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 /** Grace period before aborting session on disconnect (allows reconnection). */
 const DISCONNECT_GRACE_MS = 30_000;
+
+/**
+ * Body of the disconnect grace-timer (extracted for unit-testability — #5356).
+ * The reconnect window is over, so terminate the in-flight turn on BOTH
+ * turn-boundary lineages:
+ *   - `abortSession` (legacy `sendUserMessage` path — registered in
+ *     `activeSessions`), which already checkpoints in-flight work on disconnect.
+ *   - `closeCcConversation(convId, "disconnected")` (cc-soleur-go /
+ *     `dispatchSoleurGoForConversation` path — tracked in its own
+ *     `activeQueries` Map and never registered in `activeSessions`), which now
+ *     checkpoints in-flight work on disconnect too.
+ * Both calls are idempotent no-ops for the path that does not own the
+ * conversation; the registries are mutually exclusive by construction (per-turn
+ * routing sends a conversation to cc XOR legacy), so this never
+ * double-checkpoints. See the dual-path-terminal learning
+ * (`2026-06-14-ws-lifecycle-hook-must-cover-both-legacy-and-cc-soleur-go-turn-boundaries.md`):
+ * any turn-boundary lifecycle hook needs wiring on BOTH lineages.
+ */
+export function runDisconnectGraceAbort(uid: string, convId: string): void {
+  log.info(
+    { userId: uid, conversationId: convId },
+    "Grace period expired, aborting session",
+  );
+  abortSession(uid, convId);
+  closeCcConversation(convId, "disconnected");
+  // feat-stream-since-disconnect (#5273) — grace expired: the reconnect window
+  // is over, so drop the replay frames (counter preserved). A later reconnect
+  // now resolves `incomplete` → honest v1 history refetch, never a stale-replay
+  // lie. See ADR-059.
+  streamReplayBuffer.clear(convId);
+}
 
 /** Deferred conversation state — exists XOR conversationId exists. */
 export interface PendingConversation {
@@ -844,12 +882,16 @@ async function createConversation(
     );
   }
 
-  const wsId = getUserWorkspace(userId);
-  if (!wsId) {
-    throw new Error(
-      "No workspace binding for user — conversation insert aborted.",
-    );
-  }
+  // Durable binding resolution (AC4, #5240): prefer the hot in-memory Map, then
+  // rehydrate from `user_session_state.current_workspace_id` (reusing the
+  // `tenant` client minted above for the conversation INSERT) on an empty Map —
+  // the post-restart / pre-WS-open window that used to throw "No workspace
+  // binding". The resolver throws fail-loud (and mirrors to Sentry) only when
+  // the DB ALSO has no binding, preserving the abort semantics for the
+  // genuinely-unbound case.
+  const wsId = await resolveUserWorkspaceBinding(userId, (uid) =>
+    readWorkspaceIdFromDb(uid, tenant),
+  );
 
   // visibility-sweep-audit: INSERT — owner-scoped (user creates own conversation with workspace_id)
   const { error } = await tenant.from("conversations").insert({
@@ -1197,6 +1239,11 @@ export async function dispatchSoleurGoForConversation(
         liveSession.sessionId = nextSessionId;
       }
     },
+    // #5402 — routines "Draft a routine" tab mode flag. Derived from the
+    // validated context.type; appends ROUTINE_AUTHORING_DIRECTIVE in
+    // buildSoleurGoSystemPrompt. Document context (path/content) is unused
+    // for this mode (it carries no path).
+    routineAuthoring: context?.type === "routine-authoring",
     ...documentArgs,
   });
   } finally {
@@ -1673,18 +1720,41 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
 
-        // Resolve the session-active workspace once. The slot's workspace_id
-        // (NOT NULL since mig 059) MUST equal the conversation's workspace_id,
-        // which createConversation writes as getUserWorkspace(userId)
-        // (see :808-819). Fail loud (mirrors createConversation:809-812)
-        // rather than passing null/undefined to acquireSlot — a null
-        // p_workspace_id would re-trigger the 23502 this path closes (mig 093).
-        const slotWorkspaceId = getUserWorkspace(userId);
-        if (!slotWorkspaceId) {
-          throw new Error(
-            "No workspace binding for user — slot acquire aborted.",
-          );
-        }
+        // Resolve the session-active workspace. The slot's workspace_id (NOT
+        // NULL since mig 059) must match the conversation's workspace_id, which
+        // createConversation also resolves via resolveUserWorkspaceBinding:
+        // both read the same source-of-truth column (`current_workspace_id`),
+        // so within one connection they read the same value (the Map-writeback
+        // makes the later read a hot hit). They can still differ only if the
+        // user switches active workspace BETWEEN start_session and the first
+        // chat message — the same pre-existing mid-session-switch behavior the
+        // process-local Map already had, not a regression introduced here.
+        // Durable binding resolution (AC4, #5240): prefer the hot Map, then
+        // rehydrate from `user_session_state.current_workspace_id` on an empty
+        // Map (post-restart / pre-WS-open) instead of throwing. The resolver
+        // fails loud (throw + Sentry) only when the DB ALSO has no binding —
+        // a null p_workspace_id would re-trigger the 23502 this path closes.
+        //
+        // The tenant client for the durable read is minted LAZILY inside the
+        // closure: on the hot path (Map warm) the closure never runs, so this
+        // adds zero tenantFor/DB cost (AC4 hot-path-identical). The resume-path
+        // tenant client is block-scoped to the resume branch above and is out
+        // of scope here, so the closure mints its own tenant.
+        const slotWorkspaceId = await resolveUserWorkspaceBinding(
+          userId,
+          async (uid) => {
+            const tenantSlot = await tenantFor(
+              uid,
+              "handleMessage.slot-workspace-resolve",
+            );
+            if (!tenantSlot) {
+              throw new Error(
+                "Tenant auth-probe failed — slot workspace resolve aborted.",
+              );
+            }
+            return readWorkspaceIdFromDb(uid, tenantSlot);
+          },
+        );
 
         // Plan-based concurrency gate. Acquire a slot keyed on (userId,
         // pendingId). A cap_hit result denies before we mutate any session
@@ -1907,6 +1977,79 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           throw new Error(
             `resume-workspace-rebind failed: ${switchErr.message}`,
           );
+        }
+
+        // #5275 — restore the conversation's in-flight checkpoint (uncommitted
+        // work preserved when a prior turn grace-aborted on disconnect) into the
+        // SAME physical workspace. Runs AFTER the FR1 rebind succeeds (the
+        // workspace path resolved below is correct only now) and BEFORE
+        // `session_started`. Gated restore: it materializes only when doing so
+        // provably cannot overwrite newer work (clean tree + no sibling slot),
+        // else it refuses-and-reports honestly (the work stays at the ref). A
+        // materialization failure AFTER the precondition passes throws here and
+        // propagates to the terminal catch below (honest, retryable client
+        // error) — never a silent path.
+        {
+          const restoreWorkspacePath =
+            workspacePathForWorkspaceId(resumeWorkspaceId);
+          // Probe for a LIVE sibling conversation slot on the SAME shared clone
+          // — for EVERY resume, including solo (`workspace_id === userId`). Solo
+          // is NOT single-tenant-at-rest: per-user concurrency can be >1 (free=1
+          // but solo=2 / startup=5 / scale=50), so a solo user with two tabs
+          // shares one working tree. A checkpoint taken by one tab can carry the
+          // OTHER tab's in-flight edits (the wide path predicate snapshots the
+          // whole dirty tree); restoring it over a now-clean tree would clobber
+          // the sibling. The clean-tree gate proves "nothing uncommitted to
+          // lose" but NOT "this snapshot belongs to this conversation" — the slot
+          // probe is what supplies the latter. Liveness-filtered: stale slots are
+          // swept lazily / by pg_cron but NOT on this read path.
+          let siblingSlotActive = false;
+          const liveCutoff = new Date(Date.now() - 120_000).toISOString();
+          const { data: siblingSlots, error: slotErr } = await tenantResumeConv
+            .from("user_concurrency_slots")
+            .select("conversation_id")
+            .eq("workspace_id", resumeWorkspaceId)
+            .neq("conversation_id", msg.conversationId)
+            .gte("last_heartbeat_at", liveCutoff);
+          if (slotErr) {
+            // Fail SAFE: an unreadable slot table means we cannot prove the tree
+            // is sole-tenant, so treat a sibling as present (refuse the restore
+            // rather than risk clobbering a teammate's / sibling tab's work).
+            siblingSlotActive = true;
+            reportSilentFallback(
+              { code: slotErr.code, message: slotErr.message },
+              {
+                feature: "inflight-checkpoint",
+                op: "restore-slot-probe",
+                extra: { userId, conversationId: msg.conversationId },
+              },
+            );
+          } else {
+            siblingSlotActive = (siblingSlots?.length ?? 0) > 0;
+          }
+
+          const restoreResult = await restoreInflightCheckpoint(
+            restoreWorkspacePath,
+            msg.conversationId,
+            { siblingSlotActive },
+          );
+          if (
+            !restoreResult.restored &&
+            (restoreResult.reason === "dirty" ||
+              restoreResult.reason === "sibling-active" ||
+              restoreResult.reason === "stale-base")
+          ) {
+            // Honest refuse-and-report: reuse the FR1 honest-status surface
+            // (an `error`-family frame carrying human copy — the
+            // `worktree_enter_failed` precedent uses this for non-fatal
+            // lifecycle messages). The resume still succeeds (session_started
+            // fires below); the user is told their earlier work is saved, not
+            // lost or silently overwritten.
+            sendToClient(userId, {
+              type: "error",
+              message: CHECKPOINT_REFUSED_MESSAGE,
+            });
+          }
         }
 
         session.conversationId = msg.conversationId;
@@ -2495,6 +2638,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "workflow_ended":
     case "error":
     case "revocation_notice":
+    // feat-reasoning-chat-boxes (#5370) — agent-emitted narration is
+    // server→client only (emitted from cc-dispatcher onToolResult).
+    case "reasoning_narration":
+    case "turn_summary":
     // feat-stream-since-disconnect (#5273) — server→client only.
     case "stream_replay": {
       sendToClient(userId, {
@@ -2814,15 +2961,10 @@ export function setupWebSocket(server: HTTPServer) {
           if (current.conversationId) {
             const convId = current.conversationId;
             const uid = userId;
-            const timer = setTimeout(() => {
-              log.info({ userId: uid, conversationId: convId }, "Grace period expired, aborting session");
-              abortSession(uid, convId);
-              // feat-stream-since-disconnect (#5273) — grace expired: the
-              // reconnect window is over, so drop the replay frames (counter
-              // preserved). A later reconnect now resolves `incomplete` →
-              // honest v1 history refetch, never a stale-replay lie. See ADR-059.
-              streamReplayBuffer.clear(convId);
-            }, DISCONNECT_GRACE_MS);
+            const timer = setTimeout(
+              () => runDisconnectGraceAbort(uid, convId),
+              DISCONNECT_GRACE_MS,
+            );
             timer.unref();
             // Store timer so reconnecting user can cancel it
             pendingDisconnects.set(`${uid}:${convId}`, timer);

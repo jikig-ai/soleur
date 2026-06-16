@@ -127,4 +127,4 @@ This is the migration verb (#4617), not a routine flip — it moves a feature of
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-038-feature-flags-flagsmith.md`, `ADR-043-flagsmith-per-org-targeting.md` (§"Per-feature segment scoping")
 - Plan: `knowledge-base/project/plans/2026-05-22-feat-flagsmith-operator-skills-plan.md`, `2026-05-29-feat-flag-org-scoping-plan.md`, `2026-05-29-chore-twi-migrate-off-shared-org-targeted-plan.md` (#4617, `--detach-shared`)
 - Predecessor PR: #4331 (resolution path), #4612 (#4581 PR-2, per-feature segments)
-- Sibling skills: `soleur:flag-create`, `soleur:user-set-role`
+- Sibling skills (flag CRUD set): `soleur:flag-create` (Create), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`

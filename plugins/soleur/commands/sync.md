@@ -407,6 +407,42 @@ Present proposals one at a time using **AskUserQuestion** with options:
 
 If zero proposals were generated: "Phase 4: All learnings already synced to relevant definitions (N learnings, M definitions scanned)."
 
+## Headless Execution Contract (`--headless`)
+
+When invoked with the `--headless` flag (e.g. the post-clone auto-sync at
+`/api/repo/setup` runs `/soleur:sync --headless`), there is no operator at a
+terminal and the checked-out branch is the freshly-cloned **protected default**
+(`git clone --depth 1` leaves you on the repo's default branch). The sync agent
+MUST obey the following in headless mode:
+
+1. **Commit knowledge-base scaffolding LOCALLY only.** Stage and commit the
+   generated `knowledge-base/` files in the workspace. Do this with a local
+   `git commit` — never assume the commit will be pushed.
+
+2. **NEVER raw `git push` the checked-out default branch.** A raw
+   `git push` to the protected default branch is rejected by branch protection
+   / push protection and returns `GH013: Repository rule violations`
+   (`! [remote rejected]`). If the changes should reach the remote, use the
+   **worktree→PR workflow** (create a feature branch / worktree, push *that*
+   branch, and open a PR) — matching the project's `pushBranch` MCP tool
+   contract, which already refuses to write a protected branch. Do **not** push
+   to the default branch under any circumstance.
+
+3. **Handle `GH013` / `! [remote rejected]` / push-rule rejection as a
+   DEGRADED status, not a hard error.** If a push (even of a feature branch /
+   PR open) is rejected by branch protection or a push rule, surface a clear,
+   actionable degraded status — e.g. "knowledge-base committed locally; could
+   not open a PR — branch protection rejected the push" — and finish
+   successfully. The local commit is the durable result; the missing PR is a
+   degradation the operator can resolve, not a failure of the sync.
+
+4. **Auto-skip the interactive `AskUserQuestion` gates.** The Phase 2 fuzzy-dup
+   review (§2.2/§2.3) and the Phase 4 Definition Sync review (§4.4) prompt the
+   operator via `AskUserQuestion`. In headless mode there is no one to answer,
+   so **do not pause** on these gates — auto-skip them (treat fuzzy-dup matches
+   as Skip, and skip Phase 4 Definition Sync entirely) and log the skip rather
+   than blocking on a prompt that can never be answered.
+
 ## Output Locations
 
 | Finding Type | Destination |

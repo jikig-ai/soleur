@@ -35,13 +35,56 @@ Examples for `harness schedule`:
 
 If the agent doesn't need access to your repo, prefer harness `schedule`.
 
-**Both `schedule` skills generate GitHub-Actions cron only.** For a **one-time, autonomous, server-side action** that needs fire-time prd secrets or an installation-token repo write (no operator, no GH-Actions runner), use the Inngest path instead: a self-armed **oneshot** (ADR-046, bespoke logic) or the generic **reminder primitive** (`POST /api/internal/schedule-reminder`, no deploy for a comment / registered check). See [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
+**Both `schedule` skills generate GitHub-Actions cron only.** For a **one-time, autonomous, server-side action** that needs fire-time prd secrets or an installation-token repo write (no operator, no GH-Actions runner), use the Inngest path instead: a self-armed **oneshot** (ADR-046, bespoke logic) or the generic **reminder primitive** (`POST /api/internal/schedule-reminder`, no deploy for a comment / registered check — incl. the parametric `sentry-issue-rate` check). See [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md). **`create`'s Step 0 routing gate (below) enforces this automatically** — Inngest is the structural default for secret/server-side work; GHA is the pure-GH-ops exception.
 
 ## Commands
 
 ### `create`
 
 Generate a new scheduled workflow.
+
+**Step 0: Execution-substrate routing gate (run FIRST — before generating any GHA YAML).**
+
+This skill generates GitHub-Actions cron. But a GHA runner has **no Doppler/prd
+access**, so a scheduled task that needs fire-time prd secrets (Sentry/Supabase/
+Doppler tokens) will *fire but fail to authenticate* — and the
+`new-scheduled-cron-prefer-inngest` PreToolUse hook blocks the YAML write anyway.
+Route by what the task actually needs BEFORE generating anything; Inngest is the
+**structural default** for secret/server-side work, GHA the exception.
+
+Classify `$ARGUMENTS` (the task description):
+
+1. **Needs fire-time prd secrets OR autonomous server-side logic.** Grep the task
+   for `doppler`, `SUPABASE_SERVICE_ROLE_KEY`, `SENTRY_*` tokens, an installation-
+   token repo write, or "server-side"/"runtime" execution. **Route to Inngest —
+   STOP, do not generate GHA:**
+   - **Verification-shaped** ("did Sentry issue X drop below N/day?", "is metric Y
+     under threshold?", "comment/close an issue after a check") → the reminder
+     primitive's **`named-check`** (zero-deploy to arm; `POST /api/internal/schedule-reminder`).
+     If a suitable check exists in `CHECK_REGISTRY` (e.g. **`sentry-issue-rate`**,
+     the worked example — events/day of a tagged Sentry issue over a window, with
+     optional `close_on_pass`), arming is a single zero-deploy POST. If not, add a
+     small reviewed check to the registry (one deploy), then arm. Note: a check
+     that sets `close_on_pass` performs a **scoped issue mutation** — it closes
+     the action's own `report_to_issue` (never an arbitrary issue) — so treat
+     arming a closing check as a privileged action, not a read-only probe.
+   - **Bespoke server-side logic** (multi-step, custom data shape) → a self-armed
+     **oneshot** (ADR-046; one `.ts` + boot-arm + deploy).
+   - Full decision matrix + the exact arm HTTP shape: [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
+2. **Periodic verification needing a secret already wired to the follow-through
+   sweeper** (`scheduled-followthrough-sweeper.yml` passes an allowlist; e.g. the
+   job exposes the GitHub secret `SENTRY_IAC_AUTH_TOKEN` as env `SENTRY_AUTH_TOKEN`)
+   → a vetted follow-through script (under the repo's
+   `followthroughs` dir) + a follow-through directive. No new workflow, no
+   Inngest deploy.
+3. **Pure-GH ops** (no prd secrets — a skill reading public state, a Dependabot-
+   like job). Only this class falls through to Step 0a and GHA-cron generation.
+
+Announce the routing decision. If routing to Inngest/sweeper, do NOT proceed to
+Step 0a — point the operator at the substrate and stop. The
+`new-scheduled-cron-prefer-inngest` hook is now the BACKSTOP (it should rarely
+fire because this gate routes upstream); its `gate-override` is reserved for a
+genuinely pure-GH op and the override comment must assert "no prd secrets".
 
 **Step 0a: Mode detection (recurring vs one-time)**
 
@@ -672,6 +715,8 @@ If the run fails, diagnose the issue, fix the workflow file, and re-run. Do not 
 
 ### `list`
 
+> Also exposed as the first-class verb `soleur:cron-list` (Read), which runs these exact steps. The cron CRUD set: `soleur:schedule` (Create — this), `soleur:cron-list` (Read), `soleur:cron-delete` (Delete), `soleur:trigger-cron` (Run-now).
+
 Display all existing scheduled workflows, distinguishing recurring from one-time by cron shape.
 
 If `$ARGUMENTS` contains `--json`, output a JSON array with `name`, `cron`, `mode` (string: `"recurring"` or `"one-time"`), and `skill` fields. Otherwise display a formatted list with a mode tag.
@@ -708,6 +753,8 @@ Display:
 V1 reports mode + cron only. Richer state (`pending` / `disabled_inactivity` / `fired-failed`) is deferred — operators can run `gh workflow list` and `gh workflow view <NAME>` directly for now.
 
 ### `delete <name>`
+
+> Also exposed as the first-class verb `soleur:cron-delete` (Delete), which runs these exact steps.
 
 Remove a scheduled workflow.
 

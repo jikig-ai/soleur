@@ -149,6 +149,10 @@ interface UseWebSocketReturn {
    *  `activeLeaderIds.length > 0` — a multi-leader dispatch may have
    *  leaders responding while we are already `"stopping"`. */
   streamState: StreamState;
+  /** feat-reasoning-chat-boxes (#5370) — the transient live narration line for
+   *  the in-flight turn, or null. Rendered near the "Working…" badge; torn down
+   *  by the reducer on every turn-end path. Live-only (never persisted). */
+  liveNarration: string | null;
   /** User-initiated Stop. Sends `{ type: "abort_turn", conversationId }` and
    *  optimistically transitions `streamState` to `"stopping"`. No-op when
    *  `streamState !== "streaming"` (idempotent under double-click) or when
@@ -253,6 +257,20 @@ export interface ChatState {
    * flip" at the render layer. NOT a phase — it has no surviving invariant.
    */
   connection: { phase: ConnectionPhase; resumedAt?: number };
+  /**
+   * feat-reasoning-chat-boxes (#5370) — the TRANSIENT live narration line
+   * ("Looking into the navigation issue…"). Owned HERE (the turn-lifecycle
+   * reducer), NOT in the pure message-state-machine's `ChatStateSnapshot`,
+   * because abort/timeout/disconnect are ws-client actions
+   * (`enter_stopping`/`timeout`/`connection_change`/`clear_streams`) that never
+   * produce a server `StreamEvent` — so teardown MUST live on those arms or the
+   * line persists past turn-end and reads as a finished record (the #1 named
+   * brand failure). Single slot (not per-leader): `narrate` registers only on
+   * the interactive/cc-router path (single-leader); worst case is a flicker, not
+   * a cross-tenant incident. Set by `set_live_narration`; cleared on every
+   * turn-end arm + on the turn-ending `stream_event` (activeStreams emptied).
+   */
+  liveNarration: string | null;
 }
 
 export type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
@@ -261,6 +279,11 @@ export type ChatAction =
   | { type: "stream_event"; msg: StreamEventMsg }
   | { type: "timeout"; leaderId: string }
   | { type: "clear_streams" }
+  /** feat-reasoning-chat-boxes (#5370) — set the transient live narration line
+   *  from a `reasoning_narration` frame. Teardown is owned by the turn-end arms
+   *  (clear_streams / enter_stopping / connection_change-non-live) + the
+   *  turn-ending stream_event, NOT by a separate clear action. */
+  | { type: "set_live_narration"; message: string }
   | { type: "ack_timer_action" }
   | { type: "add_message"; message: ChatMessage }
   | { type: "filter_prepend"; messages: ChatMessage[] }
@@ -325,14 +348,25 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         pendingTimerAction: result.timerAction,
         // #5282 — stream events never touch connection state; carry it through.
         connection: state.connection,
+        // #5370 — tear down the live narration line when the turn fully ends
+        // (the last stream drained); otherwise carry it through unchanged.
+        liveNarration:
+          result.activeStreams.size === 0 ? null : state.liveNarration,
       };
     }
+    case "set_live_narration":
+      // #5370 — single-slot set; teardown happens on the turn-end arms.
+      return { ...state, liveNarration: action.message };
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
       return {
         ...state,
         messages: result.messages,
         activeStreams: result.activeStreams,
+        // #5370 — a timeout that escalates the last leader to error ends the
+        // turn (activeStreams emptied) → tear down the live narration line.
+        liveNarration:
+          result.activeStreams.size === 0 ? null : state.liveNarration,
         // FR5 (#2861): first timeout returns `{type:"reset"}` so the watchdog
         // restarts against the same leader; second consecutive timeout returns
         // `{type:"clear"}`. Propagate either (may be undefined for stale
@@ -354,6 +388,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         spawnIndex: new Map(),
         streamState: "idle",
         pendingTimerAction: undefined,
+        // #5370 — turn teardown (session_ended / socket remount / abort
+        // completion) clears the transient live narration line.
+        liveNarration: null,
       };
     case "enter_stopping":
       // #3448 PR2: idempotent under double-click — only "streaming" → "stopping".
@@ -361,8 +398,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // by the caller (the hook's `abort()` callback) BEFORE dispatching
       // this action, so a returning identity-equal state from the reducer
       // signals nothing to the WS frame either way.
+      // #5370 — user Stop tears down the live narration line (the turn is
+      // ending; the line must never persist as a finished record).
       return state.streamState === "streaming"
-        ? { ...state, streamState: "stopping" }
+        ? { ...state, streamState: "stopping", liveNarration: null }
         : state;
     case "connection_change": {
       // #5282 — sticky guard (AC11): once `unrecoverable`, the in-flight
@@ -380,6 +419,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         connection: { phase: action.phase, resumedAt: action.resumedAt },
+        // #5370 — a non-live transition (disconnect/reconnecting/unrecoverable)
+        // tears down the stale live narration line; the live-only frame does
+        // not replay, so a stale line would otherwise hang on reconnect.
+        liveNarration: action.phase === "live" ? state.liveNarration : null,
       };
     }
     case "reset_connection":
@@ -469,6 +512,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     spawnIndex: new Map(),
     streamState: "idle",
     connection: { phase: "live" },
+    liveNarration: null,
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
@@ -1215,6 +1259,25 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           dispatch({ type: "connection_change", phase: "unrecoverable" });
           break;
         }
+        case "reasoning_narration": {
+          // feat-reasoning-chat-boxes (#5370) — transient live status line.
+          // Set the single liveNarration slot; teardown is owned by the
+          // turn-end reducer arms (clear_streams / enter_stopping /
+          // connection_change-non-live) + the turn-ending stream_event. This
+          // frame is live-only (no seq), so it bypassed the replay-dedup gate
+          // above and never replays on reconnect.
+          dispatch({ type: "set_live_narration", message: msg.message });
+          break;
+        }
+        case "turn_summary": {
+          // feat-reasoning-chat-boxes (#5370) — durable per-turn summary box.
+          // Buffered (carries seq → already advanced the replay cursor above),
+          // so it survives reconnect replay AND is rehydrated from the messages
+          // table on reload. Route through the message reducer to append a
+          // ChatTurnSummaryMessage to the main list.
+          dispatch({ type: "stream_event", msg });
+          break;
+        }
         default: {
           // Review F12: compile-time exhaustiveness rail. A new server→client
           // variant added to `WSMessage` without a case here fails build.
@@ -1410,12 +1473,32 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       message_attachments?: RawAttachment[] | null;
       status?: "complete" | "aborted" | null;
       usage?: RawUsage | null;
-    }) => ({
+      message_kind?: string | null;
+    }): ChatMessage => {
+      // feat-reasoning-chat-boxes (#5370) — a persisted turn_summary row
+      // (message_kind, migration 105) rehydrates as the durable confirmed box
+      // (plain-text render), NOT a generic text bubble. Branch BEFORE the text
+      // mapping so the discriminator is honored on reload. A future unknown
+      // message_kind falls through to the text mapping (forward-compatible
+      // read; the render switch is the authoritative throw-on-unknown gate).
+      if (m.message_kind === "turn_summary") {
+        return {
+          id: m.id,
+          role: "assistant" as const,
+          content: m.content,
+          type: "turn_summary" as const,
+        };
+      }
+      return {
       id: m.id,
       role: m.role as "user" | "assistant",
       content: m.content,
       type: "text" as const,
-      leaderId: m.leader_id ?? undefined,
+      // Trusted DB-sourced leader id; the column is unconstrained text but is
+      // only ever written from the DomainLeaderId set. (The explicit return
+      // annotation above makes this cast necessary; pre-annotation it was an
+      // implicit widening.)
+      leaderId: (m.leader_id ?? undefined) as DomainLeaderId | undefined,
       // History messages intentionally leave state undefined so the
       // completion checkmark only appears on messages that completed via a
       // WS stream event in the current session. renderBubbleContent handles
@@ -1461,7 +1544,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
                 completed_actions: m.usage.completed_actions,
               }
           : null,
-    }));
+      };
+    });
 
     const costData: UsageData | null =
       json.totalCostUsd > 0
@@ -1803,6 +1887,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     conversationCreatedAt,
     historyLoading,
     streamState: chatState.streamState,
+    liveNarration: chatState.liveNarration,
     abort,
     connection: chatState.connection,
     resumeAfterUnrecoverable,

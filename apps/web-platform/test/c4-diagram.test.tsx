@@ -1,5 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { FeatureFlagProvider } from "@/components/feature-flags/provider";
+import type { FlagName } from "@/lib/feature-flags/server";
+
+function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
+  return {
+    "dev-signin": false,
+    "kb-chat-sidebar": false,
+    "team-workspace-invite": false,
+    "byok-delegations": false,
+    "c4-visualizer": false,
+    "debug-mode": false,
+    "c4-edit": c4Edit,
+  };
+}
 
 // Mock the shared building blocks so we test C4Diagram's WIRING (lifted `stale`
 // state + tab switch on save), not the real canvas/CodeMirror plumbing.
@@ -31,10 +45,12 @@ vi.mock("@/components/kb/c4-shared", () => ({
   ),
 }));
 
-async function renderEmbed() {
+async function renderEmbed(c4Edit = true, readOnly = false) {
   const { default: C4Diagram } = await import("@/components/kb/c4-diagram");
   return render(
-    <C4Diagram viewId="index" dirPath="knowledge-base/diagrams" />,
+    <FeatureFlagProvider flags={flagSnapshot(c4Edit)}>
+      <C4Diagram viewId="index" dirPath="knowledge-base/diagrams" readOnly={readOnly} />
+    </FeatureFlagProvider>,
   );
 }
 
@@ -72,5 +88,24 @@ describe("C4Diagram (inline embed) — staleness wiring (Layer 2)", () => {
         screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
       ).toBe("true"),
     );
+  });
+});
+
+describe("C4Diagram (inline embed) — c4-edit flag gates the Code tab (AC4)", () => {
+  it("AC4: flag OFF ⇒ only the Diagram tab, no Code tab, no C4CodePanel", async () => {
+    await renderEmbed(false);
+    expect(screen.queryByRole("button", { name: "code" })).toBeNull();
+    expect(screen.getByRole("button", { name: "diagram" })).toBeTruthy();
+    expect(screen.queryByTestId("c4-save-ok")).toBeNull();
+  });
+
+  it("AC4: flag ON ⇒ the Code tab is present", async () => {
+    await renderEmbed(true);
+    expect(screen.getByRole("button", { name: "code" })).toBeTruthy();
+  });
+
+  it("AC4: composes with readOnly — readOnly + flag ON still hides the Code tab", async () => {
+    await renderEmbed(true, true);
+    expect(screen.queryByRole("button", { name: "code" })).toBeNull();
   });
 });

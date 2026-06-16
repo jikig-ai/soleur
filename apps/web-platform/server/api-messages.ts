@@ -144,7 +144,11 @@ export async function handleConversationMessages(
       // assistant text persisted on Stop or tab-close. Without these
       // here, the live WS-subscriber would see the marker once and a
       // page reload would silently drop it (G2 disclosure regression).
-      "id, role, content, leader_id, created_at, status, usage, message_attachments(id, storage_path, filename, content_type, size_bytes)",
+      // `message_kind` (migration 105) discriminates the durable per-turn
+      // summary (`'turn_summary'`) from ordinary text (NULL). Without it here,
+      // a reloaded summary row hydrates as a plain text bubble (silent render
+      // regression — same class as the status/usage note above).
+      "id, role, content, leader_id, created_at, status, usage, message_kind, message_attachments(id, storage_path, filename, content_type, size_bytes)",
     )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });

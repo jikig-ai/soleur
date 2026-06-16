@@ -58,6 +58,9 @@ import {
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+// #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
+// block (re-thrown to the dispatch catch, which emits the honest client message).
+import { RepoNotReadyError } from "./repo-readiness";
 // #4440 follow-up to #4418 — `RuntimeAuthError` discriminator + the
 // founder-readable revocation status RPC. Used by `consumeStream`'s
 // catch to detect mid-stream JWT-deny and surface `session_revoked`
@@ -964,6 +967,11 @@ export interface DispatchArgs {
   documentKind?: "pdf" | "text";
   documentContent?: string;
   /**
+   * #5402 (PR-2). Routines "Draft a routine" tab mode flag. Forwarded to
+   * QueryFactoryArgs so realSdkQueryFactory appends ROUTINE_AUTHORING_DIRECTIVE.
+   */
+  routineAuthoring?: boolean;
+  /**
    * 2026-05-06 follow-up to #3338. Set when the in-process PDF extractor
    * surfaced a typed failure class (`oversized_buffer | encrypted |
    * corrupted | parse_error | empty_text | lazy_import_failed |
@@ -1032,6 +1040,9 @@ export interface QueryFactoryArgs {
   resumeSessionId?: string;
   pluginPath: string;
   cwd: string;
+  /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
+   *  ROUTINE_AUTHORING_DIRECTIVE to the system prompt when true. */
+  routineAuthoring?: boolean;
   /** Per-conversation context — real-SDK factories need these to wire the
    *  per-user `canUseTool` closure + audit logs. Tests can ignore. */
   userId: string;
@@ -1112,7 +1123,14 @@ export interface SoleurGoRunnerDeps {
    * The cc-dispatcher uses this to drain its `_ccBashGates` Map on idle
    * reap (a path that does NOT fire `onWorkflowEnded`).
    */
-  onCloseQuery?: (args: { conversationId: string; userId: string }) => void;
+  onCloseQuery?: (args: {
+    conversationId: string;
+    userId: string;
+    // #5356 — only a disconnect grace-abort carries a reason; the cc dispatcher
+    // hook checkpoints in-flight work iff `reason === "disconnected"`. Natural
+    // completion / idle reap / bare close leave it undefined (→ no checkpoint).
+    reason?: "disconnected";
+  }) => void;
 }
 
 export interface SoleurGoRunner {
@@ -1120,7 +1138,18 @@ export interface SoleurGoRunner {
   hasActiveQuery(conversationId: string): boolean;
   activeQueriesSize(): number;
   reapIdle(): number;
-  closeConversation(conversationId: string): void;
+  closeConversation(conversationId: string, reason?: "disconnected"): void;
+  /**
+   * Drain EVERY active query on process shutdown (SIGTERM). Aborts WITHOUT
+   * a checkpoint reason — matching the legacy `abortAllSessions` parity
+   * (`server_shutdown` is non-`disconnected`, so the checkpoint branch is
+   * skipped; conversations "own their terminal state"). Unlike `reapIdle`,
+   * does NOT skip `awaitingUser` queries — a deploy tears down
+   * review-gate-parked queries too. Idempotent against the grace-abort
+   * overlap (skips entries already marked `state.closed`). Returns the
+   * count closed. (#5371)
+   */
+  closeAllForShutdown(): number;
   /**
    * Push a `tool_result` content-block back into the SDK for an in-flight
    * interactive tool_use. Used by the `interactive_prompt_response`
@@ -1939,7 +1968,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeQuery(state);
   }
 
-  function closeQuery(state: ActiveQuery): void {
+  function closeQuery(state: ActiveQuery, reason?: "disconnected"): void {
     clearRunaway(state);
     clearTurnHardCap(state);
     // #3040 Finding 4 — defense-in-depth: reset paused fields so a stale
@@ -1971,6 +2000,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         deps.onCloseQuery({
           conversationId: state.conversationId,
           userId: state.userId,
+          // #5356 — only the grace-timer's `closeConversation(convId,
+          // "disconnected")` threads a reason this far; the other two callers
+          // (`emitWorkflowEnded`, `reapIdle`) pass none → no checkpoint.
+          reason,
         });
       } catch (err) {
         reportSilentFallback(err, {
@@ -2499,6 +2532,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           cwd,
           userId,
           conversationId,
+          routineAuthoring: args.routineAuthoring,
           artifactPath: args.artifactPath,
           activeWorkflow: initialWorkflow,
           documentKind: args.documentKind,
@@ -2516,11 +2550,19 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           setBashAutonomous: args.setBashAutonomous,
         });
       } catch (err) {
-        reportSilentFallback(err, {
-          feature: "soleur-go-runner",
-          op: "queryFactory",
-          extra: { conversationId, userId },
-        });
+        // #5394 — a RepoNotReadyError (repo cloning/error) is an expected,
+        // benign dispatch block, NOT an incident. Skip the Sentry mirror at
+        // THIS site too (the dispatch catch in cc-dispatcher logs an info
+        // breadcrumb instead); missing either site re-introduces noise on every
+        // cloning-window turn. Re-throw either way so the dispatch catch routes
+        // the honest client message.
+        if (!(err instanceof RepoNotReadyError)) {
+          reportSilentFallback(err, {
+            feature: "soleur-go-runner",
+            op: "queryFactory",
+            extra: { conversationId, userId },
+          });
+        }
         throw err;
       }
 
@@ -3112,11 +3154,33 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     return reaped;
   }
 
-  function closeConversation(conversationId: string): void {
+  function closeConversation(
+    conversationId: string,
+    reason?: "disconnected",
+  ): void {
     const state = activeQueries.get(conversationId);
     if (!state) return;
     state.closed = true;
-    closeQuery(state);
+    closeQuery(state, reason);
+  }
+
+  function closeAllForShutdown(): number {
+    let closed = 0;
+    for (const state of Array.from(activeQueries.values())) {
+      // #5371 — `closeQuery` has no body-level `state.closed` guard (the
+      // three other callers set it before calling). Skip entries already
+      // closed by the grace-abort overlap so the drain never double-fires
+      // `onCloseQuery` / `query.close()`. Synchronous iteration → no
+      // concurrent reaper tick can interleave; the real overlap defended
+      // here is a prior `closeConversation(id, "disconnected")`.
+      if (state.closed) continue;
+      // No reason → no checkpoint (legacy `abortAllSessions` parity). And no
+      // `awaitingUser` skip — a deploy tears down review-gate queries too.
+      state.closed = true;
+      closeQuery(state);
+      closed++;
+    }
+    return closed;
   }
 
   function respondToToolUse(args: {
@@ -3225,6 +3289,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     activeQueriesSize,
     reapIdle,
     closeConversation,
+    closeAllForShutdown,
     respondToToolUse,
     notifyAwaitingUser,
   };

@@ -176,6 +176,24 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // separately (Art. 17 cascade in server/account-delete.ts).
   action_sends: { ownerField: "user_id", article: "15" },
 
+  // Outbound cold-email WORM audit (migration 104, #5325). Art. 15: the
+  // founder can access which cold sends the platform recorded on their
+  // behalf — the keyed recipient hash, the approved/per-send body hashes,
+  // the Resend id, and when. Body and recipient are stored as hashes only
+  // (raw values never persisted), so there is no portable user-provided
+  // content; 15-only, analogous to action_sends (platform-generated audit
+  // evidence of the founder's gated approval). Erasure handled separately by
+  // anonymise_outbound_sends (Art. 17 cascade in server/account-delete.ts).
+  outbound_sends: { ownerField: "owner_id", article: "15" },
+
+  // Per-founder permanent email suppression set (migration 104, #5325).
+  // Art. 15: the founder can access which recipients they have suppressed
+  // (keyed hash + reason + added_at). The recipient address is stored only
+  // as an HMAC pseudonym (never plaintext); the set is a derived control
+  // list, not portable user-provided content → 15-only. Monotonic (no
+  // un-suppress); erasure via anonymise_email_suppression (Art. 17 cascade).
+  email_suppression: { ownerField: "owner_id", article: "15" },
+
   // Per-template authorization ledger (migration 053, PR-I #4078).
   // Art. 15+20: the founder explicitly authorised each template via the
   // first-send-IS-authorization pattern — the Send click on a labeled
@@ -379,6 +397,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "(#4521). Art. 17: user_id SET NULL via FK ON DELETE SET NULL " +
     "(no dedicated anonymise RPC — FK cascade sufficient). Promote " +
     "to allowlist with export chain.",
+
+  // #5345: routines run-log. Operational WORM audit (which cron ran, when,
+  // status, trigger source). actor_id / delegating_principal are the
+  // operator's own id on the single-operator tenant; rows are system-audit
+  // records, not Art. 15 personal-profile data. Mirrors the workspace_activity
+  // exclusion pattern.
+  routine_runs:
+    "Migration 107 operational run-log. actor_id/delegating_principal FK " +
+    "ON DELETE RESTRICT; Art. 17 satisfied by anonymise_routine_runs RPC " +
+    "(NULLs both actor cols under the WORM bypass, preserving the audit " +
+    "row) called in account-delete before auth-delete (mirrors the " +
+    "anonymise_workspace_activity pattern). On the single-operator tenant " +
+    "the only data subject is Soleur itself; rows record routine " +
+    "executions, not user-profile data. Promote to DSAR_TABLE_ALLOWLIST " +
+    "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
+    "dsar-export.ts chain is wired.",
 };
 
 /**

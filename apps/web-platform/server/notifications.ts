@@ -141,7 +141,10 @@ function ensureVapid(): void {
 // ---------------------------------------------------------------------------
 let resendClient: Resend | null = null;
 
-function getResend(): Resend {
+// Exported so the cold-outbound chokepoint (server/email-triage/outbound.ts)
+// reuses the single shared Resend client. Per the outbound sentinel, outbound.ts
+// is the ONLY other module allowed to call resend.emails.send (#5325).
+export function getResend(): Resend {
   if (!resendClient) {
     const key = process.env.RESEND_API_KEY;
     if (!key) throw new Error("RESEND_API_KEY must be set");

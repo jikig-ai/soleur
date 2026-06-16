@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { rm, rename, cp, readdir } from "node:fs/promises";
+import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -31,6 +31,17 @@ export function __setGraftForTests(fn: GraftFn): void {
   graftFn = fn;
 }
 
+/**
+ * Result of a session-start re-provision attempt (#5340 / #5240 design item #2).
+ * Deliberately 2-variant: the only consumer (the cc reconnect honest-message
+ * branch) branches solely on `"failed"`. `"ok"` folds every benign exit
+ * (not-connected, `.git`-present no-op, skipped-bad-url, cloned) — four success
+ * shades nobody reads were cut at plan-review. `"failed"` is ONLY the genuine
+ * clone-catch, i.e. the post-recovery-failure signal that gates the honest
+ * "workspace reclaimed" message.
+ */
+export type ReprovisionOutcome = "failed" | "ok";
+
 export interface EnsureWorkspaceRepoArgs {
   userId: string;
   workspacePath: string;
@@ -38,6 +49,59 @@ export interface EnsureWorkspaceRepoArgs {
   installationId: number | null;
   /** Per-user connected repo (getCurrentRepoUrl, normalized). null/empty = not connected. */
   repoUrl: string | null;
+}
+
+/**
+ * Unconditional pre-sandbox workspace-dir guarantee.
+ *
+ * The agent runs inside an SDK bubblewrap sandbox whose `cwd` is frozen to
+ * `workspacePath` at `query()` construction (`agent-runner-query-options.ts`);
+ * bwrap `chdir`s into that path and REQUIRES it to EXIST. After a sandbox/host
+ * reclaim the dir can be gone — and dir-existence is a STRONGER precondition
+ * than clone-eligibility: `ensureWorkspaceRepoCloned` early-returns for
+ * not-connected (no `installationId`/`repoUrl`) and `.git`-present workspaces
+ * BEFORE it ever reaches `realGraftRepoClone`'s own mkdir, so a reclaimed
+ * not-connected (or `.git`-present-but-root-deleted) workspace would otherwise
+ * get NO dir re-creation and the sandbox builds against a non-existent CWD
+ * (the "configured CWD `/workspaces/<uuid>` doesn't exist" symptom). This mkdir
+ * is therefore UNCONDITIONAL and independent of the clone (PR #5367's conditional
+ * mkdir stays — it is correct for the clone; this is the wider precondition).
+ *
+ * Fail-soft-but-loud (per the not-connected fail-soft hazard): one bounded retry,
+ * then mirror to Sentry (`cq-silent-fallback-must-mirror-to-sentry`) and THROW.
+ * It must NOT silently proceed to construct a sandbox against a still-missing dir
+ * — for the not-connected case there is no clone to recover and no clone-`"failed"`
+ * to surface the honest "workspace reclaimed" message, so silent-proceed would
+ * reconstruct the exact original symptom with only a swallowed Sentry event. The
+ * throw rides the caller's existing `query()`-construction catch, which surfaces
+ * the retryable error envelope to the conversation.
+ *
+ * Creates ONLY the workspace root (`recursive: true`), never `.git` — so the
+ * clone's `.git`-absent no-op guard and `"failed"` honest-message path are
+ * unperturbed. Recursive mkdir on an existing dir is idempotent.
+ */
+export async function ensureWorkspaceDirExists(
+  workspacePath: string,
+  ctx: { feature: string; userId: string },
+): Promise<void> {
+  try {
+    await mkdir(workspacePath, { recursive: true });
+  } catch {
+    try {
+      await mkdir(workspacePath, { recursive: true }); // bounded single retry
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: ctx.feature,
+        op: "ensure-workspace-dir-presandbox",
+        extra: { userId: ctx.userId },
+        message:
+          "pre-sandbox workspace-dir ensure failed; surfacing a retryable error instead of building a sandbox against a non-existent CWD",
+      });
+      throw new Error(
+        "workspace directory could not be ensured before sandbox construction",
+      );
+    }
+  }
 }
 
 /**
@@ -69,13 +133,13 @@ export interface EnsureWorkspaceRepoArgs {
  */
 export async function ensureWorkspaceRepoCloned(
   args: EnsureWorkspaceRepoArgs,
-): Promise<void> {
+): Promise<ReprovisionOutcome> {
   const { userId, workspacePath, installationId, repoUrl } = args;
-  if (installationId === null || !repoUrl) return; // not connected → nothing to ensure
+  if (installationId === null || !repoUrl) return "ok"; // not connected → nothing to ensure
 
   // NEVER touch an existing repo (Start-Fresh, already-cloned, or a different
   // origin the user is intentionally using). Only heal the no-`.git` symptom.
-  if (existsSync(join(workspacePath, ".git"))) return;
+  if (existsSync(join(workspacePath, ".git"))) return "ok";
 
   if (!GITHUB_HTTPS_REPO_RE.test(repoUrl)) {
     reportSilentFallback(new Error("repo_url failed github-https allowlist"), {
@@ -84,7 +148,7 @@ export async function ensureWorkspaceRepoCloned(
       extra: { userId, hasInstallation: true },
       message: "connected repo_url is not a github.com HTTPS URL; skipping self-heal",
     });
-    return;
+    return "ok"; // benign skip — a malformed URL is NOT a recovery failure
   }
 
   try {
@@ -95,6 +159,7 @@ export async function ensureWorkspaceRepoCloned(
     // userId), so this is source-hygiene. The two reportSilentFallback sites
     // are guard-allowlisted (they hash via hashExtraUserId) and keep userId.
     log.info({ action: "cloned" }, "ensure-workspace-repo: cloned connected repo");
+    return "ok";
   } catch (err) {
     // Fail-soft: surface to Sentry, never crash the conversation. The token is
     // env-only inside gitWithInstallationAuth (never in argv/URL/stderr), so it
@@ -105,6 +170,10 @@ export async function ensureWorkspaceRepoCloned(
       extra: { userId, hasInstallation: true },
       message: "ensure-workspace-repo clone failed; Concierge proceeds degraded (no clone)",
     });
+    // The ONLY non-benign outcome: a genuine clone failure (token expired /
+    // network / repo gone). This is the post-recovery-failure signal the cc
+    // reconnect path threads to the honest "workspace reclaimed" message.
+    return "failed";
   }
 }
 
@@ -140,6 +209,11 @@ export async function realGraftRepoClone(
   repoUrl: string,
   installationId: number,
 ): Promise<void> {
+  // `git clone` creates only the leaf (`.ensure-repo-tmp-<uuid>`), not missing
+  // parents, so the workspace root must exist first — it can be gone after a
+  // sandbox/host reclaim. Matches the operative mkdir of the signup path
+  // (workspace.ts:111); not its symlink-rejection contract, which is irrelevant here.
+  await mkdir(workspacePath, { recursive: true });
   const tmp = join(workspacePath, `.ensure-repo-tmp-${randomUUID()}`);
   try {
     await gitWithInstallationAuth(
