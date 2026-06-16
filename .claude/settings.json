@@ -182,6 +182,15 @@
         ]
       },
       {
+        "matcher": "CronCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/durable-reminder-prefer-inngest.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__pencil__open_document",
         "hooks": [
           {
