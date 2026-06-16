@@ -96,7 +96,6 @@
     "brace-expansion": "^5.0.6",
     "ws": "^8.21.0",
     "qs": "^6.15.2",
-    "js-yaml": "^4.2.0",
     "@babel/core": "^7.29.6",
     "protobufjs": "^7.6.4"
   }
