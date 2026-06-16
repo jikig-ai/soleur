@@ -293,6 +293,12 @@ describe("agent-runner leader — repo-readiness gate (#5399)", () => {
     expect(mockQuery).not.toHaveBeenCalled();
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
     expect(mockCaptureException).not.toHaveBeenCalled();
+    // AC4 + AC10: the gate is the FIRST statement and early-returns, so a block
+    // performs ZERO DB side effects — no conversation marked failed, no
+    // session-state mutation (getSession/registerSession run below the gate and
+    // touch no table here). `getCurrentRepoStatus` is fully mocked, so any
+    // mockFrom call would mean execution fell through past the gate.
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   test("AC2: error workspace blocks — emits repo_setup_failed errorCode, spawns no agent, no Sentry", async () => {
@@ -312,6 +318,8 @@ describe("agent-runner leader — repo-readiness gate (#5399)", () => {
     expect(payload.message).toMatch(/^Repository setup failed:/);
     expect(mockQuery).not.toHaveBeenCalled();
     expect(mockCaptureException).not.toHaveBeenCalled();
+    // AC4 + AC10: zero DB side effects on a block (see AC1 for rationale).
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   test("AC5a: ready workspace is a no-op — gate emits nothing, dispatch proceeds", async () => {

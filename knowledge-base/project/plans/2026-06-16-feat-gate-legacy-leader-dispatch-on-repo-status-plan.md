@@ -121,6 +121,15 @@ blocked with "your repository is still being set up." The pure evaluator is **fa
 `cloning`/`error` block; a read blip → `not_connected` → `{ ok: true }`), so the false-positive
 mode is bounded to a genuine `cloning`/`error` state.
 
+**Degraded-UX mode (accepted, not a data/money/workflow incident):** a not-ready
+**multi-leader** dispatch (`dispatchToLeaders` fan-out) runs the gate once per leader, so the user
+sees **N identical honest error toasts** (one per leader) instead of one. This is bounded to a
+genuine `cloning`/`error` state, each frame carries the same honest copy, and the client renders
+error toasts idempotently per conversation; gating once pre-fan-out would re-introduce a second
+gate site the source plan deliberately rejected. Accepted as-is (AC12) — no data, money, or
+resumable-conversation loss. If the duplicate toasts ever prove noticeable, the fix is client-side
+per-turn dedup of identical `{ type: "error", errorCode }` frames, NOT a server pre-fan-out gate.
+
 **If this leaks, the user's workflow / data is exposed via:** the error-branch message embeds the
 repo-setup failure reason. The reason is sanitized at rest (`/api/repo/setup` → `sanitizeGitStderr`)
 AND re-sanitized defensively inside `evaluateRepoReadiness` (`repo-readiness.ts` `error` branch,
