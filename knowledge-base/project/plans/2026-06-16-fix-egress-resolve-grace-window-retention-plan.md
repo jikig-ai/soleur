@@ -430,8 +430,9 @@ logs:
   retention: "host journald default (volatile/rotated); the Sentry events are the durable no-SSH channel"
 
 discoverability_test:
-  command: "gh run view <latest apply-web-platform-infra run> --log | grep -E 'ASSERT-FAILED|cron-egress' ; AND read the Sentry cron-egress-resolve monitor status + cron-egress-blocked issue event count via the incident skill's SENTRY_ISSUE_RW_TOKEN toolchain (no ssh)"
-  expected_output: "apply green (no ASSERT-FAILED); cron-egress-resolve monitor OK; cron-egress-blocked issue shows the 104.18.x/198.x/34.149.x DST hits trending to zero after the fix lands"
+  command: curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 -X POST https://app.soleur.ai/api/internal/trigger-cron
+  expected_output: 202
+  note: "Single no-ssh probe of the cron control surface that manages this resolver's cohort. With INNGEST_MANUAL_TRIGGER_SECRET (Doppler prd) the operator gets 202 (dispatch accepted); without creds it returns 401 (auth-gated — the expected pre-merge state). The durable verification is post-apply: the apply-web-platform-infra run's post-apply container probes (no ASSERT-FAILED) + the Sentry cron-egress-resolve monitor recovering to OK + the cron-egress-blocked issue's 104.18.x/198.x/34.149.x DST hits trending to zero within one grace window — read via the incident skill's SENTRY_ISSUE_RW_TOKEN toolchain (no ssh, no dashboard-eyeball)."
 ```
 
 ## Acceptance Criteria
