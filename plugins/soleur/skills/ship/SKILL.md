@@ -273,6 +273,7 @@ Ship Checklist for [branch name]:
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
+- [ ] Recurring-vendor-expense gate passed (Phase 5.5 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
@@ -522,6 +523,45 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 **If not triggered:** Skip silently.
 
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
+
+### Recurring-Vendor-Expense Gate (mandatory)
+
+Enforces workflow gate `wg-record-recurring-vendor-expense-before-ready` at the `gh pr ready` boundary. This is the **deterministic, blocking** counterpart to the COO Expense-Tracking Gate above: the COO gate *discovers and recommends* (soft, advisory), this gate *blocks PR-ready* until a detected recurring vendor cost is either recorded in `knowledge-base/operations/expenses.md` in the same change OR carried as a tracked operator-driven follow-up. The two are complementary — run the COO gate first to surface costs, this gate to enforce that they landed.
+
+Emit rule-application telemetry (records the gate fired):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-record-recurring-vendor-expense-before-ready applied \
+  '`/ship` Phase 5.5 blocks PR-ready on an unrecorded recurring vendor expense'
+```
+
+**Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'` adds a dependency the agent judges to be a *paid* vendor), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or plan-tier strings in the diff or PR body. Capture the PR body once and **strip fenced code blocks** before grepping (this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count), reusing the fail-closed fence-stripper from the Undeferred Operator-Step Gate. Bash ERE has no `(?i)` — use `grep -iE`.
+
+```bash
+# (a) Is the ledger already touched in this same change? If so the gate is satisfied.
+LEDGER_TOUCHED=$(git diff origin/main...HEAD --name-only | grep -c 'knowledge-base/operations/expenses.md' || true)
+
+# (b) Plan-tier signal, list-anchored to avoid prose noise (mirrors the
+# Undeferred gate's list-anchored convention). Run against the
+# fence-stripped PR body ($PR_BODY_FILE from the sibling gate's stripper).
+SIGNAL_RE='^[[:space:]]*([-*]|[0-9]+\.)?[[:space:]]*.*((^|[^a-z])[Pp]ro\b|subscription|upgrade|paid[[:space:]]+tier|\$[0-9]+(\.[0-9]+)?/mo)'
+SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
+```
+
+**Rule.** If a vendor-cost signal fires (plan-tier string, new paid dependency, or new vendor credential) AND `LEDGER_TOUCHED` is `0`, the change MUST carry a `(Tracks|Refs) #NNNN` companion pointing at an OPEN `type/chore` issue whose body contains the `deferred-automation` sentinel — the operator-driven-billing branch (same verification loop as the Undeferred Operator-Step Gate: state OPEN + label `type/chore` + sentinel). Absent both the ledger edit and a valid tracked follow-up, the gate is **triggered**.
+
+**If not triggered:** Skip silently (no signal, or the ledger was edited in this change, or a valid tracked follow-up exists).
+
+**If triggered:** Halt and present the structured 3-option prompt. The operator chooses one:
+
+1. **Record the expense now.** Edit `knowledge-base/operations/expenses.md` (and refresh `knowledge-base/finance/cost-model.md` if the change shifts any category subtotal >10% per the ledger's Downstream-Consumers rule) in this same change, then re-run detection. Mirror the estimate-with-verify Notes shape (Sentry PAYG / Resend Pro rows) when the exact amount is not yet billed.
+2. **File / cite an operator-driven follow-up.** When the billing action is genuinely operator-driven (a billing-portal plan upgrade behind dashboard auth that no API/CLI can perform — e.g. the Resend free→Pro upgrade), `gh issue create --label type/chore` with a body carrying the `deferred-automation` sentinel and a re-evaluation criterion, then add `Tracks #NNNN` to the PR body. Re-run detection.
+3. **Override with operator-attestation** (false positive — e.g. a free-tier SDK with no recurring cost, or a plan-tier string that is documentation not a real subscription). Append `<!-- gate-override: wg-record-recurring-vendor-expense-before-ready -->` followed by a one-line justification to the PR body, then proceed.
+
+**Headless mode.** Abort with the structured error. No auto-file / auto-override in headless — the paid-vs-free and operator-driven-vs-automatable judgments require an interactive run.
+
+**Why:** #5325 — the 2026-06-15 outbound-email go-live added a second Resend sending domain, forcing a Resend free→Pro upgrade ($20/mo), but the cost reached the ledger only after the operator noticed it missing. The COO gate's advisory recommendation did not block merge; this gate moves recurring-vendor-cost capture from honor-system to a mechanical block-before-ready, with an explicit operator-driven-billing branch for upgrades no API can self-apply.
 
 ### gdpr-gate `compliance/critical` Auto-Label Gate
 
