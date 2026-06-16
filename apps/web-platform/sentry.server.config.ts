@@ -24,6 +24,17 @@ Sentry.init({
   // Error capture only — no performance tracing at current scale.
   // Enable tracesSampleRate when investigating specific performance issues.
   tracesSampleRate: 0,
+  // #5417 — drop the auto OnUncaughtException / OnUnhandledRejection
+  // integrations. server/crash-handlers.ts installs MANUAL handlers for both
+  // (so unhandledRejection deterministically exits — Sentry's default only
+  // warns, leaving the process in an undefined post-rejection state). Keeping
+  // the auto integrations would double-report every fatal. Guarded by
+  // test/sentry-server-config-no-auto-global-handlers.test.ts.
+  integrations: (defaults) =>
+    defaults.filter(
+      (i) =>
+        i.name !== "OnUncaughtException" && i.name !== "OnUnhandledRejection",
+    ),
   beforeSend(event) {
     return scrubSentryEvent(event);
   },

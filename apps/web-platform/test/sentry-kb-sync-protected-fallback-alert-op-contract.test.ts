@@ -65,7 +65,7 @@ describe("kb-sync-protected-fallback alert op/feature contract", () => {
 
   it("the rule's frequency is unique across all issue alerts in the file", () => {
     // Line-anchored (multiline) so only real HCL `frequency = N` attribute
-    // lines count — an inline comment mention like `frequency=17` in prose must
+    // lines count — an inline comment mention like `frequency=18` in prose must
     // NOT inflate the count (drift-guard false-fail on comment prose).
     const freqMatch = tfBlock.match(/^\s*frequency\s*=\s*(\d+)/m);
     expect(freqMatch).not.toBeNull();

@@ -683,6 +683,81 @@ resource "sentry_issue_alert" "egress_blocked" {
   }
 }
 
+# container-restart-monitor.sh (#5417): the host systemd-timer detector posts a
+# Sentry error EVENT tagged feature=container-restart-monitor when the
+# soleur-web-platform container's restart rate breaches RESTART_THRESHOLD
+# (op=restart_storm) or a freshly-deployed container is already crash-looping
+# (op=fresh_crash_loop). This rule is the no-SSH NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself) for the restart-churn root cause:
+# the monitor reads docker inspect RestartCount + the cgroup memory.events
+# oom_kill counter directly on the host (authoritative — catches the cgroup-v2
+# child-cgroup OOM that .State.OOMKilled and the "Server startup" event-frequency
+# both miss), so paging on its event is the host-authoritative restart-rate
+# signal. The monitor does the rate thresholding host-side, so a first-seen page
+# is correct (no event_frequency condition needed — and beta2's conditions_v2
+# has no verified event_frequency support; see ADR-062).
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): the monitor also emits
+# op=recovered (a "storm cleared" event) under the SAME feature tag; scoping to
+# {restart_storm, fresh_crash_loop} keeps the recovery note from paging as an
+# incident. Mirrors chat_message_save_failure / kb_db_error op-scoping. A new
+# alertable monitor op MUST be added to BOTH this IS_IN value AND the op-contract
+# test (test/sentry-container-restart-alert-op-contract.test.ts).
+#
+# `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
+# mutually exclusive (a captured event is exactly one) so "all" is never
+# satisfiable; reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. Distinct `frequency=17` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,30,60,61,62; keyed on
+# action_match+filter_match+frequency+actions-shape, NOT conditions). Events
+# carry only container id / counts / exit code — no user content.
+resource "sentry_issue_alert" "container_restart_burst" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "container-restart-burst"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 17
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "container-restart-monitor"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "restart_storm,fresh_crash_loop"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure / egress_blocked):
+  # IssueOwners has no ownership rule on this project → falls through to
+  # ActiveMembers, paging the solo founder. Events carry only container id +
+  # restart counts + exit code — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── KB-sync protected-branch fallback failure (#5426) — APPLY-CREATED ───────
 # server/session-sync.ts `syncPush`: when the user's default branch is
 # protected, the post-session KB commit can't be pushed onto it, so the fallback
@@ -708,19 +783,19 @@ resource "sentry_issue_alert" "egress_blocked" {
 # `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
 # mutually exclusive (a captured event is exactly one) so "all" is never
 # satisfiable; reappeared+regression re-page a recurrence after the founder
-# resolves the Sentry issue. Distinct `frequency=17` avoids Sentry POST-time
-# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,30,60,61,62; 17 free
-# 2026-06-16) — dedup keys on action_match+filter_match+frequency+actions-shape,
-# NOT conditions. `IS_IN` proven in beta2 at byok_cap_exceeded above.
-# Cross-artifact op/feature contract pinned by
-# test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts.
+# resolves the Sentry issue. Distinct `frequency=18` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,30,60,61,62; 18 free
+# 2026-06-16 — 17 taken by container_restart_burst #5417) — dedup keys on
+# action_match+filter_match+frequency+actions-shape, NOT conditions. `IS_IN`
+# proven in beta2 at byok_cap_exceeded above. Cross-artifact op/feature contract
+# pinned by test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts.
 resource "sentry_issue_alert" "kb_sync_protected_fallback_failed" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
   name         = "kb-sync-protected-fallback-failed"
   action_match = "any"
   filter_match = "all"
-  frequency    = 17
+  frequency    = 18
 
   conditions_v2 = [
     { first_seen_event = {} },

@@ -22,6 +22,7 @@ import {
 } from "./cc-dispatcher";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
+import { installCrashHandlers } from "./crash-handlers";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
 import { assertSingleReplicaInvariant } from "./single-replica-assertion";
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
@@ -51,6 +52,13 @@ function isLoopbackHost(hostHeader: string | undefined): boolean {
 }
 
 const log = createChildLogger("startup");
+
+// #5417 — attribute crash-driven restarts. Installed at module scope (before any
+// async server setup that could itself throw) so a fatal at any point is
+// captured to Sentry and turned into a clean process.exit(1) restart instead of
+// an un-attributable churn. sentry.server.config.ts disables Sentry's auto
+// OnUncaughtException/OnUnhandledRejection integrations so these report once.
+installCrashHandlers();
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -214,9 +222,13 @@ app.prepare().then(() => {
     }, "Sentry status");
 
     if (process.env.SENTRY_DSN) {
+      // #5417 — tag the startup event so the restart-rate signal (the Sentry
+      // "Server startup" issue) can be filtered/queried precisely: the
+      // container-restart-monitor is the authoritative host-side rate alarm,
+      // and AC12 reads this issue's stats API to verify the post-fix rate drop.
       Sentry.captureMessage(
         `Server startup v${process.env.BUILD_VERSION || "dev"}`,
-        "info",
+        { level: "info", tags: { event_type: "server-startup" } },
       );
     }
   });

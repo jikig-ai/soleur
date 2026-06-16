@@ -523,6 +523,7 @@ jobs:
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=terraform_data.disk_monitor_install \
               -target=terraform_data.resource_monitor_install \
+              -target=terraform_data.container_restart_monitor_install \
               -target=terraform_data.fail2ban_tuning \
               -target=terraform_data.journald_persistent \
               -target=terraform_data.docker_seccomp_config \
