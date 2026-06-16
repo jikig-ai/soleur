@@ -71,3 +71,23 @@ backstop.
 ## Tags
 category: bug-fixes
 module: apps/web-platform/hooks/use-conversations
+
+## Follow-up (#5449 → next PR): the deterministic signal also has a commit-timing race
+
+Live post-deploy verification of #5449 (the headless-browser harness driving the deployed app)
+revealed the deterministic signal was necessary but **not sufficient**: `chat-surface` emits the
+event at `session_started`, but the conversation **row is created lazily on the first persisted
+message — slightly AFTER `session_started`**. So the single refetch on the event runs *before* the
+row is committed and misses it (confirmed: the `realConversationId` the event carried had no
+`conversations` row yet).
+
+Fix: a **small bounded retry keyed on the event's concrete `conversationId`** — `fetchConversations`
+now returns the enriched list; the listener refetches, and if the target id isn't visible yet,
+retries on a short backoff (≈9.6s bound) until it appears or the bound is hit. Deterministic (gated
+on the actual id, never a blind clock), self-cancelling (if no row ever commits — e.g. the message
+was never sent — the retries exhaust harmlessly).
+
+**Meta-lesson reinforced:** post-deploy live verification is not optional theatre — it caught a real
+residual race that the (passing, mutation-verified) unit test could not, because the unit test
+modeled "row exists at event time." The browser harness modeled the true server timing. Verify the
+deployed artifact against reality, not just the model.
