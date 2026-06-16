@@ -412,6 +412,42 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     expect(view.result.current.conversations.map((c) => c.id)).toContain("existing-row");
   });
 
+  it("refetches on the soleur:conversation-created event so a new conversation appears WITHOUT realtime or a reload (deterministic recovery)", async () => {
+    // The real-world failure (reproduced in a headless browser, 2026-06-17): a
+    // freshly-started conversation's realtime own-channel INSERT is missed
+    // because the rail re-subscribes during the new-conversation navigation (the
+    // INSERT lands in the pre-SUBSCRIBED window supabase-js never replays) and
+    // the mount-time backfills already ran before the row existed. chat-surface
+    // emits `soleur:conversation-created` the moment the server assigns the real
+    // id; the rail must refetch on it and surface the row — no realtime INSERT,
+    // no reload. With the listener absent, no refetch fires and the row never
+    // appears (the bug), so this is non-vacuous.
+    const existing = makeRow({ id: "conv-existing" });
+    const created = makeRow({ id: "conv-created-via-event" });
+    state.fallbackConvResult = [existing];
+
+    const { useConversations } = await import("@/hooks/use-conversations");
+    const view = renderHook(() => useConversations({ limit: 15 }));
+    await waitFor(() =>
+      expect(view.result.current.conversations.map((c) => c.id)).toEqual(["conv-existing"]),
+    );
+
+    // A new conversation now exists server-side; chat-surface fires the signal.
+    // NO own-channel INSERT is delivered to the rail (the missed-realtime case).
+    state.fallbackConvResult = [created, existing];
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("soleur:conversation-created", {
+          detail: { conversationId: "conv-created-via-event" },
+        }),
+      );
+    });
+    await waitFor(
+      () => expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-created-via-event"),
+      { timeout: 3000 },
+    );
+  });
+
   it("AC2 (bounded): the scope-resolve backfill fires once, not per render", async () => {
     state.deferFirstActiveRepo = true;
     const newRow = makeRow({ id: "conv-bounded" });

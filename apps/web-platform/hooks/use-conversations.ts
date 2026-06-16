@@ -455,6 +455,29 @@ export function useConversations(
     }
   }, [workspaceId, fetchConversations]);
 
+  // Deterministic new-conversation refresh (the realtime-miss recovery).
+  // chat-surface.tsx emits `soleur:conversation-created` the moment the server
+  // assigns a freshly-started conversation its real id. The rail's realtime
+  // own-channel INSERT can MISS that create: when the user starts a new
+  // conversation the rail re-subscribes during navigation, and the INSERT lands
+  // in the pre-SUBSCRIBED window supabase-js never replays — while the rail's
+  // mount-time backfills already ran before the row existed. So the row would
+  // surface only after a reload (the reported bug; client-timing fixes
+  // #5391/#5421/#5436 could not close a race they cannot observe). On the event,
+  // refetch ONCE via the quiet/background path so the new conversation appears
+  // without a reload, independent of realtime timing. Idempotent: the
+  // fill-only/replace fetch de-dups, and the scoped query preserves F3 isolation
+  // (a refetch can only ever return rows the list query already permits). See
+  // knowledge-base learning 2026-06-17 rail-realtime-race.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onCreated = () => {
+      fetchConversations({ background: true });
+    };
+    window.addEventListener("soleur:conversation-created", onCreated);
+    return () => window.removeEventListener("soleur:conversation-created", onCreated);
+  }, [fetchConversations]);
+
   // Note: there is no cross-tab `users` UPDATE channel. Repo scope now comes
   // from /api/workspace/active-repo (workspaces.repo_url), not users.repo_url,
   // so watching `users` rows would be dead. A workspace switch is a hard
