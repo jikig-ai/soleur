@@ -1,6 +1,6 @@
 # Agent Instructions — Index
 
-Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class by the SessionStart hook (multi-class/empty → all, fail-closed). Spec: `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`.
+Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class by the SessionStart hook (multi-class/empty → all, fail-closed). Spec: `feat-agents-md-change-class-loader`.
 
 ## Hard Rules
 
