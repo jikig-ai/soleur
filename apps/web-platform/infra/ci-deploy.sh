@@ -36,6 +36,28 @@ readonly EXIT_NO_PRIOR=-2
 # extraction headroom). 5GB expressed in KB to match `df --output=avail`.
 readonly MIN_DISK_KB=$((5 * 1024 * 1024))  # 5GB for image pull + extraction
 
+# Container memory caps (#5417). The prod container ran with NO --memory cap on
+# an 8GB cx33: heavy concurrent Claude-eval crons drove HOST RAM pressure → the
+# HOST kernel OOM-killed an arbitrary victim (possibly dockerd / inngest-server
+# / the firewall resolver, NOT necessarily the Node process) → --restart
+# unless-stopped churned the container ~10-60x/day, killing in-flight crons and
+# flushing the DOCKER-USER egress jump. Capping --memory converts that into a
+# DETERMINISTIC cgroup-OOM that kills only this container, sparing the rest of
+# the host. Derivation + sizing rationale in ADR-061 and the #5417 plan (AC1).
+#
+# The cap is a STARTING value bounded by the deploy-window constraint
+# (canary + prod run concurrently): CANARY_MEMORY_CAP + PROD_MEMORY_CAP +
+# host_overhead must stay under 8GB. The container-restart-monitor's cgroup-OOM
+# classification is the post-merge feedback signal to RAISE PROD_MEMORY_CAP if a
+# legitimate concurrent-cron peak exceeds it (the AC2 cap-too-low regression).
+# All three are env-overridable so that tuning is a Doppler/deploy-env change,
+# not a code edit. --memory-swap == --memory disables swap growth (cloud-init
+# configures no swap). PROD_NODE_MAX_OLD_SPACE_MB is set BELOW the cgroup cap so
+# V8 hits a clean heap-exhaustion error before the opaque cgroup SIGKILL.
+readonly PROD_MEMORY_CAP="${PROD_MEMORY_CAP:-4096m}"
+readonly CANARY_MEMORY_CAP="${CANARY_MEMORY_CAP:-1536m}"
+readonly PROD_NODE_MAX_OLD_SPACE_MB="${PROD_NODE_MAX_OLD_SPACE_MB:-3072}"
+
 # Plugin bind-mount target. Test harness overrides via env so the seed block
 # writes under a tmpdir instead of /mnt/data (which the GH runner cannot create).
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
@@ -491,6 +513,9 @@ case "$COMPONENT" in
       --name soleur-web-platform-canary \
       --log-driver journald \
       --restart no \
+      --memory "$CANARY_MEMORY_CAP" \
+      --memory-swap "$CANARY_MEMORY_CAP" \
+      --init \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
@@ -669,6 +694,9 @@ case "$COMPONENT" in
         --name soleur-web-platform \
         --log-driver journald \
         --restart unless-stopped \
+        --memory "$PROD_MEMORY_CAP" \
+        --memory-swap "$PROD_MEMORY_CAP" \
+        --init \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
@@ -676,6 +704,7 @@ case "$COMPONENT" in
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
         -e CRON_WORKSPACE_ROOT=/workspaces \
+        -e NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \

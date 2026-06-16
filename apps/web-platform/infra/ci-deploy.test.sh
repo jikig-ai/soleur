@@ -2152,6 +2152,29 @@ else
 fi
 
 echo ""
+echo "--- Container memory caps (#5417 AC3) ---"
+
+# Both docker-run blocks (canary --restart no, prod --restart unless-stopped)
+# must carry --memory + --memory-swap + --init so a heavy-cron memory spike
+# becomes a deterministic cgroup-OOM of the container instead of an arbitrary
+# HOST-OOM victim. Source-grep gate (the AC3 verification shape): mutating any
+# flag out of ci-deploy.sh fails this. Counts assert BOTH sites are covered.
+TOTAL=$((TOTAL + 1))
+MEM_FLAG_COUNT=$(grep -cE -- '--memory "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
+SWAP_FLAG_COUNT=$(grep -cE -- '--memory-swap "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
+INIT_FLAG_COUNT=$(grep -cE -- '^[[:space:]]+--init \\' "$DEPLOY_SCRIPT" || true)
+NODE_OPT_COUNT=$(grep -cE -- '-e NODE_OPTIONS="--max-old-space-size=\$PROD_NODE_MAX_OLD_SPACE_MB"' "$DEPLOY_SCRIPT" || true)
+CAP_CONST_COUNT=$(grep -cE '^readonly (PROD_MEMORY_CAP|CANARY_MEMORY_CAP|PROD_NODE_MAX_OLD_SPACE_MB)=' "$DEPLOY_SCRIPT" || true)
+if [[ "$MEM_FLAG_COUNT" -eq 2 && "$SWAP_FLAG_COUNT" -eq 2 && "$INIT_FLAG_COUNT" -eq 2 \
+   && "$NODE_OPT_COUNT" -eq 1 && "$CAP_CONST_COUNT" -eq 3 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; prod sets --max-old-space-size below the cap (#5417 AC1/AC3)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: memory-cap source gate (mem=$MEM_FLAG_COUNT/2 swap=$SWAP_FLAG_COUNT/2 init=$INIT_FLAG_COUNT/2 node_opt=$NODE_OPT_COUNT/1 consts=$CAP_CONST_COUNT/3; file: ci-deploy.sh)"
+fi
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 if [[ "$FAIL" -gt 0 ]]; then
