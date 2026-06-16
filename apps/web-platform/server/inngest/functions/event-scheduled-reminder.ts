@@ -9,7 +9,9 @@
 // one-time function deploy. Arm it via POST /api/internal/schedule-reminder.
 //
 // Canonical precedent: oneshot-4650-monitor-close.ts. ADR-046 = self-arm /
-// registered-functions-only; ADR-033 = runtime invariants:
+// registered-functions-only; ADR-033-inngest-cron-functions-invoke-claude-code-
+// via-child-process-spawn = runtime invariants (NOT the per-tenant-scope-grants
+// or runtime-jwt-signing ADR-033 files):
 //   I1 — all outbound IO inside step.run (Inngest replay memoization).
 //   I2 — operator-owned data only (installation token; no BYOK lease).
 //   I5 — deterministic step.run return shapes (plain JSON union).
@@ -149,17 +151,24 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
         return failClosed("matched issue has no id");
       }
 
-      const statsUrl = buildSentryUrl(
+      // Daily buckets come from the issue-DETAIL GET's `.stats["30d"]` (31-element
+      // daily series), NOT the `/stats/?stat=…` sub-resource — that returns only
+      // 24 HOURLY buckets covering ~1 day and cannot express a multi-day daily
+      // rate (live probe, 2026-06-16). See lib/inngest/sentry-issue-rate.ts header.
+      const detailUrl = buildSentryUrl(
         host,
-        `/api/0/organizations/${encodeURIComponent(org)}/issues/${encodeURIComponent(String(issueId))}/stats/`,
-        { stat: "14d" },
+        `/api/0/organizations/${encodeURIComponent(org)}/issues/${encodeURIComponent(String(issueId))}/`,
+        {},
       );
-      const stats = await sentryGet(statsUrl);
-      if (!Array.isArray(stats)) {
+      const detail = await sentryGet(detailUrl);
+      const daily = (detail as { stats?: { ["30d"]?: unknown } } | null)?.stats?.[
+        "30d"
+      ];
+      if (!Array.isArray(daily)) {
         return failClosed("unexpected stats shape");
       }
       const { sum, days, ratePerDay } = computeRatePerDay(
-        stats as Array<[number, number]>,
+        daily as Array<[number, number]>,
         windowHours,
       );
 
@@ -174,7 +183,7 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
       return {
         verdict,
         close: pass && closeOnPass,
-        body: `\`sentry-issue-rate\` **${verdict}**: tag \`${tag}\` ~${rateStr}/day over ${windowHours}h (sum ${sum} events / ${days}d; threshold ${maxPerDay}/day).${tail}`,
+        body: `\`sentry-issue-rate\` **${verdict}**: tag \`${tag}\` ~${rateStr}/day over the last ${days}d (window ${windowHours}h; sum ${sum} events; threshold ${maxPerDay}/day).${tail}`,
       };
     } catch (err) {
       // Token-free message: `err.message` is either our `HTTP <code>` string or

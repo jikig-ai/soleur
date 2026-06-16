@@ -64,13 +64,17 @@ Classify `$ARGUMENTS` (the task description):
      If a suitable check exists in `CHECK_REGISTRY` (e.g. **`sentry-issue-rate`**,
      the worked example — events/day of a tagged Sentry issue over a window, with
      optional `close_on_pass`), arming is a single zero-deploy POST. If not, add a
-     small reviewed check to the registry (one deploy), then arm.
+     small reviewed check to the registry (one deploy), then arm. Note: a check
+     that sets `close_on_pass` performs a **scoped issue mutation** — it closes
+     the action's own `report_to_issue` (never an arbitrary issue) — so treat
+     arming a closing check as a privileged action, not a read-only probe.
    - **Bespoke server-side logic** (multi-step, custom data shape) → a self-armed
      **oneshot** (ADR-046; one `.ts` + boot-arm + deploy).
    - Full decision matrix + the exact arm HTTP shape: [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
 2. **Periodic verification needing a secret already wired to the follow-through
-   sweeper** (`scheduled-followthrough-sweeper.yml` passes an allowlist, e.g.
-   `SENTRY_AUTH_TOKEN`) → a vetted follow-through script (under the repo's
+   sweeper** (`scheduled-followthrough-sweeper.yml` passes an allowlist; e.g. the
+   job exposes the GitHub secret `SENTRY_IAC_AUTH_TOKEN` as env `SENTRY_AUTH_TOKEN`)
+   → a vetted follow-through script (under the repo's
    `followthroughs` dir) + a follow-through directive. No new workflow, no
    Inngest deploy.
 3. **Pure-GH ops** (no prd secrets — a skill reading public state, a Dependabot-

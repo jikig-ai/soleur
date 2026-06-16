@@ -56,10 +56,14 @@ once) — thereafter that check is schedulable by name with no further deploy.
 tag, max_per_day, window_hours, close_on_pass? } }` reads the events/day of the
 Sentry issue matched by `tag` (a single `key:value` search term) over
 `window_hours` and posts a `pass`/`fail` verdict to `report_to_issue`. PASS iff
-`events/day <= max_per_day`. Reuses fire-time prd env (`SENTRY_API_HOST`,
-`SENTRY_ORG`, `SENTRY_PROJECT`, and **`SENTRY_ISSUE_RW_TOKEN`** — the issue-scoped
-token; `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` 403 on the org issues endpoint, per
-the 2026-06-16 live probe). Every future "did Sentry issue X drop below N/day?"
+`events/day <= max_per_day`. The rate is computed from the issue-DETAIL GET's
+`.stats["30d"]` **daily** series (the `/stats/?stat=…` sub-resource returns only
+24 hourly buckets and cannot express a multi-day rate — confirmed by the
+2026-06-16 live probe); `window_hours` is bounded **[24,168]** and rounded to
+whole days. Reuses fire-time prd env (`SENTRY_API_HOST`, `SENTRY_ORG`,
+`SENTRY_PROJECT`, and **`SENTRY_ISSUE_RW_TOKEN`** — the issue-scoped token;
+`SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` 403 on the org issues endpoint, per the
+2026-06-16 live probe). Every future "did Sentry issue X drop below N/day?"
 verification is now a **zero-deploy POST** (no new code). Example arm:
 
 ```

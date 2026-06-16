@@ -4,24 +4,31 @@
 // server-only import. The handler owns the actual fetch + env read + close
 // decision; this file owns the security-load-bearing validation + math.
 //
-// Security invariants encoded here (verified by the live Phase-0 probe):
+// Security invariants encoded here (verified by the live Phase-0 probe,
+// re-probed 2026-06-16 against jikigai-eu.sentry.io):
 //   - `tag` is a single Sentry search term `key:value`, strict-regex validated,
 //     so a crafted `tag` cannot inject `&`/`?`/`#`/whitespace/`..` into the
 //     Sentry query string (defense-in-depth with URLSearchParams encoding).
-//   - `window_hours` is bounded [1,168] so a spurious "pass" cannot be
+//   - `window_hours` is bounded [24,168] so a spurious "pass" cannot be
 //     manufactured by asking for an enormous window that dilutes the rate.
 //   - `max_per_day` must be finite and > 0.
+//
+// Daily-bucket source (probed, NOT the `/stats/?stat=…` sub-resource — that
+// returns only 24 HOURLY buckets covering ~1 day and CANNOT express a multi-day
+// daily rate): the issue-detail GET `…/issues/{id}/` returns `.stats["30d"]`, a
+// 31-element DAILY series `[[unixSeconds,count],...]` (86400s spacing). The
+// handler extracts that array and feeds it to computeRatePerDay below.
 
 const TAG_RE = /^[A-Za-z0-9_.-]+:[A-Za-z0-9_.\-/]+$/;
-export const MIN_WINDOW_HOURS = 1;
-export const MAX_WINDOW_HOURS = 168; // 7 days — the issue-stats `stat=14d` daily-bucket ceiling.
+export const MIN_WINDOW_HOURS = 24; // daily-bucket resolution — sub-day windows can't be honoured (see computeRatePerDay).
+export const MAX_WINDOW_HOURS = 168; // 7 days — well within the issue's 30-day daily series (`.stats["30d"]`, 31 buckets).
 
 export interface SentryRateParams {
   /** A single Sentry search term `key:value` (e.g. `event_type:server-startup`). */
   tag: string;
   /** Threshold: PASS iff events/day <= maxPerDay. Finite, > 0. */
   maxPerDay: number;
-  /** Lookback window in hours, bounded [1,168]. */
+  /** Lookback window in hours, bounded [24,168], whole-day resolution. */
   windowHours: number;
   /** When true AND the verdict is `pass`, the handler closes report_to_issue. */
   closeOnPass: boolean;
@@ -87,20 +94,21 @@ export function buildSentryUrl(
   return url.toString();
 }
 
-/** Sum the last `ceil(windowHours/24)` DAILY buckets of an issue-stats series
- *  (`[[unixSeconds, count], ...]`, as returned by `GET …/issues/{id}/stats/?stat=14d`)
- *  and derive events/day over the window. Non-finite counts collapse to 0. */
+/** Sum the last `round(windowHours/24)` DAILY buckets of an issue's `.stats["30d"]`
+ *  series (`[[unixSeconds, count], ...]`, daily resolution — see the file header)
+ *  and derive events/day over that whole-day window. The window is rounded to a
+ *  whole number of days because the buckets are daily; the SAME integer day count
+ *  is both the slice length and the divisor, so the result is a true per-day
+ *  average over those days (no fractional-day inflation). Non-finite counts → 0. */
 export function computeRatePerDay(
   buckets: Array<[number, number]>,
   windowHours: number,
 ): { sum: number; days: number; ratePerDay: number } {
-  const days = windowHours / 24;
-  const n = Math.max(1, Math.ceil(days));
-  const tail = buckets.slice(-n);
+  const days = Math.max(1, Math.round(windowHours / 24));
+  const tail = buckets.slice(-days);
   const sum = tail.reduce(
     (acc, b) => acc + (Array.isArray(b) && Number.isFinite(b[1]) ? b[1] : 0),
     0,
   );
-  const ratePerDay = days > 0 ? sum / days : sum;
-  return { sum, days, ratePerDay };
+  return { sum, days, ratePerDay: sum / days };
 }

@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-06-16
 - **Deciders:** Jean (operator), security-sentinel + architecture-strategist (deepen-plan review)
-- **Relates to:** ADR-046 (Inngest oneshot self-arm / registered-only), ADR-033 (cron runtime invariants), `inngest-oneshot-and-reminder-patterns.md`, #5417 (first consumer)
+- **Relates to:** ADR-046 (Inngest oneshot self-arm / registered-only), `ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn` (cron/oneshot runtime invariants I1/I2/I5/I6/I7 — NOT the two unrelated ADR-033 files on per-tenant-scope-grants / runtime-jwt-signing), `inngest-oneshot-and-reminder-patterns.md`, #5417 (first consumer)
 
 ## Context
 

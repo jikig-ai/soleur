@@ -3,6 +3,7 @@ import {
   parseSentryRateParams,
   buildSentryUrl,
   computeRatePerDay,
+  MIN_WINDOW_HOURS,
   MAX_WINDOW_HOURS,
 } from "@/lib/inngest/sentry-issue-rate";
 
@@ -65,16 +66,18 @@ describe("parseSentryRateParams", () => {
     },
   );
 
-  it.each([0, MAX_WINDOW_HOURS + 1, 72.5, -24])(
-    "rejects out-of-bounds/non-integer window_hours %j",
+  it.each([0, 1, 23, MIN_WINDOW_HOURS - 1, MAX_WINDOW_HOURS + 1, 72.5, -24])(
+    "rejects out-of-bounds/non-integer/sub-day window_hours %j",
     (window_hours) => {
       const r = parseSentryRateParams({ ...ok, window_hours });
       expect(r).toEqual({ ok: false, reason: "invalid-window-hours" });
     },
   );
 
-  it("accepts the window bounds 1 and 168", () => {
-    expect(parseSentryRateParams({ ...ok, window_hours: 1 }).ok).toBe(true);
+  it("accepts the window bounds 24 and 168", () => {
+    expect(
+      parseSentryRateParams({ ...ok, window_hours: MIN_WINDOW_HOURS }).ok,
+    ).toBe(true);
     expect(
       parseSentryRateParams({ ...ok, window_hours: MAX_WINDOW_HOURS }).ok,
     ).toBe(true);
@@ -131,5 +134,20 @@ describe("computeRatePerDay", () => {
       [2, 3],
     ];
     expect(computeRatePerDay(buckets, 24).sum).toBe(3);
+  });
+
+  it("rounds the window to whole days; numerator and denominator share the day count (no fractional inflation)", () => {
+    // 100h → round(100/24)=4 days. Sum the last 4 buckets, divide by 4.
+    const buckets = daily([0, 0, 0, 0, 0, 0, 2, 2, 2, 2]);
+    const r = computeRatePerDay(buckets, 100);
+    expect(r.days).toBe(4);
+    expect(r.sum).toBe(8);
+    expect(r.ratePerDay).toBe(2); // 8 events / 4 days — NOT 8 / (100/24)=1.92
+  });
+
+  it("a wide in-bounds window does not dilute a sustained burst below a daily threshold", () => {
+    // 7 daily buckets all at 50; window 168h (7d) → 350/7 = 50/day, still well above any low threshold.
+    const buckets = daily([50, 50, 50, 50, 50, 50, 50]);
+    expect(computeRatePerDay(buckets, MAX_WINDOW_HOURS).ratePerDay).toBe(50);
   });
 });

@@ -221,13 +221,17 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
   function stubFetch(opts: {
     issues?: unknown;
     issuesStatus?: number;
-    stats?: unknown;
+    stats?: unknown; // the daily `.stats["30d"]` series (wrapped into the detail body)
+    detail?: unknown; // override the whole issue-detail body (for shape tests)
     statsStatus?: number;
   }) {
     fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/issues/") && url.includes("/stats/")) {
+      // issue-DETAIL GET: `…/issues/<id>/` with no `?query=` (vs the search list).
+      if (/\/issues\/[^/?]+\/(\?|$)/.test(url)) {
         const status = opts.statsStatus ?? 200;
-        return { ok: status < 400, status, json: async () => opts.stats };
+        const body =
+          "detail" in opts ? opts.detail : { stats: { "30d": opts.stats } };
+        return { ok: status < 400, status, json: async () => body };
       }
       const status = opts.issuesStatus ?? 200;
       return { ok: status < 400, status, json: async () => opts.issues };
@@ -340,5 +344,70 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((u) => u.startsWith("https://jikigai-eu.sentry.io/api/0/"))).toBe(true);
     expect(urls.some((u) => u.includes("query=event_type%3Aserver-startup"))).toBe(true);
+  });
+
+  it("reads daily buckets from the issue-DETAIL endpoint, not /stats/", async () => {
+    stubFetch({ issues: [{ id: "120495109" }], stats: dailyStats([0, 1, 0]) });
+    await arm({ ...okParams }).result;
+    const statsUrls = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => !u.includes("query="));
+    // exactly one detail GET, ending `/issues/<id>/`, with no `/stats/` sub-path
+    expect(statsUrls).toHaveLength(1);
+    expect(statsUrls[0]).toMatch(/\/issues\/120495109\/$/);
+    expect(statsUrls[0]).not.toContain("/stats/");
+  });
+
+  it("parses a REAL captured `.stats[30d]` daily series (still-churning → fail, NO close)", async () => {
+    // Real last-7 daily buckets captured from jikigai-eu.sentry.io WEB-PLATFORM-1
+    // (event_type:server-startup) on 2026-06-16 — the issue is still active.
+    const realDaily = [
+      [1781049600, 16], [1781136000, 40], [1781222400, 42], [1781308800, 0],
+      [1781395200, 28], [1781481600, 60], [1781568000, 32],
+    ];
+    stubFetch({ issues: [{ id: "120495109" }], stats: realDaily });
+    const { result } = arm({ ...okParams, close_on_pass: true }); // window 72h → last 3 days = 28+60+32 = 120/3 = 40/day
+    expect(await result).toEqual({ ok: true, reason: "named-check-fail" });
+    expect(lastComment()!.body).toContain("**fail**");
+    expect(closeCall()).toBeUndefined();
+  });
+
+  it("dilution guard: a high recent burst stays FAIL even at the widest in-bounds window", async () => {
+    // 7 days of heavy churn; window_hours=168 (max) must NOT dilute it to a pass.
+    stubFetch({ issues: [{ id: "1" }], stats: dailyStats([50, 50, 50, 50, 50, 50, 50]) });
+    const { result } = arm({ ...okParams, window_hours: 168, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-fail" });
+    expect(closeCall()).toBeUndefined();
+  });
+
+  it("fail-closed when the matched issue has no id (no stats fetch, NO close)", async () => {
+    stubFetch({ issues: [{ title: "no id here" }] });
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-info" });
+    expect(lastComment()!.body).toContain("matched issue has no id");
+    expect(closeCall()).toBeUndefined();
+  });
+
+  it("fail-closed on an unexpected detail/stats shape (no daily array, NO close)", async () => {
+    stubFetch({ issues: [{ id: "1" }], detail: { stats: { "24h": [[1, 2]] } } });
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-info" });
+    expect(lastComment()!.body).toContain("unexpected stats shape");
+    expect(closeCall()).toBeUndefined();
+  });
+
+  it("pass+close where the close PATCH fails → pass-close-failed, reportSilentFallback", async () => {
+    stubFetch({ issues: [{ id: "1" }], stats: dailyStats([0, 0, 1]) });
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}") {
+        throw new Error("close failed");
+      }
+      return {};
+    });
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass-close-failed" });
+    expect(
+      reportSilentFallbackSpy.mock.calls.some((c) => c[1].op === "named-check-close"),
+    ).toBe(true);
   });
 });
