@@ -10,6 +10,11 @@ Type=oneshot
 # (OnUnitActiveSec timers do not re-fire while activating, and OnFailure=
 # never fires for a hang) — a timeout converts the hang into a paged failure.
 TimeoutStartSec=120
+# Persistent store for the grace-window IP-retention pool (LB-rotation fix).
+# systemd creates/owns /var/lib/cron-egress-resolve (root, 0755) BEFORE ExecStart
+# and it survives reboots — /run (tmpfs) would wipe the accumulated rotation pool
+# and re-open the egress-drop outage for up to one grace window after every boot.
+StateDirectory=cron-egress-resolve
 # Doppler env wiring — see cron-egress-firewall.service for the rationale.
 EnvironmentFile=-/etc/default/inngest-server
 Environment=HOME=/root

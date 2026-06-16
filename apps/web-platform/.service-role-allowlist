@@ -307,3 +307,11 @@ apps/web-platform/server/inngest/middleware/run-log.ts
 # operator; routine_runs is not tenant-scoped data). routine_run dispatches
 # via the runRoutine chokepoint (no DB write here).
 apps/web-platform/server/routines-tools.ts
+
+# Auto-sync trigger (#5409): extracted from app/api/repo/setup/route.ts. INSERTs
+# the post-clone headless-sync `conversations` row via the service client — the
+# same service-role write the route legitimately performed inline before the
+# extraction (conversations has no authenticated INSERT path for this system-
+# initiated sync; the row is written FOR the user by the post-clone background
+# task, which runs after the response with no live tenant session to lease).
+apps/web-platform/server/auto-sync-trigger.ts
