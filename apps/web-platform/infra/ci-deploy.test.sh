@@ -2163,15 +2163,19 @@ TOTAL=$((TOTAL + 1))
 MEM_FLAG_COUNT=$(grep -cE -- '--memory "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
 SWAP_FLAG_COUNT=$(grep -cE -- '--memory-swap "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
 INIT_FLAG_COUNT=$(grep -cE -- '^[[:space:]]+--init \\' "$DEPLOY_SCRIPT" || true)
-NODE_OPT_COUNT=$(grep -cE -- '-e NODE_OPTIONS="--max-old-space-size=\$PROD_NODE_MAX_OLD_SPACE_MB"' "$DEPLOY_SCRIPT" || true)
-CAP_CONST_COUNT=$(grep -cE '^readonly (PROD_MEMORY_CAP|CANARY_MEMORY_CAP|PROD_NODE_MAX_OLD_SPACE_MB)=' "$DEPLOY_SCRIPT" || true)
+# Both docker runs pass a COMPOSED NODE_OPTIONS (Doppler value + our cap appended
+# so -e does not clobber an operator-set value — #5417 review). Assert both
+# call-sites use the composed var AND that each composed var sets the heap cap.
+NODE_OPT_COUNT=$(grep -cE -- '-e NODE_OPTIONS="\$(PROD|CANARY)_NODE_OPTIONS"' "$DEPLOY_SCRIPT" || true)
+NODE_OPT_COMPOSE_COUNT=$(grep -cE -- '^[[:space:]]+(PROD|CANARY)_NODE_OPTIONS=.*--max-old-space-size=\$(PROD|CANARY)_NODE_MAX_OLD_SPACE_MB' "$DEPLOY_SCRIPT" || true)
+CAP_CONST_COUNT=$(grep -cE '^readonly (PROD_MEMORY_CAP|CANARY_MEMORY_CAP|PROD_NODE_MAX_OLD_SPACE_MB|CANARY_NODE_MAX_OLD_SPACE_MB)=' "$DEPLOY_SCRIPT" || true)
 if [[ "$MEM_FLAG_COUNT" -eq 2 && "$SWAP_FLAG_COUNT" -eq 2 && "$INIT_FLAG_COUNT" -eq 2 \
-   && "$NODE_OPT_COUNT" -eq 1 && "$CAP_CONST_COUNT" -eq 3 ]]; then
+   && "$NODE_OPT_COUNT" -eq 2 && "$NODE_OPT_COMPOSE_COUNT" -eq 2 && "$CAP_CONST_COUNT" -eq 4 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; prod sets --max-old-space-size below the cap (#5417 AC1/AC3)"
+  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; both set --max-old-space-size (appended to any Doppler NODE_OPTIONS) below the cap (#5417 AC1/AC3)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: memory-cap source gate (mem=$MEM_FLAG_COUNT/2 swap=$SWAP_FLAG_COUNT/2 init=$INIT_FLAG_COUNT/2 node_opt=$NODE_OPT_COUNT/1 consts=$CAP_CONST_COUNT/3; file: ci-deploy.sh)"
+  echo "  FAIL: memory-cap source gate (mem=$MEM_FLAG_COUNT/2 swap=$SWAP_FLAG_COUNT/2 init=$INIT_FLAG_COUNT/2 node_opt=$NODE_OPT_COUNT/2 compose=$NODE_OPT_COMPOSE_COUNT/2 consts=$CAP_CONST_COUNT/4; file: ci-deploy.sh)"
 fi
 
 echo ""

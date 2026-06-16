@@ -133,6 +133,10 @@ OOM_COUNTER=$(awk '/^oom_kill /{print $2; exit}' \
 [[ "$OOM_COUNTER" =~ ^[0-9]+$ ]] || OOM_COUNTER=0
 
 # journald kernel-ring OOM corroboration (vector ships these to Better Stack).
+# NOTE: this is a fixed 1h lookback, NOT a delta — a single OOM keeps it >0 for
+# the window AND the kernel logs both an `oom-kill:` and a `Killed process` line
+# per event, so the value is a CORROBORATION boolean, not a true event count
+# (it only feeds the OOM=true OR below; the alert body labels it journald_oom).
 JOURNAL_OOM=$(journalctl -k --since "@$((NOW - RESTART_WINDOW_SECS))" --no-pager 2>/dev/null \
   | grep -cE 'oom-kill|Killed process' || true)
 [[ "$JOURNAL_OOM" =~ ^[0-9]+$ ]] || JOURNAL_OOM=0
@@ -236,9 +240,14 @@ raise it. A 'crash' class means an uncaught exception (see Sentry fatal events).
     echo "$NOW" > "$COOLDOWN_FILE" 2>/dev/null || true
   fi
   touch "$ALERTED_FILE" 2>/dev/null || true
-elif [[ -f "$ALERTED_FILE" && "$RATE" -eq 0 ]]; then
+elif [[ -f "$ALERTED_FILE" && "$RATE" -eq 0 && "$IS_DEPLOY" == "false" ]]; then
   # Recovery: an alert was open and the rolling rate is back to 0 → notify ONCE
-  # so the operator does not have to infer resolution from silence.
+  # so the operator does not have to infer resolution from silence. The
+  # IS_DEPLOY==false guard is load-bearing: a deploy truncates the rolling
+  # window (RATE→0) for an unrelated reason, so without it a routine deploy
+  # landing DURING an active storm would emit a false "CLEARED" (#5417 review).
+  # A genuine recovery is only observable on the SAME container with no new
+  # restarts; the next non-deploy tick after the storm subsides fires it.
   HOST="$(hostname 2>/dev/null || echo unknown)"
   sentry_event "soleur-web-platform restart storm CLEARED on ${HOST}" "recovered" \
     "$(jq -n --argjson cnt "$COUNT" '{restart_count: $cnt, rolling_rate: 0, status: "cleared"}' 2>/dev/null || echo '{}')"

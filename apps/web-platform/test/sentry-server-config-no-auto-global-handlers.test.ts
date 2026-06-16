@@ -21,10 +21,19 @@ const src = readFileSync(
 );
 
 describe("sentry.server.config.ts auto global-handler suppression (#5417 AC4)", () => {
-  it("filters OnUncaughtException + OnUnhandledRejection out of the defaults", () => {
-    expect(src).toMatch(/OnUncaughtException/);
-    expect(src).toMatch(/OnUnhandledRejection/);
-    // the integrations filter callback that removes them
-    expect(src).toMatch(/integrations\s*:/);
+  // Non-vacuity note: the comment block ALSO names OnUncaughtException /
+  // OnUnhandledRejection in prose, so a bare `toMatch(/OnUncaughtException/)`
+  // passes even against a no-op `integrations: (defaults) => defaults`. Assert
+  // the FILTER EXPRESSION shape (the executable `i.name !== "..."` predicate),
+  // which the comment prose does not contain — a gutted passthrough fails it.
+  it("declares an integrations filter callback over the defaults", () => {
+    expect(src).toMatch(
+      /integrations\s*:\s*\(\s*defaults\s*\)\s*=>\s*\n?\s*defaults\.filter\(/,
+    );
+  });
+
+  it("the filter predicate removes BOTH auto global-handler integrations by name", () => {
+    expect(src).toMatch(/i\.name\s*!==\s*"OnUncaughtException"/);
+    expect(src).toMatch(/i\.name\s*!==\s*"OnUnhandledRejection"/);
   });
 });

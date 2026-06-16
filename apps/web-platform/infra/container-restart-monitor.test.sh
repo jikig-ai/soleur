@@ -235,18 +235,76 @@ t_absent() {
 t_absent
 
 echo ""
-echo "--- (e) OOM corroboration via memory.events (OOMKilled=false, cgroup-v2) ---"
-t_oom_via_cgroup() {
+echo "--- (e) OOM corroboration — each signal classifies OOM in ISOLATION ---"
+# Each case arms EXACTLY ONE of the four OOM signals (cgroup oom_kill delta,
+# exit-137, journald, .State.OOMKilled) with the other three clear, and asserts
+# the alert is class=OOM via an OOM-class-specific needle ("OOM restart churn",
+# the Sentry message — a crash-class alert says "crash restart churn"). The
+# cgroup-only case (e1) is the load-bearing one: it is the ONLY signal that
+# catches the child-cgroup bwrap kill, so deleting `(( OOM_DELTA > 0 ))` from the
+# monitor's OOM OR must turn e1 RED (the prior single bundled case stayed green).
+OOM_NEEDLE="OOM restart churn"
+
+t_oom_cgroup_only() {
   TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
   seed_baseline "$d" "cid-A" 0 0
-  # OOMKilled=false but exit 137 + cgroup oom_kill counter incremented → OOM class
   local out rc
   out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_OOMKILLED=false \
-        MOCK_EXITCODE=137 MOCK_OOM_COUNTER=2; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
-  assert_alert "OOMKilled=false but cgroup oom_kill+exit137 classifies OOM" "$d" "$rc" "$out" "oom"
+        MOCK_EXITCODE=0 MOCK_OOM_COUNTER=2; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  assert_alert "cgroup memory.events oom_kill delta ALONE classifies OOM (child-cgroup case)" "$d" "$rc" "$out" "$OOM_NEEDLE"
   rm -rf "$d"
 }
-t_oom_via_cgroup
+t_oom_cgroup_only
+
+t_oom_exit137_only() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_OOMKILLED=false \
+        MOCK_EXITCODE=137 MOCK_OOM_COUNTER=0; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  assert_alert "exit-137 ALONE classifies OOM" "$d" "$rc" "$out" "$OOM_NEEDLE"
+  rm -rf "$d"
+}
+t_oom_exit137_only
+
+t_oom_journald_only() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_OOMKILLED=false \
+        MOCK_EXITCODE=0 MOCK_OOM_COUNTER=0 MOCK_JOURNAL_OOM=1; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  assert_alert "journald oom-kill line ALONE classifies OOM" "$d" "$rc" "$out" "$OOM_NEEDLE"
+  rm -rf "$d"
+}
+t_oom_journald_only
+
+t_oom_oomkilled_only() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_OOMKILLED=true \
+        MOCK_EXITCODE=0 MOCK_OOM_COUNTER=0; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  assert_alert ".State.OOMKilled=true ALONE classifies OOM" "$d" "$rc" "$out" "$OOM_NEEDLE"
+  rm -rf "$d"
+}
+t_oom_oomkilled_only
+
+t_crash_not_oom() {
+  # Negative-space: a storm with NO OOM signal must be class=crash, NOT OOM.
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_OOMKILLED=false \
+        MOCK_EXITCODE=1 MOCK_OOM_COUNTER=0; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] && resend_hit "$d" && sentry_hit "$d" || ok=0
+  grep -qiF "$OOM_NEEDLE" "$d/curl_args" 2>/dev/null && ok=0   # must NOT be OOM-classed
+  grep -qF "crash restart churn" "$d/curl_args" 2>/dev/null || ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: no OOM signal → class=crash (not OOM)";
+  else FAIL=$((FAIL+1)); echo "  FAIL: crash classification (rc=$rc) curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_crash_not_oom
 
 echo ""
 echo "--- (f) Resend POST failure still posts the Sentry mirror + warns ---"
@@ -299,6 +357,46 @@ t_missing_env() {
   rm -rf "$d"
 }
 t_missing_env
+
+echo ""
+echo "--- (j) cooldown: a within-window second storm is email-suppressed ---"
+t_cooldown_suppressed() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  echo "1699999000" > "$d/container-restart-monitor.cooldown"   # 1000s ago < 3600 cooldown
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_DATE_EPOCH=1700000000; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  ! resend_hit "$d" || ok=0                                     # email suppressed
+  ! sentry_hit "$d" || ok=0                                     # both channels gated by cooldown
+  printf '%s\n' "$out" | grep -qiF "cooldown" || ok=0           # logged the suppression reason
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: active cooldown suppresses the alert send (logged)";
+  else FAIL=$((FAIL+1)); echo "  FAIL: cooldown suppression (rc=$rc) out: $out"; fi
+  rm -rf "$d"
+}
+t_cooldown_suppressed
+
+echo ""
+echo "--- (k) deploy during an open alert does NOT emit a false 'CLEARED' ---"
+t_deploy_during_storm_no_recovery() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  # An alert is open (ALERTED_FILE present); a deploy lands (container_id change)
+  # which truncates the rolling window → RATE 0. The recovery branch must NOT
+  # fire because IS_DEPLOY=true (a deploy reset is not a genuine recovery).
+  seed_baseline "$d" "cid-OLD" 7 0
+  touch "$d/container-restart-monitor.alerted"
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-NEW MOCK_RESTART_COUNT=0; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  grep -qiE "clear|recover|resolved" "$d/curl_args" 2>/dev/null && ok=0   # NO false CLEARED
+  [[ -f "$d/container-restart-monitor.alerted" ]] || ok=0                 # flag stays open
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: deploy-during-storm does not emit a false 'CLEARED'; alert stays open";
+  else FAIL=$((FAIL+1)); echo "  FAIL: deploy-during-storm recovery suppression (rc=$rc) curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_deploy_during_storm_no_recovery
 
 echo ""
 echo "--- (i) named constants present (AC6) ---"

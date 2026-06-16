@@ -47,8 +47,13 @@ describe("container-restart-burst alert op/feature contract (#5417)", () => {
   });
 
   it("the feature tag appears in both the monitor emit + the alert filter", () => {
+    // Anchored (closing-quote / value-equality) matches so a SUFFIX rename
+    // (container-restart-monitor-RENAMED) fails — a bare substring `.toContain`
+    // would pass on the prefix and miss the drift.
     expect(monitor).toContain(`feature: "${FEATURE_TAG}"`);
-    expect(tfBlock).toContain(FEATURE_TAG);
+    expect(tfBlock).toMatch(
+      new RegExp(`value\\s*=\\s*"${FEATURE_TAG}"`),
+    );
   });
 
   for (const op of ALERTABLE_OPS) {

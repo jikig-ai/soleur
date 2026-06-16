@@ -57,6 +57,10 @@ readonly MIN_DISK_KB=$((5 * 1024 * 1024))  # 5GB for image pull + extraction
 readonly PROD_MEMORY_CAP="${PROD_MEMORY_CAP:-4096m}"
 readonly CANARY_MEMORY_CAP="${CANARY_MEMORY_CAP:-1536m}"
 readonly PROD_NODE_MAX_OLD_SPACE_MB="${PROD_NODE_MAX_OLD_SPACE_MB:-3072}"
+# The canary fires no crons (it only serves the deploy probe set), so its heap
+# ceiling is well below its 1536m cgroup cap — set so a canary OOM is a clean V8
+# error, not an opaque cgroup SIGKILL that fails the deploy with a cryptic signal.
+readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 
 # Plugin bind-mount target. Test harness overrides via env so the seed block
 # writes under a tmpdir instead of /mnt/data (which the GH runner cannot create).
@@ -502,6 +506,15 @@ case "$COMPONENT" in
     # shellcheck disable=SC2064
     trap 'rc=$?; rm -f "$ENV_FILE"; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
+    # Compose NODE_OPTIONS by APPENDING our heap cap to any operator-set value
+    # in the Doppler env-file (#5417 review). `-e NODE_OPTIONS=...` on docker run
+    # overrides `--env-file` for the same key, so a bare `-e` would silently drop
+    # a Doppler-provided NODE_OPTIONS (e.g. --enable-source-maps, --dns-result-order).
+    # Our --max-old-space-size comes LAST so it wins if Doppler also set one.
+    DOPPLER_NODE_OPTIONS=$(grep -E '^NODE_OPTIONS=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)
+    PROD_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
+    CANARY_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
+
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
@@ -523,6 +536,7 @@ case "$COMPONENT" in
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -e CRON_WORKSPACE_ROOT=/workspaces \
+      -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
@@ -704,7 +718,7 @@ case "$COMPONENT" in
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
         -e CRON_WORKSPACE_ROOT=/workspaces \
-        -e NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB" \
+        -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \
