@@ -10,6 +10,16 @@ import { ROUTINE_METADATA, type RoutineMeta } from "@/server/inngest/routine-met
 
 // Minimal structural type so this module does not depend on the supabase-js
 // generic client type (which the project leaves untyped).
+interface OrderedQuery {
+  limit: (n: number) => Promise<{ data: unknown; error: unknown }>;
+  // Keyset filter is a row-comparison (started_at, id) < (cursor) expressed as
+  // a PostgREST `.or()` so same-millisecond ties are not skipped at the page
+  // boundary (a bare `.lt("started_at", …)` drops every row sharing the
+  // boundary timestamp — crons fan out on identical cron ticks).
+  or: (filter: string) => {
+    limit: (n: number) => Promise<{ data: unknown; error: unknown }>;
+  };
+}
 interface SupabaseLike {
   from: (table: string) => {
     select: (cols: string) => {
@@ -17,12 +27,7 @@ interface SupabaseLike {
         col: string,
         opts: { ascending: boolean },
       ) => {
-        order: (col: string, opts: { ascending: boolean }) => {
-          limit: (n: number) => Promise<{ data: unknown; error: unknown }>;
-          lt: (col: string, val: string) => {
-            limit: (n: number) => Promise<{ data: unknown; error: unknown }>;
-          };
-        };
+        order: (col: string, opts: { ascending: boolean }) => OrderedQuery;
       };
     } & Promise<{ data: unknown; error: unknown }>;
   };
@@ -80,25 +85,41 @@ export async function listRoutinesWithLastRun(
   );
 }
 
-/** Reverse-chronological execution history, keyset-paginated on started_at. */
+/**
+ * Reverse-chronological execution history, keyset-paginated on the full
+ * (started_at, id) tuple. The cursor is `<started_at>|<id>` — comparing only
+ * started_at would skip rows that share the boundary row's millisecond.
+ */
 export async function listRecentRuns(
   supabase: SupabaseLike,
   opts: { cursor?: string | null; limit?: number } = {},
 ): Promise<RecentRunsPage> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  const base = supabase
+  const ordered = supabase
     .from("routine_runs")
     .select(RUN_COLS)
     .order("started_at", { ascending: false })
     .order("id", { ascending: false });
-  const q = opts.cursor
-    ? base.lt("started_at", opts.cursor).limit(limit + 1)
-    : base.limit(limit + 1);
-  const { data, error } = await q;
+  let q: { limit: (n: number) => Promise<{ data: unknown; error: unknown }> } =
+    ordered;
+  if (opts.cursor) {
+    const sep = opts.cursor.lastIndexOf("|");
+    // Tolerate a legacy (started_at-only) cursor: treat the whole value as the
+    // timestamp and fall back to a plain started_at row-comparison.
+    const ts = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
+    const id = sep === -1 ? null : opts.cursor.slice(sep + 1);
+    q = ordered.or(
+      id === null
+        ? `started_at.lt.${ts}`
+        : `started_at.lt.${ts},and(started_at.eq.${ts},id.lt.${id})`,
+    );
+  }
+  const { data, error } = await q.limit(limit + 1);
   if (error) throw error;
   const rows = (data ?? []) as RecentRun[];
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore ? page[page.length - 1].started_at : null;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? `${last.started_at}|${last.id}` : null;
   return { runs: page, nextCursor };
 }

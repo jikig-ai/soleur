@@ -8,6 +8,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+// Delay before the single post-trigger reconciliation refetch that swaps the
+// optimistic "running" row for the real terminal routine_runs row.
+const RECONCILE_DELAY_MS = 5000;
+
 interface RunSummary {
   status: string;
   trigger_source: string;
@@ -160,7 +164,10 @@ function RoutinesTab() {
           setConfirming(item); // protected — show confirm modal
           return;
         }
-        // 202 (or any non-409): optimistic "Running", then refresh shortly.
+        // 202 (or any non-409): optimistic "Running", then reconcile against
+        // DB truth. The optimistic row has no terminal state of its own — the
+        // cron writes its routine_runs row when it finishes — so without this
+        // refetch the row would read "running" forever until a page reload.
         setRoutines((rs) =>
           rs
             ? rs.map((r) =>
@@ -181,11 +188,17 @@ function RoutinesTab() {
             : rs,
         );
         setConfirming(null);
+        // One delayed reconciliation refetch (not a polling loop — a single
+        // bounded GET) to replace the optimistic "running" with the real
+        // terminal row once the run has had a moment to complete.
+        setTimeout(() => {
+          void load();
+        }, RECONCILE_DELAY_MS);
       } finally {
         setBusy((b) => ({ ...b, [item.fnId]: false }));
       }
     },
-    [],
+    [load],
   );
 
   if (error)

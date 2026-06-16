@@ -5,7 +5,11 @@ import {
   listRoutinesWithLastRun,
 } from "@/server/routines/list-routines";
 
-function makeClient(opts: { latest?: unknown[]; runs?: unknown[] }) {
+function makeClient(opts: {
+  latest?: unknown[];
+  runs?: unknown[];
+  capture?: { orFilter?: string };
+}) {
   return {
     from(table: string) {
       return {
@@ -13,18 +17,17 @@ function makeClient(opts: { latest?: unknown[]; runs?: unknown[] }) {
           if (table === "routine_runs_latest") {
             return Promise.resolve({ data: opts.latest ?? [], error: null });
           }
+          const resolve = () =>
+            Promise.resolve({ data: opts.runs ?? [], error: null });
           const chain: Record<string, unknown> = {
             order() {
               return chain;
             },
-            limit() {
-              return Promise.resolve({ data: opts.runs ?? [], error: null });
-            },
-            lt() {
-              return {
-                limit: () =>
-                  Promise.resolve({ data: opts.runs ?? [], error: null }),
-              };
+            limit: resolve,
+            // Keyset filter is now a row-comparison via .or() (started_at, id).
+            or(filter: string) {
+              if (opts.capture) opts.capture.orFilter = filter;
+              return { limit: resolve };
             },
           };
           return chain;
@@ -81,6 +84,27 @@ describe("listRecentRuns", () => {
     }));
     const page = await listRecentRuns(makeClient({ runs }), { limit: 2 });
     expect(page.runs).toHaveLength(2);
-    expect(page.nextCursor).toBe("2026-06-15T01:00:00Z");
+    // nextCursor is the full (started_at|id) tuple of the last returned row.
+    expect(page.nextCursor).toBe("2026-06-15T01:00:00Z|r1");
+  });
+
+  it("builds a (started_at, id) row-comparison .or() filter from a tuple cursor (no same-ms row skip)", async () => {
+    const capture: { orFilter?: string } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      cursor: "2026-06-15T01:00:00Z|r1",
+    });
+    expect(capture.orFilter).toBe(
+      "started_at.lt.2026-06-15T01:00:00Z,and(started_at.eq.2026-06-15T01:00:00Z,id.lt.r1)",
+    );
+  });
+
+  it("tolerates a legacy started_at-only cursor (falls back to plain lt)", async () => {
+    const capture: { orFilter?: string } = {};
+    await listRecentRuns(makeClient({ runs: [], capture }), {
+      limit: 50,
+      cursor: "2026-06-15T01:00:00Z",
+    });
+    expect(capture.orFilter).toBe("started_at.lt.2026-06-15T01:00:00Z");
   });
 });

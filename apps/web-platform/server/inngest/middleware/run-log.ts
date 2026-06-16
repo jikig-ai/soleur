@@ -21,7 +21,11 @@
 //      from the event NAME (`*.manual-trigger` ⇒ manual/agent; otherwise
 //      scheduled/system) so a forged data.actor_class cannot make a manual run
 //      look scheduled. The actor_class/id come from runRoutine's route-controlled
-//      keys (Phase 3 makes runRoutine the only producer of manual-trigger events).
+//      keys. runRoutine is the producer for all USER/AGENT-initiated manual
+//      triggers; one trusted system-cascade (cron-weekly-analytics KPI-miss
+//      fan-out) still emits *.manual-trigger via a raw inngest.send and is
+//      logged actor_class:"human"/actor_id:null — acceptable (trusted system
+//      code), noted so the "only producer" claim isn't read as absolute.
 //
 // Fail-soft: a write failure mirrors to Sentry (cq-silent-fallback-must-mirror-
 // to-sentry) and NEVER throws into the handler (no retry-poisoning).
@@ -30,14 +34,21 @@ import { InngestMiddleware } from "inngest";
 import * as Sentry from "@sentry/nextjs";
 import { getServiceClient } from "@/lib/supabase/service";
 import { ROUTINE_METADATA } from "@/server/inngest/routine-metadata";
+import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 
 const ERROR_SUMMARY_MAX = 500;
 
 function errorSummary(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  // First line only (avoid stack/payload) + truncate (Art-9: never store raw payload).
+  // First line only (avoid stack/payload) + SECRET/PII redaction (the row is
+  // WORM — a leaked credential in an error message would be permanent and is
+  // NOT touched by anonymise_routine_runs). Redact BEFORE truncating so a
+  // credential straddling the 500-char boundary is still caught. The four
+  // legal-doc disclosures describe error_summary as "scrubbed + truncated";
+  // this is the scrub. Reuses the same allowlist as the command-stream emit
+  // boundary (tokens, JWTs, conn-string passwords, emails, UUIDs, IPs).
   const firstLine = msg.split("\n")[0] ?? "";
-  return firstLine.slice(0, ERROR_SUMMARY_MAX);
+  return redactCommandForDisplay(firstLine).slice(0, ERROR_SUMMARY_MAX);
 }
 
 interface Attribution {
@@ -93,13 +104,26 @@ export const runLogMiddleware = new InngestMiddleware({
         const runId = ctx.runId;
         const eventName = ctx.event.name;
         const eventData = (ctx.event.data ?? {}) as Record<string, unknown>;
-        const attempt = (ctx as { attempt?: number }).attempt ?? 0;
-        const maxAttempts = (ctx as { maxAttempts?: number }).maxAttempts ?? 1;
+        // attempt / maxAttempts are NOT on onFunctionRun's ctx — that ctx is
+        // Inngest's InitialRunInfo ({ event, runId } only; "does not necessarily
+        // contain all the data"). The retry-attempt fields live on BaseContext,
+        // which is only handed to transformInput. Reading them off the
+        // onFunctionRun ctx silently yields undefined → the final-attempt gate
+        // degrades to always-write (double-rows on retried runs). Capture them
+        // in transformInput, which receives the full run ctx.
+        let attempt = 0;
+        let maxAttempts = 1;
         let startedAtMs = Date.now();
 
         return {
-          transformInput() {
+          transformInput({
+            ctx: runCtx,
+          }: {
+            ctx: { attempt?: number; maxAttempts?: number };
+          }) {
             startedAtMs = Date.now();
+            attempt = runCtx.attempt ?? 0;
+            maxAttempts = runCtx.maxAttempts ?? 1;
           },
           async transformOutput({
             result,
