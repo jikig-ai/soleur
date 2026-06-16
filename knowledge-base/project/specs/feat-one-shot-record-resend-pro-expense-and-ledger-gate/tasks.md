@@ -9,7 +9,7 @@ brand_survival_threshold: none
 
 ## Phase 0 — Preconditions (work skill)
 - [ ] 0.1 Re-confirm runtime sending domain is `outbound.soleur.ai` (`grep OUTBOUND_FROM apps/web-platform/server/email-triage/outbound.ts`) — NOT `mail.soleur.ai`.
-- [ ] 0.2 Re-measure `B_ALWAYS` (`echo $(($(wc -c < AGENTS.md) + $(wc -c < AGENTS.core.md)))`) and the new pointer byte length; confirm a ≥64-byte core-body trim target.
+- [ ] 0.2 Re-measure `B_ALWAYS` (currently 22994/23000); confirm the 65-byte new pointer + identify a ≥65-byte rationale-prose (`**Why:**`/`see` tail) trim target in a core rule body.
 - [ ] 0.3 Confirm Resend row exists once in expenses.md; confirm cost-model Product COGS subtotal = 121.08 (pre-edit baseline).
 - [ ] 0.4 Open Question check: has Resend Pro been applied? (operator) — decides whether post-merge operator AC + follow-up issue is needed.
 
@@ -24,7 +24,7 @@ brand_survival_threshold: none
 - [ ] 2.3 Verify: no stale `121.08`; arithmetic re-derives; bump cost-model `last_updated` if present.
 
 ## Phase 3 — Workflow Gate rule (PART 2, the cause)
-- [ ] 3.1 Free ≥64 bytes from a verbose core rule body in `AGENTS.core.md` (show before/after bytes). Do NOT demote-for-budget.
+- [ ] 3.1 Free ≥65 bytes by trimming rationale prose (`**Why:**`/`see` tail) from a verbose core rule body in `AGENTS.core.md` (show before/after bytes). Do NOT demote-for-budget (all 5 core wg-rules are docs-firing or test-pinned).
 - [ ] 3.2 Add `wg-record-recurring-vendor-expense-before-ready` body to `AGENTS.rest.md` (≤600 bytes, `[skill-enforced: …]` tag).
 - [ ] 3.3 Add matching pointer `→ rest` to `AGENTS.md` Workflow Gates.
 - [ ] 3.4 Run `lint-rule-ids.py` + `lint-agents-rule-budget.py` (+ enforcement-tags lint if present); confirm B_ALWAYS ≤ 23000.
