@@ -12,6 +12,11 @@ import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 
 const RAIL_LIMIT = 15;
+// The canonical new-conversation entry point (resolves to
+// chat/[conversationId]/page.tsx with id "new" → ChatSurface.startSession).
+// Shared by BOTH the persistent header affordance and the empty-state CTA so
+// the route cannot drift between the two (user-impact review FINDING 5).
+const NEW_CONVERSATION_HREF = "/dashboard/chat/new";
 // Hoisted to module scope so re-renders pass the SAME options object
 // reference to useConversations — a literal `{ limit: RAIL_LIMIT }` per
 // render would be safe today (the hook destructures primitives) but is
@@ -103,10 +108,20 @@ export function ConversationsRail() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center border-b border-soleur-border-default px-3 py-2">
+      <div className="flex items-center justify-between border-b border-soleur-border-default px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-soleur-text-muted">
           Recent conversations
         </span>
+        {/* Persistent new-conversation entry point — visible regardless of
+            list state (the empty-state CTA below only shows when zero rows).
+            Expanded branch only: the collapsed rail returns null above. */}
+        <Link
+          href={NEW_CONVERSATION_HREF}
+          aria-label="New conversation"
+          className="text-xs font-medium text-soleur-accent-gold-fg hover:underline"
+        >
+          + New
+        </Link>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-1">
@@ -135,7 +150,7 @@ export function ConversationsRail() {
             testId="conversations-rail-empty"
             message="No conversations yet."
             ctaLabel="Start one"
-            ctaHref="/dashboard/chat/new"
+            ctaHref={NEW_CONVERSATION_HREF}
           />
         ) : (
           conversations.map((conv) => (
