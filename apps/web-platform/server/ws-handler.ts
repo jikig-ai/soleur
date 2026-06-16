@@ -1239,6 +1239,11 @@ export async function dispatchSoleurGoForConversation(
         liveSession.sessionId = nextSessionId;
       }
     },
+    // #5402 — routines "Draft a routine" tab mode flag. Derived from the
+    // validated context.type; appends ROUTINE_AUTHORING_DIRECTIVE in
+    // buildSoleurGoSystemPrompt. Document context (path/content) is unused
+    // for this mode (it carries no path).
+    routineAuthoring: context?.type === "routine-authoring",
     ...documentArgs,
   });
   } finally {

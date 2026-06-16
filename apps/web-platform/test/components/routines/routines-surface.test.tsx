@@ -8,6 +8,16 @@ import {
 } from "@testing-library/react";
 import { RoutinesSurface } from "@/components/routines/routines-surface";
 
+// Stub the heavy chat surface (WS/agent stack) — assert it mounts with the
+// routine-authoring mode flag rather than booting the real Concierge. #5402.
+const chatSurfaceProps = vi.hoisted(() => ({ last: null as unknown }));
+vi.mock("@/components/chat/chat-surface", () => ({
+  ChatSurface: (props: Record<string, unknown>) => {
+    chatSurfaceProps.last = props;
+    return <div data-testid="chat-surface-stub" />;
+  },
+}));
+
 const ALLOWED = {
   fnId: "cron-daily-triage",
   domain: "Operations",
@@ -139,5 +149,33 @@ describe("RoutinesSurface", () => {
     await waitFor(() =>
       expect(screen.getByText(/boom: upstream 503/)).toBeTruthy(),
     );
+  });
+
+  // #5402 — PR-2 Concierge "Draft a routine" tab.
+  it("shows an active Draft a routine tab (not the disabled v2 placeholder)", async () => {
+    render(<RoutinesSurface />);
+    const draftTab = screen.getByRole("tab", { name: /Draft a routine/ });
+    expect(draftTab).toBeTruthy();
+    // The PR-1 placeholder had no role=tab and was cursor-not-allowed; the new
+    // one is a real tab with a "new" badge (not "v2").
+    expect(screen.queryByText("v2")).toBeNull();
+    expect(screen.getByText("new")).toBeTruthy();
+  });
+
+  it("Draft tab renders the intro (capability cards + suggestion chips) and mounts the chat in routine-authoring mode", async () => {
+    chatSurfaceProps.last = null;
+    render(<RoutinesSurface />);
+    fireEvent.click(screen.getByRole("tab", { name: /Draft a routine/ }));
+    // Intro state (mock 05): two capability cards + composer hint.
+    expect(screen.getByText("Draft a new routine")).toBeTruthy();
+    expect(screen.getByText(/Run & verify an existing routine/)).toBeTruthy();
+    expect(screen.getByText(/New routines ship as code/)).toBeTruthy();
+    expect(screen.getByText("Run & verify cron-legal-audit")).toBeTruthy();
+    // Chat mounted, scoped to routine-authoring mode (no document path).
+    expect(screen.getByTestId("chat-surface-stub")).toBeTruthy();
+    const props = chatSurfaceProps.last as Record<string, unknown>;
+    expect(props.variant).toBe("sidebar");
+    expect(props.conversationId).toBe("new");
+    expect(props.initialContext).toEqual({ type: "routine-authoring" });
   });
 });

@@ -17,6 +17,8 @@ import { randomUUID } from "crypto";
 import { existsSync } from "node:fs";
 import path from "path";
 
+import { ROUTINE_AUTHORING_DIRECTIVE } from "@/server/routine-authoring-directive";
+
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -1858,6 +1860,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   if (c4PromptAddendum) {
     effectiveSystemPrompt += `\n\n${c4PromptAddendum}`;
   }
+  // Routines "Draft a routine" tab (#5402): scope the agent to routine
+  // authoring (create = propose-as-PR; run/verify existing = gated routine_run).
+  // Trusted system-prompt append, gated on the validated context.type mode flag.
+  if (args.routineAuthoring) {
+    effectiveSystemPrompt += `\n\n${ROUTINE_AUTHORING_DIRECTIVE}`;
+  }
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
@@ -2295,6 +2303,15 @@ export interface DispatchSoleurGoArgs {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * #5402 (PR-2). Set when the conversation context carries
+   * type === "routine-authoring" (the routines dashboard "Draft a routine"
+   * tab). Appends ROUTINE_AUTHORING_DIRECTIVE to the system prompt so the
+   * Concierge knows: create = propose-as-PR, run/verify existing = gated
+   * routine_run + routine_runs_list. Mirrors the c4PromptAddendum capability
+   * gate — a trusted system-prompt append, never via context.content.
+   */
+  routineAuthoring?: boolean;
   /**
    * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
    * when the in-process PDF extractor surfaced a typed failure class. The
@@ -3291,6 +3308,7 @@ export async function dispatchSoleurGo(
       events,
       persistActiveWorkflow,
       sessionId: sessionId ?? undefined,
+      routineAuthoring: args.routineAuthoring,
       artifactPath,
       documentKind,
       documentContent,

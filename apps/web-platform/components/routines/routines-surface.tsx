@@ -8,6 +8,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ChatSurface } from "@/components/chat/chat-surface";
+
 // Delay before the single post-trigger reconciliation refetch that swaps the
 // optimistic "running" row for the real terminal routine_runs row.
 const RECONCILE_DELAY_MS = 5000;
@@ -76,7 +78,7 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export function RoutinesSurface() {
-  const [tab, setTab] = useState<"routines" | "runs">("routines");
+  const [tab, setTab] = useState<"routines" | "runs" | "draft">("routines");
   return (
     <div>
       <div
@@ -89,17 +91,29 @@ export function RoutinesSurface() {
         <TabButton active={tab === "runs"} onClick={() => setTab("runs")}>
           Recent Runs
         </TabButton>
-        <span
-          className="ml-auto cursor-not-allowed self-center pb-2 text-xs text-soleur-text-muted"
-          title="Concierge routine authoring ships in v2"
+        <button
+          role="tab"
+          aria-selected={tab === "draft"}
+          onClick={() => setTab("draft")}
+          className={`-mb-px ml-auto self-center border-b-2 pb-2 text-sm ${
+            tab === "draft"
+              ? "border-soleur-text-primary text-soleur-text-primary"
+              : "border-transparent text-soleur-text-secondary hover:text-soleur-text-primary"
+          }`}
         >
-          Draft a routine
+          ✨ Draft a routine
           <span className="ml-1 rounded bg-soleur-bg-surface-1 px-1 py-0.5 text-[10px]">
-            v2
+            new
           </span>
-        </span>
+        </button>
       </div>
-      {tab === "routines" ? <RoutinesTab /> : <RecentRunsTab />}
+      {tab === "routines" ? (
+        <RoutinesTab />
+      ) : tab === "runs" ? (
+        <RecentRunsTab />
+      ) : (
+        <DraftRoutineTab />
+      )}
     </div>
   );
 }
@@ -126,6 +140,75 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+// PR-2 (#5402): the "Draft a routine" Concierge tab. Routines are code-defined
+// (no runtime CRUD), so the Concierge drafts NEW routines as GitHub PRs and
+// runs/verifies EXISTING ones via the gated routine_run loop. Reuses the full
+// chat stack via ChatSurface (sidebar variant — h-full, no header) scoped to
+// routine-authoring mode via initialContext.type. Wireframe: screen 05-08.
+const DRAFT_SUGGESTIONS = [
+  "Draft a weekly competitor-price check",
+  "Run & verify cron-legal-audit",
+  "Explain cron-content-publisher",
+];
+
+function DraftRoutineTab() {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mb-4">
+        <h2 className="text-sm font-medium text-soleur-text-primary">
+          Draft a routine with the Concierge
+        </h2>
+        <p className="mt-1 text-xs text-soleur-text-secondary">
+          Describe the recurring work you want. The Concierge drafts it, tests
+          it, and shows you the result — then opens a PR you approve. It can also
+          run and verify routines you already have.
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="rounded border border-soleur-border-default bg-soleur-bg-surface-1 p-3">
+            <div className="text-xs font-medium text-soleur-text-primary">
+              Draft a new routine
+            </div>
+            <div className="mt-1 text-xs text-soleur-text-secondary">
+              Scaffolds a cron function and opens a GitHub PR for review. It
+              can&apos;t run until the PR is merged and deployed.
+            </div>
+          </div>
+          <div className="rounded border border-soleur-border-default bg-soleur-bg-surface-1 p-3">
+            <div className="text-xs font-medium text-soleur-text-primary">
+              Run &amp; verify an existing routine
+            </div>
+            <div className="mt-1 text-xs text-soleur-text-secondary">
+              Runs a routine off-schedule behind a confirmation gate, then reads
+              back the run log and confirms it worked.
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {DRAFT_SUGGESTIONS.map((s) => (
+            <span
+              key={s}
+              className="rounded border border-soleur-border-default px-2 py-1 text-[11px] text-soleur-text-secondary"
+            >
+              {s}
+            </span>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] text-soleur-text-muted">
+          New routines ship as code — the Concierge drafts and tests; you approve
+          the PR; it goes live on merge + deploy.
+        </p>
+      </div>
+      <div className="min-h-0 flex-1">
+        <ChatSurface
+          variant="sidebar"
+          conversationId="new"
+          initialContext={{ type: "routine-authoring" }}
+        />
+      </div>
+    </div>
   );
 }
 

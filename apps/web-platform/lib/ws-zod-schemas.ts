@@ -80,7 +80,10 @@ const attachmentRefSchema = z.strictObject({
 });
 
 const conversationContextSchema = z.strictObject({
-  path: z.string(),
+  // path optional: mode-flag context types (e.g. "routine-authoring", #5402)
+  // carry no document. validateConversationContext enforces path-required for
+  // document-context types.
+  path: z.string().optional(),
   type: z.string(),
   content: z.string().optional(),
 });
