@@ -49,6 +49,19 @@ FAILCOUNT_DIR="/run/cron-egress-resolve-failcount"
 # Post one escalation event after this many consecutive failures of the same
 # host (at the 1-min timer cadence ≈ 30 min of sustained failure).
 FAILCOUNT_ESCALATE=30
+# Grace-window IP retention (LB-rotation fix). LB-fronted allowlisted hosts
+# (Cloudflare/AWS/Google round-robin across large pools; a single-A-record
+# snapshot pins only the current tick's few IPs, so a connect to a freshly-
+# rotated IP before the next tick is default-dropped — the non-GitHub analogue
+# of the api.github.com /meta gap, incident 5516336). Retain every IP DNS
+# returned for an ALREADY-allowlisted host over a rolling window so the set
+# accumulates that host's full rotation pool. This stays tight (only IPs
+# resolved for an already-trusted host — never wholesale provider CIDRs, which
+# would defeat ADR-052's default-drop); see the "remediation (LB-rotation
+# IP-coverage gap)" runbook section. The store lives under a persistent
+# StateDirectory (NOT tmpfs /run) so a reboot does not wipe the pool.
+GRACE_WINDOW_SECS="${GRACE_WINDOW_SECS:-86400}"
+SEEN_DIR="${SEEN_DIR:-/var/lib/cron-egress-resolve/seen}"
 
 log() { echo "[$LOG_TAG] $*"; }
 
@@ -109,6 +122,7 @@ fail() {
 command -v nft >/dev/null || fail "nft binary not found"
 command -v jq >/dev/null || fail "jq binary not found"
 mkdir -p "$FAILCOUNT_DIR"
+mkdir -p "$SEEN_DIR"
 
 container_running() {
   timeout 10 docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"
@@ -185,6 +199,49 @@ DESIRED_ALLOW="$(echo "$DESIRED_ALLOW" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]
 # FAIL-SAFE: never operate against a fully-empty resolution (DNS outage).
 [[ -n "$DESIRED_ALLOW" ]] || fail "resolution returned ZERO addresses — refusing to touch the sets (fail-safe)"
 
+# --- Grace-window IP retention (LB-rotation fix) -------------------------------
+# Runs AFTER the fail-safe-on-empty guard so a zero-resolution tick aborts above
+# and never reaches the store (a DNS outage must not be papered over by stale
+# IPs). Record every current-tick IP's last-seen, then union back any IP seen for
+# an allowlisted host within the window — so the ALLOW set accumulates each LB
+# host's full rotation pool instead of just this tick's single-A-record snapshot.
+NOW_EPOCH="$(date +%s)"
+# 1. RECORD/refresh last-seen for every current-tick IP — ALWAYS (every tick,
+#    including no-prune ticks), so a transient partial failure cannot stall the
+#    pool's freshness. The IP is a dotted quad → safe store filename.
+while IFS= read -r ip; do
+  [[ -n "$ip" ]] || continue
+  echo "$NOW_EPOCH" > "$SEEN_DIR/$ip"
+done <<< "$DESIRED_ALLOW"
+# 2. UNION stored-within-window IPs into the retained set — ALWAYS — re-filtering
+#    every readback value through the IPv4 regex (a corrupted/non-dotted-quad
+#    store entry must never reach the nft batch). 3. EVICT past-window entries
+#    ONLY on a prune tick (FAILED_HOSTS==0); a no-prune tick keeps them so a
+#    Doppler/DNS blip cannot drop the live pool (additive-only invariant).
+RETAINED="$DESIRED_ALLOW"
+if [[ -d "$SEEN_DIR" ]]; then
+  while IFS= read -r seen_file; do
+    [[ -n "$seen_file" ]] || continue
+    ip="$(basename "$seen_file")"
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    ts="$(cat "$seen_file" 2>/dev/null || echo 0)"
+    [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
+    age=$(( NOW_EPOCH - ts ))
+    if (( age <= GRACE_WINDOW_SECS )); then
+      RETAINED+=$'\n'"$ip"
+    elif [[ "$FAILED_HOSTS" -eq 0 ]]; then
+      # Eviction (store reclamation) is gated on the prune tick BY DESIGN: a
+      # no-prune tick touches nothing (the simplest additive-only invariant) —
+      # do NOT "fix" the suppressed eviction during a sustained partial failure
+      # as a leak. The store is bounded: a single prune tick (FAILED_HOSTS==0)
+      # drains the whole past-window backlog, and sustained FAILED_HOSTS>0 is
+      # already the paged condition (resolve_host_failed at FAILCOUNT_ESCALATE).
+      rm -f "$seen_file"
+    fi
+  done < <(find "$SEEN_DIR" -type f 2>/dev/null)
+fi
+RETAINED="$(echo "$RETAINED" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)"
+
 # --- DNS resolver pin set ------------------------------------------------------
 # Union of: Docker's loopback-stub substitution pair (ALWAYS — the container
 # falls back to these whenever the host resolv.conf is loopback-only, and a
@@ -239,7 +296,7 @@ if [[ "$FAILED_HOSTS" -gt 0 ]]; then
 fi
 
 BATCH="$(
-  build_batch "$ALLOW_SET" "$DESIRED_ALLOW" "$PRUNE"
+  build_batch "$ALLOW_SET" "$RETAINED" "$PRUNE"
   build_batch "$DNS_SET" "$DNS_IPS" "$PRUNE"
 )"
 
@@ -290,4 +347,4 @@ if [[ "${BLOCK_HITS:-0}" -gt 0 ]]; then
 fi
 
 sentry_checkin ok
-log "OK: allow=$(echo "$DESIRED_ALLOW" | wc -l) addrs, dns=$(echo "$DNS_IPS" | wc -l) resolvers, failed_hosts=$FAILED_HOSTS, blocked_3m=$BLOCK_HITS"
+log "OK: allow=$(echo "$DESIRED_ALLOW" | wc -l) addrs, retained=$(echo "$RETAINED" | wc -l), dns=$(echo "$DNS_IPS" | wc -l) resolvers, failed_hosts=$FAILED_HOSTS, blocked_3m=$BLOCK_HITS"

@@ -104,6 +104,52 @@ SSH). To force a refresh without waiting for the schedule, dry-fire the cron via
 `/soleur:trigger-cron` (`cron/github-cidr-refresh.manual-trigger`) — no SSH, no
 `gh workflow run`.
 
+## Remediation (LB-rotation IP-coverage gap, non-GitHub host)
+
+If the blocked `DST=<ip>` maps (via `curl -s "https://ipinfo.io/<DST-ip>/json"`)
+to a cloud LB provider — **Cloudflare** (`104.x`/`162.159.x`/`172.6x.x`),
+**AWS** (`AS16509`/`AS14618`), **Google** (`AS15169`, `*.bc.googleusercontent.com`)
+— AND the failing flow dials a host that is ALREADY in
+`cron-egress-allowlist.txt` (`discord.com`, `api.x.com`, `api.linkedin.com`,
+`api.resend.com`, `bsky.social`, `api.buttondown.com`, `edge.api.flagsmith.com`,
+`hn.algolia.com`, …), this is the **non-GitHub analogue** of the api.github.com
+`/meta` gap: the hostname IS allowlisted, but it round-robins DNS across a large
+LB pool and the single-A-record resolver only pinned the few IPs DNS returned at
+the last tick. A connect to a freshly-rotated IP before the next tick is
+default-dropped. It is the `missed`-not-`failed` cron-check-in signature for the
+six heavy eval crons (community-monitor → `hn.algolia.com`, content-generator →
+discord/x/linkedin, …).
+
+**This is now self-healing — grace-window retention (the resolver's `SEEN_DIR`
+store + `GRACE_WINDOW_SECS`, default 24h) accumulates each allowlisted host's
+full rotation pool over time.** Unlike GitHub, the fix is NOT a CIDR file:
+wholesale-allowlisting Cloudflare/AWS/Google ranges would let a compromised cron
+egress to any site on those clouds and defeat ADR-052's default-drop. The
+resolver instead retains every IP it has *observed DNS return for an
+already-allowlisted host* within the window — tight, no provider-CIDR widening.
+
+So a **recurring** `egress-blocked` for an already-allowlisted LB host means one
+of:
+
+1. **Window too short** for the host's rotation cadence. Confirm via the
+   resolver's OK log (`[cron-egress-resolve] OK: allow=N addrs, retained=M …`):
+   `retained` should exceed `allow` for a rotating fleet. If `retained ≈ allow`
+   the pool is not accumulating — raise `GRACE_WINDOW_SECS` (env override on the
+   unit; the default is 86400). One-off drops with no recurrence are the
+   benign rotation-window class — close them.
+2. **Store wiped** — `/var/lib/cron-egress-resolve/seen` was cleared (manual
+   `rm`, disk reset, or a unit that lost its `StateDirectory=`). The pool
+   re-accumulates over one window automatically; no action beyond confirming the
+   `StateDirectory=cron-egress-resolve` directive is still on
+   `cron-egress-resolve.service`.
+3. **Genuinely a NEW host** not in the allowlist (the LB org is incidental) →
+   fall through to the allowlist-gap remediation above.
+
+No SSH, no dashboard-eyeball: read the `retained` count and the `egress-blocked`
+`extra.sample` straight from Sentry. Do not widen the allowlist to a provider
+CIDR to "fix" a rotation drop — that is the wrong layer and the wrong blast
+radius.
+
 ## Remediation (loader `die "invalid CIDR …"`)
 
 If `cron-egress-firewall.service` failed (not a drop page) and journald shows

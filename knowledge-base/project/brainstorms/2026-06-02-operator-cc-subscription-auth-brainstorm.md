@@ -57,7 +57,7 @@ only genuinely new work is a credential-type branch plus two hard-block guardrai
 | 1 | **Operator self-use only**; not customer-facing | Customer-facing = ToS-prohibited (credential sharing / pooling) + illusory onboarding win for non-technical ICP |
 | 2 | Add a `credential_type` column to `api_keys` (`'api_key' \| 'oauth_token'`), not a parallel table | Reuses HKDF/zeroize/RLS/`is_valid`/lease machinery untouched; cheapest correct surface (CTO) |
 | 3 | `agent-env.ts` sets **exactly one** of `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (mutually exclusive) | **Both-keys trap:** if both are set, `ANTHROPIC_API_KEY` silently wins → user pays API rates believing they're on subscription. Must be an exhaustive `: never`-railed branch |
-| 4 | **Hard-block effective-date gate**: `oauth_token` path refuses to run before `2026-06-15T00:00:00Z` | Pre-June-15 the conduct is prohibited; gate makes a merge-before-June-15 defensible because it cannot execute. CI sentinel asserts it (CLO Guardrail 1) |
+| 4 | **Hard-block effective-date gate**: `oauth_token` path refuses to run before `2026-06-15T00:00:00Z` | Pre-June-15 the conduct is prohibited; gate makes a merge-before-June-15 defensible because it cannot execute. CI sentinel asserts it (CLO Guardrail 1). **[SUPERSEDED 2026-06-16 — Anthropic paused the June-15 change; this is now a spent gate, not a legal floor. See Re-review section below.]** |
 | 5 | **Hard-block owner-only routing**: reject routing an `oauth_token` credential to any run whose owner ≠ the token's owner | Cross-tenant routing of a subscription token is the exact construct that earned the customer-facing PROHIBITED verdict. Fail-closed at the lease boundary (CLO Guardrail 2) |
 | 6 | Gate registrability to operator/internal accounts; surface nothing to customers; no external marketing | Keeps the use inside the permitted per-user scope (CLO Guardrails 3–4) |
 | 7 | New error cause `subscription_limit`, distinct from API 429 | Subscription credit/rate-limit exhaustion fails differently; mis-mapping renders it as "key invalid" telling the user to re-paste a fine token (CTO; observability gate) |
@@ -79,6 +79,7 @@ only genuinely new work is a credential-type branch plus two hard-block guardrai
    oauth_token must be explicitly disallowed until/unless re-reviewed.
 4. **Post-June-15 text re-confirm:** re-read article 15036540 on/after June 15 before the
    first live run; the verdict is null and void if Anthropic amends the article.
+   > **[SUPERSEDED 2026-06-16 — this trigger fired: Anthropic paused the June-15 change and amended article 15036540. See Re-review section at the end of this doc.]**
 
 ## Domain Assessments
 
@@ -105,6 +106,8 @@ runs); a subscription-auth validation probe; `subscription_limit` error mapping.
 infra; isolation guarantee intact. **Capability gaps: none.**
 
 ### Legal (CLO)
+
+> **[SUPERSEDED 2026-06-16 — Anthropic paused the June-15 Agent SDK credit change. The "explicit permission" premise below never landed. New verdict: AMBIGUOUS, leaning tolerated (NOT explicitly-permitted), owner-only operator-self-use; basis downgraded permitted → tolerated risk-acceptance. The original verdict is preserved as the historical record. See the Re-review section at the end of this doc and the audit `knowledge-base/legal/audits/2026-06-16-clo-re-review-cc-oauth.md`.]**
 
 **Summary:** **Permitted-with-guardrails, on/after June 15, 2026** (prohibited before).
 The June 15 article is the explicit permission that lifts Consumer Terms §3's
@@ -143,3 +146,49 @@ ever needed. Evidence: CTO grep confirmed BYOK lease/dispatcher/env files exist 
 ## Lane
 
 cross-domain (USER_BRAND_CRITICAL → triad CPO+CLO+CTO mandatory).
+
+## Re-review 2026-06-16 — Anthropic paused the June 15 credit change
+
+**This supersedes the original Legal (CLO) verdict above.** The original verdict
+(2026-06-02) was conditioned on a **predicted** Anthropic policy transition: that on
+2026-06-15, support article 15036540 would grant Pro/Max/Team/Enterprise plans a per-user
+monthly "Agent SDK credit" that *"explicitly permits"* third-party apps to authenticate
+with a Claude subscription, lifting Consumer Terms §3's automated-access bar. That
+predicted permission was the entire load-bearing hook for the "permitted-with-guardrails"
+disposition.
+
+On **2026-06-16** Anthropic emailed that the change is **PAUSED**, and the live article
+now reads:
+
+> **Update June 15:** We're pausing the changes to Claude Agent SDK usage described below.
+> For now, nothing has changed: Claude Agent SDK, `claude -p`, and third-party app usage
+> still draw from your subscription's usage limits.
+
+The pre-registered re-review trigger (Open Question 4 + the Legal summary's "any amendment
+to article 15036540") has therefore **fired**.
+
+### Superseding verdict
+
+- **Disposition:** **AMBIGUOUS, leaning tolerated** (NOT explicitly-permitted) for the
+  owner-only operator-self-use construction. The paused article's "still draw from your
+  subscription's usage limits" is *metered tolerance*, not an explicit permission lifting
+  the Consumer Terms §3 automated-access bar.
+- **What survived intact:** the **per-user / no-pooling / no-share constraint** — the real
+  risk axis — is still imposed by the article and is **enforced in code** by the owner-only
+  routing guardrail (`OauthDelegationForbiddenError`). This did NOT change when the credit
+  was paused.
+- **Basis downgrade:** permitted → **tolerated / metered subscription use, owner-only
+  no-share enforced in code, operator-borne risk-acceptance.**
+- **Disabling is NOT mandatory.** The operator has elected to **keep `CC_OAUTH_ENABLED=1`**
+  (dev + prd) as documented risk-acceptance.
+- **Customer-facing / non-owner extension remains PROHIBITED** — and is now *harder* to
+  justify, since there is no per-user-credit framework to point at.
+
+### Updated re-review trigger
+
+Replaces the old "any amendment to article 15036540 / the Consumer Terms" trigger with:
+**Anthropic un-pauses / ships its promised advance-notice update; OR amends the "still
+draw from your subscription's usage limits" sentence; OR any move off owner-only
+operator-self-use (delegation, customer-facing, pooling).**
+
+Full assessment: `knowledge-base/legal/audits/2026-06-16-clo-re-review-cc-oauth.md`.
