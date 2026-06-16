@@ -136,7 +136,10 @@ type _AssertResponseKindsMatch =
 const _exhaustiveResponseKindCheck: _AssertResponseKindsMatch = true;
 void _exhaustiveResponseKindCheck;
 
-// Typed error codes for structured error handling over WebSocket
+// Typed error codes for structured error handling over WebSocket.
+// SECOND CANONICAL COPY: the wire schema replicates this set as a `z.enum([...])`
+// in `lib/ws-zod-schemas.ts` (errorSchema.errorCode). Widen BOTH in the same
+// change — `tsc` fails the `_SchemaCovers` proof there if they drift (#5394).
 export type WSErrorCode =
   | "key_invalid"
   // Phase 3.2 AC-D (feat-team-workspace-multi-user) — member-without-BYOK
