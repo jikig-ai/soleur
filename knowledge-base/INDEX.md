@@ -214,7 +214,6 @@
 
 - [domains](operations/domains.md)
 - [expenses](operations/expenses.md)
-- [GitHub App provisioning — Soleur-Concierge (PR-H)](operations/runbooks/github-app-provisioning.md)
 
 ## product
 
