@@ -397,6 +397,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "(#4521). Art. 17: user_id SET NULL via FK ON DELETE SET NULL " +
     "(no dedicated anonymise RPC — FK cascade sufficient). Promote " +
     "to allowlist with export chain.",
+
+  // #5345: routines run-log. Operational WORM audit (which cron ran, when,
+  // status, trigger source). actor_id / delegating_principal are the
+  // operator's own id on the single-operator tenant; rows are system-audit
+  // records, not Art. 15 personal-profile data. Mirrors the workspace_activity
+  // exclusion pattern.
+  routine_runs:
+    "Migration 107 operational run-log. actor_id/delegating_principal FK " +
+    "ON DELETE RESTRICT; Art. 17 satisfied by anonymise_routine_runs RPC " +
+    "(NULLs both actor cols under the WORM bypass, preserving the audit " +
+    "row) called in account-delete before auth-delete (mirrors the " +
+    "anonymise_workspace_activity pattern). On the single-operator tenant " +
+    "the only data subject is Soleur itself; rows record routine " +
+    "executions, not user-profile data. Promote to DSAR_TABLE_ALLOWLIST " +
+    "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
+    "dsar-export.ts chain is wired.",
 };
 
 /**

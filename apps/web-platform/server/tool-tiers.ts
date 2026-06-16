@@ -83,6 +83,14 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_triage_list": "auto-approve",
   "mcp__soleur_platform__email_triage_get": "auto-approve",
 
+  // Routines management (#5345): reads auto-approve; run-now is a write →
+  // gated. The review gate is the SINGLE confirmation for the agent path
+  // (the routine_run tool dispatches confirmed=true post-approval — no
+  // double-gate with the in-band 409). buildGateMessage names the routine.
+  "mcp__soleur_platform__routines_list": "auto-approve",
+  "mcp__soleur_platform__routine_runs_list": "auto-approve",
+  "mcp__soleur_platform__routine_run": "gated",
+
   // Email WRITE tools (#5325, agent-native outbound). The FR9 boundary that
   // formerly said "there is NO email_triage write tool" now ships: these are
   // `gated` (NEVER auto-approve) because the human review gate IS the trust
@@ -187,6 +195,8 @@ export function buildGateMessage(
       const preview = raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
       return `Agent wants to revoke share token **${preview}**. This is permanent. Allow?`;
     }
+    case "routine_run":
+      return `Agent wants to run routine **${toolInput.fnId ?? "unknown"}** now, off-schedule. This fires real production work. Allow?`;
     // Outbound email (#5325) — the operator MUST see the exact recipient,
     // subject, and body before approving: the body-hash approval binding and
     // the whole single-user-incident safety story rest on the human reviewing

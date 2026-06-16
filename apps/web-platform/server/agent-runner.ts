@@ -59,6 +59,7 @@ import { buildConversationsTools } from "./conversations-tools";
 import { buildEmailTriageTools } from "./email-triage-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
+import { buildRoutineTools } from "./routines-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { resolveActiveWorkspacePath } from "./workspace-resolver";
@@ -1614,6 +1615,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       "mcp__soleur_platform__email_reply",
       "mcp__soleur_platform__email_suppress",
     );
+
+    // Routines management tools (#5345): agent-user parity for the Routines
+    // surface — registered unconditionally. routines_list / routine_runs_list
+    // are read-only (auto-approve); routine_run is gated (the review-gate is the
+    // single confirmation). userId is recorded as delegating_principal.
+    const routineTools = buildRoutineTools({ userId });
+    platformTools.push(...routineTools.tools);
+    platformToolNames.push(...routineTools.toolNames);
 
     // Auth revocation status tool (#4440 follow-up to #4418): registered
     // unconditionally — agents need self-diagnosis on every authenticated
