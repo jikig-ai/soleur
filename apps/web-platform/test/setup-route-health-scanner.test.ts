@@ -127,6 +127,16 @@ vi.mock("@/server/project-scanner", () => ({
   scanProjectHealth: mockScanProjectHealth,
 }));
 
+// The route's fire-and-forget auto-sync (triggerHeadlessSync) lazy-imports
+// @/server/agent-runner (the heavy @anthropic-ai/claude-agent-sdk graph). Stub
+// it so the keyed-user path's startAgentSession resolves cleanly instead of
+// throwing a VitestMocker error from the real SDK import — which would escape
+// the fire-and-forget chain as an unhandled post-test rejection (vitest fails
+// the run on unhandled errors even when every test passes).
+vi.mock("@/server/agent-runner", () => ({
+  startAgentSession: vi.fn(async () => {}),
+}));
+
 vi.mock("@/server/logger", () => {
   const noopLogger = {
     error: vi.fn(),

@@ -36,6 +36,13 @@ vi.mock("@/server/project-scanner", () => ({
   scanProjectHealth: vi.fn(() => null),
 }));
 
+// Stub the heavy agent-runner SDK that triggerHeadlessSync lazy-imports in the
+// route's fire-and-forget auto-sync path — otherwise the real import throws a
+// VitestMocker error that escapes as an unhandled post-test rejection.
+vi.mock("@/server/agent-runner", () => ({
+  startAgentSession: vi.fn(async () => {}),
+}));
+
 vi.mock("@/lib/repo-url", () => ({
   normalizeRepoUrl: (u: string) => u,
 }));
