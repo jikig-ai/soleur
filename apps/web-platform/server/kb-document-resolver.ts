@@ -88,7 +88,15 @@ export const FULL_TEXT_CAP_BYTES = 5 * 1024 * 1024;
  * not provisioned" signal; callers catch it and mirror via
  * `reportSilentFallback`.
  */
-export async function fetchUserWorkspacePath(userId: string): Promise<string> {
+export async function fetchUserWorkspacePath(
+  userId: string,
+  // ADR-044 PR-1: the dispatch path resolves `resolveActiveWorkspace` ONCE and
+  // threads the membership-verified id here so the agent CWD keys to the SAME
+  // workspace as the repo/install consumers + the self-heal (no second divergent
+  // resolve — the #4767 clone-target divergence this PR kills). Omitted by the
+  // non-dispatch readers (leader/ws-handler), which resolve their own.
+  preResolvedActiveWorkspaceId?: string,
+): Promise<string> {
   let tenant;
   try {
     tenant = await getFreshTenantClient(userId);
@@ -98,7 +106,7 @@ export async function fetchUserWorkspacePath(userId: string): Promise<string> {
     }
     throw err;
   }
-  return resolveActiveWorkspacePath(userId, tenant);
+  return resolveActiveWorkspacePath(userId, tenant, preResolvedActiveWorkspaceId);
 }
 
 /**

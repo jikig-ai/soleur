@@ -62,7 +62,7 @@ export async function POST(request: Request) {
 
   // kb_share_links.workspace_id is NOT NULL (migration 059). Reuse the active
   // workspace id the resolver already resolved via
-  // resolveActiveWorkspaceIdWithMembership (claim → membership-checked → solo
+  // resolveActiveWorkspace (claim → membership-checked → solo
   // fallback = user.id) so the row satisfies the constraint AND the
   // workspace-member RLS policy. This drops the second resolveCurrentWorkspaceId
   // round-trip: the two agree for solo/legitimate-member callers, and the

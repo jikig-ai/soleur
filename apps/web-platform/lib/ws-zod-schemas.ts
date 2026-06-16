@@ -481,6 +481,9 @@ const errorSchema = z.strictObject({
       // setup errored (repo_status === "error"). Client renders the reconnect
       // CTA. The cloning block carries no errorCode.
       "repo_setup_failed",
+      // ADR-044 PR-1 — member reset to an empty solo workspace; client renders
+      // the workspace-switcher affordance (carries `switchToWorkspaceId`).
+      "workspace_switch_required",
       "delegation_revoked_post_grace",
       "delegation_expired",
       "delegation_hourly_cap_exceeded",
@@ -489,6 +492,9 @@ const errorSchema = z.strictObject({
     ])
     .optional(),
   gateId: z.string().optional(),
+  // ADR-044 PR-1 — present with `errorCode: "workspace_switch_required"`: the
+  // target workspace id the client offers to switch to.
+  switchToWorkspaceId: z.string().optional(),
 });
 
 // Stage 3 (#2885) — new event variants

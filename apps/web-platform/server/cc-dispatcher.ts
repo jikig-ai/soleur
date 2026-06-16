@@ -129,7 +129,12 @@ import {
 // `repo_status=error` workspace heals + re-evaluates instead of dead-ending at
 // the gate (short-circuit-guard-must-sit-after-the-recovery-it-gates).
 import { resolveRepoReadinessWithSelfHeal } from "./repo-readiness-self-heal";
-import { resolveCurrentWorkspaceId } from "./workspace-resolver";
+import { resolveActiveWorkspace } from "./workspace-resolver";
+// ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
+// member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
+// (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
+import { WorkspaceNotReadyError } from "./workspace-not-ready";
+import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1517,9 +1522,40 @@ export const realSdkQueryFactory: QueryFactory = async (
     // Agent-SDK consumer: prefers the operator subscription oauth_token
     // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
-    // installationId joins the existing Promise.all (it keys only off
-    // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
-    // the resolve does not add a sequential await to cold-start dispatch.
+
+    // ADR-044 PR-1 (FR1/TR1) — resolve the ACTIVE workspace ONCE,
+    // membership-verified, BEFORE the parallel consumer fan-out. Threading this
+    // single id into the agent CWD, repo, installation, AND the in-dispatch
+    // self-heal (:1703 below) eliminates the #4767 divergence where the clone
+    // landed in /workspaces/<userId> while repo+install resolved the team. On a
+    // transient membership-probe db-error we fail CLOSED to an explicit
+    // not-ready state — NEVER dispatch into an unverified team, NEVER reset a
+    // possibly-real member. One sequential indexed read (+ one membership probe
+    // only when the claim is non-solo) precedes the otherwise-parallel block.
+    const dispatchTenant = await getFreshTenantClient(args.userId);
+    const activeWorkspace = await resolveActiveWorkspace(
+      args.userId,
+      dispatchTenant,
+    );
+    if (!activeWorkspace.ok) {
+      throw new WorkspaceNotReadyError({ kind: "db-error" });
+    }
+    const activeWorkspaceId = activeWorkspace.workspaceId;
+    const resetFromClaim = activeWorkspace.resetFromClaim;
+    // FR4 — divergence breadcrumb on the non-member-claim reset (the formerly
+    // zero-Sentry/invisible path). Deduped by (op, userId, claim) so a removed
+    // member does not storm Sentry on every dispatch.
+    if (resetFromClaim) {
+      reportRepoResolverDivergence({
+        userId: args.userId,
+        op: "non-member-claim-reset",
+        activeClaimWorkspaceId: resetFromClaim,
+        resolvedWorkspaceId: activeWorkspaceId,
+      });
+    }
+
+    // installationId joins the existing Promise.all; all four workspace-keyed
+    // consumers now receive the ONE resolved id (no second divergent resolve).
     const [
       workspacePath,
       serviceTokens,
@@ -1531,9 +1567,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       repoReadinessRow,
     ] =
       await Promise.all([
-        fetchUserWorkspacePath(args.userId),
+        fetchUserWorkspacePath(args.userId, activeWorkspaceId),
         getUserServiceTokens(args.userId),
-        resolveInstallationId(args.userId),
+        resolveInstallationId(args.userId, activeWorkspaceId),
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         resolveBashAutonomous(args.userId),
@@ -1547,12 +1583,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         resolveIsWorkspaceOwner(args.userId),
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
-        getCurrentRepoUrl(args.userId),
+        // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
+        getCurrentRepoUrl(args.userId, activeWorkspaceId),
         // #5394 — active workspace repo readiness (repo_status from workspaces,
         // sanitized reason from users.repo_error). Joins the Promise.all so it
         // adds ZERO sequential await on the cold-start hot path. Fail-open
         // internally (a read blip → not_connected, never blocks a ready founder).
-        getCurrentRepoStatus(args.userId),
+        // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
+        getCurrentRepoStatus(args.userId, activeWorkspaceId),
       ]);
 
     // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
@@ -1579,6 +1617,29 @@ export const realSdkQueryFactory: QueryFactory = async (
       repoReadinessRow.repoStatus,
       repoReadinessRow.repoError,
     );
+
+    // ADR-044 PR-1 (FR2) — member reset to an empty solo workspace. When the
+    // active-workspace resolve RESET a non-member team claim (`resetFromClaim`)
+    // AND the resolved solo workspace has NO project connected, the member has
+    // nowhere to work: dispatching the agent would only make go.md's Step 0.0
+    // gate flail. Surface the honest switcher copy instead, carrying the
+    // discarded claim id so the client can offer the workspace switcher.
+    // SCOPE: only the reset case throws. A genuine solo OWNER with no repo
+    // (no `resetFromClaim`) flows UNCHANGED into the existing repo-less / #5392
+    // path — no regression, no over-block of repo-less chat. `!repoUrl` is
+    // `repoReadiness.ok === true` (not_connected, never cloning/error), so this
+    // never shadows the RepoNotReadyError gate below.
+    if (resetFromClaim && !repoUrl) {
+      throw new WorkspaceNotReadyError({
+        kind: "no-repo-switch",
+        targetTeamId: resetFromClaim,
+        // teamName omitted by construction: a reset user is a NON-member of
+        // resetFromClaim, so workspaces.name is RLS-unresolvable under the
+        // tenant client (cc-dispatcher is off the service-role allowlist) →
+        // name-omitted fallback copy (FR2).
+      });
+    }
+
     // Normalize the ack to epoch-ms | null for the permission-callback deps
     // (the wire/db value is an ISO timestamptz string). P2 — fail-CLOSED on an
     // unparseable timestamp: `Date.parse` of garbage returns NaN, and the
@@ -1700,10 +1761,13 @@ export const realSdkQueryFactory: QueryFactory = async (
       let healed: RepoReadiness = repoReadiness;
       try {
         const tenant = await getFreshTenantClient(args.userId);
-        const activeWorkspaceId = await resolveCurrentWorkspaceId(
-          args.userId,
-          tenant,
-        );
+        // ADR-044 PR-1 (TR1) — the self-heal clone target MUST be the SAME
+        // membership-verified id the agent CWD / repo / install resolved to.
+        // The former raw `resolveCurrentWorkspaceId(args.userId, tenant)` here
+        // was the SECOND divergent resolve (#4767 class): on a non-member claim
+        // it re-derived the team id while the rest of the dispatch resolved
+        // solo, so the clone lock + clone target diverged. Thread the unified
+        // id instead — no second resolve on the dispatch path.
         healed = await resolveRepoReadinessWithSelfHeal(
           {
             userId: args.userId,
@@ -1745,6 +1809,18 @@ export const realSdkQueryFactory: QueryFactory = async (
           extra: { userId: args.userId },
           message:
             "dispatch repo self-heal orchestration failed; falling back to the honest readiness block",
+        });
+        // FR4 — also route a deduped divergence breadcrumb under the
+        // `repo-resolver-divergence` fingerprint so the (fast-follow) Sentry
+        // alert rule catches a cold-dispatch self-heal failure alongside the
+        // non-member-claim reset. Deduped by (op, userId, workspaceId) so a
+        // recurring failure does not storm. No claim divergence here, so both
+        // ids are the unified activeWorkspaceId.
+        reportRepoResolverDivergence({
+          userId: args.userId,
+          op: "self-heal-failed",
+          activeClaimWorkspaceId: activeWorkspaceId,
+          resolvedWorkspaceId: activeWorkspaceId,
         });
         healed = repoReadiness;
       }
@@ -3439,6 +3515,21 @@ export async function dispatchSoleurGo(
         },
         "repo-readiness gate: blocked dispatch (repo not ready)",
       );
+    } else if (err instanceof WorkspaceNotReadyError) {
+      // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
+      // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
+      // breadcrumb already fired, deduped). Info breadcrumb keeps the rate
+      // observable without paging.
+      log.info(
+        {
+          feature: "cc-dispatcher",
+          op: "workspace-not-ready-gate",
+          kind: err.state.kind,
+          userIdHash: hashUserId(userId),
+          conversationId,
+        },
+        "workspace-not-ready gate: blocked dispatch (workspace not ready)",
+      );
     } else {
       mirrorWithDebounce(
         err,
@@ -3514,6 +3605,23 @@ export async function dispatchSoleurGo(
         type: "error",
         message: err.message,
         ...(err.errorCode ? { errorCode: err.errorCode } : {}),
+      });
+    } else if (err instanceof WorkspaceNotReadyError) {
+      // ADR-044 PR-1 (FR2) — db-error → transient copy, NO errorCode (no CTA: a
+      // transient fault must not tell the user to take a structural action).
+      // no-repo-switch → `workspace_switch_required` + `switchToWorkspaceId` so
+      // the client renders the workspace-switcher affordance (carrying the
+      // discarded claim id). MUST sit ABOVE the generic `else` so a benign block
+      // does not nuke a resumable session.
+      sendToClient(userId, {
+        type: "error",
+        message: err.message,
+        ...(err.state.kind === "no-repo-switch"
+          ? {
+              errorCode: "workspace_switch_required" as const,
+              switchToWorkspaceId: err.state.targetTeamId,
+            }
+          : {}),
       });
     } else {
       // #3266 R7 — stale-resume cleanup. The dispatch was attempted with

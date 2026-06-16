@@ -61,6 +61,7 @@ import { reportSilentFallback, mirrorWithDebounce } from "./observability";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
 import { RepoNotReadyError } from "./repo-readiness";
+import { WorkspaceNotReadyError } from "./workspace-not-ready";
 // #4440 follow-up to #4418 — `RuntimeAuthError` discriminator + the
 // founder-readable revocation status RPC. Used by `consumeStream`'s
 // catch to detect mid-stream JWT-deny and surface `session_revoked`
@@ -2556,7 +2557,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // breadcrumb instead); missing either site re-introduces noise on every
         // cloning-window turn. Re-throw either way so the dispatch catch routes
         // the honest client message.
-        if (!(err instanceof RepoNotReadyError)) {
+        // ADR-044 PR-1: WorkspaceNotReadyError (transient db-error or member
+        // reset-to-empty-solo) is also an expected, benign block — skip the
+        // mirror here too (the dispatch catch emits the honest client message;
+        // the divergence breadcrumb fires separately, deduped).
+        if (
+          !(err instanceof RepoNotReadyError) &&
+          !(err instanceof WorkspaceNotReadyError)
+        ) {
           reportSilentFallback(err, {
             feature: "soleur-go-runner",
             op: "queryFactory",
