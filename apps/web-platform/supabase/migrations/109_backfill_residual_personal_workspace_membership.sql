@@ -29,6 +29,14 @@
 -- emits one benign actor_user_id=NULL WORM row per backfilled member (tolerated —
 -- the exact path mig 053's own backfill exercised).
 --
+-- ORPHAN-ORG NOTE (dev-only, benign, precedented): a user who already has a
+-- `workspaces` row (id=user.id) but lacks the owner canary still enters the loop
+-- and gets a fresh org; the `workspaces` insert then ON CONFLICT-skips, so the
+-- new org has no child workspace. This is invisible (orgs RLS exposes only
+-- member-reachable orgs), carries no PII, and is the identical asymmetry mig
+-- 053's 6a/6b split produces. On dev this affects ~13,667 of the 18,287; prd is
+-- 0-missing so no orphan orgs accrue there.
+--
 -- Transaction wrapping: NO top-level BEGIN/COMMIT. The canonical migration
 -- runner (apps/web-platform/scripts/run-migrations.sh) pipes this body + the
 -- trailing _schema_migrations INSERT to psql --single-transaction (mig 098/068

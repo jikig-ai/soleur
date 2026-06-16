@@ -1572,6 +1572,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         resolveInstallationId(args.userId, activeWorkspaceId),
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
+        // ADR-044 PR-1: the autonomous-toggle trio (bash-autonomous / ack /
+        // is-owner) is DELIBERATELY NOT threaded the unified activeWorkspaceId
+        // (FR1 names only the path/repo/install/status consumers). Each
+        // re-resolves the claim internally, but every read backs onto an
+        // is_workspace_member(claim, auth.uid())-gated RPC, so on a non-member
+        // reset they return false/null (fail-closed — never over-grant the
+        // team's autonomous posture). Threading them would yield the solo
+        // posture; either way is safe. Left un-threaded by design.
         resolveBashAutonomous(args.userId),
         // feat-bash-autonomous-default-on — first-run consent ack (fail-closed
         // null = HOLD). When bashAutonomous && ack==null && owner, the first
