@@ -339,8 +339,16 @@ describe("ChatPage", () => {
       await waitFor(() => {
         expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
       });
-      // fetch should not be called for KB content
-      expect(fetchSpy).not.toHaveBeenCalled();
+      // fetch should not be called for KB content. #5394 added an unrelated
+      // mount-time `/api/workspace/active-repo` poll (useActiveRepo) to the chat
+      // surface, so assert specifically that NO KB-content fetch fired rather
+      // than "no fetch at all".
+      const kbContentFetches = fetchSpy.mock.calls.filter(
+        ([url]: [unknown]) =>
+          typeof url === "string" &&
+          !url.includes("/api/workspace/active-repo"),
+      );
+      expect(kbContentFetches).toHaveLength(0);
     });
 
     it("does not start session until context fetch resolves", async () => {
@@ -401,7 +409,13 @@ describe("ChatPage", () => {
       await waitFor(() => {
         expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
       });
-      expect(fetchSpy).not.toHaveBeenCalled();
+      // No KB-content fetch (the #5394 active-repo mount poll is unrelated).
+      const kbContentFetches = fetchSpy.mock.calls.filter(
+        ([url]: [unknown]) =>
+          typeof url === "string" &&
+          !url.includes("/api/workspace/active-repo"),
+      );
+      expect(kbContentFetches).toHaveLength(0);
     });
   });
 
