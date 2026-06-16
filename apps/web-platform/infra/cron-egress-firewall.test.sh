@@ -316,6 +316,134 @@ assert_grep "single atomic nft -f batch apply" 'nft -f -' "$RESOLVER"
 assert_grep "Sentry Crons ok check-in (dead-timer detection)" 'sentry_checkin ok' "$RESOLVER"
 assert_grep "Sentry Crons error check-in on failure" 'sentry_checkin error' "$RESOLVER"
 
+echo "-- resolver grace-window retention (LB-rotation fix) --"
+# Source-anchored guards (executable constructs, NOT comment prose — 2026-06-03
+# false-match class). LB-fronted allowlisted hosts (Cloudflare/AWS/Google) rotate
+# across large pools; the single-A-record snapshot pins only the current tick's
+# IPs, so a connect to a freshly-rotated IP before the next tick is default-dropped.
+# The resolver must RETAIN every IP seen for an allowlisted host within a window.
+assert_grep "retention: GRACE_WINDOW_SECS constant (env-overridable, 24h default)" 'GRACE_WINDOW_SECS="\$\{GRACE_WINDOW_SECS:-86400\}"' "$RESOLVER"
+assert_grep "retention: SEEN_DIR store constant (env-overridable, /var/lib)" 'SEEN_DIR="\$\{SEEN_DIR:-/var/lib/cron-egress-resolve/seen\}"' "$RESOLVER"
+assert_grep "retention: store dir created beside FAILCOUNT_DIR" 'mkdir -p "\$SEEN_DIR"' "$RESOLVER"
+assert_grep "retention: records every current-tick IP's last-seen (every tick)" 'echo "\$NOW_EPOCH" > "\$SEEN_DIR/\$ip"' "$RESOLVER"
+assert_grep "retention: within-window stored IPs union into RETAINED" 'age <= GRACE_WINDOW_SECS' "$RESOLVER"
+assert_grep "retention: store readback via basename (store-union path)" 'basename "\$seen_file"' "$RESOLVER"
+assert_grep "retention: strict-mode last-seen timestamp guard" '\[\[ "\$ts" =~ \^\[0-9\]\+\$ \]\]' "$RESOLVER"
+assert_grep "retention: eviction gated on prune tick (FAILED_HOSTS==0, no-prune suppresses)" 'FAILED_HOSTS" -eq 0' "$RESOLVER"
+assert_grep "retention: RETAINED set feeds the ALLOW_SET batch (not raw DESIRED_ALLOW)" 'build_batch "\$ALLOW_SET" "\$RETAINED"' "$RESOLVER"
+assert_grep "retention: OK log carries retained= count" 'retained=' "$RESOLVER"
+# Ordering: the fail-safe-on-empty guard MUST precede the store-record line, so a
+# zero-resolution tick aborts BEFORE the store is ever read (a DNS outage must not
+# be papered over by stale store IPs). Proven by line order (loader-precedent shape).
+FAILSAFE_LINE="$(grep -n 'refusing to touch the sets' "$RESOLVER" | head -1 | cut -d: -f1)"
+RETAIN_LINE="$(grep -n 'SEEN_DIR/\$ip' "$RESOLVER" | head -1 | cut -d: -f1)"
+if [[ -n "$FAILSAFE_LINE" && -n "$RETAIN_LINE" && "$FAILSAFE_LINE" -lt "$RETAIN_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: fail-safe-on-empty guard precedes the store-record block (line $FAILSAFE_LINE < $RETAIN_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: store-record must run AFTER the fail-safe-on-empty guard (failsafe=$FAILSAFE_LINE retain=$RETAIN_LINE)"
+fi
+
+# Cross-file predicate parity: the retention_build() copy below must carry the EXACT
+# load-bearing fragments the resolver ships, else the copy drifts silently while its
+# scenarios keep passing (same convention as the CIDR validator parity above). The
+# source-anchored guards pin the RESOLVER's constructs; these pin that the test COPY
+# matches. grep -qF = fixed literal. Both fragments are executable-only (the `$frag`
+# echo line and the escaped source-anchor asserts above do not contain them verbatim),
+# so a deleted code line cannot be masked by a comment/echo match (2026-06-03 class).
+for frag in '(( age <= ' ' -eq 0 ]]; then'; do
+  if grep -qF -- "$frag" "$RESOLVER" && grep -qF -- "$frag" "${BASH_SOURCE[0]}"; then
+    PASS=$((PASS + 1)); echo "  PASS: retention fragment pinned identically in resolver + test copy ($frag)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: retention fragment drift between resolver and test copy ($frag)"
+  fi
+done
+
+# Behavioral exercise (nft absent on CI; exercise the retain/evict set-building in
+# isolation against a tmp store + tiny window). Mirrors the test_is_valid_ipv4_cidr
+# copy convention — the source-anchored guards above pin that the resolver ships
+# this exact logic.
+retention_build() {
+  # args: seen_dir now window failed_hosts ; stdin = current-tick IPs (one/line)
+  local seen_dir="$1" now="$2" window="$3" failed_hosts="$4"
+  local desired retained ip ts age seen_file
+  desired="$(cat | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)"
+  while IFS= read -r ip; do
+    [[ -n "$ip" ]] || continue
+    echo "$now" > "$seen_dir/$ip"
+  done <<< "$desired"
+  retained="$desired"
+  if [[ -d "$seen_dir" ]]; then
+    while IFS= read -r seen_file; do
+      [[ -n "$seen_file" ]] || continue
+      ip="$(basename "$seen_file")"
+      [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+      ts="$(cat "$seen_file" 2>/dev/null || echo 0)"
+      [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
+      age=$(( now - ts ))
+      if (( age <= window )); then
+        retained+=$'\n'"$ip"
+      elif [[ "$failed_hosts" -eq 0 ]]; then
+        rm -f "$seen_file"
+      fi
+    done < <(find "$seen_dir" -type f 2>/dev/null)
+  fi
+  echo "$retained" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true
+}
+
+# (a) retention within window: stored-but-not-re-resolved IP is RETAINED.
+T1="$(mktemp -d)"; echo "100" > "$T1/104.18.24.159"
+OUT1="$(printf '10.0.0.1\n' | retention_build "$T1" 150 100 0)"
+if echo "$OUT1" | grep -qx '104.18.24.159' && echo "$OUT1" | grep -qx '10.0.0.1'; then
+  PASS=$((PASS + 1)); echo "  PASS: within-window stored IP retained though not re-resolved this tick"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: within-window stored IP should be retained (got: $(echo "$OUT1" | tr '\n' ' '))"
+fi
+
+# (b) eviction after window (prune tick): past-window IP dropped AND store entry removed.
+T2="$(mktemp -d)"; echo "100" > "$T2/198.51.100.7"
+OUT2="$(printf '10.0.0.1\n' | retention_build "$T2" 300 100 0)"
+if ! echo "$OUT2" | grep -qx '198.51.100.7' && [[ ! -f "$T2/198.51.100.7" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: past-window IP evicted and store entry removed on prune tick"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: past-window IP should be evicted + file removed on prune tick"
+fi
+
+# (c) no-prune (FAILED_HOSTS>0) suppresses eviction: past-window store entry KEPT.
+T3="$(mktemp -d)"; echo "100" > "$T3/203.0.113.9"
+printf '10.0.0.1\n' | retention_build "$T3" 300 100 1 >/dev/null  # scenario asserts on store-file state, not output
+if [[ -f "$T3/203.0.113.9" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: no-prune tick keeps past-window store entry (defers eviction)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no-prune tick must NOT evict the past-window store entry"
+fi
+
+# (d) no-prune STILL records (refresh ts) + unions (within-window stored IP).
+T4="$(mktemp -d)"; echo "100" > "$T4/198.18.0.5"
+OUT4="$(printf '198.18.0.9\n' | retention_build "$T4" 150 100 1)"
+if echo "$OUT4" | grep -qx '198.18.0.5' && [[ "$(cat "$T4/198.18.0.9" 2>/dev/null)" == "150" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: no-prune still unions within-window store IP and refreshes current-tick ts"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no-prune must still record (refresh ts) and union within-window store IPs"
+fi
+
+# (e) readback re-filter: a non-dotted-quad store file never reaches the set.
+T5="$(mktemp -d)"; echo "100" > "$T5/not-an-ip"; echo "100" > "$T5/1.2.3.4"
+OUT5="$(printf '10.0.0.1\n' | retention_build "$T5" 150 100 0)"
+if echo "$OUT5" | grep -qx '1.2.3.4' && ! echo "$OUT5" | grep -q 'not-an-ip'; then
+  PASS=$((PASS + 1)); echo "  PASS: non-IPv4 store filename re-filtered out of the batch"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: non-IPv4 store filename must be re-filtered out"
+fi
+# (f) boundary: age == GRACE_WINDOW exactly is RETAINED (pins `<=`, not `<`).
+T6="$(mktemp -d)"; echo "100" > "$T6/192.0.2.50"
+OUT6="$(printf '10.0.0.1\n' | retention_build "$T6" 200 100 0)"   # age = 200-100 = 100 == window
+if echo "$OUT6" | grep -qx '192.0.2.50'; then
+  PASS=$((PASS + 1)); echo "  PASS: IP at exactly age==window is retained (inclusive boundary, <= not <)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: IP at age==window must be retained (a <=→< regression would drop it)"
+fi
+rm -rf "$T1" "$T2" "$T3" "$T4" "$T5" "$T6"
+
 echo "-- unit invariants --"
 assert_grep "firewall unit alarms on failure" 'OnFailure=cron-egress-alarm@%n\.service' "$SCRIPT_DIR/cron-egress-firewall.service"
 assert_grep "resolve unit alarms on failure" 'OnFailure=cron-egress-alarm@%n\.service' "$SCRIPT_DIR/cron-egress-resolve.service"
@@ -325,6 +453,10 @@ assert_grep "resolve runs doppler-wrapped (env for Sentry + dynamic hosts)" 'run
 assert_grep "resolve unit sources the doppler token env file" 'EnvironmentFile=-/etc/default/inngest-server' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit sets HOME (doppler os.UserHomeDir requirement)" 'Environment=HOME=/root' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit bounded (no infinite activating hang)" 'TimeoutStartSec=' "$SCRIPT_DIR/cron-egress-resolve.service"
+# Grace-window retention store must persist across reboots (a tmpfs /run would
+# wipe the accumulated rotation pool and re-open the outage for up to a window).
+# StateDirectory= creates /var/lib/cron-egress-resolve (root-owned) before ExecStart.
+assert_grep "resolve unit declares persistent StateDirectory for the retention store" 'StateDirectory=cron-egress-resolve' "$SCRIPT_DIR/cron-egress-resolve.service"
 
 echo "-- cross-file literal parity (replicated literals drift silently) --"
 SLUG_RESOLVE="$(grep -oE 'SENTRY_SLUG="[^"]+"' "$RESOLVER" | head -1)"
