@@ -18,6 +18,10 @@ vi.mock("@/components/chat/chat-surface", () => ({
   },
 }));
 
+// Records every GET .../runs request URL so tests can assert filter params
+// (routineId / status / triggerSource / since) flow into the query string.
+const runsRequests = vi.hoisted(() => ({ urls: [] as string[] }));
+
 const ALLOWED = {
   fnId: "cron-daily-triage",
   domain: "Operations",
@@ -60,6 +64,7 @@ function mockFetch(handlers: {
       } as Response;
     }
     if (url.includes("/api/dashboard/routines/runs")) {
+      runsRequests.urls.push(url);
       return {
         ok: true,
         status: 200,
@@ -76,6 +81,7 @@ function mockFetch(handlers: {
 }
 
 beforeEach(() => {
+  runsRequests.urls = [];
   vi.stubGlobal("fetch", mockFetch({}));
 });
 afterEach(() => {
@@ -127,12 +133,14 @@ describe("RoutinesSurface", () => {
     );
   });
 
-  it("Recent Runs failed row expands to show error_summary", async () => {
+  it("Recent Runs row click opens the detail panel (error_summary, run_id, actor as text, no UUID)", async () => {
     const failed = {
       id: "r1",
+      run_id: "01J-RUN-ID",
       routine_id: "cron-legal-audit",
       status: "failed",
       trigger_source: "scheduled",
+      actor_class: "system",
       started_at: new Date().toISOString(),
       ended_at: new Date().toISOString(),
       duration_ms: 1200,
@@ -146,20 +154,99 @@ describe("RoutinesSurface", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Recent Runs" }));
     await waitFor(() => screen.getByTestId("run-row-r1"));
     fireEvent.click(screen.getByTestId("run-row-r1"));
+    const panel = await screen.findByTestId("run-detail-panel");
+    expect(panel.textContent).toContain("boom: upstream 503");
+    expect(panel.textContent).toContain("01J-RUN-ID");
+    // actor_class surfaced as human text (system → "System"), never "(you)".
+    expect(panel.textContent).toContain("System");
+    expect(panel.textContent).not.toContain("(you)");
+  });
+
+  it("Recent Runs detail panel opens for a NON-failed row too (one detail path)", async () => {
+    const ok = {
+      id: "r9",
+      run_id: "01J-OK",
+      routine_id: "cron-daily-triage",
+      status: "completed",
+      trigger_source: "manual",
+      actor_class: "human",
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      duration_ms: 900,
+      error_summary: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ runs: { runs: [ok], nextCursor: null } }),
+    );
+    render(<RoutinesSurface />);
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Runs" }));
+    await waitFor(() => screen.getByTestId("run-row-r9"));
+    fireEvent.click(screen.getByTestId("run-row-r9"));
+    const panel = await screen.findByTestId("run-detail-panel");
+    expect(panel.textContent).toContain("01J-OK");
+  });
+
+  it("Recent Runs status filter triggers a scoped refetch", async () => {
+    render(<RoutinesSurface />);
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Runs" }));
+    await waitFor(() => expect(runsRequests.urls.length).toBeGreaterThan(0));
+    runsRequests.urls = [];
+    fireEvent.click(screen.getByTestId("runs-filter-status-failed"));
     await waitFor(() =>
-      expect(screen.getByText(/boom: upstream 503/)).toBeTruthy(),
+      expect(runsRequests.urls.some((u) => u.includes("status=failed"))).toBe(
+        true,
+      ),
     );
   });
 
-  // #5402 — PR-2 Concierge "Draft a routine" tab.
-  it("shows an active Draft a routine tab (not the disabled v2 placeholder)", async () => {
+  // #5412 — tab renamed to "Draft a routine with Concierge" (no ✨, no "new").
+  it("shows the Concierge draft tab with the renamed label (no sparkles / new badge)", async () => {
     render(<RoutinesSurface />);
-    const draftTab = screen.getByRole("tab", { name: /Draft a routine/ });
+    const draftTab = screen.getByRole("tab", {
+      name: /Draft a routine with Concierge/,
+    });
     expect(draftTab).toBeTruthy();
-    // The PR-1 placeholder had no role=tab and was cursor-not-allowed; the new
-    // one is a real tab with a "new" badge (not "v2").
+    expect(draftTab.textContent).not.toContain("✨");
+    expect(screen.queryByText("new")).toBeNull();
     expect(screen.queryByText("v2")).toBeNull();
-    expect(screen.getByText("new")).toBeTruthy();
+  });
+
+  // #5412 — clicking a routine row opens a slide-over drawer (no route change)
+  // with the routine's metadata + a log scoped to that routine (routineId param).
+  it("clicking a routine opens a drawer with metadata + a scoped run log", async () => {
+    const scoped = {
+      id: "d1",
+      run_id: "01J-DRAWER",
+      routine_id: "cron-daily-triage",
+      status: "completed",
+      trigger_source: "scheduled",
+      actor_class: "system",
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      duration_ms: 500,
+      error_summary: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ runs: { runs: [scoped], nextCursor: null } }),
+    );
+    render(<RoutinesSurface />);
+    await waitFor(() => screen.getByTestId("routine-open-cron-daily-triage"));
+    runsRequests.urls = [];
+    fireEvent.click(screen.getByTestId("routine-open-cron-daily-triage"));
+    const drawer = await screen.findByTestId("routine-detail-drawer");
+    // Metadata shows the schedule + owner.
+    expect(drawer.textContent).toContain("Daily 04:00 UTC");
+    expect(drawer.textContent).toContain("COO");
+    // The scoped log fetch is filtered to this routine.
+    await waitFor(() =>
+      expect(
+        runsRequests.urls.some((u) =>
+          u.includes("routineId=cron-daily-triage"),
+        ),
+      ).toBe(true),
+    );
   });
 
   it("Draft tab renders the intro (capability cards + suggestion chips) and mounts the chat in routine-authoring mode", async () => {

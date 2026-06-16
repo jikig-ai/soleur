@@ -66,8 +66,9 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
       tool(
         "routine_runs_list",
         "List recent routine executions (reverse-chronological) across all " +
-          "routines: routine id, status, trigger source (scheduled/manual/agent), " +
-          "timestamps, duration. Keyset-paginated via `cursor`. Read-only.",
+          "routines: routine id, run id, status, trigger source + actor class " +
+          "(system/human/agent), timestamps, duration. Keyset-paginated via " +
+          "`cursor`. Read-only.",
         {
           cursor: z
             .string()

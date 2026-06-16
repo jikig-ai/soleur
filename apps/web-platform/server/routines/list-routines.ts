@@ -12,6 +12,13 @@ import { ROUTINE_METADATA, type RoutineMeta } from "@/server/inngest/routine-met
 // generic client type (which the project leaves untyped).
 interface OrderedQuery {
   limit: (n: number) => Promise<{ data: unknown; error: unknown }>;
+  // #5412 — optional filters. eq/gte return OrderedQuery (recursive) so
+  // multiple filters chain and the cursor `.or()`/`.limit()` still follow.
+  // PostgREST parameterizes the value (no injection); callers validate the
+  // value domain before passing it (status/triggerSource enums, routineId ∈
+  // EXPECTED_CRON_FUNCTIONS, since = ISO).
+  eq: (col: string, val: string) => OrderedQuery;
+  gte: (col: string, val: string) => OrderedQuery;
   // Keyset filter is a row-comparison (started_at, id) < (cursor) expressed as
   // a PostgREST `.or()` so same-millisecond ties are not skipped at the page
   // boundary (a bare `.lt("started_at", …)` drops every row sharing the
@@ -50,6 +57,11 @@ export interface RoutineListItem extends RoutineMeta {
 export interface RecentRun extends RunSummary {
   id: string;
   routine_id: string;
+  // #5412 — surfaced in the per-run detail panel. NOT actor_id/delegating_principal
+  // (operator-PII UUIDs deliberately omitted from RUN_COLS); actor_class is a
+  // coarse enum (system | human | agent).
+  run_id: string | null;
+  actor_class: string;
 }
 
 export interface RecentRunsPage {
@@ -59,8 +71,13 @@ export interface RecentRunsPage {
 
 const LATEST_COLS =
   "routine_id,status,trigger_source,started_at,ended_at,duration_ms,error_summary";
+// #5412: + run_id, actor_class for the per-run detail panel. NEVER add
+// actor_id / delegating_principal — those operator-PII UUIDs stay omitted (the
+// list-routines.test.ts projection guard asserts their absence). This projection
+// also feeds the routine_runs_list agent tool (service-client read); actor_class
+// is a coarse enum, safe to surface.
 const RUN_COLS =
-  "id,routine_id,status,trigger_source,started_at,ended_at,duration_ms,error_summary";
+  "id,routine_id,run_id,status,trigger_source,actor_class,started_at,ended_at,duration_ms,error_summary";
 
 /** All routines (grouped/sorted client-side) with each one's latest run. */
 export async function listRoutinesWithLastRun(
@@ -92,7 +109,15 @@ export async function listRoutinesWithLastRun(
  */
 export async function listRecentRuns(
   supabase: SupabaseLike,
-  opts: { cursor?: string | null; limit?: number } = {},
+  opts: {
+    cursor?: string | null;
+    limit?: number;
+    // #5412 — optional filters (validated by the caller before passing).
+    routineId?: string | null;
+    status?: string | null;
+    triggerSource?: string | null;
+    since?: string | null;
+  } = {},
 ): Promise<RecentRunsPage> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const ordered = supabase
@@ -100,15 +125,22 @@ export async function listRecentRuns(
     .select(RUN_COLS)
     .order("started_at", { ascending: false })
     .order("id", { ascending: false });
+  // Apply filters BEFORE the cursor `.or()`/`.limit()` so the (started_at,id)
+  // keyset tuple is preserved (filters AND the cursor row-comparison).
+  let base: OrderedQuery = ordered;
+  if (opts.routineId) base = base.eq("routine_id", opts.routineId);
+  if (opts.status) base = base.eq("status", opts.status);
+  if (opts.triggerSource) base = base.eq("trigger_source", opts.triggerSource);
+  if (opts.since) base = base.gte("started_at", opts.since);
   let q: { limit: (n: number) => Promise<{ data: unknown; error: unknown }> } =
-    ordered;
+    base;
   if (opts.cursor) {
     const sep = opts.cursor.lastIndexOf("|");
     // Tolerate a legacy (started_at-only) cursor: treat the whole value as the
     // timestamp and fall back to a plain started_at row-comparison.
     const ts = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
     const id = sep === -1 ? null : opts.cursor.slice(sep + 1);
-    q = ordered.or(
+    q = base.or(
       id === null
         ? `started_at.lt.${ts}`
         : `started_at.lt.${ts},and(started_at.eq.${ts},id.lt.${id})`,
