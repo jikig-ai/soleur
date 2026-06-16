@@ -140,10 +140,12 @@ describe("buildC4ConciergeTools", () => {
     expect(call.installationId).toBe(42);
   });
 
-  it("AC9 — reaches writeC4Diagram with NO c4-edit consultation (Concierge stays the live writer)", async () => {
-    // Behavioral: the tool handler writes with no feature-flag mock in the loop
-    // — proving the Concierge edit path is not gated by c4-edit. (c4-edit OFF is
-    // the prod state; the Concierge must keep writing.)
+  it("AC9 — Concierge edit_c4_diagram writes on the happy path (live writer; independence pinned by the structural grep test below)", async () => {
+    // Behavioral happy-path: the tool handler reaches writeC4Diagram. This does
+    // NOT by itself prove c4-edit independence (the module imports no flag
+    // module, so it passes regardless) — the structural grep test below is the
+    // load-bearing independence guard. Kept as the live-writer smoke for the
+    // prod state (c4-edit OFF, Concierge must keep writing).
     mocks.writeC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123" });
     const res = await handler()({
       relativePath: "engineering/architecture/diagrams/model.c4",
