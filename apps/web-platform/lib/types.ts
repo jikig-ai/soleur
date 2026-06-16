@@ -256,8 +256,10 @@ export interface AttachmentRef {
 
 // Context passed when starting a conversation from a specific page
 export interface ConversationContext {
-  path: string;    // artifact path (e.g., "knowledge-base/product/roadmap.md")
-  type: string;    // page type (e.g., "kb-viewer", "dashboard", "roadmap")
+  // Optional: document-context types (e.g. "kb-viewer") carry a path; mode-flag
+  // types (e.g. "routine-authoring", #5402) carry no document and omit it.
+  path?: string;   // artifact path (e.g., "knowledge-base/product/roadmap.md")
+  type: string;    // page type / mode flag (e.g., "kb-viewer", "routine-authoring")
   content?: string; // full artifact content for system prompt injection
 }
 

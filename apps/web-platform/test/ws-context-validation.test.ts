@@ -169,6 +169,31 @@ describe("validateConversationContext", () => {
     ).toThrow("type must be one of");
   });
 
+  // #5402 — routine-authoring is a MODE-FLAG context type: no document, no path.
+  it("accepts routine-authoring context with NO path (mode flag)", () => {
+    const result = validateConversationContext({ type: "routine-authoring" });
+    expect(result).toEqual({
+      path: undefined,
+      type: "routine-authoring",
+      content: undefined,
+    });
+  });
+
+  it("still rejects a mode-flag context whose (optional) path is unsafe", () => {
+    expect(() =>
+      validateConversationContext({
+        type: "routine-authoring",
+        path: "../../etc/passwd",
+      }),
+    ).toThrow("path must be a valid file path");
+  });
+
+  it("still requires a path for document-context types (kb-viewer without path throws)", () => {
+    expect(() =>
+      validateConversationContext({ type: "kb-viewer" }),
+    ).toThrow("path must be a valid file path");
+  });
+
   it("rejects content exceeding 1MB", () => {
     expect(() =>
       validateConversationContext({

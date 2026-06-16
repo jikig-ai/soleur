@@ -967,6 +967,11 @@ export interface DispatchArgs {
   documentKind?: "pdf" | "text";
   documentContent?: string;
   /**
+   * #5402 (PR-2). Routines "Draft a routine" tab mode flag. Forwarded to
+   * QueryFactoryArgs so realSdkQueryFactory appends ROUTINE_AUTHORING_DIRECTIVE.
+   */
+  routineAuthoring?: boolean;
+  /**
    * 2026-05-06 follow-up to #3338. Set when the in-process PDF extractor
    * surfaced a typed failure class (`oversized_buffer | encrypted |
    * corrupted | parse_error | empty_text | lazy_import_failed |
@@ -1035,6 +1040,9 @@ export interface QueryFactoryArgs {
   resumeSessionId?: string;
   pluginPath: string;
   cwd: string;
+  /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
+   *  ROUTINE_AUTHORING_DIRECTIVE to the system prompt when true. */
+  routineAuthoring?: boolean;
   /** Per-conversation context — real-SDK factories need these to wire the
    *  per-user `canUseTool` closure + audit logs. Tests can ignore. */
   userId: string;
@@ -2524,6 +2532,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           cwd,
           userId,
           conversationId,
+          routineAuthoring: args.routineAuthoring,
           artifactPath: args.artifactPath,
           activeWorkflow: initialWorkflow,
           documentKind: args.documentKind,
