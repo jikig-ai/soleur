@@ -77,9 +77,12 @@ async function resolveDefaultBranch(
 /**
  * Pull the workspace to sync local files with the remote repo after a
  * successful GitHub mutation. On a `non_fast_forward` (diverged clone OR dirty
- * working tree) it attempts a GATED, OBSERVABLE self-heal: reset to
- * `origin/<default>` ONLY when the clone holds ZERO un-pushed local commits —
- * never destroying agent-session work. Returns a {@link SyncWorkspaceResult}.
+ * working tree) it attempts a GATED, OBSERVABLE self-heal: it resets to
+ * `origin/<default>` when the clone holds ZERO un-pushed local commits, and —
+ * for un-pushable auto-sync orphan commits stranded on the default branch —
+ * branches them aside first (preserving them on a durable ref) before the
+ * reset, never destroying agent-session work (feature-branch / detached-HEAD
+ * divergence still aborts). Returns a {@link SyncWorkspaceResult}.
  *
  * Reporting is split by recoverability so a self-healed abort does NOT page the
  * operator: the self-healable `non_fast_forward` class logs only an info
@@ -159,7 +162,21 @@ export async function syncWorkspace(
 
 /**
  * Gated self-heal for a `non_fast_forward` clone. Fetches the default branch,
- * checks for un-pushed local commits, and ONLY resets when there are none.
+ * counts un-pushed local commits (`rev-list --count @{u}..HEAD`), and recovers
+ * by branch (one of):
+ *  - ZERO un-pushed commits (phantom divergence) → `reset --hard origin/<default>`
+ *    (op:self-heal-reset).
+ *  - un-pushed commits AND HEAD is the DEFAULT branch → these are un-pushable
+ *    auto-sync orphans (session-sync auto-commits `knowledge-base/**` onto the
+ *    checked-out default branch; a protected-branch push rejection strands
+ *    them). Branch them aside FIRST (`git branch <recovery> HEAD`, preserving
+ *    the commit objects on a durable ref), THEN `reset --hard`
+ *    (op:self-heal-recovered-diverged). Provably non-destructive: the branch
+ *    ref is a gc-root, so the reset discards nothing.
+ *  - un-pushed commits on a FEATURE branch (genuine agent work) → abort,
+ *    protect (op:self-heal-aborted-dirty).
+ *  - detached HEAD (`--abbrev-ref` → literal "HEAD") or an un-countable
+ *    rev-list → abort with a distinct op:self-heal-aborted-detached-head slug.
  * Payloads OMIT workspacePath (raw userId) per the Recital 26 omission above.
  */
 async function selfHealNonFastForward(
@@ -195,35 +212,120 @@ async function selfHealNonFastForward(
     );
     const localCommits = parseInt(revListOut.toString().trim(), 10);
 
+    // `recoveryBranch` is set ONLY when we branch un-pushed commits aside on a
+    // diverged default-branch clone; it distinguishes the recovered-diverged
+    // path from the benign phantom (zero-commit) reset for observability below.
+    let recoveryBranch: string | null = null;
+
     if (Number.isNaN(localCommits) || localCommits > 0) {
-      // Real, un-pushed agent-session work — do NOT destroy it.
-      log.error(
-        { userId: context.userId, op: context.op, localCommits },
-        `kb/${context.op}: self-heal aborted — diverged clone holds un-pushed local commits`,
+      // The clone holds un-pushed local commits (or an un-countable count).
+      // Decide by which branch HEAD is on. `--abbrev-ref HEAD` emits the
+      // branch's short name, or the literal "HEAD" when detached. Issued
+      // through the injected wrapper (NOT a direct shell-out) so the seam
+      // stays scriptable; trim the trailing newline before comparing.
+      const headRef = (
+        await gitWithInstallationAuth(
+          ["rev-parse", "--abbrev-ref", "HEAD"],
+          installationId,
+          gitOpts,
+        )
+      )
+        .toString()
+        .trim();
+
+      // Recover ONLY a countable divergence whose HEAD is the default branch:
+      // session-sync auto-commits knowledge-base/** onto the checked-out
+      // default branch, and a protected-branch push rejection strands those
+      // commits as un-pushable orphans — the permanent dead-end this fixes.
+      const onDefaultBranch =
+        !Number.isNaN(localCommits) && headRef === defaultBranch;
+
+      if (!onDefaultBranch) {
+        // Feature branch (genuine agent work targeting a PR), detached HEAD, or
+        // an un-countable rev-list — fail safe and do NOT destroy work. A
+        // detached HEAD gets a DISTINCT, queryable slug so it is never silently
+        // bucketed into the dirty abort (a misclassified detached HEAD would
+        // re-trap the very dead-end this fix removes).
+        const detached = headRef === "HEAD";
+        const abortOp = detached
+          ? "self-heal-aborted-detached-head"
+          : "self-heal-aborted-dirty";
+        log.error(
+          { userId: context.userId, op: context.op, localCommits },
+          `kb/${context.op}: self-heal aborted — ${
+            detached ? "detached HEAD" : "feature-branch"
+          } clone holds un-pushed local commits`,
+        );
+        reportSilentFallback(
+          new Error(
+            detached
+              ? "self-heal aborted: detached HEAD with un-pushed local commits"
+              : "self-heal aborted: un-pushed local commits present",
+          ),
+          {
+            feature: "kb-route-helpers",
+            op: abortOp,
+            extra: { userId: context.userId },
+            message: `kb/${context.op}: self-heal aborted (${
+              detached ? "detached HEAD" : "un-pushed local commits"
+            })`,
+          },
+        );
+        return {
+          ok: false,
+          error: new Error("non-fast-forward with un-pushed local commits"),
+          errorClass: ERROR_CLASS_NON_FAST_FORWARD,
+        };
+      }
+
+      // Diverged on the default branch: branch the un-pushed commits aside
+      // BEFORE the reset so the commit objects live on a durable named ref
+      // (recoverable without SSH) and the subsequent `reset --hard` discards
+      // NOTHING. The timestamp avoids clobbering a prior recovery branch.
+      recoveryBranch = `soleur/recovered-kb-sync-${Date.now()}`;
+      await gitWithInstallationAuth(
+        ["branch", recoveryBranch, "HEAD"],
+        installationId,
+        gitOpts,
       );
-      reportSilentFallback(
-        new Error("self-heal aborted: un-pushed local commits present"),
-        {
-          feature: "kb-route-helpers",
-          op: "self-heal-aborted-dirty",
-          extra: { userId: context.userId },
-          message: `kb/${context.op}: self-heal aborted (un-pushed local commits)`,
-        },
-      );
-      return {
-        ok: false,
-        error: new Error("non-fast-forward with un-pushed local commits"),
-        errorClass: ERROR_CLASS_NON_FAST_FORWARD,
-      };
     }
 
-    // Phantom divergence (upstream force-push / corrupted ref). Safe to reset.
+    // Reset the default branch to origin. Reached either by the phantom
+    // (zero-commit) divergence OR after the branch-aside above (un-pushed
+    // commits already preserved on `recoveryBranch`).
     await gitWithInstallationAuth(
       ["reset", "--hard", `origin/${defaultBranch}`],
       installationId,
       gitOpts,
     );
 
+    if (recoveryBranch) {
+      // Recovered a real divergence — record a distinct, queryable WARN op
+      // (recovery rate vs. aborts) that does NOT page.
+      log.warn(
+        {
+          userId: context.userId,
+          op: context.op,
+          defaultBranch,
+          localCommits,
+          recoveryBranch,
+        },
+        `kb/${context.op}: self-heal recovered diverged default-branch clone — branched ${localCommits} un-pushed commit(s) aside to ${recoveryBranch}, reset to origin/${defaultBranch}`,
+      );
+      warnSilentFallback(
+        new Error("workspace self-healed via branch-aside + reset --hard"),
+        {
+          feature: "kb-route-helpers",
+          op: "self-heal-recovered-diverged",
+          extra: { userId: context.userId },
+          message: `kb/${context.op}: diverged clone recovered (branched ${localCommits} un-pushed commit(s) to ${recoveryBranch}, reset to origin/${defaultBranch})`,
+        },
+      );
+      return { ok: true, recovered: true };
+    }
+
+    // Phantom divergence (upstream force-push / corrupted ref). Safe reset, no
+    // commits were stranded.
     log.warn(
       { userId: context.userId, op: context.op, defaultBranch },
       `kb/${context.op}: self-heal reset clone to origin/${defaultBranch}`,
