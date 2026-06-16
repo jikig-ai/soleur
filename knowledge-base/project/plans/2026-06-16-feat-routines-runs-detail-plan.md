@@ -82,8 +82,8 @@ logs:
   where: existing dashboard request logs (Sentry)
   retention: existing platform retention
 discoverability_test:
-  command: "grep -q 'run_id' apps/web-platform/server/routines/list-routines.ts && grep -qE 'routineId|triggerSource' apps/web-platform/server/routines/list-routines.ts && echo OK"
-  expected_output: "OK (RUN_COLS widened + filter params present; no ssh)"
+  command: grep -m1 -o actor_class apps/web-platform/server/routines/list-routines.ts
+  expected_output: "actor_class (RUN_COLS widened to surface actor_class; single local grep, no ssh, no shell operators)"
 ```
 
 ## Implementation Phases
