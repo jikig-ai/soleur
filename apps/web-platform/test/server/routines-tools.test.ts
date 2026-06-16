@@ -85,4 +85,36 @@ describe("buildRoutineTools", () => {
     expect(mockListRoutines).toHaveBeenCalledTimes(1);
     expect(res.content[0].text).toContain("cron-daily-triage");
   });
+
+  // #5412 — agent-user filter parity. The tool forwards validated filters to
+  // the shared listRecentRuns (same surface the dashboard route exposes).
+  it("routine_runs_list forwards validated filters to listRecentRuns", async () => {
+    mockListRuns.mockResolvedValue({ runs: [], nextCursor: null });
+    const tool = getTool("routine_runs_list");
+    await tool.handler({
+      routineId: "cron-daily-triage",
+      status: "failed",
+      triggerSource: "agent",
+      since: "2026-06-01T00:00:00.000Z",
+    });
+    expect(mockListRuns).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        routineId: "cron-daily-triage",
+        status: "failed",
+        triggerSource: "agent",
+        since: "2026-06-01T00:00:00.000Z",
+      }),
+    );
+  });
+
+  it("routine_runs_list drops a routineId outside the cron manifest", async () => {
+    mockListRuns.mockResolvedValue({ runs: [], nextCursor: null });
+    const tool = getTool("routine_runs_list");
+    await tool.handler({ routineId: "cron-bogus-not-real" });
+    expect(mockListRuns).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ routineId: null }),
+    );
+  });
 });

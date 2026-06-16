@@ -13,6 +13,7 @@ import {
   listRoutinesWithLastRun,
 } from "@/server/routines/list-routines";
 import { runRoutine } from "@/server/routines/run-routine";
+import { EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/cron-manifest";
 
 interface BuildRoutineToolsOpts {
   /** The operator the agent acts for — recorded as delegating_principal. */
@@ -65,9 +66,13 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
       ),
       tool(
         "routine_runs_list",
-        "List recent routine executions (reverse-chronological) across all " +
-          "routines: routine id, status, trigger source (scheduled/manual/agent), " +
-          "timestamps, duration. Keyset-paginated via `cursor`. Read-only.",
+        "List recent routine executions (reverse-chronological): routine id, " +
+          "run id, status, trigger source + actor class (system/human/agent), " +
+          "timestamps, duration. Optional filters (agent-user parity with the " +
+          "dashboard): `routineId` (a cron id), `status` (completed|failed — " +
+          "not the client-only 'running'), `triggerSource` (scheduled|manual|" +
+          "agent), `since` (ISO-8601 lower bound on started_at). Keyset-" +
+          "paginated via `cursor`. Read-only.",
         {
           cursor: z
             .string()
@@ -77,12 +82,45 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
             .number()
             .optional()
             .describe("Page size (1-200, default 50)"),
+          routineId: z
+            .string()
+            .optional()
+            .describe("Scope to one cron id, e.g. 'cron-daily-triage'"),
+          status: z
+            .enum(["completed", "failed"])
+            .optional()
+            .describe("Filter by terminal status"),
+          triggerSource: z
+            .enum(["scheduled", "manual", "agent"])
+            .optional()
+            .describe("Filter by what triggered the run"),
+          since: z
+            .string()
+            .optional()
+            .describe("ISO-8601 lower bound on started_at"),
         },
         async (input) => {
           try {
+            // Validate filter values before the query (parity with the
+            // dashboard route): a routineId outside the manifest or an
+            // unparseable `since` is dropped (treated as no filter), never
+            // passed through. status/triggerSource are enum-validated by zod.
+            const routineId =
+              input.routineId &&
+              EXPECTED_CRON_FUNCTIONS.includes(input.routineId)
+                ? input.routineId
+                : null;
+            const since =
+              input.since && !Number.isNaN(Date.parse(input.since))
+                ? new Date(input.since).toISOString()
+                : null;
             const page = await listRecentRuns(getServiceClient() as never, {
               cursor: input.cursor ?? null,
               limit: input.limit,
+              routineId,
+              status: input.status ?? null,
+              triggerSource: input.triggerSource ?? null,
+              since,
             });
             return textResponse(page);
           } catch (err) {
