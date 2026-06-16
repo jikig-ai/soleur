@@ -27,33 +27,36 @@ resource "hcloud_server" "web" {
   ssh_keys    = [hcloud_ssh_key.default.id]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name                           = var.image_name
-    ci_deploy_script_b64                 = base64encode(file("${path.module}/ci-deploy.sh"))
-    ci_deploy_wrapper_script_b64         = base64encode(file("${path.module}/ci-deploy-wrapper.sh"))
-    cat_deploy_state_script_b64          = base64encode(file("${path.module}/cat-deploy-state.sh"))
-    canary_bundle_claim_check_script_b64 = base64encode(file("${path.module}/canary-bundle-claim-check.sh"))
-    disk_monitor_script_b64              = base64encode(file("${path.module}/disk-monitor.sh"))
-    resource_monitor_script_b64          = base64encode(file("${path.module}/resource-monitor.sh"))
-    fail2ban_sshd_local_b64              = base64encode(file("${path.module}/fail2ban-sshd.local"))
-    journald_soleur_conf_b64             = base64encode(file("${path.module}/journald-soleur.conf"))
-    hooks_json_b64                       = base64encode(local.hooks_json)
-    infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
-    infra_config_install_script_b64      = base64encode(file("${path.module}/infra-config-install.sh"))
-    cat_infra_config_state_script_b64    = base64encode(file("${path.module}/cat-infra-config-state.sh"))
-    cron_egress_nftables_script_b64      = base64encode(file("${path.module}/cron-egress-nftables.sh"))
-    cron_egress_resolve_script_b64       = base64encode(file("${path.module}/cron-egress-resolve.sh"))
-    cron_egress_alarm_script_b64         = base64encode(file("${path.module}/cron-egress-alarm.sh"))
-    cron_egress_allowlist_b64            = base64encode(file("${path.module}/cron-egress-allowlist.txt"))
-    cron_egress_allowlist_cidr_b64       = base64encode(file("${path.module}/cron-egress-allowlist-cidr.txt"))
-    cron_egress_firewall_service_b64     = base64encode(file("${path.module}/cron-egress-firewall.service"))
-    cron_egress_resolve_service_b64      = base64encode(file("${path.module}/cron-egress-resolve.service"))
-    cron_egress_resolve_timer_b64        = base64encode(file("${path.module}/cron-egress-resolve.timer"))
-    cron_egress_alarm_unit_b64           = base64encode(file("${path.module}/cron-egress-alarm@.service"))
-    cron_egress_postapply_assert_b64     = base64encode(file("${path.module}/cron-egress-postapply-assert.sh"))
-    tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret                = var.webhook_deploy_secret
-    doppler_token                        = var.doppler_token
-    resend_api_key                       = var.resend_api_key
+    image_name                            = var.image_name
+    ci_deploy_script_b64                  = base64encode(file("${path.module}/ci-deploy.sh"))
+    ci_deploy_wrapper_script_b64          = base64encode(file("${path.module}/ci-deploy-wrapper.sh"))
+    cat_deploy_state_script_b64           = base64encode(file("${path.module}/cat-deploy-state.sh"))
+    canary_bundle_claim_check_script_b64  = base64encode(file("${path.module}/canary-bundle-claim-check.sh"))
+    disk_monitor_script_b64               = base64encode(file("${path.module}/disk-monitor.sh"))
+    resource_monitor_script_b64           = base64encode(file("${path.module}/resource-monitor.sh"))
+    container_restart_monitor_script_b64  = base64encode(file("${path.module}/container-restart-monitor.sh"))
+    container_restart_monitor_service_b64 = base64encode(file("${path.module}/container-restart-monitor.service"))
+    container_restart_monitor_timer_b64   = base64encode(file("${path.module}/container-restart-monitor.timer"))
+    fail2ban_sshd_local_b64               = base64encode(file("${path.module}/fail2ban-sshd.local"))
+    journald_soleur_conf_b64              = base64encode(file("${path.module}/journald-soleur.conf"))
+    hooks_json_b64                        = base64encode(local.hooks_json)
+    infra_config_apply_script_b64         = base64encode(file("${path.module}/infra-config-apply.sh"))
+    infra_config_install_script_b64       = base64encode(file("${path.module}/infra-config-install.sh"))
+    cat_infra_config_state_script_b64     = base64encode(file("${path.module}/cat-infra-config-state.sh"))
+    cron_egress_nftables_script_b64       = base64encode(file("${path.module}/cron-egress-nftables.sh"))
+    cron_egress_resolve_script_b64        = base64encode(file("${path.module}/cron-egress-resolve.sh"))
+    cron_egress_alarm_script_b64          = base64encode(file("${path.module}/cron-egress-alarm.sh"))
+    cron_egress_allowlist_b64             = base64encode(file("${path.module}/cron-egress-allowlist.txt"))
+    cron_egress_allowlist_cidr_b64        = base64encode(file("${path.module}/cron-egress-allowlist-cidr.txt"))
+    cron_egress_firewall_service_b64      = base64encode(file("${path.module}/cron-egress-firewall.service"))
+    cron_egress_resolve_service_b64       = base64encode(file("${path.module}/cron-egress-resolve.service"))
+    cron_egress_resolve_timer_b64         = base64encode(file("${path.module}/cron-egress-resolve.timer"))
+    cron_egress_alarm_unit_b64            = base64encode(file("${path.module}/cron-egress-alarm@.service"))
+    cron_egress_postapply_assert_b64      = base64encode(file("${path.module}/cron-egress-postapply-assert.sh"))
+    tunnel_token                          = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    webhook_deploy_secret                 = var.webhook_deploy_secret
+    doppler_token                         = var.doppler_token
+    resend_api_key                        = var.resend_api_key
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
@@ -147,6 +150,58 @@ resource "terraform_data" "resource_monitor_install" {
       "systemctl daemon-reload",
       "systemctl enable --now resource-monitor.timer",
       "systemctl list-timers resource-monitor.timer --no-pager",
+    ]
+  }
+}
+
+# Deploy container-restart-monitor.sh + units to the existing server (#5417).
+# Cloud-init handles new servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Shows as "will be created" in CI drift reports -- expected behavior (#5417).
+# Mirror of resource_monitor_install: same connection + trigger-hash shape. The
+# .service/.timer are SHIPPED AS FILES (not heredoc'd) because the doppler-
+# wrapped ExecStart's nested single-quotes do not survive a terraform inline
+# heredoc; file() keeps triggers_replace and the delivered content in lockstep.
+resource "terraform_data" "container_restart_monitor_install" {
+  triggers_replace = sha256(join(",", [
+    var.resend_api_key,
+    file("${path.module}/container-restart-monitor.sh"),
+    file("${path.module}/container-restart-monitor.service"),
+    file("${path.module}/container-restart-monitor.timer"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/container-restart-monitor.sh"
+    destination = "/usr/local/bin/container-restart-monitor.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/container-restart-monitor.service"
+    destination = "/etc/systemd/system/container-restart-monitor.service"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/container-restart-monitor.timer"
+    destination = "/etc/systemd/system/container-restart-monitor.timer"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/container-restart-monitor.sh",
+      "printf 'RESEND_API_KEY=%s\\n' '${var.resend_api_key}' > /etc/default/container-restart-monitor",
+      "chmod 600 /etc/default/container-restart-monitor",
+      "systemctl daemon-reload",
+      "systemctl enable --now container-restart-monitor.timer",
+      "systemctl list-timers container-restart-monitor.timer --no-pager",
     ]
   }
 }

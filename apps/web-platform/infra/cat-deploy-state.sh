@@ -106,6 +106,54 @@ inngest_crons_json() {
   echo "$result"
 }
 
+# Container restart / OOM observability (#5417). The no-SSH surface for the
+# restart-churn fix: RestartCount + OOMKilled + State.ExitCode straight from
+# `docker inspect`, the rolling restarts/hour the container-restart-monitor
+# persists, and a redacted tail of kernel OOM-kill lines. All best-effort with
+# safe sentinels (restart_count -1, oom_killed false, container_exit_code -1)
+# so the webhook never errors on a non-docker host. NOTE: the container's exit
+# code is exposed as `container_exit_code`, NEVER `exit_code` — the top-level
+# `exit_code` is the load-bearing DEPLOY-result sentinel (#2205 protocol) and
+# must not be clobbered by the container's State.ExitCode.
+container_restart_json() {
+  local rc=-1 oom=false cexit=-1 rate=0 oom_tail=""
+  local name="${CONTAINER_NAME:-soleur-web-platform}"
+  if command -v docker >/dev/null 2>&1; then
+    local insp
+    insp="$(docker inspect "$name" \
+      --format '{{.RestartCount}} {{.State.OOMKilled}} {{.State.ExitCode}}' 2>/dev/null || true)"
+    if [[ -n "$insp" ]]; then
+      read -r rc oom cexit <<< "$insp"
+      [[ "$rc" =~ ^[0-9]+$ ]] || rc=-1
+      [[ "$oom" == "true" || "$oom" == "false" ]] || oom=false
+      [[ "$cexit" =~ ^-?[0-9]+$ ]] || cexit=-1
+    fi
+  fi
+  local rate_file="${CONTAINER_RESTART_RATE_FILE:-/var/run/container-restart-monitor.rate}"
+  if [[ -f "$rate_file" ]]; then
+    rate="$(cat "$rate_file" 2>/dev/null || echo 0)"
+    [[ "$rate" =~ ^[0-9]+$ ]] || rate=0
+  fi
+  # Redacted, capped tail of kernel OOM-kill lines (vector ships these to Better
+  # Stack too). Inherits the same signkey- redaction + control-byte strip as the
+  # vector/inngest tails above (#5159) — OOM lines carry no PII, but defense-in-
+  # depth keeps the redaction uniform across every journald tail this script emits.
+  if command -v journalctl >/dev/null 2>&1; then
+    oom_tail="$(journalctl -k --no-pager -n 200 2>/dev/null \
+      | grep -iE 'oom-kill|killed process|out of memory' \
+      | sed -E 's/signkey-(prod-)?[0-9a-fA-F]{4,}/signkey-REDACTED/g' \
+      | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 2000 || true)"
+  fi
+  jq -nc \
+    --argjson rc "$rc" \
+    --argjson oom "$oom" \
+    --argjson cexit "$cexit" \
+    --argjson rate "$rate" \
+    --arg oom_tail "$oom_tail" \
+    '{restart_count: $rc, oom_killed: $oom, container_exit_code: $cexit,
+      restart_rate_per_hour: $rate, oom_journal_tail: $oom_tail}'
+}
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
 # inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
@@ -124,6 +172,7 @@ VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 INNGEST_JOURNAL_TAIL="$(service_journal_tail inngest-server.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"
+CONTAINER_RESTART="$(container_restart_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -146,7 +195,8 @@ jq -nc \
   --arg ij "$INNGEST_JOURNAL_TAIL" \
   --argjson ic "$INNGEST_CRONS" \
   --argjson js "$JOURNALD_STORAGE" \
-  '$base + {journald_storage: $js, services: (($base.services // {}) + {
+  --argjson cr "$CONTAINER_RESTART" \
+  '$base + $cr + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,

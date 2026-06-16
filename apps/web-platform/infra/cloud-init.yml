@@ -180,6 +180,36 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # Container restart/OOM churn monitor (#5417). Host-level detector for the
+  # soleur-web-platform container's RestartCount / OOMKilled — resource-monitor.sh
+  # samples HOST RAM% only and cannot see container restarts. Content injected
+  # from container-restart-monitor.{sh,service,timer} via base64encode(file()).
+  - path: /usr/local/bin/container-restart-monitor.sh
+    encoding: b64
+    content: ${container_restart_monitor_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # Doppler-less Resend fallback (the .service prefers doppler prd, which also
+  # supplies SENTRY_*). chmod 600 for the secret.
+  - path: /etc/default/container-restart-monitor
+    content: |
+      RESEND_API_KEY='${resend_api_key}'
+    owner: root:root
+    permissions: '0600'
+
+  - path: /etc/systemd/system/container-restart-monitor.service
+    encoding: b64
+    content: ${container_restart_monitor_service_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/container-restart-monitor.timer
+    encoding: b64
+    content: ${container_restart_monitor_timer_b64}
+    owner: root:root
+    permissions: '0644'
+
   # Container egress firewall (#5046 PR-2) — fresh-host mirror of
   # terraform_data.cron_egress_firewall in server.tf. Contents injected via
   # Terraform base64encode(file()). Keep both apply paths in sync; the SSH
@@ -527,6 +557,9 @@ runcmd:
 
   # Enable host resource (CPU/RAM/sessions) monitoring timer (#1052)
   - systemctl enable --now resource-monitor.timer
+
+  # Enable container restart/OOM churn monitor timer (#5417)
+  - systemctl enable --now container-restart-monitor.timer
 
   # Container egress firewall + allowlist re-resolve (#5046 PR-2). The
   # firewall unit is After=docker.service and tolerates a not-yet-running
