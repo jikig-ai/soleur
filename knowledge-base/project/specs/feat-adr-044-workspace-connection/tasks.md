@@ -25,8 +25,8 @@ plan: knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-conne
 - [x] 4.1 `reportSilentFallback` breadcrumb on non-member-claim-reset + self-heal-failed (synthetic Error); **dedupe by `(userId, resetFromClaim)` fingerprint**; `extra` = `{activeClaimWorkspaceId, resolvedWorkspaceId}` only; not on db-error/cloning
 
 ## Phase 5 — Owner-gate
-- [ ] 5.1 `is_workspace_owner(p_workspace_id=mutation-target=user.id, p_user_id)` on `disconnect` + `setup` (403 non-owner); document no-op-for-solo in PR-1, load-bearing in PR-2
-- [ ] 5.2 Thread `isOwner` (`workspaceIdentity.isOwner`) into `project-setup-card.tsx`; read-only member variant (load-bearing FR3 in PR-1)
+- [x] 5.1 `is_workspace_owner(p_workspace_id=mutation-target=user.id, p_user_id)` on `disconnect` + `setup` (403 non-owner); document no-op-for-solo in PR-1, load-bearing in PR-2
+- [x] 5.2 Thread `isOwner` (`workspaceIdentity.isOwner`) into `project-setup-card.tsx`; read-only member variant (load-bearing FR3 in PR-1)
 
 ## Phase 6 — ADR/C4 (plan deliverable)
 - [ ] 6.1 Amend ADR-044 (always-enforce-workspace, `status: adopting`, alternatives row)

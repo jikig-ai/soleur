@@ -38,6 +38,36 @@ export async function DELETE(request: Request) {
     );
   }
 
+  // ADR-044 PR-1 owner-gate (confused-deputy): only the OWNER of the workspace
+  // this handler mutates may disconnect it. `p_workspace_id` MUST equal the id
+  // the handler actually mutates — in PR-1 the disconnect clears the solo
+  // `users` row + the solo workspace mirror keyed on `user.id`, so
+  // `p_workspace_id = user.id` and the gate is a NO-OP for solo users by
+  // construction (a solo user always owns workspace_id=user.id). It becomes
+  // load-bearing in PR-2 when connect-writes relocate to `workspaces.*` keyed on
+  // the active (possibly team) id. `is_workspace_owner` is SECURITY DEFINER
+  // (mig 098), GRANT authenticated — reuse the workspace/logo/route.ts shape.
+  const ownerRes = await supabase.rpc("is_workspace_owner", {
+    p_workspace_id: user.id,
+    p_user_id: user.id,
+  });
+  if (ownerRes.error) {
+    logger.error(
+      { err: ownerRes.error, userId: user.id },
+      "is_workspace_owner check failed during disconnect",
+    );
+    return NextResponse.json(
+      { error: "Failed to disconnect repository" },
+      { status: 500 },
+    );
+  }
+  if (ownerRes.data !== true) {
+    return NextResponse.json(
+      { error: "Only the workspace owner can disconnect the repository." },
+      { status: 403 },
+    );
+  }
+
   const serviceClient = createServiceClient();
 
   // Reject disconnect while clone is in progress — the background

@@ -4,6 +4,7 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // Mocks (declared before the route import)
 // ---------------------------------------------------------------------------
 const mockGetUser = vi.fn();
+const mockRpc = vi.fn();
 const mockServiceFrom = vi.fn();
 const mockAdminGetUserById = vi.fn();
 const mockValidateOrigin = vi.fn();
@@ -13,7 +14,12 @@ const mockResolveReachable = vi.fn();
 const mockResolveOwning = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({ auth: { getUser: mockGetUser } }),
+  // ADR-044 PR-1 owner-gate: default to owner (solo users always own
+  // workspace_id=user.id); the non-owner test overrides mockRpc.
+  createClient: async () => ({
+    auth: { getUser: mockGetUser },
+    rpc: mockRpc,
+  }),
   createServiceClient: () => ({
     from: mockServiceFrom,
     auth: { admin: { getUserById: mockAdminGetUserById } },
@@ -151,7 +157,23 @@ describe("POST /api/repo/setup — install resolution", () => {
       error: null,
     });
     mockProvisionWorkspaceWithRepo.mockResolvedValue("/workspaces/user-1");
+    // ADR-044 PR-1 owner-gate: default owner; non-owner test overrides.
+    mockRpc.mockResolvedValue({ data: true, error: null });
     setupServiceClient();
+  });
+
+  test("ADR-044 owner-gate: non-owner → 403, no clone", async () => {
+    mockRpc.mockResolvedValueOnce({ data: false, error: null });
+
+    const res = await POST(
+      makeRequest({ repoUrl: "https://github.com/jikig-ai/soleur" }),
+    );
+    expect(res.status).toBe(403);
+    expect(mockProvisionWorkspaceWithRepo).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith("is_workspace_owner", {
+      p_workspace_id: "user-1",
+      p_user_id: "user-1",
+    });
   });
 
   test("T9: org member, NULL stored id, owning install resolved → clones via membership install", async () => {

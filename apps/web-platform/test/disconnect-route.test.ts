@@ -5,17 +5,19 @@ import { mockQueryChain } from "./helpers/mock-supabase";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockDeleteWorkspace, mockIsAllowed } =
+const { mockGetUser, mockFrom, mockDeleteWorkspace, mockIsAllowed, mockRpc } =
   vi.hoisted(() => ({
     mockGetUser: vi.fn(),
     mockFrom: vi.fn(),
     mockDeleteWorkspace: vi.fn(),
     mockIsAllowed: vi.fn(),
+    mockRpc: vi.fn(),
   }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
+    rpc: mockRpc,
   })),
   createServiceClient: vi.fn(() => ({
     from: mockFrom,
@@ -114,6 +116,25 @@ describe("DELETE /api/repo/disconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsAllowed.mockReturnValue(true);
+    // ADR-044 PR-1 owner-gate: default to owner (solo users always own
+    // workspace_id=user.id). The non-owner case overrides per-test.
+    mockRpc.mockResolvedValue({ data: true, error: null });
+  });
+
+  test("returns 403 when the caller is not the workspace owner (ADR-044 owner-gate)", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockRpc.mockResolvedValueOnce({ data: false, error: null });
+    setupUserMocks({ repoStatus: "ready" });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(403);
+    // The owner-gate must short-circuit BEFORE any mutation.
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+    // p_workspace_id MUST equal the mutated workspace (= user.id in PR-1).
+    expect(mockRpc).toHaveBeenCalledWith("is_workspace_owner", {
+      p_workspace_id: TEST_USER_ID,
+      p_user_id: TEST_USER_ID,
+    });
   });
 
   test("returns 401 when unauthenticated", async () => {

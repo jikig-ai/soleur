@@ -81,6 +81,11 @@ export function SettingsContent({
         repoStatus={repoStatus}
         repoLastSyncedAt={repoLastSyncedAt}
         needsReconnect={needsReconnect}
+        // ADR-044 PR-1 (FR3): members of a team workspace see the read-only
+        // connection summary (no connect/disconnect). Solo users (no identity,
+        // or owner of their own workspace) keep the full controls.
+        isOwner={workspaceIdentity?.isOwner ?? true}
+        ownerLabel={workspaceIdentity?.organizationName ?? null}
       />
 
       {/* API Key Section */}

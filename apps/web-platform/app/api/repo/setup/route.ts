@@ -39,6 +39,35 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // ADR-044 PR-1 owner-gate (confused-deputy): only the OWNER of the workspace
+  // this handler mutates may connect a repo to it. `p_workspace_id` MUST equal
+  // the id the handler mutates — in PR-1 setup writes the solo `users` row + the
+  // solo workspace mirror keyed on `user.id`, so `p_workspace_id = user.id` and
+  // the gate is a NO-OP for solo users by construction (a solo user always owns
+  // workspace_id=user.id). Load-bearing in PR-2 when connect-writes relocate to
+  // `workspaces.*`. `is_workspace_owner` is SECURITY DEFINER (mig 098), GRANT
+  // authenticated — reuse the workspace/logo/route.ts shape.
+  const ownerRes = await supabase.rpc("is_workspace_owner", {
+    p_workspace_id: user.id,
+    p_user_id: user.id,
+  });
+  if (ownerRes.error) {
+    logger.error(
+      { err: ownerRes.error, userId: user.id },
+      "is_workspace_owner check failed during repo setup",
+    );
+    return NextResponse.json(
+      { error: "Failed to connect repository" },
+      { status: 500 },
+    );
+  }
+  if (ownerRes.data !== true) {
+    return NextResponse.json(
+      { error: "Only the workspace owner can connect a repository." },
+      { status: 403 },
+    );
+  }
+
   const body = await request.json().catch(() => null);
   if (!body?.repoUrl || typeof body.repoUrl !== "string") {
     return NextResponse.json(
