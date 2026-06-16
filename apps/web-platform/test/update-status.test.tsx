@@ -5,8 +5,12 @@ import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
 
 // Mock Supabase channel
 const mockSubscribe = vi.fn().mockReturnValue({ unsubscribe: vi.fn() });
-const mockOn = vi.fn().mockReturnValue({ subscribe: mockSubscribe });
-const mockChannel = vi.fn().mockReturnValue({ on: mockOn });
+// Chainable channel mock: useConversations chains .on(UPDATE).on(INSERT) before
+// .subscribe(), so .on() must return the channel itself (not a subscribe-only stub).
+const mockOn = vi.fn();
+const mockChannelObj = { on: mockOn, subscribe: mockSubscribe };
+mockOn.mockReturnValue(mockChannelObj);
+const mockChannel = vi.fn().mockReturnValue(mockChannelObj);
 
 // Track update calls
 const mockUpdate = vi.fn();

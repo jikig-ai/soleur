@@ -10,7 +10,7 @@
  * source-presence check: the connected-repo context builder exists naming the
  * repo and referencing `-R`, AND is appended to `effectiveSystemPrompt` only
  * inside the server-resolved `connectedOwner && connectedRepo` guard (NOT a
- * `.git` presence check), fed only the CC_GITHUB_NAME_RE-validated bindings.
+ * `.git` presence check), fed only the parseConnectedRepo-validated bindings.
  */
 import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -62,7 +62,7 @@ describe("Concierge connected-repo context addendum", () => {
     expect(SRC.slice(guardIdx, appendIdx)).not.toMatch(/existsSync/);
   });
 
-  test("AC4: the call site is fed only the CC_GITHUB_NAME_RE-validated bindings", () => {
+  test("AC4: the call site is fed only the parseConnectedRepo-validated bindings", () => {
     // Passes connectedOwner/connectedRepo (validated before assignment),
     // never raw repoUrl or tool input.
     expect(SRC).toContain(
@@ -71,9 +71,11 @@ describe("Concierge connected-repo context addendum", () => {
     expect(SRC).not.toMatch(/buildConnectedRepoContext\(repoUrl/);
     // Injection-safety reasoning carried forward from agent-runner.ts:1425-1428
     // stays adjacent to the builder so a regex relaxation is greppable here.
+    // #5388: owner/repo validation moved to the shared `parseConnectedRepo`
+    // (github-repo-parse.ts) so the factory + resolveC4Eligible cannot drift.
     const idx = SRC.indexOf("export function buildConnectedRepoContext");
     const comment = SRC.slice(Math.max(0, idx - 800), idx);
-    expect(comment).toMatch(/CC_GITHUB_NAME_RE/);
+    expect(comment).toMatch(/parseConnectedRepo/);
     expect(comment).toMatch(/injection sink/i);
   });
 });
