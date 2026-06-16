@@ -420,6 +420,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L23 | Investigate render-blocking css/style.css on homepage (LCP check first) | P3 | [#2809](https://github.com/jikig-ai/soleur/issues/2809) | Not started |
 | L24 | Drop non-spec twitter:image:width/height meta tags (low-impact cleanup) | P2 | [#3178](https://github.com/jikig-ai/soleur/issues/3178) | Not started |
 | L25 | Citation monitoring tracker for AEO presence (recurring measurement, not ship-blocking) | P2 | [#3179](https://github.com/jikig-ai/soleur/issues/3179) | Not started |
+| L26 | Re-enable user-direct C4 diagram editing (`c4-edit` flag) once KB-edit-safety substrate is fixed — gated OFF; Concierge remains the only live KB writer in the interim | P2 | [#5419](https://github.com/jikig-ai/soleur/issues/5419) | Not started |
 
 #### Competitive-Parity Bets (vs Viktor)
 
