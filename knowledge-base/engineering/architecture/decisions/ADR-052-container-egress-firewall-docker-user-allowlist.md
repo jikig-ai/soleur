@@ -62,6 +62,23 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
    IP-rotation race is fail-loud/self-correcting (block → Sentry
    `egress_blocked` + missed heartbeat). Escalate to a proxy only on observed
    production churn.
+   - **Amendment (2026-06-16, grace-window retention).** Observed production
+     churn arrived: LB-fronted allowlisted hosts (Cloudflare/AWS/Google) rotate
+     across pools far larger than a single tick's A-record snapshot, so a
+     freshly-rotated IP was default-dropped before the next tick captured it —
+     the non-GitHub analogue of incident 5516336, and a multi-day outage of the
+     six heavy eval crons (missed, not failed, check-ins). The chosen escalation
+     is NOT the rejected SNI proxy: the resolver now **retains** every IP it has
+     observed DNS return for an already-allowlisted host over a rolling window
+     (`GRACE_WINDOW_SECS`, default 24h) in a persistent `StateDirectory`-backed
+     store, so the allow set accumulates each host's full rotation pool. This
+     stays inside the default-drop boundary — only IPs DNS actually returned for
+     an already-trusted host, never wholesale provider CIDRs — and preserves
+     every invariant above (atomic add-then-prune, fail-safe-on-empty, additive-
+     only on partial failure; eviction of past-window IPs is gated on the prune
+     tick). Cost: a rotated-away IP stays allowlisted up to one window (~1min →
+     ~24h), a bounded extension of the accepted CDN shared-IP residual. Runbook:
+     `cron-egress-blocked.md` §"LB-rotation IP-coverage gap".
 5. **Fail-loud, three channels:** kernel drops — BOTH `egress-blocked:` and
    `egress-dns-exfil:` prefixes — are counted each tick and posted as a
    Sentry error event (`feature=cron-egress-firewall`, `op=egress_blocked` →
