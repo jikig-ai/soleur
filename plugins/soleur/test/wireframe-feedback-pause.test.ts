@@ -33,7 +33,10 @@ function planGate(): string {
   expect(start).toBeGreaterThan(-1); // AC2: the gate block exists
   const rest = plan.slice(start);
   const end = rest.search(/\n5\. \*\*Content Review Gate|\n\*\*On ADVISORY:\*\*/);
-  return end === -1 ? rest.slice(0, 1200) : rest.slice(0, end);
+  // The gate block must be bounded by the next step — fail loud rather than
+  // silently slicing an arbitrary window if the surrounding structure changes.
+  expect(end).toBeGreaterThan(-1);
+  return rest.slice(0, end);
 }
 
 describe("AC1 — interactive pause exists (brainstorm Phase 3.55b)", () => {
