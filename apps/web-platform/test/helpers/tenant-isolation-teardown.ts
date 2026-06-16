@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { withGoTrueRetry } from "./gotrue-retry";
 
 /**
  * Synthetic-only allowlist gate for tenant-isolation test users.
@@ -91,7 +92,12 @@ export async function tearDownTenantUser(
     }
   }
 
-  const { error } = await service.auth.admin.deleteUser(user.id);
+  // Retry past GoTrue rate limits and the opaque transient
+  // "Database error deleting user" (the FK-reverse anonymise above is
+  // idempotent, so a retried delete is safe).
+  const { error } = await withGoTrueRetry(`deleteUser:${user.email}`, () =>
+    service.auth.admin.deleteUser(user.id!),
+  );
   if (error && !/not found/i.test(error.message)) {
     throw new Error(
       `tearDownTenantUser: deleteUser(${user.email}) failed: ${error.message}`,

@@ -44,6 +44,7 @@ vi.mock("@/server/observability", () => ({
 
 import { GET } from "@/app/api/shared/[token]/c4/route";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
+import { makeUuidWorkspaceTmpdir } from "./helpers/workspace-tmpdir";
 
 let tmpWorkspace: string;
 let kbRoot: string;
@@ -78,7 +79,7 @@ async function callGET(url = "http://localhost:3000/api/shared/token-123/c4") {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "shared-c4-"));
+  tmpWorkspace = makeUuidWorkspaceTmpdir("shared-c4-").workspacePath;
   process.env.WORKSPACES_ROOT = path.dirname(tmpWorkspace);
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });

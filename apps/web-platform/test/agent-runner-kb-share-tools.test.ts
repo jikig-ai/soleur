@@ -166,7 +166,7 @@ describe("agent-runner kb_share_* tool wiring", () => {
     setupSupabaseMock(USER_WITH_GITHUB);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_create");
@@ -182,7 +182,7 @@ describe("agent-runner kb_share_* tool wiring", () => {
     setupSupabaseMock(USER_WITHOUT_GITHUB);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     // GitHub tools absent — but KB share tools present.
@@ -200,7 +200,7 @@ describe("agent-runner kb_share_* tool wiring", () => {
     setupSupabaseMock(USER_WITH_GITHUB);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -217,7 +217,7 @@ describe("agent-runner kb_share_* tool wiring", () => {
     setupSupabaseMock(USER_WITH_GITHUB);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -235,7 +235,7 @@ describe("agent-runner kb_share_* tool wiring", () => {
     setupSupabaseMock(USER_WITH_GITHUB);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;

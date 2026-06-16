@@ -33,7 +33,9 @@
 //   - buildSpawnEnv is WIDER: adds DISCORD_WEBHOOK_URL, DISCORD_BOT_TOKEN,
 //     DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD, LINKEDIN_ACCESS_TOKEN,
 //     LINKEDIN_PERSON_URN (the community-router.sh platform scripts need
-//     these to flip platforms from "disabled" → "enabled").
+//     these to flip platforms from "disabled" → "enabled"), plus
+//     LINKEDIN_ORG_ACCESS_TOKEN + LINKEDIN_ORG_ID (the org READ creds the
+//     linkedin fetch-metrics/fetch-activity commands require — #4049).
 //   - --max-turns 80 (was 50, orig 40 — see turn-budget rationale on
 //     MAX_TURN_DURATION_MS); --allowedTools is NARROWER than the cohort
 //     default (no WebSearch, WebFetch). (The original GHA workflow
@@ -139,6 +141,14 @@ const CLAUDE_CODE_FLAGS = [
 // Verbatim-extraction discipline: anchor strings asserted by the test
 // suite (cron-community-monitor.test.ts) to catch silent paraphrasing
 // across plan→work cycles.
+//
+// LinkedIn collection note (#4049): the "LinkedIn (if enabled): … fetch-metrics"
+// step below is LIVE — it runs on every fire. TIER2_DEFERRED_CRONS is empty
+// (Tier-2 boundary fully restored, #5199), so deferIfTier2Cron is a defensive
+// no-op that does NOT gate this cron. Verified live 2026-06-15 (manual run →
+// digest #5357 carried real LinkedIn metrics: 3 followers, 2,137 impressions).
+// If a future Tier-2 deferral re-adds "community-monitor" to the set, collection
+// pauses behind the deferral heartbeat until restore.
 const COMMUNITY_MONITOR_PROMPT = `You are a community monitoring agent. Your job is to generate a daily
 community digest and create a GitHub Issue summarizing the findings.
 
@@ -170,7 +180,7 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    - X/Twitter (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics\` to the same call.
      Do NOT call fetch-mentions or fetch-timeline (403 on Free tier).
    - Bluesky (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics\` to the same call.
-   - LinkedIn (if enabled): skip — log "enabled (posting only)".
+   - LinkedIn (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics\` to the same call (aggregate Company Page metrics: follower total + share statistics). Optionally also \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-activity\` for recent org post metadata. If either fails, log the error and continue.
    Batch 2 (GitHub + HN — single Bash call):
    - \`bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1; bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1; bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1; bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20; bash plugins/soleur/skills/community/scripts/community-router.sh hn trending --limit 30\`
    If any command in a batch fails, log the error and continue.
@@ -191,6 +201,13 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    sub-section with a markdown table: | User | Issue/PR | Comment |. Each row shows
    the commenter, a link to the issue (e.g., #123), and a snippet of their comment.
    Omit this sub-section entirely if there are no external interactions.
+   The ## LinkedIn Activity section (if LinkedIn was enabled) must report the
+   aggregate Company Page metrics from fetch-metrics: total followers plus the
+   aggregate post engagement (impressions, likes, comments, shares). Aggregate-
+   only — never list individual followers, commenters, or likers. To distinguish
+   "LinkedIn quiet" from "LinkedIn broken": if the LinkedIn fetch FAILED, write an
+   explicit "collection failed: <reason>" line under ## LinkedIn Activity rather
+   than silently omitting the section.
    Summarize and aggregate -- do not store raw message transcripts. Brief
    contextual quotes (under 100 chars) with attribution are acceptable.
    If the file already exists for today, overwrite it.
@@ -228,6 +245,11 @@ const COMMUNITY_MONITOR_ALLOWED_PATHS = [
 // LINKEDIN_ACCESS_TOKEN, LINKEDIN_PERSON_URN, X_API_KEY, X_API_SECRET,
 // X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET — the community-router.sh platform
 // scripts need these to flip platforms from "disabled" → "enabled".
+// #4049 additions (community READ surface): LINKEDIN_ORG_ACCESS_TOKEN and
+// LINKEDIN_ORG_ID — the org read creds the linkedin fetch-metrics/fetch-activity
+// commands require for aggregate Company Page insights. These are a distinct
+// axis from the LINKEDIN_ACCESS_TOKEN/LINKEDIN_PERSON_URN posting creds that
+// gate the router's platform "enabled" status.
 // X_ALLOW_POST is deliberately EXCLUDED: it is the posting defense-in-depth
 // guard (x-community.sh:611); the monitor is read-only and only the publisher
 // (cron-content-publisher.ts) arms posting.
@@ -247,6 +269,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     BSKY_APP_PASSWORD: process.env.BSKY_APP_PASSWORD,
     LINKEDIN_ACCESS_TOKEN: process.env.LINKEDIN_ACCESS_TOKEN,
     LINKEDIN_PERSON_URN: process.env.LINKEDIN_PERSON_URN,
+    LINKEDIN_ORG_ACCESS_TOKEN: process.env.LINKEDIN_ORG_ACCESS_TOKEN,
+    LINKEDIN_ORG_ID: process.env.LINKEDIN_ORG_ID,
     X_API_KEY: process.env.X_API_KEY,
     X_API_SECRET: process.env.X_API_SECRET,
     X_ACCESS_TOKEN: process.env.X_ACCESS_TOKEN,

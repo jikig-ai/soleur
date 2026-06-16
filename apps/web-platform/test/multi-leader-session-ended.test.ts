@@ -191,7 +191,7 @@ describe("multi-leader session_ended (#2428)", () => {
     setupQueryMockWithResult();
 
     await startAgentSession(
-      "user-1", "conv-1", "cpo", undefined, "test message", undefined, undefined,
+      "11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test message", undefined, undefined,
       true, // skipSessionEnded
     );
 
@@ -205,7 +205,7 @@ describe("multi-leader session_ended (#2428)", () => {
     setupMocks();
     setupQueryMockWithResult();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const sessionEndedCalls = mockSendToClient.mock.calls.filter(
       (call) => (call[1] as { type: string }).type === "session_ended",
@@ -222,7 +222,7 @@ describe("multi-leader session_ended (#2428)", () => {
     setupQueryMockWithResult();
 
     await startAgentSession(
-      "user-1", "conv-1", "cpo", undefined, "test", undefined, undefined,
+      "11111111-1111-4111-8111-111111111111", "conv-1", "cpo", undefined, "test", undefined, undefined,
       true,
     );
 

@@ -27,6 +27,14 @@ export {
 
 const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
+// Mirrors workspace.ts:67 / api-usage.ts:46 — id-shape gate before any value
+// flows into join() to build a bwrap mount path (ADR-038, CWE-22 #5344). The
+// workspaceId column is typed `string | null`, not a validated UUID; this
+// allowlist (8-4-4-4-12 hex) rejects every traversal/separator token (`..`,
+// `/`, absolute prefix, newline-suffix) as a side-effect. `userId` is itself a
+// UUID, so the solo-workspace case (workspaceId === userId, N2) passes.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
 }
@@ -478,6 +486,11 @@ export async function resolveActiveWorkspaceKbRoot(
     return { ok: false, status: 503 };
   }
 
+  // The id-shape guard (CWE-22 #5344) lives in workspacePathForWorkspaceId, so
+  // both workspacePath and the kbRoot built from it below are covered here.
+  // NOTE: paths built from the pre-stored `users.workspace_path` column
+  // (kb-route-helpers / kb upload route) are a SEPARATE boundary, mitigated by
+  // their own downstream `isPathInWorkspace` containment — not by this guard.
   const workspacePath = workspacePathForWorkspaceId(activeWorkspaceId);
   return {
     ok: true,
@@ -705,6 +718,12 @@ export async function resolveWorkspacePathForUser(
   supabase: SupabaseLike,
 ): Promise<string> {
   const workspaceId = await getDefaultWorkspaceForUser(userId, supabase);
+  if (!UUID_RE.test(workspaceId)) {
+    // JSON.stringify escapes control chars (the value is Sentry-bound via the
+    // callers' catch → reportSilentFallback): closes the log-injection vector
+    // a crafted/corrupted id would otherwise open (#5344).
+    throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
+  }
   return join(getWorkspacesRoot(), workspaceId);
 }
 
@@ -716,5 +735,8 @@ export async function resolveWorkspacePathForUser(
  * the legacy `<WORKSPACES_ROOT>/<user_id>` path (N2: workspace_id == user_id).
  */
 export function workspacePathForWorkspaceId(workspaceId: string): string {
+  if (!UUID_RE.test(workspaceId)) {
+    throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
+  }
   return join(getWorkspacesRoot(), workspaceId);
 }

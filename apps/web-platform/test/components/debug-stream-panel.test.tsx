@@ -132,6 +132,16 @@ describe("DebugStreamPanel — Copy control", () => {
     fireEvent.click(copy);
     expect(writeText).not.toHaveBeenCalled();
   });
+
+  it("uses the AA-safe gold resting token, not the sub-AA -fg gold", () => {
+    // -text gold (5.56:1 light) passes AA 4.5:1 at 10px; -fg gold (3.66:1) does
+    // not. A future revert of the resting color to text-soleur-accent-gold-fg
+    // reintroduces a light-theme sub-AA failure and fails this guard.
+    const events = [ev({ id: "1", body: "ls", label: "Running command..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    const copy = screen.getByTestId("debug-stream-copy");
+    expect(copy.className).toContain("text-soleur-accent-gold-text");
+  });
 });
 
 describe("DebugStreamPanel — Show/Hide toggle affordance (regression #5241)", () => {

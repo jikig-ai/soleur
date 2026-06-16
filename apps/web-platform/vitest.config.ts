@@ -42,6 +42,10 @@ export default defineConfig({
           name: "unit",
           environment: "node",
           include: ["test/**/*.test.ts", "lib/**/*.test.ts"],
+          // Default WORKSPACES_ROOT to a writable temp dir (server startup paths
+          // now unconditionally mkdir the resolved workspace dir before sandbox
+          // construction; the prod default "/workspaces" is not writable in CI).
+          setupFiles: ["test/setup-node.ts"],
           // Vitest 3.x defaults `isolate` to true, but the default has
           // changed before. Pin it explicitly here so module-init env-var
           // reads (e.g., `const SENTRY_USERID_PEPPER = process.env.…` in

@@ -144,7 +144,7 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const calls = mockSendToClient.mock.calls.filter(
       ([, msg]) => msg?.type === "tool_progress",
@@ -181,7 +181,7 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-drift", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-drift", "cpo");
 
     const calls = mockSendToClient.mock.calls.filter(
       ([, msg]) => msg?.type === "tool_progress",
@@ -219,7 +219,7 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
     };
     mockQuery.mockReturnValue(iter as any);
 
-    await startAgentSession("user-1", "conv-2", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-2", "cpo");
 
     const progressCalls = mockSendToClient.mock.calls.filter(
       ([, msg]) => msg?.type === "tool_progress",
@@ -241,7 +241,7 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
       throw: vi.fn(),
     } as any);
 
-    await startAgentSession("user-1", "conv-3", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-3", "cpo");
 
     const progressCalls = mockSendToClient.mock.calls.filter(
       ([, msg]) => msg?.type === "tool_progress",

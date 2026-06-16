@@ -87,6 +87,14 @@ vi.mock("@/lib/supabase/service", async () => {
   });
 });
 
+// #5340 / #5240 — stub the per-dispatch warm re-provision so the
+// honest-message wiring tests can drive `reprovisionOutcome` deterministically.
+// Default "ok" is a safe no-op for every other dispatch test (fire-and-forget,
+// no assertions on it).
+vi.mock("@/server/cc-reprovision", () => ({
+  reprovisionWorkspaceOnDispatch: vi.fn().mockResolvedValue("ok"),
+}));
+
 import {
   getPendingPromptRegistry,
   getCcStartSessionRateLimiter,
@@ -96,6 +104,11 @@ import {
   __resetCcPersistUsageObservationForTests,
   CC_OP_SLUGS,
 } from "@/server/cc-dispatcher";
+import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
+import {
+  WORKSPACE_RECLAIMED_MESSAGE,
+  WORKFLOW_END_USER_MESSAGES,
+} from "@/server/cc-workflow-end-messages";
 // #3603 W1 plan §2.2.3 — hook P0 dedup reset into the test reset chain so a
 // future test that exercises the real `mirrorP0Deduped` (vs. this file's spy
 // override) doesn't see state leak from a prior test. No-op against the spy
@@ -360,6 +373,64 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(errMsg.runnerRunawayReason).toBe("idle_window");
     expect(errMsg.runnerRunawayLastBlockKind).toBe("tool_use");
     expect(errMsg.runnerRunawayLastBlockToolName).toBe("Read");
+  });
+
+  // #5340 / #5240 design item #2 — integration wiring for the post-recovery-
+  // failure honest message: the per-dispatch `reprovisionWorkspaceOnDispatch`
+  // result must populate the `reprovisionOutcome` closure cell, and the
+  // `onWorkflowEnded` `worktree_enter_failed` branch must read it via
+  // `resolveWorktreeEnterFailedMessage`. This closes the unit-vs-integration
+  // seam: the helper + pure function are unit-tested elsewhere; this proves the
+  // dispatcher actually wires them together. `worktree_enter_failed` is NOT
+  // terminal, so it routes to a `{type:"error", message}` frame (never
+  // session_ended). The stub flushes microtasks before emitting so the
+  // fire-and-forget re-provision resolves first (deterministic).
+  async function driveWorktreeEnterFailed(sendToClient: ReturnType<typeof vi.fn>) {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    __setCcRunnerForTests({
+      dispatch: vi.fn(async (args: { events: { onWorkflowEnded: (end: unknown) => void } }) => {
+        // Let the fire-and-forget reprovision `.then` populate the cell first.
+        await Promise.resolve();
+        await Promise.resolve();
+        args.events.onWorkflowEnded({ status: "worktree_enter_failed" });
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+    await dispatchSoleurGo({
+      userId: "u1",
+      conversationId: "conv-reclaim",
+      userMessage: "resume",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient: sendToClient as unknown as (userId: string, message: WSMessage) => boolean,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, msg]) => msg && typeof msg === "object" && (msg as { type?: string }).type === "error",
+    );
+    return errorCalls.map((c) => c[1] as { type: string; message: string });
+  }
+
+  it("worktree_enter_failed + reprovision 'failed' → honest WORKSPACE_RECLAIMED_MESSAGE (#5340)", async () => {
+    vi.mocked(reprovisionWorkspaceOnDispatch).mockResolvedValueOnce("failed");
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const errs = await driveWorktreeEnterFailed(sendToClient);
+    expect(errs.length).toBeGreaterThan(0);
+    expect(errs.some((e) => e.message === WORKSPACE_RECLAIMED_MESSAGE)).toBe(true);
+  });
+
+  it("worktree_enter_failed + reprovision 'ok' → generic retryable copy, NOT the reclaimed message (placement invariant)", async () => {
+    vi.mocked(reprovisionWorkspaceOnDispatch).mockResolvedValueOnce("ok");
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const errs = await driveWorktreeEnterFailed(sendToClient);
+    expect(errs.length).toBeGreaterThan(0);
+    expect(errs.some((e) => e.message === WORKFLOW_END_USER_MESSAGES.worktree_enter_failed)).toBe(true);
+    expect(errs.some((e) => e.message === WORKSPACE_RECLAIMED_MESSAGE)).toBe(false);
   });
 
   it("T19: dispatchSoleurGo surfaces errorCode=key_invalid when runner throws KeyInvalidError", async () => {

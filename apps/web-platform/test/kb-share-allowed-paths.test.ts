@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { randomUUID } from "node:crypto";
 import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 
 const mocks = vi.hoisted(() => ({
@@ -57,7 +58,7 @@ import { shareSupabaseFromMock } from "./helpers/share-mocks";
 let workspacesRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
-const TEST_USER_ID = "user-1";
+const TEST_USER_ID = randomUUID();
 
 function createShareRequest(
   documentPath: string,

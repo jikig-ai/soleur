@@ -137,7 +137,7 @@ describe("agent-runner cost capture", () => {
     setupQueryWithCost(0.0042, 1200, 300);
     mockRpc.mockResolvedValue({ error: null });
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockRpc).toHaveBeenCalledWith("increment_conversation_cost", {
       conv_id: "conv-1",
@@ -153,14 +153,14 @@ describe("agent-runner cost capture", () => {
     setupQueryWithCost(0.0042, 1200, 300);
     mockRpc.mockResolvedValue({ error: null });
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const auditCall = mockRpc.mock.calls.find(
       ([fn]) => fn === "write_byok_audit",
     );
     expect(auditCall).toBeDefined();
     const args = auditCall![1];
-    expect(args.p_founder_id).toBe("user-1");
+    expect(args.p_founder_id).toBe("11111111-1111-4111-8111-111111111111");
     expect(args.p_agent_role).toBe("cpo");
     // 1200 input + 300 output + 0 cache = 1500 combined
     expect(args.p_token_count).toBe(1500);
@@ -173,13 +173,13 @@ describe("agent-runner cost capture", () => {
     setupQueryWithCost(0.0123, 500, 150);
     mockRpc.mockResolvedValue({ error: null });
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     // Phase 3 (#4229) — usage_update widened with workspaceId.
-    expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
+    expect(mockSendToClient).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", {
       type: "usage_update",
       conversationId: "conv-1",
-      workspaceId: "user-1",
+      workspaceId: "11111111-1111-4111-8111-111111111111",
       totalCostUsd: 0.0123,
       inputTokens: 500,
       outputTokens: 150,
@@ -194,11 +194,11 @@ describe("agent-runner cost capture", () => {
 
     // Should not throw — cost tracking is non-blocking
     await expect(
-      startAgentSession("user-1", "conv-1", "cpo"),
+      startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo"),
     ).resolves.not.toThrow();
 
     // session_ended should still be sent (conversation completes)
-    expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
+    expect(mockSendToClient).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", {
       type: "session_ended",
       reason: "turn_complete",
     });
@@ -215,7 +215,7 @@ describe("agent-runner cost capture", () => {
     } as any);
     mockRpc.mockResolvedValue({ error: null });
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockRpc).toHaveBeenCalledWith("increment_conversation_cost", {
       conv_id: "conv-1",
@@ -241,7 +241,7 @@ describe("agent-runner cost capture", () => {
     } as never);
     mockRpc.mockResolvedValue({ error: null });
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     expect(mockRpc).toHaveBeenCalledWith("increment_conversation_cost", {
       conv_id: "conv-1",
@@ -254,10 +254,10 @@ describe("agent-runner cost capture", () => {
     // Phase 3 (#4229) — usage_update widened with workspaceId for
     // workspace-grain attribution at the client. Under N2 invariant
     // workspaceId === userId for solo callers.
-    expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
+    expect(mockSendToClient).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", {
       type: "usage_update",
       conversationId: "conv-1",
-      workspaceId: "user-1",
+      workspaceId: "11111111-1111-4111-8111-111111111111",
       totalCostUsd: 0.012,
       inputTokens: 521,
       outputTokens: 88,

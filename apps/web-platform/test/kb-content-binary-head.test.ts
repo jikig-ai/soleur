@@ -44,7 +44,7 @@ function callHEAD(request: Request, pathSegments: string[]) {
 
 function mockAuthOk() {
   mockGetUser.mockResolvedValue({
-    data: { user: { id: "user-1" } },
+    data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
     error: null,
   });
   mockFrom.mockReturnValue(
@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-content-head-root-"));
   process.env.WORKSPACES_ROOT = tmpRoot;
-  tmpWorkspace = path.join(tmpRoot, "user-1");
+  tmpWorkspace = path.join(tmpRoot, "11111111-1111-4111-8111-111111111111");
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
@@ -126,7 +126,7 @@ describe("HEAD /api/kb/content/[...path]", () => {
 
   test("returns 503 with empty body when workspace_status is not ready", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(

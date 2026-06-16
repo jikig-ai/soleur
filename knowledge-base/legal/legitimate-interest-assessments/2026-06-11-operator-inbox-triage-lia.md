@@ -308,7 +308,13 @@ appropriate lawful basis for PA-27.
 - Any expansion beyond `ops@soleur.ai` (additional addresses, customer-facing
   inbound, or any non-operator data subject as item owner) — re-run the
   balancing test and the DPIA screening.
-- Any reply/send authority added to the pipeline (#4672 boundary).
+- Any reply/send authority added to the pipeline (#4672 boundary). **[PARTIALLY
+  OVERTURNED 2026-06-15, #5325]** — this trigger has fired: outbound send/reply
+  authority now exists as a separate, human-approval-gated activity assessed in
+  its own LIA (`2026-06-15-outbound-email-authority-lia.md`, Article 30 PA-28).
+  This (PA-27) LIA remains in force unchanged for the **inbound triage** activity;
+  only the "no send authority" Non-Goal is superseded, by that new LIA — not by
+  this one. Any FURTHER send-authority expansion re-triggers re-assessment there.
 - First real special-category leak into a persisted summary (DPIA residual
   (a) materialising) — re-assess the prompt-instruction-only mitigation.
 - Anthropic Zero-Retention amendment signed (update Necessity §6) or Resend

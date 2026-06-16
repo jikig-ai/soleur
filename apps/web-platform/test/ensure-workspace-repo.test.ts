@@ -48,6 +48,47 @@ describe("ensureWorkspaceRepoCloned", () => {
     expect(mockExistsSync).not.toHaveBeenCalled();
   });
 
+  // #5340 / #5240 item #2 — the return type widened from `void` to a typed
+  // `ReprovisionOutcome` ("failed" | "ok") so the cc reconnect path can thread
+  // the recovery result to the post-recovery-failure honest message. The fail-
+  // soft posture is unchanged (still never throws); only the return is added.
+  // "ok" folds every benign exit (not-connected, .git-present, skipped-bad-url,
+  // cloned); "failed" is ONLY the genuine clone-catch.
+  it("not connected → returns 'ok' (benign, nothing to ensure)", async () => {
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: null, repoUrl: REPO });
+    expect(out).toBe("ok");
+  });
+
+  it("ANY existing .git → returns 'ok' (benign no-op)", async () => {
+    mockExistsSync.mockReturnValue(true);
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(out).toBe("ok");
+  });
+
+  it("malformed repo_url → returns 'ok' (benign skip, not a recovery failure)", async () => {
+    mockExistsSync.mockReturnValue(false);
+    const out = await ensureWorkspaceRepoCloned({
+      userId: "u1",
+      workspacePath: WS,
+      installationId: 123,
+      repoUrl: "https://evil.example.com/x/y --upload-pack=evil",
+    });
+    expect(out).toBe("ok");
+  });
+
+  it("successful clone → returns 'ok'", async () => {
+    mockExistsSync.mockReturnValue(false);
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(out).toBe("ok");
+  });
+
+  it("clone failure (catch) → returns 'failed' (the only non-benign outcome)", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockGraftRepoClone.mockRejectedValue(new Error("clone boom"));
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(out).toBe("failed");
+  });
+
   it("not connected (repoUrl empty) → no-op", async () => {
     await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: null });
     expect(mockGraftRepoClone).not.toHaveBeenCalled();
@@ -96,9 +137,12 @@ describe("ensureWorkspaceRepoCloned", () => {
   it("clone failure → reportSilentFallback once AND does NOT throw (graceful degrade)", async () => {
     mockExistsSync.mockReturnValue(false);
     mockGraftRepoClone.mockRejectedValue(new Error("clone boom: token ghs_SECRET"));
+    // Fail-soft: resolves (never throws). The resolved value is the typed
+    // "failed" outcome (was `void` pre-#5340) — covered by the dedicated
+    // outcome test above; here we only assert the no-throw posture.
     await expect(
       ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("failed");
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
       feature: "ensure-workspace-repo",

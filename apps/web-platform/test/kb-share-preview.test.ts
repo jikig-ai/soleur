@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/server/logger", () => ({
@@ -57,6 +57,7 @@ vi.mock("@/server/kb-preview-metadata", () => metadataMocks);
 
 import { previewShare } from "@/server/kb-share";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
+import { makeUuidWorkspaceTmpdir } from "./helpers/workspace-tmpdir";
 
 function hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
@@ -78,7 +79,7 @@ beforeEach(async () => {
   openBinaryStreamSpy.mockImplementation(actual.openBinaryStream);
   metadataMocks.readPdfMetadata.mockResolvedValue(null);
   metadataMocks.readImageMetadata.mockResolvedValue(null);
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-share-preview-"));
+  tmpWorkspace = makeUuidWorkspaceTmpdir("kb-share-preview-").workspacePath;
   // ADR-044: previewShare resolves kbRoot via workspacePathForWorkspaceId
   // (`<WORKSPACES_ROOT>/<workspace_id>`). The mock derives workspace_id from
   // this dir's basename, so point WORKSPACES_ROOT at its parent.
@@ -207,7 +208,7 @@ describe("previewShare — lookup and row-state branches", () => {
     // DIVERGE — the file lives ONLY under the workspace_id-resolved dir, while
     // the owner's workspace_path points at a file-less dir. A regression that
     // re-read workspace_path would 404; resolving off workspace_id returns 200.
-    const divergentId = "ws-divergent-from-userpath";
+    const divergentId = randomUUID();
     const divergentKbRoot = path.join(
       // WORKSPACES_ROOT is set to dirname(tmpWorkspace) in beforeEach, so
       // workspacePathForWorkspaceId(divergentId) lands here.

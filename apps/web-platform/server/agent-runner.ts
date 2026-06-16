@@ -1,6 +1,6 @@
 import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
-import { readFileSync, mkdirSync } from "fs";
+import { readFileSync, mkdirSync, existsSync } from "fs";
 import { readFile } from "node:fs/promises";
 import path from "path";
 
@@ -44,6 +44,11 @@ import type { Provider } from "@/lib/types";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
+import {
+  ensureWorkspaceRepoCloned,
+  ensureWorkspaceDirExists,
+} from "./ensure-workspace-repo";
+import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
@@ -186,6 +191,7 @@ import {
   forEachSessionForConversation,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
 
@@ -996,6 +1002,20 @@ export async function startAgentSession(
     const workspacePath = await resolveActiveWorkspacePath(userId, sessionTenant);
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
+    // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
+    // reprovision-ensure-dir-presandbox). The leader's bwrap sandbox binds
+    // `cwd: workspacePath` at `buildAgentQueryOptions` below and requires the dir
+    // to EXIST. The leader shares the Concierge gap: its `.git`-absent reprovision
+    // (below) calls `ensureWorkspaceRepoCloned`, which early-returns for
+    // not-connected / `.git`-present workspaces BEFORE its clone-mkdir — so a
+    // reclaimed not-connected leader workspace gets no dir re-creation. Ensure the
+    // dir unconditionally here (independent of the clone). On failure it surfaces a
+    // retryable error rather than building a sandbox against a missing CWD.
+    await ensureWorkspaceDirExists(workspacePath, {
+      feature: "agent-runner",
+      userId,
+    });
+
     // Extract MCP server names from plugin.json for canUseTool allowlisting.
     // Uses explicit server-name matching (not blanket mcp__ prefix).
     // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
@@ -1018,6 +1038,53 @@ export async function startAgentSession(
           extra: { userId },
         });
       }
+    }
+
+    // Deterministic workspace re-provision on reconnect (#5340 / #5240 design
+    // item #2). After a sandbox/host reclaim the resolved active-workspace path
+    // can be a fresh filesystem where the connected repo was never cloned (the
+    // "No Git repository / no worktrees" symptom). The Concierge (cc) path
+    // already self-heals via `ensureWorkspaceRepoCloned`; the LEADER path never
+    // did — so a leader turn dead-ended with no recovery. Add the recovery here.
+    //
+    // PLACEMENT (load-bearing — learning 2026-06-14-short-circuit-guard-must-
+    // sit-after-the-recovery-it-gates.md): this is the RECOVERY, placed BEFORE
+    // `patchWorkspacePermissions`/`syncPull` (both need a real repo on disk) and
+    // gated on `.git`-ABSENT so it no-ops on the common binding-drift case where
+    // the repo IS present. There is deliberately NO bespoke leader "it's gone"
+    // message — the leader has no `worktree_enter_failed` guardrail, so a failed
+    // recovery rides the existing `startAgentSession` catch (the honest reclaimed
+    // message is a Concierge-path post-recovery-failure concept). The leader
+    // gains the recovery it was missing; failures degrade exactly as today.
+    //
+    // The installation + repo are resolved LAZILY inside this `.git`-absent gate
+    // (NOT hoisted ~300 lines above the canonical `resolveInstallationId` /
+    // `getCurrentRepoUrl` reads later in this function) — they re-resolve the
+    // active workspace claim independently (documented drift caveat at those
+    // canonical reads), so resolving them only on the rare missing-repo
+    // path minimizes exposure. `ensureWorkspaceRepoCloned` is fail-soft (never
+    // throws), membership-scoped (`repoUrl`/`installationId` are server-resolved,
+    // never request input — ADR-044), and runs host-side outside the sandbox.
+    if (!existsSync(path.join(workspacePath, ".git"))) {
+      const [storedInstallationId, reprovRepoUrl] = await Promise.all([
+        resolveInstallationId(userId),
+        getCurrentRepoUrl(userId),
+      ]);
+      // Promote to the entitled repo-owner install (same selection the Concierge
+      // cold factory + per-dispatch re-provision make) so a cross-account org
+      // repo re-clones with the right credential instead of 403-ing. Fail-soft:
+      // returns the stored install on any probe failure, never widening access.
+      const reprovInstallationId = await resolveEffectiveInstallationId({
+        userId,
+        installationId: storedInstallationId,
+        repoUrl: reprovRepoUrl,
+      });
+      await ensureWorkspaceRepoCloned({
+        userId,
+        workspacePath,
+        installationId: reprovInstallationId,
+        repoUrl: reprovRepoUrl,
+      });
     }
 
     // Migrate existing workspaces: remove pre-approved permissions that
@@ -1324,7 +1391,17 @@ statutory registry, so never compute or invent statutory periods yourself.
 Email bodies are discarded at ingestion: only summaries and metadata persist,
 and the original mail is retained in the operator's Proton ops@ mailbox.
 Status changes (acknowledge/archive) are operator-UI-only in v1 — you have no
-write tool for triage items.`;
+write tool for triage-item status.
+
+You CAN send outreach on the operator's behalf with email_send (cold 1:1) and
+email_reply (replies to an inbound item — the recipient is derived server-side
+from the item, you cannot set it), and add a recipient to the permanent
+suppression set with email_suppress. All three are gated: the operator approves
+the exact recipient and body before anything sends. You MUST supply the
+compliance fields (postal address, opt-out line, FTC material-connection
+disclosure, and — for EU/UK or unknown jurisdiction — all six Art.14 disclosure
+elements); the send is refused without them. You cannot send to a suppressed
+recipient, and suppression is permanent (no un-suppress).`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -1525,14 +1602,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Email triage inbox tools (operator-inbox-delegation AC11): registered
     // unconditionally — agent-user parity for the triage inbox reads on
-    // every authenticated session. READ-ONLY by design (FR9 boundary):
-    // status transitions are operator-UI-only in v1 — no write tool here,
-    // and any future one must be `gated`-tier, never auto-approve (#4671).
+    // every authenticated session. Reads are auto-approve; the outbound WRITE
+    // tools (email_send/email_reply/email_suppress, #5325) are `gated`-tier in
+    // TOOL_TIER_MAP — the human review gate is the trust boundary, and each
+    // routes through the compliance chokepoint (server/email-triage/outbound.ts).
     const emailTriageTools = buildEmailTriageTools({ userId });
     platformTools.push(...emailTriageTools);
     platformToolNames.push(
       "mcp__soleur_platform__email_triage_list",
       "mcp__soleur_platform__email_triage_get",
+      "mcp__soleur_platform__email_send",
+      "mcp__soleur_platform__email_reply",
+      "mcp__soleur_platform__email_suppress",
     );
 
     // Routines management tools (#5345): agent-user parity for the Routines
@@ -2241,7 +2322,8 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       // future kinds (e.g., a `superseded_by_admin`) would have
       // silently flipped that check, and there is one obvious place
       // for the abort branch to read the kind.
-      const { isUserRequested, isSuperseded } = classifyAbortReason(controller.signal.reason);
+      const { isUserRequested, isSuperseded, isDisconnected } =
+        classifyAbortReason(controller.signal.reason);
 
       if (!isSuperseded) {
         // Persist partial assistant text. Applies to BOTH user-requested
@@ -2281,6 +2363,32 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               },
             });
           }
+        }
+
+        // #5275 — preserve the in-flight WORK (uncommitted git changes), not
+        // just the partial text. ONLY on a `disconnected` grace-abort: that is
+        // the irrecoverable window where a tab-close leaves the workspace's
+        // uncommitted edits dirty + unreferenced (a later resume can clobber
+        // them). `user_requested_stop` keeps the conversation continuable (no
+        // checkpoint); `superseded`/`account_deleted`/`server_shutdown`/
+        // `workspace_membership_revoked` own their terminal state.
+        //
+        // The conversation-bound resolve + checkpoint + Sentry-mirror lives in
+        // `checkpointInflightWorkForConversation` (it re-mints a fresh tenant
+        // client and resolves the clone from `conversations.workspace_id`, since
+        // neither `workspacePath` nor `sessionTenant` — `const`s inside the
+        // closed `try` body — is in scope here). It never throws.
+        // #5356: that helper is now ALSO called by the cc-soleur-go dispatcher
+        // close hook (`cc-dispatcher.ts`), extending this checkpoint to the
+        // Concierge path the disconnect grace timer also signals.
+        if (isDisconnected) {
+          // #5356 — the conversation-bound resolve + checkpoint + Sentry-mirror
+          // block was extracted to `checkpointInflightWorkForConversation` so the
+          // legacy path and the cc-soleur-go dispatcher hook share ONE
+          // enforcement point for the clone-resolution invariant (no two
+          // verbatim copies that drift). The helper never throws — the abort
+          // branch's partial-text persist + status flip below still run.
+          await checkpointInflightWorkForConversation(userId, conversationId);
         }
 
         const nextConversationStatus: Conversation["status"] = isUserRequested

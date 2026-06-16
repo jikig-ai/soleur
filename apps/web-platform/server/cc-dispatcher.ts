@@ -21,14 +21,12 @@ import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import {
   buildC4ConciergeTools,
-  EDIT_C4_DIAGRAM_TOOL,
+  C4_TOOL_FQN,
 } from "@/server/c4-concierge-tools";
 import {
-  getRuntimeFlag,
   isDebugModeAvailable,
   type Role,
 } from "@/lib/feature-flags/server";
-import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 
 import { applyPrefillGuard } from "./agent-prefill-guard";
 
@@ -52,7 +50,13 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
-import { WORKFLOW_END_USER_MESSAGES } from "./cc-workflow-end-messages";
+import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
+import {
+  WORKFLOW_END_USER_MESSAGES,
+  resolveWorktreeEnterFailedMessage,
+} from "./cc-workflow-end-messages";
+import { reprovisionWorkspaceOnDispatch } from "./cc-reprovision";
+import type { ReprovisionOutcome } from "./ensure-workspace-repo";
 import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
@@ -79,6 +83,15 @@ import {
 } from "./observability";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
+import { formatAssistantText } from "@/lib/format-assistant-text";
+import { debugRedactionProbeTrips } from "./debug-probes";
+import { insertTurnSummary } from "./messages/insert-turn-summary";
+import {
+  buildNarrationTools,
+  NARRATE_TOOL_FQN,
+  SUMMARIZE_TOOL_FQN,
+  NARRATION_TEXT_CAP_BYTES,
+} from "./narrate-tool";
 import { updateConversationFor } from "./conversation-writer";
 import {
   getUserServiceTokens,
@@ -90,20 +103,24 @@ import {
 // per-workspace resolver (ADR-044) — NOT the soleur-monorepo-hardcoded
 // `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
 import { resolveInstallationId } from "./resolve-installation-id";
-import {
-  generateInstallationToken,
-  findRepoOwnerInstallationForUser,
-  getInstallationAccount,
-} from "./github-app";
-import { mirrorSelfHealSkip } from "./cc-self-heal-observability";
+import { generateInstallationToken } from "./github-app";
+import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
 import { getCurrentRepoUrl } from "./current-repo-url";
-import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+import {
+  ensureWorkspaceRepoCloned,
+  ensureWorkspaceDirExists,
+} from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
+import {
+  resolveC4Eligible,
+  resolveC4FlagEnabled,
+} from "./resolve-c4-eligible";
+import { parseConnectedRepo } from "./github-repo-parse";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -249,12 +266,31 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * predicate has a single named place to read, preventing drift between the
  * allowlist source and the mirror predicate at Phase 2 promotion time.
  */
-const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
+// feat-reasoning-chat-boxes (#5370): narrate/summarize are now ALWAYS
+// registered in the soleur_platform server (see the always-build block), so
+// they must be listed here — otherwise `shouldMirrorUnregisteredPlatformToolUse`
+// would false-positive on every legitimate narration and flood Sentry.
+//
+// #5388: this is the ALWAYS-registered BASE list. The flag+repo-gated
+// `edit_c4_diagram` tool is NOT a constant — it is registered per-dispatch only
+// when c4 is eligible for the user, so its FQN (`C4_TOOL_FQN`) is APPENDED to a
+// per-dispatch copy of this base in the `dispatchSoleurGo` scope (see the
+// `registeredPlatformToolNames` resolve) rather than listed here. Adding it
+// unconditionally here would suppress the GENUINE unregistered-tool mirror when
+// the c4 flag is OFF — the exact silent-failure surface #2909 FR2 catches.
+// Exported so `test/cc-mcp-tier-allowlist.test.ts` can assert the c4 FQN is NOT
+// in the base (the regression guard against the naive "just add it to the
+// constant" anti-fix — c4 must be appended per-dispatch, never seeded here).
+export const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [
+  NARRATE_TOOL_FQN,
+  SUMMARIZE_TOOL_FQN,
+];
 
-// Validates a GitHub owner/repo segment before it is closed over into the
-// edit_c4_diagram tool + system prompt — defense against a malformed/injected
-// repoUrl (mirrors agent-runner.ts's GITHUB_NAME_RE).
-const CC_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+// #5388: `C4_TOOL_FQN` (the soleur_platform FQN of the flag+repo-gated
+// edit_c4_diagram tool) is the single source of truth, colocated with the bare
+// tool name in `@/server/c4-concierge-tools` and imported above. It is APPENDED
+// to a per-dispatch copy of the base list (see the `registeredPlatformToolNames`
+// resolve) when c4 is eligible for the user this dispatch.
 
 // feat-one-shot-concierge-gh-403 — kills the model's FALSE-CONFIDENCE 403
 // diagnosis. The Concierge runs `gh` inside the sandbox and, seeing a bare 403,
@@ -291,6 +327,33 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
   "operations, tell them to connect a repository first (Workspace settings " +
   "→ Connect repository).";
 
+// feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
+// always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
+// tools are always built; see the soleur_platform always-build block). The
+// cross-tenant prohibition is a load-bearing legal control (the redaction probe
+// scrubs paths/secret-shapes, NOT another tenant's prose — plan §User-Brand
+// Impact / legal MEDIUM): the summary persists into the user's exportable chat
+// record, so naming any out-of-context entity would durably leak it. The
+// cc-router is the single orchestrator on this surface (deepen-plan: the inngest
+// leader-prompts path registers zero MCP tools), so "only the orchestrator
+// summarizes" holds by construction.
+const NARRATION_PROMPT_DIRECTIVE =
+  "## Narrating your work\n" +
+  "You have two tools to keep the user informed:\n" +
+  "- `narrate({ message })`: show a SHORT, plain-language live status line of " +
+  "what you are doing right now (e.g. \"Looking into your billing settings…\"). " +
+  "It is transient — call it at milestones during a longer turn so the user is " +
+  "never staring at a silent spinner. It is NOT saved.\n" +
+  "- `summarize({ summary })`: call ONCE, only when you have SUCCESSFULLY " +
+  "completed a substantive turn, with a short plain-language description of the " +
+  "OUTCOME (e.g. \"Fixed the side panel so it stays open on mobile.\"). It is " +
+  "saved as a permanent confirmed box in the chat. Never call it on a trivial, " +
+  "aborted, or failed turn, and never more than once per turn.\n" +
+  "For BOTH tools: use plain language a non-technical user understands. NEVER " +
+  "include internal identifiers, file paths, skill names, issue numbers, or the " +
+  "name of any entity, organization, person, or resource outside THIS user's " +
+  "own context.";
+
 // feat-one-shot-concierge-workspace-repo-context — name the connected
 // repository to the Concierge so it stops trying to infer owner/repo from a
 // git origin remote. On a `.git`-less workspace `git config --get
@@ -306,8 +369,9 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
 // two in lock-step.
 //
 // The `${owner}/${repo}` interpolation is safe because both are validated
-// against CC_GITHUB_NAME_RE at the call site before assignment (see
-// connectedOwner/connectedRepo resolution below) — no whitespace, backticks,
+// by `parseConnectedRepo` (github-repo-parse.ts, GITHUB_NAME_RE) before
+// assignment (see connectedOwner/connectedRepo resolution below) — no
+// whitespace, backticks,
 // `$`, `{`, newlines, or markdown fences can slip through. If that regex ever
 // relaxes, this becomes a prompt-injection sink.
 //
@@ -481,6 +545,10 @@ export const CC_OP_SLUGS = {
   usageOrphanDropped: "usage_orphan_dropped",
   ccPersistUsageOn: "cc-persist-usage-on",
   persistUserMessage: "persist-user-message",
+  // feat-reasoning-chat-boxes (#5370) — narration emit observability.
+  narrationRedactionDrop: "reasoning-narration:redaction-drop",
+  summaryEmit: "reasoning-narration:summary-emit",
+  summaryInsertFail: "reasoning-narration:summary-insert-fail",
 } as const;
 
 // #3640 F2 — Discriminated `PersistMode` replaces the per-dispatch
@@ -551,6 +619,14 @@ export class TurnPersistenceState {
   /** Active turn index (for `onResult` to tag `captureUsage`). */
   currentTurnIndex(): number {
     return this._currentTurnIndex;
+  }
+
+  /** feat-reasoning-chat-boxes (#5370) — read the abort latch so the summarize
+   *  emit path can DROP a "✓ Done" box once the turn has been aborted/stopped
+   *  (FR5 / spec-flow 1c). Flips true in `consumeForAbort()` (the
+   *  `onWorkflowEnded` abort branch). Read-only; never mutates. */
+  isAborted(): boolean {
+    return this._aborted;
   }
 
   /**
@@ -759,6 +835,127 @@ let _assertWriteScopeOverride:
   | ((u: string, c: string) => boolean)
   | null = null;
 
+// feat-reasoning-chat-boxes (#5370) — byte-cap + redact agent narration text,
+// returning `null` when a recognized secret SHAPE survives the scrub (DROP the
+// frame, fail-loud to Sentry). The ungated all-user live frame must be at least
+// as protected as the persisted summary (security M-2); `null` means emit
+// nothing. An empty string is returned verbatim (caller no-ops on it).
+function redactNarrationOrDrop(
+  raw: string,
+  field: "message" | "summary",
+  userId: string,
+  conversationId: string,
+): string | null {
+  if (!raw) return "";
+  // Byte-cap BEFORE redaction (mirrors the command_stream path) so the wire +
+  // stored + replay-buffer payloads are bounded and redaction back-tracking is
+  // capped (security C-2).
+  const capped = capUtf8Bytes(raw, NARRATION_TEXT_CAP_BYTES);
+  const text = capped.truncated
+    ? `${capped.text}${COMMAND_STREAM_TRUNCATION_MARKER}`
+    : capped.text;
+  const redacted = formatAssistantText(text, {
+    reportFallthrough: (shape) =>
+      reportSilentFallback(new Error("narration redaction fallthrough"), {
+        feature: "cc-dispatcher",
+        op: CC_OP_SLUGS.narrationRedactionDrop,
+        message: `${field} path-leak shape survived scrub`,
+        extra: { userId, conversationId, field, shape },
+      }),
+  });
+  // Drop-on-trip: a secret SHAPE (key/token/IP) survived → never persist/emit.
+  if (debugRedactionProbeTrips(redacted)) {
+    reportSilentFallback(new Error("narration redaction probe trip"), {
+      feature: "cc-dispatcher",
+      op: CC_OP_SLUGS.narrationRedactionDrop,
+      message: `${field} dropped — secret shape survived redaction`,
+      extra: { userId, conversationId, field },
+    });
+    return null;
+  }
+  return redacted;
+}
+
+// feat-reasoning-chat-boxes (#5370) — side-effect handler for the always-on
+// narrate/summarize tools, invoked from `onToolUse`. Extracted to module scope
+// (a) for unit-testability — the `onToolUse` closure is otherwise unreachable —
+// and (b) to ease the #3243 cc-dispatcher decomposition.
+//
+//   narrate   → redact → emit transient `reasoning_narration` frame (live-only,
+//               never buffered, mirrors `debug_event`).
+//   summarize → DROP if the dispatch is aborted/stopping (FR5 / spec-flow 1c) →
+//               redact ONCE → feed the SAME redacted string to BOTH
+//               `insertTurnSummary()` AND the buffered `turn_summary` frame
+//               (security M-1: stored bytes === replayed bytes). Routes through
+//               the `assertWriteScope` seam (forward-compat + test coverage).
+async function emitNarration(opts: {
+  toolName: string;
+  input: Record<string, unknown>;
+  userId: string;
+  conversationId: string;
+  /** Turn-abort latch (`TurnPersistenceState.isAborted()`): flips true in the
+   *  `onWorkflowEnded` abort branch (`consumeForAbort`). The SDK does NOT
+   *  deliver further `tool_use` blocks after its query is aborted, so a
+   *  `summarize` cannot reach `onToolUse` post-abort-pre-onWorkflowEnded in
+   *  practice; this latch additionally drops any `summarize` that arrives at or
+   *  after the terminal abort event. (The per-Query `AbortController` lives in
+   *  `realSdkQueryFactory`, a separate function — not in the dispatch `events`
+   *  closure — so the synchronous signal is not reachable here.) */
+  aborted: boolean;
+  sendToClient: (userId: string, msg: WSMessage) => void;
+}): Promise<void> {
+  const { toolName, input, userId, conversationId, aborted, sendToClient } = opts;
+
+  if (toolName === NARRATE_TOOL_FQN) {
+    const raw = typeof input.message === "string" ? input.message : "";
+    const redacted = redactNarrationOrDrop(raw, "message", userId, conversationId);
+    if (!redacted) return; // null (dropped) or empty → emit nothing
+    sendToClient(userId, { type: "reasoning_narration", message: redacted });
+    return;
+  }
+
+  if (toolName === SUMMARIZE_TOOL_FQN) {
+    // FR5 — never persist a "✓ Done" box for an aborted/stopping turn.
+    if (aborted) return;
+    // Forward-compat write-scope seam (no-op today; the dispatch identity IS the
+    // scope). Tests force it false to prove the summarize write routes through it.
+    if (!assertWriteScope(userId, conversationId)) return;
+    const raw = typeof input.summary === "string" ? input.summary : "";
+    const redacted = redactNarrationOrDrop(raw, "summary", userId, conversationId);
+    if (!redacted) return;
+    try {
+      await insertTurnSummary({
+        founderId: userId,
+        conversationId,
+        content: redacted,
+      });
+      // Same redacted bytes to the buffered frame (security M-1). The buffer +
+      // seq stamping is auto-applied by ws-handler `isBufferedFrame()`.
+      sendToClient(userId, { type: "turn_summary", summary: redacted });
+      // Liveness: pino-only (no Sentry issue per success; NO raw body). The
+      // operator counts these by `op` without SSH (Observability block).
+      log.info(
+        { conversationId, kind: "turn_summary", op: CC_OP_SLUGS.summaryEmit },
+        "turn_summary persisted + emitted",
+      );
+    } catch (err) {
+      // insertTurnSummary already mirrored the DB error; do NOT emit the frame
+      // (no row → no replay parity). Re-mirror at the emit boundary so the
+      // failure is attributable to this dispatch.
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: CC_OP_SLUGS.summaryInsertFail,
+        extra: { userId, conversationId },
+      });
+    }
+    return;
+  }
+}
+
+// Test seam — drive `emitNarration` directly (the onToolUse closure is
+// unreachable from a unit test). Mirrors the `__set*ForTests` convention.
+export const __emitNarrationForTests = emitNarration;
+
 // #3603 PR-A2 review H4 — `CC_PERSIST_USAGE=true` is the trigger for a new
 // GDPR-regulated persisted category (Art. 13(3) prior-disclosure surface).
 // Mirror the FIRST observation per process via `reportSilentFallback` so
@@ -866,6 +1063,12 @@ const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
   "NotebookRead",
   "TodoWrite",
   "ExitPlanMode",
+  // feat-reasoning-chat-boxes (#5370) — pure emit tools, auto-approved so a
+  // narration never pays a canUseTool round-trip / surfaces a review modal.
+  // The real controls are the emit-boundary redaction + abort drop-guard, not a
+  // gate (see TOOL_TIER_MAP doc + security C-2).
+  NARRATE_TOOL_FQN,
+  SUMMARIZE_TOOL_FQN,
 ];
 
 /**
@@ -1175,6 +1378,39 @@ export function cleanupCcBashGatesForConversation(
   _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
 }
 
+/**
+ * #5356 — the runner's `onCloseQuery` close-side hook (fires from EVERY close
+ * path BEFORE `activeQueries.delete`: `emitWorkflowEnded`, `reapIdle`,
+ * `closeConversation`). Two responsibilities:
+ *   1. ALWAYS drain `_ccBashGates` (+ batched-approval cache + ack posture) for
+ *      the conversation — `reapIdle` / `closeConversation` close the Query
+ *      WITHOUT firing `onWorkflowEnded`, so the dispatch-side cleanup would
+ *      otherwise never run and the gate registry would leak.
+ *   2. On a `disconnected` grace-abort ONLY, checkpoint the conversation's
+ *      uncommitted working-tree changes — the cc-soleur-go (Concierge) parity
+ *      with the legacy `agent-runner` disconnect branch (#5275/#5356). The
+ *      helper is fire-and-forget and never throws, so the unconditional
+ *      bash-gate drain above always completes regardless.
+ */
+export function handleCcCloseQuery({
+  conversationId,
+  userId,
+  reason,
+}: {
+  conversationId: string;
+  userId: string;
+  reason?: "disconnected";
+}): void {
+  cleanupCcBashGatesForConversation(userId, conversationId);
+  if (reason === "disconnected") {
+    void checkpointInflightWorkForConversation(
+      userId,
+      conversationId,
+      "cc-resolve-workspace-path",
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // realSdkQueryFactory — Stage 2.12 binding (unconditional since #3270).
 //
@@ -1339,23 +1575,12 @@ export const realSdkQueryFactory: QueryFactory = async (
 
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below
-    // and the C4 write-tool gate further down. CC_GITHUB_NAME_RE rejects any
-    // path-shaping characters.
-    let connectedOwner = "";
-    let connectedRepo = "";
-    if (repoUrl) {
-      try {
-        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
-        const o = parts[0];
-        const r = parts[1]?.replace(/\.git$/, "");
-        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
-          connectedOwner = o;
-          connectedRepo = r;
-        }
-      } catch {
-        /* malformed repoUrl → no owner/repo (degrade silently, not security) */
-      }
-    }
+    // and the C4 write-tool gate further down. #5388: shares `parseConnectedRepo`
+    // with `resolveC4Eligible` so the factory's c4-build gate and the dispatcher's
+    // c4-advertise gate parse owner/repo identically (AC2 parity by construction).
+    const connected = parseConnectedRepo(repoUrl);
+    const connectedOwner = connected?.owner ?? "";
+    const connectedRepo = connected?.repo ?? "";
 
     // feat-one-shot-concierge-gh-403 — installation self-heal. The stored
     // installation id (workspaces.github_installation_id, resolved above) can
@@ -1381,72 +1606,35 @@ export const realSdkQueryFactory: QueryFactory = async (
     // solo-vs-active-workspace clobber risk) — the override re-applies on each
     // cold dispatch, which is bounded (cold-conversation factory). Best-effort:
     // any probe failure keeps the stored install and never blocks the chat.
-    let effectiveInstallationId = installationId;
-    if (installationId !== null && connectedOwner) {
-      try {
-        const storedAccount = await getInstallationAccount(installationId);
-        const alreadyCorrect =
-          storedAccount.login.toLowerCase() === connectedOwner.toLowerCase();
-        // `alreadyCorrect` is a no-op (the stored install already owns the
-        // connected repo), NOT a skip — do not mirror it. Every other
-        // not-already-correct branch either promotes (success log.info) or
-        // KEEPS the stored install, and a keep must be a queryable Sentry event
-        // (Bug B — cq-silent-fallback-must-mirror-to-sentry).
-        if (!alreadyCorrect) {
-          if (storedAccount.type === "User") {
-            // Only derive the user's login from a personal (User) install.
-            const { installationId: ownerInstall, outcome } =
-              await findRepoOwnerInstallationForUser(
-                connectedOwner,
-                storedAccount.login,
-              );
-            if (ownerInstall !== null && ownerInstall !== installationId) {
-              log.info(
-                {
-                  userId: args.userId,
-                  storedInstallationId: installationId,
-                  ownerInstallationId: ownerInstall,
-                  owner: connectedOwner,
-                },
-                "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
-              );
-              effectiveInstallationId = ownerInstall;
-            } else if (ownerInstall === null) {
-              // Promotion denied (not-member / transient-indeterminate /
-              // token-mint-failed / no-owner-install) — keep the stored
-              // (possibly-wrong) install + surface the skip so a residual 403
-              // is explainable from Sentry without SSH.
-              mirrorSelfHealSkip({
-                userId: args.userId,
-                storedInstallationId: installationId,
-                owner: connectedOwner,
-                membershipProbeOutcome: outcome,
-                effectiveInstallationId: installationId,
-              });
-            }
-          } else {
-            // Org-type stored install whose account != the connected-repo
-            // owner: the user's login is not derivable without a service-role
-            // admin lookup, so keep the stored install (fail-safe). Mirror it.
-            mirrorSelfHealSkip({
-              userId: args.userId,
-              storedInstallationId: installationId,
-              owner: connectedOwner,
-              membershipProbeOutcome: "org-type-stored-install",
-              effectiveInstallationId: installationId,
-            });
-          }
-        }
-      } catch (probeErr) {
-        reportSilentFallback(probeErr, {
-          feature: "cc-dispatcher",
-          op: "installation-self-heal-probe",
-          extra: { userId: args.userId },
-          message:
-            "Repo-owner installation probe failed; keeping stored installation",
-        });
-      }
-    }
+    // Self-heal SELECTION extracted to `resolveEffectiveInstallationId`
+    // (cc-effective-installation.ts) so the per-dispatch warm re-provision
+    // (cc-reprovision.ts) selects the SAME promoted install as this cold factory
+    // — otherwise the warm re-clone would use the raw (possibly 403-ing) stored
+    // install and falsely report "workspace reclaimed — couldn't restore" for an
+    // org repo a cold turn could recover (#5340 review finding). Best-effort:
+    // returns the stored install on any probe failure, never widening access.
+    const effectiveInstallationId = await resolveEffectiveInstallationId({
+      userId: args.userId,
+      installationId,
+      repoUrl,
+    });
+
+    // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
+    // reprovision-ensure-dir-presandbox). The bwrap sandbox binds `cwd` to THIS
+    // factory's own resolved `workspacePath` (the `:1315` `fetchUserWorkspacePath`
+    // in the Promise.all above — NOT `args.workspacePath`, which is system-prompt-
+    // only) at `query()` construction below, and requires the dir to EXIST. After
+    // a reclaim it can be gone. The clone's mkdir (PR #5367) is CONDITIONAL — it
+    // sits past `ensureWorkspaceRepoCloned`'s not-connected / `.git`-present early-
+    // returns — so a reclaimed not-connected workspace would skip it and the
+    // sandbox would `chdir` into a missing dir. Ensuring the dir here, before the
+    // clone and before `buildAgentQueryOptions`, is the stronger precondition. On
+    // failure it surfaces a retryable error (rides the `query()`-construction catch
+    // below) rather than building a doomed sandbox.
+    await ensureWorkspaceDirExists(workspacePath, {
+      feature: "cc-dispatcher",
+      userId: args.userId,
+    });
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
@@ -1524,26 +1712,31 @@ export const realSdkQueryFactory: QueryFactory = async (
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
   {
+    // feat-reasoning-chat-boxes (#5370): the `soleur_platform` server is now
+    // built UNCONDITIONALLY so the always-on narrate/summarize tools are
+    // reachable on every cc dispatch (the live-status + turn-summary UX is not
+    // flag-gated). The C4 write tool is still flag+repo-gated and is MERGED into
+    // the SAME server when eligible — there is exactly one soleur_platform
+    // server, with a tool set that grows by capability.
+    let c4Tools = [] as ReturnType<typeof buildC4ConciergeTools>;
+
     // Reuse the owner/repo parsed once above + the self-healed installation id
     // so the C4 write tool commits via the SAME repo-owner installation the
-    // GH_TOKEN was minted for (feat-one-shot-concierge-gh-403).
+    // GH_TOKEN was minted for (feat-one-shot-concierge-gh-403). owner/repo/
+    // installation are CLOSED OVER (ADR-044) — never tool input.
     const owner = connectedOwner;
     const repo = connectedRepo;
     if (effectiveInstallationId !== null && owner && repo) {
       let c4Enabled = false;
       try {
-        const tenant = await getFreshTenantClient(args.userId);
-        const { data: roleRow } = await tenant
-          .from("users")
-          .select("role")
-          .eq("id", args.userId)
-          .single<{ role: unknown }>();
-        const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
-        c4Enabled = await getRuntimeFlag(C4_VISUALIZER_FLAG, {
-          userId: args.userId,
-          role,
-          orgId: null,
-        });
+        // #5388: the role-read + Flagsmith resolve is extracted to
+        // `resolveC4FlagEnabled` so the factory (tool-build decision) and the
+        // dispatcher's per-dispatch `registeredPlatformToolNames` resolve share
+        // ONE flag decision and cannot drift. Flag-only here (NOT the full
+        // `resolveC4Eligible`) because owner/repo/installation are already
+        // resolved in this factory scope — calling the full helper would
+        // redundantly re-resolve them.
+        c4Enabled = await resolveC4FlagEnabled(args.userId);
       } catch (err) {
         reportSilentFallback(err, {
           feature: "cc-dispatcher",
@@ -1554,19 +1747,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         });
       }
       if (c4Enabled) {
-        const c4Server = createSdkMcpServer({
-          name: "soleur_platform",
-          version: "1.0.0",
-          tools: buildC4ConciergeTools({
-            userId: args.userId,
-            installationId: effectiveInstallationId,
-            owner,
-            repo,
-            workspacePath,
-          }),
+        c4Tools = buildC4ConciergeTools({
+          userId: args.userId,
+          installationId: effectiveInstallationId,
+          owner,
+          repo,
+          workspacePath,
         });
-        (c4McpServers as Record<string, unknown>).soleur_platform = c4Server;
-        c4ToolName = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
+        c4ToolName = C4_TOOL_FQN;
         c4PromptAddendum =
           "## C4 diagram editing\n" +
           "To edit a C4 architecture diagram, call the `edit_c4_diagram` tool " +
@@ -1580,6 +1768,13 @@ export const realSdkQueryFactory: QueryFactory = async (
           "NOT paste DSL into chat for the user to apply.";
       }
     }
+
+    const platformServer = createSdkMcpServer({
+      name: "soleur_platform",
+      version: "1.0.0",
+      tools: [...buildNarrationTools({ userId: args.userId }), ...c4Tools],
+    });
+    (c4McpServers as Record<string, unknown>).soleur_platform = platformServer;
   }
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both
@@ -1628,6 +1823,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
+  // feat-reasoning-chat-boxes (#5370) — narrate/summarize are always registered,
+  // so the directive is appended unconditionally (mirrors GH_403's "always-on").
+  effectiveSystemPrompt += `\n\n${NARRATION_PROMPT_DIRECTIVE}`;
   // No entitled token → sandbox egress closed → gh/git network-dead at the
   // proxy. Override the directive's "platform will retry automatically"
   // promise, which only holds when a token (and thus egress) exists.
@@ -1636,7 +1834,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   }
   // feat-one-shot-concierge-workspace-repo-context — name the server-resolved
   // connected repo so the agent uses it for `-R owner/repo` instead of probing
-  // a (possibly absent) git remote. Guarded ONLY on the CC_GITHUB_NAME_RE-
+  // a (possibly absent) git remote. Guarded ONLY on the parseConnectedRepo-
   // validated owner/repo truthiness — NOT a `.git` presence check, which is
   // the exact dependency the bug stems from. Fed only connectedOwner/
   // connectedRepo (validated above), never raw repoUrl or tool input.
@@ -1930,6 +2128,76 @@ export function hasActiveCcQuery(conversationId: string): boolean {
   return _runner.hasActiveQuery(conversationId);
 }
 
+/**
+ * #5356 — signal the process-wide cc runner to close a conversation's live
+ * `Query` from OUTSIDE a dispatch (the ws-handler disconnect grace timer).
+ * Mirrors `hasActiveCcQuery`'s `_runner`-direct accessor shape so the caller
+ * does not need to thread `sendToClient`. A no-op when no runner exists yet OR
+ * the conversation has no live `activeQueries` entry (a legacy-path or already-
+ * completed conversation — `closeConversation` itself no-ops on a missing
+ * entry). `reason === "disconnected"` threads to the close hook and triggers
+ * the in-flight checkpoint.
+ */
+export function closeCcConversation(
+  conversationId: string,
+  reason?: "disconnected",
+): void {
+  if (!_runner) return;
+  _runner.closeConversation(conversationId, reason);
+}
+
+// #5371 — cadence for the in-process cc idle reaper. Kept a LOCAL literal
+// (not exported, not a runtime knob): coupling it to agent-runner's
+// module-private STUCK_ACTIVE_CHECK_INTERVAL_MS would entangle two
+// unrelated reapers. ≤ DEFAULT_IDLE_REAP_MS (10min, in soleur-go-runner.ts)
+// so an idle query is reaped within ~1 interval of crossing the window.
+const CC_IDLE_REAPER_INTERVAL_MS = 300_000;
+
+/**
+ * #5371 — reap idle cc queries from OUTSIDE a dispatch (the boot-time
+ * scheduler). Mirrors `closeCcConversation`'s `_runner`-guarded accessor
+ * shape so the caller never forces runner creation (no `sendToClient`
+ * closure needed). No-op → 0 when no runner exists yet.
+ */
+export function reapIdleCcQueries(): number {
+  if (!_runner) return 0;
+  return _runner.reapIdle();
+}
+
+/**
+ * #5371 — drain EVERY active cc query on SIGTERM, aborting WITHOUT a
+ * checkpoint (legacy `abortAllSessions` parity — the disconnect grace-abort
+ * terminal, #5362, is what preserves uncommitted work; shutdown only stops
+ * API spend + flips status cleanly). No-op → 0 when no runner exists yet.
+ */
+export function drainCcQueriesForShutdown(): number {
+  if (!_runner) return 0;
+  return _runner.closeAllForShutdown();
+}
+
+/**
+ * #5371 — start the boot-time cc idle-reaper. Mirrors
+ * `startStuckActiveReaper` (in agent-runner.ts): a `setInterval` returning
+ * the timer, `unref()`'d before return so it never blocks shutdown. The
+ * explicit `clearInterval` on SIGTERM is belt-and-suspenders on top of
+ * `unref()`, not a replacement. The callback only ever calls the
+ * null-guarded `reapIdleCcQueries()` — never `_runner.reapIdle()` directly.
+ */
+export function startCcIdleReaper(): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    try {
+      reapIdleCcQueries();
+    } catch (err) {
+      // reapIdle is synchronous in-memory Map iteration (no I/O), so this
+      // catch is defensive per cq-silent-fallback-must-mirror-to-sentry —
+      // not an expected-to-fire path.
+      reportSilentFallback(err, { feature: "cc-idle-reaper", op: "reap" });
+    }
+  }, CC_IDLE_REAPER_INTERVAL_MS);
+  timer.unref();
+  return timer;
+}
+
 export function getSoleurGoRunner(
   sendToClient: (userId: string, message: WSMessage) => boolean,
 ): SoleurGoRunner {
@@ -1954,13 +2222,13 @@ export function getSoleurGoRunner(
       // wire boundary.
       sendToClient(userId, event as unknown as WSMessage);
     },
-    // Drain `_ccBashGates` from EVERY internal close path. Without this
-    // hook, `runner.reapIdle()` and `runner.closeConversation()` close
-    // the Query without firing `onWorkflowEnded`, so the dispatch-side
-    // cleanup in `onWorkflowEnded` is never reached and the gate
-    // registry leaks. The runner fires this BEFORE `activeQueries.delete`.
-    onCloseQuery: ({ conversationId, userId }) =>
-      cleanupCcBashGatesForConversation(userId, conversationId),
+    // Drain `_ccBashGates` from EVERY internal close path, AND checkpoint
+    // in-flight work on a `disconnected` grace-abort (#5356). Without the
+    // drain, `runner.reapIdle()` / `runner.closeConversation()` close the
+    // Query without firing `onWorkflowEnded`, so the dispatch-side cleanup is
+    // never reached and the gate registry leaks. The runner fires this BEFORE
+    // `activeQueries.delete`. See `handleCcCloseQuery`.
+    onCloseQuery: handleCcCloseQuery,
     defaultCostCaps: readCcCostCaps(),
   });
   return _runner;
@@ -2357,6 +2625,71 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // #5340 / #5240 design item #2 — deterministic workspace re-provision on
+  // reconnect. After a sandbox/host reclaim the resolved workspace path can be a
+  // fresh filesystem with no repo. The factory-internal self-heal
+  // (`ensureWorkspaceRepoCloned` in `realSdkQueryFactory`) runs ONLY on a COLD conversation;
+  // warm-query reconnect (the epic's headline scenario) never re-invokes the
+  // factory. Re-provision per-dispatch here — same fire-and-forget pattern as the
+  // `setBashAutonomous` warm-query resolve above — so BOTH cold and warm turns
+  // recover AND publish the outcome the honest-message branch reads.
+  //
+  // `reprovisionOutcome` is the POST-recovery signal: `onWorkflowEnded` shows the
+  // honest "workspace reclaimed" message ONLY when a `worktree_enter_failed` turn
+  // is paired with `"failed"` here — the message is gated AFTER the recovery
+  // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
+  // recovery-it-gates.md), never before. Idempotent with the cold factory call
+  // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  let reprovisionOutcome: ReprovisionOutcome | undefined;
+  void reprovisionWorkspaceOnDispatch(userId)
+    .then((outcome) => {
+      reprovisionOutcome = outcome;
+    })
+    .catch((err) => {
+      // reprovisionWorkspaceOnDispatch is already fail-soft (returns "ok" on a
+      // resolver error); this catch is belt-and-suspenders for an unexpected
+      // synchronous throw and leaves the outcome unresolved (generic message).
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "reprovision-on-dispatch-publish",
+        extra: { userId, conversationId },
+      });
+    });
+
+  // #5388 — per-dispatch registered platform-tool set for the unregistered-tool
+  // mirror predicate (`onToolUse` below). Seeded with the ALWAYS-registered base
+  // (narrate/summarize); the flag+repo-gated `edit_c4_diagram` FQN is APPENDED
+  // iff c4 is eligible for THIS user/dispatch.
+  //
+  // Per-dispatch RE-RESOLUTION (not a factory-published cell) is load-bearing:
+  // the c4 tool is built in `realSdkQueryFactory`, which runs ONLY on a COLD
+  // conversation; on warm-query reuse it is not re-invoked, so a factory-published
+  // set would stay at the c4-less base and a c4 edit on a WARM conversation would
+  // false-positive again. Same fire-and-forget warm-query pattern as the
+  // `resolveBashAutonomous` / `reprovisionWorkspaceOnDispatch` resolves above.
+  // `resolveC4Eligible` re-resolves the FULL precondition set (installation +
+  // owner/repo + flag) the factory gates the tool on — sharing `resolveC4FlagEnabled`
+  // with the factory — so the advertise can never be MORE permissive than the
+  // registration (the #5388 AC2 false-suppression guard). Resolves before any c4
+  // `tool_use` can surface (the SDK must build + emit text/tool blocks first, and
+  // an `edit_c4_diagram` call is never the first block — it is an addendum-driven
+  // mid-turn call). Fail-closed: on a resolution error the c4 FQN stays OUT (a
+  // benign false-positive) and the failure is mirrored — never a false-suppression.
+  const registeredPlatformToolNames: string[] = [
+    ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
+  ];
+  void resolveC4Eligible(userId)
+    .then((eligible) => {
+      if (eligible) registeredPlatformToolNames.push(C4_TOOL_FQN);
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "c4-registered-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+
   // feat-debug-mode-stream — per-dispatch debug-stream gate. Two INDEPENDENT
   // conditions, BOTH required for any debug_event to emit (read as `let`
   // bindings, mirroring `bashAutonomousPosture`'s fire-and-forget resolve so
@@ -2516,6 +2849,30 @@ export async function dispatchSoleurGo(
       // not mirror heartbeats to the debug panel. Do not "fix" this omission.
     },
     onToolUse: (block) => {
+      // feat-reasoning-chat-boxes (#5370) — narrate/summarize drive their OWN
+      // dedicated frames (reasoning_narration / turn_summary), NOT the generic
+      // user-facing tool_use indicator. Handle + return early so the user never
+      // sees a redundant "using narrate" bubble and the team-only debug stream
+      // stays untouched. Fire-and-forget (the summarize insert awaits);
+      // `emitNarration` owns its own error handling. The abort drop-guard reads
+      // the turn-abort latch (`state.isAborted()`, set in the onWorkflowEnded
+      // abort branch) — the SDK delivers no `tool_use` after its query aborts,
+      // so a stopped turn never reaches a `summarize` here; the latch drops any
+      // that arrives at/after the terminal abort. (The per-Query AbortController
+      // lives in realSdkQueryFactory, not this closure — see emitNarration's
+      // `aborted` doc.)
+      if (block.name === NARRATE_TOOL_FQN || block.name === SUMMARIZE_TOOL_FQN) {
+        void emitNarration({
+          toolName: block.name,
+          input: block.input,
+          userId,
+          conversationId,
+          aborted: state.isAborted(),
+          sendToClient,
+        });
+        return;
+      }
+
       // #2909 FR2 — silent-failure mirror for unregistered platform tools.
       // When `mcpServers === {}` (Phase 1 default), the Claude Agent SDK
       // rejects `mcp__soleur_platform__*` calls at model-validation time
@@ -2527,7 +2884,11 @@ export async function dispatchSoleurGo(
       // cannot flood Sentry. Intrinsically scoped to cc-router because this
       // callback only fires from `dispatchSoleurGo` (legacy
       // `startAgentSession` is a separate path).
-      if (shouldMirrorUnregisteredPlatformToolUse(block.name, CC_REGISTERED_PLATFORM_TOOL_NAMES)) {
+      // #5388: read the PER-DISPATCH registered set (base narrate/summarize +
+      // the c4 FQN when eligible this dispatch), NOT the c4-less module constant —
+      // otherwise a legitimate edit_c4_diagram call false-positives. The cell is
+      // resolved cold+warm above (see `registeredPlatformToolNames`).
+      if (shouldMirrorUnregisteredPlatformToolUse(block.name, registeredPlatformToolNames)) {
         const safeToolName = sanitizeToolNameForLog(block.name);
         mirrorWithDebounce(
           null,
@@ -2783,6 +3144,22 @@ export async function dispatchSoleurGo(
           runnerRunawayReason: end.reason,
           runnerRunawayLastBlockKind: end.lastBlockKind,
           runnerRunawayLastBlockToolName: end.lastBlockToolName,
+        });
+      } else if (end.status === "worktree_enter_failed") {
+        // #5340 / #5240 design item #2 — post-recovery-failure honest message.
+        // `worktree_enter_failed` is NOT terminal (see
+        // TERMINAL_WORKFLOW_END_STATUSES), so it routes HERE to a
+        // `{ type: "error", message }` frame. When the per-dispatch
+        // re-provision genuinely failed (`reprovisionOutcome === "failed"`),
+        // surface the honest "workspace reclaimed" copy; otherwise the generic
+        // retryable copy. The recovery already ran (factory `ensureWorkspaceRepoCloned` cold +
+        // `reprovisionWorkspaceOnDispatch` cold/warm) — this branch sits AFTER
+        // it (placement learning 2026-06-14-short-circuit-guard-must-sit-after-
+        // the-recovery-it-gates.md), so the message never lies in the
+        // recoverable case.
+        sendToClient(userId, {
+          type: "error",
+          message: resolveWorktreeEnterFailedMessage(reprovisionOutcome),
         });
       } else {
         sendToClient(userId, {

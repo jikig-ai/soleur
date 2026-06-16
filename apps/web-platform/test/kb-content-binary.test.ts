@@ -60,7 +60,7 @@ beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-binary-root-"));
   process.env.WORKSPACES_ROOT = tmpRoot;
   // The active-workspace fs dir is `<WORKSPACES_ROOT>/<userId>` (solo N2).
-  tmpWorkspace = path.join(tmpRoot, "user-1");
+  tmpWorkspace = path.join(tmpRoot, "11111111-1111-4111-8111-111111111111");
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
@@ -89,7 +89,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("PNG file returns Content-Type image/png", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -115,7 +115,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("image file returns Content-Disposition: inline", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -138,7 +138,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("PDF returns Content-Disposition: inline", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -161,7 +161,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("DOCX returns Content-Disposition: attachment", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -186,7 +186,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("path traversal on binary path returns 403", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -205,7 +205,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("non-existent binary file returns 404", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -221,7 +221,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test(".md file still goes through readContent path", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -243,7 +243,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("symlink in binary path is rejected", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -264,7 +264,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("returns Content-Length header", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -284,7 +284,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("binary response advertises Accept-Ranges: bytes", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -303,7 +303,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("Range request returns 206 Partial Content with sliced body", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -329,7 +329,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("Range request with open-ended end returns up to EOF", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(
@@ -354,7 +354,7 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
 
   test("Out-of-range request returns 416", async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-1" } },
+      data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
       error: null,
     });
     mockFrom.mockReturnValue(

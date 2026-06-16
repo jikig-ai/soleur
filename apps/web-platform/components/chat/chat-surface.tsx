@@ -26,6 +26,7 @@ import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
+import { TurnSummaryBubble } from "@/components/chat/turn-summary-bubble";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
@@ -223,6 +224,7 @@ export function ChatSurface({
     conversationCreatedAt,
     historyLoading,
     streamState,
+    liveNarration,
     abort,
     connection,
     resumeAfterUnrecoverable,
@@ -874,6 +876,12 @@ export function ChatSurface({
                   // the `: never` exhaustiveness rail; inline body is null.
                   body = null;
                   break;
+                case "turn_summary":
+                  // feat-reasoning-chat-boxes (#5370) — durable per-turn summary
+                  // box, rendered INLINE in the main conversation (plain-text;
+                  // never MarkdownRenderer — see TurnSummaryBubble security note).
+                  body = <TurnSummaryBubble content={msg.content} />;
+                  break;
                 default: {
                   const _exhaustive: never = msg;
                   void _exhaustive;
@@ -906,6 +914,35 @@ export function ChatSurface({
                 getIconPath={getIconPath}
                 variant={variant}
               />
+            </div>
+          )}
+
+          {/* feat-reasoning-chat-boxes (#5370) — transient live narration line.
+              Shows the agent's deliberate plain-language status near the Working
+              badge while a turn is in flight. The slot is gated only on
+              `streamState === "streaming"`; the CONTENT falls back to a
+              "Still working…" placeholder when `liveNarration === null` — which
+              is exactly the spec-flow Finding 4 reconnect case: the live frame is
+              live-only (never buffered), so a mid-turn reconnect nulls
+              `liveNarration` while the turn is still streaming. The placeholder
+              keeps the user oriented instead of leaving a blank gap, and is
+              immediately replaced when the next `narrate` frame arrives. It
+              disappears on turn-end (the reducer nulls liveNarration AND
+              streamState leaves "streaming" on every turn-end path), so it is
+              still fully inert outside an in-flight turn. */}
+          {streamState === "streaming" && (
+            <div
+              data-testid="live-narration"
+              aria-live="polite"
+              className="flex items-center gap-2 px-1 text-sm text-soleur-text-secondary"
+            >
+              <span
+                aria-hidden="true"
+                className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+              />
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {liveNarration ?? "Still working…"}
+              </span>
             </div>
           )}
 

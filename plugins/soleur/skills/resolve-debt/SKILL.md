@@ -7,6 +7,8 @@ description: "This skill should be used when triaging or closing open entries in
 
 Operator-facing surface for the `knowledge-base/project/learnings/technical-debt/` ledger. The ledger is populated reactively by `/soleur:compound`; this skill is the read + close half of the loop.
 
+Complement: [/soleur:harvest-debt](../harvest-debt/SKILL.md) surfaces inline `SOLEUR-DEBT:` markers in source code (the deferrals that have not yet been promoted into this ledger). harvest surfaces; compound promotes; this skill closes.
+
 Four modes:
 
 - **`--list`** — print a deterministic markdown table of open entries (severity desc, then date asc). Stdout only, no prompts. Pair with `--json` for agent / `/loop` composition.

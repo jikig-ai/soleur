@@ -354,6 +354,21 @@ export type WSMessage =
       label?: string;
       body: string;
     }
+  // feat-reasoning-chat-boxes (#5370) — agent-emitted, USER-FACING narration.
+  // Distinct from `debug_event` (team-only, dev-cohort, raw SDK internals):
+  // these carry deliberate plain-language text the agent authors via the
+  // `narrate`/`summarize` MCP tools, redacted at the server emit boundary.
+  //
+  // `reasoning_narration` is the TRANSIENT live status line ("Looking into
+  // the navigation issue…"). LIVE-ONLY: it carries NO `seq` and is EXCLUDED
+  // from the stream-replay buffer (mirrors debug_event), so it never replays
+  // on reconnect and is never persisted. The client stores it in a transient
+  // `liveNarration` slot torn down on every turn-end path.
+  | { type: "reasoning_narration"; message: string }
+  // `turn_summary` is the DURABLE per-turn record ("✓ Fixed the side panel…").
+  // Persisted as a `messages` row (message_kind='turn_summary', mig 105) AND
+  // buffered (carries `seq`) so it survives reconnect + history refetch.
+  | { type: "turn_summary"; summary: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   // feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
   // (server→client). A held Bash command awaiting the owner's one-time ack.

@@ -166,7 +166,7 @@ describe("agent-runner kb_share_preview tool wiring", () => {
     setupSupabaseMock(USER_WITH_WORKSPACE);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.allowedTools).toContain(
@@ -188,7 +188,7 @@ describe("agent-runner kb_share_preview tool wiring", () => {
     setupSupabaseMock(USER_WITH_WORKSPACE);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toMatch(/kb_share_preview/);
@@ -198,7 +198,7 @@ describe("agent-runner kb_share_preview tool wiring", () => {
     setupSupabaseMock(USER_WITH_WORKSPACE);
     setupQueryMockImmediate();
 
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
@@ -224,7 +224,7 @@ describe("agent-runner kb_share_preview tool wiring", () => {
     setupQueryMockImmediate();
 
     // Must NOT throw — the empty legacy column is no longer a provisioning gate.
-    await startAgentSession("user-1", "conv-1", "cpo");
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.allowedTools).toContain(

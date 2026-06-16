@@ -3,6 +3,9 @@
 # assertion for feature-tweet drafts (#5021). Proves the gate is NOT the Liquid
 # linter: it validates required frontmatter fields + the canonical thread
 # heading, independent of lint-distribution-content.sh.
+#
+# #5022 — feature-tweet now cross-posts to X AND Bluesky, so the gate additionally
+# requires a `bluesky` channel token and a non-empty `## Bluesky` section.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -37,7 +40,7 @@ VALID='---
 title: "Workspaces now read your real codebase"
 type: feature-launch
 publish_date: ""
-channels: x
+channels: x, bluesky
 status: draft
 pr_reference: "#4997"
 ---
@@ -46,7 +49,11 @@ pr_reference: "#4997"
 
 ## X/Twitter Thread
 
-Your AI team now operates on your actual codebase -- not a blank workspace.'
+Your AI team now operates on your actual codebase -- not a blank workspace.
+
+## Bluesky
+
+Your AI team now operates on your actual codebase -- open, file-based, no black box.'
 
 _expect_pass() {
   local label="$1" body="$2"
@@ -77,28 +84,67 @@ _expect_reject "rejects status: scheduled" "${VALID/status: draft/status: schedu
 _expect_reject "rejects missing status" "${VALID/status: draft/notes: none}"
 
 # channels must include x
-_expect_reject "rejects channels without x" "${VALID/channels: x/channels: bluesky}"
+_expect_reject "rejects channels without x" "${VALID/channels: x, bluesky/channels: bluesky}"
+# channels must include bluesky (#5022)
+_expect_reject "rejects channels without bluesky" "${VALID/channels: x, bluesky/channels: x}"
 
-# Missing thread heading (explicit fixture — avoids bash `/` substitution quirks)
+# channels in YAML inline-list / quoted forms still satisfy BOTH token requirements
+_expect_pass "accepts channels: [x, bluesky] inline list" "${VALID/channels: x, bluesky/channels: [x, bluesky]}"
+_expect_pass "accepts channels: \"x, bluesky\" quoted" "${VALID/channels: x, bluesky/channels: \"x, bluesky\"}"
+_expect_reject "rejects channels: [bluesky] (no x)" "${VALID/channels: x, bluesky/channels: [bluesky]}"
+_expect_reject "rejects channels: [x] (no bluesky)" "${VALID/channels: x, bluesky/channels: [x]}"
+
+# Missing X thread heading (explicit fixture — avoids bash `/` substitution quirks)
 NO_HEADING='---
 title: "x"
 type: feature-launch
 publish_date: ""
-channels: x
+channels: x, bluesky
 status: draft
 pr_reference: "#1"
 ---
 
 ## Discord
 
-Some body but no X thread heading.'
+Some body but no X thread heading.
+
+## Bluesky
+
+A bluesky post body.'
 _expect_reject "rejects missing ## X/Twitter Thread heading" "$NO_HEADING"
 
-# channels in YAML inline-list / quoted forms still satisfy the `x` requirement
-_expect_pass "accepts channels: [x] inline list" "${VALID/channels: x/channels: [x]}"
-_expect_pass "accepts channels: \"x\" quoted" "${VALID/channels: x/channels: \"x\"}"
-_expect_pass "accepts channels: [x, bluesky] with x present" "${VALID/channels: x/channels: [x, bluesky]}"
-_expect_reject "rejects channels: [bluesky] (no x)" "${VALID/channels: x/channels: [bluesky]}"
+# Missing ## Bluesky heading (#5022) — valid X thread + bluesky channel, no section
+NO_BLUESKY_HEADING='---
+title: "x"
+type: feature-launch
+publish_date: ""
+channels: x, bluesky
+status: draft
+pr_reference: "#1"
+---
+
+## X/Twitter Thread
+
+A valid X thread body.'
+_expect_reject "rejects missing ## Bluesky heading" "$NO_BLUESKY_HEADING"
+
+# ## Bluesky heading present but empty body (#5022)
+EMPTY_BLUESKY='---
+title: "x"
+type: feature-launch
+publish_date: ""
+channels: x, bluesky
+status: draft
+pr_reference: "#1"
+---
+
+## X/Twitter Thread
+
+A valid X thread body.
+
+## Bluesky
+'
+_expect_reject "rejects empty ## Bluesky body" "$EMPTY_BLUESKY"
 
 # Unterminated frontmatter (opening --- but no closing fence) must fail closed —
 # otherwise the extractor treats the whole file as frontmatter and a malformed
@@ -106,19 +152,19 @@ _expect_reject "rejects channels: [bluesky] (no x)" "${VALID/channels: x/channel
 UNTERMINATED='---
 title: leaked
 status: draft
-channels: x
+channels: x, bluesky
 
 ## X/Twitter Thread
 
 real body content with no closing frontmatter fence'
 _expect_reject "rejects unterminated frontmatter" "$UNTERMINATED"
 
-# Heading present but empty body
+# X heading present but empty body
 EMPTY_THREAD='---
 title: "x"
 type: feature-launch
 publish_date: ""
-channels: x
+channels: x, bluesky
 status: draft
 pr_reference: "#1"
 ---
