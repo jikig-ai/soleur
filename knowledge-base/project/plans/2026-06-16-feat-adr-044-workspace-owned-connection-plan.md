@@ -13,6 +13,18 @@ spec: knowledge-base/project/specs/feat-adr-044-workspace-connection/spec.md
 
 # Finish ADR-044 — Workspace-Owned Connection (PR-1)
 
+## Enhancement Summary
+
+**Deepened:** 2026-06-16 · **Agents:** data-integrity-guardian, security-sentinel, architecture-strategist, verify-the-negative grep pass. All 6 plan factual claims verified against code.
+
+**Load-bearing corrections (deepen):**
+1. **Split-brain layering (arch P0):** not-ready copy assembles at the **dispatch boundary** (`cc-dispatcher.ts`), not the pure `repo-readiness.ts` predicate — the member-solo-no-repo state never flows through the readiness layer.
+2. **Resolver proliferation (arch P1):** `resolveActiveWorkspace` **refactors** the silent `resolveActiveWorkspaceIdWithMembership`, not a third peer; all callers collapse onto it.
+3. **Non-convergent reset (arch P1):** breadcrumb deduped by `(userId, resetFromClaim)` fingerprint to prevent a per-dispatch storm.
+4. **Confused-deputy (security P0):** owner-gate `p_workspace_id` = the mutation target (`user.id`); a no-op-for-solo in PR-1, load-bearing in PR-2.
+5. **Backfill integrity (data P2):** composite-PK conflict target + parent org/workspace rows (FK `ON DELETE RESTRICT`); verified `claim_repo_clone_lock`/`set_repo_status` self-gate on membership and the reset is read-only.
+6. **C4 (arch P2):** connection edge is read=Workspace / write=User (`adopting`) — PR-1 cuts only the read path.
+
 ## Overview
 
 Invited team-workspace members can't dispatch Concierge work: the `soleur:go` Step 0.0 gate
@@ -58,7 +70,7 @@ structurally impossible.
 The core fix; the `:1703` thread must land in the same phase (atomic — no intermediate commit
 where path/repo/install are unified but the clone target diverges).
 
-1. Add `resolveActiveWorkspace(userId, supabase): Promise<ResolveResult>` in `workspace-resolver.ts`:
+1. **Refactor (not a new peer)** `resolveActiveWorkspaceIdWithMembership` (`workspace-resolver.ts:344`) into `resolveActiveWorkspace(userId, supabase): Promise<ResolveResult>` — make its silent solo-rewrite (`:380-382`) **explicit**. Collapse its existing callers (`resolveActiveWorkspacePath:401`, `resolveActiveWorkspaceKbRoot:415`) onto it (each unwraps `ok`→id, maps `{ok:false}` to its existing 404/503). Do NOT leave the silent function beside the explicit one — that ships two membership resolvers, the exact divergence surface this PR kills. AC: no caller of the silent `resolveActiveWorkspaceIdWithMembership` remains.
    `ResolveResult = { ok: true; workspaceId: string; resetFromClaim?: string } | { ok: false; reason: "db-error" }`.
    - claim (`current_workspace_id`) === `userId` OR null → `ok(userId)` (genuine solo / unbound — always a valid own workspace, safe pre-backfill).
    - claim is a team the user IS a member of → `ok(claim)`.
@@ -72,28 +84,28 @@ where path/repo/install are unified but the clone target diverges).
 
 Per the correction above, signup already provisions `workspace_members(owner)` (mig 091). So:
 1. Run the read-only count: `select count(*) from users u left join workspace_members m on m.user_id=u.id where m.user_id is null`. Expect 0 or a tiny trigger-failure residue.
-2. If non-zero, ship ONE idempotent residual backfill migration (`insert ... on conflict do nothing`, keyed on `userId`, mirroring mig 091's `workspace_id=user_id, role='owner'`). If zero, no migration — record the count in the PR body.
+2. If non-zero, ship ONE idempotent residual backfill migration mirroring mig 053:228-259 / 091:169-171 **exactly**: insert parent `organizations` + `workspaces(id=user.id)` rows first if missing (the `workspace_members.workspace_id` FK to `workspaces` is `ON DELETE RESTRICT` — a missing-membership user may be missing the whole chain, not just the join row), then `insert into workspace_members (workspace_id, user_id, role, attestation_id) values (u.id, u.id, 'owner', NULL) on conflict (workspace_id, user_id) do nothing` (composite-PK target, deepen data P2). The `AFTER INSERT` audit trigger emits one benign `actor_user_id=NULL` WORM row (tolerated — same path mig 053's own backfill exercised). If count = 0, no migration — record in PR body.
 No trigger rewrite, no TS-fallback build (already present).
 
-### Phase 3 — Not-ready copy: relocate member guidance to the readiness layer [FR2]
+### Phase 3 — Not-ready copy assembled at the DISPATCH BOUNDARY [FR2]
 
-Two surfaces, kept minimal (collapsed from 7 states after review):
+**Corrected after deepen (arch P0 — split-brain):** `repo-readiness.ts` is a pure `(repoStatus, repoError)` predicate (`:69`) with NO access to solo/team, the target team id, or role; `RepoNotReadyError` carries only `(code, message, errorCode)`. The member-in-solo-no-repo state is `repo_url IS NULL` on the resolved solo workspace, which `evaluateRepoReadiness` maps to `{ok:true}` (fail-open) — it never flows through the readiness layer. So **copy assembly lives in `cc-dispatcher.ts` at the dispatch boundary** (catch sites ~`:3431`/`:3507`), where `userId`, the `resolveActiveWorkspace` result (incl `resetFromClaim`), and a role probe are all in scope. `repo-readiness.ts` stays a pure `repo_status` predicate and gains NO role/team knowledge.
 
-- **Resolver `{ok:false, db-error}`** → transient copy at the dispatch boundary: "Temporary problem reaching your workspace — try again in a moment." NO switcher, NO reconnect. (Indeterminate-role folds here: a probe DB error is a db-error.)
-- **Repo-readiness layer** (resolved workspace has no connected repo — the member-in-solo case): role-branched copy.
-  - Member: "This workspace has no project connected. If your team's project lives in **<Team>**, switch workspaces and try again." Primary action = workspace-switcher deep link **carrying the target team id** so multi-team members land on the right one (via `set_current_workspace_id` RPC). No reconnect CTA. If `<Team>` name is unresolvable under RLS, fall back to "the team workspace this repo belongs to" (name omitted).
-  - Owner: actionable "reconnect in Settings → Repository" (they own it).
-- Update `go.md` Step 0.0 + `repo-readiness.ts:30` to remove the unconditional "reconnect your repository" advice from the member path.
+States (collapsed from 7 after the simplicity review):
+- **`{ok:false, db-error}`** → transient copy: "Temporary problem reaching your workspace — try again in a moment." NO switcher, NO reconnect. (Indeterminate-role folds here.)
+- **Member, resolved-solo-has-no-repo** (incl the `resetFromClaim` reset case) → "This workspace has no project connected. If your team's project lives in **<Team>**, switch workspaces and try again." Primary action = workspace-switcher deep link **carrying the target team id** — which, for a reset, is exactly the discarded `resetFromClaim` claim (thread it resolver → catch → card), via `set_current_workspace_id` RPC. No reconnect CTA. Unresolvable `<Team>` name under RLS → "the team workspace this repo belongs to" (name omitted).
+- **Owner, solo-has-no-repo / error** → actionable "reconnect in Settings → Repository."
+- Update `go.md` Step 0.0 to remove the unconditional "reconnect your repository" advice from the member path. Leave `repo-readiness.ts` pure (no edit beyond not emitting member-reconnect copy from it — it never did).
 
 ### Phase 4 — Divergence observability [FR4, breadcrumb only]
 
 At the `resetFromClaim` branch (Phase 1) and any post-switch self-heal failure, call
-`reportSilentFallback(new Error("repo_resolver_divergence"), { feature: "repo-resolver-divergence", op: <"non-member-claim-reset" | "self-heal-failed">, extra: { activeClaimWorkspaceId, resolvedWorkspaceId } })`. Helper hashes userId; dedupe by fingerprint. NOT fired on db-error or normal cloning. The Sentry **alert rule** (routing) is a fast-follow (see Infrastructure) — the breadcrumb makes the next occurrence queryable, which is PR-1's job; alerting waits until the signal is trusted in soak.
+`reportSilentFallback(new Error("repo_resolver_divergence"), { feature: "repo-resolver-divergence", op: <"non-member-claim-reset" | "self-heal-failed">, extra: { activeClaimWorkspaceId, resolvedWorkspaceId } })`. Helper hashes userId. **Dedupe by `(userId, resetFromClaim)` fingerprint — NOT just `op`** (deepen arch P1): the reset is read-time and mutates nothing, so without claim-pair fingerprinting it re-fires on EVERY dispatch for a removed member → a breadcrumb storm that buries the real first-occurrence signal. The `extra` is exactly `{activeClaimWorkspaceId, resolvedWorkspaceId}` (both UUIDs) — no `repoUrl`/`installationId`/raw-userId (security P2). NOT fired on db-error or normal cloning. The Sentry **alert rule** (routing) is a fast-follow (see Infrastructure) — the breadcrumb makes the next occurrence queryable, which is PR-1's job.
 
 ### Phase 5 — Owner-gate routes + repo card [FR3]
 
-1. `disconnect/route.ts` + `setup/route.ts`: `is_workspace_owner(p_workspace_id, p_user_id)` check after `auth.getUser()`; 403 non-owner.
-2. Thread `isOwner` into `project-setup-card.tsx`; members see read-only "Connected: <repo> · managed by <owner>", no controls (match `RenameWorkspaceAction` gating).
+1. `disconnect/route.ts` + `setup/route.ts`: `is_workspace_owner(p_workspace_id, p_user_id)` check after `auth.getUser()`; 403 non-owner. **`p_workspace_id` MUST equal the workspace id the handler actually mutates** (deepen security P0 — confused-deputy). In PR-1 both routes mutate the **solo** `users` row + solo mirror keyed on `user.id`, so `p_workspace_id = user.id` → the gate is a **no-op for solo users by construction** (a solo user is always owner of `workspace_id=user.id`) and only becomes load-bearing in **PR-2** when connect-writes relocate to `workspaces.*` keyed on the active (possibly team) id. Document this plainly so the gate gives no false assurance. `is_workspace_owner` is SECURITY DEFINER with `SET search_path = public, pg_temp` (mig 098:73-74, verified); reuse the call shape from `workspace/logo/route.ts`.
+2. Thread `isOwner` (already on `workspaceIdentity.isOwner`, `settings-content.tsx:55`) into `project-setup-card.tsx`; members see read-only "Connected: <repo> · managed by <owner>", no controls (match `RenameWorkspaceAction` gating). **This card gating is the load-bearing member-facing FR3 value in PR-1** (prevents a member clicking a control that would disconnect their *own solo* connection — a confusing-but-not-cross-tenant action).
 
 ### Phase 6 — ADR-044 amendment + C4 [FR7] — see Architecture Decision
 
@@ -193,9 +205,7 @@ not-ready (`db-error`) state and resets a non-member claim to the user's own wor
 `## Alternatives Considered`: "keep dual user/workspace keying with silent solo fallback" (rejected —
 the incident). In-scope deliverable (Phase 6), not deferred (closed #5440).
 ### C4 views
-**Container**: repo-connection + install edge moves from **User** to **Workspace**. **Component**:
-`cc-dispatcher` consumes one `resolveActiveWorkspace` result feeding path+repo+install+self-heal.
-Route via `/soleur:architecture` (Concierge-only, `c4-edit` flag, per commit `3c8849655`).
+**Container**: the connection edge is **read=Workspace / write=User (dual, `adopting`)** — PR-1 cuts over only the read path; connect-time writers still target `users.*` until PR-2 (deepen arch P2 — a wholly-Workspace edge would misrepresent the shipped state). **Component**: `cc-dispatcher` consumes one `resolveActiveWorkspace` result feeding path+repo+install+self-heal (`:1703`). Route via `/soleur:architecture` (Concierge-only, `c4-edit` flag, per commit `3c8849655`).
 ### Sequencing
 ADR authored now (`status: adopting`); C4 edit Phase 6. Not postponed to its own issue.
 
@@ -214,7 +224,10 @@ PR-1 changes no schema-drop/DSAR/erasure path; deepen-plan's brand-survival tria
 ### Pre-merge (PR-1)
 - [ ] `resolveActiveWorkspace`: `ok(userId)` for solo/unbound; `ok(team)` for member; `ok(userId, resetFromClaim)` for non-member team claim; `{ok:false,"db-error"}` on probe error.
 - [ ] **TR1 cross-tenant test:** probe db-error returns `{ok:false}`, NEVER the claim id; no `MIN(created_at)`/first-membership fallback.
-- [ ] Path/repo/install resolve to the same id for a team member; assert **no raw `resolveCurrentWorkspaceId` remains on the dispatch path** (incl `:1703`).
+- [ ] Path/repo/install resolve to the same id for a team member; assert **no raw `resolveCurrentWorkspaceId` remains on the dispatch path** (incl `:1703`), AND **no caller of the silent `resolveActiveWorkspaceIdWithMembership` remains** (it was refactored into `resolveActiveWorkspace`).
+- [ ] **Reset clone-dir test:** claim=team-not-member → all of `workspacePath`/install/repo/`:1703` derive from one `resolveActiveWorkspace` result; the clone dir is `/workspaces/<userId>` (not `/workspaces/<team>`).
+- [ ] **Owner-gate confused-deputy:** `p_workspace_id` === the workspace id every UPDATE/`deleteWorkspace`/mirror in the handler targets (= `user.id` in PR-1).
+- [ ] **Breadcrumb fingerprint:** deduped by `(userId, resetFromClaim)` (not just `op`) — does not re-fire per dispatch; `extra` keys are exactly `{activeClaimWorkspaceId, resolvedWorkspaceId}` (no repoUrl/installationId/raw-userId).
 - [ ] db-error renders transient copy — asserts NO switcher, NO reconnect.
 - [ ] Member-solo-no-repo renders a switcher deep link carrying the **target team id** (multi-team-safe); unresolvable team name → name-omitted fallback.
 - [ ] `disconnect` + `setup` routes 403 non-owner; member repo card read-only.

@@ -8,26 +8,25 @@ plan: knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-conne
 # Tasks: ADR-044 Workspace-Owned Connection (PR-1)
 
 ## Phase 1 — Unified resolver + thread all consumers (atomic)
-- [ ] 1.1 Add `resolveActiveWorkspace(userId, supabase)` → `{ok:true, workspaceId, resetFromClaim?} | {ok:false, reason:"db-error"}` in `workspace-resolver.ts` (TR1 invariant: never an unprobed claim id; no MIN(created_at))
-- [ ] 1.2 Add `preResolvedActiveWorkspaceId?` to `resolveActiveWorkspacePath` (`workspace-resolver.ts:397`); plumb through `fetchUserWorkspacePath` (`kb-document-resolver.ts:91`)
-- [ ] 1.3 `cc-dispatcher.ts`: resolve once before `Promise.all` (~:1533); thread into 4 consumers + the self-heal block at `:1703`; throw `WorkspaceNotReadyError` on `ok:false`
-- [ ] 1.4 Confirm self-heal (`ensureWorkspaceRepoCloned`) runs against unified id before the readiness gate (#5240); handle absent + diverged clone states
+- [ ] 1.1 **Refactor** `resolveActiveWorkspaceIdWithMembership` (`workspace-resolver.ts:344`) → `resolveActiveWorkspace` returning `{ok:true, workspaceId, resetFromClaim?} | {ok:false, reason:"db-error"}` (make silent solo-rewrite explicit; TR1: never an unprobed/sibling id, no MIN(created_at)). Collapse callers (`resolveActiveWorkspacePath:401`, `resolveActiveWorkspaceKbRoot:415`); no silent caller remains
+- [ ] 1.2 Add `preResolvedActiveWorkspaceId?` to `resolveActiveWorkspacePath:397`; plumb through `fetchUserWorkspacePath` (`kb-document-resolver.ts:91`)
+- [ ] 1.3 `cc-dispatcher.ts`: resolve once before `Promise.all` (~:1533); thread into 4 consumers + the self-heal block at `:1703` (replace the raw `resolveCurrentWorkspaceId`); throw `WorkspaceNotReadyError` on `ok:false`
+- [ ] 1.4 Confirm self-heal runs against unified id before the readiness gate (#5240); absent + diverged clone states; reset case → clone dir is `/workspaces/<userId>`
 
 ## Phase 2 — Personal-workspace coverage (verify-only)
 - [ ] 2.1 Run read-only membership-null count; record in PR body
-- [ ] 2.2 If count > 0: ship one idempotent residual backfill migration (mirror mig 091 keying); else no migration
+- [ ] 2.2 If count > 0: idempotent residual backfill — parent org/workspace rows first (FK ON DELETE RESTRICT), then `workspace_members ... on conflict (workspace_id, user_id) do nothing` (mirror mig 053:228-259 / 091:169-171); else no migration
 
-## Phase 3 — Not-ready copy
-- [ ] 3.1 db-error → transient copy at dispatch boundary (no switcher/reconnect)
-- [ ] 3.2 repo-readiness layer: member-solo-no-repo → switcher deep link carrying target team id + RLS-name fallback; owner → reconnect
-- [ ] 3.3 Remove member "reconnect repository" advice from `go.md` Step 0.0 + `repo-readiness.ts:30`
+## Phase 3 — Not-ready copy (dispatch boundary)
+- [ ] 3.1 Assemble copy in `cc-dispatcher.ts` catch (NOT repo-readiness.ts — pure predicate, no role/team access): db-error → transient (no switcher/reconnect); member-solo-no-repo → switcher deep link carrying `resetFromClaim`/target team id + RLS-name fallback; owner → reconnect
+- [ ] 3.2 Remove member "reconnect repository" advice from `go.md` Step 0.0; leave `repo-readiness.ts` pure
 
 ## Phase 4 — Observability
-- [ ] 4.1 `reportSilentFallback` breadcrumb on non-member-claim-reset + self-heal-failed (synthetic Error; op tag; not on db-error/cloning)
+- [ ] 4.1 `reportSilentFallback` breadcrumb on non-member-claim-reset + self-heal-failed (synthetic Error); **dedupe by `(userId, resetFromClaim)` fingerprint**; `extra` = `{activeClaimWorkspaceId, resolvedWorkspaceId}` only; not on db-error/cloning
 
 ## Phase 5 — Owner-gate
-- [ ] 5.1 `is_workspace_owner` check on `disconnect` + `setup` routes (403 non-owner)
-- [ ] 5.2 Thread `isOwner` into `project-setup-card.tsx`; read-only member variant
+- [ ] 5.1 `is_workspace_owner(p_workspace_id=mutation-target=user.id, p_user_id)` on `disconnect` + `setup` (403 non-owner); document no-op-for-solo in PR-1, load-bearing in PR-2
+- [ ] 5.2 Thread `isOwner` (`workspaceIdentity.isOwner`) into `project-setup-card.tsx`; read-only member variant (load-bearing FR3 in PR-1)
 
 ## Phase 6 — ADR/C4 (plan deliverable)
 - [ ] 6.1 Amend ADR-044 (always-enforce-workspace, `status: adopting`, alternatives row)
