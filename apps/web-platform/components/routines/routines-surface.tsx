@@ -28,6 +28,7 @@ interface RunSummary {
 }
 interface RoutineItem {
   fnId: string;
+  description: string;
   domain: string;
   ownerRole: string;
   scheduleLabel: string;
@@ -394,6 +395,9 @@ function RoutineRow({
         >
           {humanizeFnId(item.fnId)}
         </button>
+        <p className="mt-0.5 truncate text-xs text-soleur-text-secondary" title={item.description}>
+          {item.description}
+        </p>
         <div className="mt-1 flex items-center gap-2 text-xs text-soleur-text-muted">
           <span className="rounded bg-soleur-bg-surface-1 px-1.5 py-0.5">
             {item.domain}
@@ -955,6 +959,10 @@ function RoutineDetailDrawer({
             ✕
           </button>
         </div>
+
+        <p className="mt-2 text-xs leading-relaxed text-soleur-text-secondary">
+          {item.description}
+        </p>
 
         <dl className="mt-3 space-y-2 text-xs">
           <DetailRow label="Domain">{item.domain}</DetailRow>
