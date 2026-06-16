@@ -83,7 +83,12 @@ export function classifyPushError(err: unknown): PushErrorClass {
   if (
     text.includes("GH006") ||
     text.includes("protected branch hook declined") ||
-    text.includes("Protected branch update failed")
+    text.includes("Protected branch update failed") ||
+    // GitHub always prefixes protected-branch rejects with GH006, but key on
+    // the require-PR tail too (plan §Phase 1) so a future stderr-format drift
+    // that drops the GH006 prefix still routes to the fallback rather than
+    // silently looping the divergence treadmill.
+    text.includes("Changes must be made through a pull request")
   ) {
     return "protected_branch";
   }
@@ -262,8 +267,18 @@ async function runProtectedFallback(
     // Tree-overlay accretion. Base the local side branch on the EXISTING side
     // branch (preserving its prior commits) when present, else branch it from
     // origin/<default>. Never base it on the stranded default tip.
+    //
+    // `-f`: the auto-commit allowlist (ALLOWED_AUTOCOMMIT_PATHS) deliberately
+    // leaves non-`knowledge-base/` tracked files dirty. Without -f, this
+    // branch switch aborts ("local changes would be overwritten") whenever a
+    // dirty tracked non-KB file differs in the side branch's tree — silently
+    // stranding the fallback every session. Forcing discards only those
+    // never-synced working-tree edits (they are never committed, never pushed,
+    // and the success-path `reset --hard origin/<default>` below already
+    // discards them), so -f loses nothing the fallback wouldn't drop anyway.
     await git([
       "checkout",
+      "-f",
       "-B",
       KB_SYNC_SIDE_BRANCH,
       sideExists
@@ -900,10 +915,14 @@ export async function syncPush(
           installationId,
         );
         if (!fallback.ok) {
+          // `reason` discriminates "the fallback ran and failed" from the
+          // persistent_other branch below (which never entered the fallback)
+          // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
+          // test pin the single `kb-sync.protected-fallback-failed` op.
           reportSilentFallback(pushErr, {
             feature: "session-sync",
             op: "kb-sync.protected-fallback-failed",
-            extra: { userId },
+            extra: { userId, reason: "fallback_failed" },
             message:
               "KB-sync protected-branch fallback failed — writes preserved on default for retry",
           });
@@ -927,7 +946,7 @@ export async function syncPush(
         reportSilentFallback(pushErr, {
           feature: "session-sync",
           op: "kb-sync.protected-fallback-failed",
-          extra: { userId },
+          extra: { userId, reason: "persistent_other" },
           message:
             "KB-sync push persistently rejected (non-protection) — not retried",
         });

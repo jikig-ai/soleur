@@ -258,6 +258,17 @@ describe("classifyPushError", () => {
     expect(classifyPushError(err)).toBe("protected_branch");
   });
 
+  test("require-PR tail without GH006 prefix still classifies protected_branch", () => {
+    // Defensive: GitHub always prefixes with GH006 today, but a require-PR-only
+    // protection config whose stderr drops the prefix must still route to the
+    // fallback, not loop the divergence treadmill.
+    const err = pushErr(
+      "push failed",
+      " ! [remote rejected] main -> main\nremote: error: Changes must be made through a pull request.",
+    );
+    expect(classifyPushError(err)).toBe("protected_branch");
+  });
+
   test("shallow clone reject → persistent_other (must not loop)", () => {
     const err = pushErr(
       "push failed",
@@ -356,7 +367,9 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ sideExists: false }),
     );
     await syncPush("user-1", "/tmp/ws");
-    expect(gitIdx("checkout -B soleur/kb-sync origin/main")).toBeGreaterThan(-1);
+    expect(gitIdx("checkout -f -B soleur/kb-sync origin/main")).toBeGreaterThan(
+      -1,
+    );
     expect(gitIdx("checkout defHEAD -- knowledge-base")).toBeGreaterThan(-1);
     expect(createPullRequestSpy).toHaveBeenCalledTimes(1);
 
@@ -375,9 +388,9 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
     await syncPush("user-1", "/tmp/ws");
 
     expect(
-      gitIdx("checkout -B soleur/kb-sync origin/soleur/kb-sync"),
+      gitIdx("checkout -f -B soleur/kb-sync origin/soleur/kb-sync"),
     ).toBeGreaterThan(-1);
-    expect(gitIdx("checkout -B soleur/kb-sync origin/main")).toBe(-1);
+    expect(gitIdx("checkout -f -B soleur/kb-sync origin/main")).toBe(-1);
     expect(gitIdx("checkout defHEAD -- knowledge-base")).toBeGreaterThan(-1);
     // never cherry-pick
     expect(gitCalls.some((a) => a[0] === "cherry-pick")).toBe(false);
@@ -420,12 +433,15 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
     expect(createPullRequestSpy).not.toHaveBeenCalled();
     // restored back to default branch so the workspace isn't parked on the side branch
     expect(gitIdx("checkout main")).toBeGreaterThan(-1);
-    // failure op emitted
+    // failure op emitted, discriminated as a ran-and-failed fallback
     const failed = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>
         (ctx as { op?: string }).op === "kb-sync.protected-fallback-failed",
     );
     expect(failed).toHaveLength(1);
+    expect((failed[0][1] as { extra?: { reason?: string } }).extra?.reason).toBe(
+      "fallback_failed",
+    );
   });
 
   // AC7 — idempotent re-entry: empty range + no overlay diff + open PR exists →
@@ -504,6 +520,11 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
         (ctx as { op?: string }).op === "kb-sync.protected-fallback-failed",
     );
     expect(failed).toHaveLength(1);
+    // same op as a failed fallback, but discriminated via reason so Sentry can
+    // tell "never attempted" from "ran and failed"
+    expect((failed[0][1] as { extra?: { reason?: string } }).extra?.reason).toBe(
+      "persistent_other",
+    );
   });
 
   // Classification routing — `other` (auth/network) falls through to the
