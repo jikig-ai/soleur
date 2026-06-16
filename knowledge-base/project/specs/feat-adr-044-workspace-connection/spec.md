@@ -41,8 +41,6 @@ unaffected; only invited members strand.
 - Flagsmith role/flag targeting relocation — follow-up; only the trait-visibility implication.
 - Re-keying already-migrated concerns (BYOK delegations #4767, `scope_grants` mig 059,
   `workspace_members.role`).
-- C4 / ADR diagram edits in this PR — gated behind the `c4-edit` flag (Concierge-only);
-  done via `/soleur:architecture` as an ADR-044 amendment.
 
 ## Functional Requirements
 
@@ -85,6 +83,16 @@ Relocate `repo/setup`, `repo/create`, `detect-installation`, and `cron-workspace
 writes to `workspaces.*`; reconcile the co-membered backfill gap from migration 080's audit
 NOTICE; run the ADR-044 drift gate (`COUNT(*)=0` on `repo_url` AND `github_installation_id`);
 then drop the three legacy `users.*` columns with a `.down.sql`.
+
+### FR7: Architecture Decision record + C4 (plan deliverable, per plan Phase 2.10)
+
+Amend ADR-044 to record the always-enforce-workspace decision (every user owns a guaranteed
+1-member personal workspace; connection/billing/integrations key on workspace; the `userId`
+solo sentinel is retired) — authored with the always-workspace target state and a
+`status: adopting` note since it fully holds only after the follow-ups. Update the C4 view(s)
+so the repo-connection edge moves from User to Workspace. C4 edits route through
+`/soleur:architecture` (Concierge-only, `c4-edit` flag, per commit `3c8849655`). This is an
+in-scope deliverable of this feature, NOT a deferred issue.
 
 ## Technical Requirements
 

@@ -68,7 +68,7 @@ always exists.
 | 9 | Billing stays user-keyed short-term; workspace-keyed/seat billing is a dedicated revenue-risk-gated follow-up | Solo subscriber pays for their personal workspace — frictionless path needs no relocation (CFO) |
 | 10 | Add `repo_resolver_divergence` Sentry breadcrumb on the member-divergence branch (hashed user id + both workspace ids) | Today zero-Sentry/invisible; `cq-silent-fallback-must-mirror-to-sentry` + `hr-observability-as-plan-quality-gate` |
 | 11 | Visual design: member/owner repo states wireframed | `knowledge-base/product/design/workspace-connection/member-owner-repo-states.pen` |
-| 12 | Codify always-workspace as an ADR-044 amendment via `/soleur:architecture` (C4 edits are c4-edit-flag gated, Concierge-only) | Scope item 5 |
+| 12 | Codify always-workspace as an ADR-044 amendment + C4 connection-owner edge — **a plan deliverable, NOT a deferred issue** (per new plan Phase 2.10 gate). C4 edits route through `/soleur:architecture` (c4-edit-flag gated, Concierge-only) | Operator correction 2026-06-16: ADR/C4 always ships with the architectural change it documents. Drove the `wg-architecture-decision-is-a-plan-deliverable` workflow fix |
 
 ## User → Workspace Relocation Matrix
 
