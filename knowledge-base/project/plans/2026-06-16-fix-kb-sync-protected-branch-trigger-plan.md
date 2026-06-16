@@ -15,6 +15,18 @@ revised: 2026-06-16  # post plan-review: dropped safeCommitAndPr reuse (wrong-re
 
 # 🐛 fix: KB-sync protected-branch trigger — route writes to `soleur/kb-sync` + PR
 
+## Enhancement Summary
+
+**Deepened:** 2026-06-16. **Gates:** 4.6 User-Brand Impact ✓, 4.7 Observability ✓, 4.8 PAT-shaped ✓ (none),
+4.9 UI-wireframe ✓ (no UI surface → skip). **Round-1 verify-the-negative:** all load-bearing existing-behavior
+claims confirmed by grep (safeCommitAndPr repo-binding, `runConnectedRepoGit` forbidden list, App scope, helper signatures).
+
+**Key improvements (precedent-diff, Phase 4.4):**
+1. **Use `createPullRequest` (`github-app.ts:1236`) + `getInstallationOctokit` (`github/app-client.ts:88`)** — generic, owner/repo-parameterized, non-cron PR + Octokit helpers. Replaces the rejected `safeCommitAndPr` entirely.
+2. **Derive `{owner, repo}` via the `agent-runner.ts:1478-1590` `repo_url`→owner/repo parse + `GITHUB_NAME_RE` guard** (ADR-044 canonical workspace read) — not git-remote parsing.
+3. **Accretion = tree-overlay, not cherry-pick** (see R1). Cherry-pick is *novel* (only in session-sync's forbidden list) and 3-way-conflict-prone across diverged histories; the conflict-free latest-KB-wins shape is simpler and correct for single-source KB.
+4. **`createPullRequest` lacks a `draft` param** — open a **non-draft** PR (directly user-mergeable, reuses the helper verbatim) rather than extending it; "never auto-merged by Soleur" is the invariant, not "draft".
+
 ## Overview
 
 Concierge auto-commits the user's `knowledge-base/**` back to their connected repo after every
@@ -26,10 +38,10 @@ un-pushable orphan — a "divergence treadmill" that PR #5423's downstream `self
 ref each time.
 
 **This plan fixes the trigger (item A of #5426).** On a push rejection classified as
-*protected-branch*, `syncPush` accretes all un-pushed default-branch commits onto a durable
-`soleur/kb-sync` side branch in the **user's own repo**, opens/updates a **draft, never-merged** PR
-into the user's default branch, then resets the local default branch back to `origin/<default>` so
-no orphan commit remains. The common case (unprotected default) is behaviourally unchanged.
+*protected-branch*, `syncPush` accretes the latest KB tree onto a durable `soleur/kb-sync` side branch
+in the **user's own repo**, opens/updates a **never-auto-merged** PR into the user's default branch,
+then resets the local default branch back to `origin/<default>` so no orphan commit remains. The
+common case (unprotected default) is behaviourally unchanged.
 
 > **Plan-review correction (2026-06-16):** the brainstorm's "reuse `safeCommitAndPr` (ADR-054)"
 > mechanism was rejected at plan-review. `safeCommitAndPr` is **hardcoded to the Soleur monorepo**
@@ -94,19 +106,25 @@ Single atomic PR. Ordered contract-changing → consumer.
 Order operations so **default is reset only AFTER the side-branch push succeeds** — on any failure the
 original commit stays on default and retries next session (no data loss; SpecFlow G2). All git via
 `gitWithInstallationAuth` (NOT `runConnectedRepoGit` — forbids reset/branch/push).
-1. Resolve `defaultBranch` (`resolveDefaultBranch`) and the user's `{owner, repo}` (parse the clone's
-   `origin` remote URL, or read `workspaces.repo_url` per ADR-044).
+1. Resolve `defaultBranch` (`resolveDefaultBranch`) and the user's `{owner, repo}` via the
+   `agent-runner.ts:1478-1590` `repo_url`→owner/repo parse + `GITHUB_NAME_RE` guard (ADR-044 canonical
+   workspace read) — not git-remote parsing.
 2. `fetch origin <defaultBranch> soleur/kb-sync` (side branch may not exist yet).
-3. Build `soleur/kb-sync` by **accretion**: base it on `origin/soleur/kb-sync` if present, else
-   `origin/<defaultBranch>`; cherry-pick the un-pushed default commit(s) (`origin/<default>..HEAD`)
-   onto it. This preserves prior sessions' KB writes (SpecFlow G1) **and naturally migrates an
-   already-stranded clone** — its pre-existing orphan commits are `origin/<default>..HEAD` and get
-   accreted too (resolves R4: migrate, don't abandon; the stale `recovered-kb-sync-*` refs are swept
-   by #5428).
+3. Build `soleur/kb-sync` by **accretion via tree-overlay** (not cherry-pick — see R1): check out a
+   local `soleur/kb-sync` tracking `origin/soleur/kb-sync` (or branch it from `origin/<defaultBranch>`
+   if the side branch doesn't exist yet), overlay the latest KB tree
+   (`git checkout <captured-default-HEAD> -- knowledge-base/`), and commit. Latest-KB-wins is correct
+   for single-source KB and is conflict-free. This preserves prior sessions' writes (the side branch's
+   non-KB history is untouched) and **naturally migrates an already-stranded clone** (its orphan KB
+   state is in `<default-HEAD>`; the stale `recovered-kb-sync-*` refs are swept by #5428 — R4).
 4. Push `soleur/kb-sync` with an explicit refspec, fast-forward (no `--force`). On non-fast-forward
    (concurrent co-member push, R3) → do NOT reset default; bail best-effort, retry next session.
-5. Create-or-update the PR in the **user's repo** via Octokit (installation token): `GET /repos/{owner}/{repo}/pulls?head={owner}:soleur/kb-sync&base=<defaultBranch>&state=open`
-   → if none, `POST /pulls` (draft, body explains the protected default + how to merge); else no-op.
+5. Create-or-update the PR in the **user's repo**: `getInstallationOctokit(installationId)` →
+   `GET /repos/{owner}/{repo}/pulls` (`head: "soleur/kb-sync"`, `base: <defaultBranch>`, `state: "open"`)
+   to find an existing open PR; if none, `createPullRequest(installationId, owner, repo, "soleur/kb-sync",
+   <defaultBranch>, title, body)` (`github-app.ts:1236`; **non-draft** — directly user-mergeable, never
+   auto-merged by Soleur; body explains the protected default + how to merge); else no-op (the branch
+   push already updates the existing PR).
 6. Only now `reset --hard origin/<defaultBranch>` on default and restore HEAD to `<defaultBranch>`.
 7. Emit observability (Phase 3).
 
@@ -138,13 +156,14 @@ original commit stays on default and retries next session (no data loss; SpecFlo
   declined)` fixtures (incl. required-review/required-check tails); `persistent_other` for `shallow
   update not allowed`; neither for auth/network fixtures. (unit)
 - **AC2.** On a protected rejection, the fallback pushes `soleur/kb-sync` to the **user's repo** (owner/repo
-  from the clone's origin, base = `resolveDefaultBranch`, never hardcoded `main`) and opens a **draft**
-  PR with base = the resolved default. (mocked Octokit/git)
+  from the `repo_url`→owner/repo parse, base = `resolveDefaultBranch`, never hardcoded `main`) and opens a
+  PR via `createPullRequest` (non-draft, never auto-merged), base = the resolved default. (mocked Octokit/git)
 - **AC3.** After a successful fallback, local default HEAD `== origin/<default>` and HEAD is on `<default>`
   (no orphan; selfHeal stays cold as a consequence). (git-state test)
-- **AC4.** Two consecutive fallbacks accrete onto **one** `soleur/kb-sync` carrying **both** commits
-  (content-equality, not just count) and reuse **one** open PR — built by cherry-pick onto
-  `origin/soleur/kb-sync`, never `checkout -B` from default. (test) — *this was the understated R1 defect.*
+- **AC4.** Two consecutive fallbacks accrete onto **one** `soleur/kb-sync` whose KB tree equals the
+  latest session's (content-equality) while preserving the branch's prior commits, and reuse **one**
+  open PR — built by tree-overlay onto `soleur/kb-sync`, never `checkout -B` from default. (test) —
+  *this was the understated R1 defect.*
 - **AC5.** Unprotected-default path unchanged: `git push` succeeds → no fallback, history recorded as today. (test)
 - **AC6.** **Failure preserves writes:** if the side-branch push or PR call fails, the original commit
   remains on default (default NOT reset) and `kb-sync.protected-fallback-failed` is emitted; next session
@@ -224,10 +243,15 @@ None. `gh issue list --label code-review --state open` (63 open) returned zero m
 7. Side-branch push / Octokit failure → default NOT reset, writes survive, failure op emitted.
 
 ## Risks & Mitigations
-- **R1 (durable-branch accretion) — RESOLVED in design (was the understated defect).** Build
-  `soleur/kb-sync` by cherry-picking `origin/<default>..HEAD` onto `origin/soleur/kb-sync`; never
-  `checkout -B`. AC4 (content-equality) is the guard. Deepen-plan: precedent-diff the exact cherry-pick
-  vs `merge --ff` shape against `selfHealNonFastForward`'s branch-aside (`workspace-sync.ts:288`).
+- **R1 (durable-branch accretion) — RESOLVED in design (was the understated defect).**
+  **Precedent-diff (deepen-plan 4.4):** the only branch-manipulation precedent is
+  `selfHealNonFastForward`'s `git branch <recovery> HEAD` (`workspace-sync.ts:288`) — but that branches
+  *at the current HEAD*, a different shape from accreting onto a *diverged remote* branch. **Cherry-pick
+  is novel** (appears only in session-sync's forbidden list) and risks 3-way conflicts across diverged
+  histories. **Chosen: tree-overlay** (`git checkout soleur/kb-sync` → `git checkout <default-HEAD> --
+  knowledge-base/` → commit) — conflict-free, latest-KB-wins (correct for single-source KB), no `-B`
+  reset. AC4 (content-equality + prior-commits-preserved) is the guard. Pattern is otherwise novel —
+  reviewers should scrutinize the git sequence at /work.
 - **R2 (clean default without stranding) — RESOLVED in design.** `reset --hard origin/<default>` runs
   ONLY after a successful side-branch push, via `gitWithInstallationAuth`. Avoids the `reset --soft`
   staged-index trap entirely (no re-stage; we move existing commits).
