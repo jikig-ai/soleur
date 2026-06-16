@@ -79,6 +79,7 @@ import {
   warnSilentFallback,
   mirrorWithDebounce,
   mirrorP0Deduped,
+  hashUserId,
   __resetMirrorDebounceForTests,
 } from "./observability";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
@@ -108,11 +109,18 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
-import { getCurrentRepoUrl } from "./current-repo-url";
+import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
 } from "./ensure-workspace-repo";
+// #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
+// workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
+// the agent, so a Concierge session never starts against a not-ready workspace.
+import {
+  evaluateRepoReadiness,
+  RepoNotReadyError,
+} from "./repo-readiness";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1511,6 +1519,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       autonomousAckAt,
       isWorkspaceOwner,
       repoUrl,
+      repoReadinessRow,
     ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId),
@@ -1530,7 +1539,36 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         getCurrentRepoUrl(args.userId),
+        // #5394 — active workspace repo readiness (repo_status from workspaces,
+        // sanitized reason from users.repo_error). Joins the Promise.all so it
+        // adds ZERO sequential await on the cold-start hot path. Fail-open
+        // internally (a read blip → not_connected, never blocks a ready founder).
+        getCurrentRepoStatus(args.userId),
       ]);
+
+    // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
+    // repoUrl/repo_status resolve and BEFORE ensureWorkspaceDirExists /
+    // ensureWorkspaceRepoCloned (the self-heal): a `cloning`/`error` workspace
+    // throws RepoNotReadyError here so NO agent/query is spawned and NO clone is
+    // attempted. The factory is the choke point for BOTH the cold first-message
+    // (ws-handler.ts:2221) and warm follow-up (:2355) Concierge dispatch, so
+    // this one site is server-authoritative for the whole Concierge surface.
+    // `ready`/`not_connected` flow UNCHANGED into the self-heal + reclaim path
+    // (AC6: the gate keys on repo_status, never `.git` presence — a ready-but-
+    // .git-gone reclaim never reaches a cloning/error branch). The dispatch
+    // catch (below) routes this to an honest client message and SKIPS the
+    // Sentry mirror (an expected transient state, not an incident).
+    const repoReadiness = evaluateRepoReadiness(
+      repoReadinessRow.repoStatus,
+      repoReadinessRow.repoError,
+    );
+    if (!repoReadiness.ok) {
+      throw new RepoNotReadyError(
+        repoReadiness.code,
+        repoReadiness.message,
+        repoReadiness.errorCode,
+      );
+    }
     // Normalize the ack to epoch-ms | null for the permission-callback deps
     // (the wire/db value is an ISO timestamptz string). P2 — fail-CLOSED on an
     // unparseable timestamp: `Date.parse` of garbage returns NaN, and the
@@ -3281,16 +3319,35 @@ export async function dispatchSoleurGo(
         : err instanceof Error
           ? err.constructor.name
           : "unknown";
-    mirrorWithDebounce(
-      err,
-      {
-        feature: "cc-dispatcher",
-        op: "dispatch",
-        extra: { conversationId, userId },
-      },
-      userId,
-      `dispatch:${errorClass}`,
-    );
+    // #5394 — a `cloning`/`error` repo block is an EXPECTED transient/benign
+    // state, NOT an incident: skip the Sentry mirror (else every cloning-window
+    // turn pages). A structured logger.info breadcrumb keeps the rate
+    // observable in Better Stack without Sentry noise (no alert on `cloning`;
+    // alert on a `code=error` spike). This is the novel pattern — Missing/
+    // KeyInvalidError ARE mirrored because they are real failures.
+    if (err instanceof RepoNotReadyError) {
+      log.info(
+        {
+          feature: "cc-dispatcher",
+          op: "repo-readiness-gate",
+          code: err.code,
+          userIdHash: hashUserId(userId),
+          conversationId,
+        },
+        "repo-readiness gate: blocked dispatch (repo not ready)",
+      );
+    } else {
+      mirrorWithDebounce(
+        err,
+        {
+          feature: "cc-dispatcher",
+          op: "dispatch",
+          extra: { conversationId, userId },
+        },
+        userId,
+        `dispatch:${errorClass}`,
+      );
+    }
     // R10 — KeyInvalidError surfaces with errorCode so the client can
     // prompt for a fresh BYOK key. Mirrors the KeyInvalidError →
     // errorCode: "key_invalid" branch in agent-runner.ts
@@ -3343,6 +3400,17 @@ export async function dispatchSoleurGo(
         type: "error",
         message: "Your API key is invalid — set up a fresh key to continue.",
         errorCode: "key_invalid",
+      });
+    } else if (err instanceof RepoNotReadyError) {
+      // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
+      // user-facing message (and `repo_setup_failed` errorCode on the error
+      // branch, so the client can render the reconnect CTA). MUST sit ABOVE the
+      // generic `else` so it does NOT hit the `session_id`-clearing path below —
+      // a transient cloning/error block must not nuke a resumable session.
+      sendToClient(userId, {
+        type: "error",
+        message: err.message,
+        ...(err.errorCode ? { errorCode: err.errorCode } : {}),
       });
     } else {
       // #3266 R7 — stale-resume cleanup. The dispatch was attempted with

@@ -136,7 +136,10 @@ type _AssertResponseKindsMatch =
 const _exhaustiveResponseKindCheck: _AssertResponseKindsMatch = true;
 void _exhaustiveResponseKindCheck;
 
-// Typed error codes for structured error handling over WebSocket
+// Typed error codes for structured error handling over WebSocket.
+// SECOND CANONICAL COPY: the wire schema replicates this set as a `z.enum([...])`
+// in `lib/ws-zod-schemas.ts` (errorSchema.errorCode). Widen BOTH in the same
+// change — `tsc` fails the `_SchemaCovers` proof there if they drift (#5394).
 export type WSErrorCode =
   | "key_invalid"
   // Phase 3.2 AC-D (feat-team-workspace-multi-user) — member-without-BYOK
@@ -162,6 +165,11 @@ export type WSErrorCode =
   // image bytes were never attached. Client renders a non-blocking
   // banner asking the user to re-attach the image directly.
   | "image_paste_lost"
+  // #5394 — Concierge dispatch blocked because the active workspace's repo
+  // setup `error`'d (repo_status === "error"). Client renders the reconnect
+  // CTA to Settings → Repository. The `cloning` block carries NO errorCode
+  // (a benign transient state, not a failure).
+  | "repo_setup_failed"
   | "delegation_revoked_post_grace"
   | "delegation_expired"
   | "delegation_hourly_cap_exceeded"

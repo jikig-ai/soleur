@@ -213,6 +213,42 @@ export function sanitizeGitStderr(raw: string): string {
 }
 
 /**
+ * Unwrap a `users.repo_error` cell into a `{ errorMessage, errorCode }` pair.
+ *
+ * New writes (`/api/repo/setup`) store a JSON string of
+ * `{ code, message, timestamp }` where `message` is already sanitized
+ * (`sanitizeGitStderr` is applied at the write boundary). Legacy rows
+ * (pre-errorCode migration) hold plain stderr — those return
+ * `{ errorMessage: <raw>, errorCode: undefined }` so the UI falls back to its
+ * generic copy. The `code` is allowlist-validated via `isGitErrorCode` so an
+ * unknown/typo'd value coerces to `undefined` rather than rendering a blank
+ * headline from a missing ERROR_COPY key.
+ *
+ * Shared by the `/api/repo/status` read route AND the Concierge dispatch
+ * readiness gate (`server/repo-readiness.ts`) so both consume ONE sanitizer —
+ * no inline re-derivation, no drift in the allowlist (#5394).
+ */
+export function parseErrorPayload(raw: string | null | undefined): {
+  errorMessage: string | null;
+  errorCode: GitErrorCode | undefined;
+} {
+  if (!raw) return { errorMessage: null, errorCode: undefined };
+  try {
+    const parsed = JSON.parse(raw) as {
+      code?: unknown;
+      message?: unknown;
+    };
+    const code = isGitErrorCode(parsed.code) ? parsed.code : undefined;
+    const message =
+      typeof parsed.message === "string" ? parsed.message : raw;
+    return { errorMessage: message, errorCode: code };
+  } catch {
+    // Legacy row: plain stderr string.
+    return { errorMessage: raw, errorCode: undefined };
+  }
+}
+
+/**
  * Run `git` with installation-scoped credentials via GIT_ASKPASS.
  *
  * The token never appears in argv. It is delivered through the
