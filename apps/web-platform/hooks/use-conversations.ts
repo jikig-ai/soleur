@@ -443,7 +443,11 @@ export function useConversations(
   // transitions null → id AND such a drop was recorded, refetch ONCE to recover
   // the row deterministically (independent of the realtime SUBSCRIBED-callback
   // timing). Transition-gated via a ref — fires once per resolve, not per
-  // render — mirroring the canonical use-kb-layout-state.tsx:232-240 idiom.
+  // render — same shape as the canonical use-kb-layout-state.tsx:232-240 idiom.
+  // (That idiom seeds the ref with the CURRENT value; here we seed null because
+  // `workspaceId` always starts null — its useState init above is null and it is
+  // only set inside the async fetchConversations — so the null→id transition
+  // still fires exactly once and no spurious mount transition is manufactured.)
   const prevWorkspaceIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (prevWorkspaceIdRef.current === workspaceId) return; // no transition

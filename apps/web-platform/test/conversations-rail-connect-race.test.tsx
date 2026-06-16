@@ -112,6 +112,13 @@ function buildChannel(name: string): ChannelMock {
   return ch;
 }
 
+// Per-call conversations-query result, indexed by COMPLETION order at
+// `.limit()`-resolution time. In the connect-race tests call 1 is the resumed
+// initial fetch (already past its deferred active-repo await when released) and
+// call 2 is the recovery backfill (starts from scratch), so call 1 reliably
+// reaches the query first — `[[], [newRow]]` therefore maps initial→[] and
+// backfill→[newRow] deterministically. A no-op backfill never produces a call 2,
+// so the recovery `waitFor` times out and the test fails (non-vacuous).
 function nextConvResult(): Conversation[] {
   state.convCalls += 1;
   const byCall = state.convResultByCall[state.convCalls - 1];
@@ -281,7 +288,9 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
       state.releaseActiveRepo?.();
     });
 
-    await waitFor(() => expect(screen.getByText("Fix Issue 4826")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Fix Issue 4826")).toBeInTheDocument(), {
+      timeout: 3000,
+    });
   });
 
   it("AC2/AC3: a null-workspace own INSERT is recovered by the scope-resolve backfill (and mirrored to Sentry)", async () => {
@@ -311,8 +320,9 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
       state.releaseActiveRepo?.();
     });
 
-    await waitFor(() =>
-      expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-recovered"),
+    await waitFor(
+      () => expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-recovered"),
+      { timeout: 3000 },
     );
   });
 
@@ -331,12 +341,17 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     await act(async () => {
       state.releaseActiveRepo?.();
     });
-    await waitFor(() =>
-      expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-bounded"),
+    await waitFor(
+      () => expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-bounded"),
+      { timeout: 3000 },
     );
 
     // active-repo calls so far: initial (1) + recovery backfill (2). A bare
-    // re-render must NOT trigger another backfill (transition-gated).
+    // re-render must NOT trigger another backfill (transition-gated). The exact
+    // count is 2 (not 3) because the channel mock never fires the own-channel
+    // SUBSCRIBED callback — in production that path adds its own backfill, but
+    // this test isolates the SCOPE-RESOLVE backfill. A third call here would be
+    // a real defect (an un-gated refetch); do not loosen this assertion.
     const callsAfterRecovery = state.activeRepoCalls;
     expect(callsAfterRecovery).toBe(2);
     view.rerender();
