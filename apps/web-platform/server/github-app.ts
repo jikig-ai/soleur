@@ -1282,6 +1282,59 @@ export async function createPullRequest(
 }
 
 /**
+ * Find the first OPEN pull request matching `head` → `base` on a repository,
+ * via the GitHub App installation token. Returns `null` when none is open.
+ *
+ * For same-repo PRs the `head` filter qualifier is `{owner}:{branch}` (GitHub's
+ * `GET /pulls?head=` expects the user/org-qualified ref). Mirrors
+ * `createPullRequest`'s auth + error surface so the kb-sync protected-fallback
+ * (#5426) can create-or-update a single durable `soleur/kb-sync` PR without
+ * recreating it every session. Throws on a non-OK response (so the caller's
+ * try/catch preserves writes-on-default for retry rather than silently
+ * recreating).
+ */
+export async function findOpenPullRequest(
+  installationId: number,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+): Promise<PullRequestResult | null> {
+  const token = await generateInstallationToken(installationId);
+
+  const headParam = encodeURIComponent(`${owner}:${head}`);
+  const baseParam = encodeURIComponent(base);
+  const response = await githubFetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/pulls?head=${headParam}&base=${baseParam}&state=open`,
+    {
+      method: "GET",
+      headers: { Authorization: `token ${token}` },
+    },
+  );
+
+  if (!response.ok) {
+    const { message: errorMessage, body: errorBody } = await parseGitHubError(
+      response,
+      "GitHub list PRs failed",
+    );
+    log.error(
+      { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
+      "Failed to list pull requests",
+    );
+    throw new Error(errorMessage);
+  }
+
+  const data = (await response.json()) as Array<{
+    number: number;
+    html_url: string;
+    url: string;
+  }>;
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const pr = data[0];
+  return { number: pr.number, htmlUrl: pr.html_url, url: pr.url };
+}
+
+/**
  * Create an issue on a repository using the GitHub App installation token.
  *
  * Mirrors `createPullRequest`: same auth surface (`issues: write` already
