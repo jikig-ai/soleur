@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-11
+last_updated: 2026-06-16
 ---
 
 # Expenses
@@ -24,7 +24,7 @@ last_updated: 2026-06-11
 | Doppler | Doppler | secrets-mgmt | 0.00 | free-tier | - | Secrets management. Developer plan (free). Account: <ops@jikigai.com>. 6 configs: dev, dev_personal, ci, prd, prd_scheduled, prd_terraform. Upgrade triggers: team growth, audit logs |
 | LinkedIn | LinkedIn | social | 0.00 | active | - | Company page + personal profile for content distribution. Free tier API access via LinkedIn Marketing Developer Platform |
 | Bluesky | Bluesky | social | 0.00 | active | - | @soleur.ai account for content distribution. AT Protocol API (free, no tier limits) |
-| Resend | Resend | email | 0.00 | free-tier | - | Transactional email API. Free tier: 100 emails/day, 3K emails/mo. Upgrade trigger: volume exceeds free tier ($20/mo for 50K emails) |
+| Resend | Resend | email | 20.00 | active | - | Transactional + cold-outbound email API. Upgraded free-tier → **Pro ($20/mo, 50K emails/mo)**. Trigger: the 2026-06-15 outbound-email cold-sending go-live (#5325, PR #5365) added a dedicated `outbound.soleur.ai` sending subdomain for agent cold outreach, isolated from the `notifications@soleur.ai` transactional stream; running a second Resend sending domain exceeds the free tier's 1-domain limit. (PR title says `mail.soleur.ai`; the merged runtime domain is `outbound.soleur.ai` — `mail.soleur.ai` is delegated to Buttondown and can't carry Resend DNS.) Pro upgrade is operator-driven/gated (restricted send-key can't self-upgrade). **Estimate — verify exact amount + billing/renewal date on the next Resend invoice.** See ADR-060, compliance-posture PA-28 |
 | Proton Mail Workspace Standard (2 users) | Proton | email | 14.00 | active | - | Custom-domain email for `@soleur.ai` mailboxes. Workspace Standard plan, 2 users (`~$7/user/mo annual` estimate -- TBD: confirm exact monthly rate from Proton billing portal). DNS provisioned via Terraform PR #3009 (apex MX, SPF widening to `~all`, 3x DKIM CNAMEs, verification TXT). Receives + signs outbound from `@soleur.ai`. |
 | Anthropic API (ux-audit) | Anthropic | api | 15.00 | active | - | Event-driven + monthly cron via `.github/workflows/scheduled-ux-audit.yml`. ~$3-$12/run × ≤3 runs/month. Threshold warning at $15/run in workflow output. Budget: $15/mo estimate; COO target ≤$12/run. |
 | Anthropic API (CI claude-code-action) | Anthropic | dev-tools | 0.00 | accruing | - | R&D / dev-tooling (engineering accelerator, NOT product COGS). Metered `ANTHROPIC_API_KEY` spend from `claude-code-review.yml` + `test-pretooluse-hooks.yml`, captured per-run as `api-spend-<run_id>` artifacts → committed sidecar [`../finance/api-spend-ledger.jsonl`](../finance/api-spend-ledger.jsonl). `0.00`/`accruing` = estimate; flips to recorded-actual at first monthly reconciliation. Procedure: [`api-spend-reconciliation.md`](../engineering/operations/runbooks/api-spend-reconciliation.md). See #5086, ADR-056. Automation: #5173. |
