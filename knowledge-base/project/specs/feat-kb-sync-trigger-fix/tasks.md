@@ -24,23 +24,23 @@ Single atomic PR (#5427). Write failing tests first (RED) per `cq-write-failing-
 - [x] 1.2 GREEN: implement `classifyPushError(err)` in `session-sync.ts`, keyed on `GH006` + `remote rejected`, tolerant of varied tails.
 
 ## Phase 2 — Protected-fallback path in `syncPush` (RED → GREEN)
-- [ ] 2.1 RED: tests for the fallback — pushes `soleur/kb-sync` to the user repo (dynamic owner/repo, base = `resolveDefaultBranch`, never hardcoded `main`); opens a **draft** PR base = resolved default. (AC2)
-- [ ] 2.2 RED: durable-branch accretion — two consecutive fallbacks → one branch whose KB tree == latest session (content-equality) + prior commits preserved, one PR; built by **tree-overlay** (`git checkout soleur/kb-sync` → `git checkout <default-HEAD> -- knowledge-base/` → commit), never `checkout -B` or cherry-pick. (AC4)
-- [ ] 2.3 RED: after success, local default `== origin/<default>`, HEAD on `<default>`. (AC3)
-- [ ] 2.4 RED: failure preserves writes — side-branch push / Octokit failure ⇒ default NOT reset, writes survive, `protected-fallback-failed` emitted. (AC6)
-- [ ] 2.5 RED: idempotent re-entry — empty `origin/<default>..HEAD` ⇒ no-op reuse of PR, not reported as failure. (AC7)
-- [ ] 2.6 RED: unprotected path unchanged — push succeeds, no fallback, history recorded. (AC5)
-- [ ] 2.7 GREEN: implement the fallback in `syncPush` catch — resolve default + owner/repo → fetch → accrete (tree-overlay) onto `soleur/kb-sync` → push refspec (ff, no force; bail on non-ff) → find-or-`createPullRequest` (non-draft) via `getInstallationOctokit` → **then** `reset --hard origin/<default>` + restore HEAD. All git via `gitWithInstallationAuth`. Order so default resets ONLY after side-branch push succeeds.
+- [x] 2.1 RED: tests for the fallback — pushes `soleur/kb-sync` to the user repo (dynamic owner/repo, base = `resolveDefaultBranch`, never hardcoded `main`); opens a **non-draft** PR base = resolved default. (AC2)
+- [x] 2.2 RED: durable-branch accretion — two consecutive fallbacks → one branch built by **tree-overlay** (`checkout -B soleur/kb-sync origin/soleur/kb-sync` → `git checkout <default-HEAD> -- knowledge-base` → commit), never `checkout -B` from default or cherry-pick; PR reused. (AC4)
+- [x] 2.3 RED: after success, local default reset to `origin/<default>`, HEAD on `<default>`, reset AFTER side-branch push + PR. (AC3)
+- [x] 2.4 RED: failure preserves writes — side-branch push / Octokit failure ⇒ default NOT reset, HEAD restored to default, `protected-fallback-failed` emitted. (AC6)
+- [x] 2.5 RED: idempotent re-entry — empty `origin/<default>..HEAD` + no overlay diff ⇒ no commit, reuse PR, not a failure. (AC7)
+- [x] 2.6 RED: unprotected path unchanged — push succeeds, no fallback, history recorded. (AC5)
+- [x] 2.7 GREEN: implemented `runProtectedFallback` in `syncPush` — resolve default + owner/repo → fetch → tree-overlay onto `soleur/kb-sync` → push refspec (ff, no force; bail on non-ff) → `findOpenPullRequest`-or-`createPullRequest` (non-draft) → **then** `reset --hard origin/<default>` + restore HEAD. All git via `gitWithInstallationAuth`. (Used `findOpenPullRequest` + `createPullRequest` from `github-app.ts` rather than `getInstallationOctokit` — simpler, mirrors `createPullRequest`'s auth surface, no `founderId` audit baggage.)
 
 ## Phase 3 — Observability
-- [ ] 3.1 Emit `kb-sync.push-protected-fallback` (warn; payload: PR url + commit count) and `kb-sync.protected-fallback-failed` (covers push-reject / Octokit / persistent_other). Preserve operator message strings.
-- [ ] 3.2 Add the `sentry_issue_alert` for `kb-sync.protected-fallback-failed` in `infra/sentry/*.tf`.
+- [x] 3.1 Emit `kb-sync.push-protected-fallback` (warn; payload: PR url + commit count) and `kb-sync.protected-fallback-failed` (covers push-reject / Octokit / persistent_other). Operator message strings preserved.
+- [x] 3.2 Added `sentry_issue_alert.kb_sync_protected_fallback_failed` in `infra/sentry/issue-alerts.tf` (op-scoped IS_IN, freq=17); wired into `apply-sentry-infra.yml` -target list; op-contract test `test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts`.
 
 ## Phase 4 — Verify & gate
-- [ ] 4.1 New file `test/server/session-sync-protected-fallback.test.ts` (matches `test/**/*.test.ts`); extend `test/kb-route-helpers.test.ts`.
-- [ ] 4.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes. (AC8)
-- [ ] 4.3 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/session-sync-protected-fallback.test.ts test/kb-route-helpers.test.ts` passes. (AC8)
-- [ ] 4.4 (deepen-plan/work) precedent-diff the cherry-pick vs `merge --ff` shape against `selfHealNonFastForward` branch-aside (`workspace-sync.ts:288`); consider a short ADR for the branch-topology decision (R6).
+- [x] 4.1 New file `test/server/session-sync-protected-fallback.test.ts` (matches `test/**/*.test.ts`). (kb-route-helpers untouched — this change is wholly in `session-sync.ts`, not `syncWorkspace`; the existing file still passes the AC8 gate.)
+- [x] 4.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes. (AC8)
+- [x] 4.3 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/session-sync-protected-fallback.test.ts test/kb-route-helpers.test.ts` passes. (AC8)
+- [x] 4.4 Precedent-diff complete: tree-overlay chosen over cherry-pick (novel, conflict-prone) — distinct from `selfHealNonFastForward`'s `git branch <recovery> HEAD` (branches at HEAD, not onto a diverged remote branch). Branch-topology rationale captured in the plan R1 + the fallback doc-comment; standalone ADR deferred as non-blocking.
 
 ## Phase 5 — Ship & post-merge
 - [ ] 5.1 PR body uses `Ref #5426` (not `Closes`) — closure is post-merge after verification.

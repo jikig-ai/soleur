@@ -683,6 +683,85 @@ resource "sentry_issue_alert" "egress_blocked" {
   }
 }
 
+# ── KB-sync protected-branch fallback failure (#5426) — APPLY-CREATED ───────
+# server/session-sync.ts `syncPush`: when the user's default branch is
+# protected, the post-session KB commit can't be pushed onto it, so the fallback
+# accretes the latest KB tree onto a durable `soleur/kb-sync` side branch and
+# opens/updates a PR. The fallback is ORDERED so the local default is reset only
+# AFTER the side-branch push + PR succeed — on any failure the un-pushed commit
+# stays on default for next-session retry, and `op=kb-sync.protected-fallback-
+# failed` is emitted (covers side-branch push reject / Octokit error /
+# persistent_other like `shallow update not allowed`). This rule is the
+# NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself): without it a
+# user whose KB writes silently fail to deliver (the divergence-treadmill class
+# #5426 fixes) goes unnoticed. The signal already exists (reportSilentFallback →
+# captureException with feature/op tags); no app change beyond the emit.
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): `feature=session-sync` spans
+# many routine ops (syncPull, syncPush, recordKbSyncHistory, appendKbSyncRow,
+# auth-probe.*, AND the warn-level success entry op kb-sync.push-protected-
+# fallback). A feature-only filter would over-page on every transient sync blip.
+# Scoped to the single FAILURE op so only an undelivered-writes incident pages;
+# the success entry op (kb-sync.push-protected-fallback) is warn-level and
+# deliberately excluded. Mirrors kb_sync_silent_failure / chat_message_save_failure.
+#
+# `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
+# mutually exclusive (a captured event is exactly one) so "all" is never
+# satisfiable; reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. Distinct `frequency=17` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,30,60,61,62; 17 free
+# 2026-06-16) — dedup keys on action_match+filter_match+frequency+actions-shape,
+# NOT conditions. `IS_IN` proven in beta2 at byok_cap_exceeded above.
+# Cross-artifact op/feature contract pinned by
+# test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "kb_sync_protected_fallback_failed" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "kb-sync-protected-fallback-failed"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 17
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "session-sync"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "kb-sync.protected-fallback-failed"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, correctly
+  # paging the solo founder. These events carry only hashed userId + op tags —
+  # no cross-tenant content — so the fallthrough does not over-disclose. Revisit
+  # recipient pinning (target_type="Member") before the first non-founder seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
 # watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
 # ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge
