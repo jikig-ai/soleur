@@ -172,6 +172,17 @@ jobs:
       - name: Run server.tf remote-exec set -e drift-guard
         run: bash apps/web-platform/infra/server-tf-set-e.test.sh
 
+      # Host monitor family (#5417 registered these; resource-monitor +
+      # cat-deploy-state were pre-existing orphan suites CI never ran).
+      - name: Run container-restart-monitor.sh tests
+        run: bash apps/web-platform/infra/container-restart-monitor.test.sh
+
+      - name: Run resource-monitor.sh tests
+        run: bash apps/web-platform/infra/resource-monitor.test.sh
+
+      - name: Run cat-deploy-state.sh tests
+        run: bash apps/web-platform/infra/cat-deploy-state.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
