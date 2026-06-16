@@ -26,7 +26,7 @@ git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-insid
 
 If **neither** command prints `true` (no bare repo to make a worktree from AND not inside a working tree), the workspace has no git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed — the CWD is then a repo-less `/workspaces/<id>` and **every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
 
-> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**.
+> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening: if your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
 
 This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge `#4826` session hit.)
 

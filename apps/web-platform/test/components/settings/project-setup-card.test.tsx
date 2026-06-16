@@ -68,6 +68,49 @@ function routerFetch(opts: {
   });
 }
 
+describe("ProjectSetupCard — member read-only variant (ADR-044 FR3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installLocation();
+    sessionStorage.clear();
+  });
+
+  test("non-owner with a ready repo → read-only Connected summary, NO disconnect control", () => {
+    render(
+      <ProjectSetupCard
+        repoUrl={REPO_URL}
+        repoStatus="ready"
+        repoLastSyncedAt={null}
+        isOwner={false}
+        ownerLabel="Acme Eng"
+      />,
+    );
+
+    expect(screen.getByText("owner/repo")).toBeInTheDocument();
+    expect(screen.getByText(/managed by Acme Eng/i)).toBeInTheDocument();
+    // No disconnect / reconnect / connect controls for a member.
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /set up project/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("non-owner with an error repo → NO recovery button (member can't fix the owner's repo)", () => {
+    render(
+      <ProjectSetupCard
+        repoUrl={REPO_URL}
+        repoStatus="error"
+        repoLastSyncedAt={null}
+        isOwner={false}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /reconnect|retry/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/managed by your workspace owner/i)).toBeInTheDocument();
+  });
+});
+
 describe("ProjectSetupCard — error-branch re-setup recovery (FIX 1b)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

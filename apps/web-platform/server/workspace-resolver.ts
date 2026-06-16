@@ -327,61 +327,94 @@ type MaybeSingleChain<T> = {
 } & PromiseLike<{ data: T | null; error: unknown }>;
 
 /**
- * Resolve the caller's ACTIVE workspace id (ADR-044), self-healing a stale
- * non-member claim back to the SOLO workspace (fail-closed — never a sibling).
+ * Discriminated result of {@link resolveActiveWorkspace}. The ONLY `ok` returns
+ * are a membership-verified team id or the caller's own `userId` (ADR-044 PR-1
+ * TR1 invariant) — NEVER an unprobed/sibling claim id, NEVER a
+ * `MIN(created_at)`/first-membership fallback (the #4767 cross-tenant bug
+ * class). A `resetFromClaim` marks the non-member-claim self-heal (the
+ * dispatch boundary emits the divergence breadcrumb + switcher copy from it).
+ */
+export type ResolveActiveWorkspaceResult =
+  | { ok: true; workspaceId: string; resetFromClaim?: string }
+  | { ok: false; reason: "db-error" };
+
+/**
+ * Resolve the caller's ACTIVE workspace id (ADR-044) with the membership
+ * self-heal made EXPLICIT (PR-1 refactor of the former silent
+ * `resolveActiveWorkspaceIdWithMembership`, which fail-closed to solo and
+ * swallowed a probe error — the divergence surface this PR kills).
  *
- * This is steps 1-2 of `resolveActiveWorkspaceKbRoot`, extracted so the
- * Concierge document resolver and the agent sandbox cwd
- * (`fetchUserWorkspacePath`) resolve the SAME workspace the UI KB file tree
- * renders from. Without sharing this resolution, the agent goes blind to the
- * document the user has open — the agent-native parity bug (#4543 class) this
- * resolver exists to prevent.
+ * Outcomes:
+ *   - claim === userId / null/unbound → `ok(userId)` (genuine solo — always a
+ *     valid own workspace, safe pre-backfill);
+ *   - claim is a team the user IS a member of → `ok(claim)`;
+ *   - claim is a team the user is NOT a member of (removed / stale) →
+ *     `ok(userId, resetFromClaim=claim)` — reset to own workspace, non-blocking
+ *     (own tenant, safe); the dispatch boundary surfaces this;
+ *   - membership probe DB error → `{ ok:false, "db-error" }` — transient; do NOT
+ *     reset a possibly-real member, do NOT dispatch into an unverified team.
+ *
+ * This is steps 1-2 of `resolveActiveWorkspaceKbRoot`, shared so the Concierge
+ * document resolver and the agent sandbox cwd (`fetchUserWorkspacePath`)
+ * resolve the SAME workspace the UI KB file tree renders from (#4543 parity).
  *
  * RLS: `user_session_state` + `workspace_members` reads are self-scoped via
  * `.eq("user_id", userId)`; a tenant client cannot influence the result
- * cross-tenant, and the non-member fallback is unconditionally solo.
+ * cross-tenant, and the non-member self-heal is unconditionally solo.
  */
-export async function resolveActiveWorkspaceIdWithMembership(
+export async function resolveActiveWorkspace(
   userId: string,
   supabase: SupabaseLike,
-): Promise<string> {
-  // 1. Active workspace id — claim → solo fallback (never a sibling).
-  let activeWorkspaceId = await resolveCurrentWorkspaceId(userId, supabase);
+): Promise<ResolveActiveWorkspaceResult> {
+  // 1. Active workspace id — claim → solo fallback (never a sibling). A
+  //    session-state read error already fail-closes to `userId` inside
+  //    `resolveCurrentWorkspaceId`, which is TR1-safe (own id, never a claim).
+  const claim = await resolveCurrentWorkspaceId(userId, supabase);
 
-  // 2. J5 self-heal parity: a non-solo claim the caller is no longer a member
-  //    of must NOT read the sibling's workspace. Fall back to solo (read-only —
-  //    the active-repo route's corrective set_current_workspace_id write is for
-  //    the badge; a GET / agent dispatch must stay side-effect-free).
-  if (activeWorkspaceId !== userId) {
-    const memberChain = supabase.from("workspace_members") as MaybeSingleChain<{
-      user_id: string;
-    }>;
-    const membership = await awaitChain<{
-      data: { user_id: string } | null;
-      error: unknown;
-    }>(
-      memberChain
-        .select("user_id")
-        .eq("workspace_id", activeWorkspaceId)
-        .eq("user_id", userId)
-        .maybeSingle(),
-    );
-    // A transient probe error must page (cq-silent-fallback-must-mirror-to-sentry,
-    // matching the sibling resolvers in this file) — but it still fails CLOSED to
-    // solo, never the sibling. A clean `!membership.data` is the legitimate
-    // non-member case (no mirror).
-    if (membership.error) {
-      reportSilentFallback(membership.error, {
-        feature: "workspace-resolver",
-        op: "resolveActiveWorkspaceKbRoot.membership-probe",
-        extra: { userId, activeWorkspaceId },
-      });
-    }
-    if (membership.error || !membership.data) {
-      activeWorkspaceId = userId; // never the sibling
-    }
+  // Genuine solo / unbound — no membership probe (the stub-throws-on-unstubbed
+  // test asserts this no-probe-on-solo invariant).
+  if (claim === userId) {
+    return { ok: true, workspaceId: userId };
   }
-  return activeWorkspaceId;
+
+  // 2. Membership probe: a non-solo claim MUST be membership-verified before we
+  //    dispatch against it (the cross-tenant boundary).
+  const memberChain = supabase.from("workspace_members") as MaybeSingleChain<{
+    user_id: string;
+  }>;
+  const membership = await awaitChain<{
+    data: { user_id: string } | null;
+    error: unknown;
+  }>(
+    memberChain
+      .select("user_id")
+      .eq("workspace_id", claim)
+      .eq("user_id", userId)
+      .maybeSingle(),
+  );
+
+  // TR1: a probe DB error must NOT reset a possibly-real member to solo AND must
+  // NOT dispatch into an unverified team. Return a transient db-error so the
+  // dispatch boundary fails closed to an explicit retryable state — never the
+  // unverified claim id. Mirror to Sentry (cq-silent-fallback-must-mirror).
+  if (membership.error) {
+    reportSilentFallback(membership.error, {
+      feature: "workspace-resolver",
+      op: "resolveActiveWorkspace.membership-probe",
+      extra: { userId, activeWorkspaceId: claim },
+    });
+    return { ok: false, reason: "db-error" };
+  }
+
+  // Member of the claimed team → dispatch against it.
+  if (membership.data) {
+    return { ok: true, workspaceId: claim };
+  }
+
+  // Clean non-member (removed / stale claim) → reset to own workspace
+  // (non-blocking, own tenant). Surface `resetFromClaim` for the breadcrumb +
+  // switcher copy at the dispatch boundary.
+  return { ok: true, workspaceId: userId, resetFromClaim: claim };
 }
 
 /**
@@ -397,11 +430,22 @@ export async function resolveActiveWorkspaceIdWithMembership(
 export async function resolveActiveWorkspacePath(
   userId: string,
   supabase: SupabaseLike,
+  // Optional pre-resolved active id. The dispatch path resolves
+  // `resolveActiveWorkspace` ONCE and threads the id here so the agent CWD, the
+  // repo/install consumers, and the self-heal all key to the SAME
+  // membership-verified id (no second divergent resolve). When supplied, the
+  // db-error decision was already made (and thrown) upstream.
+  preResolvedActiveWorkspaceId?: string,
 ): Promise<string> {
-  const activeWorkspaceId = await resolveActiveWorkspaceIdWithMembership(
-    userId,
-    supabase,
-  );
+  if (preResolvedActiveWorkspaceId) {
+    return workspacePathForWorkspaceId(preResolvedActiveWorkspaceId);
+  }
+  // Path resolver has no status contract — it must always return a path. A
+  // transient db-error fails closed to the SOLO path (own id, never a sibling);
+  // the dispatch path never reaches this branch because it passes a
+  // pre-resolved id after handling db-error explicitly.
+  const resolved = await resolveActiveWorkspace(userId, supabase);
+  const activeWorkspaceId = resolved.ok ? resolved.workspaceId : userId;
   return workspacePathForWorkspaceId(activeWorkspaceId);
 }
 
@@ -409,13 +453,16 @@ export async function resolveActiveWorkspaceKbRoot(
   userId: string,
   supabase: SupabaseLike,
 ): Promise<ActiveWorkspaceKbAccess> {
-  // 1-2. Active workspace id (claim → solo fallback) with the J5 membership
-  //      self-heal — shared with the Concierge/agent workspace-path resolver so
-  //      both read the identical fail-closed source (ADR-044 parity).
-  const activeWorkspaceId = await resolveActiveWorkspaceIdWithMembership(
-    userId,
-    supabase,
-  );
+  // 1-2. Active workspace id (claim → membership-verified → solo self-heal),
+  //      shared with the Concierge/agent workspace-path resolver so both read
+  //      the identical fail-closed source (ADR-044 parity). A transient probe
+  //      db-error degrades to 503 (retryable) — never a sibling read, never the
+  //      unverified claim (TR1).
+  const resolved = await resolveActiveWorkspace(userId, supabase);
+  if (!resolved.ok) {
+    return { ok: false, status: 503 };
+  }
+  const activeWorkspaceId = resolved.workspaceId;
 
   // 3. Connectivity gate — read the SOURCE OF TRUTH (`workspaces`), not
   //    `users.repo_status` (ADR-044 relocated repo state to `workspaces`).
@@ -512,8 +559,8 @@ export async function resolveActiveWorkspaceKbRoot(
  * Sources, ALL service-role + membership-scoped (NEVER the caller's `users`
  * row — the #4543 dual-ownership trap, where an invited member's own users row
  * is the empty solo row → "No repository connected"):
- *   1. active workspace id via `resolveActiveWorkspaceIdWithMembership`
- *      (claim → solo fallback, NEVER a sibling — the IDOR self-scope);
+ *   1. active workspace id via `resolveActiveWorkspace`
+ *      (claim → membership-verified → solo self-heal, NEVER a sibling);
  *   2. `workspaces.repo_url` by active id (mirrors the active-repo route);
  *   3. installation via the EXISTING `resolveInstallationId(userId, activeId)`
  *      — the membership-checked `resolve_workspace_installation_id` SECURITY
@@ -543,10 +590,18 @@ export async function resolveActiveWorkspaceRepoMeta(
   // workspace_members round-trip.
   preResolvedActiveWorkspaceId?: string,
 ): Promise<ActiveWorkspaceRepoMeta> {
-  // 1. Active workspace id — claim → solo fallback (never a sibling).
-  const activeWorkspaceId =
-    preResolvedActiveWorkspaceId ??
-    (await resolveActiveWorkspaceIdWithMembership(userId, supabase));
+  // 1. Active workspace id — claim → membership-verified → solo self-heal
+  //    (never a sibling). A transient probe db-error degrades to 503.
+  let activeWorkspaceId: string;
+  if (preResolvedActiveWorkspaceId) {
+    activeWorkspaceId = preResolvedActiveWorkspaceId;
+  } else {
+    const resolved = await resolveActiveWorkspace(userId, supabase);
+    if (!resolved.ok) {
+      return { ok: false, status: 503 };
+    }
+    activeWorkspaceId = resolved.workspaceId;
+  }
 
   // 2. repo_url from the SOURCE OF TRUTH (`workspaces`), service-role, by
   //    active id — mirrors app/api/workspace/active-repo/route.ts:67-71.

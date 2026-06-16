@@ -1,0 +1,1098 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "Mbgny",
+      "x": 0,
+      "y": 0,
+      "name": "Workspace Connection — Always-Workspace Model",
+      "width": 1440,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 40,
+      "padding": 48,
+      "children": [
+        {
+          "type": "frame",
+          "id": "s2K8q",
+          "name": "title",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "TrSzg",
+              "name": "titleText",
+              "fill": "#F5F5F5",
+              "content": "Workspace-owner vs workspace-member — every user always operates inside a real workspace",
+              "fontFamily": "Inter",
+              "fontSize": 22,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "0ffFa",
+              "name": "subtitle",
+              "fill": "#8A8A8A",
+              "content": "The personal workspace is a first-class workspace. Solo = owner of a 1-member \"Personal\" workspace that owns the repo connection, billing, and integrations.",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "WbQfx",
+          "name": "1. Workspace Switcher (top nav)",
+          "width": 440,
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "p7doy",
+              "name": "swLabel",
+              "fill": "#C9A962",
+              "content": "1 · WORKSPACE SWITCHER — PERSONAL IS FIRST-CLASS",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "zThWR",
+              "name": "swDrop",
+              "width": "fill_container",
+              "fill": "#141414",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "dJpmA",
+                  "name": "hdr",
+                  "width": "fill_container",
+                  "fill": "#1A1A1A",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    10,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Q7P6O",
+                      "name": "hdrLabel",
+                      "fill": "#6A6A6A",
+                      "content": "SWITCH WORKSPACE",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rRXvq",
+                  "name": "r1",
+                  "width": "fill_container",
+                  "fill": "#1F1B12",
+                  "gap": 10,
+                  "padding": [
+                    12,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "DMxyu",
+                      "name": "r1av",
+                      "width": 28,
+                      "height": 28,
+                      "fill": "#C9A962",
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "nMMQp",
+                          "name": "r1avT",
+                          "fill": "#0A0A0A",
+                          "content": "P",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mnjBW",
+                      "name": "r1txt",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 2,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "KbFWs",
+                          "name": "r1name",
+                          "fill": "#F5F5F5",
+                          "content": "Personal Workspace",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "IIWvD",
+                          "name": "r1sub",
+                          "fill": "#C9A962",
+                          "content": "you, owner · 1 member · current",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "0ZLMm",
+                      "name": "r1chk",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "check",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "yDgEK",
+                  "name": "r2",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "gap": 10,
+                  "padding": [
+                    12,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "TnYWe",
+                      "name": "r2av",
+                      "width": 28,
+                      "height": 28,
+                      "fill": "#2A2A2A",
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "FfYDY",
+                          "name": "r2avT",
+                          "fill": "#C9C9C9",
+                          "content": "A",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "bG19I",
+                      "name": "r2txt",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 2,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Sd3ix",
+                          "name": "r2name",
+                          "fill": "#F5F5F5",
+                          "content": "Acme Co",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Iqbv3",
+                          "name": "r2sub",
+                          "fill": "#8A8A8A",
+                          "content": "team · 6 members · member",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "6AjHN",
+          "name": "2+3. Owner card & Member card (a workspace repo, owner vs member)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "ZrBHB",
+              "name": "cardSecLabel",
+              "fill": "#C9A962",
+              "content": "2 & 3 · A WORKSPACE'S REPO — SEEN BY OWNER vs MEMBER",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "QAyiv",
+              "name": "cardRow",
+              "width": "fill_container",
+              "gap": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "tqi8t",
+                  "name": "Owner repo card",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "cNrNK",
+                      "name": "ownH",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "P7DU6",
+                          "name": "ownTitle",
+                          "fill": "#F5F5F5",
+                          "content": "Project",
+                          "fontFamily": "Inter",
+                          "fontSize": 18,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "MCYLh",
+                          "name": "ownScope",
+                          "fill": "#C9A962",
+                          "content": "you own this workspace · same card for a solo Personal workspace AND a team owner",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "qbn84",
+                      "name": "ownInner",
+                      "width": "fill_container",
+                      "fill": "#0F0F0F",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "layout": "vertical",
+                      "gap": 16,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "nb3GC",
+                          "name": "ownRepoRow",
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Jf436",
+                              "name": "ownRepoName",
+                              "fill": "#F5F5F5",
+                              "content": "acme-co/web-platform",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "oqf5J",
+                              "name": "ownBadge",
+                              "fill": "#0F2A18",
+                              "gap": 4,
+                              "padding": [
+                                3,
+                                8
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "9NwN6",
+                                  "name": "ownBadgeT",
+                                  "fill": "#4ADE80",
+                                  "content": "Connected",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 11,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "D7AWB",
+                          "name": "ownSync",
+                          "fill": "#8A8A8A",
+                          "content": "Last synced: 6/16/2026",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Pj88S",
+                          "name": "ownCtrls",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "pjpOt",
+                              "name": "ownDisc",
+                              "fill": "#141414",
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#2A2A2A"
+                              },
+                              "padding": [
+                                8,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "6V1Zg",
+                                  "name": "ownDiscT",
+                                  "fill": "#C9C9C9",
+                                  "content": "Disconnect",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "500"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "fyVEL",
+                              "name": "ownRec",
+                              "fill": "#141414",
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#2A2A2A"
+                              },
+                              "padding": [
+                                8,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "NVBdV",
+                                  "name": "ownRecT",
+                                  "fill": "#C9C9C9",
+                                  "content": "Reconnect",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "500"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "kLRWx",
+                  "name": "Member read-only repo card",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "yhRxI",
+                      "name": "memH",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "BPzp4",
+                          "name": "memTitle",
+                          "fill": "#F5F5F5",
+                          "content": "Project",
+                          "fontFamily": "Inter",
+                          "fontSize": 18,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "zbWAA",
+                          "name": "memScope",
+                          "fill": "#8A8A8A",
+                          "content": "non-owner member of a team workspace · read-only",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "0JIDZ",
+                      "name": "memInner",
+                      "width": "fill_container",
+                      "fill": "#0F0F0F",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "OygVH",
+                          "name": "memRepoRow",
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "mITgW",
+                              "name": "memRepoName",
+                              "fill": "#F5F5F5",
+                              "content": "acme-co/web-platform",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "RtcIT",
+                              "name": "memBadge",
+                              "fill": "#0F2A18",
+                              "gap": 4,
+                              "padding": [
+                                3,
+                                8
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "EkPwv",
+                                  "name": "memBadgeT",
+                                  "fill": "#4ADE80",
+                                  "content": "Connected",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 11,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nCBpW",
+                          "name": "memManaged",
+                          "width": "fill_container",
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "bpNje",
+                              "name": "memMgIcon",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "shield",
+                              "iconFontFamily": "lucide",
+                              "fill": "#8A8A8A"
+                            },
+                            {
+                              "type": "text",
+                              "id": "5eo8V",
+                              "name": "memMgT",
+                              "fill": "#8A8A8A",
+                              "content": "Managed by Dana Okafor",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nL2ar",
+                          "name": "memRolePill",
+                          "fill": "#1A1A1A",
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#2A2A2A"
+                          },
+                          "gap": 6,
+                          "padding": [
+                            4,
+                            10
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "pQala",
+                              "name": "memRoleT",
+                              "fill": "#C9C9C9",
+                              "content": "role: member · read-only",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "zl3dI",
+                          "name": "memNote",
+                          "fill": "#6A6A6A",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "No connect / disconnect / reconnect controls — the owner manages this connection.",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "0ojEf",
+          "name": "4. Dispatch-boundary not-ready states",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "g36wo",
+              "name": "nrLabel",
+              "fill": "#C9A962",
+              "content": "4 · THE THREE NOT-READY STATES — ASSEMBLED AT THE DISPATCH BOUNDARY (resolver outcome + role)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "1u0Vd",
+              "name": "nrRow",
+              "width": "fill_container",
+              "gap": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "QntsV",
+                  "name": "4a. db-error (transient)",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 14,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Cg6Ct",
+                      "name": "s1tag",
+                      "fill": "#2A1F12",
+                      "gap": 4,
+                      "padding": [
+                        3,
+                        8
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "2P2aF",
+                          "name": "s1tagT",
+                          "fill": "#C9A962",
+                          "content": "a · db-error · transient",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "S22OX",
+                      "name": "s1ic",
+                      "width": 22,
+                      "height": 22,
+                      "iconFontName": "loader",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Q0sfm",
+                      "name": "s1msg",
+                      "fill": "#F5F5F5",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Temporary problem reaching your workspace — try again in a moment.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "4QpCZ",
+                      "name": "s1note",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "No switcher. No reconnect. Just retry.",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "F7E2p",
+                      "name": "s1btnRow",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "7NW8I",
+                          "name": "s1btn",
+                          "fill": "#141414",
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#2A2A2A"
+                          },
+                          "gap": 6,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "3xGXg",
+                              "name": "s1btnIc",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "rotate-cw",
+                              "iconFontFamily": "lucide",
+                              "fill": "#C9C9C9"
+                            },
+                            {
+                              "type": "text",
+                              "id": "rjW89",
+                              "name": "s1btnT",
+                              "fill": "#C9C9C9",
+                              "content": "Try again",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "NpCvM",
+                  "name": "4b. member · no project in active workspace",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 14,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "NOt26",
+                      "name": "s2tag",
+                      "fill": "#2A1F12",
+                      "gap": 4,
+                      "padding": [
+                        3,
+                        8
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "LZKXa",
+                          "name": "s2tagT",
+                          "fill": "#C9A962",
+                          "content": "b · member · active workspace has no project",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "coYJO",
+                      "name": "s2ic",
+                      "width": 22,
+                      "height": 22,
+                      "iconFontName": "folder-x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "UrQEh",
+                      "name": "s2msg",
+                      "fill": "#F5F5F5",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "This workspace has no project connected. If your team's project lives in Acme Co, switch workspaces and try again.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Kz4jz",
+                      "name": "s2note",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Active workspace = your Personal one (no repo). The team's project lives in Acme Co. No reconnect CTA.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "3qijx",
+                      "name": "s2btnRow",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "p2QoE",
+                          "name": "s2btn",
+                          "fill": "#C9A962",
+                          "gap": 6,
+                          "padding": [
+                            9,
+                            16
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "3GXFQ",
+                              "name": "s2btnIc",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "arrow-left-right",
+                              "iconFontFamily": "lucide",
+                              "fill": "#0A0A0A"
+                            },
+                            {
+                              "type": "text",
+                              "id": "YC17a",
+                              "name": "s2btnT",
+                              "fill": "#0A0A0A",
+                              "content": "Switch to Acme Co",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "W1Ga2",
+                      "name": "s2deep",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "→ deep link carries the team workspace id",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "01W5i",
+                  "name": "4c. owner · connection broken",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 14,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "jV8Bi",
+                      "name": "s3tag",
+                      "fill": "#2A1212",
+                      "gap": 4,
+                      "padding": [
+                        3,
+                        8
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "UebfD",
+                          "name": "s3tagT",
+                          "fill": "#F87171",
+                          "content": "c · owner · connection broken",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "uyQDm",
+                      "name": "s3ic",
+                      "width": 22,
+                      "height": 22,
+                      "iconFontName": "triangle-alert",
+                      "iconFontFamily": "lucide",
+                      "fill": "#F87171"
+                    },
+                    {
+                      "type": "text",
+                      "id": "hcJSg",
+                      "name": "s3msg",
+                      "fill": "#F5F5F5",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Setup failed: clone aborted (auth lost). Reconnect in Settings → Repository.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "lj9wB",
+                      "name": "s3note",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Owner of this workspace (Personal or team) — the connection is theirs to fix.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Ktt3Y",
+                      "name": "s3btnRow",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "u4Xm0",
+                          "name": "s3btn",
+                          "fill": "#2A1212",
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#7F1D1D"
+                          },
+                          "gap": 6,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "SLLgw",
+                              "name": "s3btnIc",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "rotate-cw",
+                              "iconFontFamily": "lucide",
+                              "fill": "#F87171"
+                            },
+                            {
+                              "type": "text",
+                              "id": "J4h0Q",
+                              "name": "s3btnT",
+                              "fill": "#F87171",
+                              "content": "Reconnect",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "CvgNB",
+          "name": "Footer annotation",
+          "width": "fill_container",
+          "fill": "#0F0F0F",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "gap": 10,
+          "padding": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "n1YB3",
+              "name": "fIc",
+              "width": 16,
+              "height": 16,
+              "iconFontName": "info",
+              "iconFontFamily": "lucide",
+              "fill": "#C9A962"
+            },
+            {
+              "type": "text",
+              "id": "lj3Y9",
+              "name": "fT",
+              "fill": "#8A8A8A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Model: Every user owns a Personal workspace; solo = owner of a 1-member workspace. The personal workspace owns repo / billing / integrations exactly like a team workspace. Not-ready messaging is assembled at the dispatch boundary (one place), keyed on resolver outcome + role — one coherent state set.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -20,6 +20,19 @@ interface ProjectSetupCardProps {
    * reconnect affordance instead.
    */
   needsReconnect?: boolean;
+  /**
+   * ADR-044 PR-1 (FR3) — whether the caller OWNS the active workspace. Members
+   * (non-owners) see a READ-ONLY connection summary with NO connect/disconnect/
+   * reconnect controls: they don't own the connection, and a control would
+   * either no-op or (in PR-1) disconnect their OWN solo connection — a
+   * confusing-but-not-cross-tenant action. Defaults to `true` (solo users are
+   * always owners of workspace_id=user.id). Mirrors `RenameWorkspaceAction`
+   * owner-gating.
+   */
+  isOwner?: boolean;
+  /** Display label for the workspace owner (the team/org name), shown in the
+   *  member read-only "managed by …" line. Omitted → generic fallback. */
+  ownerLabel?: string | null;
 }
 
 function extractRepoName(url: string): string {
@@ -36,8 +49,45 @@ export function ProjectSetupCard({
   repoStatus,
   repoLastSyncedAt,
   needsReconnect = false,
+  isOwner = true,
+  ownerLabel = null,
 }: ProjectSetupCardProps) {
   const router = useRouter();
+
+  // ADR-044 PR-1 (FR3) — member (non-owner) read-only variant. No connect /
+  // disconnect / reconnect controls; the member doesn't own the connection.
+  if (!isOwner) {
+    const managedBy = ownerLabel
+      ? `managed by ${ownerLabel}`
+      : "managed by your workspace owner";
+    return (
+      <section>
+        <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
+          Project
+        </h2>
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
+          {repoStatus === "ready" && repoUrl ? (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-soleur-text-primary">
+                  {extractRepoName(repoUrl)}
+                </p>
+                <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400">
+                  Connected
+                </span>
+              </div>
+              <p className="text-sm text-soleur-text-secondary">{managedBy}</p>
+            </div>
+          ) : (
+            <p className="text-sm text-soleur-text-secondary">
+              No project connected — {managedBy}.
+            </p>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section>
       <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Project</h2>

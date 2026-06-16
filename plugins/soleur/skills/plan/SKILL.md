@@ -494,6 +494,32 @@ discoverability_test:  # command (NO ssh) / expected_output
 
 **Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours. The plan that introduced it (PR-F #3940) passed every other plan-time gate but had no observability declaration; the operator-blind-zone aggregated across the substrate cascade (#4017 → #4111) until issue #4116 surfaced the gap. Codifying the gate at plan-time prevents the next feature from shipping a dark observability surface.
 
+### 2.10. Architecture Decision (ADR / C4) Gate
+
+[skill-enforced: plan Phase 2.10 — `wg-architecture-decision-is-a-plan-deliverable`]
+
+If the plan makes or changes an **architectural decision**, the ADR write and the C4 diagram update are **deliverables of THIS plan** — never a deferred follow-up issue. Phase 0.6 / line 112 already make you *read* the ADR corpus; this gate makes you *produce* the decision record when the plan creates one. Deferring an ADR/C4 update to "later" ships a system whose recorded architecture lies about its real one until someone reopens the issue (usually never).
+
+**Detection** (the plan introduces or changes any of):
+
+- A data-model **ownership / tenancy boundary** move (user-keyed → workspace-keyed, per-row → per-tenant, a new "X owns Y" relationship).
+- A new **substrate or integration pattern** (a new queue, cron substrate, auth/credential boundary, external-service edge).
+- A **resolver / dispatch / trust boundary** change (who resolves what, fail-closed semantics, a new cross-cutting invariant every consumer must honor).
+- A **reversal or extension of an existing ADR** (you read it in Phase 0.6 and the plan diverges from or supersedes its Decision).
+- Any change a future engineer would be surprised to find **undocumented** in `knowledge-base/engineering/architecture/`.
+
+**If detected, the plan MUST emit an `## Architecture Decision (ADR/C4)` section** naming, as in-scope plan tasks:
+
+- `### ADR` — the ADR to **create or amend** via `/soleur:architecture` (number + one-line decision). New decision → new ADR; divergence from an existing one → amend that ADR's `## Decision` + add to its `## Alternatives Considered`. This is a task in the implementation phases, not a "see also."
+- `### C4 views` — which C4 view(s) (Context / Container / Component) change and how (e.g., "Container: repo connection edge moves from User to Workspace"). **C4 edits are gated behind the `c4-edit` flag (Concierge-only KB writes, per commit `3c8849655`)** — note this so the implementer routes the C4 edit through the Concierge path, but the update still lands in THIS feature's lifecycle, not a separate issue.
+- `### Sequencing` — if the decision is only *true* after a later slice (e.g. a soak-gated migration), the ADR is authored now describing the target state with a "status: adopting" note; it is **not** postponed to its own issue.
+
+**Reject condition** (enforced at deepen-plan): an architectural decision is detected but the plan defers the ADR/C4 update to a follow-up issue, or the `## Architecture Decision (ADR/C4)` section is missing while detection fires.
+
+**Skip silently** when the plan makes no architectural decision — a bug fix on an existing surface, a copy/UI tweak, a dependency bump, a pure-docs change. The test: would a competent engineer reading only the existing ADRs + C4 be *misled* about the system after this plan ships? If no, skip.
+
+**Why:** 2026-06-16 ADR-044 workspace-connection brainstorm (#5437) — the always-enforce-workspace decision and its C4 connection-owner edge were initially filed as a *deferred* follow-up issue (#5440) instead of being part of the plan. The operator corrected it: the ADR/C4 update is intrinsic to the architectural change and must ship with it. No prior plan-time gate required producing (vs reading) an ADR. See `knowledge-base/project/learnings/2026-06-16-adr-c4-update-is-a-plan-deliverable-not-a-deferred-issue.md`.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**

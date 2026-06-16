@@ -36,6 +36,7 @@ const {
   mockWriteAskpassScriptTo,
   mockCleanupAskpassScript,
   mockResolveActiveWorkspacePath,
+  mockResolveActiveWorkspace,
   mockGetCurrentRepoUrl,
   mockGetCurrentRepoStatus,
   mockGetInstallationAccount,
@@ -60,6 +61,7 @@ const {
   mockWriteAskpassScriptTo: vi.fn(),
   mockCleanupAskpassScript: vi.fn(),
   mockResolveActiveWorkspacePath: vi.fn(),
+  mockResolveActiveWorkspace: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
   mockGetCurrentRepoStatus: vi.fn(),
   mockGetInstallationAccount: vi.fn(),
@@ -164,7 +166,12 @@ vi.mock("@/server/workspace-resolver", async () => {
   const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
     "@/server/workspace-resolver",
   );
-  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+  return {
+    ...actual,
+    resolveActiveWorkspacePath: mockResolveActiveWorkspacePath,
+    // ADR-044 PR-1: the factory resolves this directly before the Promise.all.
+    resolveActiveWorkspace: mockResolveActiveWorkspace,
+  };
 });
 
 vi.mock("@/server/current-repo-url", () => ({
@@ -376,6 +383,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveBashAutonomous.mockResolvedValue(false);
     mockResolveAutonomousAck.mockResolvedValue(null);
     mockResolveIsWorkspaceOwner.mockResolvedValue(false);
+    // ADR-044 PR-1: default to the solo workspace (= userId). Dispatch-path
+    // tests that need a team/reset id override per-case.
+    mockResolveActiveWorkspace.mockImplementation(async (userId: string) => ({
+      ok: true,
+      workspaceId: userId,
+    }));
     // feat-one-shot-concierge-gh-403 self-heal defaults: no connected repo so
     // the self-heal branch is skipped for every pre-existing test. The
     // dedicated describe block overrides these per-test.
@@ -617,7 +630,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
 
     await realSdkQueryFactory(makeArgs());
 
-    expect(mockResolveInstallationId).toHaveBeenCalledWith("user-1");
+    // ADR-044 PR-1: the factory threads the membership-verified activeWorkspaceId
+    // (= "user-1" solo here) into resolveInstallationId as the 2nd arg, so the
+    // install resolves to the SAME workspace as the agent CWD / repo (no second
+    // divergent resolve).
+    expect(mockResolveInstallationId).toHaveBeenCalledWith("user-1", "user-1");
     expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
       987654,
       expect.objectContaining({ minRemainingMs: expect.any(Number) }),
@@ -634,6 +651,39 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitInstallationToken: "ghs_minted_xyz",
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // ADR-044 PR-1 (FR1/TR1) — unified-resolve threading. The membership-verified
+  // activeWorkspaceId must reach ALL workspace-keyed consumers (path/install/
+  // repo/status), so the agent CWD, repo, install, and self-heal key to ONE id.
+  // -------------------------------------------------------------------------
+  it("threads the resolved TEAM id into install + repo + status consumers (no second divergent resolve)", async () => {
+    const teamWs = "team-ws-99";
+    mockResolveActiveWorkspace.mockResolvedValueOnce({
+      ok: true,
+      workspaceId: teamWs,
+    });
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_team");
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockResolveInstallationId).toHaveBeenCalledWith("user-1", teamWs);
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith("user-1", teamWs);
+    expect(mockGetCurrentRepoStatus).toHaveBeenCalledWith("user-1", teamWs);
+  });
+
+  it("db-error from resolveActiveWorkspace blocks dispatch (WorkspaceNotReadyError, no SDK query)", async () => {
+    mockResolveActiveWorkspace.mockResolvedValueOnce({
+      ok: false,
+      reason: "db-error",
+    });
+
+    await expect(realSdkQueryFactory(makeArgs())).rejects.toMatchObject({
+      name: "WorkspaceNotReadyError",
+    });
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------

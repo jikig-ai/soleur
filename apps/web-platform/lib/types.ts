@@ -170,6 +170,12 @@ export type WSErrorCode =
   // CTA to Settings → Repository. The `cloning` block carries NO errorCode
   // (a benign transient state, not a failure).
   | "repo_setup_failed"
+  // ADR-044 PR-1 — Concierge dispatch blocked because the member was reset to
+  // an empty solo workspace (their session pointed at a team they're not a
+  // member of). Client renders a workspace-switcher affordance (carrying
+  // `switchToWorkspaceId`), NOT a reconnect CTA — the member does not own the
+  // connection. Distinct from `repo_setup_failed` (an owner's repo errored).
+  | "workspace_switch_required"
   | "delegation_revoked_post_grace"
   | "delegation_expired"
   | "delegation_hourly_cap_exceeded"
@@ -478,6 +484,12 @@ export type WSMessage =
       runnerRunawayReason?: "idle_window" | "max_turn_duration";
       runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
       runnerRunawayLastBlockToolName?: string | null;
+      // ADR-044 PR-1 — set with `errorCode: "workspace_switch_required"`: the
+      // workspace id (the discarded non-member claim) the client offers to
+      // switch to. The client opens the workspace switcher (NOT a direct
+      // membership-checked switch — a reset user is a non-member by
+      // construction). Optional and ignorable by existing consumers.
+      switchToWorkspaceId?: string;
     }
   // #3930 — cross-process JWT revocation discriminator. Emitted when
   // ws-handler's `tenantFor` catch site sees a RuntimeAuthError with

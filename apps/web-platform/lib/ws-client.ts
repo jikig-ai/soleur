@@ -1026,6 +1026,22 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             });
           }
 
+          // ADR-044 PR-1 — member reset to an empty solo workspace. Surface a
+          // structured switcher action so a programmatic client can branch on
+          // `code`; the action opens the workspace switcher in the dashboard
+          // chrome (NOT a direct `set_current_workspace_id(switchToWorkspaceId)`
+          // — a reset user is a NON-member of that team by construction, so a
+          // direct switch would be rejected; the switcher lists only joinable
+          // workspaces). Falls through to the chat-bubble so the human reader
+          // also sees the honest message text.
+          if (msg.errorCode === "workspace_switch_required") {
+            setLastError({
+              code: "workspace_switch_required",
+              message: msg.message,
+              action: { label: "Switch workspace", href: "/dashboard" },
+            });
+          }
+
           if (msg.errorCode?.startsWith("delegation_")) {
             setLastError({
               code: msg.errorCode,

@@ -148,7 +148,15 @@ vi.mock("@/server/workspace-resolver", async () => {
   const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
     "@/server/workspace-resolver",
   );
-  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+  return {
+    ...actual,
+    resolveActiveWorkspacePath: mockResolveActiveWorkspacePath,
+    // ADR-044 PR-1: factory resolves this directly before the Promise.all.
+    resolveActiveWorkspace: async (userId: string) => ({
+      ok: true as const,
+      workspaceId: userId,
+    }),
+  };
 });
 
 // PR-C §2.11 (#3244): cc-dispatcher.ts now wraps `realSdkQueryFactory`

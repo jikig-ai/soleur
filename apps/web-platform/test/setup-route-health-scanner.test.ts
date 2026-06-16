@@ -76,6 +76,8 @@ vi.mock("@/lib/supabase/server", () => ({
         },
       }),
     },
+    // ADR-044 PR-1 owner-gate: default to owner.
+    rpc: vi.fn().mockResolvedValue({ data: true, error: null }),
   }),
   createServiceClient: vi.fn().mockReturnValue({
     from: vi.fn((table: string) => {
