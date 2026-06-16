@@ -21,4 +21,23 @@ describe("routine-metadata sidecar parity", () => {
       );
     }
   });
+
+  // #5424 — every routine (and every future one) must carry a human-readable
+  // description so the dashboard + agent tool can explain what it does. The
+  // required `description` field on RoutineMeta is the compile-time half of the
+  // guard; this is the runtime half (non-empty + a sane upper bound so a stub
+  // like "TODO" or a pasted essay both fail).
+  it("every entry has a meaningful description (10–160 chars)", () => {
+    for (const [fnId, meta] of Object.entries(ROUTINE_METADATA)) {
+      expect(meta.description, `${fnId}.description`).toBeTruthy();
+      expect(
+        meta.description.trim().length,
+        `${fnId}.description too short`,
+      ).toBeGreaterThanOrEqual(10);
+      expect(
+        meta.description.length,
+        `${fnId}.description too long`,
+      ).toBeLessThanOrEqual(160);
+    }
+  });
 });
