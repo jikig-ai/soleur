@@ -75,8 +75,12 @@ function buildComponents({ linkRel, preWrap, enableC4, c4DirPath }: BuildOptions
     // 8ch keeps single-token / empty cells visible; 45ch caps prose cells to the
     // bottom of the readable measure so a single long-paragraph cell doesn't blow
     // out the table. Header may exceed (whitespace-nowrap on th wins) by design.
+    // break-normal opts cells back to word-boundary wrapping: the root wrapper sets
+    // [overflow-wrap:anywhere] (issue #2229) and overflow-wrap is INHERITED, so without
+    // this override <td> text breaks short words mid-character ("active" → "activ e")
+    // and auto-layout collapses columns. <th> is already immune via whitespace-nowrap.
     td: ({ children }) => (
-      <td className="min-w-[8ch] max-w-[45ch] border border-soleur-border-default px-3 py-1.5 align-top text-soleur-text-secondary">{children}</td>
+      <td className="min-w-[8ch] max-w-[45ch] break-normal border border-soleur-border-default px-3 py-1.5 align-top text-soleur-text-secondary">{children}</td>
     ),
     pre: ({ children }) => {
       // A ```likec4-view block renders as a block-level diagram, not a <pre>.

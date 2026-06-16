@@ -98,4 +98,20 @@ describe("MarkdownRenderer — table column widths (shared-doc readability)", ()
       expect(td.className).not.toMatch(/(^|\s)w-full(\s|$)/);
     });
   });
+
+  it("renders data cells with break-normal so inherited overflow-wrap:anywhere can't break words mid-character", () => {
+    const { container } = render(<MarkdownRenderer content={tableMd} />);
+    const cells = container.querySelectorAll("td");
+    expect(cells.length).toBeGreaterThan(0);
+    cells.forEach((td) => {
+      // The renderer's root wrapper sets [overflow-wrap:anywhere] for long prose/URLs
+      // (issue #2229). overflow-wrap is an INHERITED CSS property, so without an
+      // explicit override every <td> inherits `anywhere` and breaks short words
+      // ("active" → "activ e", "Cloudflare" → "Cloudflar e") mid-character — and the
+      // table's auto-layout sizes columns as if every char is a break opportunity.
+      // break-normal (= overflow-wrap: normal; word-break: normal) opts cells back to
+      // word-boundary wrapping. <th> is already immune via whitespace-nowrap.
+      expect(td.className).toContain("break-normal");
+    });
+  });
 });
