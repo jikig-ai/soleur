@@ -18,13 +18,15 @@ set -euo pipefail
 # the unknown-arg branch below — keep this constraint in mind when adding
 # future flags.
 bootstrap_mode="auto"  # auto = legacy bootstrap fires when table empty
+verify_mode=""         # --verify: diff tracked vs. filesystem, then exit
 for arg in "$@"; do
   case "$arg" in
     --bootstrap=skip) bootstrap_mode="skip" ;;
     --bootstrap=auto) bootstrap_mode="auto" ;;
+    --verify) verify_mode="1" ;;
     --help|-h)
       cat <<'USAGE'
-Usage: run-migrations.sh [--bootstrap=skip|auto]
+Usage: run-migrations.sh [--bootstrap=skip|auto] [--verify]
 
 Applies SQL files from supabase/migrations/ in filename order, tracking state
 in public._schema_migrations.
@@ -37,6 +39,11 @@ Options:
                      provisioning of a fresh Supabase project where 001-010
                      have NOT been applied. All migrations apply in order.
                      Equivalent: BOOTSTRAP_MIGRATIONS=0 bash run-migrations.sh.
+  --verify           Diff the _schema_migrations tracking table against the
+                     filesystem and exit. Exits 0 if in sync; exits 1 on drift
+                     (untracked files or phantom rows). Does NOT apply migrations.
+                     Use to detect out-of-band applies (issue #3370) or block CI
+                     on ledger drift.
   --help, -h         Print this message and exit.
 
 Environment:
@@ -90,6 +97,71 @@ fi
 run_sql() {
   psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1 -tAq -c "$1"
 }
+
+# --verify mode (#3370): diff the _schema_migrations tracking table against
+# the filesystem and exit without applying anything. Detects two drift classes:
+#   untracked — file exists on disk but absent from _schema_migrations (e.g.
+#               applied out-of-band via dashboard or `supabase db push`).
+#   phantom   — row in _schema_migrations but file no longer on disk.
+# Exits 0 on clean; exits 1 on any drift so CI can block on ledger skew.
+if [[ "$verify_mode" == "1" ]]; then
+  echo "Verifying migration tracking state..."
+
+  run_sql "CREATE TABLE IF NOT EXISTS public._schema_migrations (
+    filename TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );"
+
+  tracked_tmp=$(mktemp)
+  fs_tmp=$(mktemp)
+
+  # Collect all tracked filenames, sorted for comm.
+  run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;" | sort > "$tracked_tmp"
+
+  # Collect all forward migration filenames from disk, sorted for comm.
+  for mig in "$MIGRATIONS_DIR"/*.sql; do
+    fn="$(basename "$mig")"
+    case "$fn" in *.down.sql) continue ;; esac
+    echo "$fn"
+  done | sort > "$fs_tmp"
+
+  # comm -23: in filesystem, NOT in tracking table (untracked drift).
+  # comm -13: in tracking table, NOT in filesystem (phantom drift).
+  untracked=$(comm -23 "$fs_tmp" "$tracked_tmp")
+  phantom=$(comm -13 "$fs_tmp" "$tracked_tmp")
+
+  rm -f "$tracked_tmp" "$fs_tmp"
+
+  drift=0
+  if [[ -n "$untracked" ]]; then
+    drift=1
+    echo "::error::Drift detected: migration file(s) on disk NOT tracked in _schema_migrations (applied out-of-band or never applied):"
+    while IFS= read -r fn; do
+      [[ -z "$fn" ]] && continue
+      echo "::error::  untracked: $fn"
+    done <<<"$untracked"
+    echo "::error::Recovery: INSERT missing filenames into public._schema_migrations (ON CONFLICT DO NOTHING) if already applied out-of-band; otherwise re-run without --verify to apply them."
+  fi
+
+  if [[ -n "$phantom" ]]; then
+    drift=1
+    echo "::error::Drift detected: _schema_migrations row(s) with no corresponding file on disk:"
+    while IFS= read -r fn; do
+      [[ -z "$fn" ]] && continue
+      echo "::error::  phantom: $fn"
+    done <<<"$phantom"
+    echo "::error::Recovery: DELETE the phantom row(s) from public._schema_migrations if the migration file was intentionally removed."
+  fi
+
+  if [[ "$drift" -eq 0 ]]; then
+    tracked_count=$(run_sql "SELECT count(*) FROM public._schema_migrations;")
+    echo "Verify OK: ${tracked_count} tracked, filesystem in sync."
+  else
+    echo "::error::Migration tracking drift detected. See above for details. Ref #3370."
+    exit 1
+  fi
+  exit 0
+fi
 
 # Create tracking table if it does not exist
 run_sql "CREATE TABLE IF NOT EXISTS public._schema_migrations (
