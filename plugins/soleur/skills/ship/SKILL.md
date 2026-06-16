@@ -536,16 +536,28 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   '`/ship` Phase 5.5 blocks PR-ready on an unrecorded recurring vendor expense'
 ```
 
-**Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'` adds a dependency the agent judges to be a *paid* vendor), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or plan-tier strings in the diff or PR body. Capture the PR body once and **strip fenced code blocks** before grepping (this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count), reusing the fail-closed fence-stripper from the Undeferred Operator-Step Gate. Bash ERE has no `(?i)` — use `grep -iE`.
+**Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` that the agent judges to be a *paid* vendor (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'`), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or a plan-tier string in the PR body. Capture the PR body and **strip fenced code blocks** before grepping — this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count. The block below is **self-contained**: it captures + strips the body itself rather than depending on the Undeferred Operator-Step Gate's `$PR_BODY_FILE` (defined later in this file — running these blocks in document order would otherwise leave it unset and the grep would silently no-op). Bash ERE has no `(?i)` — use `grep -iE`.
 
 ```bash
 # (a) Is the ledger already touched in this same change? If so the gate is satisfied.
 LEDGER_TOUCHED=$(git diff origin/main...HEAD --name-only | grep -c 'knowledge-base/operations/expenses.md' || true)
 
-# (b) Plan-tier signal, list-anchored to avoid prose noise (mirrors the
-# Undeferred gate's list-anchored convention). Run against the
-# fence-stripped PR body ($PR_BODY_FILE from the sibling gate's stripper).
-SIGNAL_RE='^[[:space:]]*([-*]|[0-9]+\.)?[[:space:]]*.*((^|[^a-z])[Pp]ro\b|subscription|upgrade|paid[[:space:]]+tier|\$[0-9]+(\.[0-9]+)?/mo)'
+# (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
+# unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
+PR_BODY_FILE=$(mktemp); trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
+PR_BODY=$(gh pr view --json body --jq .body)
+printf '%s' "$PR_BODY" | awk '
+  /^```/ { in_fence = !in_fence; next }
+  !in_fence { print }
+  END { if (in_fence) exit 2 }
+' > "$PR_BODY_FILE" || printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+
+# (c) Vendor-cost keyword scan over the fence-stripped body. Intentionally a
+# BROAD keyword match (NOT list-anchored like the Undeferred gate) — a PR often
+# describes a subscription in prose, not a bullet, so over-detection is preferred
+# here; false positives are absorbed by the LEDGER_TOUCHED branch and the
+# operator-attestation override below.
+SIGNAL_RE='(^|[^a-z])[Pp]ro\b|subscription|upgrade|paid[[:space:]]+tier|\$[0-9]+(\.[0-9]+)?/mo'
 SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 ```
 
