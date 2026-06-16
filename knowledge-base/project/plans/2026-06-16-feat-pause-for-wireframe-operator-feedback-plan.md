@@ -6,7 +6,7 @@ type: feat
 status: planned
 lane: cross-domain
 brand_survival_threshold: none
-spec: knowledge-base/project/specs/feat-one-shot-pause-wireframe-feedback/spec.md
+tasks: knowledge-base/project/specs/feat-one-shot-pause-wireframe-feedback/tasks.md
 plan_review: pending
 ---
 
