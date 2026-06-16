@@ -5,19 +5,30 @@ import { mockQueryChain } from "./helpers/mock-supabase";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockDeleteWorkspace, mockIsAllowed, mockRpc } =
-  vi.hoisted(() => ({
-    mockGetUser: vi.fn(),
-    mockFrom: vi.fn(),
-    mockDeleteWorkspace: vi.fn(),
-    mockIsAllowed: vi.fn(),
-    mockRpc: vi.fn(),
-  }));
+const {
+  mockGetUser,
+  mockFrom,
+  mockDeleteWorkspace,
+  mockIsAllowed,
+  mockRpc,
+  mockTenantFrom,
+} = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockFrom: vi.fn(),
+  mockDeleteWorkspace: vi.fn(),
+  mockIsAllowed: vi.fn(),
+  mockRpc: vi.fn(),
+  mockTenantFrom: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
     rpc: mockRpc,
+    // ADR-044 PR-2a: the tenant client now reads user_session_state via
+    // resolveCurrentWorkspaceId (active-workspace guard). Defaulted to solo
+    // in beforeEach so every existing test is a no-op for the new guard.
+    from: mockTenantFrom,
   })),
   createServiceClient: vi.fn(() => ({
     from: mockFrom,
@@ -119,6 +130,46 @@ describe("DELETE /api/repo/disconnect", () => {
     // ADR-044 PR-1 owner-gate: default to owner (solo users always own
     // workspace_id=user.id). The non-owner case overrides per-test.
     mockRpc.mockResolvedValue({ data: true, error: null });
+    // ADR-044 PR-2a: default the active-workspace resolver to SOLO
+    // (current_workspace_id null → resolveCurrentWorkspaceId returns user.id),
+    // so the team-workspace refusal guard is a no-op for every existing test.
+    mockTenantFrom.mockReturnValue(
+      mockQueryChain({ current_workspace_id: null }, null),
+    );
+  });
+
+  test("returns 422 and refuses when a TEAM workspace is active (ADR-044 PR-2a confused-deputy guard)", async () => {
+    const TEAM_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    // Active workspace is a TEAM (≠ user.id). Team on-disk provisioning is
+    // #4560/Phase-5; until then a disconnect would SILENTLY tear down the
+    // caller's PERSONAL solo connection (confused deputy). Refuse explicitly.
+    mockTenantFrom.mockReturnValue(
+      mockQueryChain({ current_workspace_id: TEAM_WORKSPACE_ID }, null),
+    );
+    const { mockUpdate } = setupUserMocks({ repoStatus: "ready" });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error).toMatch(/team workspace/i);
+
+    // The refusal precedes the owner-gate AND every mutation.
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+  });
+
+  test("solo active workspace (current_workspace_id === user.id) is unaffected by the team guard", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockTenantFrom.mockReturnValue(
+      mockQueryChain({ current_workspace_id: TEST_USER_ID }, null),
+    );
+    setupUserMocks({ repoStatus: "ready" });
+    mockDeleteWorkspace.mockResolvedValue(undefined);
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(200);
   });
 
   test("returns 403 when the caller is not the workspace owner (ADR-044 owner-gate)", async () => {

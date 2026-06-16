@@ -78,6 +78,23 @@ vi.mock("@/lib/supabase/server", () => ({
     },
     // ADR-044 PR-1 owner-gate: default to owner.
     rpc: vi.fn().mockResolvedValue({ data: true, error: null }),
+    // ADR-044 PR-2a: tenant read of user_session_state for the active-workspace
+    // guard (resolveCurrentWorkspaceId). No session row → solo (== user-123), so
+    // the team-workspace refusal is a no-op for these health-scanner tests.
+    from: vi.fn((table: string) => {
+      if (table === "user_session_state") {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi
+                .fn()
+                .mockResolvedValue({ data: null, error: null }),
+            }),
+          }),
+        };
+      }
+      return {};
+    }),
   }),
   createServiceClient: vi.fn().mockReturnValue({
     from: vi.fn((table: string) => {
