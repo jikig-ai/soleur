@@ -98,4 +98,28 @@ describe("MarkdownRenderer — table column widths (shared-doc readability)", ()
       expect(td.className).not.toMatch(/(^|\s)w-full(\s|$)/);
     });
   });
+
+  it("renders data cells that opt out of the inherited overflow-wrap:anywhere so words don't break mid-character", () => {
+    // Single-token cells ("Cloudflare", "observability") are exactly the inputs the
+    // root wrapper's inherited [overflow-wrap:anywhere] (issue #2229) would mangle
+    // ("Cloudflar e"). overflow-wrap is INHERITED, so each <td> must override it or
+    // auto-layout sizes columns as if every char is a break point. <th> is immune
+    // via whitespace-nowrap.
+    const md =
+      "| Service | Status |\n" +
+      "|---|---|\n" +
+      "| Cloudflare | active |\n" +
+      "| BetterStack | observability |\n";
+    const { container } = render(<MarkdownRenderer content={md} />);
+    const cells = container.querySelectorAll("td");
+    expect(cells.length).toBeGreaterThan(0);
+    cells.forEach((td, i) => {
+      // Contract = "the cell does NOT inherit `anywhere`", expressed at the only layer
+      // happy-dom can see (className). Assert the word-boundary opt-out (break-normal
+      // or the arbitrary [overflow-wrap:normal] form — both survive an equivalent
+      // refactor) AND the negative: the cell never carries [overflow-wrap:anywhere].
+      expect(td.className, `td[${i}]`).toMatch(/break-normal|\[overflow-wrap:normal\]/);
+      expect(td.className, `td[${i}]`).not.toContain("[overflow-wrap:anywhere]");
+    });
+  });
 });
