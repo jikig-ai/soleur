@@ -935,8 +935,7 @@ describe("syncWorkspace", () => {
     );
   });
 
-  test("AC5 observability: recovery + abort payloads carry pseudonymized userId and NO raw workspacePath", async () => {
-    // Recovery path.
+  test("AC5a observability: recovery payload carries pseudonymized userId and NO raw workspacePath", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
@@ -947,14 +946,15 @@ describe("syncWorkspace", () => {
       userId: TEST_USER_ID,
       op: "push",
     });
+    expect(mockWarnSilentFallback.mock.calls.length).toBeGreaterThan(0);
     for (const call of mockWarnSilentFallback.mock.calls) {
       const opts = call[1] as { extra?: Record<string, unknown> };
       expect(opts.extra).not.toHaveProperty("workspacePath");
       expect(opts.extra?.userId).toBe(TEST_USER_ID);
     }
+  });
 
-    // Detached abort path.
-    mockReportSilentFallback.mockClear();
+  test("AC5b observability: detached-abort payload carries pseudonymized userId and NO raw workspacePath", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
@@ -965,6 +965,7 @@ describe("syncWorkspace", () => {
       userId: TEST_USER_ID,
       op: "push",
     });
+    expect(mockReportSilentFallback.mock.calls.length).toBeGreaterThan(0);
     for (const call of mockReportSilentFallback.mock.calls) {
       const opts = call[1] as { extra?: Record<string, unknown> };
       expect(opts.extra).not.toHaveProperty("workspacePath");
@@ -1004,6 +1005,64 @@ describe("syncWorkspace", () => {
       expect.anything(),
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
+  });
+
+  test("recovery is keyed on the RESOLVED default branch, not a hardcoded \"main\" (default = trunk)", async () => {
+    // The HEAD comparison must use the symbolic-ref-resolved default, so a
+    // repo whose default is `trunk` recovers and resets to origin/trunk. A
+    // buggy `headRef === "main"` impl would abort here instead of recovering.
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/trunk\n")),
+      revParse: () => Promise.resolve(Buffer.from("trunk\n")),
+      revList: () => Promise.resolve(Buffer.from("1\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+    const calls = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => c[0] as string[],
+    );
+    expect(calls.some((a) => a[0] === "branch")).toBe(true);
+    expect(calls).toContainEqual(["reset", "--hard", "origin/trunk"]);
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-recovered-diverged" }),
+    );
+  });
+
+  test("un-countable rev-list (NaN) → fail safe: abort, NO branch/reset", async () => {
+    // A malformed rev-list count must NOT branch-aside or reset — the
+    // recovery is gated on a COUNTABLE divergence (`!Number.isNaN`). Empty
+    // output → parseInt(...) === NaN → abort, preserve work.
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revParse: () => Promise.resolve(Buffer.from("main\n")),
+      revList: () => Promise.resolve(Buffer.from("")), // unparseable → NaN
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+    const verbs = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => (c[0] as string[])[0],
+    );
+    expect(verbs).not.toContain("branch");
+    expect(verbs).not.toContain("reset");
   });
 
   test("self-heal failure: non-FF + reset rejects → fail_loud + {ok:false}", async () => {

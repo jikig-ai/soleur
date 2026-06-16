@@ -127,8 +127,11 @@ export async function syncWorkspace(
       // 9ccf1d86…). Record an info breadcrumb only (Better Stack drain; below
       // the WARN+ Sentry-mirror threshold, and no `err` key so nothing is
       // captured) and let selfHealNonFastForward own escalation: it mirrors
-      // op:self-heal-aborted-dirty / op:self-heal-failed when recovery does NOT
-      // happen, and warns op:self-heal-reset on success.
+      // op:self-heal-aborted-dirty (feature-branch) /
+      // op:self-heal-aborted-detached-head (detached) / op:self-heal-failed
+      // when recovery does NOT happen, and warns op:self-heal-reset (phantom
+      // zero-commit reset) / op:self-heal-recovered-diverged (un-pushed
+      // default-branch commits branched aside + reset) on success.
       log.info(
         { userId: context.userId, op: context.op, errorClass },
         `kb/${context.op}: ff-only pull blocked — attempting gated self-heal`,
