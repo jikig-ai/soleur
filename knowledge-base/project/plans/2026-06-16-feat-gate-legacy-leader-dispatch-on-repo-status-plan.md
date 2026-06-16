@@ -13,6 +13,38 @@ brand_survival_threshold: single-user incident
 
 > Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-16
+**Agents:** verify-the-negative grep pass (7/7 claims CONFIRMED), architecture-strategist,
+silent-failure-hunter.
+
+### Key improvements (all findings applied)
+
+1. **F1 (HIGH, silent-failure):** Option A's gate sits ABOVE the outer `try` (`:930`), so a
+   non-RuntimeAuthError throw from `getCurrentRepoStatus` (`current-repo-url.ts:126`) would escape
+   uncaught (no Sentry, no client error). Added a fail-open try/catch around the gate read
+   (`reportSilentFallback` + proceed) — AC11 + wiring test case 5. The cc-dispatcher precedent
+   does NOT share this seam.
+2. **P1 (architecture):** "before registerSession" was under-specified — the gate must sit ABOVE
+   the supersede-abort (`getSession`/`abort` at `:876`), else a blocked dispatch kills the in-flight
+   prior session before bailing. Pinned the insertion point + AC10.
+3. **P1 (architecture):** documented the multi-leader `dispatchToLeaders` fan-out (`:2576/:2587`)
+   N-emit behavior — accepted, not gated pre-fan-out (AC12).
+4. **P2 (architecture):** use `hashUserId(userId)` in the breadcrumb for parity with
+   cc-dispatcher.ts:3352 (avoid raw-userId-in-logs divergence).
+5. **F2/F3 (silent-failure, MEDIUM):** breadcrumb now carries the sanitized `reason` for
+   self-contained triage; the Observability `error_reporting` claim was made precise about the
+   `users.repo_error` read's by-design silent fail-open carve-out.
+
+### Verify-the-negative pass
+
+All 7 load-bearing claims (getCurrentRepoStatus self-mints tenant; outer catch does
+Sentry+failed-write; resolveSessionErrorCode returns undefined for RepoNotReadyError;
+registerSession at ~:885 after supersede-abort at :876; all entry points funnel through
+startAgentSession; evaluator fail-open; cc-dispatcher emit/skip shape) CONFIRMED with file:line
+citations.
+
 ## Overview
 
 #5395 (PR for the issue keyed as #5394 in code comments) added a server-authoritative
@@ -111,30 +143,59 @@ threshold).
 ### The gate
 
 ```ts
-// apps/web-platform/server/agent-runner.ts — top of startAgentSession,
-// BEFORE resolveKeyOwnerThenLease (the lease body), before registerSession.
+// apps/web-platform/server/agent-runner.ts — the FIRST statement of
+// startAgentSession, ABOVE the supersede-abort `const existing = getSession(...)`
+// (:876) and ABOVE registerSession (:885). LOAD-BEARING ordering: the gate must
+// precede the supersede-abort so a blocked not-ready dispatch does NOT abort the
+// user's in-flight prior session before bailing (architecture review P1).
 //
 // #5399 — legacy-leader repo-readiness gate (follow-up to #5395 AC10).
 // getCurrentRepoStatus self-mints its tenant client, so this runs without
 // the BYOK lease — a cloning/error workspace never acquires a key, never
 // spawns an agent, never attempts a clone. Server-authoritative for the
 // WHOLE legacy surface (ws-handler pendingLeader :2241 + sendUserMessage
-// :2793/:2817/:2833 all funnel through startAgentSession).
-const { repoStatus, repoError } = await getCurrentRepoStatus(userId);
-const repoReadiness = evaluateRepoReadiness(repoStatus, repoError);
+// :2793/:2817/:2833 + dispatchToLeaders fan-out :2576/:2587 all funnel
+// through startAgentSession).
+//
+// FAIL-OPEN WRAPPER (silent-failure review F1, HIGH): this gate sits ABOVE the
+// outer `try` (:930), so a non-RuntimeAuthError throw from getCurrentRepoStatus
+// (the bare `throw err` at current-repo-url.ts:126 — e.g. a non-auth runtime
+// blip) would otherwise escape uncaught (no Sentry, no client error, no
+// failed-status). The cc-dispatcher precedent does NOT share this seam (its read
+// is inside an existing try). Wrap the read in a fail-open try/catch that mirrors
+// to Sentry and PROCEEDS (degrade to the existing repo-less / #5392 path) rather
+// than dead-ending the dispatch.
+let repoReadiness: RepoReadiness;
+try {
+  const { repoStatus, repoError } = await getCurrentRepoStatus(userId);
+  repoReadiness = evaluateRepoReadiness(repoStatus, repoError);
+} catch (err) {
+  // Unexpected status-read throw at this pre-try call site — mirror and
+  // fail OPEN (proceed). Never block a dispatch on a readiness-read blip.
+  reportSilentFallback(err, {
+    feature: "agent-runner",
+    op: "repo-readiness-gate.read",
+    extra: { userId, conversationId },
+  });
+  repoReadiness = { ok: true };
+}
 if (!repoReadiness.ok) {
   // Honest client message; SKIP Sentry (expected transient/benign, not an
   // incident); do NOT mark the conversation failed (a cloning/error block
   // must not nuke a resumable conversation). Info breadcrumb keeps the rate
   // observable in Better Stack (alert on a code=error spike, never cloning).
+  // Carry the sanitized message so the Better Stack line is self-contained for
+  // triage (silent-failure review F2 — the reason is sanitized by the evaluator,
+  // no leak). Use hashUserId for log parity with cc-dispatcher.ts:3352 (F-P2).
   log.info(
     {
       feature: "agent-runner",
       op: "repo-readiness-gate",
       code: repoReadiness.code,
-      userId,
+      userIdHash: hashUserId(userId),
       conversationId,
       leaderId,
+      reason: repoReadiness.message,
     },
     "repo-readiness gate: blocked legacy-leader dispatch (repo not ready)",
   );
@@ -147,20 +208,29 @@ if (!repoReadiness.ok) {
 }
 ```
 
+This wrapper needs imports `RepoReadiness` from `./repo-readiness`, `reportSilentFallback`
+(already imported at `agent-runner.ts:70`), and `hashUserId` (verify import — it is used by
+cc-dispatcher; confirm the same helper is importable in agent-runner at /work time, else fall back
+to the existing `userId` field shape but document the divergence).
+
 ### Placement decision — pre-lease early-return (Option A, recommended)
 
 Two placements were considered; this is a genuine architectural choice for plan-review to weigh.
 
-- **Option A — gate at the top of `startAgentSession`, before `registerSession` and before
-  `resolveKeyOwnerThenLease`, early-`return`ing on `!ok` (RECOMMENDED).** `getCurrentRepoStatus`
-  self-mints its tenant client, so the read does not need the lease or the in-callback
-  `sessionTenant`/`workspacePath`. Gating here means a not-ready dispatch acquires **no BYOK
-  lease**, fetches **no credential**, spawns **no agent**, and attempts **no clone** — the
-  faithful "close the race at the source" intent. The honest message + Sentry-skip are emitted
-  inline (no throw), so the existing outer catch is untouched. Cost: one early `sendToClient` +
-  `return` block that does not route through the existing catch ladder; must `return` (not
-  `throw`) so the lease body never runs. MUST sit before `registerSession` so a blocked turn
-  never leaves a dangling registered session (see Sharp Edges).
+- **Option A — gate as the FIRST statement of `startAgentSession`, ABOVE the supersede-abort
+  (`const existing = getSession(...)` at `:876`) and ABOVE `registerSession` (`:885`),
+  early-`return`ing on `!ok` (RECOMMENDED).** `getCurrentRepoStatus` self-mints its tenant client,
+  so the read does not need the lease or the in-callback `sessionTenant`/`workspacePath`. Gating
+  here means a not-ready dispatch acquires **no BYOK lease**, fetches **no credential**, spawns
+  **no agent**, attempts **no clone**, and (load-bearing) does **not abort the user's in-flight
+  prior session** — the faithful "close the race at the source" intent. The honest message +
+  Sentry-skip are emitted inline (no throw), so the existing outer catch is untouched. Costs/risks
+  the implementer MUST handle: (1) the gate sits ABOVE the outer `try` (`:930`), so the
+  `getCurrentRepoStatus` read MUST be wrapped in its own fail-open try/catch (a non-RuntimeAuthError
+  throw at `current-repo-url.ts:126` would otherwise escape uncaught — silent-failure review F1,
+  HIGH); (2) it must `return` (not `throw`) so the lease body never runs; (3) it must sit above
+  `getSession`/`abort` at `:876`, not merely above `registerSession`, so a blocked turn never
+  mutates session state (architecture review P1).
 
 - **Option B — gate inside the lease callback, after `workspacePath = resolveActiveWorkspacePath`
   (`:1004`) and before `ensureWorkspaceDirExists`/`.git`-absent reprovision, throwing
@@ -170,6 +240,19 @@ Two placements were considered; this is a genuine architectural choice for plan-
   (wasted work for a known-not-ready dispatch), and the catch branch must additionally skip the
   `updateConversationStatusIfActive(..., "failed")` write — which the cc-dispatcher catch does not
   have to think about (it has no failed-status write in that ladder).
+
+### Multi-leader fan-out (legacy-path-specific behavior)
+
+`sendUserMessage`'s multi-leader branch calls `dispatchToLeaders` (`agent-runner.ts:~2550`),
+which fans out to `startAgentSession` at `:2576` and `:2587` — one closure per leader. Because the
+gate lives INSIDE `startAgentSession`, every leader's dispatch is gated (good — full coverage), but
+a single not-ready multi-leader dispatch will emit **N identical `{ type: "error" }` frames** (one
+per leader). The Concierge path has no such fan-out, so this is a legacy-path-specific behavior the
+"single point" framing glosses (architecture review P1). **Disposition: accept the N-emit** — it is
+not a correctness bug (each frame is the honest message), the client already renders error toasts
+idempotently for a given conversation, and gating once before fan-out would re-introduce a second
+gate site the source plan deliberately rejected. AC10 documents the accepted behavior; do NOT add a
+pre-fan-out gate.
 
 **Recommendation: Option A.** It is cheaper (no lease/credential for a not-ready dispatch),
 matches the source-gate intent more faithfully ("before spawn/clone"), and avoids threading a new
@@ -218,6 +301,10 @@ existing `agent-runner-reprovision.test.ts` mock harness which already mocks `@s
   4. `getCurrentRepoStatus` → `{ repoStatus: "not_connected", repoError: null }` (fail-open
      default): gate is a no-op (same as case 3) — proves a not-connected workspace flows
      unchanged into the existing repo-less / #5392 path.
+  5. `getCurrentRepoStatus` mock REJECTS (throws a non-RuntimeAuthError): the gate's fail-open
+     try/catch fires — `reportSilentFallback` is called with
+     `op: "repo-readiness-gate.read"`, the gate does NOT emit an error frame, and dispatch
+     PROCEEDS (no dead-end). Verifies AC11 (the F1 fix).
 
 ## Acceptance Criteria
 
@@ -243,9 +330,23 @@ existing `agent-runner-reprovision.test.ts` mock harness which already mocks `@s
 - **AC8** — `cd apps/web-platform && ./node_modules/.bin/vitest run test/agent-runner-repo-readiness-gate.test.ts test/repo-readiness.test.ts` passes (the new wiring test + the unchanged evaluator suite).
 - **AC9** — The gate is the single point covering all legacy-leader entry points:
   `git grep -n "startAgentSession(" apps/web-platform/server` confirms the ws-handler
-  `pendingLeader` call (`ws-handler.ts:2241`) and the three `sendUserMessage` call sites
-  (`agent-runner.ts:2793/2817/2833`) all route through the gated function — no per-caller wiring
-  is added.
+  `pendingLeader` call (`ws-handler.ts:2241`), the three `sendUserMessage` call sites
+  (`agent-runner.ts:2793/2817/2833`), AND the `dispatchToLeaders` fan-out sites
+  (`agent-runner.ts:2576/2587`) all route through the gated function — no per-caller wiring is
+  added.
+- **AC10** — The gate sits ABOVE `const existing = getSession(...)` (`agent-runner.ts:~876`) and
+  ABOVE `registerSession` (`~:885`): a blocked dispatch must not abort the in-flight prior session
+  or register a dangling session. Verified by Phase 0 reading + a test assertion that a `cloning`
+  block does NOT call `getSession`/`registerSession` (mock assertion) — or, minimally, a code
+  review check that no session-mutating call precedes the gate.
+- **AC11** — The gate read is fail-open on an unexpected throw: if `getCurrentRepoStatus` rejects
+  (non-RuntimeAuthError), the gate mirrors via `reportSilentFallback`
+  (`op: "repo-readiness-gate.read"`) and PROCEEDS (does not block, does not dead-end). Verified by a
+  wiring test case 5: `getCurrentRepoStatus` mock rejects → dispatch proceeds + `reportSilentFallback`
+  called + no error frame emitted by the gate.
+- **AC12** — A not-ready multi-leader dispatch (`dispatchToLeaders`) emits one error frame per
+  leader (accepted N-emit). Documented, not gated pre-fan-out. (Behavioral note; no new test
+  required beyond AC1/AC2 which already cover the single-leader emit.)
 
 ### Post-merge (operator)
 
@@ -262,8 +363,8 @@ liveness_signal:
   alert_target: "Better Stack — alert on a code=error spike; NEVER alert on cloning (expected transient)"
   configured_in: "apps/web-platform/server/agent-runner.ts (gate block) + existing pino->Better Stack log pipeline"
 error_reporting:
-  destination: "Sentry — INTENTIONALLY SKIPPED for RepoNotReady blocks (expected transient/benign, not an incident); the underlying repo-setup error was already mirrored at the /api/repo/setup write boundary and getCurrentRepoStatus mirrors a status-read DB error via reportSilentFallback"
-  fail_loud: "the gate is fail-open (read blip -> not_connected -> no block); a genuine status-read DB error is mirrored inside getCurrentRepoStatus (reportSilentFallback, already shipped) — not silently swallowed"
+  destination: "Sentry — INTENTIONALLY SKIPPED for RepoNotReady blocks (expected transient/benign, not an incident); the underlying repo-setup error was already mirrored at the /api/repo/setup write boundary. An UNEXPECTED throw from the gate read (non-RuntimeAuthError, current-repo-url.ts:126) IS mirrored via the gate's own fail-open try/catch (reportSilentFallback op=repo-readiness-gate.read) — the F1 fix, NOT skipped."
+  fail_loud: "the gate is fail-open (read blip / unexpected throw -> proceed, never block). Precise carve-out: the STATUS read (workspaces.repo_status) mirrors a DB error via reportSilentFallback inside getCurrentRepoStatus (already shipped); the REASON read (users.repo_error, current-repo-url.ts:159-163) fails open to generic copy WITHOUT a mirror BY DESIGN — accepted because it only degrades message specificity, never readiness. AC6 forbids touching that file, so this carve-out is stated, not fixed."
 failure_modes:
   - mode: "false-positive block of a ready founder"
     detection: "evaluateRepoReadiness is fail-open by construction (only cloning/error block); a code=cloning breadcrumb for a user whose workspaces.repo_status is ready would indicate a status-read consistency bug"
@@ -313,14 +414,26 @@ No open issue touches `repo-readiness.ts` or the readiness-gate code path. No fo
 
 ## Risks & Mitigations
 
-- **Risk: Option A's early `return` leaves a registered session dangling.** `startAgentSession`
-  calls `registerSession(userId, conversationId, session, leaderId)` near its top (`~:884`,
-  preceded by a supersede-abort of any existing session). If the gate returns AFTER
-  `registerSession`, a blocked turn registers then immediately abandons a session entry.
-  **Mitigation:** place the gate BEFORE `registerSession` (and before the supersede-abort) so a
-  blocked dispatch never mutates session state. /work Phase 0 MUST read `agent-runner.ts:875-890`
-  and confirm the exact ordering; document the chosen ordering in the PR body. (This is the
-  load-bearing Option-A correctness detail — see Sharp Edges.)
+- **Risk (silent-failure review F1, HIGH): Option A's gate sits ABOVE the outer `try` (`:930`), so
+  an unexpected throw from `getCurrentRepoStatus` escapes uncaught.** `getCurrentRepoStatus`
+  fails-open only for `RuntimeAuthError` (`current-repo-url.ts:116-125`) and `statusRes.error`
+  (`:147-153`); any OTHER throw hits the bare `throw err` at `:126` and propagates UP — past the
+  new pre-`try` gate, out of `startAgentSession` entirely. The user gets no error frame, the
+  conversation is not marked failed, and Sentry may or may not see it depending on the caller's
+  await handling. The cc-dispatcher precedent does NOT share this seam (its read is inside an
+  existing `try`). **Mitigation (in the gate snippet above):** wrap the gate read in its own
+  fail-open try/catch — mirror via `reportSilentFallback` (`op: "repo-readiness-gate.read"`) and
+  set `repoReadiness = { ok: true }` (proceed; degrade to the existing repo-less / #5392 path).
+  AC11 + wiring test case 5 verify it.
+- **Risk (architecture review P1): Option A's early `return`/blocked dispatch must not abort the
+  in-flight prior session or leave a dangling registered one.** `startAgentSession` runs a
+  supersede-abort (`const existing = getSession(...)` at `:876`) then `registerSession` at `:885`.
+  If the gate sits BELOW `:876`, a blocked not-ready dispatch first kills the user's running prior
+  turn, then bails — leaving the conversation with no active session and no replacement.
+  **Mitigation:** place the gate as the FIRST statement of `startAgentSession`, ABOVE `:876` (not
+  merely above `registerSession`). /work Phase 0 MUST read `agent-runner.ts:870-890` and pin the
+  exact insertion point (immediately after the JSDoc/param list); AC10 asserts no session-mutating
+  call precedes the gate. (Load-bearing — see Sharp Edges.)
 - **Risk: extra DB read on the leader hot path.** `getCurrentRepoStatus` adds one tenant-mint +
   two parallel selects per leader dispatch. The cc-dispatcher path parallelized it into an
   existing `Promise.all`; the legacy path has no such pre-lease `Promise.all`, so under Option A it
@@ -342,10 +455,16 @@ No open issue touches `repo-readiness.ts` or the readiness-gate code path. No fo
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
   text, or omits the threshold will fail `deepen-plan` Phase 4.6. (Section is filled above.)
-- **Option A ordering is load-bearing.** The gate's early `return` must sit before
-  `registerSession`/the supersede-abort, or a blocked turn registers-then-abandons a session. The
-  cc-dispatcher gate did not face this because it lives inside the factory, not at a session-
-  registration boundary. /work Phase 0 must read `agent-runner.ts:875-890` and pin the ordering.
+- **Option A ordering is load-bearing.** The gate must sit ABOVE `const existing = getSession(...)`
+  (`:876`) — not merely above `registerSession` (`:885`). Placing it between the two still kills
+  the in-flight prior session before bailing. The cc-dispatcher gate did not face this because it
+  lives inside the factory, not at a session-registration boundary. /work Phase 0 must read
+  `agent-runner.ts:870-890` and pin the exact insertion point.
+- **Option A introduces a pre-`try` uncaught-throw seam the cc-dispatcher precedent lacks.** The
+  gate read sits above the outer `try` (`:930`); a non-RuntimeAuthError throw from
+  `getCurrentRepoStatus` (`current-repo-url.ts:126`) would escape uncaught (no Sentry, no client
+  error). The gate snippet's fail-open try/catch is NOT optional — it is the F1 fix. Do not drop
+  it as "defensive boilerplate."
 - **Do not add a new error-branch to the outer catch under Option A.** The early-return design
   intentionally bypasses the catch ladder (which marks conversations failed + clears session
   state). Adding both the early return AND a catch branch would double-handle the block. Choose

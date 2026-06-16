@@ -5,9 +5,12 @@ Issue: #5399 (AC10 follow-up to #5395). Branch: `feat-one-shot-gate-legacy-leade
 
 ## Phase 0 — Preconditions (read-before-edit)
 
-- [ ] 0.1 Read `apps/web-platform/server/agent-runner.ts:859-920` (startAgentSession open,
-      supersede-abort, `registerSession`) and pin the exact line of `registerSession`. The Option A
-      gate MUST sit BEFORE it (Risk + Sharp Edge: dangling-session).
+- [ ] 0.1 Read `apps/web-platform/server/agent-runner.ts:870-930` and pin the exact lines of the
+      supersede-abort (`const existing = getSession(...)` ~:876), `registerSession` (~:885), and
+      the outer `try` (~:930). The Option A gate MUST sit ABOVE the supersede-abort (~:876) — not
+      merely above registerSession — and ABOVE the outer try (so the gate read needs its own
+      fail-open try/catch; F1). Pin the insertion point as the first statement after the
+      JSDoc/param list.
 - [ ] 0.2 Read `apps/web-platform/server/agent-runner.ts:2455-2514` (outer catch) — confirm the
       generic `else` mirrors to Sentry AND marks the conversation failed (the two behaviors the
       gate must avoid).
@@ -21,21 +24,26 @@ Issue: #5399 (AC10 follow-up to #5395). Branch: `feat-one-shot-gate-legacy-leade
 
 ## Phase 1 — RED (failing wiring test)
 
-- [ ] 1.1 Create `apps/web-platform/test/agent-runner-repo-readiness-gate.test.ts` with cases 1-4
-      from the plan (cloning / error / ready / not_connected). Assert: `sendToClient` shape,
-      `query` (SDK) NOT called on block, `captureException` NOT called on block, conversation NOT
-      marked failed on block.
+- [ ] 1.1 Create `apps/web-platform/test/agent-runner-repo-readiness-gate.test.ts` with cases 1-5
+      from the plan (cloning / error / ready / not_connected / read-throws-fail-open). Assert:
+      `sendToClient` shape, `query` (SDK) NOT called on block, `captureException` NOT called on
+      block, conversation NOT marked failed on block, `getSession`/`registerSession` NOT called on
+      block (AC10), and case 5 → `reportSilentFallback` called + dispatch proceeds (AC11).
 - [ ] 1.2 Run `cd apps/web-platform && ./node_modules/.bin/vitest run
-      test/agent-runner-repo-readiness-gate.test.ts` — cases 1/2 FAIL on origin/main (no gate yet).
+      test/agent-runner-repo-readiness-gate.test.ts` — cases 1/2/5 FAIL on origin/main (no gate yet).
 
 ## Phase 2 — GREEN (implement the gate, Option A)
 
-- [ ] 2.1 Add the gate to `startAgentSession` BEFORE `registerSession`/`resolveKeyOwnerThenLease`:
-      `getCurrentRepoStatus(userId)` → `evaluateRepoReadiness(...)` → on `!ok`: `log.info`
-      breadcrumb (op=repo-readiness-gate), `sendToClient` honest message + optional errorCode,
-      early `return` (no throw).
-- [ ] 2.2 Extend/add imports (`getCurrentRepoStatus`, `evaluateRepoReadiness`). Do NOT import
-      `RepoNotReadyError` under Option A (unused → lint/tsc noise).
+- [ ] 2.1 Add the gate as the FIRST statement of `startAgentSession`, ABOVE the supersede-abort
+      (~:876) and the outer try: a fail-open try/catch wrapping `getCurrentRepoStatus(userId)` +
+      `evaluateRepoReadiness(...)` (catch → `reportSilentFallback` op=repo-readiness-gate.read +
+      `repoReadiness = { ok: true }`; F1), then on `!ok`: `log.info` breadcrumb
+      (op=repo-readiness-gate, `userIdHash: hashUserId(userId)`, `reason: repoReadiness.message`),
+      `sendToClient` honest message + optional errorCode, early `return` (no throw).
+- [ ] 2.2 Extend/add imports: `getCurrentRepoStatus` (verify if already in the `./current-repo-url`
+      import), `evaluateRepoReadiness` + `RepoReadiness` from `./repo-readiness`, `reportSilentFallback`
+      (already at :70), `hashUserId` (verify importable in agent-runner; else use existing `userId`
+      field + document divergence). Do NOT import `RepoNotReadyError` under Option A (unused).
 - [ ] 2.3 Re-run the wiring test — all 4 cases PASS.
 - [ ] 2.4 (Only if Option A's pre-`registerSession` ordering proves infeasible) pivot to Option B:
       throw `RepoNotReadyError` after `workspacePath` resolves; add `else if (err instanceof
