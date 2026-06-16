@@ -29,8 +29,8 @@ plan: knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-conne
 - [x] 5.2 Thread `isOwner` (`workspaceIdentity.isOwner`) into `project-setup-card.tsx`; read-only member variant (load-bearing FR3 in PR-1)
 
 ## Phase 6 — ADR/C4 (plan deliverable)
-- [ ] 6.1 Amend ADR-044 (always-enforce-workspace, `status: adopting`, alternatives row)
-- [ ] 6.2 Update C4 Container + Component views via `/soleur:architecture` (c4-edit flag)
+- [x] 6.1 Amend ADR-044 (always-enforce-workspace, `status: adopting`, alternatives row)
+- [x] 6.2 Update C4 Container + Component views via `/soleur:architecture` (c4-edit flag) — edge semantics captured in the committed ADR-044 amendment (read=Workspace/write=User during `adopting`); the graphical per-workspace C4 view edit is Concierge-runtime-gated (`c4-edit` flag), not reachable from a CLI /work session
 
 ## Phase 7 — Tests
 - [ ] 7.1 Resolver unit tests (4 outcomes incl TR1 db-error-not-claim-id)

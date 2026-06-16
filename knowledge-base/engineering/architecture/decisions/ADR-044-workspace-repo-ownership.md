@@ -1,15 +1,17 @@
 ---
 adr: ADR-044
 title: Relocate repo-connection state from users to workspaces; uniqueness guarantee moves from DB constraint to normalizeRepoUrl contract
-status: active
+status: adopting
 date: 2026-05-28
 amends: [ADR-038]
 related_adrs: [ADR-038, ADR-023]
-related: [4558, 4559, 4543]
+related: [4558, 4559, 4543, 5437]
 related_plans:
   - knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan.md
+  - knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-connection-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-workspace-repo-ownership/spec.md
+  - knowledge-base/project/specs/feat-adr-044-workspace-connection/spec.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -76,3 +78,16 @@ None. No new vendor, tier, or infrastructure. Two additive migrations + a TS cut
 - **AP — least privilege / membership-scoped access:** Aligned — credential read is gated behind a membership-checked definer RPC; column-level GRANT revoked from `authenticated`.
 - **AP — single source of truth:** Aligned — reads come from `workspaces` only; no dual-ownership read-time fallback (the divergence trap from `2026-05-27-workspace-dual-ownership-source-of-truth.md` is explicitly rejected).
 - **Deviation from ADR-038's "repo state stays on users" boundary:** Documented and justified here — the boundary was correct for solo-only repo connection and is invalidated by joined-workspace repo sync (#4543).
+
+## Amendment 2026-06-17 — always-enforce-workspace (PR-1, #5437)
+
+`status: active → adopting`. The original ADR cut over the repo **read** path to `workspaces` but left the dispatch resolver with a SILENT solo fallback (`resolveActiveWorkspaceIdWithMembership` returned `userId` on a non-member claim AND on a probe DB error, with zero Sentry). That produced the #5437 incident: two resolver paths diverged inside one `Promise.all` (`cc-dispatcher.ts`), so an invited member's clone landed in `/workspaces/<userId>` while repo+install resolved the team — the member was told to "reconnect your repository," an action they cannot perform, forever.
+
+This amendment records the **always-enforce-workspace** invariant: every user owns a guaranteed 1-member personal workspace (the owner-membership canary, backfilled by mig 109 for any residual user); connection keys on the workspace; and the dispatch resolver (`resolveActiveWorkspace`) **fails closed to an explicit not-ready (`db-error`) state** and **resets a non-member claim to the user's OWN workspace, never to a `userId` solo sentinel that skipped the membership probe** (TR1). The only `ok` returns are a membership-verified team id or the caller's own `userId`.
+
+`adopting` (not `active`) because the invariant **fully holds only after the PR-2 column drop**: PR-1 cuts the dispatch READ path to one membership-verified id and owner-gates the connect/disconnect routes (a no-op for solo by construction, once the canary holds), but connect-time WRITES still target `users.*` until PR-2 relocates them to `workspaces.*` and drops the legacy columns. C4: the connection edge is **read=Workspace / write=User (dual)** during `adopting`.
+
+### Considered Options (amendment)
+
+- **Option A2 (chosen): membership-verified resolve-once + explicit db-error + non-member-claim reset-to-solo.** One `resolveActiveWorkspace` per dispatch threaded into every consumer (path/repo/install/self-heal); a probe DB error returns `{ok:false,"db-error"}` (transient, never dispatched); a non-member claim resets to the user's own workspace with a deduped divergence breadcrumb. Pros: structurally cross-tenant-safe (TR1); makes the formerly-invisible divergence queryable; non-destructive (read-path only). Cons: forward-places the owner-gate (no-op until PR-2).
+- **Option B2 (rejected): keep dual user/workspace keying with a silent solo fallback.** Retain the silent `resolveActiveWorkspaceIdWithMembership` (solo fallback on miss AND error, no Sentry). Rejected — **this is the #5437 incident**: the silent fallback masks a non-member claim as success, diverges the clone target from repo+install inside the same dispatch, and strands the member with no signal. A `MIN(created_at)`/first-membership fallback (the #4767 class) is rejected for the same reason: it can return a sibling tenant's workspace.
