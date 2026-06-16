@@ -196,8 +196,8 @@ logs:
   where: journald (container --log-driver journald) to vector.toml to Better Stack (source 2457081); the deploy webhook /hooks/deploy-status carries restart_count + oom_killed + OOM journald tail
   retention: docker json-file max-size 10m x 3 (daemon.json) for the daemon default; journald persistent /var/log/journal (bounded) per #4792; Better Stack per its plan
 discoverability_test:
-  command: 'curl -s -H "X-Signature-256: sha256=$(printf %s "" | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | cut -d" " -f2)" https://deploy.soleur.ai/hooks/deploy-status | jq ".restart_count, .oom_killed, .restart_rate_per_hour"'
-  expected_output: 'restart_count integer (per-current-container), oom_killed boolean, restart_rate_per_hour number; NO ssh. Cross-check: Sentry "Server startup" event frequency drops to <=1/day over 72h.'
+  command: 'curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://deploy.soleur.ai/hooks/deploy-status'
+  expected_output: '403 (the CF-Access challenge — proves /hooks/deploy-status is reachable with NO ssh; an HMAC + CF-Access authenticated request additionally returns restart_count, oom_killed, container_exit_code, restart_rate_per_hour). Authenticated form: curl -H "X-Signature-256: sha256=<hmac of empty body with WEBHOOK_DEPLOY_SECRET>" -H "CF-Access-Client-Id/Secret" then jq ".restart_count, .oom_killed, .restart_rate_per_hour". Cross-check: Sentry "Server startup" event frequency drops to <=1/day over 72h.'
 ```
 
 ## Acceptance Criteria
