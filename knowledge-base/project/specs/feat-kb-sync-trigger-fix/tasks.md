@@ -20,8 +20,8 @@ Single atomic PR (#5427). Write failing tests first (RED) per `cq-write-failing-
 - [ ] 0.4 Capture real protected-branch + `shallow update not allowed` push stderr shapes (synthesize fixtures from them — `cq-test-fixtures-synthesized-only`).
 
 ## Phase 1 — Push-error classification (RED → GREEN)
-- [ ] 1.1 RED: write `classifyPushError` unit tests — `protected_branch` (GH006 / remote-rejected + protection tails incl. required-review/required-check), `persistent_other` (`shallow update not allowed`), neither for auth/network. (AC1)
-- [ ] 1.2 GREEN: implement `classifyPushError(err)` in `session-sync.ts`, keyed on `GH006` + `remote rejected`, tolerant of varied tails.
+- [x] 1.1 RED: write `classifyPushError` unit tests — `protected_branch` (GH006 / remote-rejected + protection tails incl. required-review/required-check), `persistent_other` (`shallow update not allowed`), neither for auth/network. (AC1)
+- [x] 1.2 GREEN: implement `classifyPushError(err)` in `session-sync.ts`, keyed on `GH006` + `remote rejected`, tolerant of varied tails.
 
 ## Phase 2 — Protected-fallback path in `syncPush` (RED → GREEN)
 - [ ] 2.1 RED: tests for the fallback — pushes `soleur/kb-sync` to the user repo (dynamic owner/repo, base = `resolveDefaultBranch`, never hardcoded `main`); opens a **draft** PR base = resolved default. (AC2)

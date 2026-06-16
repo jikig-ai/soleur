@@ -55,6 +55,40 @@ const FORBIDDEN_GIT_FLAGS = new Set([
   "--no-verify",
 ]);
 
+// #5426 — push-error classification for the protected-branch fallback.
+// `protected_branch` routes to the side-branch + PR fallback; `persistent_other`
+// is a non-protection reject that must NOT silently retry-loop (notably
+// `shallow update not allowed` — these are shallow clones); `other` keeps the
+// existing best-effort retry-next-session behaviour (auth/network/transient).
+export type PushErrorClass = "protected_branch" | "persistent_other" | "other";
+
+/**
+ * Classify a failed `git push` error. Keys on GitHub's protected-branch
+ * rejection signatures (`GH006`, `protected branch hook declined`) and
+ * tolerates varied tails (required-review, required-status-check, "Changes
+ * must be made through a pull request"). Narrow by design: auth/network
+ * rejections must fall through to `other`.
+ */
+export function classifyPushError(err: unknown): PushErrorClass {
+  const text =
+    err instanceof Error
+      ? `${err.message}\n${(err as { stderr?: string }).stderr ?? ""}`
+      : typeof err === "string"
+        ? err
+        : "";
+  if (
+    text.includes("GH006") ||
+    text.includes("protected branch hook declined") ||
+    text.includes("Protected branch update failed")
+  ) {
+    return "protected_branch";
+  }
+  if (text.includes("shallow update not allowed")) {
+    return "persistent_other";
+  }
+  return "other";
+}
+
 /**
  * Connected-repo git wrapper. Wraps `execFileSync("git", argv, opts)` with
  * an argv-shape guard that rejects:
