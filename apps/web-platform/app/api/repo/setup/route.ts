@@ -228,10 +228,16 @@ export async function POST(request: Request) {
       //
       // Dynamic import: agent-runner.ts pulls in @anthropic-ai/claude-agent-sdk
       // which breaks Next.js build-time route validation when statically imported,
-      // so startAgentSession is injected at the call site.
-      const { startAgentSession } = await import("@/server/agent-runner");
+      // so startAgentSession is injected at the call site. The import is wrapped
+      // in a thunk so agent-runner loads ONLY when startAgentSession actually
+      // fires — i.e. AFTER triggerHeadlessSync's keyless presence-gate passes.
+      // Keyless users never pull the SDK graph (restores the pre-extraction
+      // ordering the setup-route tests assert).
       await triggerHeadlessSync(user.id, repoUrl, {
-        startAgentSession,
+        startAgentSession: async (...args) => {
+          const { startAgentSession } = await import("@/server/agent-runner");
+          return startAgentSession(...args);
+        },
         serviceClient,
         resolveWorkspaceId: resolveCurrentWorkspaceId,
       });

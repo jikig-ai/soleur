@@ -3,7 +3,6 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { userHasEffectiveByokKey as defaultUserHasEffectiveByokKey } from "@/server/byok-resolver";
 import { RuntimeAuthError } from "@/lib/supabase/tenant";
-import { ByokLeaseError } from "@/server/byok-lease";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
@@ -82,7 +81,18 @@ const LEASE_RETRY_MESSAGE = "Authentication unavailable; retry shortly";
  */
 function isLeaseRetryable(err: unknown): boolean {
   if (err instanceof RuntimeAuthError) return true;
-  if (err instanceof ByokLeaseError && err.cause === "escape") return true;
+  // Duck-type `ByokLeaseError("escape")` by name + cause instead of importing
+  // the heavy `byok-lease` module graph (its module-init `createChildLogger` +
+  // tenant client) into the `/api/repo/setup` route's STATIC import graph. The
+  // constructor pins `this.name = "ByokLeaseError"` (byok-lease.ts:175), so the
+  // structural check is exact for the typed instance.
+  if (
+    err instanceof Error &&
+    (err as { name?: unknown }).name === "ByokLeaseError" &&
+    (err as { cause?: unknown }).cause === "escape"
+  ) {
+    return true;
+  }
   if (err instanceof Error && err.message.includes(LEASE_RETRY_MESSAGE)) {
     return true;
   }
