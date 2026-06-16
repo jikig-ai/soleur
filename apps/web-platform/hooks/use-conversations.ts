@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { warnSilentFallback } from "@/lib/client-observability";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
@@ -145,6 +146,12 @@ export function useConversations(
   useEffect(() => {
     repoUrlRef.current = repoUrl;
   }, [repoUrl]);
+  // Set when an own-channel INSERT is dropped because the rail's scope has not
+  // resolved yet (workspaceId still null in the fresh-mount connect window).
+  // Consumed by the scope-resolve backfill effect below: the dropped row is
+  // recovered by a single refetch once workspaceId lands. See plan
+  // 2026-06-16-fix-recent-conversations-rail-optimistic-insert.
+  const pendingScopeRecoveryRef = useRef(false);
 
   const fetchConversations = useCallback(async () => {
     setLoading(true);
@@ -335,7 +342,30 @@ export function useConversations(
       channel: RealtimeChannelKind,
     ) => {
       const created = payload.new as Conversation;
-      if (shouldDropForScope(created, { repoUrl: repoUrlRef.current, workspaceId, channel, archiveFilter })) return;
+      if (shouldDropForScope(created, { repoUrl: repoUrlRef.current, workspaceId, channel, archiveFilter })) {
+        // An own-channel INSERT already matched this user server-side (the WAL
+        // filter is user_id). If it is dropped ONLY because workspaceId has not
+        // resolved yet — the fresh-mount connect window, since the rail portals
+        // per-drill (ADR-047) and workspaceId is set inside the async
+        // fetchConversations — then losing it with no recovery is the reported
+        // bug: the row would surface only after the conversation completes (the
+        // completion UPDATE is map-only and cannot add a missing row). Schedule
+        // the bounded scope-resolve backfill and mirror the silent drop to
+        // Sentry so the no-op is observable (cq-silent-fallback-must-mirror-to-sentry).
+        // A drop while scope is already resolved is a genuine cross-(repo|
+        // workspace) row — correctly silent (the F3 isolation invariant).
+        if (channel === "own" && workspaceId === null) {
+          pendingScopeRecoveryRef.current = true;
+          warnSilentFallback(null, {
+            feature: "conversations-rail",
+            op: "own-insert-deferred-unresolved-workspace",
+            message:
+              "own-channel conversation INSERT dropped while workspaceId unresolved; scheduled scope-resolve backfill recovery",
+            extra: { conversationId: created.id },
+          });
+        }
+        return;
+      }
 
       setConversations((prev) => {
         if (prev.some((c) => c.id === created.id)) return prev; // fill-only de-dup
@@ -402,6 +432,28 @@ export function useConversations(
       if (sharedChannel) supabase.removeChannel(sharedChannel);
     };
   }, [userId, workspaceId, archiveFilter, limit, fetchConversations]);
+
+  // Scope-resolve recovery backfill. The conversations rail portals per-drill
+  // (ADR-047) and mounts fresh on entry to /dashboard/chat/*, so its realtime
+  // own-channel can subscribe while `workspaceId` is still null (it is set
+  // inside the async fetchConversations). An own-channel INSERT arriving in that
+  // window is dropped by shouldDropForScope (workspace_id !== null) — and the
+  // completion UPDATE is map-only and cannot add the missing row, so it would
+  // surface only "after it completes" (the reported bug). When workspaceId
+  // transitions null → id AND such a drop was recorded, refetch ONCE to recover
+  // the row deterministically (independent of the realtime SUBSCRIBED-callback
+  // timing). Transition-gated via a ref — fires once per resolve, not per
+  // render — mirroring the canonical use-kb-layout-state.tsx:232-240 idiom.
+  const prevWorkspaceIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevWorkspaceIdRef.current === workspaceId) return; // no transition
+    const prev = prevWorkspaceIdRef.current;
+    prevWorkspaceIdRef.current = workspaceId;
+    if (prev === null && workspaceId !== null && pendingScopeRecoveryRef.current) {
+      pendingScopeRecoveryRef.current = false;
+      fetchConversations();
+    }
+  }, [workspaceId, fetchConversations]);
 
   // Note: there is no cross-tab `users` UPDATE channel. Repo scope now comes
   // from /api/workspace/active-repo (workspaces.repo_url), not users.repo_url,
