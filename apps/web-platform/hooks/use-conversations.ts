@@ -172,7 +172,7 @@ export function useConversations(
       if (authError || !authData.user) {
         setError("Authentication required");
         setLoading(false);
-        return;
+        return null;
       }
       const currentUserId = authData.user.id;
       setUserId(currentUserId);
@@ -197,7 +197,7 @@ export function useConversations(
         // flashing the empty state (which reads as "you have no conversations").
         setError("Failed to resolve the active repository");
         setLoading(false);
-        return;
+        return null;
       }
       const activeRepo = (await res.json()) as {
         workspaceId: string;
@@ -211,7 +211,7 @@ export function useConversations(
       if (!currentRepoUrl) {
         setConversations([]);
         setLoading(false);
-        return;
+        return [];
       }
 
       // visibility-sweep: RLS policies conversations_owner_select +
@@ -254,12 +254,12 @@ export function useConversations(
       if (convError) {
         setError(convError.message);
         setLoading(false);
-        return;
+        return null;
       }
       if (!convData || convData.length === 0) {
         setConversations([]);
         setLoading(false);
-        return;
+        return [];
       }
 
       // Query 2: Fetch messages for displayed conversations
@@ -273,7 +273,7 @@ export function useConversations(
       if (msgError) {
         setError(msgError.message);
         setLoading(false);
-        return;
+        return null;
       }
 
       const messages = (msgData ?? []) as Message[];
@@ -292,9 +292,11 @@ export function useConversations(
 
       setConversations(enriched);
       setLoading(false);
+      return enriched;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load conversations");
       setLoading(false);
+      return null;
     }
   }, [statusFilter, domainFilter, archiveFilter, limit]);
 
@@ -470,19 +472,47 @@ export function useConversations(
   // in the pre-SUBSCRIBED window supabase-js never replays — while the rail's
   // mount-time backfills already ran before the row existed. So the row would
   // surface only after a reload (the reported bug; client-timing fixes
-  // #5391/#5421/#5436 could not close a race they cannot observe). On the event,
-  // refetch ONCE via the quiet/background path so the new conversation appears
-  // without a reload, independent of realtime timing. Idempotent: the
-  // fill-only/replace fetch de-dups, and the scoped query preserves F3 isolation
-  // (a refetch can only ever return rows the list query already permits). See
+  // #5391/#5421/#5436 could not close a race they cannot observe).
+  //
+  // COMMIT-TIMING RACE (#5449 follow-up, found via a live headless-browser
+  // repro): the event fires at `session_started` — but the conversation ROW is
+  // created LAZILY on the first persisted message (ws-handler.ts), which lands
+  // slightly AFTER `session_started`. A single refetch on the event therefore
+  // runs before the row is committed and misses it. So we refetch with a SMALL
+  // BOUNDED RETRY keyed on the event's concrete `conversationId`: refetch, and
+  // if that id is not visible yet, retry on a short backoff until it appears or
+  // the bound is hit. This is deterministic (gated on the actual id, never a
+  // blind clock) and self-cancelling — if no row ever commits (e.g. the message
+  // was never sent) the retries exhaust harmlessly (nothing to show is correct).
+  // F3 isolation preserved (every refetch is the scoped list query). See
   // knowledge-base learning 2026-06-17 rail-realtime-race.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const onCreated = () => {
-      fetchConversations({ background: true });
+    const MAX_ATTEMPTS = 6;
+    const BACKOFF_MS = [0, 600, 1000, 1500, 2500, 4000]; // ≈ cumulative 9.6s bound
+    let cancelled = false;
+    const onCreated = (ev: Event) => {
+      const targetId =
+        (ev as CustomEvent<{ conversationId?: string }>).detail?.conversationId ?? null;
+      let attempt = 0;
+      const run = async () => {
+        if (cancelled) return;
+        const rows = await fetchConversations({ background: true });
+        attempt += 1;
+        // Stop once the new conversation is visible (or there is no id to wait
+        // for, or the bound is hit). `rows === null` is a transient fetch error
+        // — keep retrying within the bound.
+        const present = !targetId || (rows?.some((c) => c.id === targetId) ?? false);
+        if (cancelled || present || attempt >= MAX_ATTEMPTS) return;
+        setTimeout(run, BACKOFF_MS[attempt] ?? 4000);
+      };
+      void run();
     };
     window.addEventListener(CONVERSATION_CREATED_EVENT, onCreated);
-    return () => window.removeEventListener(CONVERSATION_CREATED_EVENT, onCreated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(CONVERSATION_CREATED_EVENT, onCreated);
+    };
   }, [fetchConversations]);
 
   // Note: there is no cross-tab `users` UPDATE channel. Repo scope now comes

@@ -392,8 +392,9 @@ export function ChatSurface({
     ) {
       window.dispatchEvent(
         new CustomEvent(CONVERSATION_CREATED_EVENT, {
-          // `detail` is informational only — the rail listener ignores it and
-          // refetches its full scoped list (more robust than trusting a payload).
+          // `detail.conversationId` is LOAD-BEARING: the rail listener keys its
+          // bounded retry's stop-condition on it (refetch until this id appears,
+          // since the row commits lazily after this event). Do not remove it.
           detail: { conversationId: realConversationId },
         }),
       );

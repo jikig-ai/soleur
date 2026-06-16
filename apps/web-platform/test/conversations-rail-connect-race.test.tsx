@@ -449,6 +449,44 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     );
   });
 
+  it("retries the event refetch until the LAZILY-committed conversation row appears (commit-timing race, #5449 follow-up)", async () => {
+    // The real-world race (found via live headless-browser repro, 2026-06-17):
+    // the event fires at session_started, but the conversation ROW is created
+    // lazily on the first persisted message — slightly LATER. So the FIRST
+    // refetch on the event runs before the row is committed and misses it; the
+    // bounded retry (keyed on the event's conversationId) must keep refetching
+    // until the row appears. Non-vacuous: a single refetch leaves the row absent
+    // forever (the bug this enhancement fixes).
+    const existing = makeRow({ id: "conv-existing" });
+    const late = makeRow({ id: "conv-late-commit" });
+    state.fallbackConvResult = [existing]; // row NOT committed yet
+    const { useConversations, CONVERSATION_CREATED_EVENT } = await import(
+      "@/hooks/use-conversations"
+    );
+    const view = renderHook(() => useConversations({ limit: 15 }));
+    await waitFor(() =>
+      expect(view.result.current.conversations.map((c) => c.id)).toEqual(["conv-existing"]),
+    );
+
+    // Event fires before the row commits — the first refetch misses it.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(CONVERSATION_CREATED_EVENT, {
+          detail: { conversationId: "conv-late-commit" },
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(view.result.current.conversations.map((c) => c.id)).not.toContain("conv-late-commit");
+
+    // The row commits a beat later; the bounded retry must surface it.
+    state.fallbackConvResult = [late, existing];
+    await waitFor(
+      () => expect(view.result.current.conversations.map((c) => c.id)).toContain("conv-late-commit"),
+      { timeout: 5000 },
+    );
+  });
+
   it("AC2 (bounded): the scope-resolve backfill fires once, not per render", async () => {
     state.deferFirstActiveRepo = true;
     const newRow = makeRow({ id: "conv-bounded" });
