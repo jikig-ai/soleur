@@ -267,6 +267,55 @@ No `apps/*/server/`, `apps/*/infra/`, or `plugins/*/scripts/` file is touched.
 - CSS-class-presence (not stylesheet) verification: `knowledge-base/project/learnings/2026-06-04-vendored-library-css-hook-must-be-verified-against-rendered-dom-not-stylesheet.md`
 - Behavior-reversal RED discipline: `knowledge-base/project/learnings/2026-06-01-behavior-reversal-fix-flip-existing-test-as-red.md`
 
+## Research Insights (deepen-plan)
+
+**Deepened:** 2026-06-16. Leaf-component CSS fix — no external research warranted
+(strong local context: file, test, consumers, and Tailwind utility semantics all
+verified directly). Findings below are verification artifacts, not new scope.
+
+**Precedent-Diff Gate (Phase 4.4) — pattern is NOT novel.** The fix follows the
+file's own established per-element wrapping-override precedent:
+- `<pre>` (markdown-renderer.tsx:96) intentionally sets `break-words`
+  (`overflow-wrap: break-word`) + `[overflow-wrap:anywhere]` in wrap mode.
+- `<th>` (markdown-renderer.tsx:71) intentionally sets `whitespace-nowrap` to
+  override the inherited `anywhere`.
+- Adding `break-normal` to `<td>` is the same class of change — a per-element
+  wrapping override — applied to the one element that was missed. No new pattern;
+  reviewers need not scrutinize a novel approach.
+
+**Verify-the-negative pass (Phase 4.45).** The plan's load-bearing negative claim
+("do NOT remove the container `[overflow-wrap:anywhere]`") was checked:
+`grep -n overflow-wrap:anywhere` returns exactly two sites — L96 (`<pre>` wrap
+mode) and L176 (container wrapper). Both are intentional (long prose/URL/code
+wrapping); neither is the table-cell bug. **Confirmed.** The `<td>` (L79) has no
+`overflow-wrap`/`word-break` of its own today — **confirms the bug.** No other
+component or consumer overrides `<td>` wrapping downstream, so the single
+renderer change is authoritative across all consumers. **Confirmed.**
+
+**Installed-version semantics (Phase: SDK/lib runtime claim).** `break-normal`'s
+output was read verbatim from the installed Tailwind v4 source
+(`apps/web-platform/node_modules/tailwindcss/dist/chunk-L5IEUH3R.mjs`):
+`break-normal -> [["overflow-wrap","normal"],["word-break","normal"]]`. The
+class emits `overflow-wrap: normal; word-break: normal`, which (a) overrides the
+inherited `anywhere` on the cell and (b) keeps `word-break: normal` so
+`table-layout: auto` computes column min-content widths from whole words. The
+claim is correct against the pinned `tailwindcss@^4.1.0`.
+
+**Deepen-plan halt gates — all pass:**
+- 4.6 User-Brand Impact: present, threshold `none`, no sensitive-path diff. PASS.
+- 4.7 Observability: section present with a justified skip (pure leaf CSS, no
+  server/infra/error path). PASS.
+- 4.8 PAT-shaped variable: grep clean (no infra/token surface). PASS.
+- 4.9 UI-Wireframe Halt: **excluded — no `.pen` required.** The shared
+  UI-surface term list
+  (`plugins/soleur/skills/brainstorm/references/ui-surface-terms.md`) line 27
+  explicitly excludes "Pure copy or style tweaks with no structural/layout
+  change." This change adds one Tailwind wrapping utility to an existing `<td>`;
+  it adds no element, component, route, modal, or flow and makes no
+  structural/DOM change. The mechanical glob superset matches `components/**/*.tsx`,
+  but the governing prose exclusion for `wg-ui-feature-requires-pen-wireframe` is
+  the style-tweak carve-out. PASS (skip — wireframe not applicable).
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only
