@@ -14,8 +14,8 @@ plan: knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-conne
 - [x] 1.4 Confirm self-heal runs against unified id before the readiness gate (#5240); absent + diverged clone states; reset case → clone dir is `/workspaces/<userId>`
 
 ## Phase 2 — Personal-workspace coverage (verify-only)
-- [ ] 2.1 Run read-only membership-null count; record in PR body
-- [ ] 2.2 If count > 0: idempotent residual backfill — parent org/workspace rows first (FK ON DELETE RESTRICT), then `workspace_members ... on conflict (workspace_id, user_id) do nothing` (mirror mig 053:228-259 / 091:169-171); else no migration
+- [x] 2.1 Run read-only membership-null count; record in PR body
+- [x] 2.2 If count > 0: idempotent residual backfill — parent org/workspace rows first (FK ON DELETE RESTRICT), then `workspace_members ... on conflict (workspace_id, user_id) do nothing` (mirror mig 053:228-259 / 091:169-171); else no migration
 
 ## Phase 3 — Not-ready copy (dispatch boundary)
 - [x] 3.1 Assemble copy in `cc-dispatcher.ts` catch (NOT repo-readiness.ts — pure predicate, no role/team access): db-error → transient (no switcher/reconnect); member-solo-no-repo → switcher deep link carrying `resetFromClaim`/target team id + RLS-name fallback; owner → reconnect
