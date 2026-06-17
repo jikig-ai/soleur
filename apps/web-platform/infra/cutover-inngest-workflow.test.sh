@@ -60,6 +60,14 @@ assert "freshness guard present (TRIGGER_TS - 60)" "grep -qE 'FRESH_FLOOR=\\\$\(
 # enumerate surfaces counts/ids only, never comment bodies (P2-sec-a)
 assert "enumerate emits reminder_id list, not bodies" "grep -qE 'reminder_id\] \| join' '$WF'"
 
+# every webhook hook the workflow hits must be a real hook id in hooks.json.tmpl
+# (a hook rename would otherwise 404 silently). Cross-check all 4 trigger URLs.
+HOOKS_TMPL="$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl"
+for hook in inngest-enumerate-reminders inngest-rearm-reminders inngest-wiped-volume-verify inngest-verify-status; do
+  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook\"' '$WF'"
+  assert "hook id '$hook' exists in hooks.json.tmpl" "grep -qE '\"id\": \"$hook\"' '$HOOKS_TMPL'"
+done
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

@@ -79,10 +79,17 @@ read_secret() {
 # ---- Gate 1: emptiness (the real B1 safety gate) -----------------------------
 armed=$("$ENUMERATE_CMD" 2>/dev/null) || abort "enumerate_failed" "enumeration failed; refusing to wipe without confirming the armed set is empty"
 echo "$armed" | jq -e 'type == "array"' >/dev/null 2>&1 || abort "enumerate_bad_output" "enumeration did not return a JSON array"
-# Exclude our own throwaway markers (a prior aborted run could leave one).
-real_count=$(echo "$armed" | jq --arg p "$MARKER_PREFIX" '[.[] | select((.reminder_id // "") | startswith($p) | not)] | length')
+# Classify our own throwaway markers by the UNFORGEABLE signal: action.check ==
+# NOOP_CHECK. A real named-check must resolve in CHECK_REGISTRY, so a real
+# reminder can never carry the noop check; and a reminder that DOES carry it is
+# itself harmless (unregistered → no-op at fire, posts nothing). The reminder_id
+# prefix is NOT used here — it is operator-suppliable and a prefix-only match
+# would let a spoofed id dodge the gate (security review P3).
+# shellcheck disable=SC2016  # $c is a jq --arg variable, not a shell expansion
+is_throwaway='(.action.check? == $c)'
+real_count=$(echo "$armed" | jq --arg c "$NOOP_CHECK" "[.[] | select(($is_throwaway) | not)] | length")
 if [[ "$real_count" -ne 0 ]]; then
-  ids=$(echo "$armed" | jq -r --arg p "$MARKER_PREFIX" '[.[] | select((.reminder_id // "") | startswith($p) | not) | .reminder_id] | join(",")')
+  ids=$(echo "$armed" | jq -r --arg c "$NOOP_CHECK" "[.[] | select(($is_throwaway) | not) | .reminder_id] | join(\",\")")
   abort "real_reminders_present" "$real_count real armed reminder(s) present ([$ids]) — drain or re-arm them first; refusing to wipe"
 fi
 

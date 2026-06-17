@@ -3,7 +3,7 @@
 # /hooks/infra-config webhook handler (#4827, Ref #4804).
 #
 # WHY THIS EXISTS: infra-config-apply.sh runs as User=deploy (webhook.service).
-# Its 7 managed files live in root:root 0755 destination directories
+# Its 11 managed files live in root:root 0755 destination directories
 # (/usr/local/bin, /etc/systemd/system, /etc/webhook). The deploy user cannot
 # mktemp inside those dirs — EACCES — so the handler could never land a single
 # file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths elevates

@@ -18,7 +18,8 @@
 #   - `eventsV2(filter:{from,until})` bounds `receivedAt` (ingest time), NOT
 #     `occurredAt`/fire-time — so a future reminder cannot be selected
 #     server-side. We fetch a WIDE receivedAt window then filter client-side on
-#     `occurredAt > now`.
+#     the future fire-time using `raw.ts` (== `occurredAt`, the producer ts;
+#     using the already-parsed epoch-ms avoids re-parsing the ISO string).
 #   - `node.runs[].status` terminal set {COMPLETED,CANCELLED,FAILED,SKIPPED} = the
 #     reminder already fired → drop. Empty `runs` = armed, never picked up → keep.
 #

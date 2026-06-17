@@ -242,29 +242,32 @@ No firewall/DNS/TLS change is required; the no-SSH path is a superset-reuse of t
 
 ```yaml
 liveness_signal:
-  what: cutover-inngest.yml workflow run terminal status (success/failure) + /hooks/deploy-status JSON terminal exit_code for the wiped-volume verify
+  what: cutover-inngest.yml workflow run terminal status (success/failure) + the DEDICATED /hooks/inngest-verify-status JSON terminal exit_code for the wiped-volume verify (NOT /hooks/deploy-status — that slot is ci-deploy.state only; P1a)
   cadence: on-demand (operator-triggered cutover, one-time)
   alert_target: workflow run log (GitHub Actions) + the run's ::error:: annotation on failure
-  configured_in: .github/workflows/cutover-inngest.yml + apps/web-platform/infra/cat-deploy-state.sh (status slot)
+  configured_in: .github/workflows/cutover-inngest.yml + apps/web-platform/infra/cat-inngest-verify-state.sh (dedicated verify-state slot)
 error_reporting:
-  destination: host syslog via logger -t (mirrors ci-deploy.sh/cat-deploy-state.sh) surfaced in the deploy-status JSON; workflow ::error:: annotation
-  fail_loud: yes — the wiped-volume verify returns non-zero terminal exit_code; the enumeration returns its records or a non-200; the workflow fails the run (no silent green)
+  destination: host syslog via logger -t (mirrors ci-deploy.sh/cat-deploy-state.sh) surfaced in the inngest-verify-status JSON; workflow ::error:: annotation. Re-arm/enumerate failures surface their loud abort body in the run log (hooks set include-command-output-in-response-on-error)
+  fail_loud: yes — the wiped-volume verify returns non-zero terminal exit_code; the enumeration returns its records or a non-200; re-arm exits non-zero (the webhook returns 500 with the abort body); the workflow fails the run (no silent green)
 failure_modes:
   - mode: enumeration returns no payload (eventsV2 schema drift)
     detection: AC1 test asserts payload presence; workflow run shows empty/invalid re-arm records
     alert_route: workflow run log
-  - mode: wiped-volume verify destroys state on non-durable backend
-    detection: script precondition guard refuses (exit non-zero) when --postgres-uri absent
-    alert_route: workflow ::error:: + deploy-status JSON exit_code
+  - mode: re-arm runs before quiesce-clear (would 503 and silently drop)
+    detection: inngest-rearm-reminders.sh aborts loud on 503; the rearm hook returns 500 with the abort body (include-command-output-in-response-on-error)
+    alert_route: workflow ::error:: + run log body + Layer-3 journald
+  - mode: wiped-volume verify destroys state with a real reminder armed
+    detection: the emptiness gate (B1) calls enumerate first and aborts (exit non-zero) unless the armed set is empty; the --postgres-uri check is only a secondary sanity
+    alert_route: workflow ::error:: + inngest-verify-status JSON exit_code
   - mode: throwaway reminder did not fire post-wipe (durability regression)
-    detection: verify script polls runs for the marker; absence then non-zero exit
-    alert_route: workflow ::error:: + deploy-status JSON
+    detection: verify script re-enumerates for the marker; presence then non-zero exit
+    alert_route: workflow ::error:: + inngest-verify-status JSON
 logs:
-  where: host syslog (journalctl -t ci-deploy / the new LOG_TAGs) — surfaced via /hooks/deploy-status without a remote shell
+  where: host syslog (journalctl -t inngest-enumerate-reminders / -rearm-reminders / -wiped-volume-verify) — surfaced via /hooks/inngest-verify-status + the run log without a remote shell
   retention: host journald default (existing)
 discoverability_test:
-  command: gh run view --log <run-id>   # plus an HMAC+CF-Access GET to /hooks/deploy-status for the verify terminal state
-  expected_output: workflow run shows enumerate records / verify PASS|FAIL; deploy-status JSON shows terminal exit_code — no remote shell required
+  command: gh run view --log <run-id>   # plus an HMAC+CF-Access GET to /hooks/inngest-verify-status for the verify terminal state
+  expected_output: workflow run shows enumerate records / verify PASS|FAIL; inngest-verify-status JSON shows terminal exit_code — no remote shell required
 ```
 
 ## Domain Review

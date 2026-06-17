@@ -178,7 +178,23 @@ test_marker_unique() {
   assert_contains "marker id is a recognizable sentinel" "$id1" "wiped-volume-verify"
 }
 
+# --- Test 1b (B1 hardening): a real reminder is NOT dodged by spoofing the
+# sentinel reminder_id prefix — the unregistered-check signal is unforgeable.
+# A real reminder cannot carry action.check == the noop sentinel (a real
+# named-check must resolve in CHECK_REGISTRY), so an issue-comment reminder with
+# a spoofed __wiped-volume-verify- id is still counted as real → ABORT.
+test_abort_on_spoofed_prefix_real_reminder() {
+  setup
+  make_enum_stub '[{"reminder_id":"__wiped-volume-verify-SPOOF__","fire_at":"2026-06-18T12:00:00Z","actor":"platform","action":{"type":"issue-comment","issue":7,"body":"real"}}]'
+  local out rc=0
+  out=$(run_verify) || rc=$?
+  assert_eq "spoofed-prefix issue-comment reminder still ABORTS (not dodged)" "1" "$rc"
+  assert_eq "data dir NOT wiped on spoofed-prefix abort" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
+  teardown
+}
+
 test_abort_on_real_reminder
+test_abort_on_spoofed_prefix_real_reminder
 test_abort_on_non_durable_backend
 test_throwaway_posts_no_comment
 test_happy_wipe_order
