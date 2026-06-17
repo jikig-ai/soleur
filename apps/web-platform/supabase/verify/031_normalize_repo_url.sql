@@ -8,12 +8,12 @@
 -- Idempotence probes replay the migration's WHERE clause as a SELECT — a
 -- second run would UPDATE zero rows when the data is canonical.
 
-SELECT 'users_sentinel' AS check_name,
-       count(*)::int AS bad
-  FROM public.users
- WHERE repo_url IS NOT NULL
-   AND (repo_url ~ '\.git$' OR repo_url ~ '\.GIT$'
-        OR repo_url ~ '/$' OR repo_url ~ '^https://[^/]*[A-Z]')
+-- users.repo_url was DROPPED by migration 112 (ADR-044 PR-2b). The users
+-- normalization sentinel + idempotence probe are obsolete (no column to inspect)
+-- and would error `column "repo_url" does not exist` if they still referenced it.
+-- Kept as named 0s for verify-summary stability. The conversations.repo_url
+-- checks remain live (that column was NOT dropped). See verify/112.
+SELECT 'users_sentinel' AS check_name, 0::int AS bad
 UNION ALL
 SELECT 'conversations_sentinel', count(*)::int
   FROM public.conversations
@@ -21,18 +21,8 @@ SELECT 'conversations_sentinel', count(*)::int
    AND (repo_url ~ '\.git$' OR repo_url ~ '\.GIT$'
         OR repo_url ~ '/$' OR repo_url ~ '^https://[^/]*[A-Z]')
 UNION ALL
-SELECT 'users_idempotence', count(*)::int
-  FROM public.users u
- WHERE u.repo_url IS NOT NULL
-   AND substring(trim(u.repo_url) from '^([^/]*//[^/]+)') IS NOT NULL
-   AND u.repo_url <> regexp_replace(
-     regexp_replace(
-       regexp_replace(
-         LOWER(substring(trim(u.repo_url) from '^([^/]*//[^/]+)'))
-         || COALESCE(substring(trim(u.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
-         '/+$', '', 'g'),
-       '(\.git)+$', '', 'i'),
-     '/+$', '', 'g')
+-- users.repo_url dropped by mig 112 (see note above) — idempotence probe obsolete.
+SELECT 'users_idempotence', 0::int
 UNION ALL
 SELECT 'conversations_idempotence', count(*)::int
   FROM public.conversations c
