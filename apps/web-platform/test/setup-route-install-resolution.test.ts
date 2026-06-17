@@ -176,7 +176,7 @@ describe("POST /api/repo/setup — install resolution", () => {
   test("ADR-044 PR-2a: TEAM workspace active → 422 refusal, no owner-gate, no clone", async () => {
     const TEAM_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
     // Active workspace is a TEAM (≠ user.id). Team on-disk provisioning is
-    // #4560/Phase-5; until then setup would SILENTLY clone into the caller's
+    // #5462/Phase-5; until then setup would SILENTLY clone into the caller's
     // PERSONAL solo workspace (confused deputy). Refuse explicitly.
     mockTenantFrom.mockReturnValue(
       mockQueryChain({ current_workspace_id: TEAM_WORKSPACE_ID }, null),

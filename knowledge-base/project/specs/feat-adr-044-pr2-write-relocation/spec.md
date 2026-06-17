@@ -2,7 +2,7 @@
 feature: ADR-044 PR-2a — workspace-owned repo connection (confused-deputy refusal guard)
 refs: 5437
 closed_by: 5437 is closed by PR-2b (the column drop), not PR-2a
-depends_on: 4560
+depends_on: 5462
 adr: ADR-044
 lane: cross-domain
 status: in-progress
@@ -50,7 +50,8 @@ come from `workspaces.repo_status`).
 `current-repo-url.ts:82-104` documents the error-reason staying on
 `users.repo_error` (read keyed on the dispatching user) as an accepted
 forward-looking limitation, with the team-workspace relocation explicitly
-assigned to **#4560**. So the "migration 110 + credential RPC" items from the
+assigned to **#5462** (the team write-cutover; #4560 is journey-state polish, not
+this). So the "migration 110 + credential RPC" items from the
 original PR-2 sketch are already done / out-of-scope; dropping them shrinks the
 blast radius (no schema change) with the core fix intact.
 

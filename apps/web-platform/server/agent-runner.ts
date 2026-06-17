@@ -1483,8 +1483,9 @@ recipient, and suppression is permanent (no un-suppress).`;
     // pair workspace A's installation with workspace B's repo_url — both
     // workspaces the SAME user belongs to (not cross-tenant). The window is
     // sub-ms and the switcher reloads the page (restarting this context), so
-    // it is not fixed here; when #4560 makes mid-run switches plausible,
-    // resolve the workspace ONCE and thread it into both via their existing
+    // it is not fixed here; when #5462 gives workspaces distinct repo
+    // connections (making A-install/B-repo pairing reachable), resolve the
+    // workspace ONCE and thread it into both via their existing
     // `workspaceId` override params so installation + repo share one snapshot.
     const repoUrl = await getCurrentRepoUrl(userId);
 

@@ -142,7 +142,7 @@ describe("DELETE /api/repo/disconnect", () => {
     const TEAM_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
     mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
     // Active workspace is a TEAM (≠ user.id). Team on-disk provisioning is
-    // #4560/Phase-5; until then a disconnect would SILENTLY tear down the
+    // #5462/Phase-5; until then a disconnect would SILENTLY tear down the
     // caller's PERSONAL solo connection (confused deputy). Refuse explicitly.
     mockTenantFrom.mockReturnValue(
       mockQueryChain({ current_workspace_id: TEAM_WORKSPACE_ID }, null),
