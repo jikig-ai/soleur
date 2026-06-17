@@ -13,8 +13,13 @@
 //           the affected-row gate unreliable; the Stripe path catches
 //           PG_UNIQUE_VIOLATION instead — same idiom here).
 //   Step 4: JSON.parse + switch on req.headers.get('x-github-event').
-//   Step 5: resolve founderId via github_installation_id mapping; 404
-//           if no founder owns this installation.
+//   Step 5: resolve the SOLO-workspace founder for this installation via the
+//           membership self-join (resolveSoloFounderForInstallation, ADR-044
+//           Amendment 2026-06-17b). The reverse-lookup reads the NON-UNIQUE
+//           workspaces install column, so the count is fail-closed: 0 → 404
+//           (no founder owns this install), 1 → founderId, >1 → 404 + PAGE
+//           (ambiguous standing-state — do NOT pick one), db-error → 500 +
+//           releaseDedupRow (GitHub redelivers).
 //   Step 6: isGranted(supabase, founderId, actionClass) — fail-closed
 //           on no-grant (log + 200) OR DB-error (Sentry via isGranted + 200).
 //   Step 7: inngest.send({ id: github-<deliveryId>, name, v: '1', data }).
@@ -310,14 +315,15 @@ export async function POST(request: Request) {
     supabase,
   );
   if (founderResolution.kind === "db-error") {
+    // The resolver ALREADY mirrored the real Postgres error to Sentry via
+    // reportSilentFallback (feature=github-webhook, op=founder-resolve). Do NOT
+    // re-capture a synthetic Error under the same op here — that double-reports
+    // one failure. The pino line below stays for container-stdout context; the
+    // durable Sentry signal is the resolver's. (One report per failure.)
     logger.error(
       { installationId, deliveryId },
       "GitHub webhook: founder resolution DB error",
     );
-    Sentry.captureException(new Error("founder resolution db error"), {
-      tags: { feature: "github-webhook", op: "founder-resolve" },
-      extra: { installationId, deliveryId },
-    });
     await releaseDedupRow();
     return NextResponse.json({ error: "DB error" }, { status: 500 });
   }

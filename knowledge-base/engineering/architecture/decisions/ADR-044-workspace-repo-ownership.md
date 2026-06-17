@@ -331,12 +331,24 @@ in one branch as two reviewable commits (PR-A webhook, PR-B session-sync). Ref #
 
 **Verified fact:** the webhook Step 5 founder lookup was the SOLE remaining
 `users.github_installation_id` **1:N reverse-lookup** (`.eq("github_installation_id", …)`).
-The full reader sweep also surfaced a THIRD stranded reader the original framing missed —
-`app/api/repo/detect-installation/route.ts` did a `users.select("github_installation_id")`
-**self-read** (`.eq("id", user.id)`), a column-location cutover (not a 1:N lookup); it now
-reads via `resolveInstallationIdForWorkspace(user.id, serviceClient)` (the solo workspace
-carries the install, same value). `github_username` is NOT relocated by ADR-044 and stays a
-`users` read.
+The full reader sweep surfaced TWO more stranded readers the original framing missed,
+bringing the relocated set to **FOUR** sites:
+- **3rd** — `app/api/repo/detect-installation/route.ts` did a
+  `users.select("github_installation_id")` **self-read** (`.eq("id", user.id)`), a
+  column-location cutover (not a 1:N lookup); it now reads via
+  `resolveInstallationIdForWorkspace(user.id, serviceClient)` (the solo workspace carries the
+  install, same value).
+- **4th** — `app/(dashboard)/dashboard/settings/page.tsx` read
+  `users.select("repo_url, repo_status, repo_last_synced_at, github_installation_id")` in a
+  **multi-line** select (which the AC grep missed) on the settings render. Since PR-2
+  relocated the WRITES to `workspaces`, this `users` read served stale/frozen values, and
+  PR-2b's column DROP would throw on every settings render. **CLOSED:** it now resolves the
+  active workspace via `resolveActiveWorkspace(user.id, service)` and reads the repo cols
+  from `workspaces` (mirrors `app/api/repo/status/route.ts`); a resolve `db-error` fails
+  closed to "not connected" so the page still renders. The `users` read is removed entirely
+  (no non-repo field was used).
+
+`github_username` is NOT relocated by ADR-044 and stays a `users` read.
 
 ### CTO binding ruling (transcribed verbatim) — Decision: Option C (hybrid)
 
@@ -383,8 +395,11 @@ discriminated union `{found|none|ambiguous|db-error}`):
   level error) + `releaseDedupRow()` + 404-drop. ZERO `inngest.send`, ZERO `isGranted`.**
   Dropping a re-drivable event is strictly safer than misattributing it (an unrecoverable
   cross-tenant action/repo-write). This is the single most important new code path.
-- **DB error** → `Sentry.captureException` (`op:"founder-resolve"`) + `releaseDedupRow()` +
-  **500** (preserves the existing Step 5 `founderErr` contract — never a silent 200).
+- **DB error** → the **resolver** mirrors the real Postgres error via
+  `reportSilentFallback` (`feature:"github-webhook"`, `op:"founder-resolve"`); the route then
+  `releaseDedupRow()` + **500** (preserves the Step 5 `founderErr` contract — never a silent
+  200). The route does **not** re-`captureException` a synthetic Error on this branch — that
+  would double-report one failure under the same op (one report per failure).
 
 **Test invariants:** the `>1` fail-closed (Test Scenario 3) is mandatory; the solo self-join
 excludes team workspaces (Scenario 4); same-user double-solo-row drift trips ambiguous
@@ -398,7 +413,12 @@ co-member reconcile (mig 110) that duplicates an install onto a second solo row 
 every non-push event for that install 404-drop until the duplicate is removed operationally
 — a STANDING single-user availability incident (R8), so `op:"founder-ambiguous"` must
 **page**, not just log. A cross-table partial-index predicate is not directly expressible;
-the accepted posture is the runtime branch + the paging Sentry signal.
+the accepted posture is the runtime branch + the paging Sentry signal. **R8 paging is now
+WIRED** (no longer aspirational): the `github_webhook_founder_ambiguous` Sentry issue-alert
+rule (`infra/sentry/issue-alerts.tf`) is `filter_match="all"` on BOTH `feature=github-webhook`
+AND `op=founder-ambiguous` tags, so it pages specifically on this standing-state ambiguity
+(NOT the routine no-founder 404 or the db-error mirror). Before this rule the HTTP monitor
+treated the 404 as expected and no `github-webhook` Sentry rule existed.
 
 ### Session-sync write (PR-B)
 

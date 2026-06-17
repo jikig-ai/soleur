@@ -125,8 +125,9 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     expect(mockWriteRepoCols.mock.calls[0][1]).toBe(SOLO_WORKSPACE_ID);
   });
 
-  // Scenario 9 — 0-row write surfaces (not silent) and does not throw.
-  // writeRepoColsToWorkspace owns the Sentry-mirror; session-sync best-effort.
+  // Scenario 9 — best-effort: the 0-row write does not throw. The Sentry-mirror
+  // for the 0-row path lives in writeRepoColsToWorkspace (out of this test's
+  // scope, which mocks it); session-sync's contract here is only no-throw.
   test("syncPull does not throw when the write is a best-effort no-op", async () => {
     mockWriteRepoCols.mockResolvedValue(undefined);
     await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();

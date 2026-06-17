@@ -233,14 +233,19 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
     expect(sentPayload.v).toBe("3");
   });
 
-  // Scenario 6 — DB error on resolver → 500 + dedup released.
-  test("resolver db-error → 500, Sentry, dedup released", async () => {
+  // Scenario 6 — DB error on resolver → 500 + dedup released. The resolver
+  // ITSELF mirrors the real Postgres error to Sentry via reportSilentFallback
+  // (op:founder-resolve); the route must NOT also captureException a synthetic
+  // Error under the same op (one report per failure — review P3 dedup). The
+  // resolver is mocked here, so the route's captureException count is the
+  // observable: it must be 0 on this branch.
+  test("resolver db-error → 500, dedup released, route does NOT double-report", async () => {
     mockResolveFounder.mockResolvedValue({ kind: "db-error" });
     const res = await POST(
       makeRequest("pull_request", { installation: { id: INSTALLATION_ID } }),
     );
     expect(res.status).toBe(500);
-    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).not.toHaveBeenCalled();
     expect(mockDeleteEq).toHaveBeenCalledTimes(1);
     expect(mockSendWithRetry).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
