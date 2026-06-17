@@ -25,6 +25,12 @@ When a workflow can't be pre-merge-validated (R4 — a new `workflow_dispatch` 4
 
 (Root-cause aside, same PR: the enumerate script defaulted its `eventsV2 filter:{from}` bound to the 1970 epoch, which inngest v1.19.4 rejects as out-of-range → no `.data.eventsV2` → exit 1 → the 500. Clamped to a 365-day lookback; `ENUMERATE_FROM` overrides. The default-value path was untested because the mocked fixtures + the docker schema probe both used a recent `from` — a runtime-only default never exercised by the suite. See `2026-06-17-inngest-eventsv2-raw-payload-and-receivedat-filter`.)
 
+## Session Errors
+
+1. **`readonly NOW_MS` inherited by a `$()` subshell broke the new `source`-based unit test** (`line 57: NOW_MS: readonly variable`). The test file marks `NOW_MS` readonly; a same-process `$(source "$TARGET"; …)` inherits it, and the script's top-level `NOW_MS=` then fails. **Recovery:** source via a fresh `bash -c 'source "$1"; …' _ "$TARGET"` (a new process does not inherit the parent's readonly; `BASH_SOURCE[0] != $0` still skips the network loop). **Prevention:** to unit-test a function in a script that assigns top-level vars the harness froze readonly, source in a fresh `bash -c`, never an in-process command-substitution subshell.
+2. **The issue's stated mechanism ("adnanh/webhook include-command-output is stdout-only") was factually wrong** — it's `CombinedOutput()` (stdout+stderr). **Recovery:** deepen-plan dogfooded the observability-coverage-reviewer, verified the upstream source, and re-framed the fix (consumer discards the body) + authored the learning stream-agnostically. **Prevention:** verify a third-party tool's stream/capture behavior against its pinned-version source before encoding it as a durable rule (this learning + the reviewer Step 2.5 now state the corrected fact).
+3. **The plan's `/work MUST confirm the malformed-response stderr doesn't echo event `.data`` was not executed on the first work pass** — the raw `echo "$resp" >&2` shipped, and AC4's body-dump made it leak into the synchronous run log. **Recovery:** two review agents (code-quality + observability) concurred; fixed inline (dump only error messages + data key names; combined-stream no-leak test). **Prevention:** treat plan `## Sharp Edges` "/work MUST" items as explicit checklist tasks during work, not assumptions; the multi-agent review is the safety net that caught the miss here.
+
 ## Tags
 category: best-practices
 module: webhook, observability, no-ssh, #5492
