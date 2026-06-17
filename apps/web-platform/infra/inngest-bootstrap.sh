@@ -164,7 +164,21 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
+# Durable backend (#5450): --postgres-uri (dedicated Supabase project, Supavisor
+# SESSION pooler :5432 — NEVER transaction :6543, which breaks inngest's sqlc
+# prepared statements) + --redis-uri (self-hosted Redis, AOF on /mnt/data).
+# Phase-0 spike (runbook § Durable backend) proved Postgres-ALONE loses armed
+# future-ts reminders on a host re-provision; the durable external Redis is what
+# survives. Both secrets inject from Doppler prd via the `doppler run` wrapper
+# (same $${...} pattern as the keys — avoids the #4116 EnvironmentFile-empty
+# trap). --sqlite-dir is KEPT but vestigial when --postgres-uri is set (verified:
+# inngest logs `initialized database db=postgres`); rollback = drop the two new
+# flags in one revert step. --postgres-max-open-conns 25 bounds the dedicated
+# project's pooler budget (default 100 is too high). Inngest FAILS CLOSED on an
+# unreachable/empty backend (Phase-0 0.3) — so this ExecStart must not deploy
+# until INNGEST_POSTGRES_URI + INNGEST_REDIS_PASSWORD are populated in Doppler
+# prd (the cutover ordering; verify_inngest_health hard-gates it).
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 25 --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
 Restart=on-failure
 RestartSec=5
 User=deploy
