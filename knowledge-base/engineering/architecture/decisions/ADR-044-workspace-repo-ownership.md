@@ -192,3 +192,64 @@ substitutable by **direct enumeration**: run the pre-decommission drift-gate que
 drift-gate COUNT as authoritative and the breadcrumb as informational. This retires
 the *calendar*-soak requirement for internal-only — it does **not** unblock PR-2b,
 which still waits on the #5462 write-cutover (prereq 1) regardless of soak.
+
+## Amendment 2026-06-17 — PR-2 write-cutover lands (#5462)
+
+The connect-time **write** path is relocated `users.*` → `workspaces.*`. This is the
+prereq-(1) the prior amendment recorded as the hard block on PR-2b.
+
+`status` stays **`adopting`** (NOT `accepted`): the `adopting → accepted` flip lands
+with PR-2b's destructive column drop after a real prod soak. This PR moves the write
+edge but does not drop the legacy `users` columns (they survive as the revert net).
+
+**C4 edge moves: `read=Workspace / write=User (dual)` → `read=Workspace /
+write=Workspace`.** The four `app/api/repo/**` routes (`setup`, `disconnect`,
+`install`, `detect-installation`) now write the authoritative repo-connection
+columns to the `workspaces` row keyed on the **membership-verified resolved active
+workspace id**; the owner-gate `p_workspace_id` equals that mutation-target id; team
+on-disk provisioning + teardown (with live-member-session abort before the shared-dir
+`rm`) replaces the PR-2a 422 refusal. `repo_error` was relocated by migration 110
+(non-credential `authenticated` GRANT). The `users` columns are now **un-written
+legacy** until PR-2b drops them.
+
+### Read-cutover scope correction (the "read path is already cut over" claim was false)
+
+The PR-1 amendment and the #5462 plan asserted the read path was fully on `workspaces`.
+Implementing PR-2 surfaced FIVE+ surviving `users.{github_installation_id, repo_url,
+repo_status}` readers. The binding ruling (engineering CTO):
+
+- **Chosen (Option D): migrate the authenticated *interactive* readers in this PR,
+  defer the *service-role* readers to PR-2b's blocker set.** Migrated here:
+  `repo/status`, `repo/create`, `kb/tree`, `dashboard/today/[id]/undo`,
+  `(auth)/callback`, and `repo/setup`'s degraded install-fallback — each now reads
+  `workspaces` (via the `resolve_workspace_installation_id` RPC / `resolveInstallationId`
+  for the credential, or a service-role `workspaces` read for the non-credential cols).
+  Without this, a *newly-connected* user would strand on stale-NULL `users.*`
+  (a `single-user incident`: broken GitHub-App git auth / "no repo connected" UI).
+- **Rejected: migrate all readers in-PR (pure Option A)** — three readers are
+  service-role/cron contexts where `resolve_workspace_installation_id` is structurally
+  unusable (it gates on `auth.uid()` and is `REVOKE`'d from `service_role`, mig
+  079:114/126); cutting them needs a *net-new* service-role-safe resolver, outside a
+  write-cutover's blast radius.
+- **Rejected: dark-launch flag (Option C)** — a write-relocation flag gates the wrong
+  layer (the reads are the hazard); default-off leaves dual-writes live, which is
+  Option B and re-blocks the PR-2b drift gate. Loud failure (`reportSilentFallback` /
+  throw) + the whole-PR git-revert already satisfy the `single-user incident`
+  threshold without a second drift surface (flag-state vs deploy-state).
+- **Rejected: keep `users.*` dual-writes (Option B)** — re-introduces the
+  dual-source-of-truth divergence ADR-044 forbids and makes the PR-2b drift gate
+  unreachable.
+
+**PR-2b (#5437) precondition set is amended:** PR-2b is blocked on the soak **AND** the
+two deferred service-role-reader migrations (`server/inngest/functions/agent-on-spawn-requested.ts`,
+`server/inngest/functions/cron-workspace-sync-health.ts`), because both read
+`users.github_installation_id` and PR-2b drops that column. They need a new
+service-role-safe founder→workspace installation resolver (membership-bypass justified
+by trusted server context). Tracked in **#5470** (PR-2b-blocker).
+
+### Considered Options (amendment)
+
+- **Option D (chosen):** above.
+- **Capability gap recorded:** there is no service-role-safe installation-id resolver
+  (the only one is `auth.uid()`-gated). It must be built before PR-2b can drop
+  `users.github_installation_id`.

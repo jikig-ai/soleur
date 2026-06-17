@@ -53,9 +53,21 @@ User-Brand Impact, 4.7 Observability, 4.8 PAT-shaped, 4.9 UI-wireframe) PASS.
 ## Overview
 
 ADR-044 relocates GitHub repo-connection state from `users.*` to `workspaces.*`.
-The **read** path is already cut over (`current-repo-url.ts`, `workspace-resolver.ts`
-read `workspaces.repo_url` / the `resolve_workspace_installation_id` SECURITY DEFINER
-RPC). The **write** path is still `users`-authoritative: the four connect routes write
+
+> **Implementation correction (2026-06-17, engineering CTO ruling — see ADR-044
+> amendment "PR-2 write-cutover lands").** This plan's claim that "the read path is
+> already cut over" was **false**: implementing PR-2 surfaced 5+ surviving `users.*`
+> readers. Per the binding Option-D ruling, the authenticated *interactive* readers
+> were migrated in THIS PR (`repo/status`, `repo/create`, `kb/tree`,
+> `dashboard/undo`, `(auth)/callback`, the `repo/setup` install-fallback); the two
+> *service-role* readers (`agent-on-spawn-requested`, `cron-workspace-sync-health`)
+> are deferred to PR-2b's blocker set (the membership-checked RPC is `auth.uid()`-gated
+> and unusable from service-role contexts; they need a new service-role-safe resolver).
+
+The **read** path was PARTIALLY cut over by PR-1 (`current-repo-url.ts`,
+`workspace-resolver.ts` read `workspaces.repo_url` / the
+`resolve_workspace_installation_id` SECURITY DEFINER RPC); this PR completes the
+interactive readers (above). The **write** path was still `users`-authoritative: the four connect routes write
 `users.{repo_url, workspace_path, github_installation_id, repo_error}` and best-effort
 *mirror* a subset to `workspaces` via `mirrorRepoColsToSoloWorkspace`, always keyed on
 `user.id` (the solo workspace). PR-2a (#5455, shipped) added a **422 refusal** when a
@@ -508,7 +520,10 @@ explicit edge; route any `.c4` edit through the Concierge `c4-edit` path.
   `gh` post-merge, not a dashboard eyeball.
 - [ ] AC14: Open the PR-2b soak window — confirm `repo_resolver_divergence` breadcrumb
   volume in Sentry (issues API query, deterministic verdict) before #5437 proceeds. `Ref
-  #5437` (do not `Closes` — PR-2b is the closer).
+  #5437` (do not `Closes` — PR-2b is the closer). **PR-2b precondition set amended (CTO
+  ruling):** PR-2b is blocked on the soak AND the two deferred service-role-reader
+  migrations (`agent-on-spawn-requested`, `cron-workspace-sync-health`) — both read
+  `users.github_installation_id`, which PR-2b drops. Tracked in #5470 (PR-2b-blocker).
 
 ## Observability
 
