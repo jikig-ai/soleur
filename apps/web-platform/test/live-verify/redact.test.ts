@@ -80,4 +80,31 @@ describe("redact", () => {
     const twice = `${FAKE_JWT} and again ${FAKE_JWT}`;
     expect(redact(twice)).not.toContain(FAKE_JWT);
   });
+
+  // #5487 review: the live-verify GHA job runs under `doppler run -c prd` and
+  // `gh api` with GH_TOKEN; a CLI crash could surface those tokens in stderr,
+  // which the job tees to the run log + a Sentry crash-tail event. The harness's
+  // own threat model (Supabase synthetic principal) did not cover them.
+  it("redacts a Doppler service token shape", () => {
+    const dp = "dp." + "st." + "prd." + "AbCdSyntheticDopplerTokenValue0123456789";
+    const out = redact(`doppler: error: invalid token ${dp}`);
+    expect(out).not.toContain(dp);
+    expect(out).toContain("[REDACTED_DOPPLER]");
+  });
+
+  it("redacts GitHub token shapes (PAT + fine-grained)", () => {
+    const ghp = "ghp_" + "0123456789AbCdEfGhIjKlMnOpQrSt";
+    const pat = "github_pat_" + "11ABCDEF0" + "0123456789abcdefABCDEF";
+    const out = redact(`remote: ${ghp} and ${pat}`);
+    expect(out).not.toContain(ghp);
+    expect(out).not.toContain(pat);
+    expect(out).toContain("[REDACTED_GH_TOKEN]");
+  });
+
+  it("redacts a bare base64- SSR session blob not preceded by a cookie name", () => {
+    const blob = "base64-" + "x".repeat(60);
+    const out = redact(`stderr dump: session=${blob} done`);
+    expect(out).not.toContain(blob);
+    expect(out).toContain("[REDACTED_SB_SESSION]");
+  });
 });
