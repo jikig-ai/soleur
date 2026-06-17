@@ -17,12 +17,12 @@ Issue: #5487 · Branch: feat-one-shot-5487-live-verify-gha-rehome · lane: cross
 - [ ] 1.2 Steps: checkout (pinned SHA), dopplerhq/cli-action (pinned SHA), oven-sh/setup-bun (pinned SHA).
 - [ ] 1.3 `bun install --frozen-lockfile` in apps/web-platform.
 - [ ] 1.4 `npx playwright install --with-deps chromium` in apps/web-platform. LIVE_VERIFY_BROWSER_CHANNEL/PATH UNSET.
-- [ ] 1.5 Trigger-paths gate step (`id: gate`): diff changed files vs `trigger-paths.txt` (strip comments/blanks, `grep -qE -f`); set `triggered` output; on 0 → record SKIPPED, skip harness; branch on `github.event_name` (no zero-SHA diff on dispatch).
-- [ ] 1.6 Harness step (`id: harness`, `if: triggered == 1`, `continue-on-error: true`): `cd apps/web-platform && doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 | tee /tmp/live-verify.out`; extract last `RESULT:` line; empty → `CANT-RUN:no-result-line`. `env: DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD`.
+- [ ] 1.5 Trigger-paths gate step (`id: gate`): changed files via **GH compare API** (`gh api repos/.../compare/<before>...<sha>`, NOT `git diff` — zero-SHA fragility); strip comments/blanks, `grep -qE -f`. Three outcomes: match → `triggered=1`; no match → `SKIPPED:no-triggering-paths` (`triggered=0`); compare-API fail → `CANT-RUN:gate-diff-failed` (`gate_failed=1`, NOT silent skip). Branch on `github.event_name` (skip harness on dispatch).
+- [ ] 1.6 Harness step (`id: harness`, `if: triggered == 1`, `continue-on-error: true`): `set +e; doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 | tee /tmp/live-verify.out; rc=${PIPESTATUS[0]}; set -e`; extract last `RESULT:`; empty → `CANT-RUN:no-result-line:exit=$rc` + redacted stderr tail; write `result_line` + `rc` to `$GITHUB_OUTPUT`. `env: DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD`.
 
-## Phase 2 — Sentry emit
+## Phase 2 — Sentry emit (NEW integration, not precedent reuse)
 
-- [ ] 2.1 Emit step (`if: always() && triggered == 1`): POST redacted RESULT line to Sentry store endpoint from `NEXT_PUBLIC_SENTRY_DSN`; tags `gate=live-verify`, `component=web-platform`, `result=<tri-state>`; FAIL → level=error. Reuse `sentry-monitors-audit.sh:159-182` DSN-parse. Degraded-permissive on non-2xx (log warning, don't red the job).
+- [ ] 2.1 Emit step (`if: always()` for triggered/skipped/gate_failed): POST redacted result as a REAL event (not breadcrumb) to region-aware `https://<dsn-host>/api/<project>/store/` from `NEXT_PUBLIC_SENTRY_DSN` (public key as `sentry_key`; carry the DSN region, no `us` default); tags `gate=live-verify`, `component=web-platform`, `result=<tri-state>`; FAIL/no-result-line/gate-diff-failed → level=error, CANT-RUN → warning, SKIPPED → info. Fail-closed to `CANT-RUN:no-result-line` on empty `result_line`. Bounded 2-3 retry. Non-2xx → `::error::` + `$GITHUB_STEP_SUMMARY` (don't red the job). Reuse only the DSN-split shape from `sentry-monitors-audit.sh` (NOT its cluster-default).
 
 ## Phase 3 — ADR-064 amendment
 
@@ -32,7 +32,8 @@ Issue: #5487 · Branch: feat-one-shot-5487-live-verify-gha-rehome · lane: cross
 
 - [ ] 4.1 `actionlint .github/workflows/web-platform-release.yml` → 0 errors (NOT `bash -n` on the YAML).
 - [ ] 4.2 `bash -c '<snippet>'` over each new embedded `run:` block (gate, harness, emit).
-- [ ] 4.3 Prove harness-failure-cannot-fail-the-deploy: (a) no job `needs: live-verify`; (b) harness step `continue-on-error: true`. Comment both in the workflow.
+- [ ] 4.3 Prove harness-failure-cannot-fail-the-deploy: (a) no other job lists `live-verify` in `needs:`; (b) harness step `continue-on-error: true`. Comment both.
+- [ ] 4.3b Prove failure-still-produces-a-recording: stub a non-zero harness exit, confirm `result_line` output is still populated AND emit would POST a non-empty `result` tag (fail-closed `CANT-RUN:no-result-line:exit=<rc>`).
 - [ ] 4.4 Confirm `deploy:` job `needs:` (L256) + `if:` (L265-273) byte-for-byte unchanged (additive diff only).
 
 ## Acceptance verification (pre-merge)

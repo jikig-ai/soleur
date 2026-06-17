@@ -10,6 +10,22 @@ status: plan-complete
 
 # feat(live-verify): re-home harness into web-platform-release.yml deploy job (report-only, GHA substrate)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-17
+**Review agents:** architecture-strategist, silent-failure-hunter
+**Halt gates passed:** 4.6 User-Brand Impact, 4.7 Observability (5-field), 4.8 PAT-shaped (none), 4.9 UI-wireframe (no UI surface).
+
+### Key improvements (all workflow-side; no `run.ts` change)
+1. **Sentry-emit is a NEW integration, not precedent reuse** (arch P1): `sentry-monitors-audit.sh` only PARSES the DSN, never POSTs. Region-aware DSN→ingest-URL (no `us` default), public DSN key as `sentry_key`, bounded retry, fail-loud to `$GITHUB_STEP_SUMMARY` + `::error::`.
+2. **Changed-file gate via GH compare API, not `git diff`** (arch P1 / SF F4): `fetch-depth:1` default makes `before..sha` error on the zero-SHA. Compare-API failure → `CANT-RUN:gate-diff-failed`, never a silent SKIPPED.
+3. **`${PIPESTATUS[0]}` exit-code capture + `set +e` guard** (SF F1/F2): empty RESULT → `CANT-RUN:no-result-line:exit=<rc>` + redacted stderr tail; extraction + `$GITHUB_OUTPUT` write always run even on harness crash. "Failure cannot fail the job" and "failure still produces a recording" proven independently in Phase 4.
+4. **Emit fail-closed on empty `result_line`; SKIPPED as a real `level=info` event** (SF F3/F5) so the post-merge AC's events-API query has a queryable denominator.
+5. **ADR-064 amendment restates the C4 edge driver** as the release workflow (arch P2).
+
+### New considerations
+- No P0 findings; the report-only-by-topology decision and separate-job decision were validated as architecturally correct. All P1/HIGH findings were in supporting mechanisms (Sentry emit + changed-file gate) that directly threaten the dark-launch signal integrity — folded in above.
+
 ## Overview
 
 Re-home the live-verify harness (`apps/web-platform/scripts/live-verify/run.ts`)
@@ -107,8 +123,10 @@ No ADR-033 Option-set change. Capture via `/soleur:architecture` (amend flow).
 No new C4 edge. ADR-064 §C4 already records the "live-verify harness → deployed
 web-platform (HTTPS) + prod Supabase (auth)" edge as `status: adopting`. This PR
 moves the *execution location* of that edge (skill → GHA) but does not change the
-edge's endpoints. Note in the amendment that the edge's driver is now the release
-workflow; no `.c4` model file edit is required (the edge already exists).
+edge's endpoints. The amendment MUST explicitly restate the edge's **driver** as
+the `web-platform-release.yml` release workflow (architecture-review P2 — otherwise
+ADR-064 §C4 keeps describing a driver, the agent skill, that no longer owns the
+edge). No `.c4` model file edit is required (the edge endpoints are unchanged).
 
 ### Sequencing
 
@@ -156,44 +174,99 @@ re-shape it). The job:
   5. `npx playwright install --with-deps chromium` in `apps/web-platform` (bundled
      chromium per `@playwright/test`; `--with-deps` installs the OS libs on
      `ubuntu-latest`). Leave `LIVE_VERIFY_BROWSER_CHANNEL/PATH` UNSET.
-  6. **Trigger-paths gate** (`id: gate`): compute changed files for the push
-     (`git diff --name-only ${{ github.event.before }} ${{ github.sha }}` with a
-     fallback to the GH compare API if `before` is the zero-SHA), strip
-     `trigger-paths.txt` comments/blanks, `grep -qE -f`; set
-     `triggered=0|1` as a step output. On `triggered=0`: emit
-     `RESULT: SKIPPED (no triggering paths)` to the log + Sentry breadcrumb-level,
-     skip the harness.
+  6. **Trigger-paths gate** (`id: gate`): compute changed files for the push via
+     the **GH compare API as the PRIMARY mechanism** —
+     `gh api repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.sha }} --jq '.files[].filename'`
+     — NOT a local `git diff`. (Per architecture-review P1: `actions/checkout`
+     defaults to `fetch-depth: 1`; `git diff ${{ github.event.before }}..${{ github.sha }}`
+     errors on the zero-SHA / shallow-graph case — the repo's other changed-file
+     workflows all set `fetch-depth: 0` to avoid this. The compare API needs no
+     local history.) Strip `trigger-paths.txt` comments/blanks, `grep -qE -f`; set
+     `triggered=0|1` as a step output. **Three distinct outcomes (never collapse them):**
+     - changed-file set computed AND no pattern matches → `triggered=0`, record
+       `SKIPPED:no-triggering-paths`, skip the harness (legitimate fail-open,
+       matches the `trigger-paths.txt` header posture).
+     - changed-file set computed AND a pattern matches → `triggered=1`.
+     - compare API call **failed** (rate-limit / 5xx / zero-SHA on first push) →
+       record `CANT-RUN:gate-diff-failed`, set `triggered=0` BUT mark a separate
+       `gate_failed=1` output so step 8 emits it as a real CANT-RUN event, NOT a
+       silent SKIPPED (silent-failure-hunter F4: a broken diff must not masquerade
+       as an intentional skip).
   7. **Run harness** (`id: harness`, `if: steps.gate.outputs.triggered == '1'`,
-     `continue-on-error: true`): `cd apps/web-platform && doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 | tee /tmp/live-verify.out`;
-     extract `RESULT_LINE=$(grep -E '^RESULT: ' /tmp/live-verify.out | tail -1)`;
-     empty → `RESULT: CANT-RUN:no-result-line` (fail-closed for the *recording*,
-     not for "done"). Set `RESULT_LINE` as a step output (already redacted by run.ts).
-     `env: DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}`.
-  8. **Emit to Sentry** (`if: always() && steps.gate.outputs.triggered == '1'`):
-     POST the `RESULT_LINE` as a Sentry event (message-level, tagged
-     `gate=live-verify`, `component=web-platform`, `result=<PASS|FAIL|CANT-RUN|SKIPPED>`)
-     to the `store`/envelope endpoint derived from `NEXT_PUBLIC_SENTRY_DSN`.
-     `env: NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}`. This is
-     the SSH-free observability surface (ADR-033 Option C shape). On a FAIL, set
-     the Sentry event `level=error` so it surfaces for the #5463 flip observation.
+     `continue-on-error: true`): run under explicit shell handling so `set -e`
+     CANNOT abort the extraction before the output is set (silent-failure-hunter
+     F1/F2):
+     ```bash
+     set +e
+     cd apps/web-platform
+     doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 | tee /tmp/live-verify.out
+     rc=${PIPESTATUS[0]}          # bun's exit code, NOT tee's — pipefail-safe
+     set -e
+     RESULT_LINE=$(grep -E '^RESULT: ' /tmp/live-verify.out | tail -1)
+     if [ -z "$RESULT_LINE" ]; then
+       TAIL=$(tail -5 /tmp/live-verify.out | tr '\n' ' ')
+       RESULT_LINE="RESULT: CANT-RUN:no-result-line:exit=$rc — $TAIL"  # already-redacted stdout
+     fi
+     echo "result_line=$RESULT_LINE" >> "$GITHUB_OUTPUT"
+     echo "rc=$rc" >> "$GITHUB_OUTPUT"
+     ```
+     `env: DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}`. The empty-RESULT case
+     embeds the **process exit code + a stderr tail** so a hard harness/runner/Doppler
+     crash is diagnosable, NOT flattened into a bare `CANT-RUN:no-result-line`
+     (silent-failure-hunter F1). The `tee` output is already `redact()`-scrubbed
+     only for the harness's own RESULT line; the stderr `TAIL` could carry an
+     unredacted node stack — re-`redact()` the TAIL via a `bun run -e` one-liner
+     calling `redact.ts`, OR cap to the error *name/message* class only. (Decision:
+     pipe the TAIL through `redact` before embedding — the redact module is already
+     imported in the harness dir.)
+  8. **Emit to Sentry** (`if: always() && (steps.gate.outputs.triggered == '1' || steps.gate.outputs.gate_failed == '1' || steps.gate.outputs.triggered == '0')`):
+     POST the result as a **real Sentry event** (NOT a breadcrumb — a bare
+     breadcrumb is not queryable via the events API, which the post-merge AC relies
+     on; silent-failure-hunter F5) to the `store` endpoint derived from
+     `NEXT_PUBLIC_SENTRY_DSN`, tagged `gate=live-verify`, `component=web-platform`,
+     `result=<PASS|FAIL|CANT-RUN|SKIPPED>`. **Fail-closed on empty:** if
+     `steps.harness.outputs.result_line` is empty but the harness ran, POST
+     `result=CANT-RUN:no-result-line` at `level=error` with `steps.harness.outcome`
+     + `rc` embedded — never POST a blank message (silent-failure-hunter F3). Level
+     mapping: FAIL → `level=error`; CANT-RUN → `level=warning` (gate-diff-failed and
+     no-result-line → `level=error` since they hide a real failure); SKIPPED →
+     `level=info` (queryable "ran, skipped intentionally" — gives the #5463 soak a
+     denominator). `env: NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}`.
 
 **Report-only invariant (load-bearing):** the deploy is gated by
 `needs: [release, migrate, verify-migrations, verify-doppler-secrets, await-ci]`
 (L256). `live-verify:` is NOT in any job's `needs:`, so by construction it cannot
 gate the deploy or roll it back. This is stronger than `continue-on-error` alone.
 
-### Phase 2 — Sentry emit helper (workflow `run:` block)
+### Phase 2 — Sentry emit helper (workflow `run:` block) — NEW outbound integration
 
-Inline bash in the emit step (no new file): parse the DSN
-(`https://<key>@<host>/<project_id>`), build the
-`https://<host>/api/<project_id>/store/` URL, POST a minimal JSON event
-(`{message, level, tags, platform:"other"}`) with header
-`X-Sentry-Auth: Sentry sentry_version=7, sentry_key=<key>`, `--max-time 10`.
-Degraded-permissive: a non-2xx Sentry response logs a warning but does NOT fail
-the step (the GH Actions log + step summary is the secondary observability surface;
-Sentry is primary but a Sentry outage must not red the report-only job). Mirror the
-DSN-parse shape already in `apps/web-platform/scripts/sentry-monitors-audit.sh:159-182`
-(use that as the canonical parse precedent — do NOT hand-roll a new regex).
+**This is a net-new outbound integration pattern, not a precedent reuse**
+(architecture-review P1). `sentry-monitors-audit.sh:159-182` only PARSES the DSN
+into `dsn_org_id`/`dsn_cluster` for a residency-match assertion — it never
+constructs an ingest URL and never POSTs an event. No existing workflow POSTs an
+arbitrary event to Sentry. Treat this as a component with its own contract:
+
+- **DSN → ingest URL (region-aware).** `NEXT_PUBLIC_SENTRY_DSN` is the public
+  CLIENT DSN (`https://<public_key>@<host>/<project_id>`, where `<host>` is e.g.
+  `o123.ingest.de.sentry.io` or `o123.ingest.us.sentry.io`). The POST host MUST be
+  the DSN's own `<host>` (carry the region segment through — do NOT default to `us`
+  the way the audit script's parse does on an unset DSN, or the event lands in the
+  wrong cluster and silently 4xx's). Build `https://<host>/api/<project_id>/store/`.
+  `sentry_key` in the auth header is the DSN's PUBLIC key (the `<public_key>` before
+  `@`) — NOT the org-scoped audit token used by `sentry-monitors-audit.sh` (a
+  different credential). Reuse only the DSN-SPLIT shape from that script's parse
+  (and its `{ … || true; }` `set -e` guards), not its cluster-defaulting logic.
+- POST a minimal JSON event `{message: <result_line>, level, platform:"other",
+  tags:{gate:"live-verify", component:"web-platform", result:<tri-state>}}` with
+  header `X-Sentry-Auth: Sentry sentry_version=7, sentry_key=<public_key>`,
+  `--max-time 10`, with a **bounded 2-3 attempt retry** (this is the primary
+  observability surface feeding #5463; one-shot delivery is too thin).
+- **Fail-loud-to-secondary (not silent).** A non-2xx / timeout does NOT red the
+  report-only job, BUT it MUST surface as a `::error::` workflow annotation AND a
+  line in `$GITHUB_STEP_SUMMARY` (per `cq-silent-fallback-must-mirror-to-sentry`
+  spirit: here Sentry IS the mirror target, so a Sentry-POST failure must surface
+  on the run-summary page without expanding raw logs — silent-failure-hunter F6).
+  A buried stdout warning is invisible.
 
 ### Phase 3 — ADR-064 amendment (via /soleur:architecture)
 
@@ -208,9 +281,16 @@ per §Architecture Decision above. No status change to ADR-064 (stays Accepted).
 - `bash -n` / `bash -c` over each NEW embedded `run:` snippet (gate, harness,
   emit) extracted in isolation.
 - **Harness-step-failure-cannot-fail-the-job proof:** confirm via two independent
-  mechanisms — (a) topology: `grep -n 'needs:' web-platform-release.yml` shows no
-  job `needs: live-verify`; (b) step-level: the harness step has
-  `continue-on-error: true`. Add a one-line comment in the workflow citing both.
+  mechanisms — (a) topology: NO other job lists `live-verify` in its `needs:` array
+  (assert by inspecting each job's `needs:`, not a raw substring `grep -c` which
+  also matches comments — architecture-review P2); (b) step-level: the harness step
+  has `continue-on-error: true`. Add a one-line comment in the workflow citing both.
+- **Failure-still-produces-a-recording proof** (silent-failure-hunter F2/F3 — the
+  ACTUAL observability invariant, distinct from "failure cannot fail the job"):
+  `bash -c` a stub that exits non-zero in place of the harness and confirm (i) the
+  `result_line` step output is still populated (the `set +e` + `${PIPESTATUS[0]}`
+  guard runs the extraction), and (ii) the emit step would POST a non-empty
+  `result` tag (fail-closed to `CANT-RUN:no-result-line:exit=<rc>` at `level=error`).
 - Confirm the `deploy:` job's `if:` (L265-273) and `needs:` (L256) are UNCHANGED
   (diff is additive only).
 
@@ -227,11 +307,22 @@ per §Architecture Decision above. No status change to ADR-064 (stays Accepted).
   from `apps/web-platform`, with `LIVE_VERIFY_BROWSER_CHANNEL`/`LIVE_VERIFY_BROWSER_PATH`
   NEVER set in the job (`! grep -qE 'LIVE_VERIFY_BROWSER_(CHANNEL|PATH)' web-platform-release.yml`).
 - [ ] Job runs the trigger-paths gate against `trigger-paths.txt`
-  (`grep -q 'trigger-paths.txt' web-platform-release.yml`); on no match it records
-  `SKIPPED` and the harness step does not run.
-- [ ] A Sentry-emit step POSTs the redacted `RESULT:` line using
-  `secrets.NEXT_PUBLIC_SENTRY_DSN`, tagged with the tri-state result and
-  `gate=live-verify`. Reachable without SSH.
+  (`grep -q 'trigger-paths.txt' web-platform-release.yml`) via the **GH compare
+  API** (not local `git diff` — no `git diff .*\.\..*github\.sha` form in the job);
+  on no match it records `SKIPPED:no-triggering-paths` and the harness does not run;
+  on a compare-API failure it records `CANT-RUN:gate-diff-failed` (NOT a silent SKIPPED).
+- [ ] The harness step captures `${PIPESTATUS[0]}` (`grep -q 'PIPESTATUS' web-platform-release.yml`)
+  and on an empty RESULT emits `CANT-RUN:no-result-line:exit=<rc>` with a redacted
+  stderr tail — a hard harness/runner/Doppler crash is diagnosable, not flattened.
+- [ ] A Sentry-emit step POSTs the redacted result line as a REAL event (not a
+  breadcrumb) using `secrets.NEXT_PUBLIC_SENTRY_DSN`, region-aware host derived from
+  the DSN (no hardcoded cluster), tagged `gate=live-verify` + tri-state `result`,
+  with `if: always()` so a FAIL/CANT-RUN still emits; fail-closed to
+  `result=CANT-RUN:no-result-line` (level=error) when `result_line` is empty.
+  Reachable without SSH.
+- [ ] SKIPPED is emitted as a real `level=info` event (queryable denominator for
+  the #5463 soak); a non-2xx Sentry POST surfaces via `::error::` + `$GITHUB_STEP_SUMMARY`
+  (does not red the report-only job).
 - [ ] `actionlint .github/workflows/web-platform-release.yml` passes (0 errors).
 - [ ] The `deploy:` job's `needs:` (L256) and `if:` (L265-273) are byte-for-byte
   unchanged in the diff (additive-only change).
@@ -252,23 +343,26 @@ per §Architecture Decision above. No status change to ADR-064 (stays Accepted).
 
 ```yaml
 liveness_signal:
-  what: "live-verify RESULT (PASS|FAIL|CANT-RUN|SKIPPED) Sentry event per qualifying merge"
-  cadence: "per push to main touching a trigger-paths.txt surface"
+  what: "live-verify RESULT Sentry event per push to main — PASS|FAIL|CANT-RUN when a trigger-paths surface changed, SKIPPED (level=info) otherwise; every push produces exactly one queryable event"
+  cadence: "per push to main (SKIPPED when no trigger-paths.txt surface changed)"
   alert_target: "Sentry (tag gate=live-verify); FAIL emitted at level=error"
   configured_in: ".github/workflows/web-platform-release.yml live-verify job, Sentry-emit step"
 error_reporting:
-  destination: "Sentry via NEXT_PUBLIC_SENTRY_DSN store endpoint; GH Actions step log + job summary as secondary"
-  fail_loud: "harness FAIL → Sentry level=error; CANT-RUN → level=warning; empty RESULT → CANT-RUN:no-result-line (never silently dropped)"
+  destination: "Sentry (region-aware host from NEXT_PUBLIC_SENTRY_DSN) store endpoint; $GITHUB_STEP_SUMMARY + ::error:: annotation as secondary"
+  fail_loud: "FAIL → level=error; CANT-RUN(browser/config/teardown) → level=warning; no-result-line:exit=<rc> + gate-diff-failed → level=error (hide a real failure); empty result_line → fail-closed CANT-RUN:no-result-line level=error (never a blank event)"
 failure_modes:
   - mode: "harness FAIL (rail regression)"
     detection: "RESULT: FAIL line → Sentry level=error"
     alert_route: "Sentry gate=live-verify result=FAIL"
-  - mode: "harness CANT-RUN (browser launch / config / teardown)"
-    detection: "RESULT: CANT-RUN:<reason> → Sentry level=warning"
+  - mode: "harness hard crash / Doppler-auth / runner OOM (no RESULT line)"
+    detection: "${PIPESTATUS[0]} non-zero + empty RESULT → CANT-RUN:no-result-line:exit=<rc> + redacted stderr tail → Sentry level=error"
+    alert_route: "Sentry gate=live-verify result=CANT-RUN (exit code embedded — distinguishes crash from clean pre-launch gate)"
+  - mode: "changed-file gate computation fails (zero-SHA / compare-API 5xx)"
+    detection: "gate_failed=1 → CANT-RUN:gate-diff-failed (NOT a silent SKIPPED) → Sentry level=warning"
     alert_route: "Sentry gate=live-verify result=CANT-RUN"
   - mode: "Sentry POST itself fails"
-    detection: "non-2xx from store endpoint → workflow log warning + job summary"
-    alert_route: "GH Actions job log (degraded-permissive; does not red the report-only job)"
+    detection: "non-2xx / timeout (after bounded retry) → ::error:: annotation + $GITHUB_STEP_SUMMARY line"
+    alert_route: "GH Actions run summary page (degraded-permissive; does not red the report-only job)"
 logs:
   where: "GitHub Actions run log for the live-verify job (tee'd RESULT + harness stdout); Sentry event"
   retention: "GH Actions default (90d); Sentry per project retention"
@@ -367,3 +461,31 @@ None. (No new script: the Sentry-emit is an inline `run:` block reusing the
   a bare `playwright install chromium` may leave `chromium.launch()` failing on
   missing shared libs → a spurious `CANT-RUN:browser-launch:…`. Pin the same
   playwright version as `apps/web-platform/package.json` (1.58.2).
+- **`cmd | tee` exit code is `tee`'s, not the harness's.** Under `set -o pipefail`
+  the pipe returns the harness's non-zero (which aborts the step under `set -e`
+  BEFORE the RESULT extraction); without `pipefail` it returns `tee`'s 0 (masking a
+  `bun`/Doppler crash as green). BOTH are wrong. Use `set +e` around the run +
+  `rc=${PIPESTATUS[0]}` (NOT `$?` after the pipe), then `set -e`, so the extraction
+  + `$GITHUB_OUTPUT` write ALWAYS execute. "Failure cannot fail the job" (topology +
+  `continue-on-error`) is a DIFFERENT invariant from "failure still produces a
+  recording" — Phase 4 must prove both independently.
+- **Sentry-emit is a NEW integration, not a precedent reuse.** `sentry-monitors-audit.sh`
+  only PARSES the DSN for a residency assertion — it never POSTs. Carry the DSN's
+  region segment (`ingest.<region>.sentry.io`) into the POST host; do NOT default to
+  `us` (the audit script's parse does, which would silently 4xx an event into the
+  wrong cluster). `sentry_key` = the DSN's PUBLIC key, not the org audit token.
+- **Empty stdout collapses distinct failure classes.** A Doppler-auth failure, a
+  missing `bun install`, a runner OOM, and a chromium hard-crash all produce NO
+  RESULT line — embed `${PIPESTATUS[0]}` + a redacted stderr tail in
+  `CANT-RUN:no-result-line:exit=<rc>` so the #5463 observer can tell "the prod
+  secret store rejected us" from "a rail regressed".
+- **SKIPPED must be a real `level=info` Sentry EVENT, not a breadcrumb.** A bare
+  breadcrumb is not queryable via the events API the post-merge AC + `discoverability_test`
+  rely on. Most merges will SKIP (non-realtime surfaces) — without a queryable
+  SKIPPED event, "ran and skipped" is indistinguishable from "never ran" (the
+  dark-signal ambiguity #5463 must not inherit).
+- **Changed-file gate: GH compare API, not `git diff`.** `actions/checkout` defaults
+  to `fetch-depth: 1`; `git diff ${{ github.event.before }}..${{ github.sha }}`
+  errors on the zero-SHA (first push / force-push / dispatch). Use
+  `gh api repos/.../compare/<before>...<sha>` (no local history needed). A
+  compare-API failure → `CANT-RUN:gate-diff-failed`, NEVER a silent SKIPPED.
