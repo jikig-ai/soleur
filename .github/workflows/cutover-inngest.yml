@@ -1,0 +1,167 @@
+# Inngest durable-backend Phase 2 cutover — no-SSH host ops (#5450).
+# Drives the cutover's host-side steps through the deploy webhook (HMAC +
+# CF-Access), NEVER SSH (hr-no-ssh-fallback-in-runbooks):
+#   op=enumerate           → GET  /hooks/inngest-enumerate-reminders  (list still-armed reminders)
+#   op=rearm               → POST /hooks/inngest-rearm-reminders      (re-arm them post-quiesce-clear)
+#   op=verify-wiped-volume → POST /hooks/inngest-wiped-volume-verify  (async; opt-in destructive proof)
+# See knowledge-base/engineering/operations/runbooks/inngest-server.md
+# § "Cutover procedure". The live cutover is operator-triggered; this workflow is
+# the no-SSH mechanism, NOT an auto-run.
+name: Cutover Inngest (durable-backend Phase 2)
+
+on:
+  workflow_dispatch:
+    inputs:
+      op:
+        description: "Cutover host op to run"
+        required: true
+        type: choice
+        options:
+          - enumerate
+          - rearm
+          - verify-wiped-volume
+  # push trigger scoped to this file forces GitHub to register the workflow in
+  # the Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cutover-inngest.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  cutover:
+    # Only run a cutover op on manual dispatch; the push trigger exists solely to
+    # register the workflow (the job no-ops on push).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # SAME group as deploy/restart — these inngest host ops share the host state
+    # slot and must not interleave (P1a).
+    concurrency:
+      group: deploy-inngest-restart
+      cancel-in-progress: false
+    steps:
+      - name: Run cutover host op via webhook
+        env:
+          OP: ${{ inputs.op }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          BASE="https://deploy.soleur.ai/hooks"
+
+          case "$OP" in
+            enumerate)
+              # GET hook → records JSON in the response body. HMAC over empty body
+              # (mirrors the deploy-status GET signature).
+              SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/enum-body
+              CODE=$(curl -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "$BASE/inngest-enumerate-reminders" || echo "000")
+              if [[ "$CODE" != "200" ]]; then
+                echo "::error::enumerate returned HTTP $CODE"; exit 1
+              fi
+              BODY=$(cat /tmp/enum-body 2>/dev/null || echo "")
+              if ! echo "$BODY" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                echo "::error::enumerate did not return a JSON array"; echo "$BODY"; exit 1
+              fi
+              # P2-sec-a: surface counts + reminder_ids ONLY, never comment bodies.
+              COUNT=$(echo "$BODY" | jq 'length')
+              IDS=$(echo "$BODY" | jq -r '[.[].reminder_id] | join(",")')
+              echo "::notice::$COUNT still-armed reminder(s): [$IDS]"
+              ;;
+
+            rearm)
+              # POST hook → the host script self-enumerates and re-arms each via
+              # the schedule-reminder route. A 503 means INNGEST_CUTOVER_QUIESCE is
+              # still set (clear it first); the host script aborts loud on that.
+              PAYLOAD='{}'
+              SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/rearm-body
+              CODE=$(curl -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                -d "$PAYLOAD" \
+                "$BASE/inngest-rearm-reminders" || echo "000")
+              echo "re-arm response:"; cat /tmp/rearm-body 2>/dev/null || true; echo
+              if [[ "$CODE" != "200" ]]; then
+                echo "::error::re-arm returned HTTP $CODE (a non-200 includes the host script's loud abort, e.g. quiesce still set)"; exit 1
+              fi
+              echo "::notice::re-arm completed"
+              ;;
+
+            verify-wiped-volume)
+              # Async (202) destructive op → poll the dedicated verify-status GET
+              # for a fresh terminal exit_code. The stop+wipe+restart+settle exceeds
+              # the CF 120s edge timeout, so it MUST be async + poll (not synchronous).
+              PAYLOAD='{}'
+              SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              CODE=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                -d "$PAYLOAD" \
+                "$BASE/inngest-wiped-volume-verify" || echo "000")
+              if [[ "$CODE" != "202" ]]; then
+                echo "::error::wiped-volume verify webhook rejected (HTTP $CODE)"; exit 1
+              fi
+              # Freshness anchor: the verify-state is a single slot; only honor a
+              # terminal state written at/after this trigger (minus clock skew).
+              TRIGGER_TS=$(date +%s)
+              FRESH_FLOOR=$((TRIGGER_TS - 60))
+              GSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              MAX_POLLS=120
+              POLL_INTERVAL=10
+              for i in $(seq 1 "$MAX_POLLS"); do
+                rm -f /tmp/verify-body
+                curl -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$GSIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-verify-status" >/dev/null || true
+                BODY=$(cat /tmp/verify-body 2>/dev/null || echo "")
+                if [[ -z "$BODY" ]] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+                  echo "Attempt $i/$MAX_POLLS: non-JSON/empty — retrying"; sleep "$POLL_INTERVAL"; continue
+                fi
+                EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+                START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
+                REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+                case "$EXIT_CODE" in
+                  -2|-3) echo "Attempt $i/$MAX_POLLS: no/corrupt verify state — retrying" ;;
+                  0)
+                    if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
+                      echo "Attempt $i/$MAX_POLLS: state predates this trigger — waiting"
+                    else
+                      echo "::notice::wiped-volume verify PASSED (reason=$REASON)"; echo "$BODY" | jq .; exit 0
+                    fi
+                    ;;
+                  *)
+                    if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
+                      echo "Attempt $i/$MAX_POLLS: stale state (exit_code=$EXIT_CODE) — waiting"
+                    else
+                      echo "::error::wiped-volume verify FAILED (exit_code=$EXIT_CODE, reason=$REASON)"; echo "$BODY" | jq .; exit 1
+                    fi
+                    ;;
+                esac
+                sleep "$POLL_INTERVAL"
+              done
+              echo "::error::wiped-volume verify did not reach a terminal state within $((MAX_POLLS * POLL_INTERVAL))s"; exit 1
+              ;;
+
+            *)
+              echo "::error::unknown op '$OP'"; exit 1
+              ;;
+          esac

@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# Tests for inngest-enumerate-reminders.sh — the no-SSH cutover step-2 enumeration
+# (#5450). Verifies the script reconstructs FULL re-armable records from the
+# inngest v1.19.4 eventsV2 `raw` envelope, drops already-fired events (terminal
+# `runs` status), drops past-dated events (client-side `occurredAt`/`ts` filter —
+# the server `from`/`until` bounds receivedAt, NOT fire-time), and paginates the
+# cursor to exhaustion.
+#
+# Schema pinned in knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md
+#
+# Test seam: the script reads page N from "${INNGEST_GQL_FIXTURE_DIR}/page-N.json"
+# instead of curling when INNGEST_GQL_FIXTURE_DIR is set, and uses ENUMERATE_NOW_MS
+# for a deterministic "now". No network, no inngest, no root.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET="$SCRIPT_DIR/inngest-enumerate-reminders.sh"
+
+PASS=0
+FAIL=0
+
+assert_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then echo "  PASS: $desc"; PASS=$((PASS + 1));
+  else echo "  FAIL: $desc"; echo "    expected: $expected"; echo "    actual:   $actual"; FAIL=$((FAIL + 1)); fi
+}
+assert_contains() {
+  local desc="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS: $desc"; PASS=$((PASS + 1));
+  else echo "  FAIL: $desc — '$needle' not found"; FAIL=$((FAIL + 1)); fi
+}
+
+# NOW = 2026-06-17T12:00:00Z = 1781784000000 ms. Future fire = 2026-06-18 (the
+# #5432-class armed reminder). Past fire = 2026-06-01.
+readonly NOW_MS=1781784000000
+readonly FUTURE_MS=1781870400000   # 2026-06-18T12:00:00Z
+readonly PAST_MS=1780358400000     # 2026-06-01T12:00:00Z
+
+# Build a v1.19.4-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
+make_page() {
+  local has_next="$1" end_cursor="$2" edges="$3"
+  jq -nc --argjson hn "$has_next" --arg ec "$end_cursor" --argjson edges "$edges" \
+    '{data:{eventsV2:{totalCount:($edges|length),pageInfo:{hasNextPage:$hn,endCursor:$ec},edges:$edges}}}'
+}
+
+# Build one edge. Args: <ulid> <reminder_id> <fire_ms> <runs-json>
+make_edge() {
+  local ulid="$1" rid="$2" fire_ms="$3" runs="$4"
+  local occurred; occurred=$(date -u -d "@$((fire_ms/1000))" +%Y-%m-%dT%H:%M:%SZ)
+  # raw is the JSON-STRING envelope the producer sent (per schema pin).
+  local raw; raw=$(jq -nc --arg rid "$rid" --arg fa "$occurred" --argjson ts "$fire_ms" \
+    '{data:{reminder_id:$rid,fire_at:$fa,actor:"platform",action:{type:"issue-comment",issue:7,body:"SECRET-BODY"}},id:$rid,name:"reminder.scheduled",ts:$ts,v:null}')
+  jq -nc --arg ulid "$ulid" --arg occ "$occurred" --arg raw "$raw" --argjson runs "$runs" \
+    '{cursor:$ulid,node:{id:$ulid,name:"reminder.scheduled",occurredAt:$occ,receivedAt:"2026-06-10T00:00:00Z",idempotencyKey:null,raw:$raw,runs:$runs}}'
+}
+
+run_enum() {
+  local dir="$1"
+  INNGEST_GQL_FIXTURE_DIR="$dir" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null
+}
+
+echo "=== inngest-enumerate-reminders.sh tests ==="
+
+assert_eq "script exists and is executable" "1" "$([[ -x "$TARGET" ]] && echo 1 || echo 0)"
+
+# --- Test 1: future-dated, no runs → INCLUDED with full re-armable payload ---
+test_future_unfired_included() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  make_page false "" "[$(make_edge "01ULIDFUTURE" "rem-future" "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+  local out; out=$(run_enum "$d")
+  assert_eq "one record emitted" "1" "$(echo "$out" | jq 'length')"
+  assert_eq "reminder_id reconstructed from raw.data" "rem-future" "$(echo "$out" | jq -r '.[0].reminder_id')"
+  assert_eq "actor preserved (route 400s without it)" "platform" "$(echo "$out" | jq -r '.[0].actor')"
+  local expect_fire; expect_fire=$(date -u -d "@$((FUTURE_MS/1000))" +%Y-%m-%dT%H:%M:%SZ)
+  assert_eq "fire_at preserved" "$expect_fire" "$(echo "$out" | jq -r '.[0].fire_at')"
+  assert_eq "action object preserved" "issue-comment" "$(echo "$out" | jq -r '.[0].action.type')"
+}
+
+# --- Test 2: already-fired (COMPLETED run) → DROPPED ---
+test_completed_dropped() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  local edges; edges=$(jq -nc --argjson a "$(make_edge "01ULIDDONE" "rem-done" "$FUTURE_MS" '[{"id":"r1","status":"COMPLETED","startedAt":null,"endedAt":null}]')" '[$a]')
+  make_page false "" "$edges" > "$d/page-1.json"
+  assert_eq "completed event dropped" "0" "$(run_enum "$d" | jq 'length')"
+}
+
+# --- Test 3: past-dated (client-side occurredAt filter) → DROPPED even with no runs ---
+test_past_dropped() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  make_page false "" "[$(make_edge "01ULIDPAST" "rem-past" "$PAST_MS" "[]")]" > "$d/page-1.json"
+  assert_eq "past-dated event dropped (server from= bounds receivedAt not fire-time)" "0" "$(run_enum "$d" | jq 'length')"
+}
+
+# --- Test 4: CANCELLED/FAILED/SKIPPED terminal runs → DROPPED; RUNNING/QUEUED → KEPT ---
+test_terminal_status_matrix() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  local e_cancel e_fail e_skip e_running e_queued edges
+  e_cancel=$(make_edge "01C" "rem-c" "$FUTURE_MS" '[{"id":"r","status":"CANCELLED","startedAt":null,"endedAt":null}]')
+  e_fail=$(make_edge "01F" "rem-f" "$FUTURE_MS" '[{"id":"r","status":"FAILED","startedAt":null,"endedAt":null}]')
+  e_skip=$(make_edge "01S" "rem-s" "$FUTURE_MS" '[{"id":"r","status":"SKIPPED","startedAt":null,"endedAt":null}]')
+  e_running=$(make_edge "01R" "rem-r" "$FUTURE_MS" '[{"id":"r","status":"RUNNING","startedAt":null,"endedAt":null}]')
+  e_queued=$(make_edge "01Q" "rem-q" "$FUTURE_MS" '[{"id":"r","status":"QUEUED","startedAt":null,"endedAt":null}]')
+  edges=$(jq -nc --argjson a "$e_cancel" --argjson b "$e_fail" --argjson c "$e_skip" --argjson dd "$e_running" --argjson e "$e_queued" '[$a,$b,$c,$dd,$e]')
+  make_page false "" "$edges" > "$d/page-1.json"
+  local out; out=$(run_enum "$d")
+  assert_eq "terminal CANCELLED/FAILED/SKIPPED dropped; RUNNING/QUEUED kept" "2" "$(echo "$out" | jq 'length')"
+  assert_eq "kept set is exactly the non-terminal ids" "rem-q,rem-r" "$(echo "$out" | jq -r '[.[].reminder_id]|sort|join(",")')"
+}
+
+# --- Test 5: pagination — a future reminder on PAGE 2 is still captured ---
+test_pagination_page2_captured() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  make_page true "CURSOR1" "[$(make_edge "01P1" "rem-p1" "$PAST_MS" "[]")]" > "$d/page-1.json"
+  make_page false "" "[$(make_edge "01P2" "rem-p2" "$FUTURE_MS" "[]")]" > "$d/page-2.json"
+  local out; out=$(run_enum "$d")
+  assert_eq "page-2 future reminder captured" "1" "$(echo "$out" | jq 'length')"
+  assert_eq "page-2 reminder_id correct" "rem-p2" "$(echo "$out" | jq -r '.[0].reminder_id')"
+}
+
+# --- Test 6: P2-sec-a — comment bodies must NOT be on stdout's emitted records' top level... ---
+# The re-arm record carries action (incl. body — needed for re-arm fidelity), but
+# the script's STDERR/log summary must emit counts + reminder_ids only, never the
+# comment body. Assert the log line does not leak the body.
+test_log_no_body_leak() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  make_page false "" "[$(make_edge "01L" "rem-log" "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+  local err; err=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1 1>/dev/null)
+  assert_contains "log mentions the reminder_id" "$err" "rem-log"
+  if [[ "$err" == *"SECRET-BODY"* ]]; then
+    echo "  FAIL: comment body leaked into the log/stderr summary"; FAIL=$((FAIL + 1));
+  else echo "  PASS: comment body NOT leaked into the log/stderr summary"; PASS=$((PASS + 1)); fi
+}
+
+# --- Test 7: empty event set → emits [] (not an error) ---
+test_empty_set() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  make_page false "" "[]" > "$d/page-1.json"
+  assert_eq "empty set emits []" "0" "$(run_enum "$d" | jq 'length')"
+}
+
+# --- Test 8: jq -n --arg body construction (injection-safe), shellcheck-clean source ---
+test_no_shell_string_interpolation_in_gql() {
+  # The GraphQL request body must be built with jq -n (no bare shell var splice
+  # into the JSON request). Assert the source uses `jq -n` for the request body.
+  assert_contains "GraphQL request body built with jq -n" "$(cat "$TARGET")" "jq -n"
+}
+
+test_future_unfired_included
+test_completed_dropped
+test_past_dropped
+test_terminal_status_matrix
+test_pagination_page2_captured
+test_log_no_body_leak
+test_empty_set
+test_no_shell_string_interpolation_in_gql
+
+echo ""
+echo "=== Results: $PASS passed, $FAIL failed ==="
+[[ "$FAIL" -gt 0 ]] && exit 1 || exit 0
