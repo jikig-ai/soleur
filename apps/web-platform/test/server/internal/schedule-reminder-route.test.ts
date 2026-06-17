@@ -3,6 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // INNGEST_MANUAL_TRIGGER_SECRET is security-relevant — capture + restore so a
 // stub/delete never leaks to a sibling file in the same worker.
 const ORIG_SECRET = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
+// INNGEST_CUTOVER_QUIESCE (#5450) — capture + force-OFF per test so an inherited
+// Doppler/CI value cannot flip the quiesce gate (vitest unstub can't clear a
+// process-inherited env var).
+const ORIG_QUIESCE = process.env.INNGEST_CUTOVER_QUIESCE;
 
 const { mockSendInngestWithRetry, mockReportSilentFallback, mockInngestSend } =
   vi.hoisted(() => ({
@@ -53,6 +57,7 @@ function makeRequest(
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.INNGEST_MANUAL_TRIGGER_SECRET = SECRET;
+  delete process.env.INNGEST_CUTOVER_QUIESCE;
   mockSendInngestWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => {
     await fn();
   });
@@ -62,6 +67,32 @@ beforeEach(() => {
 afterEach(() => {
   if (ORIG_SECRET === undefined) delete process.env.INNGEST_MANUAL_TRIGGER_SECRET;
   else process.env.INNGEST_MANUAL_TRIGGER_SECRET = ORIG_SECRET;
+  if (ORIG_QUIESCE === undefined) delete process.env.INNGEST_CUTOVER_QUIESCE;
+  else process.env.INNGEST_CUTOVER_QUIESCE = ORIG_QUIESCE;
+});
+
+describe("POST /api/internal/schedule-reminder — cutover quiesce (#5450)", () => {
+  it("503 + Retry-After and does NOT arm when INNGEST_CUTOVER_QUIESCE=1", async () => {
+    process.env.INNGEST_CUTOVER_QUIESCE = "1";
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  it('also quiesces on the literal "true"', async () => {
+    process.env.INNGEST_CUTOVER_QUIESCE = "true";
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  it("arms normally (202) when the flag is unset — proves the gate is the cause, not a broken happy path", async () => {
+    // beforeEach already deletes INNGEST_CUTOVER_QUIESCE.
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(202);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("POST /api/internal/schedule-reminder — auth", () => {

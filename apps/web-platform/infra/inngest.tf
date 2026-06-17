@@ -135,6 +135,46 @@ resource "doppler_secret" "inngest_manual_trigger_secret_dev" {
   }
 }
 
+# ---------------- Durable backend secrets (#5450) ----------------
+# Self-hosted Redis password (prd) — the queue/run-state store's auth. Generated
+# via random_password (hashicorp/random, already declared for random_id), NOT an
+# operator-mint sensitive var (hr-tf-variable-no-operator-mint-default). special
+# = false keeps it URL-safe inside the redis://:<pw>@127.0.0.1:6379 URI that
+# inngest-server + inngest-redis ExecStart build. prd-only: the durable Inngest
+# server is prd-only (dev runs ephemeral local `inngest dev`, no --redis-uri).
+resource "random_password" "inngest_redis_password_prd" {
+  length  = 48
+  special = false
+}
+
+resource "doppler_secret" "inngest_redis_password_prd" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "INNGEST_REDIS_PASSWORD"
+  value      = random_password.inngest_redis_password_prd.result
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value] # rotate via `terraform taint random_password.inngest_redis_password_prd`.
+  }
+}
+
+# INNGEST_POSTGRES_URI (prd) — provisioned OUT-OF-BAND, NOT a TF resource (mirrors
+# the BETTERSTACK_LOGS_TOKEN pattern below). The value is the session-pooler
+# (:5432, NEVER transaction :6543 — breaks inngest's sqlc prepared statements)
+# connection string for the dedicated EU Inngest Supabase project:
+#   project: soleur-inngest-prd  ref: pigsfuxruiopinouvjwy  region: eu-west-1
+#   host: aws-0-eu-west-1.pooler.supabase.com:5432  user: postgres.<ref>  db: postgres
+# Created 2026-06-17 via the Supabase Management API (#5450; org Jikig AI is on
+# Pro → this is a ~$10/mo Micro-compute project, recorded in expenses.md). The
+# db password lives ONLY in Doppler prd + the project. It is intentionally not a
+# `doppler_secret` resource: the URI embeds a project-side secret TF never minted,
+# and a doppler_secret would clobber the real value on first create (ignore_changes
+# only engages after the resource is in state). Rotation: rotate the project DB
+# password in the Supabase dashboard → re-set INNGEST_POSTGRES_URI in Doppler prd
+# (stdin, never argv). Live-verified: inngest v1.19.4 connects + migrates on :5432
+# (runbook § Durable backend, verdict 0.5).
+
 # NOTE: All `doppler_secret` resources in this file carry `ignore_changes = [value]`.
 # This means out-of-band rotation via the Doppler UI is INVISIBLE to subsequent
 # `terraform plan` runs (the provider skips the value read-back when

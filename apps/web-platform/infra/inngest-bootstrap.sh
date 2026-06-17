@@ -155,6 +155,19 @@ fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always 
 # 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
 # planned. Without that pin, neither this poll nor the loopback re-register PUT
 # re-plans crons after a restart (the 2026-06-11 cron-deplan incident).
+# Durable backend (#5450): the ExecStart below adds --postgres-uri (dedicated
+# Supabase project, Supavisor SESSION pooler :5432 — transaction pooler breaks
+# inngest's sqlc prepared statements, verdict 0.5) + --redis-uri (self-hosted
+# Redis, AOF on /mnt/data). Phase-0 spike (runbook § Durable backend) proved
+# Postgres-ALONE loses armed future-ts reminders on a host re-provision; durable
+# external Redis is what survives. Both secrets inject from Doppler prd via the
+# `doppler run` wrapper (same $${...} pattern as the keys; avoids the #4116
+# EnvironmentFile-empty trap). --sqlite-dir is kept but vestigial when
+# --postgres-uri is set (verified); rollback = drop the two new flags in one
+# revert step. --postgres-max-open-conns 25 bounds the pooler budget. Inngest
+# FAILS CLOSED on an unreachable/empty backend (verdict 0.3) — so this ExecStart
+# must not deploy until INNGEST_POSTGRES_URI + INNGEST_REDIS_PASSWORD are
+# populated in Doppler prd (cutover ordering; verify_inngest_health hard-gates).
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
 Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
@@ -164,7 +177,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 25 --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -287,6 +300,30 @@ DOPPLEREOF
   )
   chown root:deploy /etc/default/inngest-server
   chmod 0640 /etc/default/inngest-server
+fi
+
+# Durable Redis (#5450) — install + start the queue store BEFORE the
+# inngest-server restart below, because the new ExecStart fails closed when
+# --redis-uri is unreachable (Phase-0 verdict 0.3). Assets are staged to /tmp by
+# the OCI image entrypoint (mirrors /tmp/vector.toml). The unit's
+# EnvironmentFile=/etc/default/inngest-server now exists (written just above), so
+# Redis can start with its Doppler-injected password on fresh AND existing hosts.
+# Skip gracefully if the assets are absent (a pre-#5450 image on a not-yet-
+# migrated host) — verify_inngest_health is the hard durability gate.
+if [[ -f /tmp/inngest-redis.conf && -f /tmp/inngest-redis.service && -x /tmp/inngest-redis-bootstrap.sh ]]; then
+  log "installing durable Redis (#5450)"
+  # Only the bootstrap SCRIPT lands here (/usr/local/bin is webhook-namespace
+  # writable); the script installs the conf onto /mnt/data and the unit into
+  # /etc/systemd/system itself (the conf canNOT go to /etc/redis — read-only in
+  # the deploy namespace; see inngest-redis-bootstrap.sh header).
+  install -m 0755 /tmp/inngest-redis-bootstrap.sh /usr/local/bin/inngest-redis-bootstrap.sh
+  if /usr/local/bin/inngest-redis-bootstrap.sh; then
+    log "durable Redis ready"
+  else
+    log "warn: inngest-redis-bootstrap.sh failed — inngest-server will fail closed if Redis is required; verify_inngest_health will catch it"
+  fi
+else
+  log "durable Redis assets not staged at /tmp/inngest-redis.* — skipping (pre-#5450 image?)"
 fi
 
 # Record the installed version BEFORE restart so the idempotency short-circuit

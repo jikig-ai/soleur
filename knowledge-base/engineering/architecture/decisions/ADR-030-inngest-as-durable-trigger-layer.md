@@ -3,8 +3,8 @@ adr: 030
 title: Inngest as durable trigger layer for server-side agents
 status: accepted
 date: 2026-05-17
-related: [3244, 3940, 3947, 3948]
-related_adrs: [ADR-005, ADR-023, ADR-027]
+related: [3244, 3940, 3947, 3948, 5450]
+related_adrs: [ADR-005, ADR-023, ADR-027, ADR-046]
 related_plans:
   - knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md
   - knowledge-base/project/plans/2026-05-17-feat-pr-f-inngest-trigger-layer-plan.md
@@ -35,7 +35,9 @@ Brand-survival threshold: `single-user incident`. Operator (2026-05-17) confirme
 
 ## Decision
 
-**Adopt Inngest as the durable trigger layer for server-side agents. Deploy the OSS `inngest` server binary (`inngest start`) self-hosted alongside the existing Node process on the Hetzner host. SQLite for state persistence (alpha-default). Bound to `127.0.0.1` only.**
+**Adopt Inngest as the durable trigger layer for server-side agents. Deploy the OSS `inngest` server binary (`inngest start`) self-hosted alongside the existing Node process on the Hetzner host. ~~SQLite for state persistence (alpha-default).~~ Bound to `127.0.0.1` only.**
+
+> **Amended 2026-06-17 (#5450, `adopting`).** State/queue persistence flipped from bundled SQLite + in-memory Redis (ephemeral root disk) to **Supabase Postgres** (`--postgres-uri`, dedicated EU project `soleur-inngest-prd`, Supavisor **session pooler :5432**) for config/history **+ self-hosted Redis** (`--redis-uri`, AOF on the persistent `/mnt/data` volume) for the durable queue/run-state. This executes the Postgres migration this ADR deferred (see Trade-offs). Empirically required: the Phase-0 spike proved Postgres-alone loses armed future-`ts` reminders on a host re-provision; durable Redis is what survives (runbook § Durable backend). `status: adopting` until the Phase-2 cutover wiped-volume invariant verifies in prod.
 
 The Node application uses `inngest@^3` SDK and exposes `/api/inngest` via `serve()`. Events are sent via `inngest.send(...)` to the local server endpoint `http://127.0.0.1:8288`.
 
@@ -120,8 +122,9 @@ Any future code adding a step.run-checkpointed verify whose result feeds a downs
 
 - **Operational cost.** Self-hosted Inngest adds a sidecar process (systemd unit, upgrade cadence, no debugging UI for non-Pro). Mitigated by: SQLite default (zero new persistence config), `Restart=always`, `127.0.0.1` binding.
 - **No Cloud dashboard.** The OSS server has a basic UI; not the Pro debugging surface. Acceptable for alpha (operator + 1 dogfood founder). Re-evaluate per criteria above.
-- **SQLite single-host limitation.** State persistence is local-disk; no high-availability. Mitigated by: Hetzner backups, Inngest's redelivery semantics (Stripe redelivers webhooks for ~3 days; missed events recoverable). Migration to Postgres-backed Inngest deferred to future PR if/when warranted.
+- **SQLite single-host limitation.** ~~State persistence is local-disk; no high-availability. Mitigated by: Hetzner backups, Inngest's redelivery semantics (Stripe redelivers webhooks for ~3 days; missed events recoverable). Migration to Postgres-backed Inngest deferred to future PR if/when warranted.~~ **Corrected + resolved 2026-06-17 (#5450):** the "Hetzner backups" mitigation was falsified — `hcloud_server.web` carries `lifecycle { ignore_changes = [user_data, ssh_keys, image] }` (server.tf), so SQLite state is NOT lost on every `terraform apply`; it is lost only on an explicit `terraform apply -replace` (or a replace-forcing change), which boots a fresh root disk with **no backup restore path** (Hetzner volume snapshots cover `/mnt/data`, not the root disk where SQLite lived). Rarer than implied, but real and silent — and the redelivery semantics do NOT cover HTTP-armed `event-scheduled-reminder` events (they have no upstream to redeliver). **Resolved** by the durable-backend amendment above. The deferral's re-eval trigger fired not on the original "3rd founder / 5th-sub-processor" criterion but on the **#5450 durability gap**; the migration adds **no new sub-processor** (Supabase is already the primary DB + an existing sub-processor; Redis is self-hosted on our own host), which dissolves the deferral's sole legal-surface objection.
+- **Availability coupling (new, permanent — #5450).** Post-cutover Inngest **cannot start** without Supabase + Redis reachable (the in-memory fallback is gone — proven fail-closed in the Phase-0 spike). Pre-migration it survived a Supabase outage on local SQLite; it no longer will. Knowingly traded for durability + Supabase PITR + closing this deferral. The dedicated Inngest Supabase project + co-located Redis keep the blast radius off the main app's project.
 
 ## Updates / amendment log
 
-(Empty at proposed time. Future amendments appended here with date + rationale.)
+- **2026-06-17 (#5450, PR #5459) — durable backend; `status: adopting`.** Flipped state/queue persistence from SQLite + in-memory Redis to **Supabase Postgres (dedicated EU project, session pooler :5432) + self-hosted Redis (AOF on /mnt/data)**; see the amended `## Decision` + `## Trade-offs accepted`. Corrected the falsified "Hetzner backups" mitigation (root-disk SQLite is not backed up; loss trigger is `terraform apply -replace`, not every apply). Recorded the "Supabase already a sub-processor → no 5th sub-processor" reframe (the deferral's sole objection) and the new permanent **availability-coupling** trade-off (in-memory fallback removed → fail-closed on backend down). Phase-0 spike verdicts in `knowledge-base/engineering/operations/runbooks/inngest-server.md` § Durable backend. **Cross-ref ADR-046:** its "bounded by single-host SQLite durability (ADR-030)" line now points at the durable backend; the boot-arm/re-arm-every-deploy (ADR-046 I4) remains correct as the dedup-window recovery path — NOT made redundant. Reverts to `accepted` once the Phase-2 cutover wiped-volume invariant verifies in prod.

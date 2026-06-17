@@ -261,6 +261,32 @@ verify_inngest_health() {
     return 1
   fi
 
+  # Durable-backend HARD gate (#5450). Phase-0 verdict 0.3: inngest FAILS CLOSED
+  # on an *unreachable* backend (so /health=200 above already proves a configured
+  # backend is reachable — inngest won't serve otherwise). The residual silent
+  # risk is *flags-absent*: a templating/image regression that drops the backend
+  # flags → inngest defaults to in-memory Redis (non-durable) WHILE /health=200.
+  # This gate is a CONSISTENCY assertion: when --postgres-uri is configured the
+  # queue MUST also be durable (--redis-uri present AND inngest-redis active), or
+  # the deploy fails loud. It is transparent to pre-migration / rollback states
+  # (no --postgres-uri → skip), so a `--sqlite-dir`-only rollback still passes.
+  # Reads only the CONFIGURED ExecStart ($VAR form — no secret value) + unit
+  # activeness; never logs the connection string. Build-time flag presence is
+  # separately drift-guarded in inngest.test.sh.
+  local exec_start=""
+  exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
+  if [[ "$exec_start" == *'--postgres-uri'* ]]; then
+    if [[ "$exec_start" != *'--redis-uri'* ]]; then
+      logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — --postgres-uri configured but --redis-uri absent; the queue would be non-durable in-memory Redis (silent armed-reminder loss on host rebuild, #5450)"
+      return 1
+    fi
+    if ! systemctl is-active --quiet inngest-redis.service; then
+      logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — durable backend configured but inngest-redis.service is not active; armed reminders would not persist"
+      return 1
+    fi
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — --postgres-uri + --redis-uri configured and inngest-redis.service active"
+  fi
+
   # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159): /health proves only
   # process liveness. A standalone inngest restart de-plans cron triggers; they
   # re-arm async (web-platform redeploy → modified:true sync, or the server's

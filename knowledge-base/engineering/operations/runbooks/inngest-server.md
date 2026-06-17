@@ -204,6 +204,112 @@ Stopping inngest-server before VACUUM is required (SQLite write lock). Downtime 
 
 **Automation deferred:** the operator runs this manually for now. If event volume increases to where monthly manual cleanup becomes a chore, file a follow-up issue to wire a weekly systemd timer alongside `inngest-heartbeat.timer`.
 
+## Durable backend (Supabase Postgres + self-hosted Redis) — #5450
+
+> Migrating Inngest off bundled SQLite + in-memory Redis (ephemeral root disk) onto
+> **Supabase Postgres** (`--postgres-uri`, dedicated EU project, session pooler :5432) +
+> **self-hosted Redis** (`--redis-uri`, AOF on `/mnt/data`). Closes the silent-loss gap where a
+> host re-provision drops every HTTP-armed `event-scheduled-reminder`. Executes the Postgres
+> migration ADR-030 deferred. Plan: `knowledge-base/project/plans/2026-06-17-feat-inngest-durable-backend-supabase-postgres-plan.md`.
+
+### Host-rebuild durability matrix (per mechanism)
+
+"Dies with session?" (process restart) is distinct from "Survives host re-provision?" (fresh root disk).
+The bug is the **host-rebuild** column, not the session column.
+
+| Mechanism | Re-arms on web redeploy? | Survives process restart? | Survives host re-provision (pre-migration) | Survives host re-provision (post-migration) |
+|---|---|---|---|---|
+| `cron-*` (recurring) | Yes (registered every deploy) | Yes | Yes (re-armed on next deploy) | Yes |
+| `oneshot-*` (first-arm) | n/a | Yes | Yes (boot-arm re-arms, ADR-046 I4) | Yes |
+| `oneshot-*` (conditional re-arm, diverged ts) | n/a | Yes | **No — silent loss** | Yes (durable queue) |
+| `event-scheduled-reminder` (HTTP-armed future `ts`) | No | Yes (queue in Redis) | **No — silent loss** | **Yes (durable Redis AOF)** |
+
+### Phase 0 spike verdicts (2026-06-17, inngest v1.19.4, local docker harness — the Phase 1 gate)
+
+CLI semantics (`inngest start --help`): `--postgres-uri` = "configuration and history persistence
+(defaults to SQLite)"; `--redis-uri` = "external **queue and run state** (defaults to self-contained
+**in-memory Redis** with periodic snapshot backups)". The armed-event **queue lives in Redis**, not Postgres.
+
+- **0.2 FR1 durability boundary — durable Redis is MANDATORY.** Wiped-volume restart (recreate the
+  inngest container = fresh root disk; Postgres + external-Redis volumes persist):
+  - Postgres-only (default in-memory Redis): armed future-`ts` event **LOST** (did not fire).
+  - Postgres + external durable Redis (AOF, `appendfsync everysec`): armed event **SURVIVED**, fired at its `ts`.
+  - → Ship **both** `--postgres-uri` and `--redis-uri`. Postgres alone does NOT persist the queue.
+- **0.3 Fail-closed vs silent fallback — Inngest FAILS CLOSED.** With a reachable-but-refused backend
+  it exits non-zero (`failed to connect … connection refused`); `/health` never returns 200; **no**
+  silent degrade to a healthy SQLite state. → The existing `/health` 200 gate already catches an
+  *unreachable* backend. The residual silent-non-durable risk is **flags-absent** (ExecStart drops the
+  flags → defaults to SQLite **while** `/health`=200). The hard gate therefore asserts: (a) the running
+  inngest cmdline contains `--postgres-uri` AND `--redis-uri`, (b) `inngest-redis` unit active + Redis
+  ping, (c) Postgres reachable — NOT a "fail-open post-start assertion".
+- **0.4 Cutover-recovery — enumeration is FEASIBLE; no app-side ledger required.** The server's GraphQL
+  (`/v0/gql` `eventsV2(filter:{from!,until,eventNames,query,includeInternalEvents})`) returns received
+  events by time window, including future-dated `reminder.scheduled`. Cutover recovery = quiesce arming →
+  enumerate the OLD server's future-dated, not-yet-fired `reminder.scheduled` events → re-arm on the new
+  Postgres+Redis server (cross-ref `runs` to exclude already-fired → avoid double-posting a comment).
+  Dual-run-drain (run old SQLite server until armed reminders fire) is the simpler fallback. **No
+  `scheduled_reminders` Supabase migration / boot reconciler is needed** (removes that conditional Phase-1 scope).
+- **0.5 Pooler mode — session :5432 only (LIVE-confirmed).** Inngest uses sqlc prepared statements;
+  Supabase **transaction pooler :6543 breaks them** (PgBouncer transaction mode). Use **Supavisor
+  session pooler :5432**. **Live-verified 2026-06-17**: inngest v1.19.4 connected to the dedicated EU
+  project (`soleur-inngest-prd`, ref `pigsfuxruiopinouvjwy`, `aws-0-eu-west-1.pooler.supabase.com:5432`,
+  user `postgres.<ref>`) and **ran its migrations** cleanly (`ran database migrations db=postgres`).
+  The dedicated project IS the isolation boundary, so the connection uses the project's `postgres` role
+  via the pooler (verified) rather than a custom role (custom-role-via-Supavisor routing is the
+  unverified part; a dedicated role inside an already-isolated project adds pooler-auth risk for
+  marginal benefit — so the planned `inngest-supabase-bootstrap.sql` role bootstrap is intentionally
+  dropped). `INNGEST_POSTGRES_URI` is set out-of-band in Doppler prd (see inngest.tf).
+
+### Availability coupling (permanent, post-migration)
+
+Post-cutover Inngest **cannot start** without Supabase + Redis reachable (the in-memory fallback is
+gone — proven fail-closed in 0.3). Pre-migration it survived a Supabase outage on local SQLite; it no
+longer will. Knowingly traded for durability + PITR + ADR-030 closure. The dedicated Inngest Supabase
+project + co-located Redis keep the blast radius off the main app's project.
+
+### Cutover procedure (Phase 2 — low-traffic window, rollback-ready)
+
+The KEYSTONE risk (plan §Sharp Edges): armed `reminder.scheduled` events live ONLY in Inngest state —
+there is no app-side reminder store. A fresh-Postgres cutover loses them unless they are enumerated and
+re-armed. Run these steps in order; the connection string is set out-of-band in Doppler prd
+(`INNGEST_POSTGRES_URI`, see inngest.tf) and must be **URL-safe** (the provisioned value is hex — no
+percent-encoding needed; if rotated to a password with reserved chars, URL-encode before setting).
+
+1. **Quiesce arming** (no reminder armed into the doomed old SQLite mid-cutover):
+   ```bash
+   doppler secrets set INNGEST_CUTOVER_QUIESCE=1 -p soleur -c prd --no-interactive
+   # POST /api/internal/schedule-reminder now returns 503 + Retry-After: 120.
+   ```
+2. **Enumerate armed-but-unfired reminders** from the OLD server's GraphQL (verdict 0.4 — no app-side
+   ledger needed). Query received `reminder.scheduled` events over a window spanning the future, then
+   keep those whose payload `fire_at` is still future AND have no completed run (cross-ref `runs` to
+   avoid double-posting a comment that already fired):
+   ```bash
+   FROM=$(date -u -d '-2 days' +%Y-%m-%dT%H:%M:%SZ)
+   curl -s http://127.0.0.1:8288/v0/gql -X POST -H 'content-type: application/json' \
+     -d "{\"query\":\"{ eventsV2(first:200, filter:{from:\\\"$FROM\\\", eventNames:[\\\"reminder.scheduled\\\"]}){ edges { node { id name receivedAt } } } }\"}"
+   # For each event still future-dated and not yet run, re-send it to the NEW server post-deploy.
+   ```
+3. **Drain in-flight runs** — confirm zero `Running` status for ~60s (or accept-and-document that
+   in-flight runs are abandoned; the reminder `post-comment`/`run-check` steps are not idempotent on
+   replay, so a re-arm of an already-fired reminder would double-post).
+4. **Deploy** via the release pipeline (no SSH): `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap:vinngest-v1.1.14`.
+   The `verify_inngest_health` HARD gate fails the deploy if `--postgres-uri` is set but `--redis-uri`
+   is absent OR `inngest-redis.service` is inactive.
+5. **Verify the REAL invariant** (not a process-restart proxy): arm a throwaway future reminder, then
+   recreate the inngest container with a wiped local volume (the wiped-volume test from spike 0.2, in
+   prod shape) and confirm it still fires. Confirm `/health` 200 + `/v1/functions` shows ≥1 cron.
+6. **Re-open arming + re-arm recovered work**:
+   ```bash
+   doppler secrets set INNGEST_CUTOVER_QUIESCE= -p soleur -c prd --no-interactive  # clears the flag
+   # Re-send each pending reminder collected in step 2 to the new server.
+   ```
+7. **Rollback tripwire** — reverting ExecStart to `--sqlite-dir` is data-safe ONLY before any *real*
+   (non-throwaway) reminder is armed against Postgres. After that the stale SQLite is missing those
+   reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed
+   cutover, wipe the old `/var/lib/inngest` SQLite so an accidental SQLite boot cannot replay dead
+   reminders.
+
 ## Concurrency conventions
 
 - **One `terraform apply` at a time.** The R2 backend has `use_lockfile = false` (R2 does not support S3 conditional writes). Concurrent applies race silently. R7 in the plan documents this.
