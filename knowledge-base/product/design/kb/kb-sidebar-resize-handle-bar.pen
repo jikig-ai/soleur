@@ -1,0 +1,994 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "text",
+      "id": "CthPN",
+      "x": 80,
+      "y": 60,
+      "name": "Title",
+      "fill": "#FFFFFF",
+      "content": "KB Sidebar — Resize Handle Grip Bar (replaces dot triad)",
+      "fontFamily": "Inter",
+      "fontSize": 28,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "9FPK6",
+      "x": 80,
+      "y": 100,
+      "name": "Subtitle",
+      "fill": "#848484",
+      "content": "Solar Forge (dark) · desktop · wireframe · right-edge drag handle in three interaction states",
+      "fontFamily": "Inter",
+      "fontSize": 15
+    },
+    {
+      "type": "frame",
+      "id": "mZ3EQ",
+      "x": 80,
+      "y": 160,
+      "name": "State 1 — IDLE",
+      "width": 420,
+      "height": 560,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "CCQLP",
+          "name": "Header",
+          "width": "fill_container",
+          "fill": "#101010",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "AD64x",
+              "fill": "#C9A962",
+              "content": "1 · IDLE",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "mlXC8",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Grip bar at rest",
+              "fontFamily": "Inter",
+              "fontSize": 13
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "7k8RB",
+          "name": "Stage",
+          "clip": true,
+          "width": "fill_container",
+          "height": 300,
+          "fill": "#0A0A0A",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Ttce2",
+              "name": "KB Sidebar (slice)",
+              "width": 280,
+              "height": "fill_container",
+              "fill": "#141414",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ncTib",
+                  "fill": "#6A6A6A",
+                  "content": "KNOWLEDGE BASE",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "w9176",
+                  "name": "nav-row",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "SDFxO",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "jbaAy",
+                      "fill": "#FFFFFF",
+                      "content": "Overview",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "reKN5",
+                  "name": "nav-row",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "AZEYu",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "f0UG0",
+                      "fill": "#848484",
+                      "content": "Documents",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "vBNci",
+                  "name": "nav-row",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "etJ2l",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "lAY2c",
+                      "fill": "#848484",
+                      "content": "Conventions",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "dpAgW",
+              "name": "Resize handle (12px hit-zone)",
+              "width": 12,
+              "height": "fill_container",
+              "fill": "#14141400",
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "h2Qij",
+                  "name": "Grip bar 2x36",
+                  "fill": "#848484",
+                  "width": 2,
+                  "height": 36
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "sdC9v",
+              "name": "Page content (bg)",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "#0A0A0A",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "EjaTB",
+                  "fill": "#FFFFFF",
+                  "content": "Article content",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "h2aT9",
+                  "fill": "#1A1A1A",
+                  "width": "fill_container",
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "id": "J758Q",
+                  "fill": "#1A1A1A",
+                  "width": "fill_container",
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "id": "xlBEl",
+                  "fill": "#1A1A1A",
+                  "width": 200,
+                  "height": 8
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "m0Dm2",
+          "name": "Annotations",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "ktMGO",
+              "name": "r1",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "Xm7oo",
+                  "fill": "#848484",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "uXz18",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Bar fill: soleur-text-secondary #848484 — medium contrast, clearly visible (not the old faint dots).",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "JIICe",
+              "name": "r2",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "hG5WZ",
+                  "fill": "#848484",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "w0iST",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Bar size: 2px wide × 36px tall (taller-than-wide). Sharp 0px corners — brand mandate.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "DIyt5",
+              "name": "r3",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "ANoD4",
+                  "fill": "#848484",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "FWpNJ",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Vertically centered on a 12px hit-zone column sitting on the sidebar's right edge.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "9xpn4",
+      "x": 540,
+      "y": 160,
+      "name": "State 2 — HOVER",
+      "width": 420,
+      "height": 560,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "7av1k",
+          "name": "Header",
+          "width": "fill_container",
+          "fill": "#101010",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "RFeiy",
+              "fill": "#C9A962",
+              "content": "2 · HOVER",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "bNbiO",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Pointer over the handle",
+              "fontFamily": "Inter",
+              "fontSize": 13
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "fgzD6",
+          "name": "Stage",
+          "clip": true,
+          "width": "fill_container",
+          "height": 300,
+          "fill": "#0A0A0A",
+          "children": [
+            {
+              "type": "frame",
+              "id": "u6jl1",
+              "name": "KB Sidebar (slice)",
+              "width": 280,
+              "height": "fill_container",
+              "fill": "#141414",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PVRCN",
+                  "fill": "#6A6A6A",
+                  "content": "KNOWLEDGE BASE",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "Nx2IV",
+                  "name": "nav1",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "hZbhV",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "ecfJ1",
+                      "fill": "#FFFFFF",
+                      "content": "Overview",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "4P2xy",
+                  "name": "nav2",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "G9hVs",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "WfI21",
+                      "fill": "#848484",
+                      "content": "Documents",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "B5ZXg",
+                  "name": "nav3",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "NsNQd",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "MwROl",
+                      "fill": "#848484",
+                      "content": "Conventions",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "tKhYx",
+              "name": "Resize handle (hover highlight)",
+              "width": 12,
+              "height": "fill_container",
+              "fill": "#FFFFFF14",
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "xbrq2",
+                  "name": "Grip bar 2x36 (brightened)",
+                  "fill": "#C0C0C0",
+                  "width": 2,
+                  "height": 36
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rnDKg",
+              "name": "Page content (bg)",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "#0A0A0A",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Xmtg5",
+                  "fill": "#FFFFFF",
+                  "content": "Article content",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "aNSSq",
+                  "fill": "#1A1A1A",
+                  "width": "fill_container",
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "id": "h2Pn4",
+                  "fill": "#1A1A1A",
+                  "width": "fill_container",
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "id": "wLqG8",
+                  "fill": "#1A1A1A",
+                  "width": 200,
+                  "height": 8
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ImDUa",
+          "name": "Annotations",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "U5NCs",
+              "name": "r1",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "56gkW",
+                  "fill": "#C0C0C0",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "XZFvw",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Handle hit-zone background subtly highlights (~8% white wash) — signals it is grabbable.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "AAHHA",
+              "name": "r2",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "4FdVV",
+                  "fill": "#C0C0C0",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "rbsxN",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Bar brightens from #848484 toward near-white. Cursor becomes col-resize (↔).",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "3pqPU",
+              "name": "r3",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "R7aiy",
+                  "fill": "#C0C0C0",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "1Wi4k",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Bar size, centering, and 0px corners unchanged from idle.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "wbw37",
+      "x": 1000,
+      "y": 160,
+      "name": "State 3 — ACTIVE / DRAGGING",
+      "width": 420,
+      "height": 560,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "PzvzO",
+          "name": "Header",
+          "width": "fill_container",
+          "fill": "#101010",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "xRE52",
+              "fill": "#C9A962",
+              "content": "3 · ACTIVE / DRAGGING",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "UN4eE",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Handle grabbed, sidebar resizing",
+              "fontFamily": "Inter",
+              "fontSize": 13
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "TlTN4",
+          "name": "Stage",
+          "clip": true,
+          "width": "fill_container",
+          "height": 300,
+          "fill": "#0A0A0A",
+          "children": [
+            {
+              "type": "frame",
+              "id": "1cLKe",
+              "name": "KB Sidebar (slice)",
+              "width": 280,
+              "height": "fill_container",
+              "fill": "#141414",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "9TvQR",
+                  "fill": "#6A6A6A",
+                  "content": "KNOWLEDGE BASE",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "5UQFW",
+                  "name": "nav1",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "9gJzu",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "Ej3NE",
+                      "fill": "#FFFFFF",
+                      "content": "Overview",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Zwi87",
+                  "name": "nav2",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "jyv8y",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "UUgfU",
+                      "fill": "#848484",
+                      "content": "Documents",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "9Szqc",
+                  "name": "nav3",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "ULCKh",
+                      "fill": "#2A2A2A",
+                      "width": 14,
+                      "height": 14
+                    },
+                    {
+                      "type": "text",
+                      "id": "ymZcC",
+                      "fill": "#848484",
+                      "content": "Conventions",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "j0K9N",
+              "name": "Resize handle (active — gold)",
+              "width": 12,
+              "height": "fill_container",
+              "fill": "#C9A962",
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "vZi10",
+                  "name": "Grip bar 2x36 (brightest)",
+                  "fill": "#FFFFFF",
+                  "width": 2,
+                  "height": 36
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "62Nx8",
+              "name": "Page content (bg)",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "#0A0A0A",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "cmHUN",
+                  "fill": "#FFFFFF",
+                  "content": "Article content",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "Om1B2",
+                  "fill": "#1A1A1A",
+                  "width": "fill_container",
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "id": "ONCrW",
+                  "fill": "#1A1A1A",
+                  "width": "fill_container",
+                  "height": 8
+                },
+                {
+                  "type": "rectangle",
+                  "id": "c05Il",
+                  "fill": "#1A1A1A",
+                  "width": 200,
+                  "height": 8
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "9sen7",
+          "name": "Annotations",
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": [
+            20,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "wkyCm",
+              "name": "r1",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "2mhsl",
+                  "fill": "#C9A962",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "IWSUf",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Handle hit-zone background fills with gold accent #C9A962 (amber) while dragging.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KFN8d",
+              "name": "r2",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "iwdl9",
+                  "fill": "#C9A962",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "a32ev",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Bar at its brightest (#FFFFFF) for maximum contrast against gold.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "oKrud",
+              "name": "r3",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "YqEmu",
+                  "fill": "#C9A962",
+                  "width": 2,
+                  "height": 16
+                },
+                {
+                  "type": "text",
+                  "id": "LLwJ5",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Progression: #848484 (idle) → near-white (hover) → #FFFFFF on gold (active). 0px corners throughout.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
