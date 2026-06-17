@@ -38,6 +38,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getServiceClient } from "@/lib/supabase/service";
 import { createGitHubAppClient } from "@/server/github/app-client";
+import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -157,23 +158,13 @@ export async function POST(
     );
   }
 
-  // Resolve installation id for the GitHub App client.
-  const { data: installRow, error: installErr } = await service
-    .from("users")
-    .select("github_installation_id")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (installErr) {
-    reportSilentFallback(installErr, {
-      feature: "dashboard-undo",
-      op: "users-install-read",
-      extra: { userId: user.id },
-    });
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
-  }
-  const installationId = (installRow as
-    | { github_installation_id?: number | null }
-    | null)?.github_installation_id;
+  // Resolve installation id for the GitHub App client. ADR-044 PR-2: read via the
+  // membership-checked RPC keyed on the caller's active workspace (was a direct
+  // `users.github_installation_id` read, which goes NULL for a newly-connected
+  // user after the write relocated to `workspaces`). null = no install OR a
+  // transient read error (Sentry-mirrored inside the resolver) → 403, preserving
+  // the prior unauthorized contract.
+  const installationId = await resolveInstallationId(user.id);
   if (!installationId) {
     return NextResponse.json(
       { error: "github_installation_unauthorized" },

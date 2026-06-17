@@ -52,6 +52,14 @@ vi.mock("@/server/byok-resolver", () => ({
   userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
 }));
 
+// ADR-044 PR-2 (#5462): the callback resolves the active workspace before
+// reading repo_status from the `workspaces` table. Stub the resolver to the
+// test user id (solo workspace id === user id per the N2 invariant) so the
+// WORKSPACES read targets a row our service-client mock recognizes.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: vi.fn(async () => USER_ID),
+}));
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: {
@@ -137,41 +145,27 @@ function makeCallbackRequest(code: string, extraQuery = ""): NextRequest {
 }
 
 /**
- * Wire the service `users` table for the fully-onboarded path: the
- * ensureWorkspaceProvisioned select (workspace_status, tc_accepted_version)
- * AND the repo_status select both resolve. tcVersion drives the T&C gate;
- * repoStatus drives connect-repo vs the terminal hop.
+ * Wire the service clients for the fully-onboarded path. Post-ADR-044 PR-2
+ * (#5462) the callback reads from THREE select shapes:
+ *   - users.select(workspace_status, tc_accepted_version).single()  [provision]
+ *   - users.select(setup_key_skipped_at).single()                   [skip flag]
+ *   - workspaces.select(repo_status).maybeSingle()                  [repo status]
+ * tcVersion drives the T&C gate; repoStatus drives connect-repo vs the terminal
+ * hop. setup_key_skipped_at defaults null here (no skip).
  */
 function stubServiceUsersFullyOnboarded(
   tcVersion: string | null,
   repoStatus: string,
 ): void {
-  mockServiceFrom.mockImplementation((table: string) => {
-    if (table !== "users") {
-      return { select: vi.fn(), update: vi.fn(), upsert: vi.fn() };
-    }
-    const select = vi.fn((columns: string) => {
-      if (typeof columns === "string" && columns.includes("repo_status")) {
-        const single = vi.fn().mockResolvedValue({
-          data: { repo_status: repoStatus },
-          error: null,
-        });
-        return { eq: vi.fn().mockReturnValue({ single }) };
-      }
-      const single = vi.fn().mockResolvedValue({
-        data: { workspace_status: "ready", tc_accepted_version: tcVersion },
-        error: null,
-      });
-      return { eq: vi.fn().mockReturnValue({ single }) };
-    });
-    return { select, update: vi.fn(), upsert: vi.fn() };
-  });
+  stubServiceUsersWithSkip(tcVersion, repoStatus, null);
 }
 
 /**
- * Like stubServiceUsersFullyOnboarded but also drives `setup_key_skipped_at` on
- * the repo_status select, so the keyless-SKIPPED branch (callback:261-268) can
- * be exercised. A non-null `skippedAt` means the user chose "Set up later".
+ * Like stubServiceUsersFullyOnboarded but lets the caller drive
+ * `setup_key_skipped_at` (read from the `users` table via .single()), so the
+ * keyless-SKIPPED branch can be exercised. A non-null `skippedAt` means the
+ * user chose "Set up later". `repo_status` is now AUTHORITATIVE on the
+ * `workspaces` row (ADR-044 PR-2) and is served via .maybeSingle().
  */
 function stubServiceUsersWithSkip(
   tcVersion: string | null,
@@ -179,13 +173,27 @@ function stubServiceUsersWithSkip(
   skippedAt: string | null,
 ): void {
   mockServiceFrom.mockImplementation((table: string) => {
+    if (table === "workspaces") {
+      const maybeSingle = vi.fn().mockResolvedValue({
+        data: { repo_status: repoStatus },
+        error: null,
+      });
+      return {
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({ maybeSingle }),
+        }),
+      };
+    }
     if (table !== "users") {
       return { select: vi.fn(), update: vi.fn(), upsert: vi.fn() };
     }
     const select = vi.fn((columns: string) => {
-      if (typeof columns === "string" && columns.includes("repo_status")) {
+      if (
+        typeof columns === "string" &&
+        columns.includes("setup_key_skipped_at")
+      ) {
         const single = vi.fn().mockResolvedValue({
-          data: { repo_status: repoStatus, setup_key_skipped_at: skippedAt },
+          data: { setup_key_skipped_at: skippedAt },
           error: null,
         });
         return { eq: vi.fn().mockReturnValue({ single }) };

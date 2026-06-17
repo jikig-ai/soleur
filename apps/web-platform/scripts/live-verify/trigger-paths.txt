@@ -1,0 +1,25 @@
+# trigger-paths.txt — committed source-of-truth for the live-verification gate
+# (#5452, FR7, AC5). The /soleur:postmerge Live Verification phase fires the
+# harness IFF a changed file matches ONE of the ERE patterns below.
+#
+# Contract: one POSIX-ERE pattern per line. Lines that are blank or start with
+# `#` (after optional whitespace) are ignored. Consumers strip them via:
+#   grep -vE '^[[:space:]]*#|^[[:space:]]*$' trigger-paths.txt
+# then match changed paths with `grep -qE -f <stripped>`.
+#
+# Scope = the realtime / WebSocket / session-auth / DOM-server-timing class that
+# mock e2e structurally cannot reproduce (the #5391/#5421/#5436 bug class).
+# Pure logic / docs / copy / config changes do NOT match → skip (fail-open is
+# the accepted residual, mitigated by the drift canary in the test suite).
+#
+# When adding a new realtime/WS/auth surface, ADD its pattern here — the drift
+# canary test fails if a new top-level dir matching the heuristic is absent.
+
+^apps/web-platform/hooks/
+^apps/web-platform/components/chat/
+^apps/web-platform/lib/ws-
+^apps/web-platform/lib/realtime
+^apps/web-platform/middleware\.ts
+^apps/web-platform/app/\(auth\)/
+^apps/web-platform/server/inngest/.*realtime
+^apps/web-platform/server/ws-handler\.ts

@@ -278,12 +278,24 @@ vi.mock("next/server", () => ({
   },
 }));
 
+// ADR-044 PR-2: the install write is now an authoritative write to the active
+// `workspaces` row via writeRepoColsToWorkspace, keyed on the membership-verified
+// id from resolveActiveWorkspace (defaults to the solo identity here).
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspace: vi.fn(),
+}));
+vi.mock("@/server/workspace-repo-mirror", () => ({
+  writeRepoColsToWorkspace: vi.fn(),
+}));
+
 import { POST } from "../app/api/repo/install/route";
 import {
   createClient as mockCreateClient,
   createServiceClient as mockCreateServiceClient,
 } from "@/lib/supabase/server";
 import { validateOrigin as mockValidateOrigin } from "@/lib/auth/validate-origin";
+import { resolveActiveWorkspace as mockResolveActiveWorkspace } from "@/server/workspace-resolver";
+import { writeRepoColsToWorkspace as mockWriteRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
 
 describe("install route behavioral enforcement", () => {
   beforeEach(() => {
@@ -291,6 +303,12 @@ describe("install route behavioral enforcement", () => {
       valid: true,
       origin: "https://app.soleur.ai",
     });
+    // Active workspace resolves to the solo identity (workspaceId === user.id).
+    vi.mocked(mockResolveActiveWorkspace).mockImplementation(
+      async (userId: string) => ({ ok: true, workspaceId: userId }) as never,
+    );
+    // Authoritative workspaces write succeeds by default.
+    vi.mocked(mockWriteRepoColsToWorkspace).mockResolvedValue(undefined as never);
   });
 
   test("email-only user: succeeds when installation exists (existence-verified)", async () => {
@@ -309,6 +327,8 @@ describe("install route behavioral enforcement", () => {
           },
         }),
       },
+      // Owner-gate rpc("is_workspace_owner") passes for the solo owner.
+      rpc: vi.fn().mockResolvedValue({ data: true, error: null }),
     } as never);
 
     // Mock createServiceClient — returns a service client whose
@@ -357,6 +377,16 @@ describe("install route behavioral enforcement", () => {
 
     const response = await POST(request);
     expect(response.status).toBe(200);
+
+    // ADR-044 PR-2: the installation lands on the active workspaces row (keyed
+    // on the resolved solo id === user.id), NOT via a users.update.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalledWith(
+      expect.anything(),
+      userId,
+      { github_installation_id: 42 },
+      { throwOnError: true },
+    );
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -365,16 +395,20 @@ describe("install route behavioral enforcement", () => {
 // ---------------------------------------------------------------------------
 
 describe("install route structural enforcement", () => {
-  test("verifyInstallationOwnership is called before .update() in route source", () => {
+  test("verifyInstallationOwnership is called before the installation write in route source", () => {
     const routeSource = readFileSync(
       join(__dirname, "../app/api/repo/install/route.ts"),
       "utf-8",
     );
     const verifyIndex = routeSource.indexOf("verifyInstallationOwnership");
-    const updateIndex = routeSource.indexOf(".update({ github_installation_id");
+    // ADR-044 PR-2: the write is now writeRepoColsToWorkspace(...) to the active
+    // workspaces row, not serviceClient.from("users").update(...).
+    const writeIndex = routeSource.indexOf("writeRepoColsToWorkspace(");
     expect(verifyIndex).toBeGreaterThan(-1);
-    expect(updateIndex).toBeGreaterThan(-1);
-    expect(verifyIndex).toBeLessThan(updateIndex);
+    expect(writeIndex).toBeGreaterThan(-1);
+    expect(verifyIndex).toBeLessThan(writeIndex);
+    // The legacy users-row credential write must be gone entirely.
+    expect(routeSource).not.toMatch(/\.update\(\{\s*github_installation_id/);
   });
 
   test("githubLogin assignment does not reference user_metadata for user_name", () => {

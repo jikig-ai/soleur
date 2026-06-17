@@ -192,3 +192,81 @@ substitutable by **direct enumeration**: run the pre-decommission drift-gate que
 drift-gate COUNT as authoritative and the breadcrumb as informational. This retires
 the *calendar*-soak requirement for internal-only — it does **not** unblock PR-2b,
 which still waits on the #5462 write-cutover (prereq 1) regardless of soak.
+
+## Amendment 2026-06-17 — PR-2 write-cutover lands (#5462)
+
+The connect-time **write** path is relocated `users.*` → `workspaces.*`. This is the
+prereq-(1) the prior amendment recorded as the hard block on PR-2b.
+
+`status` stays **`adopting`** (NOT `accepted`): the `adopting → accepted` flip lands
+with PR-2b's destructive column drop after a real prod soak. This PR moves the write
+edge but does not drop the legacy `users` columns (they survive as the revert net).
+
+**C4 edge moves: `read=Workspace / write=User (dual)` → `read=Workspace /
+write=Workspace`.** The four `app/api/repo/**` routes (`setup`, `disconnect`,
+`install`, `detect-installation`) now write the authoritative repo-connection
+columns to the `workspaces` row keyed on the **membership-verified resolved active
+workspace id**; the owner-gate `p_workspace_id` equals that mutation-target id; team
+on-disk provisioning + teardown (with live-member-session abort before the shared-dir
+`rm`) replaces the PR-2a 422 refusal. `repo_error` was relocated by migration 110
+(non-credential `authenticated` GRANT). The `users` columns are now **un-written
+legacy** until PR-2b drops them.
+
+### Read-cutover scope correction (the "read path is already cut over" claim was false)
+
+The PR-1 amendment and the #5462 plan asserted the read path was fully on `workspaces`.
+Implementing PR-2 surfaced FIVE+ surviving `users.{github_installation_id, repo_url,
+repo_status}` readers. The binding ruling (engineering CTO):
+
+- **Chosen (Option D): migrate the authenticated *interactive* readers in this PR,
+  defer the *service-role* readers to PR-2b's blocker set.** Migrated here:
+  `repo/status`, `repo/create`, `kb/tree`, `dashboard/today/[id]/undo`,
+  `(auth)/callback`, and `repo/setup`'s degraded install-fallback — each now reads
+  `workspaces` (via the `resolve_workspace_installation_id` RPC / `resolveInstallationId`
+  for the credential, or a service-role `workspaces` read for the non-credential cols).
+  Without this, a *newly-connected* user would strand on stale-NULL `users.*`
+  (a `single-user incident`: broken GitHub-App git auth / "no repo connected" UI).
+- **Rejected: migrate all readers in-PR (pure Option A)** — three readers are
+  service-role/cron contexts where `resolve_workspace_installation_id` is structurally
+  unusable (it gates on `auth.uid()` and is `REVOKE`'d from `service_role`, mig
+  079:114/126); cutting them needs a *net-new* service-role-safe resolver, outside a
+  write-cutover's blast radius.
+- **Rejected: dark-launch flag (Option C)** — a write-relocation flag gates the wrong
+  layer (the reads are the hazard); default-off leaves dual-writes live, which is
+  Option B and re-blocks the PR-2b drift gate. Loud failure (`reportSilentFallback` /
+  throw) + the whole-PR git-revert already satisfy the `single-user incident`
+  threshold without a second drift surface (flag-state vs deploy-state).
+- **Rejected: keep `users.*` dual-writes (Option B)** — re-introduces the
+  dual-source-of-truth divergence ADR-044 forbids and makes the PR-2b drift gate
+  unreachable.
+
+**PR-2b (#5437) precondition set is amended:** PR-2b is blocked on the soak **AND** the
+deferred service-role-context migrations, all tracked in **#5470** (PR-2b-blocker).
+PR #5466 multi-agent review found these are **three** read sites + one write site, not
+two — all service-role contexts where the `auth.uid()`-gated RPC is unusable:
+- `server/inngest/functions/agent-on-spawn-requested.ts` — reads `users.github_installation_id`.
+- `server/inngest/functions/cron-workspace-sync-health.ts` — reads `users.github_installation_id`.
+- `app/api/webhooks/github/route.ts` — resolves `founderId` via `.eq("github_installation_id", …)`
+  (a lookup, missed by the original `.select(…)` grep). They need a service-role-safe
+  founder→workspace installation resolver (membership-bypass, trusted server context); the
+  webhook additionally needs the fan-out reconcile because `workspaces.github_installation_id`
+  is non-unique (ADR-044 fan-out).
+- `server/session-sync.ts` `updateLastSynced` — writes `users.repo_last_synced_at`; PR #5466
+  moved the `repo/status` read to `workspaces.repo_last_synced_at`, so the timestamp display
+  freezes at connect time until this write relocates (needs `session-sync` on the
+  service-role allowlist).
+
+**Soak limitation (documented, accepted):** until #5470 lands, a user who connects via the
+new workspaces-authoritative path during the soak does **not** get push auto-sync (the
+webhook founder-resolver reads NULL `users.github_installation_id`) and shows a stale
+last-synced timestamp. The soak population is internal-only, so this is an accepted
+internal-dogfood limitation, consistent with the Option-D deferral logic (loud-failure +
+revert-net for the interactive paths; the service-role paths fail in low-frequency
+background contexts surfaced by the soak itself).
+
+### Considered Options (amendment)
+
+- **Option D (chosen):** above.
+- **Capability gap recorded:** there is no service-role-safe installation-id resolver
+  (the only one is `auth.uid()`-gated). It must be built before PR-2b can drop
+  `users.github_installation_id`.
