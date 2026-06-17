@@ -32,7 +32,8 @@ Threshold: single-user incident · `requires_cpo_signoff: true`
 - [ ] 4.1 detail page → workspace gate + reportSilentFallback on error
 - [ ] 4.2 `app/api/inbox/emails/route.ts` (3 queries) → workspace gate
 - [ ] 4.3 `server/email-triage-tools.ts` (list/get/status) → workspace gate
-- [ ] 4.4 grep for any inbox list page/component beyond detail page; include
+- [ ] 4.3b `server/email-triage/email-triage-status-handler.ts` (acknowledge/archive handler) → widen any user_id pre-gate; RPC re-auth is DB enforcement
+- [ ] 4.4 dashboard renders via /api/inbox/emails (covered by 4.2); routes [id]/{acknowledge,archive} are thin exports (no change)
 
 ## Phase 5 — GDPR verification — AC8
 - [ ] 5.1 anonymise still NULLs user_id; row survives via workspace_id

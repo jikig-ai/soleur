@@ -121,15 +121,23 @@ never a foreign `user_id`.
 - [ ] **AC4 (write path):** `email-on-received.ts` claim-insert sets
   `workspace_id` = the validated owner's solo workspace_id (already computed as
   `ownerId` in the N2 solo shape). No change to the notification recipient.
-- [ ] **AC5 (read paths — all 3):** `.eq("user_id", …)` is replaced with the
-  workspace-Owner gate at: (a) `app/(dashboard)/dashboard/inbox/email/[emailId]/page.tsx`,
-  (b) `app/api/inbox/emails/route.ts` (3 queries: list/new-count/archived),
-  (c) `server/email-triage-tools.ts` (list + get + status-change tools). The
-  RLS change makes the owner-membership rows visible; the explicit
-  belt-and-suspenders `.eq` must widen consistently or be dropped in favour of
-  RLS (decide per-site; do not leave a `user_id` filter that re-narrows below
-  RLS). Grep for any inbox **list page/component** beyond the detail page and
-  include it.
+- [ ] **AC5 (read/act paths — COMPLETE inventory, deepen-verified):**
+  `.eq("user_id", …)` is replaced with the workspace-Owner gate at every site:
+  (a) `app/(dashboard)/dashboard/inbox/email/[emailId]/page.tsx` (detail read);
+  (b) `app/api/inbox/emails/route.ts` (3 queries: list/new-count/archived);
+  (c) `server/email-triage-tools.ts` (list + get + status-change tools);
+  (d) `server/email-triage/email-triage-status-handler.ts` — the shared handler
+  behind the `acknowledge`/`archive` routes (`makeEmailTriageStatusHandler`); if
+  it pre-gates on `user_id` before calling the RPC, widen to the owner gate (the
+  RPC's own re-auth, AC3, is the DB-level enforcement). The two route files
+  (`app/api/inbox/emails/[id]/{acknowledge,archive}/route.ts`) are thin
+  HTTP-only exports — no change needed there. `app/(dashboard)/dashboard/page.tsx`
+  renders the inbox via `GET /api/inbox/emails` + `EmailTriageRow` (no direct
+  email_triage_items query — covered by (b); its `.eq("user_id")` at :274 is the
+  unrelated conversations cross-workspace hint). The RLS change makes
+  owner-membership rows visible; the belt-and-suspenders `.eq` must widen
+  consistently or be dropped — never leave a `user_id` filter that re-narrows
+  below RLS.
 - [ ] **AC6 (diagnostic hygiene — carryover):** the detail page captures `error`
   from the query and calls `reportSilentFallback(error, { feature:
   "email-triage", op: "inbox-detail-lookup-error", extra: { emailId } })` before
@@ -280,3 +288,54 @@ discoverability_test:
 - Test path must match `vitest.config.ts:44` node glob (`test/**/*.test.ts`); typecheck
   is `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (no root workspaces).
 - Migration body: no top-level BEGIN/COMMIT; no `CREATE INDEX CONCURRENTLY`.
+
+## Deepen Pass (2026-06-17)
+
+Deterministic gates: 4.6 User-Brand-Impact ✓ (threshold single-user incident),
+4.7 Observability ✓ (5-field schema), 4.8 PAT-shaped ✓ none, no new scheduled
+job (Inngest/cron gate N/A). 4.9 UI-wireframe: `page.tsx` matches the
+`app/**/page.tsx` glob but the edit is a data-gate swap + server-side error
+mirror with **no new screen/modal/layout** → `ui-surface-terms.md` "pure logic,
+no structural change" exclusion; no `.pen` required.
+
+### Precedent-diff — `068_attachments_workspace_shared.sql`
+| Aspect | Mig 068 (precedent) | This migration (111) |
+|---|---|---|
+| helper | `is_attachment_path_workspace_member` — SECURITY DEFINER **plpgsql** (defeats planner inlining of tenant boundary), `is_workspace_member` (ANY member) | `is_email_triage_workspace_owner` — same SECURITY DEFINER plpgsql shape, but `role = 'owner'`-scoped (Owners-only decision) |
+| RLS split | FOR ALL → widened SELECT + 3 narrow write policies (FOR ALL USING governs writes too) | email_triage_items has **no** authenticated write policies (writes are RPC/service-role); only the SELECT policy widens — no write-policy split needed |
+| GRANT | REVOKE from all 4 roles, GRANT to authenticated | identical |
+| GDPR cascade | nulls `messages.user_id` per-workspace | reuse existing `anonymise_email_triage_items` (unchanged) — row survives via `workspace_id` |
+
+### Concrete migration mechanisms
+- **WORM backfill (the load-bearing edge):** the existing `no_mutate` trigger
+  rejects a plain backfill UPDATE. Add a GUC-bypass arm
+  `app.email_triage_backfill_in_progress` (mirrors the existing
+  purge/anonymise/status GUC idiom), wrap the one-time
+  `UPDATE … SET workspace_id = user_id` in `SET LOCAL … = 'on'`, and add
+  `workspace_id` to the trigger's **hard-frozen** column set (set-once at insert,
+  immutable thereafter — same arm as `id`/`claim_key`).
+- **RLS predicate:** `USING (public.is_email_triage_workspace_owner(workspace_id, auth.uid()))`
+  where the helper is `EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id =
+  p_workspace_id AND user_id = p_user_id AND role = 'owner')`. NULL workspace_id
+  (anonymised rows) → helper returns false → not readable (correct: anonymised =
+  erased).
+- **Status RPC re-auth:** replace `v_row.user_id <> auth.uid()` with
+  `NOT public.is_email_triage_workspace_owner(v_row.workspace_id, auth.uid())`;
+  keep the same `42501` no-oracle error for missing+foreign rows.
+
+### GDPR (carry to /review gdpr-gate)
+- anonymise survival: `user_id`→NULL leaves `workspace_id` intact → co-Owners
+  still see statutory evidence (Art. 5(1)(e) retention preserved). The
+  `workspace_id … ON DELETE RESTRICT` FK can't block account-delete (workspaces
+  aren't deleted on user delete).
+- **Open for gdpr-gate:** for the residual-personal-workspace shape
+  `workspace_id == user_id`, an anonymised row still carries the former owner's
+  uid in `workspace_id`. gdpr-gate to rule whether anonymise must also NULL
+  `workspace_id` for that shape (workspace identifier vs data-subject identifier).
+- DSAR keeps `ownerField: "user_id"` (shared third-party inbound mail is not a
+  co-Owner's personal data).
+
+### Verify-the-negative (round-1)
+"Never log sender/subject/summary in the mirror" — confirmed: detail page already
+routes display fields through `sanitizeDisplayString`; the new mirror's `extra` is
+restricted to `{ emailId }`. No contradiction.
