@@ -527,3 +527,199 @@ jobs:
           done
           echo "::error::Deploy verification failed after $((HEALTH_POLL_MAX_ATTEMPTS * HEALTH_POLL_INTERVAL_S))s — expected version $VERSION with supabase connected"
           exit 1
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Report-only live-verify gate (#5487 — item 3 of the #5463 prereq chain).
+  # Runs the post-deploy harness (apps/web-platform/scripts/live-verify/run.ts)
+  # on a deterministic, host-isolated ubuntu-latest runner AFTER the deploy job's
+  # "Verify deploy health and version" step (ordered via `needs: [deploy]`).
+  #
+  # REPORT-ONLY by TWO independent mechanisms (wg-dark-launch-deploy-gates):
+  #   (1) TOPOLOGY — NO job lists `live-verify` in its `needs:`, so a job-level
+  #       failure can NEVER gate, block, or roll back the deploy or "done".
+  #   (2) STEP-LEVEL — the harness step carries `continue-on-error: true`.
+  # Either alone suffices; both are kept so removing one later still leaves the
+  # gate report-only. The report-only→blocking flip is #5463, gated on observing
+  # >=1 real green PASS Sentry event (tag gate=live-verify) from this job.
+  #
+  # Substrate = GitHub Actions, NOT Inngest (CTO ruling 2026-06-17; ADR-064
+  # §Substrate "Inngest re-home considered and rejected"): a blocking deploy-gate
+  # needs a deterministic, synchronous, host-isolated exit-code signal.
+  live-verify:
+    needs: [deploy]
+    if: always() && needs.deploy.result == 'success' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+      - name: Install web-platform deps
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+      - name: Install Playwright chromium (+ OS deps)
+        working-directory: apps/web-platform
+        # Use the @playwright/test version bun just installed (package.json pins
+        # 1.58.2). --with-deps installs the OS shared libs ubuntu-latest lacks; a
+        # bare install would leave chromium.launch() failing on missing libs
+        # (spurious CANT-RUN). The harness's optional system-browser override
+        # env vars are deliberately left unset here so run.ts uses the bundled
+        # chromium that ubuntu-latest installs cleanly.
+        run: npx playwright install --with-deps chromium
+      - name: Changed-file trigger gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # GH compare API (NOT `git diff`): actions/checkout is fetch-depth:1, so
+          # `before..sha` errors on the zero-SHA / shallow graph. compare needs no
+          # local history. A compare failure is CANT-RUN, never a silent SKIP.
+          if ! files=$(gh api "repos/${REPO}/compare/${BEFORE_SHA}...${AFTER_SHA}" --jq '.files[].filename' 2>/tmp/gate.err); then
+            echo "::warning::live-verify trigger-gate compare API failed: $(tr '\n' ' ' </tmp/gate.err)"
+            {
+              echo "triggered=0"
+              echo "gate_failed=1"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          patterns=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+            apps/web-platform/scripts/live-verify/trigger-paths.txt)
+          if printf '%s\n' "$files" | grep -qE -f <(printf '%s\n' "$patterns"); then
+            triggered=1
+          else
+            triggered=0
+          fi
+          {
+            echo "triggered=$triggered"
+            echo "gate_failed=0"
+          } >> "$GITHUB_OUTPUT"
+      - name: Run live-verify harness (report-only)
+        id: harness
+        if: steps.gate.outputs.triggered == '1'
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          # `set +e` so a non-zero harness exit (run.ts exits 1 on FAIL/CANT-RUN)
+          # cannot abort the step before the RESULT extraction + $GITHUB_OUTPUT
+          # write. "Failure cannot fail the job" (topology + continue-on-error) is
+          # a DISTINCT invariant from "failure still produces a recording" (this).
+          set +e
+          cd apps/web-platform
+          # Redact the harness's merged stdout+stderr BEFORE it reaches the run
+          # log / the extracted tail (#5487 review, user-impact FINDING 3): a raw
+          # `2>&1 | tee` writes an unhandled Playwright/bun/doppler stderr stack —
+          # which could embed a captured secret — verbatim into the Actions run
+          # log (visible to any Actions-read principal). redact-stdin.ts is
+          # idempotent on run.ts's own already-redacted RESULT line.
+          doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 \
+            | bun run scripts/live-verify/redact-stdin.ts \
+            | tee /tmp/live-verify.out
+          rc=${PIPESTATUS[0]}   # bun's exit code (first pipe stage), NOT redact/tee
+          set -e
+          RESULT_LINE=$(grep -E '^RESULT: ' /tmp/live-verify.out | tail -1)
+          if [ -z "$RESULT_LINE" ]; then
+            # Harness crashed before emitting its own redacted RESULT line. The raw
+            # tail may carry live secrets → scrub through the redact module before
+            # embedding. Distinct failure classes (Doppler-auth, OOM, chromium
+            # hard-crash) collapse to empty stdout, so embed the exit code to keep
+            # them distinguishable.
+            TAIL=$(tail -8 /tmp/live-verify.out \
+              | bun run scripts/live-verify/redact-stdin.ts 2>/dev/null | tr '\n' ' ')
+            RESULT_LINE="RESULT: CANT-RUN:no-result-line:exit=${rc} — ${TAIL}"
+          fi
+          {
+            echo "rc=${rc}"
+            echo "result_line<<__LV_EOF__"
+            echo "${RESULT_LINE}"
+            echo "__LV_EOF__"
+          } >> "$GITHUB_OUTPUT"
+      - name: Emit result to Sentry (report-only observability)
+        if: always()
+        env:
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          TRIGGERED: ${{ steps.gate.outputs.triggered }}
+          GATE_FAILED: ${{ steps.gate.outputs.gate_failed }}
+          RESULT_LINE: ${{ steps.harness.outputs.result_line }}
+          HARNESS_OUTCOME: ${{ steps.harness.outcome }}
+          RC: ${{ steps.harness.outputs.rc }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # Compose the tri-state result + Sentry level. Order matters: setup
+          # failure (gate never ran) → CANT-RUN; gate-diff failure → CANT-RUN;
+          # no triggering paths → SKIPPED; harness ran → PASS/FAIL/CANT-RUN.
+          # Every job run emits EXACTLY ONE queryable event (the #5463 soak needs
+          # a denominator — "ran and skipped" must be distinguishable from "never
+          # ran").
+          if [ -z "${TRIGGERED:-}" ] && [ -z "${GATE_FAILED:-}" ]; then
+            RESULT="CANT-RUN:setup-failed"; LEVEL="error"
+            MSG="RESULT: ${RESULT} (job setup failed before the trigger gate)"
+          elif [ "${GATE_FAILED:-0}" = "1" ]; then
+            RESULT="CANT-RUN:gate-diff-failed"; LEVEL="error"
+            MSG="RESULT: ${RESULT} (changed-file compare API failed)"
+          elif [ "${TRIGGERED:-0}" = "0" ]; then
+            RESULT="SKIPPED"; LEVEL="info"
+            MSG="RESULT: SKIPPED:no-triggering-paths"
+          elif [ -z "${RESULT_LINE:-}" ]; then
+            RESULT="CANT-RUN:no-result-line"; LEVEL="error"
+            MSG="RESULT: ${RESULT}:outcome=${HARNESS_OUTCOME:-unknown}:exit=${RC:-unknown}"
+          else
+            MSG="${RESULT_LINE}"
+            case "${RESULT_LINE}" in
+              "RESULT: PASS"*) RESULT="PASS"; LEVEL="info" ;;
+              "RESULT: FAIL"*) RESULT="FAIL"; LEVEL="error" ;;
+              *no-result-line*|*gate-diff-failed*) RESULT="CANT-RUN"; LEVEL="error" ;;
+              "RESULT: CANT-RUN"*) RESULT="CANT-RUN"; LEVEL="warning" ;;
+              *) RESULT="CANT-RUN"; LEVEL="warning" ;;
+            esac
+          fi
+          echo "live-verify: result=${RESULT} level=${LEVEL}" >> "$GITHUB_STEP_SUMMARY"
+          # Parse the public client DSN: https://<public_key>@<host>/<project_id>.
+          # The POST host MUST carry the DSN's own region segment
+          # (…ingest.<region>.sentry.io) — never default to a cluster, or the
+          # event silently 4xx's into the wrong region.
+          DSN="${NEXT_PUBLIC_SENTRY_DSN:-}"
+          if [ -z "$DSN" ]; then
+            echo "::error::live-verify: NEXT_PUBLIC_SENTRY_DSN unset — ${RESULT} event NOT emitted"
+            echo "live-verify: Sentry DSN unset — event NOT emitted (result=${RESULT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          PUBLIC_KEY=$(printf '%s' "$DSN" | sed -E 's#^https?://([^@:]+)(:[^@]*)?@.*#\1#')
+          HOST=$(printf '%s' "$DSN" | sed -E 's#^https?://[^@]+@([^/]+)/.*#\1#')
+          PROJECT_ID=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
+          if [ -z "$PUBLIC_KEY" ] || [ -z "$HOST" ] || [ -z "$PROJECT_ID" ]; then
+            echo "::error::live-verify: could not parse NEXT_PUBLIC_SENTRY_DSN — ${RESULT} event NOT emitted"
+            echo "live-verify: Sentry DSN unparseable — event NOT emitted (result=${RESULT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          STORE_URL="https://${HOST}/api/${PROJECT_ID}/store/"
+          PAYLOAD=$(jq -nc --arg msg "$MSG" --arg level "$LEVEL" --arg result "$RESULT" \
+            --arg sha "${GITHUB_SHA:-}" \
+            '{message:$msg, level:$level, platform:"other",
+              tags:{gate:"live-verify", component:"web-platform", result:$result},
+              extra:{sha:$sha}}')
+          ok=0; code="000"
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST "$STORE_URL" \
+              -H "Content-Type: application/json" \
+              -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=live-verify-gha/1.0, sentry_key=${PUBLIC_KEY}" \
+              --data "$PAYLOAD" 2>/dev/null || echo "000")
+            if [ "$code" = "200" ] || [ "$code" = "202" ]; then ok=1; break; fi
+            echo "live-verify: Sentry POST attempt ${attempt} → HTTP ${code}"
+            sleep 3
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::live-verify: Sentry event POST failed after 3 attempts (last HTTP ${code}) for result=${RESULT}"
+            echo "live-verify: Sentry POST FAILED (result=${RESULT}, last HTTP ${code}) — observability degraded, deploy NOT affected" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "live-verify: Sentry event emitted (result=${RESULT}, level=${LEVEL})" >> "$GITHUB_STEP_SUMMARY"
+          fi
