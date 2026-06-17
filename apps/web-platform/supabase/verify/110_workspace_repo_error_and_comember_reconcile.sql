@@ -13,36 +13,40 @@
 
 -- (1) workspaces.repo_error column exists (the schema precondition for the
 --     write relocation + getCurrentRepoStatus read).
+-- NOTE: every UNION branch's `bad` column MUST be the SAME type (Postgres rejects
+-- a boolean/integer UNION: "UNION types boolean and integer cannot be matched").
+-- run-verify.sh reports `bad=N` and fails on `bad <> 0`, so `bad` is INTEGER
+-- throughout — the boolean predicate checks (1-3) are cast `::int` (true→1, false→0).
 SELECT 'workspaces_repo_error_missing' AS check_name,
-       (SELECT count(*) FROM information_schema.columns
+       ((SELECT count(*) FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name   = 'workspaces'
-          AND column_name  = 'repo_error') = 0 AS bad
+          AND column_name  = 'repo_error') = 0)::int AS bad
 UNION ALL
 -- (2) repo_error is in the `authenticated` column-level SELECT grant (it is a
 --     sanitized reason, non-credential). A tenant read of it must not be
 --     permission-denied (getCurrentRepoStatus reads it via the tenant client).
 SELECT 'repo_error_not_in_authenticated_grant',
-       NOT EXISTS (
+       (NOT EXISTS (
          SELECT 1 FROM information_schema.column_privileges
          WHERE table_schema = 'public'
            AND table_name   = 'workspaces'
            AND column_name  = 'repo_error'
            AND grantee      = 'authenticated'
            AND privilege_type = 'SELECT'
-       ) AS bad
+       ))::int AS bad
 UNION ALL
 -- (3) github_installation_id stays REVOKE'd from `authenticated` (credential —
 --     readable only via resolve_workspace_installation_id RPC).
 SELECT 'github_installation_id_leaked_to_authenticated',
-       EXISTS (
+       (EXISTS (
          SELECT 1 FROM information_schema.column_privileges
          WHERE table_schema = 'public'
            AND table_name   = 'workspaces'
            AND column_name  = 'github_installation_id'
            AND grantee      = 'authenticated'
            AND privilege_type = 'SELECT'
-       ) AS bad
+       ))::int AS bad
 UNION ALL
 -- (4) SOLO drift-gate COUNT = 0. ADR-044's exact PR-2b gate query
 --     (users JOIN workspaces ON w.id = u.id) scoped to SOLO (sole-member)
