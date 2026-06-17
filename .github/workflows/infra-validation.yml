@@ -196,6 +196,9 @@ jobs:
       - name: Run cat-inngest-verify-state.sh tests
         run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
 
+      - name: Run inngest-inventory.sh tests
+        run: bash apps/web-platform/infra/inngest-inventory.test.sh
+
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
 

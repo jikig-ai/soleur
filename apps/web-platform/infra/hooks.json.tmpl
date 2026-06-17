@@ -96,6 +96,25 @@
     }
   },
   {
+    "id": "inngest-inventory",
+    "execute-command": "/usr/local/bin/inngest-inventory.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
     "id": "inngest-enumerate-reminders",
     "execute-command": "/usr/local/bin/inngest-enumerate-reminders.sh",
     "command-working-directory": "/",
