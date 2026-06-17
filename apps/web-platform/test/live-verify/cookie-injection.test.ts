@@ -9,7 +9,31 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildLaunchOptions, buildInjectedCookies } from "../../scripts/live-verify/run";
+import {
+  buildLaunchOptions,
+  buildInjectedCookies,
+  pollFreshConversationId,
+} from "../../scripts/live-verify/run";
+
+// Minimal supabase query-builder stub: every chained method returns the same
+// object; the terminal `.limit()` resolves to `{ data }`, shifting one response
+// per poll so a multi-iteration test can model "empty, then a row appears".
+function makeSupabaseStub(responses: Array<Array<{ id: string }>>) {
+  let call = 0;
+  const chain = {
+    from: () => chain,
+    select: () => chain,
+    eq: () => chain,
+    gt: () => chain,
+    order: () => chain,
+    limit: () =>
+      Promise.resolve({ data: responses[Math.min(call++, responses.length - 1)] ?? [] }),
+  };
+  return chain as never;
+}
+
+const VERIFIED = { __brand: "verified-live-verify-principal", uid: "u-1" } as never;
+const UUID = "0123abcd-1234-5678-9abc-def012345678";
 
 describe("buildLaunchOptions (runner-portability override)", () => {
   // Override branches carry the Wayland GPU-crash stabilization flags; the
@@ -52,6 +76,28 @@ describe("buildLaunchOptions (runner-portability override)", () => {
     const opts = buildLaunchOptions({ channel: "", executablePath: "" });
     expect(opts).toEqual({});
     expect("args" in opts).toBe(false);
+  });
+});
+
+describe("pollFreshConversationId (materialization signal, not URL nav)", () => {
+  it("returns the conversation id when a fresh row is present", async () => {
+    const supabase = makeSupabaseStub([[{ id: UUID }]]);
+    const id = await pollFreshConversationId(supabase, VERIFIED, "2026-01-01T00:00:00Z", 5_000);
+    expect(id).toBe(UUID);
+  });
+
+  it("returns null when no row materializes before the deadline", async () => {
+    // timeoutMs 0 → the do/while runs exactly once, sees no row, and breaks
+    // before any 1s sleep (keeps the unit test instant).
+    const supabase = makeSupabaseStub([[]]);
+    const id = await pollFreshConversationId(supabase, VERIFIED, "2026-01-01T00:00:00Z", 0);
+    expect(id).toBeNull();
+  });
+
+  it("ignores a non-uuid id shape (never returns a malformed id)", async () => {
+    const supabase = makeSupabaseStub([[{ id: "not-a-uuid" }]]);
+    const id = await pollFreshConversationId(supabase, VERIFIED, "2026-01-01T00:00:00Z", 0);
+    expect(id).toBeNull();
   });
 });
 
