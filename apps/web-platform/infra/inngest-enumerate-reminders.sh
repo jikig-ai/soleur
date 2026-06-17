@@ -105,13 +105,21 @@ run_enumerate() {
   while :; do
     resp=$(fetch_page "$after" "$page")
     if ! echo "$resp" | jq -e '.data.eventsV2' >/dev/null 2>&1; then
-      logger -t "$LOG_TAG" "ERROR: malformed GraphQL response on page $page" 2>/dev/null || true
-      # STDOUT cause-only line (#5492 AC11, P2-sec-a: NO raw payload here) so the
-      # webhook response + workflow log carry a diagnosable reason. The raw
-      # response stays STDERR-only below.
-      echo "inngest-enumerate-reminders: FATAL malformed GraphQL response on page $page (from=$FROM_TS) — eventsV2 missing; check the inngest Time bound / endpoint"
-      echo "ERROR: malformed GraphQL response on page $page" >&2
-      echo "$resp" >&2
+      # P2-sec-a: webhook v2.8.2 CombinedOutput() captures BOTH streams and the
+      # workflow cats the response body into the collaborator-readable run log, so
+      # NEITHER stream may carry the event `.data` payload. Surface ONLY the GraphQL
+      # error MESSAGES (API strings — e.g. "out-of-range Time bound") + the `.data`
+      # KEY NAMES (structure, not values). Never the raw response, never the whole
+      # `.errors` (its `extensions` can carry arbitrary data), never `.data` values.
+      local err_msgs data_keys gql_msg
+      err_msgs=$(echo "$resp" | jq -c '[(.errors // [])[].message]' 2>/dev/null || echo '["<unparseable response>"]')
+      data_keys=$(echo "$resp" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
+      gql_msg=$(echo "$resp" | jq -r '(.errors // [])[0].message // ""' 2>/dev/null | tr -d '\n\r' || echo "")
+      logger -t "$LOG_TAG" "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" 2>/dev/null || true
+      # STDOUT cause line (surfaced via the webhook response + workflow ::error::):
+      # the upstream GraphQL message is a diagnosable, payload-free API string.
+      echo "inngest-enumerate-reminders: FATAL malformed GraphQL response on page $page (from=$FROM_TS): ${gql_msg:-eventsV2 missing; check the inngest Time bound / endpoint}"
+      echo "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" >&2
       exit 1
     fi
     page_edges=$(echo "$resp" | jq -c '.data.eventsV2.edges // []')

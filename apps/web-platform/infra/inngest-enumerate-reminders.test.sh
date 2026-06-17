@@ -169,19 +169,32 @@ test_default_from_is_recent_not_epoch() {
   assert_eq "ENUMERATE_FROM override wins" "2099-01-01T00:00:00Z" "$overridden"
 }
 
-# --- Test 10 (#5492 AC7): malformed-response cause line carries NO raw payload ---
-# The STDOUT cause-only line must not leak the event data; the raw response stays
-# STDERR-only. Feed a GraphQL error fixture (no .data.eventsV2) carrying a sentinel.
+# --- Test 10 (#5492 AC7): malformed-response cause carries NO payload on EITHER stream ---
+# webhook CombinedOutput() captures stdout+stderr and the workflow cats the body
+# into the run log, so the assertion is against the COMBINED stream (2>&1), NOT
+# stdout-only. Two leak vectors: a secret in .errors[].extensions, and a secret in
+# a .data value. Only error MESSAGES + .data key NAMES may surface.
 test_malformed_cause_no_payload_leak() {
-  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
-  printf '%s' '{"errors":[{"message":"invalid Time bound","extensions":{"secret":"SECRET-PAYLOAD-XYZ"}}]}' > "$d/page-1.json"
-  local out rc=0
-  out=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null) || rc=$?
+  local d out rc
+  # Vector 1: secret in an error's extensions (the whole .errors must NOT be dumped).
+  d=$(mktemp -d)
+  printf '%s' '{"errors":[{"message":"invalid Time bound","extensions":{"secret":"SECRET-EXT-XYZ"}}]}' > "$d/page-1.json"
+  rc=0; out=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1) || rc=$?
+  rm -rf "$d"
   assert_eq "malformed response exits non-zero" "1" "$rc"
-  assert_contains "stdout carries a diagnosable cause line" "$out" "malformed GraphQL response"
-  if [[ "$out" == *"SECRET-PAYLOAD-XYZ"* ]]; then
-    echo "  FAIL: raw payload leaked into the STDOUT cause line"; FAIL=$((FAIL + 1));
-  else echo "  PASS: raw payload NOT leaked into the STDOUT cause line"; PASS=$((PASS + 1)); fi
+  assert_contains "combined output carries the upstream GraphQL message" "$out" "invalid Time bound"
+  if [[ "$out" == *"SECRET-EXT-XYZ"* ]]; then
+    echo "  FAIL: error.extensions secret leaked into combined output"; FAIL=$((FAIL + 1));
+  else echo "  PASS: error.extensions secret NOT leaked (combined stdout+stderr)"; PASS=$((PASS + 1)); fi
+  # Vector 2: secret in a .data value (well-formed-but-unexpected — no .data.eventsV2).
+  d=$(mktemp -d)
+  printf '%s' '{"data":{"eventsV2OTHER":{"raw":"SECRET-DATA-XYZ"}}}' > "$d/page-1.json"
+  rc=0; out=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1) || rc=$?
+  rm -rf "$d"
+  assert_eq "data-bearing malformed response exits non-zero" "1" "$rc"
+  if [[ "$out" == *"SECRET-DATA-XYZ"* ]]; then
+    echo "  FAIL: .data value leaked into combined output"; FAIL=$((FAIL + 1));
+  else echo "  PASS: .data value NOT leaked (combined stdout+stderr; only key names surface)"; PASS=$((PASS + 1)); fi
 }
 
 test_future_unfired_included
