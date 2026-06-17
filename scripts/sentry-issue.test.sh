@@ -101,6 +101,10 @@ check "stderr never echoes token" "$([[ "$LAST_ERR" != *"$RO_TOKEN"* && "$LAST_E
 #    that mentions `set -x` is not a false positive).
 check "no set -x directive in source" "$(grep -qE '^[[:space:]]*set[[:space:]]+-[a-z]*x' "$SUT" && echo 1 || echo 0)"
 
+# 10. --redact masks an obvious email in a 200 body (opt-in human-hygiene, not a transfer control)
+MOCK_BODY='{"id":"12345","culprit":"alice@example.com failed"}' run_sut --redact 12345
+check "--redact masks email" "$([[ "$LAST_OUT" == *'[redacted-email]'* && "$LAST_OUT" != *'alice@example.com'* ]] && echo 0 || echo 1)"
+
 echo "----"
 echo "sentry-issue.sh: $PASS/$TOTAL passed, $FAIL failed"
 [[ "$FAIL" == "0" ]]
