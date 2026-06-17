@@ -30,9 +30,12 @@ ops@soleur.ai (Proton)
             └─ svix-signed POST  →  https://app.soleur.ai/api/webhooks/resend-inbound   [HOP B: INGRESS via Cloudflare tunnel]
                  └─ route.ts: svix verify → dedup insert into processed_resend_events   [HOP C: EGRESS → Supabase data-plane]
                       └─ inngest.send(EMAIL_INBOUND_RECEIVED_EVENT)                       [HOP D: loopback 127.0.0.1:8288, self-hosted]
-                           └─ email-on-received.ts: claim-insert into email_triage_items   [HOP E: EGRESS → Supabase data-plane]
-                                └─ (probe path short-circuits BEFORE the LLM at mail_class='probe' — Supabase-only)
+                           └─ email-on-received.ts: claim-insert into email_triage_items   [HOP E: EGRESS → Supabase data-plane, SHARED by probe + real mail]
+                                ├─ probe path: probe_tokens lookup → finalize mail_class='probe' (NO LLM)   [diverges AFTER the shared HOP E insert]
+                                └─ real mail: fetch-sanitize-summarize (LLM, Anthropic)                      [HOP F: real-mail-only tail, probe never exercises this]
 ```
+
+> **Verified (verify-the-negative pass):** the probe and real mail **share** the HOP E `claim-insert` into `email_triage_items` (`email-on-received.ts:234,291-310`); they diverge AFTER it — probe does a `probe_tokens` lookup (`:378`) + `mail_class='probe'` finalize (`:391-394`), real mail goes on to the LLM summariser (HOP F, `:425`). So the probe round-trip proves HOPS A→E but does NOT exercise the real-mail HOP F summariser tail or the deadline-repin. AC8's "short-circuit-after-insert" invariant HOLDS (good); AC8c covers the residual real-mail tail. The earlier loose phrasing "probe short-circuits before the LLM, Supabase-only" was misleading — corrected here.
 
 Evidence: `apps/web-platform/infra/resend-inbound-bootstrap.sh:43-47` (domain `inbound.soleur.ai`, webhook endpoint `https://app.soleur.ai/api/webhooks/resend-inbound`); `apps/web-platform/app/api/webhooks/resend-inbound/route.ts:81-316`; `apps/web-platform/server/inngest/client.ts` (`baseUrl: http://127.0.0.1:8288`, self-hosted per ADR-030); `apps/web-platform/server/inngest/functions/email-on-received.ts:233-341` (claim-insert).
 
