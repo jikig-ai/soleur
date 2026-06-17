@@ -46,10 +46,23 @@ runbook `knowledge-base/engineering/operations/runbooks/inbound-email-ingress-de
 Both landed diagnostics are `mail_class=null`/`summary=null` → the non-probe
 HOP F `fetch-sanitize-summarize` tail fails. Does NOT affect the probe path.
 
-### Operator action (post-merge, operator-only)
-Re-enable the Proton Sieve forward in Proton webmail. No Proton credentials in
-Doppler (any config) and Proton webmail is MFA-gated → cannot be automated
-from this environment. The existing daily probe verifies the fix (AC8).
+### Remediation — DONE + VERIFIED (2026-06-17 13:36 UTC)
+Refined mechanism: the #5103 Sieve `redirect :copy "triage@inbound.soleur.ai"`
+was enabled + matching but never delivered — forwarding breaks SPF/DMARC, so
+Resend inbound dropped the forwarded copy (probes piled up in the ops@ inbox).
+Fix: replaced it with Proton's **native auto-forward** ops@soleur.ai →
+triage@inbound.soleur.ai (SRS → survives SPF). Setup driven via Playwright
+(operator entered the Proton password — true human gate; confirmation link read
+from the Resend dashboard Receiving tab and activated). **AC8 verified:** a
+manual-trigger probe (token 739db236…) round-tripped to `mail_class='probe'` in
+~11s. Operator inbox restored.
+
+Residual (separate, #5468): non-probe mail finalizes mail_class=null — prod
+RESEND_API_KEY is send-only so HOP F fetchReceivedEmail fails. Inbox still
+receives mail; only summaries are pending the read-key fix.
+
+Optional cleanup (needs Proton password again): remove the now-redundant
+#5103 Sieve filter (its failing redirect is harmless; native forward supersedes).
 
 ### Decisions
 - Did NOT run the plan's "MANDATORY" nft/dig diff: H1 is ruled out by a

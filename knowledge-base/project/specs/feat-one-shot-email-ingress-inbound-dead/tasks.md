@@ -48,8 +48,8 @@ requires_cpo_signoff: true
 
 ## Phase 4 — Post-merge (operator + automated)
 
-- [ ] 4.1 Fire probe: `/soleur:trigger-cron cron/email-ingress-probe.manual-trigger`.
-- [ ] 4.2 AC8: `mail_class='probe'` row lands in `email_triage_items` within 15m + Sentry monitor → `ok` (query via Supabase MCP + Sentry check-in API).
+- [x] 4.1 Fired probe via trigger.sh → HTTP 202 dispatched (token 739db236…, 13:36:27 UTC).
+- [x] 4.2 **AC8 PASS** — `SOLEUR-PROBE-739db236…` landed as `mail_class='probe'` in `email_triage_items` at 13:36:38 (~11s, ≪ 15m SLA). Chain restored via the native Proton forward. Sentry monitor → `ok` at the run's 15m assert (~13:51).
 - [ ] 4.3 AC8b: if probe still red → issue stays OPEN, re-enter diagnosis treating the applied fix as ruled-out; escalate H6+CPO on a second failure.
 - [ ] 4.4 AC8c (only if probe short-circuits BEFORE the shared insert): operator forwards one real email; assert non-probe row lands.
 - [ ] 4.5 AC9: next scheduled run (`0 6 * * *`) stays green (Sentry API, no dashboard).
