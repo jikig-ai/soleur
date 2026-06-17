@@ -41,15 +41,15 @@ interface ReconcileEvent {
   name: string;
   v?: string;
   data: {
-    // founderId = the installation owner (webhook 404-lookup). Carried for
-    // observability; the fan-out targets workspaces by repo, not founder.
-    founderId: string;
+    // `founderId` removed in ADR-044 Amendment 2026-06-17b (v=3): it was
+    // vestigial — the fan-out targets workspaces by (installation_id,
+    // repo_url), never founder, and the field was never destructured here.
     installationId: number;
     deliveryId: string;
     defaultBranch: string;
     headSha: string;
     beforeSha: string;
-    // ADR-044: bare owner/repo slug from repository.full_name (v=2).
+    // ADR-044: bare owner/repo slug from repository.full_name (v=3).
     fullName: string;
     pushReceivedAt?: number;
   };
@@ -118,11 +118,12 @@ export async function workspaceReconcileOnPushHandler({
   const { installationId, deliveryId, fullName, headSha, beforeSha, pushReceivedAt } =
     event.data;
 
-  // Schema-gate. Non-throwing — an in-flight v=1 envelope (no fullName)
-  // should drain to {ok:false}, not burn a retry. The webhook now emits v=2
-  // with fullName; stale v=1 events persist in the self-hosted store (no
-  // automatic deletion; ~24h is only the event-id dedup window) and can
-  // replay through here.
+  // Schema-gate. Non-throwing — an in-flight v=2 envelope (the prior schema,
+  // before this PR dropped the vestigial `founderId`) should drain to
+  // {ok:false}, not burn a retry. The webhook now emits v=3 (SCHEMA_V); stale
+  // in-flight v=2 (and older v=1) events persist in the self-hosted store (no
+  // automatic deletion; ~24h is only the event-id dedup window) and deadletter
+  // through here when they replay.
   const v = event.v ?? "0";
   const gate = await step.run("schema-gate", async () => {
     if (v !== WORKSPACE_RECONCILE_SCHEMA_V) {
@@ -131,8 +132,9 @@ export async function workspaceReconcileOnPushHandler({
     return { deadletter: false as const, reason: "" };
   });
   if (gate.deadletter) {
-    // Expected drain of an in-flight v=1 envelope (the webhook now emits v=2);
-    // observable at warning level rather than returning silently.
+    // Expected deadletter of an in-flight v=2 (or older) envelope (the webhook
+    // now emits v=3); observable at warning level rather than returning
+    // silently.
     warnSilentFallback(new Error("reconcile event drained (schema version)"), {
       feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
       op: "deadletter-schema-version",

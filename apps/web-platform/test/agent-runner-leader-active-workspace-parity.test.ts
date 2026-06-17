@@ -244,6 +244,15 @@ describe("agent-runner leader — active-workspace cwd parity", () => {
 
     await startAgentSession(MEMBER_ID, "conv-1", "cpo");
 
-    expect(vi.mocked(syncPull)).toHaveBeenCalledWith(MEMBER_ID, ACTIVE_DIR);
+    // ADR-044 PR-B (resolve-id-first, #5435): syncPull is threaded the injected
+    // service client + the ONE resolved ACTIVE workspace id — for this
+    // team-active member that is ACTIVE_WS_ID, NOT the member's solo MEMBER_ID
+    // (the write-side equivalent of the webhook misattribution).
+    expect(vi.mocked(syncPull)).toHaveBeenCalledWith(
+      MEMBER_ID,
+      ACTIVE_DIR,
+      expect.anything(),
+      ACTIVE_WS_ID,
+    );
   });
 });

@@ -113,6 +113,18 @@ vi.mock("../server/logger", () => ({
 
 import { syncPull, syncPush } from "../server/session-sync";
 
+// ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved
+// workspace id. A minimal stub satisfies writeRepoColsToWorkspace's chain.
+const STUB_SERVICE = {
+  from: () => ({
+    update: () => ({
+      eq: () => ({
+        select: () => Promise.resolve({ data: [{ id: "user-1" }], error: null }),
+      }),
+    }),
+  }),
+} as never;
+
 beforeEach(() => {
   calls.length = 0;
   porcelainOutput = "";
@@ -144,7 +156,7 @@ describe("session-sync path allowlist (#2905)", () => {
     porcelainOutput =
       " M .claude/settings.json\0?? knowledge-base/overview/vision.md\0";
 
-    await syncPull("user-1", "/tmp/workspace");
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const adds = gitAddCalls();
     expect(adds).toHaveLength(1);
@@ -162,7 +174,7 @@ describe("session-sync path allowlist (#2905)", () => {
   test("TS-2: only non-allowlisted dirty paths produce no commit (syncPull)", async () => {
     porcelainOutput = " M .claude/settings.json\0";
 
-    await syncPull("user-1", "/tmp/workspace");
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     expect(gitAddCalls()).toHaveLength(0);
     expect(gitCommitCalls()).toHaveLength(0);
@@ -175,7 +187,7 @@ describe("session-sync path allowlist (#2905)", () => {
   test("TS-2b: only non-allowlisted dirty paths produce no commit (syncPush)", async () => {
     porcelainOutput = " M .github/workflows/ci.yml\0";
 
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     expect(gitAddCalls()).toHaveLength(0);
     expect(gitCommitCalls()).toHaveLength(0);
@@ -185,7 +197,7 @@ describe("session-sync path allowlist (#2905)", () => {
   test("TS-3: stray .claude/worktrees/* marker is rejected", async () => {
     porcelainOutput = "?? .claude/worktrees/agent-deadbeef\0";
 
-    await syncPull("user-1", "/tmp/workspace");
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     expect(gitAddCalls()).toHaveLength(0);
     expect(gitCommitCalls()).toHaveLength(0);
@@ -196,7 +208,7 @@ describe("session-sync path allowlist (#2905)", () => {
     porcelainOutput =
       "?? .claude/worktrees/agent-deadbeef\0 M knowledge-base/foo.md\0";
 
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const adds = gitAddCalls();
     expect(adds).toHaveLength(1);
@@ -212,7 +224,7 @@ describe("session-sync path allowlist (#2905)", () => {
     // either match the allowlist (false positive) or be misparsed.
     porcelainOutput = "R  knowledge-base/new.md\0docs/old.md\0";
 
-    await syncPull("user-1", "/tmp/workspace");
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const adds = gitAddCalls();
     expect(adds).toHaveLength(1);
@@ -229,7 +241,7 @@ describe("session-sync path allowlist (#2905)", () => {
     porcelainOutput =
       ' M knowledge-base/has space.md\0?? knowledge-base/has\t"quote".md\0';
 
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const adds = gitAddCalls();
     expect(adds).toHaveLength(1);
@@ -242,7 +254,7 @@ describe("session-sync path allowlist (#2905)", () => {
     // allowed subcommand. None of session-sync's call sites use these
     // flags today; this test pins that invariant against future drift.
     porcelainOutput = " M knowledge-base/foo.md\0";
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
     for (const c of calls) {
       if (c.cmd !== "git") continue;
       expect(c.args).not.toContain("--force");
@@ -257,7 +269,7 @@ describe("session-sync path allowlist (#2905)", () => {
     // subcommand allowlist must keep `git rm`/`git reset`/`git clean`/
     // `git checkout` off the connected-repo write path.
     porcelainOutput = " M knowledge-base/foo.md\0";
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
     const gitArgs0 = calls.filter((c) => c.cmd === "git").map((c) => c.args[0]);
     expect(gitArgs0).not.toContain("rm");
     expect(gitArgs0).not.toContain("reset");
@@ -270,7 +282,7 @@ describe("session-sync path allowlist (#2905)", () => {
     porcelainOutput =
       " M .claude/settings.json\0 M knowledge-base/foo.md\0 M .github/workflows/x.yml\0";
 
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const adds = gitAddCalls();
     expect(adds).toHaveLength(1);

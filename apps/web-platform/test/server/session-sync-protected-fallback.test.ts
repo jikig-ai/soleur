@@ -114,6 +114,19 @@ vi.mock("../../server/logger", () => ({
 
 import { classifyPushError, syncPush } from "@/server/session-sync";
 
+// ADR-044 PR-B: syncPush now takes an injected service client + resolved
+// workspace id (threaded by agent-runner). The injected stub satisfies
+// writeRepoColsToWorkspace's `.from().update().eq().select()` chain.
+const STUB_SERVICE = {
+  from: () => ({
+    update: () => ({
+      eq: () => ({
+        select: () => Promise.resolve({ data: [{ id: "user-1" }], error: null }),
+      }),
+    }),
+  }),
+} as never;
+
 function pushErr(message: string, stderr?: string): Error {
   const e = new Error(message);
   if (stderr !== undefined) {
@@ -305,7 +318,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
   test("AC2: protected push → side branch + create PR in the user's repo", async () => {
     gitWithInstallationAuthSpy.mockImplementation(makeGitMock());
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     expect(gitIdx("push origin HEAD:refs/heads/soleur/kb-sync")).toBeGreaterThan(
       -1,
@@ -327,7 +340,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ defaultRef: "origin/develop" }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     expect(createPullRequestSpy).toHaveBeenCalledWith(
       42,
@@ -347,7 +360,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
   test("AC3: default reset to origin happens after side-branch push + PR", async () => {
     gitWithInstallationAuthSpy.mockImplementation(makeGitMock());
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     const sidePush = gitIdx("push origin HEAD:refs/heads/soleur/kb-sync");
     const checkoutDefault = gitIdx("checkout main");
@@ -366,7 +379,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
     gitWithInstallationAuthSpy.mockImplementation(
       makeGitMock({ sideExists: false }),
     );
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
     expect(gitIdx("checkout -f -B soleur/kb-sync origin/main")).toBeGreaterThan(
       -1,
     );
@@ -385,7 +398,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
     gitWithInstallationAuthSpy.mockImplementation(
       makeGitMock({ sideExists: true }),
     );
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     expect(
       gitIdx("checkout -f -B soleur/kb-sync origin/soleur/kb-sync"),
@@ -404,7 +417,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ initialPush: "ok" }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     expect(createPullRequestSpy).not.toHaveBeenCalled();
     expect(gitCalls.some((a) => a[0] === "checkout")).toBe(false);
@@ -425,7 +438,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ sideBranchPushFails: true }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     // default NOT reset (writes survive on default for next-session retry)
     expect(gitIdx("reset --hard origin/main")).toBe(-1);
@@ -456,7 +469,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ sideExists: true, commitRange: "0", noStagedChanges: true }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     // no commit when overlay produced no diff
     expect(gitCalls.some((a) => a[0] === "commit")).toBe(false);
@@ -484,7 +497,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ commitRange: "2" }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     const warn = warnSilentFallbackSpy.mock.calls.find(
       ([, ctx]) =>
@@ -510,7 +523,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ initialPush: "shallow" }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     // fallback never ran (no default-branch resolution)
     expect(gitCalls.some((a) => a[0] === "symbolic-ref")).toBe(false);
@@ -534,7 +547,7 @@ describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
       makeGitMock({ initialPush: "auth" }),
     );
 
-    await syncPush("user-1", "/tmp/ws");
+    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
 
     expect(gitCalls.some((a) => a[0] === "symbolic-ref")).toBe(false);
     expect(createPullRequestSpy).not.toHaveBeenCalled();

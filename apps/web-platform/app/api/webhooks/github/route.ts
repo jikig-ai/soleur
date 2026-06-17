@@ -13,8 +13,13 @@
 //           the affected-row gate unreliable; the Stripe path catches
 //           PG_UNIQUE_VIOLATION instead — same idiom here).
 //   Step 4: JSON.parse + switch on req.headers.get('x-github-event').
-//   Step 5: resolve founderId via github_installation_id mapping; 404
-//           if no founder owns this installation.
+//   Step 5: resolve the SOLO-workspace founder for this installation via the
+//           membership self-join (resolveSoloFounderForInstallation, ADR-044
+//           Amendment 2026-06-17b). The reverse-lookup reads the NON-UNIQUE
+//           workspaces install column, so the count is fail-closed: 0 → 404
+//           (no founder owns this install), 1 → founderId, >1 → 404 + PAGE
+//           (ambiguous standing-state — do NOT pick one), db-error → 500 +
+//           releaseDedupRow (GitHub redelivers).
 //   Step 6: isGranted(supabase, founderId, actionClass) — fail-closed
 //           on no-grant (log + 200) OR DB-error (Sentry via isGranted + 200).
 //   Step 7: inngest.send({ id: github-<deliveryId>, name, v: '1', data }).
@@ -34,6 +39,7 @@ import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import { isGranted } from "@/server/scope-grants/is-granted";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import { isReconcilablePush } from "@/server/webhook-push-reconcilable";
+import { resolveSoloFounderForInstallation } from "@/server/resolve-founder-for-installation";
 import {
   WORKSPACE_RECONCILE_REQUESTED_EVENT,
   WORKSPACE_RECONCILE_SCHEMA_V,
@@ -228,42 +234,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true });
   }
 
-  // Step 5: founderId resolution via the users.github_installation_id
-  // column (migration 011) gated by the partial-UNIQUE index added in
-  // migration 052 (PR-H #3244). The UNIQUE constraint is load-bearing:
-  // without it, .maybeSingle() would silently route a 1:N installation
-  // to one founder. Inline `as { id?: string }` cast keeps the route
-  // file zero-types-dependency.
-  const { data: founderRow, error: founderErr } = await supabase
-    .from("users")
-    .select("id")
-    .eq("github_installation_id", installationId)
-    .maybeSingle();
-
-  if (founderErr) {
-    logger.error(
-      { err: founderErr, installationId, deliveryId },
-      "GitHub webhook: founder lookup DB error",
-    );
-    Sentry.captureException(founderErr, {
-      tags: { feature: "github-webhook", op: "founder-lookup" },
-    });
-    await releaseDedupRow();
-    return NextResponse.json({ error: "DB error" }, { status: 500 });
-  }
-  const founderId = (founderRow as { id?: string } | null)?.id;
-  if (!founderId) {
-    logger.warn(
-      { installationId, deliveryId, githubEvent },
-      "GitHub webhook: no founder for installation_id — 404",
-    );
-    // 404 mirrors GitHub's expectation that the receiver advertises
-    // "not for me"; GitHub will not retry 4xx. Release the dedup row
-    // so a future install→delivery on the same delivery_id (unlikely
-    // but legitimate) is not silently short-circuited (Kieran #1).
-    await releaseDedupRow();
-    return NextResponse.json({ error: "No founder for installation" }, { status: 404 });
-  }
+  // Step 5: founder attribution. Split by event type (ADR-044 Amendment
+  // 2026-06-17b, CTO Option C).
+  //
+  // The install→founder reverse-lookup formerly read the credential column
+  // off `users` (migration 011) gated by the mig-052 partial-UNIQUE. PR-2b
+  // drops that column AND its UNIQUE index; the lookup now resolves through
+  // `workspaces` (NON-UNIQUE, one install → N workspaces), so a single-row
+  // `.maybeSingle()` is structurally invalid. Resolution branches:
+  //
+  //   - PUSH (Step 5.5): the reconcile fan-out re-derives workspaces from
+  //     (installation_id, repo_url), so no per-event founder lookup is
+  //     needed; `founderId` was vestigial in the payload and is dropped.
+  //   - NON-PUSH (before Step 6): the solo-workspace self-join resolver
+  //     yields exactly ONE founder, with a `>1` fail-closed branch (the
+  //     defense the dropped UNIQUE used to give structurally).
 
   // Step 5.5 (#4224): push-event reconcile dispatch. Branches BEFORE the
   // scope-grant gate because workspace reconciliation is structurally NOT
@@ -290,7 +275,6 @@ export async function POST(request: Request) {
             name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
             v: WORKSPACE_RECONCILE_SCHEMA_V,
             data: {
-              founderId,
               installationId,
               deliveryId,
               defaultBranch: reconcilable.defaultBranch,
@@ -298,7 +282,8 @@ export async function POST(request: Request) {
               beforeSha: reconcilable.beforeSha,
               // ADR-044: bare owner/repo slug. The reconcile composes
               // https://github.com/<fullName> and matches workspaces by
-              // normalized repo_url (fan-out). v=2 (SCHEMA_V).
+              // normalized repo_url (fan-out). v=3 (SCHEMA_V) — `founderId`
+              // dropped (vestigial; the consumer re-derives workspaces).
               fullName: reconcilable.fullName,
               pushReceivedAt: Date.now(),
             },
@@ -312,13 +297,74 @@ export async function POST(request: Request) {
       );
       Sentry.captureException(err, {
         tags: { feature: "github-webhook", op: "inngest-send-push" },
-        extra: { deliveryId, founderId, installationId },
+        extra: { deliveryId, installationId },
       });
       await releaseDedupRow();
       return NextResponse.json({ error: "Dispatch failed" }, { status: 500 });
     }
     return NextResponse.json({ received: true });
   }
+
+  // Non-push founder resolution: solo-workspace self-join (CTO Option C).
+  // Discriminated union — 0/1/>1/db-error each branch distinctly. The `>1`
+  // (ambiguous) branch is the load-bearing fail-closed defense: dropping a
+  // re-drivable event is strictly safer than misattributing an action /
+  // installation-token to the WRONG founder (the brand-survival hazard).
+  const founderResolution = await resolveSoloFounderForInstallation(
+    installationId,
+    supabase,
+  );
+  if (founderResolution.kind === "db-error") {
+    // The resolver ALREADY mirrored the real Postgres error to Sentry via
+    // reportSilentFallback (feature=github-webhook, op=founder-resolve). Do NOT
+    // re-capture a synthetic Error under the same op here — that double-reports
+    // one failure. The pino line below stays for container-stdout context; the
+    // durable Sentry signal is the resolver's. (One report per failure.)
+    logger.error(
+      { installationId, deliveryId },
+      "GitHub webhook: founder resolution DB error",
+    );
+    await releaseDedupRow();
+    return NextResponse.json({ error: "DB error" }, { status: 500 });
+  }
+  if (founderResolution.kind === "ambiguous") {
+    // >1 solo workspaces share this installation — invariant drift (two
+    // users + same fork, OR a connect/reconcile bug duplicating the install
+    // onto a second solo row). The dropped mig-052 UNIQUE made this
+    // unreachable; we now FAIL CLOSED: do NOT pick one founder, do NOT
+    // dispatch, do NOT scope-check. Page on this — it is a STANDING state
+    // (every event drops until the duplicate solo row is removed; GitHub
+    // does not retry 4xx and releaseDedupRow does not replay).
+    Sentry.captureException(
+      new Error("ambiguous founder for installation (>1 solo workspaces)"),
+      {
+        level: "error",
+        tags: { feature: "github-webhook", op: "founder-ambiguous" },
+        extra: { installationId, deliveryId, count: founderResolution.count },
+      },
+    );
+    await releaseDedupRow();
+    return NextResponse.json(
+      { error: "Ambiguous founder for installation" },
+      { status: 404 },
+    );
+  }
+  if (founderResolution.kind === "none") {
+    logger.warn(
+      { installationId, deliveryId, githubEvent },
+      "GitHub webhook: no founder for installation_id — 404",
+    );
+    // 404 mirrors GitHub's expectation that the receiver advertises
+    // "not for me"; GitHub will not retry 4xx. Release the dedup row
+    // so a future install→delivery on the same delivery_id (unlikely
+    // but legitimate) is not silently short-circuited (Kieran #1).
+    await releaseDedupRow();
+    return NextResponse.json({ error: "No founder for installation" }, { status: 404 });
+  }
+  // kind === "found": founderId is byte-equal to the resolver's `w.id`
+  // (== owner users.id by the solo invariant) and flows unchanged into
+  // isGranted (Step 6) + the dispatch payload (Step 7).
+  const founderId = founderResolution.founderId;
 
   // Step 6: scope-grant gate. fail-closed (200 without dispatch) on
   // no-grant OR DB error. The DB-error case mirrors the silent-fallback
