@@ -63,7 +63,10 @@ import { buildRoutineTools } from "./routines-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
 import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
-import { resolveActiveWorkspacePath } from "./workspace-resolver";
+import {
+  resolveActiveWorkspace,
+  resolveActiveWorkspacePath,
+} from "./workspace-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -1060,7 +1063,22 @@ export async function startAgentSession(
     // this converges the leader half). `resolveActiveWorkspacePath` fails closed
     // to the SOLO workspace (never a sibling) and always returns a path, so the
     // provisioning guard above keys only on the `users` row existing.
-    const workspacePath = await resolveActiveWorkspacePath(userId, sessionTenant);
+    // ADR-044 PR-B (resolve-id-first, #5435 fix): resolve the ACTIVE workspace
+    // id ONCE here, then thread that ONE membership-verified id into BOTH the
+    // on-disk path AND the post-session sync write (`updateLastSynced`). A
+    // db-error on the membership probe fails closed (do NOT dispatch into an
+    // unverified team, do NOT mis-key the sync to solo) — surface a retryable
+    // error rather than guessing. `resetFromClaim` is non-blocking (own solo id).
+    const activeWorkspace = await resolveActiveWorkspace(userId, sessionTenant);
+    if (!activeWorkspace.ok) {
+      throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
+    }
+    const activeWorkspaceId = activeWorkspace.workspaceId;
+    const workspacePath = await resolveActiveWorkspacePath(
+      userId,
+      sessionTenant,
+      activeWorkspaceId,
+    );
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
@@ -1163,7 +1181,7 @@ export async function startAgentSession(
     // `users.repo_status` would skip the pull for an invited member whose ACTIVE
     // (shared) workspace is connected — the exact #4543 divergence the converged
     // `workspacePath` above fixes, re-created one branch away.
-    await syncPull(userId, workspacePath);
+    await syncPull(userId, workspacePath, supabase(), activeWorkspaceId);
 
     // Create vision.md on first message if it doesn't exist (fire-and-forget).
     // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
@@ -2259,7 +2277,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // self-guards (`hasRemote` + `hasLocalCommits` + active installation),
           // so no legacy `repo_status` gate (which would silently drop an
           // invited member's leader edits to a connected shared workspace).
-          await syncPush(userId, workspacePath);
+          await syncPush(userId, workspacePath, supabase(), activeWorkspaceId);
 
           // Notify client that this leader finished streaming. The finally block
           // below emits the same event as a fallback for exception paths; guard

@@ -10,7 +10,7 @@ import { createHmac } from "node:crypto";
 const {
   mockInsert,
   mockDeleteEq,
-  mockUsersMaybeSingle,
+  mockResolveFounder,
   mockLogger,
   mockInngestSend,
   mockIsGranted,
@@ -19,7 +19,10 @@ const {
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
   mockDeleteEq: vi.fn(),
-  mockUsersMaybeSingle: vi.fn(),
+  // ADR-044 Amendment 2026-06-17b: PUSH must NOT call the founder resolver at
+  // all (the reconcile fan-out re-derives workspaces). The resolver is mocked
+  // only to assert it is never invoked on the push path (Test Scenario 5).
+  mockResolveFounder: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   mockInngestSend: vi.fn(),
   mockIsGranted: vi.fn(),
@@ -36,16 +39,14 @@ vi.mock("@/lib/supabase/server", () => ({
           delete: () => ({ eq: mockDeleteEq }),
         };
       }
-      if (table === "users") {
-        return {
-          select: () => ({
-            eq: () => ({ maybeSingle: mockUsersMaybeSingle }),
-          }),
-        };
-      }
-      return {};
+      // The route must NOT touch `users` after the cutover.
+      throw new Error(`Unexpected table access in webhook route: ${table}`);
     },
   }),
+}));
+
+vi.mock("@/server/resolve-founder-for-installation", () => ({
+  resolveSoloFounderForInstallation: mockResolveFounder,
 }));
 
 vi.mock("@/server/logger", () => ({
@@ -129,10 +130,7 @@ beforeEach(() => {
   process.env.GITHUB_APP_WEBHOOK_SECRET = SECRET;
   mockInsert.mockResolvedValue({ error: null });
   mockDeleteEq.mockResolvedValue({ error: null });
-  mockUsersMaybeSingle.mockResolvedValue({
-    data: { id: "founder-push-1" },
-    error: null,
-  });
+  mockResolveFounder.mockResolvedValue({ kind: "found", founderId: "founder-push-1" });
   mockIsGranted.mockResolvedValue({ tier: "draft_one_click" });
   mockInngestSend.mockResolvedValue(undefined);
 });
@@ -147,9 +145,8 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
       expect.objectContaining({
         id: "github-delivery-push-1",
         name: "platform/workspace.reconcile.requested",
-        v: "2",
+        v: "3",
         data: expect.objectContaining({
-          founderId: "founder-push-1",
           installationId: 42,
           deliveryId: "delivery-push-1",
           defaultBranch: "main",
@@ -159,6 +156,10 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
         }),
       }),
     );
+    // `founderId` is dropped from the v=3 payload (ADR-044 Amendment 2026-06-17b).
+    expect(mockInngestSend.mock.calls[0][0].data.founderId).toBeUndefined();
+    // PUSH must NOT resolve a founder (the reconcile re-derives workspaces).
+    expect(mockResolveFounder).not.toHaveBeenCalled();
     // Scope-grant check must NOT fire — GitHub App install IS the consent surface.
     expect(mockIsGranted).not.toHaveBeenCalled();
   });
@@ -227,17 +228,20 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 
-  it("Case 9: unmapped installation_id → 404; zero inngest.send; releaseDedupRow called", async () => {
-    mockUsersMaybeSingle.mockResolvedValueOnce({ data: null, error: null });
+  it("Case 9: unmapped installation_id on PUSH → dispatches (no founder gate); reconcile re-derives workspaces", async () => {
+    // ADR-044 Amendment 2026-06-17b: push no longer 404s on an unmapped
+    // installation. The founder reverse-lookup was removed from the push path;
+    // the reconcile fan-out keys on (installation_id, repo_url) and benignly
+    // finds zero workspaces for an uninstalled/unconnected install (the
+    // "no-workspace-match" skip lives in the consumer, not the route). So the
+    // route dispatches and 200s regardless of founder.
     const req = makePushRequest({ installationId: 9999 });
     const res = await POST(req);
-    expect(res.status).toBe(404);
-    expect(mockInngestSend).not.toHaveBeenCalled();
-    // 404 (4xx, GitHub won't retry) does NOT release the dedup row in the
-    // existing route shape — verify the established invariant.
-    // (Plan §Phase 1 Kieran #1 actually requires releaseDedupRow on 404 for push;
-    // we assert that here.)
-    expect(mockDeleteEq).toHaveBeenCalledWith("delivery_id", "delivery-push-1");
+    expect(res.status).toBe(200);
+    expect(mockResolveFounder).not.toHaveBeenCalled();
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+    expect(mockInngestSend.mock.calls[0][0].data.installationId).toBe(9999);
+    expect(mockDeleteEq).not.toHaveBeenCalled();
   });
 
   it("dispatches with releaseDedupRow on inngest.send failure (release-on-error invariant)", async () => {

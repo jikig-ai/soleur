@@ -7,9 +7,7 @@ import { createHmac } from "node:crypto";
 const {
   mockInsert,
   mockDeleteEq,
-  mockUsersMaybeSingle,
-  mockUsersSelect,
-  mockUsersEq,
+  mockResolveFounder,
   mockLogger,
   mockInngestSend,
   mockIsGranted,
@@ -19,9 +17,9 @@ const {
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
   mockDeleteEq: vi.fn(),
-  mockUsersMaybeSingle: vi.fn(),
-  mockUsersSelect: vi.fn(),
-  mockUsersEq: vi.fn(),
+  // ADR-044 Amendment 2026-06-17b: the route no longer reads `users` for the
+  // founder; it calls resolveSoloFounderForInstallation (discriminated union).
+  mockResolveFounder: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   mockInngestSend: vi.fn(),
   mockIsGranted: vi.fn(),
@@ -39,16 +37,14 @@ vi.mock("@/lib/supabase/server", () => ({
           delete: () => ({ eq: mockDeleteEq }),
         };
       }
-      if (table === "users") {
-        return {
-          select: () => ({
-            eq: () => ({ maybeSingle: mockUsersMaybeSingle }),
-          }),
-        };
-      }
-      return {};
+      // The route must NOT touch `users` after the cutover.
+      throw new Error(`Unexpected table access in webhook route: ${table}`);
     },
   }),
+}));
+
+vi.mock("@/server/resolve-founder-for-installation", () => ({
+  resolveSoloFounderForInstallation: mockResolveFounder,
 }));
 
 vi.mock("@/server/logger", () => ({
@@ -109,7 +105,7 @@ beforeEach(() => {
   process.env.GITHUB_APP_WEBHOOK_SECRET = SECRET;
   mockInsert.mockResolvedValue({ error: null });
   mockDeleteEq.mockResolvedValue({ error: null });
-  mockUsersMaybeSingle.mockResolvedValue({ data: { id: "founder-1" }, error: null });
+  mockResolveFounder.mockResolvedValue({ kind: "found", founderId: "founder-1" });
   mockIsGranted.mockResolvedValue({ tier: "draft_one_click" });
   mockIsDenied.mockReturnValue(false);
   mockInngestSend.mockResolvedValue(undefined);
@@ -180,7 +176,7 @@ describe("POST /api/webhooks/github — scope-grant gate (AC2)", () => {
   });
 
   it("returns 404 when no founder owns the installation", async () => {
-    mockUsersMaybeSingle.mockResolvedValueOnce({ data: null, error: null });
+    mockResolveFounder.mockResolvedValueOnce({ kind: "none" });
     const req = makeRequest({ body: { installation: { id: 999 } } });
     const res = await POST(req);
     expect(res.status).toBe(404);
