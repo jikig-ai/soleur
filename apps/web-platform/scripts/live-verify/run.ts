@@ -40,7 +40,7 @@
 //                          only a redacted RESULT summary is emitted.
 
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { chromium, type Browser } from "@playwright/test";
+import { chromium, type Browser, type LaunchOptions } from "@playwright/test";
 
 import { redact } from "./redact";
 
@@ -71,6 +71,12 @@ export interface Config {
   expectedRef: string;
   productionUrl: string;
   dryRun: boolean;
+  // Optional runner-portability overrides (#5485). Unset on ubuntu-latest CI,
+  // where the bundled @playwright/test chromium installs cleanly. Set on a host
+  // whose OS the bundled chromium does not support (the launch otherwise fails
+  // with "Executable doesn't exist") to point the harness at a system browser.
+  browserChannel?: string;
+  browserPath?: string;
 }
 
 function readConfig(): Config {
@@ -80,6 +86,10 @@ function readConfig(): Config {
       throw new Error(`live-verify: required env ${name} is unset`);
     }
     return v.trim();
+  };
+  const optional = (name: string): string | undefined => {
+    const v = process.env[name];
+    return v && v.trim() !== "" ? v.trim() : undefined;
   };
   const productionUrl =
     process.env.PRODUCTION_URL?.trim() ||
@@ -96,7 +106,68 @@ function readConfig(): Config {
     expectedRef: required("LIVE_VERIFY_EXPECTED_REF"),
     productionUrl,
     dryRun: process.argv.includes("--dry-run"),
+    browserChannel: optional("LIVE_VERIFY_BROWSER_CHANNEL"),
+    browserPath: optional("LIVE_VERIFY_BROWSER_PATH"),
   };
+}
+
+/**
+ * Build the Playwright launch options from the optional runner-portability
+ * overrides (#5485). Returns `{}` when neither is set so the call is
+ * byte-identical to the historical `chromium.launch()` (no `channel` key) and
+ * ubuntu-latest CI keeps using the bundled chromium. An explicit
+ * `executablePath` wins over `channel` (a concrete binary is the stronger
+ * signal). Empty strings are treated as unset.
+ */
+export function buildLaunchOptions(opts: {
+  channel?: string;
+  executablePath?: string;
+}): LaunchOptions {
+  if (opts.executablePath) return { executablePath: opts.executablePath };
+  if (opts.channel) return { channel: opts.channel };
+  return {};
+}
+
+// The shape Playwright's `context.addCookies` accepts for the injected session.
+type InjectedCookie = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "Lax";
+};
+
+/**
+ * Map the minted SSR cookie jar to the per-cookie shape the deployed app reads.
+ * Every jar entry is re-injected 1:1 (chunk-suffix names preserved); the cookie
+ * is scoped to the APP host (`app.soleur.ai`), never the supabase host.
+ *
+ * `httpOnly: false` is load-bearing (#5485). The deployed client-guarded routes
+ * (e.g. `/dashboard/chat/new`) hydrate their session via the @supabase/ssr
+ * BROWSER client, which reads the auth-token cookie from `document.cookie` —
+ * a path `httpOnly` blocks. Injecting `httpOnly: true` made the client-side
+ * guard win a hydration race and bounce to `/login` ~20% of runs (measured
+ * live, 5-iteration repro); `httpOnly: false` was 5/5 clean and matches the two
+ * proven-working cookie-injection references in the repo
+ * (`plugins/soleur/skills/ux-audit/scripts/bot-signin.ts`,
+ * `apps/web-platform/e2e/global-setup.ts`). Do NOT flip it back without a fresh
+ * live repro. The shape is locked by a characterization test.
+ */
+export function buildInjectedCookies(
+  entries: Iterable<[string, { value: string }]>,
+  appHost: string,
+): InjectedCookie[] {
+  return Array.from(entries).map(([name, c]) => ({
+    name,
+    value: c.value,
+    domain: appHost,
+    path: "/",
+    httpOnly: false,
+    secure: true,
+    sameSite: "Lax" as const,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -250,29 +321,45 @@ async function driveAndVerify(
 
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch();
+    // Launch the bundled chromium by default; honor the optional runner-
+    // portability override (#5485) on hosts whose OS the bundled browser does
+    // not support. Fail LOUD (CANT-RUN:browser-launch:<error.name>) rather than
+    // a silent fallback, so a runner-environment problem is a distinct,
+    // diagnosable result and never masquerades as a rail regression.
+    try {
+      browser = await chromium.launch(
+        buildLaunchOptions({
+          channel: cfg.browserChannel,
+          executablePath: cfg.browserPath,
+        }),
+      );
+    } catch (err) {
+      return {
+        kind: "CANT-RUN",
+        reason: `browser-launch:${(err as Error).name}`,
+      };
+    }
     const context = await browser.newContext();
-    await context.addCookies(
-      Array.from(jar.cookies.entries()).map(([name, c]) => ({
-        name,
-        value: c.value,
-        domain: prodHost,
-        path: "/",
-        httpOnly: true,
-        secure: true,
-        sameSite: "Lax" as const,
-      })),
-    );
+    await context.addCookies(buildInjectedCookies(jar.cookies.entries(), prodHost));
     const page = await context.newPage();
 
     if (cfg.dryRun) {
-      // Read-only: load the dashboard, confirm authenticated render, create
-      // NOTHING, write no artifact.
-      await page.goto(`${cfg.productionUrl}/dashboard`, {
+      // Read-only auth proof: load the chat-composer route and confirm the
+      // authenticated app shell renders (the conversations rail), creating
+      // NOTHING and writing no artifact. NOTE: /dashboard/chat/new — NOT
+      // /dashboard. For the synthetic principal (no organization yet)
+      // /dashboard renders the onboarding command-center, which has no rail;
+      // /dashboard/chat/new renders the authenticated shell WITH the rail and
+      // only materializes a conversation on message *send* (#5485). The
+      // non-dry-run gate path below already uses /dashboard/chat/new.
+      await page.goto(`${cfg.productionUrl}/dashboard/chat/new`, {
         waitUntil: "domcontentloaded",
       });
       await page.waitForSelector(RAIL, { timeout: 20_000 });
-      return { kind: "PASS", detail: "dry-run: dashboard rendered, no mutation" };
+      return {
+        kind: "PASS",
+        detail: "dry-run: authenticated app shell rendered, no mutation",
+      };
     }
 
     // Start a fresh conversation and send ONE benign message — the only path

@@ -177,7 +177,7 @@ the assessment.)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Live divergence pinned (Phase 1, MCP browser).** A live Playwright
+- [x] **AC1 — Live divergence pinned (Phase 1, MCP browser).** A live Playwright
   **MCP** repro is performed and its findings recorded in the PR body: (a) the
   EXACT cookie name(s), domain attribute, `httpOnly`, `secure`, `sameSite`, and
   value-prefix shape a real `live-verify@soleur.ai` prod login sets (captured via
@@ -185,7 +185,7 @@ the assessment.)
   EXACT name/value/options shape the harness's mint jar produces and what
   `addCookies` injects; (c) the single attribute (or empty-jar condition) that
   differs. No values are echoed — names, counts, and attribute flags only.
-- [ ] **AC2 — Fix matches the deployed reader.** `run.ts` is changed so the
+- [x] **AC2 — Fix matches the deployed reader.** `run.ts` is changed so the
   injected cookies match what the deployed `@supabase/ssr` middleware reads:
   every chunk is re-injected (the 1:1 `jar.cookies.entries()` map already does
   this — do not regress it), and the per-cookie shape carries the attributes the
@@ -193,18 +193,18 @@ the assessment.)
   the same explicit-domain shape both working refs use), `secure: true`,
   `sameSite: Lax`, and the `httpOnly` value the live repro showed the real cookie
   uses — do NOT blindly keep `httpOnly: true` if the repro shows otherwise.
-- [ ] **AC3 — Authenticated render, not /login (MCP browser).** Verified via the
+- [x] **AC3 — Authenticated render, not /login (MCP browser).** Verified via the
   Playwright **MCP** browser against prod: after injecting the harness cookies and
   navigating to `/dashboard` (dry-run path) the page renders the authenticated
   dashboard with the conversations rail present (`[data-testid="conversations-rail"]`),
   NOT `/login`. Record the final URL + rail-present assertion in the PR body.
-- [ ] **AC4 — No-secret-echo discipline preserved.** Any new diagnostic logging
+- [x] **AC4 — No-secret-echo discipline preserved.** Any new diagnostic logging
   emits cookie **names**/counts/attribute flags only — never cookie values,
   tokens, the session JSON, or `error.message`. `grep -nE 'console\.(log|error|warn)' scripts/live-verify/run.ts`
   shows every site routes through `redact()` or emits only structural metadata;
   the `error.name`-only sign-in/getUser failure paths (`run.ts:193,215`) are
   unchanged.
-- [ ] **AC5 — Unit test for the injection shape.** A new test in
+- [x] **AC5 — Unit test for the injection shape.** A new test in
   `apps/web-platform/test/live-verify/` asserts the cookie-build/injection helper
   produces the correct shape for a synthetic (non-secret) session fixture:
   derived name `sb-api-auth-token` (chunked names if applicable), host-only domain
@@ -212,8 +212,8 @@ the assessment.)
   deployed reader. Verifies via `cq-test-fixtures-synthesized-only` — the fixture
   session is fabricated, never a real token. Test runs under vitest
   (`test/**/*.test.ts`) per `vitest.config.ts` include globs.
-- [ ] **AC6 — typecheck clean.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] **AC7 — existing harness suites green.** `cd apps/web-platform && ./node_modules/.bin/vitest run test/live-verify/`
+- [x] **AC6 — typecheck clean.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] **AC7 — existing harness suites green.** `cd apps/web-platform && ./node_modules/.bin/vitest run test/live-verify/`
   (gate.test.ts + redact.test.ts + the new injection test) all pass.
 
 ### Post-merge (operator)
