@@ -62,15 +62,15 @@ This is a pure presentational change: **no change** to the handle's behavior (po
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — The dot triad is gone: `grep -c 'rounded-full' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns `0` (the three `rounded-full` dot spans are removed). The file contains no three-`<span>` grip group.
-- [ ] AC2 — A single vertical-bar grip element exists in its own block: the component renders exactly one grip element carrying a stable hook (`data-testid="kb-rail-resize-grip"`), and `grep -c 'kb-rail-resize-grip' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns `1`.
-- [ ] AC3 — The bar uses sharp corners (brand-compliant): the new grip element's className contains no `rounded` token; `grep -E 'kb-rail-resize-grip' -A1 apps/web-platform/components/dashboard/rail-resize-handle.tsx | grep -c 'rounded'` returns `0`.
-- [ ] AC4 — The bar uses wired design tokens, not raw hex: `grep -E '\[#' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns no match (BRAND-RAW-HEX clean).
-- [ ] AC5 — The handle's a11y + interaction contract is unchanged: `apps/web-platform/test/rail-resize-handle.test.tsx` still passes verbatim (no edit to its existing 6 assertions). Run: `cd apps/web-platform && ./node_modules/.bin/vitest run test/rail-resize-handle.test.tsx`.
-- [ ] AC6 — A new test asserts the bar grip renders: `test/rail-resize-handle.test.tsx` gains one `it(...)` that does `screen.getByTestId("kb-rail-resize-grip")` and asserts it is in the document; the full file passes via the AC5 command.
-- [ ] AC7 — Typecheck clean: `cd apps/web-platform && npm run typecheck` (declared script = `tsc --noEmit`; equivalently `./node_modules/.bin/tsc --noEmit`) exits 0.
-- [ ] AC8 — `transition-colors` (not `transition-all`) is preserved on the handle container; `grep -c 'transition-all' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns `0`.
-- [ ] AC9 — The wireframe `.pen` produced by the Product/UX gate exists on disk (non-empty) under `knowledge-base/product/design/kb/` and is referenced in this plan's FR list.
+- [x] AC1 — The dot triad is gone: `grep -c 'rounded-full' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns `0` (the three `rounded-full` dot spans are removed). The file contains no three-`<span>` grip group.
+- [x] AC2 — A single vertical-bar grip element exists in its own block: the component renders exactly one grip element carrying a stable hook (`data-testid="kb-rail-resize-grip"`), and `grep -c 'kb-rail-resize-grip' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns `1`.
+- [x] AC3 — The bar uses sharp corners (brand-compliant): the new grip element's className contains no `rounded` token; `grep -E 'kb-rail-resize-grip' -A1 apps/web-platform/components/dashboard/rail-resize-handle.tsx | grep -c 'rounded'` returns `0`.
+- [x] AC4 — The bar uses wired design tokens, not raw hex: `grep -E '\[#' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns no match (BRAND-RAW-HEX clean).
+- [x] AC5 — The handle's a11y + interaction contract is unchanged: `apps/web-platform/test/rail-resize-handle.test.tsx` still passes verbatim (no edit to its existing 6 assertions). Run: `cd apps/web-platform && ./node_modules/.bin/vitest run test/rail-resize-handle.test.tsx`.
+- [x] AC6 — A new test asserts the bar grip renders: `test/rail-resize-handle.test.tsx` gains one `it(...)` that does `screen.getByTestId("kb-rail-resize-grip")` and asserts it is in the document; the full file passes via the AC5 command.
+- [x] AC7 — Typecheck clean: `cd apps/web-platform && npm run typecheck` (declared script = `tsc --noEmit`; equivalently `./node_modules/.bin/tsc --noEmit`) exits 0.
+- [x] AC8 — `transition-colors` (not `transition-all`) is preserved on the handle container; `grep -c 'transition-all' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns `0`.
+- [x] AC9 — The wireframe `.pen` produced by the Product/UX gate exists on disk (non-empty) under `knowledge-base/product/design/kb/` and is referenced in this plan's FR list.
 
 ### Post-merge (operator)
 
