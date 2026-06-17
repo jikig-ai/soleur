@@ -1,6 +1,8 @@
 ---
-feature: ADR-044 PR-2a — workspace-owned repo connection (additive write relocation)
-closes: 5437
+feature: ADR-044 PR-2a — workspace-owned repo connection (confused-deputy refusal guard)
+refs: 5437
+closed_by: 5437 is closed by PR-2b (the column drop), not PR-2a
+depends_on: 4560
 adr: ADR-044
 lane: cross-domain
 status: in-progress
@@ -27,33 +29,42 @@ soak-gated **PR-2b**. This PR (PR-2a) does the soak-independent, additive half.
 Matches the plan's own Top-Risks mandate: *"additive-write-relocation must land +
 soak BEFORE the column drop (two migrations, two deploys)."*
 
-## PR-2a scope (this PR — additive only)
+## PR-2a scope (this PR — application-layer only, NO migration)
 
-The real ADR-044 gap is **team workspaces**: connect routes today write to
-`user.id` and gate on `is_workspace_owner(user.id, user.id)` (always true), so a
-team's repo connection can never be set via the UI and any member can "connect."
-Solo workspaces are already covered (the mirror keeps `workspaces` in sync; reads
-already come from `workspaces.repo_status`).
+The real ADR-044 gap is **team workspaces**: connect routes today write the
+workspaces-side repo state keyed on `user.id` (the solo mirror) and gate on
+`is_workspace_owner(user.id, user.id)` (always true post-mig-109), so a team's
+repo connection can never land on the team workspace and any member can "connect."
+Solo workspaces already work end-to-end (mirror keeps `workspaces` in sync; reads
+come from `workspaces.repo_status`).
 
-1. **Migration 110 (additive):**
-   - `ALTER TABLE workspaces ADD COLUMN repo_error text` (the only missing
-     repo-connection column; `repo_url`/`github_installation_id`/`repo_status`/
-     `repo_last_synced_at` already exist per mig 079).
-   - Credential protection: `REVOKE SELECT (github_installation_id) ON
-     public.workspaces FROM authenticated, anon` + a membership-checked SECURITY
-     DEFINER reader RPC.
-   - Membership/owner-gated SECURITY DEFINER write RPC(s) for the repo-connection
-     columns keyed on `p_workspace_id` (precedent: mig 108 `set_repo_status`).
-   - `verify/110_*.sql` sentinel.
-2. **Owner-gate finalization:** `app/api/repo/setup` + `app/api/repo/disconnect`
-   resolve the active workspace and gate on `is_workspace_owner(activeWorkspaceId,
-   user.id)` → 403 for a non-owner member. (Confused-deputy fix.)
-3. **Write relocation (additive dual-write):** connect-time repo-connection writes
-   ALSO target the resolved active workspace (team or solo) via the RPC; the
-   existing `users.*` writes stay as the rollback net.
-4. **Consumer reads:** onboarding/connect-flow repo-state reads source the active
-   workspace's `workspaces.*`. (`dsar-export.ts` + `account-delete.ts` already
-   carry no legacy-column reads per recon.)
+**No migration is required.** Recon of the live schema found mig 079 already:
+- added the repo-connection columns to `workspaces`
+  (`repo_url`/`repo_provider`/`github_installation_id`/`repo_status`/
+  `repo_last_synced_at`);
+- did the **credential protection** in full — `REVOKE SELECT ON workspaces FROM
+  authenticated` + re-GRANT of only the non-credential columns (excludes
+  `github_installation_id`), with `resolve_workspace_installation_id`
+  (membership-checked SECURITY DEFINER) as the sole reader.
+`repo_error` is deliberately NOT on `workspaces` and is NOT relocated here:
+`current-repo-url.ts:82-104` documents the error-reason staying on
+`users.repo_error` (read keyed on the dispatching user) as an accepted
+forward-looking limitation, with the team-workspace relocation explicitly
+assigned to **#4560**. So the "migration 110 + credential RPC" items from the
+original PR-2 sketch are already done / out-of-scope; dropping them shrinks the
+blast radius (no schema change) with the core fix intact.
+
+1. **Owner-gate finalization (the confused-deputy fix #5437 centers on):**
+   `app/api/repo/setup` + `app/api/repo/disconnect` resolve the active workspace
+   and gate on `is_workspace_owner(activeWorkspaceId, user.id)` → 403 for a
+   non-owner member. No-op for solo (`activeWorkspaceId === user.id`).
+2. **Write relocation (additive dual-write):** the connect-time workspaces-side
+   repo-connection writes (`setup`, `detect-installation`, `install`,
+   `disconnect`) target the resolved **active** workspace id (team or solo) rather
+   than always `user.id`; the existing `users.*` writes stay as the rollback net.
+   No-op for solo.
+3. **Consumer reads:** `dsar-export.ts` + `account-delete.ts` already carry no
+   legacy-column reads (recon-confirmed); no change needed there.
 
 ## Out of scope (deferred to PR-2b, soak-gated)
 
