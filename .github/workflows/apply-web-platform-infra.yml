@@ -347,7 +347,8 @@ jobs:
               -target=random_password.inngest_redis_password_prd \
               -target=doppler_secret.inngest_redis_password_prd \
               -target=hcloud_firewall.web \
-              -target=hcloud_firewall_attachment.web
+              -target=hcloud_firewall_attachment.web \
+              -target=doppler_secret.resend_receiving_api_key
           rc=$?
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan failed (exit $rc)."
