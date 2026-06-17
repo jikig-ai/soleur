@@ -142,7 +142,8 @@ type InjectedCookie = {
 /**
  * Map the minted SSR cookie jar to the per-cookie shape the deployed app reads.
  * Every jar entry is re-injected 1:1 (chunk-suffix names preserved); the cookie
- * is scoped to the APP host (`app.soleur.ai`), never the supabase host.
+ * is scoped to the APP host (the driven origin, e.g. `app.soleur.ai`), never
+ * the supabase host.
  *
  * `httpOnly: false` is load-bearing (#5485). The deployed client-guarded routes
  * (e.g. `/dashboard/chat/new`) hydrate their session via the @supabase/ssr
@@ -304,6 +305,10 @@ export async function verifyPrincipal(
 // ---------------------------------------------------------------------------
 
 const RAIL = '[data-testid="conversations-rail"]';
+// The authenticated app-shell route that renders the rail for the synthetic
+// principal (NOT /dashboard, which is the rail-less onboarding command-center
+// for an org-less user). Used by both the dry-run auth proof and the gate path.
+const CHAT_NEW_PATH = "/dashboard/chat/new";
 
 /**
  * Launch chromium, inject the verified session cookies against the deployed
@@ -352,7 +357,7 @@ async function driveAndVerify(
       // /dashboard/chat/new renders the authenticated shell WITH the rail and
       // only materializes a conversation on message *send* (#5485). The
       // non-dry-run gate path below already uses /dashboard/chat/new.
-      await page.goto(`${cfg.productionUrl}/dashboard/chat/new`, {
+      await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
         waitUntil: "domcontentloaded",
       });
       await page.waitForSelector(RAIL, { timeout: 20_000 });
@@ -365,7 +370,7 @@ async function driveAndVerify(
     // Start a fresh conversation and send ONE benign message — the only path
     // that materializes the conversations row the rail observes via realtime
     // (messages is not in the supabase_realtime publication; conversations is).
-    await page.goto(`${cfg.productionUrl}/dashboard/chat/new`, {
+    await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
       waitUntil: "domcontentloaded",
     });
     const input = page.getByRole("textbox").first();
