@@ -141,6 +141,18 @@ model {
         technology "Hetzner Cloud"
         description "Docker containers running web app and CLI engine"
       }
+      inngest = container "Inngest Server" {
+        technology "Self-hosted inngest (Hetzner, loopback 127.0.0.1:8288)"
+        description "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders (ADR-030)"
+      }
+      inngestPostgres = database "Supabase PostgreSQL (Inngest)" {
+        technology "PostgreSQL — dedicated EU project, Supavisor session pooler :5432"
+        description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450)"
+      }
+      inngestRedis = container "Inngest Redis" {
+        technology "Self-hosted Redis — AOF on /mnt/data"
+        description "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450)"
+      }
     }
   }
 
@@ -192,7 +204,7 @@ model {
   doppler -> engine "Runtime secrets" { technology "CLI" }
   stripe -> webapp "Payment webhooks" { technology "HTTPS" }
 
-  // ---- C4 L2 (Container) — 19 relationships ------------------------------
+  // ---- C4 L2 (Container) — 24 relationships ------------------------------
   founder -> dashboard "Browses and converses" { technology "HTTPS" }
   dashboard -> api "Calls" { technology "HTTPS" }
   api -> claude "Spawns agent sessions" { technology "WebSocket" }
@@ -212,6 +224,11 @@ model {
   auth -> supabase "Validates tokens" { technology "HTTPS" }
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
+  api -> inngest "Sends events; serves functions" { technology "HTTP loopback :8288/:3000" }
+  inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
+  inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
+  hetzner -> inngest "Hosts" { technology "systemd" }
+  doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }
 
   // ---- C4 L3 (Component — Soleur Plugin) — 20 relationships --------------
   // (the L3 `hooks -> claude` edge is identical to the L2 one above and is not
