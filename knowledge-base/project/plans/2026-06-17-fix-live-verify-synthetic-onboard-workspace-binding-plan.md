@@ -5,13 +5,65 @@ type: fix
 issue: "#5501"
 branch: feat-one-shot-5501-live-verify-synthetic-onboard
 lane: single-domain
-status: draft
+status: ready
 brand_survival_threshold: none
 ---
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
 # fix(live-verify): onboard the synthetic principal's active-workspace binding 🐛
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-17
+
+**Gates run (all PASS):** 4.4 precedent-diff (added a Precedent Diff subsection — the write
+mirrors the `set_current_workspace_id` RPC body verbatim), 4.45 round-1 realism
+(verify-the-negative + data-integrity passes, all 6 load-bearing claims confirmed against the
+repo), 4.5 network-outage (skip — no SSH/network trigger; the only `ssh`-ish token is the
+"no remote shell" IaC prose), 4.6 User-Brand Impact (present, threshold `none` + non-empty
+sensitive-path scope-out reason), 4.7 Observability (present, all 5 fields, no-ssh), 4.8
+PAT-shaped variable (none), 4.9 UI-wireframe (skip — no UI-surface file in Files lists).
+
+### Key improvements over the plan-skill output
+
+1. **Foregrounded the strongest correctness anchor:** the seed's upsert body matches the
+   `set_current_workspace_id` RPC's own `INSERT … ON CONFLICT (user_id) DO UPDATE` verbatim
+   (mig 079:293-298) — a stronger argument than the `conversations` 028/035 REST-transport
+   precedent alone.
+2. **Verified the six load-bearing claims against the repo** (verify-the-negative pass):
+   no table-level `REVOKE … FROM service_role`, no insert/update trigger on
+   `user_session_state`, RPC `auth.uid()`-28000 guard, `handle_new_user` does NOT seed
+   `user_session_state`, merge-duplicates upsert idempotency.
+3. **Confirmed binding source-of-truth:** the seed binds the workspace id resolved from the
+   **owner-membership row** (not a hard-coded `=uid`), which equals `uid` by construction for
+   a solo principal but via the authoritative lookup the RPC itself gates on.
+
+### New considerations discovered
+
+- The data-integrity pass flagged `updated_at` in the body as redundant (the column has
+  `DEFAULT now()`); kept for parity with the RPC's explicit `now()` set — harmless, no action.
+- The `limit=1` owner-membership lookup (pre-existing seed code) is safe only because the
+  synthetic principal is single-workspace; noted in Risks so the pattern is not copied to
+  multi-workspace principals without an ordering key.
+
+## Research Insights — Precedent Diff (Phase 4.4)
+
+The proposed `user_session_state` write has a **canonical in-repo precedent**: the
+`set_current_workspace_id` RPC body. The seed reproduces the same write through the table
+endpoint because the RPC requires `auth.uid()` (unavailable to a service-role caller).
+
+| Aspect | RPC `set_current_workspace_id` (mig 079:256-300) | Seed direct REST upsert (this plan) |
+|---|---|---|
+| Write statement | `INSERT … (user_id, current_workspace_id, current_organization_id, updated_at) VALUES (…) ON CONFLICT (user_id) DO UPDATE SET …` (`:293-298`) | `POST /rest/v1/user_session_state?on_conflict=user_id` + `Prefer: resolution=merge-duplicates` → identical INSERT…ON CONFLICT |
+| `current_workspace_id` source | `p_workspace_id` arg (membership-checked) | owner-membership lookup (`seed:187-189`), equals solo workspace id |
+| `current_organization_id` source | `SELECT organization_id FROM workspaces WHERE id = p_workspace_id` (`:284-286`) | `GET …/workspaces?id=eq.$workspace_id&select=organization_id` (this plan) |
+| Caller identity | `auth.uid()` (authenticated) | service-role key (RLS-bypass) |
+| Why not the RPC | n/a | RPC raises 28000 on null `auth.uid()` + EXECUTE revoked from `service_role` (`:267`, `:302`) |
+
+**Verdict:** not a novel pattern — the seed adopts the canonical write shape with the only
+difference being the transport (table endpoint vs SECURITY-DEFINER RPC), forced by the
+service-role caller context. No precedent risk.
 
 ## Overview
 
@@ -158,9 +210,16 @@ vector.`
        > /dev/null
      ```
      (`on_conflict=user_id` + `resolution=merge-duplicates` is the repo's existing
-     service-role upsert idiom — precedent: migrations 028/035 for `conversations`. Service
-     role bypasses the SELECT-only RLS on `user_session_state` (mig 060:41-43). The two FK
-     columns are `ON DELETE SET NULL` — no cascade-block.)
+     service-role upsert idiom — the REST-transport precedent is migrations 028/035 for
+     `conversations`. The **strongest correctness anchor**, though, is that this body matches
+     the `set_current_workspace_id` RPC's own write **verbatim**:
+     `INSERT INTO public.user_session_state (user_id, current_workspace_id, current_organization_id, updated_at) … ON CONFLICT (user_id) DO UPDATE SET …`
+     (mig 079:293-298) — the seed produces exactly the row the RPC would, just via the table
+     endpoint because the RPC needs `auth.uid()`. Service role bypasses the SELECT-only RLS on
+     `user_session_state` (mig 060:41-43) and the table has NO insert/update trigger (verified)
+     + NO table-level `REVOKE … FROM service_role` (the only REVOKEs are on the RPC *functions*,
+     mig 060:154/217 + mig 079:302). The two FK columns are `ON DELETE SET NULL` — no
+     cascade-block.)
    - Secret discipline (AC8 parity): no `set -x`; no response body echoed (the response
      carries nothing sensitive here, but keep the `> /dev/null` convention).
    - Update the script's header-comment ladder (`:17-30`) to list the new
