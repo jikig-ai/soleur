@@ -54,5 +54,5 @@ Phases are contract-before-consumer ordered. Token mint is `automation-status: U
 
 ## Phase 6 — gdpr-gate + verification
 
-- [ ] 6.1 Re-run `/soleur:gdpr-gate` on the PR diff; add value-level redaction only if it shows raw values without the warning.
-- [ ] 6.2 Run AC verification suite (AC1–AC7).
+- [x] 6.1 (gdpr work-gate: diff has no regulated-data surface — plan-time verdict stands, no Critical) Re-run `/soleur:gdpr-gate` on the PR diff; add value-level redaction only if it shows raw values without the warning.
+- [x] 6.2 (scripts 115/115 incl sentry-issue 16/16; bun exit 0) Run AC verification suite (AC1–AC7).
