@@ -183,6 +183,14 @@ complete LikeC4 DSL syntax before editing any model.
 
 ### Project layout
 
+> **`.c4` edits are not gated for this workflow.** The `c4-edit` runtime flag
+> (commit `3c8849655`) gates ONLY direct end-user edits in the in-browser webapp
+> editor (`PUT /api/kb/c4`, default OFF). It does **not** gate a workflow: Concierge
+> and the Claude Code plugin terminal are equally-trusted agent contexts that edit
+> the `.c4` files on the filesystem (Edit/Write) and commit them via this skill —
+> they never route through the webapp endpoint. Edit `.c4` directly; do not defer a
+> model change to "ask the Concierge."
+
 The model lives as a LikeC4 project under
 `knowledge-base/engineering/architecture/diagrams/`:
 
