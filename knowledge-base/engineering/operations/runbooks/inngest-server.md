@@ -249,11 +249,16 @@ CLI semantics (`inngest start --help`): `--postgres-uri` = "configuration and hi
   Postgres+Redis server (cross-ref `runs` to exclude already-fired → avoid double-posting a comment).
   Dual-run-drain (run old SQLite server until armed reminders fire) is the simpler fallback. **No
   `scheduled_reminders` Supabase migration / boot reconciler is needed** (removes that conditional Phase-1 scope).
-- **0.5 Pooler mode — session :5432 only.** Inngest uses sqlc prepared statements; Supabase
-  **transaction pooler :6543 breaks them** (PgBouncer transaction mode). Use **Supavisor session
-  pooler :5432**. Spike used direct session-semantics Postgres and prepared statements worked. Live
-  Supabase dedicated-project pooler reachability + owner-role grants confirmed at apply-time (the EU
-  Inngest project is provisioned via the delivered idempotent SQL bootstrap, not during the local spike).
+- **0.5 Pooler mode — session :5432 only (LIVE-confirmed).** Inngest uses sqlc prepared statements;
+  Supabase **transaction pooler :6543 breaks them** (PgBouncer transaction mode). Use **Supavisor
+  session pooler :5432**. **Live-verified 2026-06-17**: inngest v1.19.4 connected to the dedicated EU
+  project (`soleur-inngest-prd`, ref `pigsfuxruiopinouvjwy`, `aws-0-eu-west-1.pooler.supabase.com:5432`,
+  user `postgres.<ref>`) and **ran its migrations** cleanly (`ran database migrations db=postgres`).
+  The dedicated project IS the isolation boundary, so the connection uses the project's `postgres` role
+  via the pooler (verified) rather than a custom role (custom-role-via-Supavisor routing is the
+  unverified part; a dedicated role inside an already-isolated project adds pooler-auth risk for
+  marginal benefit — so the planned `inngest-supabase-bootstrap.sql` role bootstrap is intentionally
+  dropped). `INNGEST_POSTGRES_URI` is set out-of-band in Doppler prd (see inngest.tf).
 
 ### Availability coupling (permanent, post-migration)
 

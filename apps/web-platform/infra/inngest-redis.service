@@ -1,0 +1,38 @@
+[Unit]
+Description=Inngest durable Redis (AOF queue/run-state on /mnt/data, #5450)
+After=network-online.target
+Wants=network-online.target
+# LOAD-BEARING (architecture review P1-2): without RequiresMountsFor, Redis can
+# start before the `|| true` volume mount in cloud-init and write its AOF to the
+# ephemeral ROOT disk — silently reproducing the exact data-loss trap this
+# migration fixes. This pins the unit to the persistent /mnt/data mount.
+RequiresMountsFor=/mnt/data
+
+[Service]
+Type=simple
+# Runs as deploy (same as inngest-server.service) so it can read the shared
+# Doppler env file and own /mnt/data/redis — NOT the distro `redis` user (which
+# cannot read /etc/default/inngest-server and would split the doppler-auth source).
+User=deploy
+Group=deploy
+EnvironmentFile=/etc/default/inngest-server
+# Password injected from Doppler prd at runtime, inside a bash -c so the literal
+# $INNGEST_REDIS_PASSWORD (NOT its value) appears in `ps`/journal — same
+# defense as inngest-server.service. Shipped as a FILE (not a TF inline heredoc)
+# because the doppler-wrapped nested single-quotes do not survive templating.
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/bin/redis-server /etc/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'
+Restart=on-failure
+RestartSec=5
+# Sized for the modest queue/run-state; bound so a runaway cannot starve the
+# co-located web-platform + inngest-server on the shared cx33 (8GB).
+MemoryMax=384M
+CPUQuota=50%
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/mnt/data/redis
+ReadOnlyPaths=/etc/redis/inngest-redis.conf
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
