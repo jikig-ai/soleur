@@ -12,32 +12,46 @@ import { describe, expect, it } from "vitest";
 import { buildLaunchOptions, buildInjectedCookies } from "../../scripts/live-verify/run";
 
 describe("buildLaunchOptions (runner-portability override)", () => {
+  // Override branches carry the Wayland GPU-crash stabilization flags; the
+  // no-override (CI) branch stays `{}` byte-identical. Rationale: see the
+  // buildLaunchOptions comment in scripts/live-verify/run.ts.
+  const WAYLAND_ARGS = ["--ozone-platform=x11", "--disable-gpu"];
+
   it("returns an empty object when no override is set (byte-identical to bundled chromium)", () => {
     const opts = buildLaunchOptions({});
     expect(opts).toEqual({});
     // Must NOT carry a `channel: undefined` key — that is not the same as omitting it.
     expect("channel" in opts).toBe(false);
     expect("executablePath" in opts).toBe(false);
+    // CI path must NEVER carry the override-only stabilization args (ubuntu-latest
+    // headless bundled chromium has no X server for --ozone-platform=x11).
+    expect("args" in opts).toBe(false);
   });
 
-  it("passes through a browser channel when only the channel is set", () => {
-    expect(buildLaunchOptions({ channel: "chrome" })).toEqual({ channel: "chrome" });
-  });
-
-  it("passes through an executablePath when only the path is set", () => {
-    expect(buildLaunchOptions({ executablePath: "/usr/bin/google-chrome" })).toEqual({
-      executablePath: "/usr/bin/google-chrome",
+  it("passes through a browser channel + Wayland-stabilization args when only the channel is set", () => {
+    expect(buildLaunchOptions({ channel: "chrome" })).toEqual({
+      channel: "chrome",
+      args: WAYLAND_ARGS,
     });
   });
 
-  it("prefers executablePath over channel when both are set (explicit binary wins)", () => {
+  it("passes through an executablePath + Wayland-stabilization args when only the path is set", () => {
+    expect(buildLaunchOptions({ executablePath: "/usr/bin/google-chrome" })).toEqual({
+      executablePath: "/usr/bin/google-chrome",
+      args: WAYLAND_ARGS,
+    });
+  });
+
+  it("prefers executablePath over channel when both are set (explicit binary wins) and still carries the args", () => {
     const opts = buildLaunchOptions({ channel: "chrome", executablePath: "/opt/chromium/chrome" });
-    expect(opts).toEqual({ executablePath: "/opt/chromium/chrome" });
+    expect(opts).toEqual({ executablePath: "/opt/chromium/chrome", args: WAYLAND_ARGS });
     expect("channel" in opts).toBe(false);
   });
 
-  it("treats empty-string overrides as unset", () => {
-    expect(buildLaunchOptions({ channel: "", executablePath: "" })).toEqual({});
+  it("treats empty-string overrides as unset (no override → no args)", () => {
+    const opts = buildLaunchOptions({ channel: "", executablePath: "" });
+    expect(opts).toEqual({});
+    expect("args" in opts).toBe(false);
   });
 });
 
