@@ -304,7 +304,8 @@ describe("buildEmailTriageTools", () => {
     expect(recorded.or).toContain(PROBE_EXCLUSION_OR);
     expect(recorded.or).toContain(PINNED_EXCLUSION_OR);
     expect(recorded.neq).toContainEqual(["status", "archived"]);
-    expect(recorded.eq).toContainEqual(["user_id", "u1"]);
+    // mig 111: workspace-shared reads gated SOLELY by RLS — no `.eq("user_id")`.
+    expect(recorded.eq).not.toContainEqual(["user_id", "u1"]);
     expect(recorded.order).toContainEqual(["received_at", { ascending: false }]);
     // L1: pinned statutory query present (uncapped) + rest query capped.
     expect(recorded.not).toContainEqual(["statutory_class", "is", null]);
@@ -361,11 +362,13 @@ describe("buildEmailTriageTools", () => {
     );
   });
 
-  test("userId is captured in closure — different builders scope to their own user", async () => {
+  test("userId is captured in closure — scoping is the per-user tenant client (mig 111: RLS by auth.uid(), not a user_id filter)", async () => {
     const list = await getTool("email_triage_list", "u2");
     await list.handler({});
+    // The tenant client is minted for u2 → RLS evaluates auth.uid()=u2 against
+    // the workspace-owner predicate. There is NO `.eq("user_id")` filter.
     expect(mockGetFreshTenantClient).toHaveBeenCalledWith("u2");
-    expect(recorded.eq).toContainEqual(["user_id", "u2"]);
+    expect(recorded.eq).not.toContainEqual(["user_id", "u2"]);
   });
 
   test("email_triage_get derives dueDate/dueLabel/catalogExcerpt from the statutory registry", async () => {
