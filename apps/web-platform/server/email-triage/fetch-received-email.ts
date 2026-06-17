@@ -26,8 +26,16 @@ export interface ReceivedEmailBody {
 export async function fetchReceivedEmail(
   resendEmailId: string,
 ): Promise<ReceivedEmailBody> {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) throw new Error("RESEND_API_KEY must be set");
+  // Least-privilege split (#5468): the inbound body fetch
+  // (`resend.emails.receiving.get` → GET /emails/receiving/{id}) needs the
+  // *receiving-read* permission. The shared send-scoped (restricted) Resend
+  // key lacks it — reusing it here threw `restricted_api_key` and stranded
+  // every non-probe email at a permanent NULL (Sentry WEB-PLATFORM-35). Read a
+  // dedicated receiving-scoped key ONLY; deliberately NO fallback to the send
+  // key — a prod fallback silently reproduces the exact bug behind a warn. Dev
+  // sets RESEND_RECEIVING_API_KEY equal to the send key in .env.example.
+  const key = process.env.RESEND_RECEIVING_API_KEY;
+  if (!key) throw new Error("RESEND_RECEIVING_API_KEY must be set");
   const resend = new Resend(key);
   const { data, error } = await resend.emails.receiving.get(resendEmailId);
   if (error || !data) {

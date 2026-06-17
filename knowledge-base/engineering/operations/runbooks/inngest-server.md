@@ -271,10 +271,29 @@ project + co-located Redis keep the blast radius off the main app's project.
 
 The KEYSTONE risk (plan §Sharp Edges): armed `reminder.scheduled` events live ONLY in Inngest state —
 there is no app-side reminder store. A fresh-Postgres cutover loses them unless they are enumerated and
-re-armed. Run these steps in order; the connection string is set out-of-band in Doppler prd
-(`INNGEST_POSTGRES_URI`, see inngest.tf) and must be **URL-safe** (the provisioned value is hex — no
-percent-encoding needed; if rotated to a password with reserved chars, URL-encode before setting).
+re-armed. Run these steps in order, **starting with Step 0** (the secret-provisioning precondition —
+`INNGEST_REDIS_PASSWORD` is not created at merge time); the connection string is set out-of-band in
+Doppler prd (`INNGEST_POSTGRES_URI`, see inngest.tf) and must be **URL-safe** (the provisioned value is
+hex — no percent-encoding needed; if rotated to a password with reserved chars, URL-encode before
+setting).
 
+0. **Provision the Redis secret** (one-time precondition — `INNGEST_REDIS_PASSWORD` is NOT created at
+   merge time; the `apply-web-platform-infra.yml` allow-list now reconciles it on the next infra merge,
+   but for an immediate cutover run, apply it explicitly here). `INNGEST_POSTGRES_URI` is already present
+   (set out-of-band, see inngest.tf). From the repo root:
+   ```bash
+   export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID  -p soleur -c prd_terraform --plain)
+   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+   terraform -chdir=apps/web-platform/infra init -input=false
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform -chdir=apps/web-platform/infra apply \
+       -target=random_password.inngest_redis_password_prd \
+       -target=doppler_secret.inngest_redis_password_prd
+   # Confirm the secret now exists (read-only, no SSH):
+   doppler secrets get INNGEST_REDIS_PASSWORD -p soleur -c prd --plain   # → 48-char URL-safe value
+   ```
+   If the value is already present (a prior auto-apply or manual run minted it), this is a clean no-op —
+   proceed to step 1.
 1. **Quiesce arming** (no reminder armed into the doomed old SQLite mid-cutover):
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE=1 -p soleur -c prd --no-interactive
