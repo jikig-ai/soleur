@@ -14,7 +14,7 @@ where the unverified claim originates and then sails through work→ship.
 
 When the operator pushed back and a Playwright attempt was finally run, the
 "operator-gated" assertion was **false**:
-- `resend.com/api-keys` loaded a **fully authenticated** session (`ops@jikigai.com`,
+- `resend.com/api-keys` loaded a **fully authenticated** session (the operator's ops account,
   Pro) — no login, no MFA, no CAPTCHA.
 - "Create API key" opened a form with Permission defaulting to **Full access**;
   the key was created end-to-end via Playwright. No human gate of any kind.
