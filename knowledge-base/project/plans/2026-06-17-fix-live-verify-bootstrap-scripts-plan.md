@@ -11,6 +11,34 @@ brand_survival_threshold: none
 
 # fix(live-verify): make the bootstrap scripts functional as-written 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-17
+
+**Gates run (all PASS):** 4.4 precedent-diff (added a Precedent Diff section), 4.45
+round-1 realism (verify-the-negative + 7-check citation re-grep, all confirmed), 4.5
+network-outage (skip — the only `ssh` token is the literal "NO ssh" discoverability
+note; the apply drives `random_password`/`doppler_secret`, no SSH provisioner), 4.6
+User-Brand Impact (present, threshold `none` + reason), 4.7 Observability (present),
+4.8 PAT-shaped variable (none), 4.9 UI-wireframe (skip — no UI surface).
+
+### Key improvements over the plan-skill output
+1. **Precedent diff** added — side-by-side against `apply-web-platform-infra.yml`
+   (the canonical prd_terraform+tf-var+R2 invocation) with line citations, plus the
+   one intentional divergence (single `-target` apply vs saved `tfplan`).
+2. **Citation accuracy** — the realism pass re-grepped every file:line claim. One
+   correction: the bootstrap header Steps block is `:12-17` (was `:12-20`); fixed in
+   AC5 + Files-to-Edit.
+3. **Confirmed all 7 load-bearing facts** live: defect-1 line (`:182`), constraint
+   (`011:10`), current bootstrap shape (no transformer/no AWS export), precedent step
+   lines, test-runner glob (`test-all.sh:183`), negative-AC zero, and the two
+   `live-verify.tf` resources (`:19`/`:24`).
+
+### New considerations discovered
+- None that change scope. The fix remains a one-literal swap + a Step-1 rework
+  mirroring an existing working workflow + one test assertion. The plan-review +
+  deepen passes converged on the same minimal shape.
+
 ## Overview
 
 The live-verification harness (#5452/#5453) shipped two committed bootstrap shell
@@ -82,7 +110,7 @@ prod-write safety guards are untouched.
 
 _(Trimmed per plan-review consensus: AC list collapsed to the distinct post-condition
 gates. The AWS-ordering ordering constraint, prod-guard non-regression, and shellcheck
-are covered by AC3/AC5 + the standard suite gate rather than separate checkboxes.)_
+are covered by AC3 + the standard suite gate rather than separate checkboxes.)_
 
 ### Pre-merge (PR)
 
@@ -118,7 +146,7 @@ are covered by AC3/AC5 + the standard suite gate rather than separate checkboxes
       Verify: `grep -n 'doppler run -p soleur -c prd -- bash' apps/web-platform/scripts/bootstrap-live-verify.sh`
       and `grep -n 'DOPPLER_CONFIG' apps/web-platform/scripts/bootstrap-live-verify.sh`.
 - [ ] **AC5 (bootstrap header truthful):** the `bootstrap-live-verify.sh` header Steps
-      comment block (`:12-20`) reflects the dual-config invocation (Step 1 →
+      comment block (`:12-17`) reflects the dual-config invocation (Step 1 →
       `prd_terraform` + tf-var + bare R2 creds; Step 2 → `prd`). Verify by reading the
       header: it no longer implies a single-config flow.
 - [ ] **AC6 (negative AC — no CI wiring):** the scripts remain agent-run-local-only.
@@ -224,7 +252,7 @@ DHH review both confirmed this is the right call.)
   `"ready"` at `:182` (code) and `:23` (header comment).
 - `apps/web-platform/scripts/bootstrap-live-verify.sh` — rework Step 1 (`:40-44`) to the
   canonical triplet (bare AWS exports from `prd_terraform` + `--name-transformer tf-var`
-  apply wrapper); update the header Steps comment block (`:12-20`) to reflect the
+  apply wrapper); update the header Steps comment block (`:12-17`) to reflect the
   dual-config invocation (Step 1 → prd_terraform, Step 2 → prd); keep Step 2 under `-c prd`.
 - `apps/web-platform/scripts/seed-live-verify-user.test.sh` — add the
   `repo_status: "ready"` assertion (and forbidden-literal check) after case 4.
@@ -264,20 +292,39 @@ terraform invocation, addressed inline by mirroring the canonical workflow step;
 no IaC *change* — the `.tf` resources are unchanged, only the script that invokes
 them.)
 
+## Precedent Diff (deepen-plan Phase 4.4)
+
+The terraform invocation is a **pattern-bound behavior** with a canonical sibling
+precedent in-repo. Verified side-by-side (all line numbers confirmed live by the
+realism pass):
+
+| Aspect | Precedent (`apply-web-platform-infra.yml`) | This plan (`bootstrap-live-verify.sh`) |
+|---|---|---|
+| Bare AWS creds | `:213-235` — `doppler secrets get AWS_ACCESS_KEY_ID --plain` under `DOPPLER_CONFIG: prd_terraform`, exported to `$GITHUB_ENV` (bare, outside the wrapper) | `export AWS_*=$(doppler secrets get … -c prd_terraform --plain)` before the wrapper |
+| init | `:244` — `terraform init -input=false -lockfile=readonly` | `terraform init -input=false -lockfile=readonly` (parity adopted) |
+| apply | `:399-400` — `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply` | identical wrapper, `-target`ed to the two live-verify resources |
+
+The plan mirrors the precedent exactly. The one intentional divergence: the precedent
+uses a saved `tfplan` (plan-then-apply for the destructive-change guard); the bootstrap
+does a single `apply -target=… -auto-approve` because it is a tiny, non-destructive,
+operator-acknowledged two-resource apply on already-provisioned infra (no guard needed —
+the `-target` set is the scope guard). The seed step (`-c prd`) has no infra-side
+precedent; it is the existing `seed-dev-users.sh`/`seed-qa-user.sh` prod-write pattern.
+
 ## Risks & Mitigations
 
 - **Risk:** the reworked Step 1 quoting/expansion is subtly wrong and breaks the
   apply in a new way. **Mitigation:** mirror the *exact* working pattern from
   `apply-web-platform-infra.yml:213-264` and the runbook learning triplet;
-  shellcheck both scripts (AC10).
+  shellcheck both scripts (AC7).
 - **Risk:** `prd_terraform` vs `prd` config confusion recurs.
   **Mitigation:** the dual-config split is the whole point of the fix — Step 1
-  prd_terraform (infra creds), Step 2 prd (Supabase + password). AC4/AC6 lock each.
+  prd_terraform (infra creds), Step 2 prd (Supabase + password). AC3/AC4 lock each.
   See `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md`
   (service tokens are scoped to one config; the `-c` flag works for the *personal*
   CLI token used in local agent runs).
 - **Risk:** AWS creds exported inside the transformer wrapper (the original-bug
-  shape). **Mitigation:** AC5 explicitly asserts the exports precede the wrapper;
+  shape). **Mitigation:** AC3 explicitly asserts the exports precede the wrapper;
   precedent `knowledge-base/project/learnings/integration-issues/2026-04-05-terraform-doppler-dual-credential-pattern.md`
   documents why (`--name-transformer tf-var` rewrites `AWS_*` → `TF_VAR_aws_*`,
   which the S3/R2 backend ignores → SSO fallback → auth failure).
@@ -290,7 +337,7 @@ them.)
 - The `--name-transformer tf-var` flag and the **bare** AWS exports are BOTH
   load-bearing and easy to drop independently. Dropping the transformer → `No value
   for required variable`; dropping the bare exports (or putting them inside the
-  wrapper) → R2 backend auth failure. Verify both halves (AC4 + AC5).
+  wrapper) → R2 backend auth failure. Both halves are locked by AC3.
 - The test addition is a **static-source** check (greps the script text), not a
   live curl — the seed's write paths require prod service-role creds and must never
   run in CI (`hr-dev-prd-distinct-supabase-projects`). The 23514 is locked by
