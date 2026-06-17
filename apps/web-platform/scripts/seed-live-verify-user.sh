@@ -20,7 +20,7 @@
 #   - auth user (email_confirm:true) → handle_new_user trigger (mig 053, ADR-038)
 #     auto-provisions a solo workspace whose id == user.id + owner membership
 #   - public.users ladder: tc_accepted_version (= lib/legal/tc-version.ts),
-#     workspace_status=ready, repo_status=connected, workspace_path
+#     workspace_status=ready, repo_status=ready, workspace_path
 #   - workspaces row: repo_status=ready AND repo_url=<synthetic sentinel> (the
 #     seed-qa-user.sh gap; getCurrentRepoUrl reads workspaces.repo_url, not
 #     users.repo_url — server/current-repo-url.ts:58-62)
@@ -179,7 +179,7 @@ curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
     --arg tc "$TC_VERSION" \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg wp "/workspaces/$user_id" \
-    '{tc_accepted_version: $tc, tc_accepted_at: $ts, workspace_status: "ready", repo_status: "connected", workspace_path: $wp}')" \
+    '{tc_accepted_version: $tc, tc_accepted_at: $ts, workspace_status: "ready", repo_status: "ready", workspace_path: $wp}')" \
   > /dev/null
 
 # Resolve the solo workspace (handle_new_user trigger sets id == user.id; the
