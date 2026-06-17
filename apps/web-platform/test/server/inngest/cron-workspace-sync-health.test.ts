@@ -29,22 +29,48 @@ let USERS_ROWS: {
   github_installation_id?: number | null;
 }[] = [];
 let USERS_QUERY_ERROR: { message: string } | null = null;
+// #5470: per-row install is resolved from the user's solo WORKSPACE via
+// resolveInstallationIdForWorkspace (from("workspaces").eq("id", id).maybeSingle()).
+// Backfilled-solo invariant (mig 080): the solo workspace install mirrors the
+// user's install, so by default the workspace lookup returns the matching
+// USERS_ROWS row's github_installation_id. WORKSPACE_INSTALL_BY_ID overrides that
+// per-id — used by the newly-connected scenarios (NULL users install, populated
+// workspaces install) that the old users-predicate would have false-excluded.
+let WORKSPACE_INSTALL_BY_ID: Record<string, number | null> = {};
 const eqSpy = vi.fn();
 const isSpy = vi.fn();
 const notSpy = vi.fn();
 
+function resolveWorkspaceInstall(id: string | undefined): number | null {
+  if (id !== undefined && id in WORKSPACE_INSTALL_BY_ID) {
+    return WORKSPACE_INSTALL_BY_ID[id];
+  }
+  return USERS_ROWS.find((r) => r.id === id)?.github_installation_id ?? null;
+}
+
 const serviceFrom = vi.fn((table: string) => {
   if (table === "workspaces") {
+    // Two consumers share this chain: the arm-1 scan
+    // (.select().eq("repo_status","ready").is("github_installation_id",null) → await)
+    // and the per-row resolver (.select().eq("id", wsId).maybeSingle()). Capture
+    // the id-eq so maybeSingle returns that workspace's install.
+    let idEqVal: string | undefined;
     const chain = {
       select: () => chain,
       eq: (col: string, val: unknown) => {
         eqSpy(col, val);
+        if (col === "id") idEqVal = val as string;
         return chain;
       },
       is: (col: string, val: unknown) => {
         isSpy(col, val);
         return chain;
       },
+      maybeSingle: () =>
+        Promise.resolve({
+          data: { github_installation_id: resolveWorkspaceInstall(idEqVal) },
+          error: null,
+        }),
       then: (resolve: (v: unknown) => unknown) =>
         Promise.resolve({
           data: WORKSPACE_QUERY_ERROR ? null : WORKSPACE_ROWS,
@@ -125,6 +151,7 @@ beforeEach(() => {
   WORKSPACE_QUERY_ERROR = null;
   USERS_ROWS = [];
   USERS_QUERY_ERROR = null;
+  WORKSPACE_INSTALL_BY_ID = {};
   serviceFrom.mockClear();
   eqSpy.mockClear();
   isSpy.mockClear();
@@ -241,17 +268,23 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
   const okTrue = { at: "2026-05-31T00:00:00Z", trigger: "webhook_push", ok: true, sync_completed_at: 2 };
   const legacy = { date: "2026-05-29", count: 3 };
 
-  it("scans users for ready + installed (github_installation_id IS NOT NULL)", async () => {
+  it("scans users for ready (no install predicate — #5470 dropped users.github_installation_id)", async () => {
+    USERS_ROWS = [{ id: "user-X", kb_sync_history: [okTrue, okFalse] }];
+    WORKSPACE_INSTALL_BY_ID = { "user-X": 42 };
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
     expect(serviceFrom).toHaveBeenCalledWith("users");
     expect(eqSpy).toHaveBeenCalledWith("repo_status", "ready");
-    expect(notSpy).toHaveBeenCalledWith("github_installation_id", "is", null);
+    // The users scan no longer carries the install predicate (it would break at
+    // PR-2b's column drop); install is resolved per-row from workspaces instead.
+    expect(notSpy).not.toHaveBeenCalledWith("github_installation_id", "is", null);
+    expect(eqSpy).toHaveBeenCalledWith("id", "user-X"); // per-row workspaces resolve
   });
 
   it("reports a user whose LATEST row is ok:false exactly once (op:stale-sync-failed, hashed userId)", async () => {
-    USERS_ROWS = [{ id: "user-X", kb_sync_history: [okTrue, okFalse] }];
+    // Installed user (backfilled-solo: the workspace install mirrors the user's).
+    USERS_ROWS = [{ id: "user-X", kb_sync_history: [okTrue, okFalse], github_installation_id: 99 }];
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
@@ -284,6 +317,41 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
 
   it("does NOT report when history is empty (went-quiet / NULL-install class, deferred #4717)", async () => {
     USERS_ROWS = [{ id: "user-empty", kb_sync_history: [] }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#5470 Test Scenario 6: reports a newly-connected user (NULL legacy users install, populated workspaces install) — the old predicate false-excluded this row", async () => {
+    // users.github_installation_id is NULL (newly-connected, post-PR-2 write-
+    // cutover) but the solo workspace install IS populated. The old
+    // .not("github_installation_id","is",null) users-predicate would have
+    // excluded this row → false negative; the per-row workspaces resolve catches it.
+    USERS_ROWS = [
+      { id: "user-new", kb_sync_history: [okTrue, okFalse], github_installation_id: null },
+    ];
+    WORKSPACE_INSTALL_BY_ID = { "user-new": 777 };
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "workspace-sync-health",
+        op: "stale-sync-failed",
+        extra: expect.objectContaining({ userId: "user-new" }),
+      }),
+    );
+  });
+
+  it("#5470: skips a row whose solo workspace has no install (per-row equivalent of the dropped predicate)", async () => {
+    // Latest ok:false but the workspace install is NULL → genuinely not connected
+    // → skipped (not reported), exactly as the old predicate filtered it out.
+    USERS_ROWS = [
+      { id: "user-noinstall", kb_sync_history: [okTrue, okFalse], github_installation_id: null },
+    ];
+    WORKSPACE_INSTALL_BY_ID = { "user-noinstall": null };
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
@@ -487,6 +555,26 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
 
     expect(getDefaultBranchHeadCommitAtSpy).toHaveBeenCalledTimes(1);
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#5470 Test Scenario 7: fires for a newly-connected user (NULL legacy users install, workspaces install resolves the probe)", async () => {
+    // users.github_installation_id NULL, but the solo workspace install IS set →
+    // the resolver supplies the install for the GitHub probe (keyed id=user.id).
+    USERS_ROWS = [userRow({ id: "user-newq", github_installation_id: null, lastOkDaysAgo: 10 })];
+    WORKSPACE_INSTALL_BY_ID = { "user-newq": 555 };
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now() - 1 * DAY);
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    // Probe runs with the WORKSPACE-resolved install (555), not the NULL users col.
+    expect(getDefaultBranchHeadCommitAtSpy).toHaveBeenCalledWith(555, "acme", "widget");
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        op: "went-quiet",
+        extra: expect.objectContaining({ userId: "user-newq" }),
+      }),
+    );
   });
 
   it("does NOT fire for empty or legacy {date,count} history", async () => {

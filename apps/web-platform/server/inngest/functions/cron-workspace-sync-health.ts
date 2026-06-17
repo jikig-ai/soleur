@@ -24,6 +24,7 @@
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { getDefaultBranchHeadCommitAt } from "@/server/github-app";
+import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import { postSentryHeartbeat, type HandlerArgs } from "./_cron-shared";
 
 const SENTRY_MONITOR_SLUG = "cron-workspace-sync-health";
@@ -104,16 +105,18 @@ export async function cronWorkspaceSyncHealthHandler({
   // class IS installed, so the webhook reaches it, but the sync keeps failing
   // and the user just sees a stale tree. kb_sync_history lives on `users` only
   // (ADR-044 mirrored repo cols — not history — to workspaces), so this scan
-  // targets `users`, unlike the workspaces scan above. Read-only; reports
-  // in-place and deliberately does NOT widen the function's ScanResult return.
+  // still reads `users` for the history; the INSTALL is resolved per-row from
+  // the user's solo `workspaces` row via resolveInstallationIdForWorkspace
+  // (#5470 — the legacy `users` install predicate is dropped ahead of PR-2b's
+  // column drop, which removes that column). Read-only; reports in-place and
+  // deliberately does NOT widen the function's ScanResult return.
   await step.run("scan-stale-sync-failed", async (): Promise<{ reported: number }> => {
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
     const { data, error } = await service
       .from("users")
       .select("id, kb_sync_history")
-      .eq("repo_status", "ready")
-      .not("github_installation_id", "is", null);
+      .eq("repo_status", "ready");
     if (error) {
       reportSilentFallback(error, {
         feature: SENTRY_FEATURE,
@@ -136,6 +139,14 @@ export async function cronWorkspaceSyncHealthHandler({
         "ok" in latest &&
         (latest as { ok: unknown }).ok === false
       ) {
+        // Resolve the install from the user's solo workspace. A null result
+        // (not connected) is the dropped install predicate's per-row
+        // equivalent — skip, do not report. Newly-connected users (whose legacy
+        // `users` install column is NULL but whose `workspaces` row is
+        // populated) are now CAUGHT here, where the old `users` predicate
+        // false-negatively excluded them (#5470 Test Scenario 6).
+        const install = await resolveInstallationIdForWorkspace(r.id, service);
+        if (install === null) continue;
         reportSilentFallback(
           new Error("ready+installed workspace's latest KB sync failed"),
           {
@@ -189,9 +200,8 @@ export async function cronWorkspaceSyncHealthHandler({
       const service = createServiceClient();
       const { data, error } = await service
         .from("users")
-        .select("id, repo_url, github_installation_id, kb_sync_history")
-        .eq("repo_status", "ready")
-        .not("github_installation_id", "is", null);
+        .select("id, repo_url, kb_sync_history")
+        .eq("repo_status", "ready");
       if (error) {
         reportSilentFallback(error, {
           feature: SENTRY_FEATURE,
@@ -205,7 +215,6 @@ export async function cronWorkspaceSyncHealthHandler({
           | {
               id: string;
               repo_url: string | null;
-              github_installation_id: number | null;
               kb_sync_history: unknown;
             }[]
           | null) ?? [];
@@ -213,8 +222,9 @@ export async function cronWorkspaceSyncHealthHandler({
       const maxGapMs = KB_WENT_QUIET_MAX_GAP_DAYS * 24 * 60 * 60 * 1000;
       let wentQuiet = 0;
       for (const r of rows) {
-        // Need both a reachable installation and a repo to probe.
-        if (!r.repo_url || !r.github_installation_id) continue;
+        // Need a repo to probe; the install is resolved per-row below (from the
+        // user's solo workspace) just before the GitHub probe that consumes it.
+        if (!r.repo_url) continue;
         // Latest row only — `at(-1).ok === true` is the went-quiet gate AND the
         // mutual-exclusion boundary with arm 2 (which fires on `ok === false`).
         // The `'ok' in latest` guard excludes legacy {date,count} rows.
@@ -246,10 +256,16 @@ export async function cronWorkspaceSyncHealthHandler({
         const [owner, repo] = slug.split("/");
         if (!owner || !repo) continue;
 
+        // Resolve the install from the user's solo workspace (replaces the
+        // dropped `users` install select+predicate, #5470). Null → not
+        // connected → skip, exactly as the old predicate filtered it out.
+        const install = await resolveInstallationIdForWorkspace(r.id, service);
+        if (install === null) continue;
+
         let headCommitAt: number | null;
         try {
           headCommitAt = await getDefaultBranchHeadCommitAt(
-            r.github_installation_id,
+            install,
             owner,
             repo,
           );

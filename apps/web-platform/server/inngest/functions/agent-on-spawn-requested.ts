@@ -12,10 +12,12 @@
 // LOAD-BEARING INVARIANTS (PR-A I1/I2/I3/I5 inherited; I4 deliberately
 // REVERSED — this is the first raw `@anthropic-ai/sdk` site in
 // apps/web-platform/server/):
-//   I1 — `installationId` is server-resolved INSIDE step 1 from
-//        `users.github_installation_id` keyed by the SERVER-DERIVED
-//        `founderId`. The event payload type OMITS `installationId`;
-//        any consumer reading `event.data.installationId` fails `tsc`.
+//   I1 — `installationId` is server-resolved INSIDE step 1 via
+//        `resolveInstallationIdForWorkspace` (service-role read of the
+//        workspaces installation credential) keyed by the SERVER-DERIVED
+//        `founderId` (the user's solo workspace id; ADR-038 N2 / ADR-044).
+//        The event payload type OMITS `installationId`; any consumer
+//        reading `event.data.installationId` fails `tsc`.
 //   I2 — Every Octokit call routes through `createGitHubAppClient(
 //        installationId, founderId)` (PA-16 factory hook).
 //   I3 — Idempotency key = `event.data.actionSendId`. Inngest's
@@ -36,6 +38,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { inngest } from "@/server/inngest/client";
 import { getServiceClient } from "@/lib/supabase/service";
 import { createGitHubAppClient } from "@/server/github/app-client";
+import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import { reportSilentFallback } from "@/server/observability";
 import { runWithByokLease } from "@/server/byok-lease";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
@@ -222,24 +225,20 @@ export async function agentOnSpawnRequestedHandler({
   let installationId: number;
   try {
     installationId = await step.run("resolve-installation", async () => {
-      const sb = getServiceClient();
-      const { data, error } = await sb
-        .from("users")
-        .select("github_installation_id")
-        .eq("id", founderId)
-        .maybeSingle();
-      if (error) {
-        throw new Error(
-          `agent-on-spawn: users select error for founder ${founderId}: ${error.message}`,
-        );
-      }
-      const row = data as { github_installation_id?: number | null } | null;
-      if (!row?.github_installation_id) {
+      // Service-role read of the user's solo workspace install credential
+      // (workspaces.github_installation_id keyed id=founderId). Resolver
+      // mirrors db-error → null to Sentry; a null result (not-connected,
+      // not-found, or read error) throws → github_installation_unauthorized.
+      const install = await resolveInstallationIdForWorkspace(
+        founderId,
+        getServiceClient(),
+      );
+      if (install === null) {
         throw new Error(
           `agent-on-spawn: no github_installation_id for founder ${founderId}`,
         );
       }
-      return row.github_installation_id;
+      return install;
     });
   } catch (err) {
     return persistFailure(step, {

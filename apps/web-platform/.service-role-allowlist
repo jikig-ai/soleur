@@ -165,17 +165,21 @@ apps/web-platform/server/workspace-resolver.ts
 # ── feat-wire-today-card-spawn-agent-buttons (#4124, PR-A) ──────────
 #
 # PERMANENT — agent-on-spawn-requested.ts is the Inngest function that
-# consumes `agent.spawn.requested` events, resolves the operator's
-# `users.github_installation_id` (read), then UPDATEs the three new
-# acknowledgment columns on `action_sends` (write). Both surfaces need
-# service-role:
-#   - users.github_installation_id read: the operator's own row, but
-#     the Inngest function runs with no cookie context (the event was
-#     signed by INNGEST_SIGNING_KEY; founderId is server-derived from
-#     the dashboard /send route's auth.getUser()). Tenant-JWT path
-#     would require synthesizing a JWT for the founder, which the
-#     factory hook already does for the GitHub App client; layering
-#     another JWT mint for a single column SELECT is over-engineered.
+# consumes `agent.spawn.requested` events, resolves the operator's GitHub
+# App install, then UPDATEs the three new acknowledgment columns on
+# `action_sends` (write). Both surfaces need service-role:
+#   - install read (#5470, ADR-044): the install is now resolved from the
+#     operator's solo `workspaces` row via resolveInstallationIdForWorkspace
+#     (handed the getServiceClient() instance) — no longer
+#     `users.github_installation_id`, ahead of PR-2b's column drop. The
+#     Inngest function runs with no cookie context (the event was signed by
+#     INNGEST_SIGNING_KEY; founderId is server-derived from the dashboard
+#     /send route's auth.getUser()). Tenant-JWT path would require
+#     synthesizing a JWT for the founder, which the factory hook already
+#     does for the GitHub App client; the canonical authenticated reader
+#     (resolve_workspace_installation_id RPC) is REVOKE'd from service_role
+#     AND gates on auth.uid(), so it returns NULL here — hence the distinct
+#     service-role-safe resolver.
 #   - action_sends UPDATE: the table's RLS substrate has owner-INSERT
 #     and owner-SELECT policies only; UPDATE has no permissive policy
 #     (default-deny). Migration 064's WORM-trigger reshape admits
