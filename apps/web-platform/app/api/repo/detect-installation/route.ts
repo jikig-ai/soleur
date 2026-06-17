@@ -9,6 +9,7 @@ import {
 } from "@/server/github-app";
 import { resolveReachableInstallationIds } from "@/server/reachable-installations";
 import { resolveGithubLogin } from "@/server/github-login";
+import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import logger from "@/server/logger";
 
 /**
@@ -75,10 +76,19 @@ export async function POST(request: Request) {
 
   const serviceClient = createServiceClient();
 
-  // If installation is already stored, just return repos
+  // ADR-044 Amendment 2026-06-17b: the install is read from the caller's solo
+  // `workspaces` row (NOT `users.github_installation_id`, ahead of PR-2b's
+  // column drop) via the service-role-safe resolver — the solo workspace
+  // carries the install (workspaces.id == users.id, ADR-038 N2), same value.
+  // `github_username` is NOT relocated by ADR-044, so it stays a `users` read.
+  const storedInstallationId = await resolveInstallationIdForWorkspace(
+    user.id,
+    serviceClient,
+  );
+
   const { data: userData } = await serviceClient
     .from("users")
-    .select("github_installation_id, github_username")
+    .select("github_username")
     .eq("id", user.id)
     .single();
 
@@ -89,7 +99,7 @@ export async function POST(request: Request) {
     userData?.github_username,
   );
 
-  if (userData?.github_installation_id) {
+  if (storedInstallationId) {
     // A stored personal install does not preclude a separate workspace org
     // install — aggregate repos across the full reachable set so org-owned
     // repos appear here too.

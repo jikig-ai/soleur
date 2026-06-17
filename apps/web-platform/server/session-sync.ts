@@ -606,7 +606,14 @@ export const WORKSPACE_RECONCILE_REQUESTED_EVENT =
 // boundary change; in-flight v=1 events (lacking fullName) drain to
 // {ok:false} via the non-throwing schema-gate rather than syncing with a
 // missing field. See 2026-04-18-schema-version-must-be-asserted-at-consumer-boundary.
-export const WORKSPACE_RECONCILE_SCHEMA_V = "2" as const;
+//
+// Bumped "2"→"3" (ADR-044 Amendment 2026-06-17b): `founderId` removed from
+// the payload (it was vestigial — the consumer re-derives workspaces from
+// (installation_id, repo_url) and never read it for routing). Dropping a
+// payload field is a schema-boundary change; in-flight v=2 events deadletter
+// via the non-throwing schema-gate and the next push re-drives (reconcile is
+// idempotent by (installation_id, repo_url)). See plan R6/P2-3.
+export const WORKSPACE_RECONCILE_SCHEMA_V = "3" as const;
 export const WORKSPACE_RECONCILE_SENTRY_FEATURE =
   "workspace-reconcile-push" as const;
 

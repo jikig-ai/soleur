@@ -41,15 +41,15 @@ interface ReconcileEvent {
   name: string;
   v?: string;
   data: {
-    // founderId = the installation owner (webhook 404-lookup). Carried for
-    // observability; the fan-out targets workspaces by repo, not founder.
-    founderId: string;
+    // `founderId` removed in ADR-044 Amendment 2026-06-17b (v=3): it was
+    // vestigial — the fan-out targets workspaces by (installation_id,
+    // repo_url), never founder, and the field was never destructured here.
     installationId: number;
     deliveryId: string;
     defaultBranch: string;
     headSha: string;
     beforeSha: string;
-    // ADR-044: bare owner/repo slug from repository.full_name (v=2).
+    // ADR-044: bare owner/repo slug from repository.full_name (v=3).
     fullName: string;
     pushReceivedAt?: number;
   };
