@@ -17,19 +17,20 @@ brand_survival_threshold: single-user incident
 - [ ] 0.4 Read `writeRepoColsToWorkspace` + `appendKbSyncRowForWorkspace` + `resolveActiveWorkspace` bodies to confirm the injected-service + resolved-workspace pattern.
 - [ ] 0.5 Open Code-Review Overlap query (plan §Open Code-Review Overlap) — record matches + disposition or None.
 
-## Phase 1 — SURFACE 1: webhook founder attribution (PR-A) [TDD: RED first]
-- [ ] 1.1 Write failing tests `test/github-webhook-founder-attribution.test.ts` for the 6 scenarios (single-solo / zero / >1-ambiguous / team-not-mistaken / push-no-users-read / db-error-500). Mirror `test/webhook-subscription.test.ts`.
+## Phase 1 — SURFACE 1: webhook founder attribution + detect-installation (PR-A) [TDD: RED first]
+- [ ] 1.1 Write failing tests `test/github-webhook-founder-attribution.test.ts` for scenarios 1-6 + 11 + 12 (single-solo / zero / >1-ambiguous / team-not-mistaken / push-no-users-read / db-error-500 / same-user-double-solo-drift→>1 / repository_advisory-reaches-resolver). Mirror `test/webhook-subscription.test.ts`.
 - [ ] 1.2 Add the non-push solo-founder resolver (`server/resolve-founder-for-installation.ts` or fold into `resolve-installation-id-for-workspace.ts`): injected service client, solo self-join (`m.user_id = w.id AND m.role='owner' WHERE w.github_installation_id = $1`), discriminated-union return {found/none/ambiguous/db-error}. No allowlist entry.
-- [ ] 1.3 Webhook route: replace Step 5 `users` reverse-lookup. Non-push branch → resolver; map 0→404+release, 1→proceed, >1→Sentry op:founder-ambiguous + 404 + release (zero send/isGranted), db-error→500+release. Reword the comment so `users` + `github_installation_id` don't co-occur on one line.
+- [ ] 1.3 Webhook route: replace Step 5 `users` reverse-lookup. Non-push branch → resolver; map 0→404+release, 1→proceed, >1→Sentry op:founder-ambiguous (page) + 404 + release (zero send/isGranted), db-error→500+release. **[P0-1]** founderId passed to isGranted == resolver's w.id (byte-equal); installationId captured once. Reword the comment so `users` + `github_installation_id` don't co-occur on one line.
 - [ ] 1.4 Push branch: stop sourcing `founderId` from a `users` read; drop `founderId` from the `inngest.send` reconcile payload.
-- [ ] 1.5 Bump `WORKSPACE_RECONCILE_SCHEMA_V` (2→3) in session-sync.ts; drop `founderId` from the reconcile event payload type.
-- [ ] 1.6 `workspace-reconcile-on-push.ts`: drop `founderId` from consumed payload type; confirm no `event.data.founderId` read remains.
-- [ ] 1.7 GREEN: all Phase 1 tests pass.
+- [ ] 1.5 Bump `WORKSPACE_RECONCILE_SCHEMA_V` (2→3) in session-sync.ts; drop `founderId` from the reconcile event payload type. (In-flight v=2 deadletter is acceptable — next-push convergence.)
+- [ ] 1.6 `workspace-reconcile-on-push.ts`: drop `founderId` from consumed payload type; confirm no `event.data.founderId` read remains (verified: not destructured at :118).
+- [ ] 1.7 **[P1-4]** `detect-installation/route.ts:81` — swap `users.select("github_installation_id")` for `resolveInstallationIdForWorkspace(user.id, serviceClient)`; keep `github_username` via existing path. Test: detect-installation still returns the install after cutover.
+- [ ] 1.8 GREEN: all Phase 1 tests pass. Verify AC 3b: no non-workspaces `users.github_installation_id` reader remains.
 
 ## Phase 2 — SURFACE 2: session-sync write relocation (PR-B) [TDD: RED first]
-- [ ] 2.1 Write failing test `test/server/session-sync-workspace-last-synced.test.ts` (or extend `session-sync.tenant-isolation.test.ts`): write lands on `workspaces.repo_last_synced_at` keyed on resolved workspace id; no `users` write; read-back parity via repo/status; 0-row Sentry-mirror.
-- [ ] 2.2 `updateLastSynced(service, workspaceId)`: write via `writeRepoColsToWorkspace(service, workspaceId, { repo_last_synced_at })`; remove the `users` UPDATE. Service client injected — session-sync.ts does NOT acquire service-role.
-- [ ] 2.3 Thread the injected service client + resolved active-workspace id from `agent-runner.ts` (lines 1166, 2262) through `syncPull`/`syncPush` into `updateLastSynced`. Reuse agent-runner's existing active-workspace resolution (no second divergent resolver).
+- [ ] 2.1 Write failing tests `test/server/session-sync-workspace-last-synced.test.ts` (or extend `session-sync.tenant-isolation.test.ts`): scenarios 7-10 — write lands on `workspaces.repo_last_synced_at` keyed on resolved workspace id; no `users` write; read-back parity via repo/status; 0-row Sentry-mirror; **[P1-3] team-active member writes to TEAM workspaceId, never userId** (the load-bearing test).
+- [ ] 2.2 `updateLastSynced(service, workspaceId)`: write via `writeRepoColsToWorkspace(service, workspaceId, { repo_last_synced_at })`; remove the `users` UPDATE. **NO userId param, NO internal resolve, NO userId fallback.** Service client injected — session-sync.ts does NOT acquire service-role.
+- [ ] 2.3 **[P1-1/P1-2]** `agent-runner.ts`: refactor to resolve the active workspace **id** ONCE via `resolveActiveWorkspace(userId, sessionTenant)` (handle `{ok:false,db-error}` → skip sync); thread that id into BOTH `resolveActiveWorkspacePath(userId, sessionTenant, workspaceId)` AND `syncPull`/`syncPush` → `updateLastSynced(service, workspaceId)`. Widen `syncPull`/`syncPush` signatures to carry `(… , service, workspaceId)`. This is the resolve-id-first refactor (fixes #5435 dual-resolver-divergence trap), not just a signature change.
 - [ ] 2.4 Confirm session-sync.ts NOT added to `.service-role-allowlist`; `service-role-allowlist-gate.sh` passes.
 - [ ] 2.5 GREEN: all Phase 2 tests pass.
 
