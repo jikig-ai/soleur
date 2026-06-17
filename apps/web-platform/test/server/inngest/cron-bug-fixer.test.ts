@@ -178,6 +178,7 @@ const ORIGINAL_ENV = {
   INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
   INNGEST_DEV: process.env.INNGEST_DEV,
   RESEND_API_KEY: process.env.RESEND_API_KEY,
+  RESEND_RECEIVING_API_KEY: process.env.RESEND_RECEIVING_API_KEY,
   GITHUB_APP_ID: process.env.GITHUB_APP_ID,
   GITHUB_APP_PRIVATE_KEY: process.env.GITHUB_APP_PRIVATE_KEY,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -276,6 +277,7 @@ beforeEach(() => {
     "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   process.env.INNGEST_DEV = "1";
   process.env.RESEND_API_KEY = "re_test_key";
+  process.env.RESEND_RECEIVING_API_KEY = "re_test_receiving_key";
   process.env.GITHUB_APP_ID = "12345";
   process.env.GITHUB_APP_PRIVATE_KEY =
     "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----";
@@ -724,6 +726,9 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(opts.env?.ANTHROPIC_API_KEY).toBe("sk-ant-test-key");
     // RESEND_API_KEY NEVER propagated to spawn (CWE-526 allowlist)
     expect(opts.env?.RESEND_API_KEY).toBeUndefined();
+    // RESEND_RECEIVING_API_KEY (the #5468 receiving-scoped key) is likewise
+    // denylist-by-omission — assert it never leaks into the bug-fixer sandbox.
+    expect(opts.env?.RESEND_RECEIVING_API_KEY).toBeUndefined();
   });
 });
 

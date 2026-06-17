@@ -101,7 +101,7 @@ import { MAIL_CLASS_ALLOWLIST } from "@/server/email-triage/summarize";
 // --- Supabase service-client fake -------------------------------------------
 
 interface DbFilter {
-  kind: "eq" | "neq" | "not" | "gte";
+  kind: "eq" | "neq" | "not" | "gte" | "is";
   col: string;
   val?: unknown;
 }
@@ -169,6 +169,12 @@ function makeDb(script: (op: DbOp) => DbResult) {
         gte: chain((col, val) =>
           op.filters.push({ kind: "gte", col: col as string, val }),
         ),
+        // supabase-js `.is(col, null)` — the disjoint-column WORM race guard
+        // on the degraded finalize (AC7) filters on statutory_class IS NULL
+        // AND mail_class IS NULL.
+        is: chain((col, val) =>
+          op.filters.push({ kind: "is", col: col as string, val }),
+        ),
         limit: chain(() => undefined),
         single: () => Promise.resolve(finish()),
         maybeSingle: () => Promise.resolve(finish()),
@@ -197,7 +203,15 @@ function baseScript(op: DbOp): DbResult {
   if (op.table === "probe_tokens") return { data: null };
   if (op.table === "email_triage_items") {
     if (op.method === "insert") return { data: { id: ITEM_ID } };
-    if (op.method === "update") return { error: null };
+    if (op.method === "update") {
+      // Degraded finalize (AC7) does `.update(...).eq().is().is().select("id")`
+      // and reads data.length to learn whether the guarded write hit a row.
+      // Default: the guard passes (both class columns NULL) → 1 row written.
+      if (hasFilter(op, "is", "statutory_class")) {
+        return { data: [{ id: ITEM_ID }], error: null };
+      }
+      return { error: null };
+    }
     // LLM daily ceiling count (summary IS NOT NULL + created_at gte)
     if (op.countExact && hasFilter(op, "not", "summary")) return { count: 0 };
     // unacknowledged statutory count (status = new)
@@ -259,14 +273,19 @@ function makeStep() {
 async function runHandler(
   eventOverrides?: Record<string, unknown>,
   script: (op: DbOp) => DbResult = baseScript,
+  ctx?: { attempt?: number; maxAttempts?: number },
 ) {
   const db = makeDb(script);
   dbHolder.current = db.client;
   const step = makeStep();
+  // attempt/maxAttempts come off Inngest's BaseContext (the handler arg) — see
+  // _cron-shared.ts:107-108. Omitted here → attempt=0/maxAttempts=1 →
+  // isFinalAttempt=true (legacy/eager shape, identical to pre-degraded-tail).
   const result = await emailOnReceivedHandler({
     event: makeEvent(eventOverrides),
     step,
     logger: loggerSpies,
+    ...(ctx ?? {}),
   } as never);
   return { step, result, ops: db.ops, stepReturns: step.returns };
 }
@@ -1029,6 +1048,226 @@ describe("fetch-sanitize-summarize", () => {
       }),
     ).rejects.toThrow(/llm ceiling count failed: 57014/);
     expectNoPiiInObservability();
+  });
+});
+
+// --- Degraded-finalize tail (fetch/summarize failure, #5468) ------------------
+// A body-fetch or summarizer egress drop must not strand the row at a permanent
+// NULL (silently eating a possibly-body-only Art. 12 clock). On the FINAL
+// Inngest attempt only, the pipeline degrades: mail_class='other' + a fixed
+// sentinel summary + a (statutory-grade, when the body was never fetched)
+// notify + a Sentry mirror. On a NON-final attempt it re-throws so Inngest
+// retries — the degraded write must be structurally skipped, never run-and-no-op.
+
+const DEGRADED_SENTINEL_PREFIX = "fetch/summarize failed";
+
+describe("degraded-finalize tail (fetch/summarize failure)", () => {
+  it("AC4: non-final attempt re-throws and the finalize-row step is structurally absent; the final attempt's recovery wins (not degraded)", async () => {
+    // (a)+(b) attempt 0 of 2 (NON-final): body fetch throws → the handler must
+    // re-throw so Inngest retries, and finalize-row must NEVER enter the step
+    // memo (a run-and-no-op step would replay an empty result on attempt 1 and
+    // mask recovery — learning 2026-06-12).
+    fetchReceivedEmailSpy.mockRejectedValueOnce(
+      new Error("fetch-received-email failed: restricted_api_key"),
+    );
+    const attempt0 = makeDb(baseScript);
+    dbHolder.current = attempt0.client;
+    const step0 = makeStep();
+    await expect(
+      emailOnReceivedHandler({
+        event: makeEvent(),
+        step: step0,
+        logger: loggerSpies,
+        attempt: 0,
+        maxAttempts: 2,
+      } as never),
+    ).rejects.toThrow(/restricted_api_key/);
+    expect(step0.calls.map((c) => c.name)).toEqual([
+      "claim-insert",
+      "fetch-sanitize-summarize",
+    ]);
+    expect(step0.calls.map((c) => c.name)).not.toContain("finalize-row");
+    // No degraded write happened on the non-final attempt.
+    expect(
+      attempt0.ops.filter(
+        (o) => o.table === "email_triage_items" && o.method === "update",
+      ),
+    ).toHaveLength(0);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+
+    // attempt 1 of 2 (FINAL): the body fetch now RECOVERS — the real
+    // classification must win, NOT a degraded 'other' row.
+    resetOwnerValidationMemo();
+    fetchReceivedEmailSpy.mockResolvedValue({ text: BODY_FIXTURE, html: null });
+    const { result, ops } = await runHandler(undefined, baseScript, {
+      attempt: 1,
+      maxAttempts: 2,
+    });
+    expect(result).toMatchObject({ triaged: "summarized" });
+    const finalize = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "update",
+    );
+    expect(finalize!.payload).toMatchObject({ mail_class: "billing" });
+    expect((finalize!.payload as { summary: string }).summary).not.toContain(
+      DEGRADED_SENTINEL_PREFIX,
+    );
+  });
+
+  it("AC5: a summarizer failure AFTER a body statutory marker still finalizes statutory_class — the LLM is never reached", async () => {
+    // The deterministic body pass runs BEFORE the LLM, so a DSAR body short-
+    // circuits to bodyStatutory and the (rejecting) summarizer is unreachable.
+    const DSAR_BODY =
+      "I hereby make a subject access request for all my personal data.";
+    fetchReceivedEmailSpy.mockResolvedValue({ text: DSAR_BODY, html: null });
+    anthropicCreateSpy.mockRejectedValue(new Error("529 overloaded"));
+    const { ops } = await runHandler(undefined, baseScript, {
+      attempt: 1,
+      maxAttempts: 2,
+    });
+    const finalize = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "update",
+    );
+    expect(finalize!.payload).toMatchObject({
+      statutory_class: "dsar",
+      rule_id: "dsar-art15",
+    });
+    expect(finalize!.payload).not.toHaveProperty("mail_class");
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC5 (symmetric negative): a body-fetch failure degrades to 'other' and does NOT write statutory_class", async () => {
+    fetchReceivedEmailSpy.mockRejectedValue(
+      new Error("fetch-received-email failed: restricted_api_key"),
+    );
+    const { ops } = await runHandler(undefined, baseScript, {
+      attempt: 1,
+      maxAttempts: 2,
+    });
+    const finalize = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "update",
+    );
+    expect(finalize).toBeDefined();
+    expect((finalize!.payload as { mail_class: string }).mail_class).toBe(
+      "other",
+    );
+    expect((finalize!.payload as { summary: string }).summary).toContain(
+      DEGRADED_SENTINEL_PREFIX,
+    );
+    // The body never arrived → the statutory body pass could not run → the
+    // degraded write must NOT set statutory_class (it pins the wrap boundary).
+    expect(finalize!.payload).not.toHaveProperty("statutory_class");
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC5: a summarizer-only failure (body fetched, no statutory marker) degrades to 'other' with an ORDINARY notify", async () => {
+    anthropicCreateSpy.mockRejectedValue(new Error("529 overloaded"));
+    const { ops } = await runHandler(undefined, baseScript, {
+      attempt: 1,
+      maxAttempts: 2,
+    });
+    const finalize = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "update",
+    );
+    expect((finalize!.payload as { mail_class: string }).mail_class).toBe(
+      "other",
+    );
+    // Body WAS fetched and the statutory pass already ran clean → ordinary ping.
+    expect(notifyOfflineUserSpy).toHaveBeenCalledTimes(1);
+    expect(notifyOfflineUserSpy.mock.calls[0][1]).toMatchObject({
+      isStatutory: false,
+    });
+  });
+
+  it("AC6: degraded finalize mirrors op:fetch-summarize-degraded with only { itemId } extra, no PII", async () => {
+    fetchReceivedEmailSpy.mockRejectedValue(
+      new Error("fetch-received-email failed: restricted_api_key"),
+    );
+    await runHandler(undefined, baseScript, { attempt: 1, maxAttempts: 2 });
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "email-triage",
+        op: "fetch-summarize-degraded",
+        extra: { itemId: ITEM_ID },
+      }),
+    );
+    // A body-fetch failure means the body could be a body-only DSAR that was
+    // never scanned → statutory-grade notify (Phase 3 P1 decision).
+    expect(notifyOfflineUserSpy).toHaveBeenCalledTimes(1);
+    expect(notifyOfflineUserSpy.mock.calls[0][1]).toMatchObject({
+      isStatutory: true,
+    });
+    expectNoPiiInObservability();
+  });
+
+  it("AC7: degraded write is a no-op when a sibling already set statutory_class — guarded by .is(...null), no notify", async () => {
+    // A concurrent statutory finalize set statutory_class WITHOUT raising P0001
+    // against this disjoint mail_class write (mig 102:189-203). The degraded
+    // UPDATE's .is("statutory_class", null).is("mail_class", null) guard makes
+    // it hit ZERO rows; that zero-row result must suppress the degraded notify
+    // (the race winner already pinged statutory-grade).
+    // NOTE: this test pins the zero-row→suppress-notify BEHAVIOR. The guard
+    // clauses' EXISTENCE is pinned separately by the sibling test below
+    // ("carries the disjoint-column race guard"); both are required — deleting
+    // the sibling would make this behavior test vacuous (the mock branch keys
+    // on the .is filter, so a missing guard falls through to a no-row default).
+    fetchReceivedEmailSpy.mockRejectedValue(
+      new Error("fetch-received-email failed: restricted_api_key"),
+    );
+    const { result } = await runHandler(undefined, (op) => {
+      if (
+        op.table === "email_triage_items" &&
+        op.method === "update" &&
+        hasFilter(op, "is", "statutory_class")
+      ) {
+        // The guarded UPDATE matched no row — a sibling won the race.
+        return { data: [] };
+      }
+      return baseScript(op);
+    }, { attempt: 1, maxAttempts: 2 });
+    expect(result).toMatchObject({ triaged: "fetchFailed" });
+    expect(notifyOfflineUserSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC7: the degraded UPDATE carries the disjoint-column race guard (.is statutory_class null AND .is mail_class null)", async () => {
+    fetchReceivedEmailSpy.mockRejectedValue(
+      new Error("fetch-received-email failed: restricted_api_key"),
+    );
+    const { ops } = await runHandler(undefined, baseScript, {
+      attempt: 1,
+      maxAttempts: 2,
+    });
+    const degraded = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "update",
+    );
+    expect(degraded!.filters).toContainEqual({
+      kind: "is",
+      col: "statutory_class",
+      val: null,
+    });
+    expect(degraded!.filters).toContainEqual({
+      kind: "is",
+      col: "mail_class",
+      val: null,
+    });
+  });
+
+  it("AC8: the degraded sentinel is excluded from the daily-LLM-ceiling count (zero Anthropic spend)", async () => {
+    const { ops } = await runHandler();
+    const ceiling = ops.find(
+      (o) =>
+        o.table === "email_triage_items" &&
+        o.countExact &&
+        hasFilter(o, "not", "summary"),
+    );
+    expect(ceiling).toBeDefined();
+    // The degraded sentinel rows carry a non-NULL summary but cost no LLM call,
+    // so the ceiling query must exclude them via a verbatim LIKE prefix.
+    expect(ceiling!.filters).toContainEqual({
+      kind: "not",
+      col: "summary",
+      val: `${DEGRADED_SENTINEL_PREFIX}%`,
+    });
   });
 });
 
