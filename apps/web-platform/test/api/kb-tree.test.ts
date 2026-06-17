@@ -86,15 +86,21 @@ describe("GET /api/kb/tree — needsReconnect", () => {
     expect(body.needsReconnect).toBe(false);
   });
 
-  test("needsReconnect=false for ready repo with an installation id (short-circuits before workspace credential)", async () => {
-    mockFrom.mockReturnValue(
-      mockQueryChain({ ...BASE_USER, github_installation_id: 98765 }),
-    );
+  test("needsReconnect=false for ready repo with an installation id", async () => {
+    // ADR-044 PR-2 (#5462): the install id moved off `users` — the route reads
+    // only `kb_sync_history` there and resolves the credential via the
+    // membership-checked RPC. A resolvable install id (here from the
+    // workspace-scoped RPC) short-circuits resolveNeedsReconnect to false.
+    mockResolveInstallationId.mockResolvedValue(98765);
+    mockFrom.mockReturnValue(mockQueryChain({ ...BASE_USER }));
     const res = await GET(makeRequest());
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.needsReconnect).toBe(false);
-    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(
+      TEST_USER.id,
+      TEST_USER.id,
+    );
   });
 
   test("not_connected short-circuits to 404 (no needsReconnect)", async () => {

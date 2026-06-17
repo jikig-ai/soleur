@@ -11,6 +11,7 @@ const mockFindInstallationForLogin = vi.fn();
 const mockVerifyInstallationOwnership = vi.fn();
 const mockListInstallationRepos = vi.fn();
 const mockResolveReachable = vi.fn();
+const mockWriteRepoColsToWorkspace = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
@@ -49,9 +50,11 @@ vi.mock("@/server/reachable-installations", () => ({
     mockResolveReachable(...args),
 }));
 
-// mirrorRepoColsToSoloWorkspace is dynamically imported by the route.
+// writeRepoColsToWorkspace is dynamically imported by the route to persist the
+// login-matched personal install onto the caller's SOLO workspace (ADR-044 PR-2).
 vi.mock("@/server/workspace-repo-mirror", () => ({
-  mirrorRepoColsToSoloWorkspace: vi.fn(async () => {}),
+  writeRepoColsToWorkspace: (...args: unknown[]) =>
+    mockWriteRepoColsToWorkspace(...args),
 }));
 
 import { POST } from "../app/api/repo/detect-installation/route";
@@ -67,14 +70,15 @@ function makeRequest() {
   });
 }
 
-type TableOperation = "select" | "update";
-type TableMockConfig = Record<string, Partial<Record<TableOperation, unknown>>>;
+// ADR-044 PR-2: the route now READS `users` (the "already stored" short-circuit)
+// but never WRITES it — the install write relocated to a SOLO workspace via the
+// mocked writeRepoColsToWorkspace helper. We therefore wire ONLY `.select` and
+// deliberately omit `.update`: any residual `users.update({github_installation_id})`
+// would throw `mock.update is not a function`, failing the test structurally.
+type TableMockConfig = Record<string, { select?: unknown }>;
 
 function setupTableRoutes(config: TableMockConfig) {
   mockServiceFrom.mockImplementation((table: string) => {
-    if (table === "workspaces") {
-      return { update: () => ({ eq: async () => ({ error: null }) }) };
-    }
     const tableConfig = config[table];
     if (!tableConfig) {
       throw new Error(
@@ -89,11 +93,6 @@ function setupTableRoutes(config: TableMockConfig) {
         }),
       });
     }
-    if (tableConfig.update !== undefined) {
-      mock.update = vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: tableConfig.update }),
-      });
-    }
     return mock;
   });
 }
@@ -106,6 +105,7 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   beforeEach(() => {
     vi.resetAllMocks();
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
+    mockWriteRepoColsToWorkspace.mockResolvedValue(undefined);
     // Default: reachable set is the single login-matched install (legacy shape).
     mockResolveReachable.mockImplementation(
       async (_svc: unknown, _uid: string, login: string | null) =>
@@ -117,7 +117,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     setupTableRoutes({
       users: {
         select: { github_installation_id: null, github_username: "deruelle" },
-        update: null,
       },
     });
     mockAdminGetUserById.mockResolvedValue({
@@ -141,6 +140,14 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     expect(data.installed).toBe(true);
     expect(data.repos).toHaveLength(1);
     expect(mockFindInstallationForLogin).toHaveBeenCalledWith("deruelle");
+    // ADR-044 PR-2: the login-matched install is persisted to the caller's SOLO
+    // workspace via writeRepoColsToWorkspace (svc client, uid, install cols) —
+    // NOT users.update.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ from: mockServiceFrom }),
+      "user-123",
+      { github_installation_id: 12345 },
+    );
   });
 
   test("returns no_github_identity when neither Supabase identity nor github_username exists", async () => {
@@ -169,7 +176,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     setupTableRoutes({
       users: {
         select: { github_installation_id: null },
-        update: null,
       },
     });
     mockAdminGetUserById.mockResolvedValue({
@@ -194,6 +200,12 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
 
     expect(data.installed).toBe(true);
     expect(mockFindInstallationForLogin).toHaveBeenCalledWith("supabase-user");
+    // The verified install is persisted to the SOLO workspace, not users.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ from: mockServiceFrom }),
+      "user-123",
+      { github_installation_id: 99999 },
+    );
   });
 
   test("T14: org member (login != org login) sees the org repo on first call", async () => {
@@ -201,7 +213,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     setupTableRoutes({
       users: {
         select: { github_installation_id: null, github_username: "deruelle" },
-        update: null,
       },
     });
     mockAdminGetUserById.mockResolvedValue({
@@ -226,7 +237,9 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     expect(data.repos.map((r: { fullName: string }) => r.fullName)).toEqual([
       "jikig-ai/soleur",
     ]);
-    // The membership-only install is NOT persisted on users (unique constraint).
+    // The membership-only install is NOT persisted to any workspace — no
+    // personal install matched the login, so the write path never runs.
     expect(mockFindInstallationForLogin).toHaveBeenCalledWith("deruelle");
+    expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
   });
 });
