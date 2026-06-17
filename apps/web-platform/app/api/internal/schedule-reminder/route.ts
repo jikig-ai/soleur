@@ -37,6 +37,16 @@ function readSecret(): string | null {
   return v && v.length > 0 ? v : null;
 }
 
+// Cutover quiesce (#5450, Phase 2.1): during the SQLite→Postgres+Redis cutover
+// window the operator sets INNGEST_CUTOVER_QUIESCE=1 in Doppler prd so NO new
+// reminder is armed into the doomed old SQLite mid-cutover (spec-flow P0-2).
+// Authenticated callers get a 503 + Retry-After and retry after the window;
+// the operator unsets the flag in Phase 2.6. Strict truthy check ("1"/"true").
+function isCutoverQuiesced(): boolean {
+  const v = process.env.INNGEST_CUTOVER_QUIESCE;
+  return v === "1" || v === "true";
+}
+
 function bearerMatches(header: string | null, secret: string): boolean {
   if (!header) return false;
   const token = header.startsWith("Bearer ")
@@ -56,6 +66,16 @@ export async function POST(request: Request) {
   }
   if (!bearerMatches(request.headers.get("authorization"), secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Cutover quiesce gate (#5450): refuse to arm during the migration window so
+  // a reminder is not lost into the old SQLite mid-cutover. Retry-After lets
+  // callers re-arm once the operator clears the flag (Phase 2.6).
+  if (isCutoverQuiesced()) {
+    return NextResponse.json(
+      { error: "Reminder arming temporarily paused (Inngest backend cutover in progress)" },
+      { status: 503, headers: { "Retry-After": "120" } },
+    );
   }
 
   let raw: string;

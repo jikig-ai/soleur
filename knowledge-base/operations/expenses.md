@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-16
+last_updated: 2026-06-17
 ---
 
 # Expenses
@@ -12,6 +12,7 @@ last_updated: 2026-06-16
 | Hetzner CX33 | Hetzner | hosting | 15.37 | active | 2026-04-01 | 4 vCPU, 8 GB RAM, 160 GB SSD, hel1 (web platform). DPA: must be signed via Hetzner Console |
 | Hetzner Volume (20 GB) | Hetzner | hosting | 0.88 | active | 2026-04-01 | Persistent storage for /workspaces, hel1 (web platform) |
 | Supabase Pro + Custom Domain | Supabase | saas | 35.00 | active | 2026-04-03 | Pro plan ($25/mo) + custom domain add-on ($10/mo). Custom domain: api.soleur.ai for branded OAuth callbacks |
+| Supabase Inngest project (Micro compute) | Supabase | saas | 10.00 | active | 2026-06-17 | Dedicated EU project `soleur-inngest-prd` (ref pigsfuxruiopinouvjwy, eu-west-1) for the durable Inngest Postgres backend (#5450). Org is on Pro, so a 3rd project bills ~$10/mo Micro compute (Nano is Free-plan-only) — the plan's "free-tier-capable" assumption was false. Isolation rationale: breaks shared-fate + connection-budget contention with the main app's project (architecture review P1-1). Verify actual compute draw on the next invoice |
 | Stripe | Stripe | payments | 0.00 | test-mode | - | Payment processing for web platform. Live costs: 2.9% + $0.30/charge (US), 1.5% + EUR 0.25/charge (EU cards). No monthly minimum |
 | soleur.ai | Cloudflare | domain | 70.00 | active | 2028-02-16 | 2-year registration required for .ai TLD. Also proxies app.soleur.ai (A record to Hetzner CX33, free tier) |
 | Plausible Analytics | Plausible | saas | 9.00 | active | 2027-03-28 | Growth plan, 10K pageviews, EUR 9/mo. Annual renewal |
