@@ -19,20 +19,20 @@ Phases are contract-before-consumer ordered. Token mint is `automation-status: U
 
 ## Phase 1 — `scripts/sentry-issue.sh` (GET-only CLI; TDD)
 
-- [ ] 1.1 Write failing `scripts/sentry-issue.test.sh` (mock curl): GET-only invariant, token RO→RW fallback + warning, org-subdomain host pinning, `--latest-event` org-scoped URL.
-- [ ] 1.2 Implement `scripts/sentry-issue.sh` mirroring `betterstack-query.sh`:
+- [ ] 1.1 Write failing `scripts/sentry-issue.test.sh` (mock **both** `curl` and `doppler` per `container-restart-monitor.test.sh` `curl_args`-log; synthesized fake token): per-invocation GET + no `-d`/`--data*`/`-F`/`-T` + URL matches two-endpoint allowlist; **hostile issue-id** (`/`,`?`,`;`,`..`) rejected; assertions run with **both** RO and RW tokens; error-path stderr never contains the token; source has no `set -x`; token RO→RW fallback + warning; `--latest-event` org-scoped URL.
+- [ ] 1.2 Implement `scripts/sentry-issue.sh` mirroring `betterstack-query.sh` (`curl -sS --fail-with-body --max-time 30 -H "Authorization: Bearer $TOKEN"`, `set -uo pipefail`, never `set -x`):
   - [ ] 1.2.1 `<issue-id>` → `GET /api/0/organizations/<org>/issues/<id>/`.
-  - [ ] 1.2.2 `--latest-event <issue-id>` → `GET /api/0/organizations/<org>/issues/<id>/events/latest/` (org-scoped).
-  - [ ] 1.2.3 Token resolution: read `SENTRY_ISSUE_RO_TOKEN` from `doppler run -c prd` env (`: "${VAR:?}"` guard); fall back to `SENTRY_ISSUE_RW_TOKEN` GET-only with stderr warning.
-  - [ ] 1.2.4 GET-only guard; map 403 → "token lacks event:read"; 401 → scope-not-ownership hint (ADR-031 glossary).
-  - [ ] 1.2.5 stderr PII banner.
+  - [ ] 1.2.2 `--latest-event <issue-id>` → `GET /api/0/organizations/<org>/issues/<id>/events/latest/` (org-scoped); surface `exception.values[].value` + `stacktrace.frames[]`.
+  - [ ] 1.2.3 Token resolution: read `SENTRY_ISSUE_RO_TOKEN` from `doppler run -p soleur -c prd` env (`: "${VAR:?}"` guard); fall back to `SENTRY_ISSUE_RW_TOKEN` GET-only with stderr warning. RW-fallback removal trigger once RO exists.
+  - [ ] 1.2.4 GET-only HARDENING: fixed-method GET, no body, URL-allowlist, issue-id charset `^[A-Za-z0-9_-]+$` validated before interpolation; applies to RW path too. Map 403 → "token lacks event:read"; 401 → scope-not-ownership hint (ADR-031 glossary). Host = org-subdomain `jikigai-eu.sentry.io` (NOT `de.sentry.io`).
+  - [ ] 1.2.5 stderr PII banner (incl. `user.*`); optional `--redact` flag (default OFF).
 - [ ] 1.3 GREEN: `scripts/sentry-issue.test.sh` passes.
 
 ## Phase 2 — Auto-mint read-only token (UNVERIFIED automation)
 
 - [ ] 2.1 Attempt API mint (`POST /api/0/organizations/jikigai-eu/sentry-apps/`, `inline-read-prd`, scopes `[event:read, org:read]`) — only if an org:admin bootstrap credential is available.
-- [ ] 2.2 Else Playwright mint via `eu.sentry.io` dashboard (Settings → Developer Settings → New Internal Integration); record `playwright-attempt:` evidence.
-- [ ] 2.3 Write token to Doppler `soleur/prd` as `SENTRY_ISSUE_RO_TOKEN` (never echo); add to `.env.example` with scope comment.
+- [ ] 2.2 Else Playwright mint via `eu.sentry.io` dashboard (Settings → Developer Settings → New Internal Integration); capture token via `browser_evaluate` (NO screenshot of token field); record `playwright-attempt:` evidence with token redacted.
+- [ ] 2.3 Write token to Doppler `soleur/prd` as `SENTRY_ISSUE_RO_TOKEN` via stdin (no argv/history; never echo); add to `.env.example` with scope comment.
 - [ ] 2.4 CLI defaults to `SENTRY_ISSUE_RO_TOKEN`. Document working mint path in runbook re-mint section.
 
 ## Phase 3 — Runbook
