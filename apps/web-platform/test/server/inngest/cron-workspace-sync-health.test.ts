@@ -297,6 +297,11 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
         extra: expect.objectContaining({ userId: "user-X" }),
       }),
     );
+    // Prove the install came through the workspaces resolver (eq("id", user.id)),
+    // not a residual users-column read — the mock's backfilled-solo fallback
+    // sources both from the same value, so without this assertion the test would
+    // pass even if the code reverted to reading users.github_installation_id.
+    expect(eqSpy).toHaveBeenCalledWith("id", "user-X");
   });
 
   it("does NOT report when the latest row is ok:true (even if an older row failed)", async () => {

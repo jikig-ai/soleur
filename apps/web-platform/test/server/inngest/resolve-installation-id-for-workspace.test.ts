@@ -67,6 +67,16 @@ describe("resolveInstallationIdForWorkspace", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
+  it("returns 0 (not null) for a 0 install id — pins `?? null` over a `|| null` truthiness regression", async () => {
+    // 0 is a valid integer the column could hold; the resolver uses `?? null`
+    // (nullish), so 0 must survive. A future `|| null` refactor would wrongly
+    // coalesce 0 → null; the downstream `install === null` gate correctly keeps 0.
+    MAYBE_SINGLE_RESULT = { data: { github_installation_id: 0 }, error: null };
+    const result = await resolveInstallationIdForWorkspace("ws-1", makeService());
+    expect(result).toBe(0);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
   it("returns null when no workspace row is found", async () => {
     MAYBE_SINGLE_RESULT = { data: null, error: null };
     const result = await resolveInstallationIdForWorkspace("ws-unknown", makeService());

@@ -297,7 +297,11 @@ contexts need.
 
 - `server/inngest/functions/agent-on-spawn-requested.ts` — `resolve-installation` step
   resolves the founder's solo-workspace install via the resolver (founderId keying
-  preserved; behavior-equivalent via the mig-080 backfilled-solo invariant).
+  preserved). Behavior-equivalent **for solo workspaces only** (`workspaces.id =
+  users.id`, ADR-038 N2; backfilled by mig 080) — a team-workspace founder resolves
+  NULL under BOTH the old `users` read and this solo read (the install lives on the
+  team row), so agent-on-spawn remains solo-only exactly as before; broadening to
+  active-workspace keying is out of scope (north-star).
 - `server/inngest/functions/cron-workspace-sync-health.ts` — `scan-stale-sync-failed` +
   `scan-went-quiet` drop the `users.github_installation_id` select/predicate and resolve
   per-row from `workspaces`. The `users` read **stays** for `kb_sync_history` (users-only,

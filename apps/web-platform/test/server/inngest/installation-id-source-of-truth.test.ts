@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // PR-A (#4124) — Sentinel: `installationId` MUST be server-resolved
-// inside `agent-on-spawn-requested` from `users.github_installation_id`
-// keyed by the SERVER-DERIVED `founderId`. The event payload type
-// EXPLICITLY OMITS `installationId`; this test enforces the runtime
-// counterpart as belt-and-suspenders against the TypeScript guard.
+// inside `agent-on-spawn-requested` keyed by the SERVER-DERIVED `founderId`.
+// Post-#5470 (ADR-044) the source of truth is the workspaces install credential
+// resolved via `resolveInstallationIdForWorkspace(founderId, …)` — NOT an inline
+// `users.github_installation_id` read (the final `it` enforces that swap). The
+// event payload type EXPLICITLY OMITS `installationId`; this test enforces the
+// runtime counterpart as belt-and-suspenders against the TypeScript guard.
 //
 // Two-layer enforcement (plan AC2):
 //   (a) TypeScript: `AgentSpawnRequestedEvent['data']` has no
