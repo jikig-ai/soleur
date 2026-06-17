@@ -24,6 +24,12 @@
 #   - workspaces row: repo_status=ready AND repo_url=<synthetic sentinel> (the
 #     seed-qa-user.sh gap; getCurrentRepoUrl reads workspaces.repo_url, not
 #     users.repo_url — server/current-repo-url.ts:58-62)
+#   - user_session_state row: current_workspace_id=<solo workspace> +
+#     current_organization_id (#5501). createConversation resolves
+#     conversations.workspace_id via the fail-loud resolveUserWorkspaceBinding,
+#     which THROWS on an absent binding (agent-session-registry.ts:316) — without
+#     this row a chat send never persists a conversation and the harness emits
+#     CANT-RUN:forURL. handle_new_user (mig 053) does not seed this row.
 #   - a dummy (decrypt-poisoned) anthropic api_keys row (has-key gate)
 #   - DELIBERATELY NO scope_grants row: with zero grants the agent's Send route
 #     403s before write-action-send.ts, so the harness can never create a WORM
@@ -202,6 +208,43 @@ curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc --arg url "$SENTINEL_REPO_URL" \
     '{repo_status: "ready", repo_url: $url}')" \
+  > /dev/null
+
+# Active-workspace binding (#5501). The deployed createConversation
+# (server/ws-handler.ts:851) resolves conversations.workspace_id via the
+# fail-loud resolveUserWorkspaceBinding (server/agent-session-registry.ts:288),
+# which reads user_session_state.current_workspace_id and THROWS when no row
+# exists (:316-326) — aborting the INSERT before any conversation persists, so
+# the harness can never navigate and emits CANT-RUN:forURL. handle_new_user
+# (mig 053) does NOT seed user_session_state, so we must bind it here.
+#
+# Write the row DIRECTLY via the table endpoint (NOT the set_current_workspace_id
+# RPC at mig 079:256: it derives the writer from auth.uid() and RAISEs 28000
+# under a service-role caller, mig 079:267). The body mirrors the RPC's own write
+# verbatim (INSERT … ON CONFLICT (user_id) DO UPDATE, mig 079:293-298). Service
+# role bypasses the SELECT-only RLS (mig 060:41-43); the table has no
+# insert/update trigger and no table-level REVOKE FROM service_role.
+echo "  Resolving organization_id for the active-workspace binding..."
+org_id=$(curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id&select=organization_id" \
+  -H "$header_auth" -H "$header_api" \
+  | jq -r '.[0].organization_id // ""')
+if [[ -z "$org_id" ]]; then
+  echo "::error::No organization_id on workspace $workspace_id (handle_new_user trigger did not provision an org?)"
+  exit 1
+fi
+
+# POST upsert (NOT a bare PATCH: no row exists yet, so ?user_id=eq.X matches 0
+# rows and silently no-ops, leaving the binding absent and the harness broken).
+echo "  Binding active workspace (user_session_state upsert)..."
+curl -sf "$SB_URL/rest/v1/user_session_state?on_conflict=user_id" \
+  -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  -H "Prefer: resolution=merge-duplicates,return=minimal" \
+  -d "$(jq -nc \
+    --arg uid "$user_id" \
+    --arg wid "$workspace_id" \
+    --arg oid "$org_id" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{user_id: $uid, current_workspace_id: $wid, current_organization_id: $oid, updated_at: $ts}')" \
   > /dev/null
 
 # Dummy decrypt-poisoned anthropic api_keys row (has-key gate). iv/auth_tag are

@@ -224,3 +224,42 @@ Leak response:
   teardown, RLS-only gate-run path) and its leak path is the rotation runbook.
 - The mock-hermetic e2e suite is unchanged and stays CI-blocking for the model
   layer (Non-Goal: do not replace it).
+
+## Amendment 2026-06-17 — seed must bind active workspace
+
+**Status: Accepted (extension of the seed contract, not a reversal).**
+
+The synthetic-principal seed (`apps/web-platform/scripts/seed-live-verify-user.sh`)
+table contract now ALSO includes a `user_session_state` row
+(`current_workspace_id` = the solo workspace, `current_organization_id` = that
+workspace's org).
+
+**Why.** Running the FULL (non-dry-run) harness path against prod never emitted
+`RESULT: PASS` — it emitted `CANT-RUN:forURL` because no `conversations` row was
+ever persisted for the synthetic UID (0 rows confirmed via the DB). The deployed
+`createConversation` (`server/ws-handler.ts:851`) resolves `conversations.workspace_id`
+through the **fail-loud** `resolveUserWorkspaceBinding` (`server/agent-session-registry.ts:288`),
+which reads `user_session_state.current_workspace_id` and **THROWS**
+`"Unable to resolve workspace binding for user — no durable binding found."`
+(`:316-326`) when the user has no row — aborting the INSERT before any conversation
+persists, so the app never navigates to `/dashboard/chat/<uuid>` and the rail never
+materializes. `handle_new_user` (mig 053) provisions the org + workspace + owner
+membership but **not** a `user_session_state` row (mig 060 only backfilled
+migration-time users), so the binding was permanently absent for this principal.
+
+**Why a direct table write, not the RPC.** The canonical writer
+`set_current_workspace_id` (mig 079:256) derives the writer from `auth.uid()` and
+`RAISE`s 28000 under a service-role caller (and EXECUTE is revoked from
+`service_role`). The seed authenticates with the service-role key (no `auth.uid()`),
+so it writes the row directly via the REST table endpoint
+(`POST /rest/v1/user_session_state?on_conflict=user_id`,
+`Prefer: resolution=merge-duplicates`) with the **same body the RPC would produce**
+(`INSERT … ON CONFLICT (user_id) DO UPDATE`, mig 079:293-298). Service role bypasses
+the SELECT-only RLS (mig 060:41-43); the table has no insert/update trigger and no
+table-level `REVOKE … FROM service_role`. A bare `PATCH` would silently no-op (0 rows
+match before the first run), so the upsert MUST be a POST.
+
+This **more completely satisfies ADR-044** (which defines `current_workspace_id` in
+`user_session_state` as THE active-workspace binding) for the synthetic principal; it
+does not introduce or reverse any decision. Tracked by #5501; the live `RESULT: PASS`
+de-risks #5463 item 4 (report-only → blocking flip).
