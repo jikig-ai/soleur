@@ -147,7 +147,11 @@ run_enumerate() {
   # AND stderr — even on a 200, and the cutover workflow parses that body as a JSON
   # array (`jq -e 'type == "array"'`). So on the SUCCESS path this script must write
   # NOTHING non-JSON to EITHER stream: stdout carries only the records array (below)
-  # and the summary goes to journald via `logger` ONLY (→ Vector → Better Stack).
+  # and the summary goes to on-host journald via `logger` ONLY (read with
+  # `journalctl -t inngest-enumerate-reminders`; it does NOT reach Better Stack —
+  # vector.toml's journald sources match inngest-server.service / CRIT-only, not this
+  # webhook.service notice line, see #5495). The no-SSH count+ids signal is the cutover
+  # workflow's own `::notice::`, recomputed from the parsed array (cutover-inngest.yml).
   # An `echo ... >&2` here would be merged ahead of the JSON and break the array parse
   # (the bug that left the cutover blocked even after the epoch-from fix). Internal
   # shell consumers use `$(...)`, which captures stdout only, so they were unaffected —
