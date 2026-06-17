@@ -59,6 +59,7 @@ run_rearm() {
   local records="$1"
   printf '%s' "$records" | \
     PATH="${MOCKBIN}:$PATH" \
+    INNGEST_REARM_STDIN=1 \
     INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
     SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/api/internal/schedule-reminder" \
     bash "$TARGET" 2>&1
@@ -130,11 +131,32 @@ test_missing_secret_fails_closed() {
   teardown_mock_curl
 }
 
+# --- Test 6: webhook path (no stdin) self-enumerates via INNGEST_ENUMERATE_CMD ---
+test_self_enumerate_default() {
+  setup_mock_curl 202
+  local enum_stub; enum_stub="${MOCKBIN}/enum.sh"
+  cat > "$enum_stub" <<MOCK
+#!/usr/bin/env bash
+printf '%s' '[{"reminder_id":"rem-enum","fire_at":"2026-06-18T12:00:00Z","actor":"platform","action":{"type":"named-check","check":"x","report_to_issue":9}}]'
+MOCK
+  chmod +x "$enum_stub"
+  local rc=0 out
+  out=$(PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_ENUMERATE_CMD="$enum_stub" \
+    SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/api/internal/schedule-reminder" \
+    bash "$TARGET" 2>&1) || rc=$?
+  assert_eq "self-enumerate path exits 0" "0" "$rc"
+  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
+  assert_contains "re-armed the self-enumerated record" "$bodies" '"reminder_id":"rem-enum"'
+  teardown_mock_curl
+}
+
 test_happy_rearm
 test_503_aborts_loud
 test_other_failure
 test_empty_noop
 test_missing_secret_fails_closed
+test_self_enumerate_default
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

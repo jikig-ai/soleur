@@ -37,7 +37,11 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "cat_deploy_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-deploy-state.sh")",
   "canary_bundle_claim_check_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/canary-bundle-claim-check.sh")",
   "hooks_json_b64": "${HOOKS_JSON_B64}",
-  "cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")"
+  "cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")",
+  "inngest_enumerate_reminders_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-enumerate-reminders.sh")",
+  "inngest_rearm_reminders_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-rearm-reminders.sh")",
+  "inngest_wiped_volume_verify_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-wiped-volume-verify.sh")",
+  "cat_inngest_verify_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-inngest-verify-state.sh")"
 }
 PAYLOAD
 

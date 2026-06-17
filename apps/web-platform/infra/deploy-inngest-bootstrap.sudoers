@@ -28,6 +28,19 @@ deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
 Cmnd_Alias INNGEST_RESTART = /usr/bin/systemctl restart inngest-server.service
 deploy ALL=(root) NOPASSWD: INNGEST_RESTART
 
+# #5450 — permits inngest-wiped-volume-verify.sh (the OPT-IN destructive cutover
+# durability proof, invoked via the /hooks/inngest-wiped-volume-verify handler as
+# the deploy user) to stop THEN start inngest-server.service around the volume
+# wipe. It cannot be a `restart` — the wipe of /var/lib/inngest happens while the
+# unit is DOWN. Two pinned, wildcard-free aliases (sudo-rs safe); the wipe itself
+# needs no root (the dir is deploy:deploy 0750). Delivered root-only with the rest
+# of this file (cloud-init write_files + the handler-bootstrap bridge), never via
+# the webhook handler.
+Cmnd_Alias INNGEST_STOP = /usr/bin/systemctl stop inngest-server.service
+deploy ALL=(root) NOPASSWD: INNGEST_STOP
+Cmnd_Alias INNGEST_START = /usr/bin/systemctl start inngest-server.service
+deploy ALL=(root) NOPASSWD: INNGEST_START
+
 # #4827 — permits infra-config-apply.sh (the /hooks/infra-config handler, running
 # as the deploy user) to escalate the atomic install of its 7 managed files into
 # their root:root 0755 destination dirs, which the deploy user cannot mktemp into

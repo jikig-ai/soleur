@@ -64,6 +64,10 @@ declare -rA DEST_SPEC=(
   ["/usr/local/bin/canary-bundle-claim-check.sh"]="755 root:root"
   ["/etc/webhook/hooks.json"]="640 root:deploy"
   ["/usr/local/bin/cat-infra-config-state.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-enumerate-reminders.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-rearm-reminders.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-wiped-volume-verify.sh"]="755 root:root"
+  ["/usr/local/bin/cat-inngest-verify-state.sh"]="755 root:root"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),

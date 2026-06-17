@@ -69,8 +69,16 @@ write_files:
       Cmnd_Alias INNGEST_RESTART = /usr/bin/systemctl restart inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_RESTART
 
+      # #5450 — permits the opt-in wiped-volume durability verify to stop THEN
+      # start inngest-server around the /var/lib/inngest wipe (can't be a restart;
+      # the wipe happens while down). Two pinned, wildcard-free aliases.
+      Cmnd_Alias INNGEST_STOP = /usr/bin/systemctl stop inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_STOP
+      Cmnd_Alias INNGEST_START = /usr/bin/systemctl start inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_START
+
       # #4827 — permits infra-config-apply.sh to escalate the atomic install of
-      # its 8 managed files into root:root dest dirs the deploy user cannot write.
+      # its managed files into root:root dest dirs the deploy user cannot write.
       # Fixed helper path, no argument wildcards (sudo-rs safe); the helper's
       # hardcoded dest allowlist + TOCTOU guards are the security boundary.
       Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install

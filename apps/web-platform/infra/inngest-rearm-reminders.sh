@@ -47,9 +47,19 @@ if [[ -z "$SECRET" ]]; then
   exit 1
 fi
 
-records="$(cat)"
+# Source the re-arm records. DEFAULT (webhook path): self-enumerate on the host
+# via inngest-enumerate-reminders.sh — adnanh/webhook does NOT pipe the request
+# body to the command's stdin, so relying on stdin here would hang; self-enumerate
+# also keeps comment bodies on-host (never transiting the workflow log, P2-sec-a).
+# INNGEST_REARM_STDIN=1 switches to reading records from stdin (manual/test).
+ENUMERATE_CMD="${INNGEST_ENUMERATE_CMD:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inngest-enumerate-reminders.sh}"
+if [[ "${INNGEST_REARM_STDIN:-0}" == "1" ]]; then
+  records="$(cat)"
+else
+  records="$("$ENUMERATE_CMD")" || { echo "ERROR: enumeration failed; cannot source re-arm records" >&2; exit 1; }
+fi
 if ! echo "$records" | jq -e 'type == "array"' >/dev/null 2>&1; then
-  echo "ERROR: stdin is not a JSON array of re-arm records" >&2
+  echo "ERROR: re-arm records are not a JSON array" >&2
   exit 1
 fi
 
