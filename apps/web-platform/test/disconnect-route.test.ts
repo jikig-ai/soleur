@@ -11,24 +11,24 @@ const {
   mockDeleteWorkspace,
   mockIsAllowed,
   mockRpc,
-  mockTenantFrom,
+  mockResolveActiveWorkspace,
+  mockWriteRepoColsToWorkspace,
+  mockAbortAllWorkspaceMemberSessions,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
   mockDeleteWorkspace: vi.fn(),
   mockIsAllowed: vi.fn(),
   mockRpc: vi.fn(),
-  mockTenantFrom: vi.fn(),
+  mockResolveActiveWorkspace: vi.fn(),
+  mockWriteRepoColsToWorkspace: vi.fn(),
+  mockAbortAllWorkspaceMemberSessions: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
     rpc: mockRpc,
-    // ADR-044 PR-2a: the tenant client now reads user_session_state via
-    // resolveCurrentWorkspaceId (active-workspace guard). Defaulted to solo
-    // in beforeEach so every existing test is a no-op for the new guard.
-    from: mockTenantFrom,
   })),
   createServiceClient: vi.fn(() => ({
     from: mockFrom,
@@ -37,6 +37,25 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/server/workspace", () => ({
   deleteWorkspace: mockDeleteWorkspace,
+}));
+
+// ADR-044 PR-2: the route resolves its target workspace via the
+// membership-verified resolver (session claim, never request input). Control
+// its return per-test; db-error must fail-closed to 503.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspace: mockResolveActiveWorkspace,
+}));
+
+// ADR-044 PR-2: the repo-column CLEAR is now authoritative on the `workspaces`
+// row, written via the dynamically-imported mirror helper. Mock it so we can
+// assert the exact (client, id, patch, opts) and exercise the fail-closed path.
+vi.mock("@/server/workspace-repo-mirror", () => ({
+  writeRepoColsToWorkspace: mockWriteRepoColsToWorkspace,
+}));
+
+// ADR-044 PR-2 / P0-6: live member agent sessions are aborted before teardown.
+vi.mock("@/server/agent-session-registry", () => ({
+  abortAllWorkspaceMemberSessions: mockAbortAllWorkspaceMemberSessions,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -82,20 +101,25 @@ function makeRequest(): Request {
 }
 
 const TEST_USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+const TEAM_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
 
-/** Sets up Supabase mock chain for the users table. */
-function setupUserMocks(opts: {
+/**
+ * Wire the service-role `workspaces` table mock chain.
+ *
+ * The route reads `workspaces.select("repo_status").eq("id", activeId).single()`
+ * for the cloning-guard (ADR-044 PR-2: was `users`). Repo-column CLEAR and the
+ * readiness reset on `users` are handled by separate mocks
+ * (`writeRepoColsToWorkspace`, `mockUpdate`).
+ *
+ * Returns `mockUpdate` so callers can assert the `users.update(...)` readiness
+ * reset (solo path) — or assert it was NOT called (team path).
+ */
+function setupServiceMocks(opts: {
   repoStatus?: string;
   selectError?: { message: string } | null;
   updateError?: { message: string } | null;
-  mirrorError?: { message: string } | null;
 }) {
-  const {
-    repoStatus = "ready",
-    selectError = null,
-    updateError = null,
-    mirrorError = null,
-  } = opts;
+  const { repoStatus = "ready", selectError = null, updateError = null } = opts;
 
   const selectChain = mockQueryChain(
     selectError ? null : { repo_status: repoStatus },
@@ -106,12 +130,14 @@ function setupUserMocks(opts: {
   const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
 
   mockFrom.mockImplementation((table: string) => {
-    if (table === "users") {
-      return { select: selectChain.select, update: mockUpdate };
-    }
-    // ADR-044: workspaces mirror write (mirrorRepoColsToSoloWorkspace).
     if (table === "workspaces") {
-      return { update: () => ({ eq: async () => ({ error: mirrorError }) }) };
+      // Only the cloning-guard select hits this table directly; the CLEAR goes
+      // through the mocked writeRepoColsToWorkspace helper.
+      return { select: selectChain.select };
+    }
+    if (table === "users") {
+      // Solo-only readiness reset (health_snapshot / workspace_status).
+      return { update: mockUpdate };
     }
     return {};
   });
@@ -127,86 +153,187 @@ describe("DELETE /api/repo/disconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsAllowed.mockReturnValue(true);
-    // ADR-044 PR-1 owner-gate: default to owner (solo users always own
-    // workspace_id=user.id). The non-owner case overrides per-test.
+    // ADR-044 PR-1 owner-gate: default to owner. The non-owner case overrides.
     mockRpc.mockResolvedValue({ data: true, error: null });
-    // ADR-044 PR-2a: default the active-workspace resolver to SOLO
-    // (current_workspace_id null → resolveCurrentWorkspaceId returns user.id),
-    // so the team-workspace refusal guard is a no-op for every existing test.
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({ current_workspace_id: null }, null),
-    );
+    // ADR-044 PR-2: default the resolver to SOLO (active == caller), so every
+    // existing case (cloning-guard, fail-closed clear, idempotency) runs the
+    // solo path unless a team test overrides it.
+    mockResolveActiveWorkspace.mockResolvedValue({
+      ok: true,
+      workspaceId: TEST_USER_ID,
+    });
+    // Default the credential-clear helper to succeed.
+    mockWriteRepoColsToWorkspace.mockResolvedValue(undefined);
   });
 
-  test("returns 422 and refuses when a TEAM workspace is active (ADR-044 PR-2a confused-deputy guard)", async () => {
-    const TEAM_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
+  // -------------------------------------------------------------------------
+  // ADR-044 PR-2 team write-cutover
+  // -------------------------------------------------------------------------
+
+  test("team workspace active + owner → proceeds and tears down the TEAM workspace (200)", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
-    // Active workspace is a TEAM (≠ user.id). Team on-disk provisioning is
-    // #5462/Phase-5; until then a disconnect would SILENTLY tear down the
-    // caller's PERSONAL solo connection (confused deputy). Refuse explicitly.
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({ current_workspace_id: TEAM_WORKSPACE_ID }, null),
-    );
-    const { mockUpdate } = setupUserMocks({ repoStatus: "ready" });
-
-    const res = await DELETE(makeRequest());
-    expect(res.status).toBe(422);
-    const body = await res.json();
-    expect(body.error).toMatch(/team workspace/i);
-
-    // The refusal precedes the owner-gate AND every mutation.
-    expect(mockRpc).not.toHaveBeenCalled();
-    expect(mockUpdate).not.toHaveBeenCalled();
-    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
-  });
-
-  test("solo active workspace (current_workspace_id === user.id) is unaffected by the team guard", async () => {
-    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({ current_workspace_id: TEST_USER_ID }, null),
-    );
-    setupUserMocks({ repoStatus: "ready" });
+    mockResolveActiveWorkspace.mockResolvedValue({
+      ok: true,
+      workspaceId: TEAM_WORKSPACE_ID,
+    });
+    const { mockUpdate } = setupServiceMocks({ repoStatus: "ready" });
     mockDeleteWorkspace.mockResolvedValue(undefined);
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+
+    // Owner-gate is keyed to the RESOLVED active (team) id, NOT user.id.
+    expect(mockRpc).toHaveBeenCalledWith("is_workspace_owner", {
+      p_workspace_id: TEAM_WORKSPACE_ID,
+      p_user_id: TEST_USER_ID,
+    });
+
+    // The repo columns are cleared AUTHORITATIVELY on the team workspaces row.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalledWith(
+      expect.anything(),
+      TEAM_WORKSPACE_ID,
+      {
+        github_installation_id: null,
+        repo_url: null,
+        repo_status: "not_connected",
+        repo_last_synced_at: null,
+        repo_error: null,
+      },
+      { throwOnError: true },
+    );
+
+    // Live member sessions aborted before teardown, keyed to the team id.
+    expect(mockAbortAllWorkspaceMemberSessions).toHaveBeenCalledWith(
+      TEAM_WORKSPACE_ID,
+      TEST_USER_ID,
+    );
+
+    // The team directory is torn down (NOT the caller's solo dir).
+    expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEAM_WORKSPACE_ID);
+
+    // CRITICAL: the team path must NOT reset the caller's `users` readiness —
+    // doing so corrupts their personal solo readiness and other owned teams.
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  test("returns 403 when the caller is not the workspace owner (ADR-044 owner-gate)", async () => {
+  test("team workspace active + NON-owner → 403 before any mutation (owner-gate)", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockResolveActiveWorkspace.mockResolvedValue({
+      ok: true,
+      workspaceId: TEAM_WORKSPACE_ID,
+    });
     mockRpc.mockResolvedValueOnce({ data: false, error: null });
-    setupUserMocks({ repoStatus: "ready" });
+    const { mockUpdate } = setupServiceMocks({ repoStatus: "ready" });
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(403);
-    // The owner-gate must short-circuit BEFORE any mutation.
+    const body = await res.json();
+    expect(body.error).toMatch(/owner/i);
+
+    // Owner-gate keyed to the RESOLVED active (team) id.
+    expect(mockRpc).toHaveBeenCalledWith("is_workspace_owner", {
+      p_workspace_id: TEAM_WORKSPACE_ID,
+      p_user_id: TEST_USER_ID,
+    });
+
+    // Short-circuit BEFORE any mutation.
+    expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
+    expect(mockAbortAllWorkspaceMemberSessions).not.toHaveBeenCalled();
     expect(mockDeleteWorkspace).not.toHaveBeenCalled();
-    // p_workspace_id MUST equal the mutated workspace (= user.id in PR-1).
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  test("resolver fails (db-error) → 503 fail-closed, no mutation, no teardown", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockResolveActiveWorkspace.mockResolvedValue({
+      ok: false,
+      reason: "db-error",
+    });
+    const { mockUpdate } = setupServiceMocks({ repoStatus: "ready" });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toMatch(/active workspace/i);
+
+    // A db-error at this destructive boundary must NEVER silently tear down the
+    // caller's solo workspace under a team claim — fail closed before the
+    // owner-gate AND every mutation.
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
+    expect(mockAbortAllWorkspaceMemberSessions).not.toHaveBeenCalled();
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  test("solo active workspace → owner-gate keyed to user.id, resets solo readiness, tears down solo dir (200)", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    // resolver defaults to solo (workspaceId === user.id).
+    const { mockUpdate } = setupServiceMocks({ repoStatus: "ready" });
+    mockDeleteWorkspace.mockResolvedValue(undefined);
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+
     expect(mockRpc).toHaveBeenCalledWith("is_workspace_owner", {
       p_workspace_id: TEST_USER_ID,
       p_user_id: TEST_USER_ID,
     });
+
+    // Authoritative CLEAR on the caller's own (solo) workspaces row.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalledWith(
+      expect.anything(),
+      TEST_USER_ID,
+      {
+        github_installation_id: null,
+        repo_url: null,
+        repo_status: "not_connected",
+        repo_last_synced_at: null,
+        repo_error: null,
+      },
+      { throwOnError: true },
+    );
+
+    // Solo readiness reset on `users` — ONLY the provisioning/readiness columns,
+    // NEVER a repo column (those are relocated to `workspaces`).
+    expect(mockUpdate).toHaveBeenCalledWith({
+      health_snapshot: null,
+      workspace_status: "provisioning",
+    });
+
+    expect(mockAbortAllWorkspaceMemberSessions).toHaveBeenCalledWith(
+      TEST_USER_ID,
+      TEST_USER_ID,
+    );
+    expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEST_USER_ID);
   });
+
+  // -------------------------------------------------------------------------
+  // Auth / CSRF / rate-limit gates
+  // -------------------------------------------------------------------------
 
   test("returns 401 when unauthenticated", async () => {
     mockGetUser.mockResolvedValue({ data: { user: null } });
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(401);
-
     const body = await res.json();
     expect(body.error).toMatch(/unauthorized/i);
+
+    // No resolution / mutation before auth.
+    expect(mockResolveActiveWorkspace).not.toHaveBeenCalled();
   });
 
   test("returns 429 when rate limited", async () => {
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: TEST_USER_ID } },
-    });
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
     mockIsAllowed.mockReturnValue(false);
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(429);
-
     const body = await res.json();
     expect(body.error).toMatch(/too many/i);
   });
@@ -221,106 +348,146 @@ describe("DELETE /api/repo/disconnect", () => {
     expect(res.status).toBe(403);
   });
 
-  test("returns 409 when repo is currently cloning", async () => {
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: TEST_USER_ID } },
-    });
-    setupUserMocks({ repoStatus: "cloning" });
+  // -------------------------------------------------------------------------
+  // Cloning-guard / db-error / fail-closed clear (adapted to workspaces row)
+  // -------------------------------------------------------------------------
+
+  test("returns 409 when the active workspace repo is currently cloning", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    setupServiceMocks({ repoStatus: "cloning" });
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(409);
-
     const body = await res.json();
     expect(body.error).toMatch(/in progress/i);
+
+    // Guard precedes the destructive clear + teardown.
+    expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
   });
 
-  test("returns 500 when select query fails", async () => {
+  test("returns 500 when the workspaces cloning-guard select fails", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
-    setupUserMocks({ selectError: { message: "database unreachable" } });
+    setupServiceMocks({ selectError: { message: "database unreachable" } });
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toMatch(/failed to disconnect/i);
+
+    expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
   });
 
-  test("returns 200 and clears all repo fields on successful disconnect", async () => {
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: TEST_USER_ID } },
-    });
-    const { mockUpdate } = setupUserMocks({ repoStatus: "ready" });
+  test("returns 500 when the owner-gate rpc errors", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockRpc.mockResolvedValueOnce({ data: null, error: { message: "rpc boom" } });
+    setupServiceMocks({ repoStatus: "ready" });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/failed to disconnect/i);
+
+    expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+  });
+
+  test("returns 500 when the credential-clear fails CLOSED (ADR-044, helper throws)", async () => {
+    // The read path is workspaces-only; a silently-failed clear would leave
+    // github_installation_id + repo_url live (caller appears connected, agent
+    // can still act under the revoked grant). The helper throws on db-error OR
+    // 0-row no-op, so the route surfaces a 500 and the (idempotent) disconnect
+    // is retried rather than falsely reporting success.
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    setupServiceMocks({ repoStatus: "ready" });
+    mockWriteRepoColsToWorkspace.mockRejectedValue(
+      new Error("mirror write failed"),
+    );
     mockDeleteWorkspace.mockResolvedValue(undefined);
 
     const res = await DELETE(makeRequest());
-    expect(res.status).toBe(200);
-
+    expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.ok).toBe(true);
+    expect(body.error).toMatch(/failed to disconnect/i);
 
-    expect(mockUpdate).toHaveBeenCalledWith({
-      github_installation_id: null,
-      repo_url: null,
-      repo_status: "not_connected",
-      repo_last_synced_at: null,
-      repo_error: null,
-      health_snapshot: null,
-      workspace_path: "",
-      workspace_status: "provisioning",
-    });
-
-    expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEST_USER_ID);
+    // Failed CLOSED: teardown does NOT proceed after a failed credential clear.
+    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
   });
 
   test("workspace cleanup failure still returns 200 (best-effort)", async () => {
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: TEST_USER_ID } },
-    });
-    setupUserMocks({ repoStatus: "ready" });
-    mockDeleteWorkspace.mockRejectedValue(new Error("Directory already removed"));
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    setupServiceMocks({ repoStatus: "ready" });
+    mockDeleteWorkspace.mockRejectedValue(
+      new Error("Directory already removed"),
+    );
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(200);
-
     const body = await res.json();
     expect(body.ok).toBe(true);
+
+    // The credential WAS cleared before the best-effort teardown failed.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalled();
   });
 
-  test("returns 500 when database update fails", async () => {
+  test("returns 200 idempotently when the active workspace has no connected repo", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
-    setupUserMocks({ repoStatus: "ready", updateError: { message: "constraint violation" } });
-
-    const res = await DELETE(makeRequest());
-    expect(res.status).toBe(500);
-    const body = await res.json();
-    expect(body.error).toMatch(/failed to disconnect/i);
-  });
-
-  test("returns 500 when the workspaces mirror fails (credential-clear fails closed, ADR-044)", async () => {
-    // The read path is workspaces-only; a silently-failed disconnect mirror
-    // would leave github_installation_id + repo_url live. Disconnect must fail
-    // closed so the (idempotent) operation is retried rather than reporting a
-    // disconnect that left the credential readable.
-    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
-    setupUserMocks({ repoStatus: "ready", mirrorError: { message: "mirror write failed" } });
-    mockDeleteWorkspace.mockResolvedValue(undefined);
-
-    const res = await DELETE(makeRequest());
-    expect(res.status).toBe(500);
-    const body = await res.json();
-    expect(body.error).toMatch(/failed to disconnect/i);
-  });
-
-  test("returns 200 idempotently when user has no connected repo", async () => {
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: TEST_USER_ID } },
-    });
-    setupUserMocks({ repoStatus: "not_connected" });
+    setupServiceMocks({ repoStatus: "not_connected" });
     mockDeleteWorkspace.mockResolvedValue(undefined);
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(200);
-
     const body = await res.json();
     expect(body.ok).toBe(true);
+
+    // Still clears authoritatively (idempotent no-op clear) and tears down.
+    expect(mockWriteRepoColsToWorkspace).toHaveBeenCalled();
+    expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEST_USER_ID);
+  });
+
+  // -------------------------------------------------------------------------
+  // ADR-044 exit criterion: ZERO repo-column writes to `users` on ANY path.
+  // The whole point of PR-2 — repo state is authoritative on `workspaces`.
+  // -------------------------------------------------------------------------
+
+  test("NO repo-column write to `users` occurs on ANY path (solo + team)", async () => {
+    const repoCols = ["repo_url", "github_installation_id", "repo_error"];
+
+    // Solo path.
+    {
+      mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+      const { mockUpdate } = setupServiceMocks({ repoStatus: "ready" });
+      mockDeleteWorkspace.mockResolvedValue(undefined);
+
+      const res = await DELETE(makeRequest());
+      expect(res.status).toBe(200);
+
+      for (const call of mockUpdate.mock.calls) {
+        const patch = ((call as unknown[])[0] ?? {}) as Record<string, unknown>;
+        for (const col of repoCols) {
+          expect(patch).not.toHaveProperty(col);
+        }
+      }
+    }
+
+    // Team path — `users.update` must not be called at all.
+    {
+      vi.clearAllMocks();
+      mockIsAllowed.mockReturnValue(true);
+      mockRpc.mockResolvedValue({ data: true, error: null });
+      mockWriteRepoColsToWorkspace.mockResolvedValue(undefined);
+      mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+      mockResolveActiveWorkspace.mockResolvedValue({
+        ok: true,
+        workspaceId: TEAM_WORKSPACE_ID,
+      });
+      const { mockUpdate } = setupServiceMocks({ repoStatus: "ready" });
+      mockDeleteWorkspace.mockResolvedValue(undefined);
+
+      const res = await DELETE(makeRequest());
+      expect(res.status).toBe(200);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    }
   });
 });

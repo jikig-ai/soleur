@@ -3,7 +3,10 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { existsSync } from "fs";
 import { join } from "path";
 import { parseErrorPayload } from "@/server/git-auth";
-import { resolveActiveWorkspacePath } from "@/server/workspace-resolver";
+import {
+  resolveActiveWorkspacePath,
+  resolveCurrentWorkspaceId,
+} from "@/server/workspace-resolver";
 
 /**
  * GET /api/repo/status
@@ -21,27 +24,37 @@ export async function GET() {
   }
 
   const serviceClient = createServiceClient();
-  // #5005 — `workspace_path` is no longer read here; the `hasKnowledgeBase`
-  // existence check below resolves the ACTIVE workspace path via the
-  // membership-scoped resolver (the own-row column is stale/empty post-ADR-044).
-  // The `repo_url`/`repo_status`/`repo_last_synced_at` reads are the ADR-044
-  // relocated REPO columns — out of scope for #5005 (covered by ADR-044's own
-  // pre-decommission drift gate); left untouched here.
-  const { data: userData, error: fetchError } = await serviceClient
-    .from("users")
-    .select("repo_url, repo_status, repo_last_synced_at, repo_error, health_snapshot")
-    .eq("id", user.id)
-    .single();
 
-  if (fetchError || !userData) {
+  // ADR-044 PR-2 (#5462): the repo-connection columns are AUTHORITATIVE on the
+  // ACTIVE `workspaces` row (not the caller's own `users` row, which goes
+  // stale for newly-connected users once the write relocated, and is wrong for a
+  // member viewing a shared/team workspace). Resolve the active workspace
+  // (claim → solo fallback, never a sibling) and read the repo cols there.
+  // `health_snapshot` is NOT relocated by ADR-044 — it stays on `users`.
+  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, serviceClient);
+  const [wsRes, userRes] = await Promise.all([
+    serviceClient
+      .from("workspaces")
+      .select("repo_url, repo_status, repo_last_synced_at, repo_error")
+      .eq("id", activeWorkspaceId)
+      .maybeSingle(),
+    serviceClient
+      .from("users")
+      .select("health_snapshot")
+      .eq("id", user.id)
+      .maybeSingle(),
+  ]);
+
+  if (wsRes.error) {
     return NextResponse.json(
-      { error: "User not found" },
-      { status: 404 },
+      { error: "Failed to read repository status" },
+      { status: 500 },
     );
   }
 
-  const status = userData.repo_status ?? "not_connected";
-  const repoUrl = userData.repo_url ?? null;
+  const workspaceData = wsRes.data;
+  const status = workspaceData?.repo_status ?? "not_connected";
+  const repoUrl = workspaceData?.repo_url ?? null;
 
   // Extract repo name from URL (e.g., "owner/repo" from "https://github.com/owner/repo")
   let repoName: string | null = null;
@@ -83,16 +96,16 @@ export async function GET() {
   // returns a `{errorMessage, errorCode: undefined}` shape so the UI
   // falls back to its legacy generic copy for those rows.
   const { errorMessage, errorCode } = parseErrorPayload(
-    status === "error" ? userData.repo_error : null,
+    status === "error" ? (workspaceData?.repo_error ?? null) : null,
   );
 
   return NextResponse.json({
     status,
     repoUrl,
     repoName,
-    lastSyncedAt: userData.repo_last_synced_at ?? null,
+    lastSyncedAt: workspaceData?.repo_last_synced_at ?? null,
     hasKnowledgeBase,
-    healthSnapshot: userData.health_snapshot ?? null,
+    healthSnapshot: userRes.data?.health_snapshot ?? null,
     syncConversationId,
     errorMessage,
     errorCode,
