@@ -204,7 +204,9 @@ The model lives as a LikeC4 project under
 1. **Gather context.** Read to understand the system:
    - `knowledge-base/project/README.md` and `knowledge-base/project/components/`
    - Existing ADRs in `knowledge-base/engineering/architecture/decisions/`
-   - The current `.c4` project in the diagrams dir (do not duplicate elements that already exist)
+   - The current `.c4` project in the diagrams dir — **READ all three files in full** (`model.c4`, `views.c4`, `spec.c4`), never a single keyword grep (do not duplicate elements that already exist).
+
+   **External-actor / external-system completeness sweep (do this before concluding "nothing to add").** For the change at hand, enumerate every (a) external human actor (who sends/receives the data — correspondents, reviewers, recipients), (b) external system/vendor (inbound webhook, outbound API, third-party store), (c) container/data-store touched, and (d) actor↔surface access relationship that changes. For each, confirm it is already modeled; if not, add it (element + `#external` tag if outside the platform boundary + the relationship edges + the `views.c4` `include` line so it RENDERS). A `grep` for the feature's own noun returning zero is NOT evidence of absence — the gap is usually an external actor/vendor named by role/vendor, not the feature (e.g. an inbound-email "Correspondent" actor + a "Resend" system for an email feature). Also fix any element **description** the change falsifies (e.g. a "Solo founder" actor when the change adds multi-Owner sharing). See `knowledge-base/project/learnings/2026-06-18-c4-impact-requires-reading-all-diagrams-and-enumerating-external-actors.md`.
 
 2. **Edit the consolidated model** (`spec.c4` / `model.c4`), following
    [likec4-reference.md](./references/likec4-reference.md). Key rules:

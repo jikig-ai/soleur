@@ -5,8 +5,15 @@
 // component-plugin) — union of all elements and relationships, nothing dropped.
 model {
 
-  founder = actor "Founder" {
-    description "Solo founder using Soleur as their AI organization"
+  founder = actor "Founder / Operator" {
+    description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
+  }
+
+  // External actor — third parties whose inbound email is the operator
+  // email-triage inbox's source (ADR-066 / mig 102).
+  emailSender = actor "Inbound Correspondent" {
+    #external
+    description "Vendors, regulators, and counsel emailing the operator address. Their statutory/operational mail is the email-triage inbox's inbound source."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------
@@ -185,6 +192,10 @@ model {
     #external
     description "Privacy-focused website analytics"
   }
+  resend = system "Resend" {
+    #external
+    description "Inbound email ingress (operator-inbox webhook, svix-verified) + transactional outbound (statutory triage notifications). ADR-066."
+  }
 
   // ======================================================================
   // Relationships — preserved 1:1 from the three Mermaid sources.
@@ -203,6 +214,9 @@ model {
   cloudflare -> webapp "Tunnel, DNS, CDN" { technology "HTTPS" }
   doppler -> engine "Runtime secrets" { technology "CLI" }
   stripe -> webapp "Payment webhooks" { technology "HTTPS" }
+  emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
+  resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
+  webapp -> resend "Statutory triage notifications (outbound email)" { technology "HTTPS (Resend API)" }
 
   // ---- C4 L2 (Container) — 24 relationships ------------------------------
   founder -> dashboard "Browses and converses" { technology "HTTPS" }
@@ -225,6 +239,9 @@ model {
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP loopback :8288/:3000" }
+  resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }
+  api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066)" { technology "HTTPS" }
+  inngest -> supabase "Email-triage claim/finalize writes (email-on-received)" { technology "PostgreSQL" }
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
   hetzner -> inngest "Hosts" { technology "systemd" }

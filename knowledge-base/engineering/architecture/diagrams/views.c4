@@ -9,9 +9,9 @@ views {
     title "Soleur Platform — System Context (C4 L1)"
 
     include
-      founder,
+      founder, emailSender,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
-      anthropic, github, cloudflare, doppler, discord, stripe, plausible
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend
 
     style element.tag == #external {
       color muted
@@ -24,14 +24,14 @@ views {
     title "Soleur Platform — Containers (C4 L2)"
 
     include
-      founder,
+      founder, emailSender,
       platform.webapp, platform.engine, platform.plugin, platform.infra,
       platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
       platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,
       platform.infra.supabase, platform.infra.tunnel, platform.infra.hetzner,
       platform.infra.inngest, platform.infra.inngestPostgres, platform.infra.inngestRedis,
-      anthropic, github, cloudflare, doppler, stripe, plausible
+      anthropic, github, cloudflare, doppler, stripe, plausible, resend
 
     style element.tag == #external {
       color muted
