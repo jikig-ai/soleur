@@ -1,10 +1,12 @@
 {
   "_comment": "Playwright MCP config — pins headed mode explicitly so a future @playwright/mcp regression (cf. 0.0.75 silent-headless bug; learning 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md §2 + W4) cannot break the credential-handoff workflow. chromiumSandbox: true + channel chrome: Playwright defaults to --no-sandbox, which Chrome flags as a stability/security risk and which destabilized the long credential-handoff session that stalled issue #5092 (diagnosed 2026-06-10); real Chrome's root SUID helper sandboxes correctly even where AppArmor restricts unprivileged userns (Ubuntu 24.04+), unlike Playwright's bundled Chromium whose chrome_sandbox helper is not setuid. Wire via --config in .mcp.json.",
+  "_args_comment": "args: HEADED Chrome on a Wayland session (XDG_SESSION_TYPE=wayland) auto-selects the Wayland ozone backend, which is incompatible with the Vulkan/SwiftShader GPU path (Chrome logs 'wayland_surface_factory.cc: --ozone-platform=wayland is not compatible with Vulkan'); the GPU process crashes and every page context drops as 'Target page/context/browser has been closed' (every ~2-3 tool calls — diagnosed 2026-06-17 during the #5480 Resend mint, which crashed repeatedly). Per Chrome's own remediation hint, force the X11/XWayland backend (DISPLAY=:0 is present) and disable the GPU so headed automation renders via software — stable, and headed mode (credential-handoff requirement) is preserved. See knowledge-base/project/learnings/workflow-patterns/2026-06-17-playwright-mcp-wayland-vulkan-launch-crash.md.",
   "browser": {
     "launchOptions": {
       "headless": false,
       "channel": "chrome",
-      "chromiumSandbox": true
+      "chromiumSandbox": true,
+      "args": ["--ozone-platform=x11", "--disable-gpu"]
     },
     "isolated": false
   }

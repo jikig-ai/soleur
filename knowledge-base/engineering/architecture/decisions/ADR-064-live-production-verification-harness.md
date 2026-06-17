@@ -135,6 +135,38 @@ result** (ADR-033 Option C for credential-heavy real-stack execution) — **neve
 boolean flip in an agent skill** (that would recreate the #4932
 non-deterministic-blocking-gate class). This precondition is recorded on #5463.
 
+### Inngest re-home considered and rejected (2026-06-17, CTO ruling)
+
+The Inngest substrate was evaluated as an alternative to the GitHub-Action
+re-home (#5487), on the basis that (a) the prod runner image already bakes
+Chromium (`apps/web-platform/Dockerfile`; ADR-033 I4) and `cron-ux-audit.ts`
+already drives a Playwright browser in-container, so "ubuntu-latest is the only
+place with a working browser" no longer holds, and (b) Inngest functions already
+run with Doppler `prd` secrets + Sentry in-process. **Rejected.**
+
+A blocking deploy-gate requires a *deterministic, synchronous* signal *isolated
+from the system under test*. An Inngest function produces an **asynchronous**
+result, on the **same prod host** whose deploy is being gated; gating on it would
+require the release workflow to poll a written verdict (a poll-with-timeout
+fallback = silent-pass-or-flaky-block — the #4932 non-deterministic-blocking-gate
+class this §Substrate already forbids), and it lets a browser-driving job perturb
+the prod server under test. It would also couple a *mutating* synthetic-prod
+session to the `cron-platform` concurrency slot shared with agent-loop crons. The
+GH-Action's **exit-code-as-required-check** is deterministic and host-isolated.
+This aligns with ADR-033 Option C's own scope-note: a job that must stay in an
+ephemeral runner isolated from the long-lived app host keeps the GHA shape. The
+hybrid (Inngest-runs / CI-polls) was rejected as combining both substrates' costs.
+
+The recorded substrate (GitHub Action in `web-platform-release.yml`, ADR-033
+Option C, Sentry-observable result) **stands unchanged.** Report-only v1 lands as
+a `live-verify:` job in `web-platform-release.yml` (#5487, item 3 of the #5463
+chain) — report-only by topology (no job `needs:` it) + `continue-on-error`, per
+`wg-dark-launch-deploy-gates` — superseding the original `/soleur:postmerge`-skill
+location named above for the report-only stage. The C4 edge "live-verify harness
+→ deployed web-platform + prod Supabase" is unchanged in endpoints; its **driver**
+is now the release workflow, not the agent-driven `/soleur:postmerge` skill. No
+ADR-033 Option-set change.
+
 ### Runner browser + cookie shape (#5485)
 
 Two harness-runnability facts pinned by a live MCP/system-Chrome repro (#5485):
