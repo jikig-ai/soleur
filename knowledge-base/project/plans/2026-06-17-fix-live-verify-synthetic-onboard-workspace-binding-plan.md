@@ -267,31 +267,32 @@ this re-run is the de-risk for #5463 item 4.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `apps/web-platform/scripts/seed-live-verify-user.sh` contains a
+- [x] **AC1** `apps/web-platform/scripts/seed-live-verify-user.sh` contains a
   `POST /rest/v1/user_session_state?on_conflict=user_id` call with
   `Prefer: resolution=merge-duplicates` whose JSON body carries `user_id`,
   `current_workspace_id`, `current_organization_id`, `updated_at`. Verify:
   `grep -qE 'rest/v1/user_session_state\?on_conflict=user_id' apps/web-platform/scripts/seed-live-verify-user.sh && grep -qE 'resolution=merge-duplicates' apps/web-platform/scripts/seed-live-verify-user.sh`.
-- [ ] **AC2** The seed resolves `organization_id` from the workspace row before the upsert and
+- [x] **AC2** The seed resolves `organization_id` from the workspace row before the upsert and
   fails closed when empty. Verify: `grep -qE 'select=organization_id' apps/web-platform/scripts/seed-live-verify-user.sh`
   AND a `::error::` + `exit 1` guard exists for an empty `org_id`.
-- [ ] **AC3** Write order: the `user_session_state` upsert line number is greater than the
-  `workspace_members` owner-lookup line number. Verify:
-  `[[ $(grep -n user_session_state apps/web-platform/scripts/seed-live-verify-user.sh | head -1 | cut -d: -f1) -gt $(grep -n workspace_members apps/web-platform/scripts/seed-live-verify-user.sh | head -1 | cut -d: -f1) ]]`.
-- [ ] **AC4** The seed does NOT call `set_current_workspace_id` via `/rpc/` (it would 28000 on
+- [x] **AC3** Write order: the `user_session_state` upsert call line number is greater than the
+  `workspace_members` owner-lookup line number. Verify (anchored on the `rest/v1/` call so the
+  new header-inventory comment mention from AC's header-update requirement does not match first):
+  `[[ $(grep -nE 'rest/v1/user_session_state' apps/web-platform/scripts/seed-live-verify-user.sh | head -1 | cut -d: -f1) -gt $(grep -nE 'rest/v1/workspace_members' apps/web-platform/scripts/seed-live-verify-user.sh | head -1 | cut -d: -f1) ]]`. (The seed test's order check is likewise anchored on `rest/v1/user_session_state`.)
+- [x] **AC4** The seed does NOT call `set_current_workspace_id` via `/rpc/` (it would 28000 on
   a service-role caller with no `auth.uid()`). Verify:
   `! grep -qE '/rpc/set_current_workspace_id' apps/web-platform/scripts/seed-live-verify-user.sh`.
-- [ ] **AC5** `bash apps/web-platform/scripts/seed-live-verify-user.test.sh` exits 0 (all
+- [x] **AC5** `bash apps/web-platform/scripts/seed-live-verify-user.test.sh` exits 0 (all
   static-grep assertions, including the new `user_session_state` ones, pass).
-- [ ] **AC6** Secret discipline preserved: no `set -x` added; the new block does not echo a
+- [x] **AC6** Secret discipline preserved: no `set -x` added; the new block does not echo a
   response body or any secret. Verify: `! grep -qE '^\s*set -x' apps/web-platform/scripts/seed-live-verify-user.sh`.
-- [ ] **AC7** ADR-064 carries an `### Amendment 2026-06-17 — seed must bind active workspace`
+- [x] **AC7** ADR-064 carries an `### Amendment 2026-06-17 — seed must bind active workspace`
   subsection citing the `resolveUserWorkspaceBinding` fail-loud path. Verify:
   `grep -qE 'Amendment 2026-06-17 — seed must bind active workspace' knowledge-base/engineering/architecture/decisions/ADR-064-live-production-verification-harness.md`.
-- [ ] **AC8** Negative AC preserved (no CI wiring of the seed):
+- [x] **AC8** Negative AC preserved (no CI wiring of the seed):
   `! grep -rlE 'seed-live-verify' .github/workflows/` returns nothing (the seed stays
   agent-run-locally per ADR-064 security P0-1).
-- [ ] **AC9** PR body uses `Ref #5501` (NOT `Closes`) — the issue's true resolution is the
+- [x] **AC9** PR body uses `Ref #5501` (NOT `Closes`) — the issue's true resolution is the
   post-merge live PASS in AC10, not the code merge (`wg-use-closes-n-in-pr-body-not-title` /
   ops-remediation `Ref` extension). Issue closed in the post-merge step after AC10 passes.
 
