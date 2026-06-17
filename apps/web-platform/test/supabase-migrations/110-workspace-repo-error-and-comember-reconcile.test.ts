@@ -134,18 +134,18 @@ describe("verify 110 contract", () => {
     expect(verifyExecutable).toMatch(/AS\s+bad/i);
   });
 
-  it("asserts the SOLO drift-gate COUNT scoped to sole-member workspaces", () => {
+  it("repo_drift_count is vacuously satisfied post-mig-112 (users.* repo cols dropped)", () => {
+    // Migration 112 (ADR-044 PR-2b) DROPPED users.{repo_url, github_installation_id}
+    // after a verified prod COUNT=0. The pre-drop SOLO drift-gate query
+    // (users JOIN workspaces) can no longer run — the columns don't exist — so the
+    // check is rewritten to a named `0::int` (vacuously satisfied), retained for
+    // verify-summary stability.
     expect(verifyExecutable).toMatch(/repo_drift_count/i);
-    // The drift query mirrors ADR-044's PR-2b gate (users JOIN workspaces).
-    expect(verifyExecutable).toMatch(/u\.repo_url\s+IS\s+NOT\s+NULL/i);
-    expect(verifyExecutable).toMatch(
-      /w\.repo_url\s+IS\s+DISTINCT\s+FROM\s+u\.repo_url/i,
-    );
-    expect(verifyExecutable).toMatch(
-      /w\.github_installation_id\s+IS\s+DISTINCT\s+FROM\s+u\.github_installation_id/i,
-    );
-    // Scoped to SOLO rows (sole-member).
-    expect(verifyExecutable).toMatch(/=\s*1/);
+    expect(verifyExecutable).toMatch(/repo_drift_count'?\s*,\s*0::int/i);
+    // Regression guard: the dropped columns MUST NOT be referenced (they no longer
+    // exist; a reference re-breaks the verify-migrations job → deploy pipeline).
+    expect(verifyExecutable).not.toMatch(/\bu\.repo_url\b/i);
+    expect(verifyExecutable).not.toMatch(/\bu\.github_installation_id\b/i);
   });
 
   it("asserts 0 co-membered rows adopted WITHOUT an attestation (not 0 SKIP rows)", () => {

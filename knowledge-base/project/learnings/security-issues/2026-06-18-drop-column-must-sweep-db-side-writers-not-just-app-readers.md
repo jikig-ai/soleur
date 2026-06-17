@@ -48,6 +48,20 @@ rg -nU 'INTO public\.<table>[\s\S]{0,300}?\b<col>\b|UPDATE public\.<table>[\s\S]
 ```
 The signup trigger `handle_new_user` is the highest-frequency writer of `users.*` — always check it explicitly when dropping a `users` column.
 
+**The sweep MUST also include `apps/web-platform/supabase/verify/`** — the CI
+`verify-migrations` job re-runs EVERY verify file on every deploy, so a sibling
+verify file that asserts a property of the dropped column (a drift gate, a
+normalization sentinel) errors `column ... does not exist` post-DROP and BLOCKS
+the deploy pipeline for all PRs. (Follow-up incident to this same #5508 drop:
+`verify/031` + `verify/110` referenced the dropped `users.repo_url` /
+`users.github_installation_id`; `migrate` + `verify/112` were green but
+`verify-migrations` failed on the siblings → `deploy` skipped. See
+`knowledge-base/engineering/operations/post-mortems/mig112-verify-stale-column-refs-postmortem.md`.)
+Fix obsolete verify assertions to a named `0::int AS bad` + a `see verify/<N>`
+comment. Canonical sweep scope for a column DROP: `app/server/lib` (readers) +
+`supabase/migrations/` (function/trigger/view/policy bodies) +
+`supabase/verify/` (CI re-run assertions).
+
 **The fix lives in the SAME migration, ordered before the drop:** `CREATE OR REPLACE
 FUNCTION public.handle_new_user()` with the column removed from the INSERT (rest of the
 body verbatim — preserve SECURITY DEFINER + `SET search_path` + REVOKE + COMMENT), THEN

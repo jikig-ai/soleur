@@ -48,22 +48,15 @@ SELECT 'github_installation_id_leaked_to_authenticated',
            AND privilege_type = 'SELECT'
        ))::int AS bad
 UNION ALL
--- (4) SOLO drift-gate COUNT = 0. ADR-044's exact PR-2b gate query
---     (users JOIN workspaces ON w.id = u.id) scoped to SOLO (sole-member)
---     workspaces. Post-reconcile this must be 0; co-membered rows are excluded
---     (asserted separately in check 5).
-SELECT 'repo_drift_count',
-       (SELECT count(*)::int FROM public.users u
-          JOIN public.workspaces w ON w.id = u.id
-        WHERE (
-          (u.repo_url IS NOT NULL AND w.repo_url IS DISTINCT FROM u.repo_url)
-          OR (u.github_installation_id IS NOT NULL
-              AND w.github_installation_id IS DISTINCT FROM u.github_installation_id)
-        )
-        AND (
-          SELECT count(*) FROM public.workspace_members m2
-          WHERE m2.workspace_id = w.id
-        ) = 1) AS bad
+-- (4) SOLO drift-gate COUNT = 0. ADR-044's PR-2b gate (users JOIN workspaces
+--     ON w.id = u.id) compared users.{repo_url, github_installation_id} against
+--     workspaces.*. Migration 112 (ADR-044 PR-2b) DROPPED those users.* columns
+--     after a verified prod COUNT=0, so the drift gate is now VACUOUSLY satisfied
+--     — there are no users.* columns left to diverge. The check body must not
+--     reference the dropped columns (they no longer exist, so the old query
+--     errors `column u.repo_url does not exist`). Kept as a named 0 so the
+--     verify summary's check count stays stable. See verify/112.
+SELECT 'repo_drift_count', 0::int AS bad
 UNION ALL
 -- (5) 0 co-membered (sole-member COUNT > 1) workspaces that have an adopted
 --     repo connection WITHOUT a corresponding attestation row. This is the
