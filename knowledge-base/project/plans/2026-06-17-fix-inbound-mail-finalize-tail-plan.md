@@ -178,6 +178,18 @@ swallowed DSAR is a brand-survival event.
 
 ### Post-merge (operator)
 
+> **SPLIT (CTO ruling — ADR-065, 2026-06-17).** AC12/AC13 and Phase 1b / the
+> Infrastructure (IaC) section below are **deferred to follow-up #5480** and are
+> NOT part of this PR. Reason: `apply-web-platform-infra.yml` auto-applies on
+> merge for any `infra/*.tf` change, and Terraform resolves all root variables
+> before `-target` pruning — so a new no-default `resend_receiving_api_key`
+> would fail the merge-triggered apply until the operator mints the key and sets
+> `TF_VAR_resend_receiving_api_key` in `prd_terraform`. This PR ships ONLY the
+> code-resilience half (degraded tail + receiving-key read), which resolves the
+> issue's defect (silent permanent NULL) and `Closes #5468` per the Sharp Edge.
+> The IaC (`variable` + `doppler_secret` + workflow `-target`) lands in #5480
+> after the operator prerequisites.
+
 - **AC12** Provision the receiving-scoped key **through Terraform** (NOT a raw `doppler secrets set`
   — Phase 2.8 IaC routing). The only non-automatable step is minting the key in the Resend
   dashboard (CAPTCHA/console). The minted value enters Terraform as
