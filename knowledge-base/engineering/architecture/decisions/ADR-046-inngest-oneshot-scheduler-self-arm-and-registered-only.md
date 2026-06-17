@@ -4,7 +4,7 @@ title: Inngest one-time scheduler — registered-functions-only + self-arm-in-co
 status: active
 date: 2026-05-30
 issue: "#4654"
-related: [ADR-030, ADR-033]
+related: [ADR-030, ADR-033, 5450]
 ---
 
 # ADR-046: Inngest one-time scheduler — registered-functions-only + self-arm-in-code
@@ -57,8 +57,13 @@ secret/repo-write consumer (the #4650 monitor-close oneshot):
    `inngest send`.
 3. **`inngest.send({ ts })`, not `step.sleepUntil`** — future-dated event
    delivery is the proven primitive (zero `sleepUntil` precedent in-tree) and is
-   more durable than holding a sleeping step open. Bounded by single-host SQLite
-   durability (ADR-030) for far-future fires.
+   more durable than holding a sleeping step open. ~~Bounded by single-host SQLite
+   durability (ADR-030) for far-future fires.~~ **Updated 2026-06-17 (#5450):** that
+   bound changed — ADR-030's backend is now Supabase Postgres + self-hosted Redis
+   (AOF on /mnt/data), so a far-future armed event now survives a host re-provision.
+   The boot-arm/re-arm-every-deploy mechanism (item 2 above / ADR-030 I4) is **NOT**
+   made redundant by the durable backend: it remains the recovery path within
+   Inngest's dedup window and the re-plan-on-deploy path for de-planned crons.
 4. **GHA `--once` coexists** — keep it for no-secret / no-repo-write
    analyze-report tasks; route fire-time-secret / repo-write tasks to Inngest.
 

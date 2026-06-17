@@ -162,6 +162,12 @@ jobs:
           # in at build time.
           cp apps/web-platform/infra/inngest-bootstrap.sh "$BUILD_DIR/inngest-bootstrap.sh"
           cp apps/web-platform/infra/vector.toml "$BUILD_DIR/vector.toml"
+          # Durable Redis assets (#5450) — delivered the same way as vector.toml:
+          # baked into the image, staged to /tmp at entrypoint, installed by the
+          # bootstrap script after the Doppler env file exists.
+          cp apps/web-platform/infra/inngest-redis.conf "$BUILD_DIR/inngest-redis.conf"
+          cp apps/web-platform/infra/inngest-redis.service "$BUILD_DIR/inngest-redis.service"
+          cp apps/web-platform/infra/inngest-redis-bootstrap.sh "$BUILD_DIR/inngest-redis-bootstrap.sh"
 
           # Conditional Vector env block — empty pin values produce empty
           # ENV lines, which the bootstrap script's `${VECTOR_CLI_VERSION:-}`
@@ -175,10 +181,13 @@ jobs:
           ENV VECTOR_CLI_SHA256=${VECTOR_SHA256}
           COPY inngest-bootstrap.sh /inngest-bootstrap.sh
           COPY vector.toml /vector.toml
-          RUN chmod +x /inngest-bootstrap.sh
-          # The bootstrap script reads /tmp/vector.toml at install time;
-          # stage the OCI-bundled config there at entrypoint invocation.
-          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && /inngest-bootstrap.sh"]
+          COPY inngest-redis.conf /inngest-redis.conf
+          COPY inngest-redis.service /inngest-redis.service
+          COPY inngest-redis-bootstrap.sh /inngest-redis-bootstrap.sh
+          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh
+          # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.*
+          # at install time; stage the OCI-bundled assets there at entrypoint.
+          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && /inngest-bootstrap.sh"]
           DOCKERFILE
 
           docker build -t "$IMAGE:$TAG" "$BUILD_DIR"
