@@ -269,6 +269,8 @@ project + co-located Redis keep the blast radius off the main app's project.
 
 ### Cutover procedure (Phase 2 — low-traffic window, rollback-ready)
 
+**Before any cutover, consult:** [Destructive datastore migration safety pattern](../../../project/learnings/best-practices/2026-06-18-destructive-datastore-migration-backup-inventory-after-diff.md) — every destructive datastore migration takes (a) a recovery backup, (b) a full inventory BEFORE, (c) an after-inventory + diff. Steps 0.5 and 5 below are this runbook's instance of that pattern.
+
 The KEYSTONE risk (plan §Sharp Edges): armed `reminder.scheduled` events live ONLY in Inngest state —
 there is no app-side reminder store. A fresh-Postgres cutover loses them unless they are enumerated and
 re-armed. Run these steps in order, **starting with Step 0** (the secret-provisioning precondition —
@@ -293,7 +295,16 @@ setting).
    doppler secrets get INNGEST_REDIS_PASSWORD -p soleur -c prd --plain   # → 48-char URL-safe value
    ```
    If the value is already present (a prior auto-apply or manual run minted it), this is a clean no-op —
-   proceed to step 1.
+   proceed to step 0.5.
+0.5. **Pre-cutover safety gates (MANDATORY — #5509).** Before quiescing, capture a recovery point and a
+   full-state baseline so this destructive cutover is reversible and verifiable (no SSH):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=backup      # Hetzner server snapshot (full root disk incl. /var/lib/inngest); logs the image id
+   gh workflow run cutover-inngest.yml --field op=inventory   # BEFORE baseline: {functions, event_names, armed_reminder_ids}
+   ```
+   Record the backup **image id** (the run logs `DELETE /v1/images/<id>` to free it after the cutover is
+   confirmed) and save the BEFORE inventory block from the run log — both feed step 5's correctness check.
+   Do NOT proceed to quiesce until the `op=backup` snapshot action reports `success`.
 1. **Quiesce arming** (no reminder armed into the doomed old SQLite mid-cutover):
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE=1 -p soleur -c prd --no-interactive
@@ -322,7 +333,10 @@ setting).
 3. **Drain in-flight runs** — confirm zero `Running` status for ~60s (or accept-and-document that
    in-flight runs are abandoned; the reminder `post-comment`/`run-check` steps are not idempotent on
    replay, so a re-arm of an already-fired reminder would double-post).
-4. **Deploy** via the release pipeline (no SSH): `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap:vinngest-v1.1.14`.
+4. **Deploy** via the release pipeline (no SSH): `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.1.14`.
+   The deploy arg is the OCI **image tag** `v1.1.14` (space-separated, matching the CLI-version-bump
+   step) — NOT `vinngest-v1.1.14`: the build workflow strips the `vinngest-` GIT-tag prefix and publishes
+   the image as `v1.1.14` (GHCR has `v1.1.14`; `vinngest-v1.1.14` does not exist and would fail to pull).
    The `verify_inngest_health` HARD gate fails the deploy if `--postgres-uri` is set but `--redis-uri`
    is absent OR `inngest-redis.service` is inactive.
 5. **Verify durability.**
@@ -340,6 +354,16 @@ setting).
      unregistered-`named-check` throwaway that fires a run but posts **zero** comments, wipes
      `/var/lib/inngest`, restarts, and asserts `/health` + `/v1/functions` + the throwaway fired. Only
      run it once the armed set is drained/re-armed.
+   - **Correctness diff (MANDATORY — #5509):** re-run `op=inventory` (the AFTER baseline) and diff it
+     against the BEFORE block from step 0.5:
+     ```bash
+     gh workflow run cutover-inngest.yml --field op=inventory   # AFTER baseline
+     ```
+     Expected: `functions` identical (re-registered every deploy by construction) and `event_names`
+     identical. `armed_reminder_ids` MUST be re-present after re-arm (FALLBACK path, step 6) OR
+     empty-by-design (DEFAULT dual-run-drain, where the armed set fired on the old server pre-cutover).
+     Any unexplained drop in `functions`/`event_names`, or a missing `armed_reminder_id` after re-arm,
+     is a cutover defect — restore from the step 0.5 backup image before clearing quiesce.
 6. **Re-open arming + re-arm recovered work** (no remote shell):
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE= -p soleur -c prd --no-interactive  # clears the flag

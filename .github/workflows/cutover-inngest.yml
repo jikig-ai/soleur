@@ -4,6 +4,8 @@
 #   op=enumerate           → GET  /hooks/inngest-enumerate-reminders  (list still-armed reminders)
 #   op=rearm               → POST /hooks/inngest-rearm-reminders      (re-arm them post-quiesce-clear)
 #   op=verify-wiped-volume → POST /hooks/inngest-wiped-volume-verify  (async; opt-in destructive proof)
+#   op=backup              → hcloud API create_image (no webhook; pre-cutover server snapshot) (#5509)
+#   op=inventory           → GET  /hooks/inngest-inventory            (full-state baseline for before/after diff) (#5509)
 # See knowledge-base/engineering/operations/runbooks/inngest-server.md
 # § "Cutover procedure". The live cutover is operator-triggered; this workflow is
 # the no-SSH mechanism, NOT an auto-run.
@@ -20,6 +22,8 @@ on:
           - enumerate
           - rearm
           - verify-wiped-volume
+          - backup
+          - inventory
   # push trigger scoped to this file forces GitHub to register the workflow in
   # the Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
   push:
@@ -43,12 +47,20 @@ jobs:
       group: deploy-inngest-restart
       cancel-in-progress: false
     steps:
+      # Doppler CLI is needed only by op=backup (reads HCLOUD_TOKEN from the
+      # prd_terraform-scoped DOPPLER_TOKEN); installing it is harmless for the
+      # webhook ops. SHA-pinned, matching web-platform-release.yml.
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Run cutover host op via webhook
         env:
           OP: ${{ inputs.op }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          # prd_terraform READ-only (op=backup reads HCLOUD_TOKEN). Same secret as
+          # apply-web-platform-infra.yml's read steps — NOT DOPPLER_TOKEN_WRITE.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"
@@ -165,6 +177,73 @@ jobs:
                 sleep "$POLL_INTERVAL"
               done
               echo "::error::wiped-volume verify did not reach a terminal state within $((MAX_POLLS * POLL_INTERVAL))s"; exit 1
+              ;;
+
+            backup)
+              # #5509 pre-cutover recovery point: a Hetzner SERVER snapshot of the
+              # whole root disk (incl. /var/lib/inngest SQLite). No webhook, no SSH —
+              # pure hcloud API. HCLOUD_TOKEN read from the prd_terraform-scoped
+              # DOPPLER_TOKEN (never echoed). server id 123931471 = soleur-web-platform.
+              HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
+              TS=$(date -u +%Y%m%dT%H%M%SZ)
+              rm -f /tmp/backup-body
+              CODE=$(curl -s --max-time 30 -o /tmp/backup-body -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"type\":\"snapshot\",\"description\":\"inngest-cutover-pre-$TS\",\"labels\":{\"purpose\":\"inngest-cutover-pre\",\"ts\":\"$TS\"}}" \
+                "https://api.hetzner.cloud/v1/servers/123931471/actions/create_image" || echo "000")
+              if [[ "$CODE" != "201" ]]; then
+                echo "::error::hcloud create_image returned HTTP $CODE: $(cat /tmp/backup-body 2>/dev/null)"; exit 1
+              fi
+              IMAGE_ID=$(jq -r '.image.id' < /tmp/backup-body)
+              ACTION_ID=$(jq -r '.action.id' < /tmp/backup-body)
+              echo "::notice::backup snapshot started: image id=$IMAGE_ID action=$ACTION_ID (label inngest-cutover-pre-$TS)"
+              # Poll the action to terminal (snapshot of a running server takes minutes).
+              for i in $(seq 1 60); do
+                rm -f /tmp/backup-action
+                curl -s --max-time 15 -o /tmp/backup-action \
+                  -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                  "https://api.hetzner.cloud/v1/actions/$ACTION_ID" >/dev/null || true
+                ST=$(jq -r '.action.status // "running"' < /tmp/backup-action 2>/dev/null || echo running)
+                case "$ST" in
+                  success) echo "::notice::backup image id=$IMAGE_ID ready (label inngest-cutover-pre-$TS); DELETE after cutover confirmed: DELETE /v1/images/$IMAGE_ID"; exit 0 ;;
+                  error) echo "::error::backup snapshot action $ACTION_ID failed"; cat /tmp/backup-action 2>/dev/null; exit 1 ;;
+                  *) echo "Attempt $i/60: snapshot status=$ST — waiting"; sleep 10 ;;
+                esac
+              done
+              echo "::error::backup snapshot did not reach success within 600s (image id=$IMAGE_ID may still complete; check hcloud console)"; exit 1
+              ;;
+
+            inventory)
+              # #5509 full-state baseline. GET hook → a single JSON OBJECT
+              # {functions, event_names, armed_reminders} in the response body. Run
+              # ONCE before the cutover and ONCE after; diff the payload-free
+              # projections (the runbook documents the expected diff).
+              SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/inv-body
+              CODE=$(curl -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "$BASE/inngest-inventory" || echo "000")
+              BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                CAUSE="${BODY//[$'\n\r']/ }"
+                echo "::error::inventory returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+              fi
+              if ! echo "$BODY" | jq -e 'type == "object" and has("functions") and has("event_names") and has("armed_reminders")' >/dev/null 2>&1; then
+                echo "::error::inventory did not return the expected {functions,event_names,armed_reminders} object"; echo "$BODY"; exit 1
+              fi
+              FN=$(echo "$BODY" | jq '.functions | length')
+              EV=$(echo "$BODY" | jq '.event_names | length')
+              AR=$(echo "$BODY" | jq '.armed_reminders | length')
+              echo "::notice::inventory: functions=$FN event_names=$EV armed_reminders=$AR"
+              # Payload-free, key-sorted baseline for the before/after diff (P2-sec-a:
+              # names + reminder_ids only — armed_reminders bodies stay out of the run log).
+              echo "Inventory baseline (capture this block for the BEFORE/AFTER diff):"
+              echo "$BODY" | jq -S '{functions, event_names, armed_reminder_ids: ([.armed_reminders[].reminder_id] | sort)}'
               ;;
 
             *)

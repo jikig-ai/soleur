@@ -51,7 +51,8 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "inngest_enumerate_reminders_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-enumerate-reminders.sh")",
   "inngest_rearm_reminders_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-rearm-reminders.sh")",
   "inngest_wiped_volume_verify_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-wiped-volume-verify.sh")",
-  "cat_inngest_verify_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-inngest-verify-state.sh")"
+  "cat_inngest_verify_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-inngest-verify-state.sh")",
+  "inngest_inventory_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-inventory.sh")"
 }
 PAYLOAD
 
