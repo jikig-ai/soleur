@@ -8,14 +8,14 @@ adr: ADR-044
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
-migration_number: 111
+migration_number: 112
 status: planned
 ---
 
 # feat(adr-044): PR-2b — DROP legacy `users` repo-connection columns 🗃️
 
 > **FINAL step of the ADR-044 arc. IRREVERSIBLE — this removes the revert net.**
-> Migration #111 drops the migration-052 partial-UNIQUE index on
+> Migration #112 drops the migration-052 partial-UNIQUE index on
 > `users.github_installation_id`, then `DROP COLUMN github_installation_id,
 > repo_url, workspace_path` from `public.users`. The `.down.sql` is
 > **SCHEMA-ONLY** rollback: it re-creates the three columns + the index, but the
@@ -50,7 +50,7 @@ Phase-0 gates are re-run at work-start.
 4. **Migrate-before-deploy window** scoped out (safe because PR-2a removed all live
    readers from the deployed image; `dsar-export.ts:462` `select("*")` degrades).
 5. **Added AC13:** 24h post-deploy `op="founder-ambiguous"` Sentry watch — the
-   load-bearing signal that the runtime replacement actually fires (verify/111 only
+   load-bearing signal that the runtime replacement actually fires (verify/112 only
    proves the index is gone).
 6. AC9/AC12 relabeled (dev REST probe vs prod psql verify); down.sql COMMENT
    restored verbatim from mig-052; rollback-doc + PGRST205 cache notes added.
@@ -68,7 +68,7 @@ arc landed in slices:
   relocated every connect-time WRITE and the last `users.*` repo READ off
   `users` onto `workspaces`. After this, `users.{github_installation_id,
   repo_url, workspace_path}` are dead columns with stale/frozen data.
-- **PR-2b (THIS plan, mig 111):** drop the three dead columns + the dead index.
+- **PR-2b (THIS plan, mig 112):** drop the three dead columns + the dead index.
 
 The structural guarantee the dropped mig-052 partial-UNIQUE index provided
 (one founder per installation; the webhook `.maybeSingle()` would otherwise
@@ -94,7 +94,7 @@ closure amendment, and **hand-trims the `users` row type** in `lib/types.ts`
 - **KEEP** `users.role`, `users.workspace_status`, `users.tc_accepted_at`,
   `users.email`, `users.github_username`, `users.health_snapshot` — all live.
 - **KEEP** `workspaces.{repo_url, repo_status, repo_provider,
-  repo_last_synced_at, github_installation_id}` — the cutover TARGET. Mig 111
+  repo_last_synced_at, github_installation_id}` — the cutover TARGET. Mig 112
   touches **only `public.users`**, never `public.workspaces`.
 - **KEEP** `conversations.repo_url` (mig 029) — a different column on a different
   table. `lib/types.ts:594` `Conversation.repo_url` is OUT OF SCOPE.
@@ -153,25 +153,25 @@ actions routed to another tenant.
 
 ### Migration artifacts (pre-merge)
 
-- [ ] **AC1 — Up migration exists** at `apps/web-platform/supabase/migrations/111_drop_legacy_users_repo_columns.sql` with: a header comment block (filename, ADR-044 ref, **IRREVERSIBLE/DATA-NOT-RECOVERABLE** warning, LAWFUL_BASIS, no-CONCURRENTLY note), `DROP INDEX IF EXISTS public.users_github_installation_id_unique_idx;`, then a single `ALTER TABLE public.users DROP COLUMN IF EXISTS github_installation_id, DROP COLUMN IF EXISTS repo_url, DROP COLUMN IF EXISTS workspace_path;`. **No top-level `BEGIN;`/`COMMIT;`** (mirror mig 110; the runner's `--single-transaction` wraps it).
-- [ ] **AC2 — Down migration exists** at `…/111_drop_legacy_users_repo_columns.down.sql`: re-adds the three columns with exact original types (`github_installation_id bigint`, `repo_url text`, `workspace_path text NOT NULL DEFAULT ''` — use `ADD COLUMN IF NOT EXISTS`), then recreates the partial-UNIQUE index identically (`CREATE UNIQUE INDEX IF NOT EXISTS users_github_installation_id_unique_idx ON public.users (github_installation_id) WHERE github_installation_id IS NOT NULL`) and re-adds its `COMMENT ON INDEX`. Header states **SCHEMA-ONLY rollback; column DATA is NOT recoverable**.
-- [ ] **AC3 — Verify sentinel** at `apps/web-platform/supabase/verify/111_drop_legacy_users_repo_columns.sql` mirrors verify/110's UNION-of-`(check_name, bad::int)` shape (every `bad` column INTEGER — no boolean/integer UNION mismatch, per the verify/110 NOTE) asserting **post-apply**: (a) `users.github_installation_id` column count = 0, (b) `users.repo_url` count = 0, (c) `users.workspace_path` count = 0, (d) index `users_github_installation_id_unique_idx` count = 0 (via `pg_indexes`). Any `bad > 0` fails `run-verify.sh`.
+- [ ] **AC1 — Up migration exists** at `apps/web-platform/supabase/migrations/112_drop_legacy_users_repo_columns.sql` with: a header comment block (filename, ADR-044 ref, **IRREVERSIBLE/DATA-NOT-RECOVERABLE** warning, LAWFUL_BASIS, no-CONCURRENTLY note), `DROP INDEX IF EXISTS public.users_github_installation_id_unique_idx;`, then a single `ALTER TABLE public.users DROP COLUMN IF EXISTS github_installation_id, DROP COLUMN IF EXISTS repo_url, DROP COLUMN IF EXISTS workspace_path;`. **No top-level `BEGIN;`/`COMMIT;`** (mirror mig 110; the runner's `--single-transaction` wraps it).
+- [ ] **AC2 — Down migration exists** at `…/112_drop_legacy_users_repo_columns.down.sql`: re-adds the three columns with exact original types (`github_installation_id bigint`, `repo_url text`, `workspace_path text NOT NULL DEFAULT ''` — use `ADD COLUMN IF NOT EXISTS`), then recreates the partial-UNIQUE index identically (`CREATE UNIQUE INDEX IF NOT EXISTS users_github_installation_id_unique_idx ON public.users (github_installation_id) WHERE github_installation_id IS NOT NULL`) and re-adds its `COMMENT ON INDEX`. Header states **SCHEMA-ONLY rollback; column DATA is NOT recoverable**.
+- [ ] **AC3 — Verify sentinel** at `apps/web-platform/supabase/verify/112_drop_legacy_users_repo_columns.sql` mirrors verify/110's UNION-of-`(check_name, bad::int)` shape (every `bad` column INTEGER — no boolean/integer UNION mismatch, per the verify/110 NOTE) asserting **post-apply**: (a) `users.github_installation_id` column count = 0, (b) `users.repo_url` count = 0, (c) `users.workspace_path` count = 0, (d) index `users_github_installation_id_unique_idx` count = 0 (via `pg_indexes`). Any `bad > 0` fails `run-verify.sh`.
 - [ ] **AC4 — Type trim:** remove `workspace_path: string` from `interface User` (`apps/web-platform/lib/types.ts:555`) — deepen-plan review confirmed this is a SAFE straight deletion (synthesized objects use the local `KbRouteContext.userData` shape, not `interface User`; Sharp Edge #1). `Conversation.repo_url` (line 594) is UNTOUCHED. `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`) is the backstop confirming no consumer broke.
 - [ ] **AC5 — ADR status flip:** `ADR-044-workspace-repo-ownership.md` frontmatter `status: adopting` → `status: accepted`.
-- [ ] **AC6 — Closure amendment:** a dated `## Amendment 2026-06-18 — PR-2b column DROP (arc CLOSED)` section records: the drop migration number (111), the verified drift-gate COUNT=0 + timestamp, the final reader-sweep result (0 live readers), and that the dropped index's guarantee is carried by the runtime resolver + Sentry rule.
-- [ ] **AC7 — PR body** uses `Closes #5437` (this is the umbrella's final criterion; mig 111 IS the change, applied pre-deploy by the release pipeline — `Closes`, not `Ref`, is correct because the resolution lands at merge via the `migrate` job, not a separate post-merge operator step).
+- [ ] **AC6 — Closure amendment:** a dated `## Amendment 2026-06-18 — PR-2b column DROP (arc CLOSED)` section records: the drop migration number (112), the verified drift-gate COUNT=0 + timestamp, the final reader-sweep result (0 live readers), and that the dropped index's guarantee is carried by the runtime resolver + Sentry rule.
+- [ ] **AC7 — PR body** uses `Closes #5437` (this is the umbrella's final criterion; mig 112 IS the change, applied pre-deploy by the release pipeline — `Closes`, not `Ref`, is correct because the resolution lands at merge via the `migrate` job, not a separate post-merge operator step).
 
 ### Dev apply + verification (work phase, in-session)
 
-- [ ] **AC8 — Dev apply:** migration applied to DEV via `apps/web-platform/scripts/run-migrations.sh` (or a tracking-row-mirroring apply) using Doppler `DATABASE_URL_POOLER` rewritten to session mode `:5432`. Do NOT bare a `BEGIN; <migration>; COMMIT;` apply (phantom-applied state — the tracking row must land in the same transaction as the DDL). If 111 is not yet on `origin/main`, the unmerged-apply gate requires `ALLOW_UNMERGED_DEV_APPLY=1` ack AND a dev-schema revert plan before push (learning `2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`).
+- [ ] **AC8 — Dev apply:** migration applied to DEV via `apps/web-platform/scripts/run-migrations.sh` (or a tracking-row-mirroring apply) using Doppler `DATABASE_URL_POOLER` rewritten to session mode `:5432`. Do NOT bare a `BEGIN; <migration>; COMMIT;` apply (phantom-applied state — the tracking row must land in the same transaction as the DDL). If 112 is not yet on `origin/main`, the unmerged-apply gate requires `ALLOW_UNMERGED_DEV_APPLY=1` ack AND a dev-schema revert plan before push (learning `2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`).
 - [ ] **AC9 — Columns GONE (dev manual discoverability probe — REST/42703):** `curl -s "$SUPABASE_URL/rest/v1/users?select=github_installation_id&limit=1" -H "apikey: $ANON"` returns HTTP 400 with `{"code":"42703", … "column users.github_installation_id does not exist"}`; same for `repo_url` and `workspace_path`. This is a **dev sanity probe**, distinct from the prod psql gate (AC12).
-- [ ] **AC10 — verify/111 green on dev:** `run-verify.sh` (psql against dev `DATABASE_URL_POOLER`) reports `bad=0` for all four checks post-apply.
+- [ ] **AC10 — verify/112 green on dev:** `run-verify.sh` (psql against dev `DATABASE_URL_POOLER`) reports `bad=0` for all four checks post-apply.
 
 ### Post-merge (operator/pipeline — automatable, NOT operator-manual)
 
-- [ ] **AC11 — Prod apply:** the `web-platform-release.yml` `#migrate` job (`doppler run -c prd -- bash …/run-migrations.sh`) applies mig 111 to PROD on merge (path-filtered on `apps/web-platform/**`), BEFORE the deploy job (deploy `needs: migrate`). No separate operator step. `Automation: handled by release pipeline.`
-- [ ] **AC12 — Prod verify (psql, NOT REST):** the `#verify-migrations` job (`needs: migrate`) runs `run-verify.sh` which executes verify/111 via **psql** (`run-verify.sh:55`, not a REST probe) and reports `bad=0` for all four checks against prod. `Automation: pipeline verify step.`
-- [ ] **AC13 — Post-deploy 24h cross-tenant watch:** the `github_webhook_founder_ambiguous` Sentry rule (`apps/web-platform/infra/sentry/issue-alerts.tf:576`) is the load-bearing post-drop signal — verify/111 only proves the index is GONE, not that its runtime replacement FIRES. Verdict rule: **ANY `op="founder-ambiguous"` event in the first 24h = a 1:N installation collision the dropped UNIQUE index used to block → investigate.** `Automation: existing Sentry paging rule; no operator dashboard-watch.`
+- [ ] **AC11 — Prod apply:** the `web-platform-release.yml` `#migrate` job (`doppler run -c prd -- bash …/run-migrations.sh`) applies mig 112 to PROD on merge (path-filtered on `apps/web-platform/**`), BEFORE the deploy job (deploy `needs: migrate`). No separate operator step. `Automation: handled by release pipeline.`
+- [ ] **AC12 — Prod verify (psql, NOT REST):** the `#verify-migrations` job (`needs: migrate`) runs `run-verify.sh` which executes verify/112 via **psql** (`run-verify.sh:55`, not a REST probe) and reports `bad=0` for all four checks against prod. `Automation: pipeline verify step.`
+- [ ] **AC13 — Post-deploy 24h cross-tenant watch:** the `github_webhook_founder_ambiguous` Sentry rule (`apps/web-platform/infra/sentry/issue-alerts.tf:576`) is the load-bearing post-drop signal — verify/112 only proves the index is GONE, not that its runtime replacement FIRES. Verdict rule: **ANY `op="founder-ambiguous"` event in the first 24h = a 1:N installation collision the dropped UNIQUE index used to block → investigate.** `Automation: existing Sentry paging rule; no operator dashboard-watch.`
 
 ---
 
@@ -225,7 +225,7 @@ COMMENT ON INDEX public.users_github_installation_id_unique_idx IS
 > Note: `workspace_path … NOT NULL DEFAULT ''` re-adds cleanly because all
 > existing rows take the default (`''`); no backfill trap.
 
-### Phase 3 — Verify sentinel (`verify/111_…sql`)
+### Phase 3 — Verify sentinel (`verify/112_…sql`)
 Mirror verify/110 UNION shape; all `bad` columns `::int`. Four checks
 (3 columns absent + 1 index absent).
 
@@ -292,7 +292,7 @@ liveness_signal:
   alert_target: CI failure (deploy job blocked on migrate success) — GitHub Actions run failure
   configured_in: .github/workflows/web-platform-release.yml (#migrate, #verify jobs)
 error_reporting:
-  destination: migrate job fails the release pipeline (deploy gated on needs.migrate); verify/111 bad>0 fails run-verify.sh
+  destination: migrate job fails the release pipeline (deploy gated on needs.migrate); verify/112 bad>0 fails run-verify.sh
   fail_loud: true (a failed DROP rolls back via --single-transaction; deploy never proceeds on a half-applied schema)
 failure_modes:
   - mode: a live users.* reader missed at Phase 0 leads to 42703 on that route post-deploy
@@ -362,9 +362,9 @@ plan touches `supabase/migrations/*.sql`, `supabase/verify/*.sql`,
 ---
 
 ## Files to Create
-- `apps/web-platform/supabase/migrations/111_drop_legacy_users_repo_columns.sql`
-- `apps/web-platform/supabase/migrations/111_drop_legacy_users_repo_columns.down.sql`
-- `apps/web-platform/supabase/verify/111_drop_legacy_users_repo_columns.sql`
+- `apps/web-platform/supabase/migrations/112_drop_legacy_users_repo_columns.sql`
+- `apps/web-platform/supabase/migrations/112_drop_legacy_users_repo_columns.down.sql`
+- `apps/web-platform/supabase/verify/112_drop_legacy_users_repo_columns.sql`
 
 ## Files to Edit
 - `apps/web-platform/lib/types.ts` — `interface User` field trim (Sharp Edge #1 / AC4)
@@ -412,7 +412,7 @@ misses).
    (`run-migrations.sh:343`) wraps the body + tracking-row INSERT; a body `COMMIT;`
    ends the txn early and strands the ledger row (learning
    `2026-05-25-migration-body-no-top-level-begin-commit.md`). Mirror **110**.
-3. **verify/111 UNION type pinning.** Every UNION branch's `bad` column must be
+3. **verify/112 UNION type pinning.** Every UNION branch's `bad` column must be
    the SAME type — cast boolean predicates `::int` (the verify/110 NOTE; commit
    e21066864 / #5474 was a release-blocking boolean-vs-integer UNION mismatch).
 4. **The `## User-Brand Impact` section is load-bearing** — empty/placeholder

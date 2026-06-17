@@ -552,7 +552,6 @@ export type WorkflowEndedEvent = Extract<WSMessage, { type: "workflow_ended" }>;
 export interface User {
   id: string;
   email: string;
-  workspace_path: string;
   workspace_status: "provisioning" | "ready";
   tc_accepted_at: string | null;
   created_at: string;
