@@ -1,46 +1,40 @@
-# Tasks — Shared workspace email-triage inbox
+# Tasks — Shared workspace email-triage inbox  ✅ COMPLETE
 
 Plan: `knowledge-base/project/plans/2026-06-17-feat-shared-workspace-email-triage-inbox-plan.md`
-Branch: `feat-one-shot-fix-notification-button-404` · PR: #5494 (draft)
+Branch: `feat-one-shot-fix-notification-button-404` · PR: #5494
 Threshold: single-user incident · `requires_cpo_signoff: true`
+ADR: ADR-066 · C4: model.c4 + views.c4 updated (email ingress + Owner-shared)
 
-## Phase 0 — Live topology verification (DONE 2026-06-17, read-only)
-- [x] 0.1 Confirm `EMAIL_TRIAGE_OWNER_USER_ID` → ops@jikigai.com; rows user_id=754ee124
-- [x] 0.2 Confirm jean.deruelle@ (52af49c2) role='owner' of workspace 754ee124 → TRUE
-- [x] 0.3 Confirm workspace_id == owner uid (backfill target = user_id) → TRUE
+## Phase 0 — Live topology verification (DONE, read-only)
+- [x] EMAIL_TRIAGE_OWNER_USER_ID → ops@jikigai.com; rows user_id=754ee124
+- [x] jean.deruelle@ (52af49c2) role='owner' of workspace 754ee124 → TRUE
+- [x] workspace_id == owner uid (backfill target = user_id) → TRUE
 
-## Phase 1 — Failing tests (RED) — AC7
-- [ ] 1.1 RLS: owner-of-workspace reads row; non-owner member + non-member do NOT
-- [ ] 1.2 status RPC: Owner authorized; non-owner rejected (no-oracle error)
-- [ ] 1.3 detail-page query-error path mirrors once with error object
-- [ ] 1.4 confirm tests FAIL before code
+## Phase 1 — Failing tests (RED) — AC7  [x]
+- [x] New test/inbox-email-detail-page.test.ts (error-mirror / absence / render / id-only gate)
+- [x] route + tools tests flipped to assert RLS-only gating
+- [x] WORM integration test: workspace-owner semantics + shared-owner case (j)
 
-## Phase 2 — Migration 111 — AC1/2/3/10
-- [ ] 2.1 Add `workspace_id uuid REFERENCES workspaces(id) ON DELETE RESTRICT`
-- [ ] 2.2 Add `app.email_triage_backfill_in_progress` GUC arm to WORM trigger; add workspace_id to hard-frozen set
-- [ ] 2.3 Backfill existing rows (workspace_id = user_id) under the GUC
-- [ ] 2.4 `is_email_triage_workspace_owner(p_workspace_id, p_user_id)` SECURITY DEFINER plpgsql (role='owner'-scoped, mig 068 pattern)
-- [ ] 2.5 Replace owner-SELECT RLS with owner-membership predicate
-- [ ] 2.6 Re-auth `set_email_triage_status` → workspace-owner pin
-- [ ] 2.7 `.down.sql` restores mig 102 shape verbatim
-- [ ] 2.8 Migration safety: next ordinal, no BEGIN/COMMIT, no CONCURRENTLY
+## Phase 2 — Migration 111  [x]
+- [x] workspace_id column + backfill GUC arm + WORM hard-freeze
+- [x] is_email_triage_workspace_owner SECURITY DEFINER helper (role='owner')
+- [x] owner-membership SELECT RLS; set_email_triage_status workspace-owner re-auth
+- [x] .down.sql restores mig-102 shape (data-integrity-guardian: faithful)
+- [x] verify/111 sentinel; applied to dev — 8/8 sentinels green; 11/11 worm tests green
 
-## Phase 3 — Write path — AC4
-- [ ] 3.1 `email-on-received.ts` claim-insert sets workspace_id (= ownerId)
+## Phase 3 — Write path  [x]
+- [x] email-on-received.ts stamps workspace_id = ownerId
 
-## Phase 4 — Read paths + diagnostic mirror — AC5/AC6
-- [ ] 4.1 detail page → workspace gate + reportSilentFallback on error
-- [ ] 4.2 `app/api/inbox/emails/route.ts` (3 queries) → workspace gate
-- [ ] 4.3 `server/email-triage-tools.ts` (list/get/status) → workspace gate
-- [ ] 4.3b `server/email-triage/email-triage-status-handler.ts` (acknowledge/archive handler) → widen any user_id pre-gate; RPC re-auth is DB enforcement
-- [ ] 4.4 dashboard renders via /api/inbox/emails (covered by 4.2); routes [id]/{acknowledge,archive} are thin exports (no change)
+## Phase 4 — Read paths + mirror  [x]
+- [x] detail page → workspace gate + reportSilentFallback(inbox-detail-lookup-error)
+- [x] inbox list route (3 queries) → RLS-only
+- [x] email-triage-tools (list/get/reply) → RLS-only
+- [x] status-handler comment refreshed (RPC is the DB enforcement)
 
-## Phase 5 — GDPR verification — AC8
-- [ ] 5.1 anonymise still NULLs user_id; row survives via workspace_id
-- [ ] 5.2 DSAR allowlist keeps ownerField=user_id
-- [ ] 5.3 gdpr-gate: solo workspace_id==user_id pseudonym question; Art.30 §(c) note
+## Phase 5 — GDPR  [x]
+- [x] gdpr-gate: anonymise/DSAR unchanged-by-design; pseudonym question ruled (Suggestion/defensible)
 
-## Phase 6 — Verify — AC9/AC10
-- [ ] 6.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
-- [ ] 6.2 `./node_modules/.bin/vitest run` new + notifications.test.ts
-- [ ] 6.3 ADR + C4 update (email-triage read edge User→Workspace(Owner))
+## Phase 6 — Verify + architecture  [x]
+- [x] tsc --noEmit clean; full vitest 10625 passed / 0 failed
+- [x] ADR-066 + C4 (model/views) email-ingress modeling; c4-code-syntax + c4-render green
+- [x] Adversarial review: data-integrity + security-sentinel + observability — all clean
