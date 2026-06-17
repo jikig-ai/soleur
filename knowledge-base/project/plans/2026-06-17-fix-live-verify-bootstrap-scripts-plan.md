@@ -114,7 +114,7 @@ are covered by AC3 + the standard suite gate rather than separate checkboxes.)_
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (defect 1):** in `apps/web-platform/scripts/seed-live-verify-user.sh` the
+- [x] **AC1 (defect 1):** in `apps/web-platform/scripts/seed-live-verify-user.sh` the
       `public.users` PATCH body sets `repo_status: "ready"` (not `"connected"`), AND the
       header-comment ladder description (`:23`) says `repo_status=ready`. Verify:
       `grep -c 'repo_status: "connected"' apps/web-platform/scripts/seed-live-verify-user.sh`
@@ -123,14 +123,14 @@ are covered by AC3 + the standard suite gate rather than separate checkboxes.)_
       returns `0`. (The `public.users` PATCH is the line carrying `tc_accepted_version`;
       the workspaces PATCH at `:204` already correctly uses `repo_status: "ready"` and is
       untouched.)
-- [ ] **AC2 (defect 1, test — RED→GREEN):** `seed-live-verify-user.test.sh` gains a
+- [x] **AC2 (defect 1, test — RED→GREEN):** `seed-live-verify-user.test.sh` gains a
       static-source assertion that (a) the `tc_accepted_version`-bearing `public.users`
       PATCH line carries `repo_status: "ready"`, and (b) the forbidden literal
       `repo_status: "connected"` appears nowhere in the seed. Confirmed failing (red)
       against the unfixed seed, passing (green) after AC1. Verify:
       `bash apps/web-platform/scripts/seed-live-verify-user.test.sh` prints
       `seed-live-verify-user.test.sh: PASSED`.
-- [ ] **AC3 (defect 2/3 — terraform invocation):** `bootstrap-live-verify.sh` Step 1
+- [x] **AC3 (defect 2/3 — terraform invocation):** `bootstrap-live-verify.sh` Step 1
       exports **bare** `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (via
       `doppler secrets get … -p soleur -c prd_terraform --plain`) **before** the wrapper,
       then runs `terraform init` and `terraform apply` under
@@ -139,20 +139,20 @@ are covered by AC3 + the standard suite gate rather than separate checkboxes.)_
       transformer rewrites them to `TF_VAR_aws_*` and the R2 backend SSO-fallback-fails.
       Verify: `grep -n 'name-transformer tf-var' apps/web-platform/scripts/bootstrap-live-verify.sh`
       shows the apply wrapper, and reading the script confirms the `AWS_*` gets precede it.
-- [ ] **AC4 (seed step + guard preserved):** Step 2 still runs the seed under
+- [x] **AC4 (seed step + guard preserved):** Step 2 still runs the seed under
       `doppler run -p soleur -c prd -- bash "$SEED"` (the seed reads `SUPABASE_*` +
       `LIVE_VERIFY_USER_PASSWORD` from `prd` and hard-refuses unless DOPPLER_CONFIG=prd),
       and the bootstrap's top-level `DOPPLER_CONFIG != "prd"` refusal guard is intact.
       Verify: `grep -n 'doppler run -p soleur -c prd -- bash' apps/web-platform/scripts/bootstrap-live-verify.sh`
       and `grep -n 'DOPPLER_CONFIG' apps/web-platform/scripts/bootstrap-live-verify.sh`.
-- [ ] **AC5 (bootstrap header truthful):** the `bootstrap-live-verify.sh` header Steps
+- [x] **AC5 (bootstrap header truthful):** the `bootstrap-live-verify.sh` header Steps
       comment block (`:12-17`) reflects the dual-config invocation (Step 1 →
       `prd_terraform` + tf-var + bare R2 creds; Step 2 → `prd`). Verify by reading the
       header: it no longer implies a single-config flow.
-- [ ] **AC6 (negative AC — no CI wiring):** the scripts remain agent-run-local-only.
+- [x] **AC6 (negative AC — no CI wiring):** the scripts remain agent-run-local-only.
       Verify: `grep -rl "bootstrap-live-verify\|seed-live-verify" .github/workflows/`
       returns **zero** matches (exit 1).
-- [ ] **AC7 (full scripts suite green):** `TEST_GROUP=scripts bash scripts/test-all.sh`
+- [x] **AC7 (full scripts suite green):** `TEST_GROUP=scripts bash scripts/test-all.sh`
       passes — confirms the seed test is discovered (`scripts/test-all.sh:183` globs
       `apps/web-platform/scripts/*.test.sh`) and no orphan `.test.sh` suite regressed,
       and subsumes the seed's prod-write-guard cases 1–4. Run `shellcheck` on both
