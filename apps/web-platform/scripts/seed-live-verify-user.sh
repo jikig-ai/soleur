@@ -219,8 +219,8 @@ curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
 # (mig 053) does NOT seed user_session_state, so we must bind it here.
 #
 # Write the row DIRECTLY via the table endpoint (NOT the set_current_workspace_id
-# RPC: it derives the writer from auth.uid() and RAISEs 28000 under a
-# service-role caller, mig 079:256). The body mirrors the RPC's own write
+# RPC at mig 079:256: it derives the writer from auth.uid() and RAISEs 28000
+# under a service-role caller, mig 079:267). The body mirrors the RPC's own write
 # verbatim (INSERT … ON CONFLICT (user_id) DO UPDATE, mig 079:293-298). Service
 # role bypasses the SELECT-only RLS (mig 060:41-43); the table has no
 # insert/update trigger and no table-level REVOKE FROM service_role.

@@ -193,7 +193,9 @@ vector.`
    - Fetch the workspace's `organization_id` via REST:
      `GET /rest/v1/workspaces?id=eq.$workspace_id&select=organization_id` → `org_id`; fail
      closed (`::error::` + `exit 1`) if empty (the trigger guarantees it, but the seed must
-     not silently bind a null org — the NOT NULL `organizations` FK would reject it anyway).
+     not silently bind a null org — `current_organization_id` is nullable (mig 060:34), so a
+     SQL NULL would be silently ACCEPTED; the seed's own `exit 1` guard, not a column
+     constraint, is what prevents a null-org binding. The FK only rejects a non-existent org).
    - **Upsert** the row with a POST to the table endpoint (NOT the RPC — the RPC needs
      `auth.uid()`, see Premise Validation; NOT a bare PATCH — no row exists yet, so
      `?user_id=eq.X` matches 0 rows and silently no-ops):
@@ -371,7 +373,7 @@ failure_modes:
   - mode: "seed upsert silently no-ops (PATCH-on-absent-row mistake)"
     detection: "harness re-run still emits CANT-RUN:forURL; seed test AC3/AC1 grep would have caught the wrong verb pre-merge"
     alert_route: "#5488 job RESULT line (non-PASS) + Sentry op resolveUserWorkspaceBinding.unresolvable"
-  - mode: "organization_id resolves empty - upsert rejected by NOT NULL org FK"
+  - mode: "organization_id resolves empty - seed's own exit-1 guard aborts (col is nullable; no NOT NULL constraint)"
     detection: "seed exits non-zero at the org-fetch guard (AC2); curl -sf fails on 4xx"
     alert_route: "seed stderr ::error:: line at run time (agent-run locally)"
   - mode: "conversation persists but rail row never appears (the original #5391 class returns)"
