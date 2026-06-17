@@ -66,13 +66,13 @@ Better Stack host-stderr coverage gap.
 
 ## Deferred (file as follow-up issues)
 
-- **DEF-1: Host `logger -t` → Better Stack coverage gap.** Arbitrary host-script stderr at
+- **DEF-1 (#5499): Host `logger -t` → Better Stack coverage gap.** Arbitrary host-script stderr at
   WARN priority is NOT queryable (Vector `system_journald` ships only PRIORITY 0–2 / CRIT+;
   app-container source is WARN+ but container-only). Fixing = Vector config change with
   quota implications (`2026-06-10-betterstack-quota-diagnosis...`). The #5492 sibling
   worktree already routes *that* specific cause to gh-run Actions logs, so this is a
   general infra follow-up, not a #5495 blocker.
-- **DEF-2: Sentry read-by-tag/search CLI mode** — deferred per D3 (YAGNI).
+- **DEF-2 (#5500): Sentry read-by-tag/search CLI mode** — deferred per D3 (YAGNI).
 - **DEF-3 (Productize candidate):** if read-only-token auto-mint recurs for other vendors,
   consider a generic `provision-readonly-token` skill. Not in scope now.
 
