@@ -143,11 +143,19 @@ run_enumerate() {
     ]')
 
   # --- Observability summary (P2-sec-a: counts + reminder_ids ONLY, never bodies) ---
+  # #5503: the webhook (adnanh/webhook v2.8.2) returns cmd.CombinedOutput() — stdout
+  # AND stderr — even on a 200, and the cutover workflow parses that body as a JSON
+  # array (`jq -e 'type == "array"'`). So on the SUCCESS path this script must write
+  # NOTHING non-JSON to EITHER stream: stdout carries only the records array (below)
+  # and the summary goes to journald via `logger` ONLY (→ Vector → Better Stack).
+  # An `echo ... >&2` here would be merged ahead of the JSON and break the array parse
+  # (the bug that left the cutover blocked even after the epoch-from fix). Internal
+  # shell consumers use `$(...)`, which captures stdout only, so they were unaffected —
+  # the merge happens solely at the webhook boundary.
   local count ids
   count=$(echo "$records" | jq 'length')
   ids=$(echo "$records" | jq -r '[.[].reminder_id] | join(",")')
   logger -t "$LOG_TAG" "armed reminders to re-arm: count=$count ids=[$ids]" 2>/dev/null || true
-  echo "inngest-enumerate-reminders: $count armed reminder(s) to re-arm: [$ids]" >&2
 
   echo "$records"
 }
