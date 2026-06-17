@@ -355,6 +355,29 @@ export function abortAllWorkspaceMemberSessions(
   }
 }
 
+/**
+ * Abort EVERY active session bound to `workspaceId`, regardless of which member
+ * owns it. Called from `repo/disconnect` (ADR-044 PR-2 / P0-6) BEFORE tearing
+ * down a SHARED team workspace dir: the `rm` removes the clone for all members,
+ * so any member mid-agent-turn in that dir must be aborted first or it hits
+ * ENOENT mid-write.
+ *
+ * Distinct from `abortAllWorkspaceMemberSessions`, which is scoped to a SINGLE
+ * member's own sessions (the member-removal flow must not touch other members).
+ * Here the whole shared clone is disappearing, so every session bound to it must
+ * stop — keyed on the per-user workspace binding (`userWorkspaces`), matching the
+ * sibling function's binding semantics. Reuses the `workspace_membership_revoked`
+ * abort kind (the client-observable effect — an interrupted turn — is identical).
+ */
+export function abortAllSessionsForWorkspace(workspaceId: string): void {
+  for (const [key, session] of activeSessions) {
+    const sessionUserId = key.split(":")[0];
+    if (userWorkspaces.get(sessionUserId) === workspaceId) {
+      session.abort.abort(new SessionAbortError("workspace_membership_revoked"));
+    }
+  }
+}
+
 /** Abort every session in the process. Called during server shutdown. */
 export function abortAllSessions(): void {
   for (const [, session] of activeSessions) {

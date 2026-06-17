@@ -5,7 +5,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { SlidingWindowCounter } from "@/server/rate-limiter";
 import { deleteWorkspace } from "@/server/workspace";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
-import { abortAllWorkspaceMemberSessions } from "@/server/agent-session-registry";
+import { abortAllSessionsForWorkspace } from "@/server/agent-session-registry";
 import logger from "@/server/logger";
 
 const disconnectLimiter = new SlidingWindowCounter({
@@ -176,12 +176,13 @@ export async function DELETE(request: Request) {
     }
   }
 
-  // P0-6: a team workspace dir is SHARED across members. Abort any live member
-  // agent sessions BEFORE the `rm` so no agent is mid-write when the shared clone
-  // disappears (otherwise it gets ENOENT mid-operation). Owner-only disconnect, so
-  // tearing down the shared clone for everyone is intended. No-op for solo.
+  // P0-6: a team workspace dir is SHARED across members. Abort EVERY live session
+  // bound to this workspace (all members, not just the disconnecter) BEFORE the
+  // `rm` so no agent is mid-write when the shared clone disappears (otherwise it
+  // gets ENOENT mid-operation). Owner-only disconnect, so tearing down the shared
+  // clone for everyone is intended. No-op when no session is bound (e.g. solo).
   try {
-    abortAllWorkspaceMemberSessions(activeWorkspaceId, user.id);
+    abortAllSessionsForWorkspace(activeWorkspaceId);
   } catch (abortErr) {
     logger.warn(
       { err: abortErr, userId: user.id, workspaceId: activeWorkspaceId },

@@ -241,11 +241,28 @@ repo_status}` readers. The binding ruling (engineering CTO):
   unreachable.
 
 **PR-2b (#5437) precondition set is amended:** PR-2b is blocked on the soak **AND** the
-two deferred service-role-reader migrations (`server/inngest/functions/agent-on-spawn-requested.ts`,
-`server/inngest/functions/cron-workspace-sync-health.ts`), because both read
-`users.github_installation_id` and PR-2b drops that column. They need a new
-service-role-safe founder→workspace installation resolver (membership-bypass justified
-by trusted server context). Tracked in **#5470** (PR-2b-blocker).
+deferred service-role-context migrations, all tracked in **#5470** (PR-2b-blocker).
+PR #5466 multi-agent review found these are **three** read sites + one write site, not
+two — all service-role contexts where the `auth.uid()`-gated RPC is unusable:
+- `server/inngest/functions/agent-on-spawn-requested.ts` — reads `users.github_installation_id`.
+- `server/inngest/functions/cron-workspace-sync-health.ts` — reads `users.github_installation_id`.
+- `app/api/webhooks/github/route.ts` — resolves `founderId` via `.eq("github_installation_id", …)`
+  (a lookup, missed by the original `.select(…)` grep). They need a service-role-safe
+  founder→workspace installation resolver (membership-bypass, trusted server context); the
+  webhook additionally needs the fan-out reconcile because `workspaces.github_installation_id`
+  is non-unique (ADR-044 fan-out).
+- `server/session-sync.ts` `updateLastSynced` — writes `users.repo_last_synced_at`; PR #5466
+  moved the `repo/status` read to `workspaces.repo_last_synced_at`, so the timestamp display
+  freezes at connect time until this write relocates (needs `session-sync` on the
+  service-role allowlist).
+
+**Soak limitation (documented, accepted):** until #5470 lands, a user who connects via the
+new workspaces-authoritative path during the soak does **not** get push auto-sync (the
+webhook founder-resolver reads NULL `users.github_installation_id`) and shows a stale
+last-synced timestamp. The soak population is internal-only, so this is an accepted
+internal-dogfood limitation, consistent with the Option-D deferral logic (loud-failure +
+revert-net for the interactive paths; the service-role paths fail in low-frequency
+background contexts surfaced by the soak itself).
 
 ### Considered Options (amendment)
 

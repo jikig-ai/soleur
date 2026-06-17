@@ -344,10 +344,12 @@ describe("POST /api/repo/setup — install resolution", () => {
       expect(c.id).toBe("user-1");
     }
 
-    // The install id is NEVER written to `users` (the setupServiceClient mock
-    // hard-asserts no users.update carries github_installation_id; this confirms
-    // any users write that did happen was the readiness write, not the install).
-    void usersUpdateCalled;
+    // The install id is NEVER written to `users`: the setupServiceClient `users`
+    // mock (line ~147) hard-asserts `expect(patch).not.toHaveProperty(
+    // "github_installation_id")` on EVERY users.update, so any stray install
+    // write throws and fails this test. No separate assertion needed here
+    // (`usersUpdateCalled` is set by the async readiness callback, which this
+    // synchronous `await POST` does not await — asserting its value would race).
   });
 
   test("T11: personal happy path — stored id present, owning probe 'ok' → clones with stored id", async () => {

@@ -13,7 +13,7 @@ const {
   mockRpc,
   mockResolveActiveWorkspace,
   mockWriteRepoColsToWorkspace,
-  mockAbortAllWorkspaceMemberSessions,
+  mockAbortAllSessionsForWorkspace,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
@@ -22,7 +22,7 @@ const {
   mockRpc: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
   mockWriteRepoColsToWorkspace: vi.fn(),
-  mockAbortAllWorkspaceMemberSessions: vi.fn(),
+  mockAbortAllSessionsForWorkspace: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -55,7 +55,7 @@ vi.mock("@/server/workspace-repo-mirror", () => ({
 
 // ADR-044 PR-2 / P0-6: live member agent sessions are aborted before teardown.
 vi.mock("@/server/agent-session-registry", () => ({
-  abortAllWorkspaceMemberSessions: mockAbortAllWorkspaceMemberSessions,
+  abortAllSessionsForWorkspace: mockAbortAllSessionsForWorkspace,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -204,10 +204,10 @@ describe("DELETE /api/repo/disconnect", () => {
       { throwOnError: true },
     );
 
-    // Live member sessions aborted before teardown, keyed to the team id.
-    expect(mockAbortAllWorkspaceMemberSessions).toHaveBeenCalledWith(
+    // ALL live member sessions bound to the team workspace aborted before
+    // teardown (keyed to the team id, not the disconnecter).
+    expect(mockAbortAllSessionsForWorkspace).toHaveBeenCalledWith(
       TEAM_WORKSPACE_ID,
-      TEST_USER_ID,
     );
 
     // The team directory is torn down (NOT the caller's solo dir).
@@ -240,7 +240,7 @@ describe("DELETE /api/repo/disconnect", () => {
 
     // Short-circuit BEFORE any mutation.
     expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
-    expect(mockAbortAllWorkspaceMemberSessions).not.toHaveBeenCalled();
+    expect(mockAbortAllSessionsForWorkspace).not.toHaveBeenCalled();
     expect(mockDeleteWorkspace).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
   });
@@ -263,7 +263,7 @@ describe("DELETE /api/repo/disconnect", () => {
     // owner-gate AND every mutation.
     expect(mockRpc).not.toHaveBeenCalled();
     expect(mockWriteRepoColsToWorkspace).not.toHaveBeenCalled();
-    expect(mockAbortAllWorkspaceMemberSessions).not.toHaveBeenCalled();
+    expect(mockAbortAllSessionsForWorkspace).not.toHaveBeenCalled();
     expect(mockDeleteWorkspace).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
   });
@@ -305,8 +305,7 @@ describe("DELETE /api/repo/disconnect", () => {
       workspace_status: "provisioning",
     });
 
-    expect(mockAbortAllWorkspaceMemberSessions).toHaveBeenCalledWith(
-      TEST_USER_ID,
+    expect(mockAbortAllSessionsForWorkspace).toHaveBeenCalledWith(
       TEST_USER_ID,
     );
     expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEST_USER_ID);
