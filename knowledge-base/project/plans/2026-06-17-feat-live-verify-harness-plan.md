@@ -12,6 +12,37 @@ created: 2026-06-17
 
 # feat: autonomous post-deploy live-verification harness + fail-closed postmerge gate
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-17 · **Agents:** data-integrity-guardian, security-sentinel,
+architecture-strategist, verify-the-negative (Explore). Verify-the-negative confirmed all 6
+factual reconciliations.
+
+### Critical findings folded in
+1. **ADR-049 conflict (must supersede).** ADR-049 (Headless Visual-Regression Gate) mandates
+   "zero credentials / no live backend / never point at a live origin — if it ever does, re-trigger
+   gdpr-gate" (`ADR-049…:27,35,62-63`). This plan reintroduces the rejected live-creds shape for a
+   *new* reason (realtime timing is invisible to mock). The new ADR **partial-supersedes ADR-049**
+   scoped to the realtime-timing class; **gdpr-gate runs inline** (ADR-049's armed clause) as a
+   /work Phase 0 deliverable.
+2. **`action_sends` WORM permanent-wedge.** `action_sends.message_id → messages` is NO-ACTION +
+   WORM `BEFORE DELETE` trigger (`051…:103,150-154`); any `messages` row the harness creates becomes
+   **permanently undeletable** → monotonic prod accumulation. Harness is **message-free**; teardown
+   asserts 0 messages before delete.
+3. **Service-role blast radius.** Bootstrap (service-role) runs **locally via the agent**, never
+   wired into a workflow; the **gate-run teardown uses the synthetic user's own session** (RLS),
+   not service-role.
+4. **UID allowlist insufficient** (wrong-project collision) → gate binds **ref + UID + email** before
+   sign-in; `chromium.launch` reachable only via a function taking the verified principal.
+5. **Slot leak** — `user_concurrency_slots` has no FK (`029…:77`); teardown must release the slot.
+6. **Redaction gaps** — scrubber must cover `?access_token=`/`apikey=` (WS connect URL),
+   `Authorization` headers, `sb-*-auth-token` cookie, `refresh_token`.
+7. **Substrate** — report-only v1 in agent-postmerge is fine; the **#5463 blocking flip requires
+   re-homing into a GH-Action/`workflow_dispatch` with Sentry-observable result** (ADR-033 Option C),
+   not flipping a boolean in an agent skill.
+8. **Trigger drift** — move the path-set to a committed source-of-truth file + a drift canary
+   (fail-open is the accepted residual).
+
 ## Overview
 
 Build a committed harness that drives the **deployed** app with a **real (non-mock, non-OTP,
@@ -74,39 +105,64 @@ brainstorm; carry-forward satisfies plan-time sign-off). `user-impact-reviewer` 
 Two files only (DHH + simplicity: collapse the per-noun split; the guardrails are behaviors, not
 files). Runner is **`bun`** (`apps/web-platform/bun.lock`) — `.ts` runs via `bun run`, NOT bare `node`.
 1. `run.ts` — single linear orchestrator:
+   - **Project bind (I-allowlist, security P0-3):** derive the ref from the anon-key JWT and assert
+     it equals a pinned `LIVE_VERIFY_EXPECTED_REF`; validate the URL against
+     `PROD_ALLOWED_HOSTS ∪ canonical-shape` (`lib/supabase/validate-url.ts`). Wrong project →
+     hard-fail **before** sign-in.
    - **Mint:** server-side `createServerClient(NEXT_PUBLIC_SUPABASE_URL, anonKey, {cookies})` →
      `signInWithPassword({email, password})` (password from Doppler prd), capturing `setAll`-written
-     cookies into an in-memory jar (port `app/api/auth/dev-signin/route.ts:112-139`).
-   - **UID-allowlist code-gate (FR2):** inline — after sign-in, `getUser()` and **hard-fail** if
-     `user.id` ≠ the single allowlisted synthetic UID, **before** any `chromium.launch()`.
+     cookies into an in-memory jar (port `app/api/auth/dev-signin/route.ts:112-139`); set prod
+     cookies `secure:true` (do NOT copy dev-signin's `secure:false`).
+   - **Allowlist code-gate (FR2):** after sign-in, assert `getUser().id == UID` **AND**
+     `email == "live-verify@soleur.ai"`. `chromium.launch` is reachable ONLY via a single function
+     that takes the verified-principal token as a typed argument — no other launch call site exists
+     (a future refactor cannot bypass a boolean).
    - **Drive:** `import { chromium } from "@playwright/test"` → `chromium.launch()` →
      `context.addCookies(jar)` → drive `PRODUCTION_URL`; capture WS frames (CDP/`page.on`), console,
      DOM, network with **bounded waits on observable state** (no fixed sleeps); `retries:0`.
-   - **verify-rail check (CPO MVP):** start a fresh conversation, assert the row appears in the
-     Recent Conversations rail via observed WS/DOM (the #5391/#5436 bug; must PASS against current
-     prod, proving the #5451 fix holds as a backstop).
-   - **Teardown (FR5):** delete the conversation row + child rows created this run by unique-marker
-     id, in the empirically-confirmed delete order (see step 2 below); on failure leave the marker
-     and FAIL loudly so the next run reaps it (no silent prod accumulation).
+   - **verify-rail check (CPO MVP), MESSAGE-FREE (I-message-free, data-integrity P0-1):** start a
+     fresh conversation, assert the row appears in the Recent Conversations rail via observed WS/DOM
+     — and **never send a message** (a `messages` row spawns a WORM-undeletable `action_sends`
+     child). This is the #5391/#5436 bug; must PASS against current prod (#5451 backstop).
+   - **Teardown (FR5), as the SYNTHETIC USER's OWN session (security P0-2), NOT service-role:**
+     (a) assert `SELECT count(*) messages WHERE conversation_id=$id == 0` — else
+     `CANT-RUN:CANT-TEARDOWN-has-messages+#issue` (distinct, escalated, never "reap next run");
+     (b) release the concurrency slot (the synthetic user archives its own conversation → fires the
+     `036` slot-release trigger, OR calls `release_conversation_slot`) — `user_concurrency_slots` has
+     no FK (`029…:77`) so a plain conversation delete leaks it (data-integrity P1-1);
+     (c) delete the conversation by id **with `user_id=<allowlisted UID>` as a mandatory first
+     predicate** (defense-in-depth; abort if the marker/UID is empty so a null filter can't match
+     other users — data-integrity P2-1). `messages` would CASCADE but we asserted 0.
+   - **Queryable marker (data-integrity P1-2):** stamp `session_id = "live-verify:<run-id>"` so the
+     start-of-run reaper can `DELETE … WHERE user_id=<UID> AND session_id LIKE 'live-verify:%'` to
+     reap any orphan from a crashed run (`conversations` has no title column).
+   - **Start-of-run guards:** assert 0 active slots for the synthetic user (fail-closed if a prior
+     leak saturated the cap; set the synthetic user's tier cap ≥ 2 for sweep-lag tolerance).
    - **RESULT:** emit one structured line `RESULT: PASS|FAIL|CANT-RUN:<reason>` + redacted summary.
-   - `--dry-run`: mint + allowlist-gate + load the page **read-only** (no conversation create) for
-     the discoverability probe (the only non-mutating invocation; keeps the doc probe prod-safe).
-2. `redact.ts` (FR4) — standalone (it is the leakage-safety boundary with its own fixture test):
-   scrub tokens/JWTs/cookies/emails; default attach **redacted-only**; destroy session + raw
-   captures at end of run (ephemeral, never commit).
-3. **Empirical teardown-order check (Kieran P1-1):** before finalizing `run.ts`, confirm a
-   conversation row created via the live UI (and its `messages` + `user_concurrency_slots` children)
-   is deletable by conversation-id under service_role in prod without a sibling RESTRICT FK error;
-   pin the order in `run.ts` and the AC.
+   - `--dry-run`: project-bind + mint + full allowlist-gate + load page **read-only** (no conversation
+     create) + **destroy the session, write no artifact**. The only non-mutating invocation; keeps
+     the doc probe prod-safe.
+2. `redact.ts` (FR4) — standalone leakage boundary (own fixture test). Scrub by **structural
+   location**, not just free-text JWT shape (security P0-4): `?access_token=`/`&access_token=`/
+   `apikey=` URL query params (incl. the WS connect URL), `Authorization` request headers,
+   `Cookie`/`Set-Cookie` + `sb-*-auth-token` cookie values, JSON keys `access_token`/`refresh_token`/
+   `provider_token`, plus emails. Default attach **redacted-only**; destroy session + raw captures
+   at end of run (ephemeral, never commit).
+3. **Empirical teardown-order check:** before finalizing `run.ts`, confirm — under the **synthetic
+   user's own session** — that archiving (slot release via `036`) then deleting the conversation by
+   id succeeds with 0 messages and no RESTRICT error; pin the order in `run.ts` + AC. The gate path
+   must NOT reference `SUPABASE_SERVICE_ROLE_KEY`.
 
 ### Phase 3 — Postmerge gate (`plugins/soleur/skills/postmerge/SKILL.md`) — **report-only first**
 Per `wg-dark-launch-deploy-gates` (Kieran P0-1): a new deploy-gating check ships **non-blocking**
 first and is observed passing on ≥1 real qualifying deploy before it gates. Blocking flip tracked in
 **#5463**.
-1. New phase after Phase 5: **Live Verification (path-triggered, REPORT-ONLY).** Reuse Phase 4's
-   `gh pr diff <number> --name-only` to compute the trigger via a committed grep pattern (Kieran
-   P2-5): fire iff a changed path matches `grep -qE '^apps/web-platform/(hooks/|components/chat/|lib/ws-|middleware\.ts|app/\(auth\)/|server/inngest/.*realtime)'`. Pure logic/docs/copy/config →
-   skip.
+1. New phase after Phase 5: **Live Verification (path-triggered, REPORT-ONLY).** The trigger path-set
+   is a **committed source-of-truth file** `apps/web-platform/scripts/live-verify/trigger-paths.txt`
+   (not SKILL.md prose — architecture P1-4), consumed by both the gate and a test. Reuse Phase 4's
+   `gh pr diff <number> --name-only`; fire iff a changed path matches the file's `grep -qE` pattern
+   (seed: `^apps/web-platform/(hooks/|components/chat/|lib/(ws-|realtime)|middleware\.ts|app/\(auth\)/|server/inngest/.*realtime)`). Pure logic/docs/copy/config → skip. **Fail-open is the accepted
+   residual** (unmatched path → skip) — mitigated by a drift canary (step 5).
 2. If triggered: run the harness (`bun run scripts/live-verify/run.ts`) against
    `PRODUCTION_URL`/`DEPLOY_URL` (reuse Phase 3 resolution, `/health` gate at `:88-91`). Record
    tri-state **`PASS` / `FAIL` / `CANT-RUN:<reason>+#issue`** and **surface it** — but do NOT block
@@ -116,7 +172,13 @@ first and is observed passing on ≥1 real qualifying deploy before it gates. Bl
    harness path** instead of "warn and skip" (the issue's proposal #2).
 4. Mode-branch (defense-in-depth, `2026-03-27-skill-defense-in-depth-gate-pattern.md`): always run;
    in report-only mode both arms record + surface (no abort). The empty→FAIL-closed and
-   FAIL-blocks-done semantics land with the #5463 blocking flip, after ≥1 observed real PASS.
+   FAIL-blocks-done semantics land with the **#5463 blocking flip — which also requires re-homing the
+   harness into a GH-Action/`workflow_dispatch` with a Sentry-observable result** (ADR-033 Option C);
+   a boolean flip in the agent-driven skill is NOT acceptable for a blocking gate.
+5. **Drift canary:** a cheap test that fails when a new top-level dir under `apps/web-platform/`
+   matches realtime/WS/auth heuristics but is absent from `trigger-paths.txt` (mirrors the
+   `kb-domain-allowlist-guard.sh` advisory pattern) — converts silent-skip into a loud
+   "extend the trigger set" prompt.
 
 ### Phase 4 — ADR + C4
 Author the ADR via `/soleur:architecture` (synthetic prod principal + live-mutation gate); note the
@@ -127,9 +189,11 @@ C4 Container-view edge (verification harness → deployed web-platform + prod Su
 - `apps/web-platform/infra/live-verify.tf`
 - `apps/web-platform/scripts/seed-live-verify-user.sh`
 - `apps/web-platform/scripts/seed-live-verify-user.test.sh`
-- `apps/web-platform/scripts/bootstrap-live-verify.sh` (one-shot: terraform apply -target + seed; AC12 owner)
-- `apps/web-platform/scripts/live-verify/run.ts` (orchestrator; inline UID allowlist + gate)
+- `apps/web-platform/scripts/bootstrap-live-verify.sh` (one-shot, **agent-run locally**: terraform apply -target + seed; never in CI; AC12 owner)
+- `apps/web-platform/scripts/live-verify/run.ts` (orchestrator; project-bind + ref+UID+email gate)
 - `apps/web-platform/scripts/live-verify/redact.ts` (standalone leakage boundary; fixture-tested)
+- `apps/web-platform/scripts/live-verify/trigger-paths.txt` (committed trigger source-of-truth)
+- `apps/web-platform/scripts/live-verify/*.test.ts` (allowlist-gate, redact, trigger-pattern, drift-canary)
 - `knowledge-base/engineering/architecture/decisions/ADR-XXX-live-production-verification-harness.md` (via `/soleur:architecture`)
 
 ## Files to Edit
@@ -140,20 +204,25 @@ C4 Container-view edge (verification harness → deployed web-platform + prod Su
 
 ### Pre-merge (PR)
 - [ ] AC1: `git grep -n "playwright-core" apps/web-platform/scripts/live-verify` returns **zero**; `run.ts` imports `{ chromium }` from `@playwright/test` (no new dep).
-- [ ] AC2: `run.ts` hard-fails when `getUser().id` ≠ the allowlisted UID — unit test asserting a non-allowlisted session throws before any `chromium.launch`.
-- [ ] AC3: `redact.ts` removes JWT/cookie/bearer/email shapes from a fixture capture and passes benign text through — unit test on synthetic input (no real tokens; use `<<...>>` placeholders per push-protection).
-- [ ] AC4: `bun run scripts/live-verify/run.ts --dry-run` against a reachable URL prints exactly one `RESULT: ` line and creates **no** conversation row.
-- [ ] AC5: the postmerge trigger is a committed grep pattern — a docs-only changed-file set yields `skip`; a `components/chat/**` set yields a run (shell unit over the pinned `grep -qE` pattern).
-- [ ] AC6: the gate ships **report-only** (records + surfaces tri-state, does NOT block "done"); the SKILL.md gate text cites `wg-dark-launch-deploy-gates` and references #5463 for the blocking flip.
+- [ ] AC2: the gate asserts **ref(from anon JWT) + UID + email** before sign-in/launch; `chromium.launch` has exactly one call site (inside the post-gate function) — unit test: wrong-ref, wrong-UID, and wrong-email sessions each throw before launch.
+- [ ] AC2b: **gate path is service-role-free** — `git grep -n "SUPABASE_SERVICE_ROLE_KEY" apps/web-platform/scripts/live-verify` returns **zero**.
+- [ ] AC2c: **harness is message-free** — `git grep -nE "from\(.messages.\)|/messages|insertMessage" apps/web-platform/scripts/live-verify` returns **zero**; teardown asserts 0 messages before delete.
+- [ ] AC2d: every teardown DELETE carries `user_id=<allowlisted UID>` as a predicate and is a **no-op when the marker is empty/undefined** — unit test proves 0 rows on empty marker.
+- [ ] AC3: `redact.ts` redacts a fixture containing a **WS connect URL with `?access_token=<<JWT>>`**, an `Authorization: Bearer <<JWT>>` header, an `sb-<<ref>>-auth-token` cookie, and a `refresh_token` JSON key; passes benign text through — unit test (synthetic `<<...>>` placeholders per push-protection).
+- [ ] AC4: `bun run scripts/live-verify/run.ts --dry-run` against a reachable URL prints exactly one `RESULT: ` line, creates **no** conversation row, **destroys the session, and writes no artifact**.
+- [ ] AC5: the trigger lives in committed `trigger-paths.txt` — a docs-only changed-file set yields `skip`; a `components/chat/**` set yields a run (test over the file's pattern). Drift canary fails when a new realtime/WS/auth top-level dir is absent from the file.
+- [ ] AC6: the gate ships **report-only** (records + surfaces tri-state, does NOT block "done"); the SKILL.md gate text cites `wg-dark-launch-deploy-gates`, references #5463, and states the blocking flip requires re-homing into a GH-Action with Sentry-observable result.
+- [ ] AC6b: ADR partial-supersedes ADR-049 (scoped to realtime class) and `/soleur:gdpr-gate` is run inline at /work Phase 0 (ADR-049 armed clause) — gate output recorded in the PR.
 - [ ] AC7: `apps/web-platform/infra/live-verify.tf` uses `random_password` + `doppler_secret config="prd"` (no `variable {sensitive=true}` operator-mint); `terraform validate` passes (run after `terraform init`).
-- [ ] AC8: `seed-live-verify-user.test.sh` passes — refuses non-prd `DOPPLER_CONFIG`, non-`service_role` JWT, wrong ref.
+- [ ] AC8: `seed-live-verify-user.test.sh` passes — refuses non-prd `DOPPLER_CONFIG`, non-`service_role` JWT, wrong ref; AND asserts **no secret-shaped string reaches stdout/stderr** on success or failure (no `set -x`, no echoed `-d` bodies — mirror dev-signin's password discipline).
 - [ ] AC9: `.env.example` contains `LIVE_VERIFY_USER_PASSWORD` and `PRODUCTION_URL` — `grep -qE 'LIVE_VERIFY_USER_PASSWORD' apps/web-platform/.env.example`.
 - [ ] AC10: ADR file exists under `knowledge-base/engineering/architecture/decisions/`.
 - [ ] AC11: typecheck green — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 
 ### Post-merge (operator/pipeline)
-- [ ] AC12: one-time bootstrap via a single committed script (owner: `apps/web-platform/scripts/bootstrap-live-verify.sh`, called from the deploy pipeline — NOT a manual checklist): `terraform apply -target=random_password.live_verify_user -target=doppler_secret.live_verify_user_password` then `doppler run -p soleur -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh` — creates the synthetic prd user + `public.users`/`api_keys` ladder idempotently.
-- [ ] AC13 (after AC12; non-blocking per #5463): harness PASSes against production for the rail-conversation-appears check (proves the #5451 fix holds as a live backstop). Cannot gate this PR — report-only.
+- [ ] AC12: one-time bootstrap via a single committed script `apps/web-platform/scripts/bootstrap-live-verify.sh`, **run once by the agent locally** (`doppler run -p soleur -c prd -- bash …`) — **NEVER wired into `.github/workflows/`** (keeps prod service-role out of CI; security P0-1). It runs `terraform apply -target=random_password.live_verify_user -target=doppler_secret.live_verify_user_password` then the seed (synthetic user + `public.users`/`api_keys` ladder, idempotent). Negative AC: `grep -rl "bootstrap-live-verify\|seed-live-verify" .github/workflows/` returns **zero**.
+- [ ] AC13 (after AC12; non-blocking per #5463): harness PASSes against production for the message-free rail-conversation-appears check (proves the #5451 fix holds as a live backstop). Cannot gate this PR — report-only.
+- [ ] AC14: synthetic-user rows are invisible in operator-facing views (RLS/user_id scoping) — a stranded marker row never surfaces to the operator (security P1-2).
 
 ## Domain Review
 
@@ -185,21 +254,67 @@ EEA data subject.
 
 ## Architecture Decision (ADR/C4)
 
-### ADR
-Create `ADR-XXX: Live production verification harness with synthetic prod session` via
-`/soleur:architecture`. Decision: the merge pipeline authenticates to **prod** as a dedicated
-synthetic Supabase principal and performs **live mutations** on qualifying PRs to verify the
-deployed artifact. Alternatives considered: (a) mock-only e2e (rejected — can't reproduce realtime);
-(b) operator's own account (rejected — CLO impersonation/PII surface); (c) preview-deploy target
-(rejected — realtime/server-commit timing only reproduces against the real stack).
+Decision adjudicated **at plan time** (per `wg-architecture-decision-is-a-plan-deliverable`); Phase 4
+transcribes it into the ADR file via `/soleur:architecture`.
+
+### Decision
+The merge pipeline authenticates to **prod** as a dedicated, persistent synthetic Supabase principal
+and performs **live, conversation-scoped mutations** on qualifying PRs to verify the deployed
+artifact — the only way to exercise the realtime/server-commit-timing class.
+
+### Partial-supersession of ADR-049 (load-bearing)
+ADR-049 (Headless Visual-Regression Gate) mandates "runs with zero credentials," "no dev-signin, no
+live backend, no real credentials," and "the gate must never point at a live/staging origin. If it
+ever does, re-trigger the gdpr-gate" (`ADR-049…:27,35,62-63`). This ADR **partial-supersedes ADR-049,
+scoped to the realtime/server-commit-timing trigger class only** — CSS/structural diffs stay on
+ADR-049's zero-cred mock gate. The new fact ADR-049 didn't weigh: realtime timing is invisible to
+mock-Supabase (it 200s `/realtime/*` instead of upgrading the WS). **ADR-049's gdpr-gate clause is
+armed** → run `/soleur:gdpr-gate` inline at /work Phase 0 (not brainstorm carry-forward).
+
+### Alternatives considered
+(a) mock-only e2e — rejected, can't reproduce realtime; (b) operator's own account — rejected (CLO
+impersonation/PII); (c) preview-deploy target — rejected: a preview points at **dev** Supabase
+(ADR-023), a different realtime backend, so it cannot reproduce the prod race; (d) ADR-049's zero-cred
+mock-storageState gate — rejected for this class (mock can't upgrade the WS). Honest consequence:
+this is a **detect-fast gate, not a prevent gate** — it verifies post-merge, so a regression is
+briefly live; prevention would need a prod-realtime-pointing preview (separate, larger infra,
+deferred).
+
+### Binding invariants (ADR must enumerate, ADR-033 I1–I7 style)
+- **I-allowlist:** exactly one synthetic principal; gate asserts ref(from anon JWT) **+ UID + email**
+  before sign-in; `chromium.launch` reachable only via a function taking the verified principal.
+- **I-blast-radius:** read-mostly + conversation-scoped mutation only; a 1-member personal workspace
+  (consistent with ADR-044 owner-gate / AP-015 canary); never touches another user's data.
+- **I-message-free:** never writes `messages`/`action_sends`/any WORM/audit row (undeletable on a
+  persistent principal — data-integrity P0-1).
+- **I-no-founder-context:** no BYOK/operator credentials beyond its own session (ADR-033 I2 mirror).
+- **I-service-role-bootstrap-only:** service-role used only at one-time local bootstrap; the gate-run
+  path never references it.
+- **I-ephemerality:** session + raw captures destroyed at end of run.
+- **I-teardown:** delete-by-conversation-id (+ `user_id=<allowlisted uid>` predicate), never
+  delete-by-user-id.
+
+### Substrate (reconcile with ADR-033)
+Report-only v1 lives in the agent-driven `/soleur:postmerge` skill (acceptable for dark-launch
+observation). **The #5463 blocking flip is gated on re-homing the harness into a GH-Action /
+`workflow_dispatch`-from-`web-platform-release.yml` with a Sentry-observable result** (ADR-033 Option
+C for credential-heavy real-stack execution) — never a boolean flip in an agent skill (that would
+re-create the #4932 non-deterministic-blocking-gate class). Record this as a written precondition on
+#5463.
+
+### Principle-register alignment
+AP-001 (Terraform — aligned; note `-target=` is a scoped bootstrap escape hatch), AP-008 (Doppler —
+aligned), **AP-009 (never delete user data — carve-out:** synthetic-principal rows are not user data;
+teardown is scoped to the allowlisted UID), AP-015 (always-enforce-workspace — synthetic user is a
+1-member personal workspace, does not perturb the canary).
 
 ### C4 views
 Container view: new edge "live-verify harness → deployed web-platform (HTTPS) + prod Supabase
 (auth)". `status: adopting`. Routed through the `c4-edit` Concierge path (KB-write gated).
 
-### Sequencing
-ADR authored now describing target state; the gate becomes load-bearing once the synthetic prd user
-is seeded (AC10).
+### Password rotation / revocation
+Leak path: `terraform apply -replace=random_password.live_verify_user` → re-seed (idempotent admin
+password update) → `auth.admin` sign-out-all for the synthetic UID. Record in the ADR body.
 
 ## Infrastructure (IaC)
 
@@ -262,15 +377,25 @@ coincidental path-fragment matches; none touch the files this plan creates/edits
 6. Live (post-bootstrap, non-blocking): fresh conversation appears in the rail against prod (AC13).
 
 ## Risks & Mitigations
-- **Prod mutation on every qualifying merge** → per-run conversation teardown + unique marker;
-  `retries:0` so a flake is a signal; synthetic user's rows excluded from operator-facing views
-  (verify during impl).
-- **Flakiness masking the very timing bug** → bounded waits on observable WS/DOM state, never fixed
-  sleeps; `retries:0`.
-- **Captured-artifact leakage** → redact-before-persist default + ephemeral destroy (CLO).
-- **`@playwright/test` chromium in a non-test script** → confirm `chromium.launch()` is exported at
-  the installed 1.58.2 (research-confirmed bundled); pin via the existing `playwright-mcp-version-pin`
-  posture if needed.
+- **`action_sends` WORM permanent-wedge** (data-integrity P0-1) → harness is message-free
+  (I-message-free); teardown asserts 0 messages before delete (`051…:103,150-154`).
+- **Service-role blast radius** (security P0-1/P0-2) → service-role is bootstrap-only and local;
+  gate-run teardown uses the synthetic user's own session (RLS); AC2b greps it to zero.
+- **Wrong-project UID collision** (security P0-3) → bind ref+UID+email before sign-in; type-gated
+  launch.
+- **Concurrency-slot leak** (data-integrity P1-1) → release slot (archive trigger / RPC) before
+  delete; assert 0 slots at start; cap ≥ 2.
+- **Service-role teardown matching other users on empty marker** (data-integrity P2-1) →
+  `user_id=<UID>` mandatory predicate + no-op-on-empty test.
+- **Captured-artifact leakage** → structural-location scrubber (`?access_token=`, `Authorization`,
+  `sb-*-auth-token`, `refresh_token`) + ephemeral destroy (security P0-4).
+- **Prod mutation on every qualifying merge** → message-free conversation-scoped teardown + queryable
+  `live-verify:<run-id>` marker; `retries:0`; rows invisible in operator views (AC14).
+- **Flakiness masking the timing bug** → bounded waits on observable WS/DOM state, no fixed sleeps.
+- **Detect-fast, not prevent** → post-merge gate means a regression is briefly live; accepted (ADR
+  Consequences); prevention would need a prod-realtime preview (deferred).
+- **Gate substrate non-determinism** → report-only in agent-postmerge is OK; #5463 blocking flip
+  requires GH-Action + Sentry-observable result (ADR-033 Option C).
 
 ## Sharp Edges
 - A plan whose `## User-Brand Impact` section is empty/`TBD`/placeholder fails `deepen-plan`
