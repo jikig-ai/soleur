@@ -135,6 +135,30 @@ result** (ADR-033 Option C for credential-heavy real-stack execution) — **neve
 boolean flip in an agent skill** (that would recreate the #4932
 non-deterministic-blocking-gate class). This precondition is recorded on #5463.
 
+### Runner browser + cookie shape (#5485)
+
+Two harness-runnability facts pinned by a live MCP/system-Chrome repro (#5485):
+
+- **Browser binary.** `run.ts` launches the bundled `@playwright/test` chromium
+  by default. On a host whose OS that bundled browser does not support (the
+  bundled `chrome-headless-shell` is then absent and `chromium.launch()` fails),
+  set `LIVE_VERIFY_BROWSER_CHANNEL` (e.g. `chrome`) or `LIVE_VERIFY_BROWSER_PATH`
+  (an explicit executable path, which wins over the channel) to point at a system
+  browser. Both are **optional** — unset on ubuntu-latest CI, where the bundled
+  chromium installs cleanly, so the GH-Action re-home substrate is unaffected. A
+  launch failure now surfaces as the distinct, diagnosable
+  `CANT-RUN:browser-launch:<error.name>` (fail-loud, never a silent fallback).
+- **Injected cookie `httpOnly: false` is load-bearing.** Client-guarded routes
+  (`/dashboard/chat/new`, the gate path) hydrate the session via the
+  `@supabase/ssr` BROWSER client, which reads the auth-token cookie from
+  `document.cookie` — a path `httpOnly` blocks. Injecting `httpOnly: true` made
+  the client guard win a hydration race and bounce to `/login` ~20% of runs
+  (measured live); `httpOnly: false` was 5/5 clean and matches the proven
+  cookie-injection references (`bot-signin.ts`, `e2e/global-setup.ts`). The
+  earlier "cookie does not authenticate / lands on /login" framing was a partial
+  diagnosis — auth works; the bug was the `httpOnly` flag + the missing runner
+  browser. Locked by `test/live-verify/cookie-injection.test.ts`.
+
 ## Principle-register alignment
 
 AP-001 (Terraform — aligned; `-target=` is a scoped bootstrap escape hatch),

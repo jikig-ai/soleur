@@ -384,6 +384,14 @@ cd apps/web-platform && \
   2>&1 | grep -E '^RESULT: '
 ```
 
+**Runner browser (#5485).** If this host's OS does not support the bundled
+`@playwright/test` chromium (`chromium.launch()` → `CANT-RUN:browser-launch:…`),
+prepend a system-browser override — `LIVE_VERIFY_BROWSER_CHANNEL=chrome` (or
+`LIVE_VERIFY_BROWSER_PATH=/path/to/chrome`) — to the `doppler run` line. Unset on
+ubuntu-latest (bundled chromium works); see ADR-064 §"Runner browser + cookie
+shape". The terminal substrate for the blocking flip is the GH-Action re-home
+(#5463 item 3), not this override.
+
 The harness emits exactly one structured line: `RESULT: PASS`,
 `RESULT: FAIL — <redacted detail>`, or `RESULT: CANT-RUN:<reason>`. Empty output
 is treated as `CANT-RUN:no-result-line` (fail-closed semantics for the result
