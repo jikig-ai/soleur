@@ -554,21 +554,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
-      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
-      - name: Install web-platform deps
-        working-directory: apps/web-platform
-        run: bun install --frozen-lockfile
-      - name: Install Playwright chromium (+ OS deps)
-        working-directory: apps/web-platform
-        # Use the @playwright/test version bun just installed (package.json pins
-        # 1.58.2). --with-deps installs the OS shared libs ubuntu-latest lacks; a
-        # bare install would leave chromium.launch() failing on missing libs
-        # (spurious CANT-RUN). The harness's optional system-browser override
-        # env vars are deliberately left unset here so run.ts uses the bundled
-        # chromium that ubuntu-latest installs cleanly.
-        run: npx playwright install --with-deps chromium
+      # The trigger-paths gate runs FIRST (it needs only `gh` + the committed
+      # trigger-paths.txt). The bun/doppler/playwright setup + harness below are
+      # gated on `triggered == '1'`, so a SKIP release (most merges — no
+      # realtime/WS/auth/DOM-timing surface changed) never pays the ~10min
+      # `playwright install --with-deps chromium`, and a triggering release does
+      # not let that install compete with the harness for the 15-min budget (#5497).
       - name: Changed-file trigger gate
         id: gate
         env:
@@ -600,6 +591,26 @@ jobs:
             echo "triggered=$triggered"
             echo "gate_failed=0"
           } >> "$GITHUB_OUTPUT"
+      - name: Install Doppler CLI
+        if: steps.gate.outputs.triggered == '1'
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - name: Install bun
+        if: steps.gate.outputs.triggered == '1'
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+      - name: Install web-platform deps
+        if: steps.gate.outputs.triggered == '1'
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+      - name: Install Playwright chromium (+ OS deps)
+        if: steps.gate.outputs.triggered == '1'
+        working-directory: apps/web-platform
+        # Use the @playwright/test version bun just installed (package.json pins
+        # 1.58.2). --with-deps installs the OS shared libs ubuntu-latest lacks; a
+        # bare install would leave chromium.launch() failing on missing libs
+        # (spurious CANT-RUN). The harness's optional system-browser override
+        # env vars are deliberately left unset here so run.ts uses the bundled
+        # chromium that ubuntu-latest installs cleanly.
+        run: npx playwright install --with-deps chromium
       - name: Run live-verify harness (report-only)
         id: harness
         if: steps.gate.outputs.triggered == '1'
