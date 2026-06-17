@@ -46,7 +46,8 @@
       { "source": "payload", "name": "inngest_enumerate_reminders_sh_b64", "envname": "INNGEST_ENUMERATE_REMINDERS_SH_B64" },
       { "source": "payload", "name": "inngest_rearm_reminders_sh_b64", "envname": "INNGEST_REARM_REMINDERS_SH_B64" },
       { "source": "payload", "name": "inngest_wiped_volume_verify_sh_b64", "envname": "INNGEST_WIPED_VOLUME_VERIFY_SH_B64" },
-      { "source": "payload", "name": "cat_inngest_verify_state_sh_b64", "envname": "CAT_INNGEST_VERIFY_STATE_SH_B64" }
+      { "source": "payload", "name": "cat_inngest_verify_state_sh_b64", "envname": "CAT_INNGEST_VERIFY_STATE_SH_B64" },
+      { "source": "payload", "name": "inngest_inventory_sh_b64", "envname": "INNGEST_INVENTORY_SH_B64" }
     ],
     "trigger-rule": {
       "match": {
@@ -82,6 +83,25 @@
     "execute-command": "/usr/local/bin/cat-infra-config-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "inngest-inventory",
+    "execute-command": "/usr/local/bin/inngest-inventory.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {

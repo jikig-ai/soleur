@@ -29,6 +29,8 @@ assert "op input is type: choice" "grep -qE 'type:[[:space:]]*choice' '$WF'"
 assert "choice includes enumerate" "grep -qE '^[[:space:]]+-[[:space:]]*enumerate$' '$WF'"
 assert "choice includes rearm" "grep -qE '^[[:space:]]+-[[:space:]]*rearm$' '$WF'"
 assert "choice includes verify-wiped-volume" "grep -qE '^[[:space:]]+-[[:space:]]*verify-wiped-volume$' '$WF'"
+assert "choice includes backup (#5509)" "grep -qE '^[[:space:]]+-[[:space:]]*backup$' '$WF'"
+assert "choice includes inventory (#5509)" "grep -qE '^[[:space:]]+-[[:space:]]*inventory$' '$WF'"
 
 # op is passed via env, never interpolated into a run: command (injection-safe)
 assert "op passed via env (OP: \${{ inputs.op }})" "grep -qE 'OP:[[:space:]]*\\\$\{\{[[:space:]]*inputs.op' '$WF'"
@@ -63,7 +65,7 @@ assert "enumerate emits reminder_id list, not bodies" "grep -qE 'reminder_id\] \
 # every webhook hook the workflow hits must be a real hook id in hooks.json.tmpl
 # (a hook rename would otherwise 404 silently). Cross-check all 4 trigger URLs.
 HOOKS_TMPL="$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl"
-for hook in inngest-enumerate-reminders inngest-rearm-reminders inngest-wiped-volume-verify inngest-verify-status; do
+for hook in inngest-enumerate-reminders inngest-rearm-reminders inngest-wiped-volume-verify inngest-verify-status inngest-inventory; do
   assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook\"' '$WF'"
   assert "hook id '$hook' exists in hooks.json.tmpl" "grep -qE '\"id\": \"$hook\"' '$HOOKS_TMPL'"
 done

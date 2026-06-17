@@ -622,6 +622,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/inngest-rearm-reminders.sh"),
     file("${path.module}/inngest-wiped-volume-verify.sh"),
     file("${path.module}/cat-inngest-verify-state.sh"),
+    file("${path.module}/inngest-inventory.sh"),
     local.hooks_json,
   ]))
 

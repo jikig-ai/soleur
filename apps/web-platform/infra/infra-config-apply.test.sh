@@ -58,6 +58,7 @@ export_valid_env_vars() {
   export INNGEST_REARM_REMINDERS_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export INNGEST_WIPED_VOLUME_VERIFY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export CAT_INNGEST_VERIFY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export INNGEST_INVENTORY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
 }
 
 assert_eq() {
@@ -221,9 +222,9 @@ test_state_file_happy_path() {
   local files_total
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
-  assert_eq "files_written is 11" "11" "$files_written"
+  assert_eq "files_written is 12" "12" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
-  assert_eq "files_total is 11" "11" "$files_total"
+  assert_eq "files_total is 12" "12" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -424,9 +425,9 @@ test_missing_env_partial_write() {
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "files_written is 10" "10" "$files_written"
+  assert_eq "files_written is 11" "11" "$files_written"
   assert_eq "files_failed is 1" "1" "$files_failed"
-  assert_eq "files_total is 11" "11" "$files_total"
+  assert_eq "files_total is 12" "12" "$files_total"
 
   # The missing file's entry records status:failed, reason:missing_env
   local mstatus mreason
@@ -492,7 +493,7 @@ test_prod_mode_escalated_move() {
   # root-managed and not in FILE_MAP, #4827 security review).
   local calls
   calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
-  assert_eq "escalation helper invoked once per file (11)" "11" "$calls"
+  assert_eq "escalation helper invoked once per file (12)" "12" "$calls"
 
   # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
   # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
@@ -515,10 +516,33 @@ test_prod_mode_escalated_move() {
   local files_written exit_code
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "prod-mode files_written is 11" "11" "$files_written"
+  assert_eq "prod-mode files_written is 12" "12" "$files_written"
   assert_eq "prod-mode exit_code is 0" "0" "$exit_code"
 
   teardown
+}
+
+# --- #5509: b64 delivery-surface parity (push ↔ FILE_MAP ↔ pass-environment) ---
+# The three surfaces that carry a host file from the push payload to disk MUST
+# enumerate the SAME key set: push-infra-config.sh payload "<key>_b64", this
+# handler's FILE_MAP <ENV>|, and hooks.json.tmpl's pass-environment-to-command
+# envname. A key in push + FILE_MAP but MISSING from pass-environment means the
+# file is pushed but never written (missing_env) — the silent break #5509 review
+# caught (inngest-inventory.sh was in 11 surfaces but not the pass-environment bridge).
+test_b64_delivery_parity() {
+  local push="${SCRIPT_DIR}/push-infra-config.sh"
+  local hooks="${SCRIPT_DIR}/hooks.json.tmpl"
+  local push_keys map_vars pass_vars
+  push_keys=$(grep -oE '"[a-z0-9_]+_b64":' "$push" | sed -E 's/"([a-z0-9_]+)":/\1/' | tr '[:lower:]' '[:upper:]' | sort -u)
+  map_vars=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -oE '"[A-Z0-9_]+_B64\|' | tr -d '"|' | sort -u)
+  pass_vars=$(grep -oE '"envname": "[A-Z0-9_]+_B64"' "$hooks" | sed -E 's/.*"([A-Z0-9_]+)".*/\1/' | sort -u)
+  if [[ "$push_keys" == "$map_vars" && "$map_vars" == "$pass_vars" ]]; then
+    echo "  PASS: push payload ↔ FILE_MAP ↔ pass-environment b64 key sets are identical ($(echo "$push_keys" | wc -l | tr -d ' ') keys)"; PASS=$((PASS + 1));
+  else
+    echo "  FAIL: b64 delivery-surface drift (a file pushed but not env-bridged is written nowhere)"
+    echo "    push vs FILE_MAP diff:"; comm -3 <(echo "$push_keys") <(echo "$map_vars") | sed 's/^/      /'
+    echo "    FILE_MAP vs pass-environment diff:"; comm -3 <(echo "$map_vars") <(echo "$pass_vars") | sed 's/^/      /'
+    FAIL=$((FAIL + 1)); fi
 }
 
 # --- Run all tests ---
@@ -534,6 +558,7 @@ test_restart_ordering
 test_exit_trap_unhandled
 test_missing_env_partial_write
 test_prod_mode_escalated_move
+test_b64_delivery_parity
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then
