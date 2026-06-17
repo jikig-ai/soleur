@@ -84,7 +84,12 @@ Checked against the worktree + live GitHub state (2026-06-17):
   a real synthetic-prod session and captures WS/DOM/network; an un-redacted RESULT
   line forwarded to Sentry or a workflow log could carry the synthetic principal's
   live tokens/cookies/emails. Mitigated: `run.ts` `redact()`s the RESULT line
-  before `console.log` (run.ts:509), and the workflow forwards ONLY that line.
+  before `console.log` (run.ts:509), the workflow forwards ONLY that line to
+  Sentry, AND the harness's merged stdout+stderr is piped through `redact-stdin.ts`
+  before `tee` so the GitHub Actions **run log** is scrubbed too — not just the
+  extracted tail (#5487 review FINDING 3). `redact.ts` covers Doppler (`dp.*`) and
+  GitHub (`ghp_`/`github_pat_`) token shapes in addition to the Supabase session
+  shapes, so a `doppler run`/`gh api` CLI crash cannot egress its token.
 - **Brand-survival threshold:** single-user incident.
 
 CPO sign-off required at plan time (threshold = single-user incident). The CTO/CLO

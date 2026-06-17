@@ -42,6 +42,16 @@ const RULES: Array<[RegExp, string]> = [
   // DOM) — this is the structural shape the scrubber's threat model targets
   // (security review P1; default cookieEncoding="base64url").
   [/base64-[A-Za-z0-9_-]{40,}/g, "[REDACTED_SB_SESSION]"],
+  // Doppler tokens (#5487): the live-verify GHA job runs the harness under
+  // `doppler run -c prd`, so a doppler CLI error could surface its token in
+  // stderr — which the job tees to the run log and embeds in a Sentry crash-tail
+  // event. These are prefix-shaped (no structural location in raw stderr), so a
+  // shape match is the only option; the `dp.<class>.` prefix is stable across
+  // service/personal/service-account/CLI/scim/audit token classes.
+  [/dp\.(?:st|pt|sa|ct|scim|audit)\.[A-Za-z0-9._-]{10,}/g, "[REDACTED_DOPPLER]"],
+  // GitHub tokens (#5487): the trigger-gate step runs `gh api` with GH_TOKEN.
+  [/gh[pousr]_[A-Za-z0-9]{20,}/g, "[REDACTED_GH_TOKEN]"],
+  [/github_pat_[A-Za-z0-9_]{20,}/g, "[REDACTED_GH_TOKEN]"],
   // JSON token keys: "access_token":"...", "refresh_token":"...", etc.
   [
     /(["'](?:access_token|refresh_token|provider_token)["']\s*:\s*")[^"]+/gi,

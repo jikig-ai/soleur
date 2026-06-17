@@ -613,8 +613,16 @@ jobs:
           # a DISTINCT invariant from "failure still produces a recording" (this).
           set +e
           cd apps/web-platform
-          doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 | tee /tmp/live-verify.out
-          rc=${PIPESTATUS[0]}   # bun's exit code, NOT tee's
+          # Redact the harness's merged stdout+stderr BEFORE it reaches the run
+          # log / the extracted tail (#5487 review, user-impact FINDING 3): a raw
+          # `2>&1 | tee` writes an unhandled Playwright/bun/doppler stderr stack —
+          # which could embed a captured secret — verbatim into the Actions run
+          # log (visible to any Actions-read principal). redact-stdin.ts is
+          # idempotent on run.ts's own already-redacted RESULT line.
+          doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 \
+            | bun run scripts/live-verify/redact-stdin.ts \
+            | tee /tmp/live-verify.out
+          rc=${PIPESTATUS[0]}   # bun's exit code (first pipe stage), NOT redact/tee
           set -e
           RESULT_LINE=$(grep -E '^RESULT: ' /tmp/live-verify.out | tail -1)
           if [ -z "$RESULT_LINE" ]; then
