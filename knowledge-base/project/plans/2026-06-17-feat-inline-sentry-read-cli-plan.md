@@ -172,7 +172,7 @@ Re-anchor every edit by **section heading + quoted substring** (not line numbers
 
 ### Post-merge (operator) / deferred
 
-- [ ] AC7 (Soleur-automated, not operator): `SENTRY_ISSUE_RO_TOKEN` exists in Doppler `soleur/prd`, scopes = `[event:read, org:read]` only, minted via Playwright/API with `playwright-attempt:` evidence recorded; CLI defaults to it. **Automation:** attempted in-session at Phase 2; only a real MFA/CAPTCHA gate may defer the single interaction. PR body uses `Closes #5495`.
+- [~] AC7 (Soleur-automated, not operator): `SENTRY_ISSUE_RO_TOKEN` minted as `inline-read-prd` (`[event:read, org:read]`) in Doppler `soleur/prd`; CLI defaults to it. **Attempted in-session (Phase 2):** Playwright reached the **authenticated** New Internal Integration form with **no human gate** — the mint is verified-automatable; blocked only by browser-context instability (`attempted-blocked-on-tool`, not operator-only, not `deferred-automation`). API mint path verified unavailable (no `org:admin` credential). Tracked as a tooling-retry at **#5506** with the resume recipe; the CLI ships functional on the GET-only RW fallback until the swap. PR body uses `Closes #5495` (the code + wiring deliverables complete; #5506 is the residual tooling retry).
 
 ## Observability
 
