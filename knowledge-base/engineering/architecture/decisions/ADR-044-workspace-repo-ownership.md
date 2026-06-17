@@ -270,3 +270,55 @@ background contexts surfaced by the soak itself).
 - **Capability gap recorded:** there is no service-role-safe installation-id resolver
   (the only one is `auth.uid()`-gated). It must be built before PR-2b can drop
   `users.github_installation_id`.
+
+## Amendment 2026-06-17 — service-role-safe installation resolver (#5470, PR-2b precondition)
+
+**The Option-D capability gap is now CLOSED.** `resolveInstallationIdForWorkspace(workspaceId, service)`
+(`apps/web-platform/server/resolve-installation-id-for-workspace.ts`) does a **direct
+service-role read** of `workspaces.github_installation_id` keyed on an explicit
+`workspaceId`, with NO `auth.uid()` dependency — the distinct path service-role/cron
+contexts need.
+
+- **Mechanism chosen: direct service-role read, NOT a new RPC.** Migration 079 §2 (and
+  mig 110) revoked the `github_installation_id` column SELECT from `authenticated`
+  **only** — `service_role` retains its default `workspaces` table grant, so it reads the
+  credential column today. A net-new SECURITY DEFINER RPC would add a privileged surface
+  to audit for zero capability gain. The resolver takes an **injected** service client
+  (mirrors `workspace-identity-resolver.ts`), so it imports no service-role factory and
+  needs no `.service-role-allowlist` entry of its own.
+- **Membership-bypass justification:** the credential is a GitHub App installation-token
+  grant (repo write access). The bypass is sound ONLY because callers key on a
+  **server-derived** id (`founderId` / the user's own solo workspace, `workspaces.id =
+  users.id` per ADR-038 N2), never a request-supplied id. A single `eq("id", …)` read —
+  no sibling discovery (CLO forbid: no unscoped membership scan, no `MIN(created_at)`
+  first-membership lookup).
+
+**Two of the three #5470 read sites are cut over in this PR:**
+
+- `server/inngest/functions/agent-on-spawn-requested.ts` — `resolve-installation` step
+  resolves the founder's solo-workspace install via the resolver (founderId keying
+  preserved). Behavior-equivalent **for solo workspaces only** (`workspaces.id =
+  users.id`, ADR-038 N2; backfilled by mig 080) — a team-workspace founder resolves
+  NULL under BOTH the old `users` read and this solo read (the install lives on the
+  team row), so agent-on-spawn remains solo-only exactly as before; broadening to
+  active-workspace keying is out of scope (north-star).
+- `server/inngest/functions/cron-workspace-sync-health.ts` — `scan-stale-sync-failed` +
+  `scan-went-quiet` drop the `users.github_installation_id` select/predicate and resolve
+  per-row from `workspaces`. The `users` read **stays** for `kb_sync_history` (users-only,
+  mig 017; ADR-044 deliberately did not mirror history to workspaces). Newly-connected
+  users (NULL legacy `users` install, populated `workspaces`) are now **caught** where the
+  old `users` predicate false-negatively excluded them — a strict detection improvement.
+
+`git grep 'users.*github_installation_id' apps/web-platform/server/inngest/` returns **0**.
+
+**Remaining #5470 set (still on `users`, NOT in this PR's `server/inngest/**` scope):**
+
+- `app/api/webhooks/github/route.ts` — the reverse `.eq("github_installation_id", …)`
+  founder lookup needs the **fan-out reconcile** shape (workspaces install is non-unique),
+  a materially different change.
+- `server/session-sync.ts` `updateLastSynced` — a **write** of `users.repo_last_synced_at`
+  (different column + verb).
+
+These two remain tracked under the #5470 / #5437 umbrella; PR-2b's `users.github_installation_id`
+column drop is now unblocked **for the two Inngest readers**, with the webhook + session-sync
+sites the residual blockers.
