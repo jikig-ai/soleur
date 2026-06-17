@@ -145,6 +145,45 @@ test_no_shell_string_interpolation_in_gql() {
   assert_contains "GraphQL request body built with jq -n" "$(cat "$TARGET")" "jq -n"
 }
 
+# --- Test 9 (#5492 AC6): the DEFAULT filter.from is a recent instant, NOT epoch ---
+# Sources the script with NO ENUMERATE_FROM override and invokes build_request_body
+# directly (sourcing does not run the network loop — BASH_SOURCE guard). RED before
+# the AC5 clamp (epoch default), GREEN after. The epoch 1970 default is what inngest
+# rejected as an out-of-range Time! bound → the opaque 500 (#5492 root cause).
+test_default_from_is_recent_not_epoch() {
+  local from
+  # Fresh `bash -c` (NOT in-process `source` — this test file marks NOW_MS readonly,
+  # which a same-process subshell would inherit and the script's NOW_MS= would then
+  # fail to assign). `bash -c 'source X'` has BASH_SOURCE!=$0 so the network loop
+  # stays guarded; a fresh exec does not inherit the readonly.
+  from=$(unset ENUMERATE_FROM; bash -c 'source "$1"; build_request_body ""' _ "$TARGET" | jq -r '.variables.filter.from')
+  assert_eq "default filter.from is not the 1970 epoch" "0" "$([[ "$from" == 1970-* ]] && echo 1 || echo 0)"
+  # Within the last ~2 years (clamped recent lookback), and a real ISO instant.
+  local from_year now_year
+  from_year=${from:0:4}; now_year=$(date -u +%Y)
+  assert_eq "default filter.from year is within 2 years of now" "1" \
+    "$([[ "$from_year" =~ ^[0-9]{4}$ && $((now_year - from_year)) -le 2 && $((now_year - from_year)) -ge 0 ]] && echo 1 || echo 0)"
+  # ENUMERATE_FROM still wins (it IS the override — no second env var).
+  local overridden
+  overridden=$(ENUMERATE_FROM="2099-01-01T00:00:00Z" bash -c 'source "$1"; build_request_body ""' _ "$TARGET" | jq -r '.variables.filter.from')
+  assert_eq "ENUMERATE_FROM override wins" "2099-01-01T00:00:00Z" "$overridden"
+}
+
+# --- Test 10 (#5492 AC7): malformed-response cause line carries NO raw payload ---
+# The STDOUT cause-only line must not leak the event data; the raw response stays
+# STDERR-only. Feed a GraphQL error fixture (no .data.eventsV2) carrying a sentinel.
+test_malformed_cause_no_payload_leak() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  printf '%s' '{"errors":[{"message":"invalid Time bound","extensions":{"secret":"SECRET-PAYLOAD-XYZ"}}]}' > "$d/page-1.json"
+  local out rc=0
+  out=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null) || rc=$?
+  assert_eq "malformed response exits non-zero" "1" "$rc"
+  assert_contains "stdout carries a diagnosable cause line" "$out" "malformed GraphQL response"
+  if [[ "$out" == *"SECRET-PAYLOAD-XYZ"* ]]; then
+    echo "  FAIL: raw payload leaked into the STDOUT cause line"; FAIL=$((FAIL + 1));
+  else echo "  PASS: raw payload NOT leaked into the STDOUT cause line"; PASS=$((PASS + 1)); fi
+}
+
 test_future_unfired_included
 test_completed_dropped
 test_past_dropped
@@ -153,6 +192,8 @@ test_pagination_page2_captured
 test_log_no_body_leak
 test_empty_set
 test_no_shell_string_interpolation_in_gql
+test_default_from_is_recent_not_epoch
+test_malformed_cause_no_payload_leak
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
