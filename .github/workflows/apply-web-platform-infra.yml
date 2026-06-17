@@ -344,6 +344,8 @@ jobs:
               -target=betteruptime_heartbeat.inngest_prd \
               -target=betteruptime_policy.inngest \
               -target=doppler_secret.inngest_heartbeat_url_prd \
+              -target=random_password.inngest_redis_password_prd \
+              -target=doppler_secret.inngest_redis_password_prd \
               -target=hcloud_firewall.web \
               -target=hcloud_firewall_attachment.web
           rc=$?
