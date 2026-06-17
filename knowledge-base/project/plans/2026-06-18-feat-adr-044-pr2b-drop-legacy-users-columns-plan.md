@@ -26,6 +26,37 @@ column DROP that PR-2a / the team write-cutover unblocked).
 
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Review agents:** data-migration-expert, data-integrity-guardian,
+deployment-verification-agent, user-impact-reviewer, verify-the-negative pass.
+**Verdict:** APPROVE — all load-bearing safety claims verified live on
+`origin/main`; no blocking P0. The destructive drop is safe to proceed once the
+Phase-0 gates are re-run at work-start.
+
+### Key findings applied
+1. **Runtime cross-tenant guard is verifiably LIVE** (4-of-5 consensus): the
+   `{found|none|ambiguous|db-error}` resolver (`>1` fail-closed) + the
+   `github_webhook_founder_ambiguous` Sentry rule at
+   `apps/web-platform/infra/sentry/issue-alerts.tf:576` both exist — the dropped
+   index's guarantee is genuinely replaced. (One reviewer's "file absent" P0 was a
+   false negative from a bare path; resolved.)
+2. **AC0.5 / Observability / prose now use the full `apps/web-platform/` path** for
+   the Sentry rule — a bare `infra/sentry/...` grep falsely reads "guard absent".
+3. **Type trim corrected to SAFE straight-delete** — synthesized objects use the
+   local `KbRouteContext.userData` shape, not `interface User`; `tsc --noEmit` is
+   the backstop (Sharp Edge #1 / AC4 reworded).
+4. **Migrate-before-deploy window** scoped out (safe because PR-2a removed all live
+   readers from the deployed image; `dsar-export.ts:462` `select("*")` degrades).
+5. **Added AC13:** 24h post-deploy `op="founder-ambiguous"` Sentry watch — the
+   load-bearing signal that the runtime replacement actually fires (verify/111 only
+   proves the index is gone).
+6. AC9/AC12 relabeled (dev REST probe vs prod psql verify); down.sql COMMENT
+   restored verbatim from mig-052; rollback-doc + PGRST205 cache notes added.
+
+---
+
 ## Overview
 
 ADR-044 relocated repo-connection state from `users.*` to `workspaces.*`. The
@@ -43,10 +74,14 @@ The structural guarantee the dropped mig-052 partial-UNIQUE index provided
 (one founder per installation; the webhook `.maybeSingle()` would otherwise
 silently mis-attribute on a 1:N collision) is **already replaced at runtime**
 by the webhook `>1`-fail-closed founder resolver
-(`server/resolve-founder-for-installation.ts`, the
-`resolveSoloFounderForInstallation` `{found|none|ambiguous|db-error}` union) +
-the `op:"founder-ambiguous"` `Sentry.captureException` paging rule (ADR-044
-Amendment 2026-06-17b, R7/R8). The drop does **not** reintroduce the
+(`apps/web-platform/server/resolve-founder-for-installation.ts`, the
+`resolveSoloFounderForInstallation` `{found|none|ambiguous|db-error}` union, `>1`
+fail-closed at `:108`) + the `op="founder-ambiguous"` `Sentry.captureException`
+(fired from `app/api/webhooks/github/route.ts:342`) and the
+`github_webhook_founder_ambiguous` paging rule
+(`apps/web-platform/infra/sentry/issue-alerts.tf:576`, value `"founder-ambiguous"`)
+(ADR-044 Amendment 2026-06-17b, R7/R8). **All three are verified live on
+`origin/main`** (multi-agent deepen-plan review, 2026-06-18). The drop does **not** reintroduce the
 cross-tenant hazard — the guard moved from DB-constraint to application code by
 design.
 
@@ -109,11 +144,11 @@ actions routed to another tenant.
 
 ### Pre-apply gates (work Phase 0 — HARD BLOCK, re-verify; do NOT trust the brief)
 
-- [ ] **AC0.1 — Reader sweep (multi-line):** `rg -nU 'from\("users"\)[\s\S]{0,400}?\b(github_installation_id\|repo_url\|workspace_path)\b' apps/web-platform/{app,server,lib}` returns ZERO *live* readers (comments + different-column selects + `workspaces`/synthesized-object reads are allowed; a live `.from("users").select(...one of the three...)` is a BLOCK). A sibling PR could have added one since the cutover.
+- [ ] **AC0.1 — Reader sweep (multi-line):** `rg -nU 'from\("users"\)[\s\S]{0,400}?\b(github_installation_id\|repo_url\|workspace_path)\b' apps/web-platform/{app,server,lib}` returns ZERO *live* readers (comments + different-column selects + `workspaces`/synthesized-object reads are allowed; a live `.from("users").select(...one of the three...)` is a BLOCK). A sibling PR could have added one since the cutover. **The 400-char window over-matches** — it bleeds into adjacent comments/statements (e.g. `agent-runner.ts:1047` selects `email`, the `github_installation_id` nearby is a comment). Inspect the column-of-SELECT on EACH hit manually; do NOT trust exit code (deepen-plan review note).
 - [ ] **AC0.2 — Lookup-shape sweep (dual-shape):** `git grep -nE "\.eq\([\"']?(github_installation_id\|repo_url\|workspace_path)\b" -- 'apps/web-platform/{app,server,lib}'` shows every hit is on a `workspaces` query or a synthesized object — ZERO live `users`-table `.eq()`/`.in()`/`.match()` filters on the three columns (the stranded-lookup class, learning `2026-06-17-column-relocation-reader-sweep-and-stranded-eq-lookups.md`).
-- [ ] **AC0.3 — `workspace_path` consumer trace:** every `userData.workspace_path` / `access.workspacePath` consumer (`kb/upload`, `kb/file`, `kb/c4`, `agent-runner`, `sandbox`, `dsar-export`) reads from a **resolver-synthesized** object (`resolveActiveWorkspaceKbRoot` / active-workspace resolver), NOT a `users` SELECT. Confirmed example: `kb/upload/route.ts:104` builds `userData = { workspace_path: access.workspacePath }`. (Sharp Edge #1.)
+- [ ] **AC0.3 — `workspace_path` consumer trace:** every `userData.workspace_path` / `access.workspacePath` consumer (`kb/upload`, `kb/file`, `kb/c4`, `agent-runner`, `sandbox`, `dsar-export`) reads from a **resolver-synthesized** object (`resolveActiveWorkspaceKbRoot` / active-workspace resolver), NOT a `users` SELECT. Confirmed example: `kb/upload/route.ts:104` builds `userData = { workspace_path: access.workspacePath }`, typed against the **local `KbRouteContext.userData` inline shape** (`server/kb-route-helpers.ts:23-27`), NOT `lib/types.ts interface User`. (Sharp Edge #1 — the trim is therefore SAFE, see below.) Also confirm `dsar-export.ts:462` `.from("users").select("*")` is the only wildcard `users` reader — it is **drop-safe** (PostgREST `*` returns whatever columns exist; no 42703 on a dropped column).
 - [ ] **AC0.4 — Drift gate COUNT=0:** re-run the ADR-044 §"Pre-decommission drift gate" against PROD read-only (Doppler `DATABASE_URL_POOLER`, session mode `:5432`, node-pg, `ssl: { rejectUnauthorized: false }`): `SELECT count(*) FROM users u JOIN workspaces w ON w.id = u.id WHERE u.repo_url IS DISTINCT FROM w.repo_url OR u.github_installation_id IS DISTINCT FROM w.github_installation_id` returns **0**. Capture the count + timestamp in the PR body. Any non-zero BLOCKS the drop.
-- [ ] **AC0.5 — Runtime guard live:** confirm `server/resolve-founder-for-installation.ts` exports the `{found|none|ambiguous|db-error}` resolver and `infra/sentry/issue-alerts.tf` carries the `github_webhook_founder_ambiguous` rule on `op:"founder-ambiguous"` — the replacement for the dropped index's structural guarantee, on `origin/main`.
+- [ ] **AC0.5 — Runtime guard live:** confirm `apps/web-platform/server/resolve-founder-for-installation.ts` exports the `{found|none|ambiguous|db-error}` resolver (`>1` fail-closed at `:108`) AND `apps/web-platform/infra/sentry/issue-alerts.tf:576` carries the `github_webhook_founder_ambiguous` rule on `op="founder-ambiguous"` — the replacement for the dropped index's structural guarantee, on `origin/main`. **Use the full `apps/web-platform/` path prefix** — a bare `infra/sentry/...` grep from repo root returns zero and falsely reads as "guard absent" (deepen-plan review false-negative). Already verified present 2026-06-18.
 - [ ] **AC0.6 — Collision check:** `git fetch origin main` then `git ls-tree origin/main -- apps/web-platform/supabase/migrations/ | grep -oE '[0-9]{3}_' | sort -u | tail` confirms 110 is the max and 111 is free.
 
 ### Migration artifacts (pre-merge)
@@ -121,7 +156,7 @@ actions routed to another tenant.
 - [ ] **AC1 — Up migration exists** at `apps/web-platform/supabase/migrations/111_drop_legacy_users_repo_columns.sql` with: a header comment block (filename, ADR-044 ref, **IRREVERSIBLE/DATA-NOT-RECOVERABLE** warning, LAWFUL_BASIS, no-CONCURRENTLY note), `DROP INDEX IF EXISTS public.users_github_installation_id_unique_idx;`, then a single `ALTER TABLE public.users DROP COLUMN IF EXISTS github_installation_id, DROP COLUMN IF EXISTS repo_url, DROP COLUMN IF EXISTS workspace_path;`. **No top-level `BEGIN;`/`COMMIT;`** (mirror mig 110; the runner's `--single-transaction` wraps it).
 - [ ] **AC2 — Down migration exists** at `…/111_drop_legacy_users_repo_columns.down.sql`: re-adds the three columns with exact original types (`github_installation_id bigint`, `repo_url text`, `workspace_path text NOT NULL DEFAULT ''` — use `ADD COLUMN IF NOT EXISTS`), then recreates the partial-UNIQUE index identically (`CREATE UNIQUE INDEX IF NOT EXISTS users_github_installation_id_unique_idx ON public.users (github_installation_id) WHERE github_installation_id IS NOT NULL`) and re-adds its `COMMENT ON INDEX`. Header states **SCHEMA-ONLY rollback; column DATA is NOT recoverable**.
 - [ ] **AC3 — Verify sentinel** at `apps/web-platform/supabase/verify/111_drop_legacy_users_repo_columns.sql` mirrors verify/110's UNION-of-`(check_name, bad::int)` shape (every `bad` column INTEGER — no boolean/integer UNION mismatch, per the verify/110 NOTE) asserting **post-apply**: (a) `users.github_installation_id` column count = 0, (b) `users.repo_url` count = 0, (c) `users.workspace_path` count = 0, (d) index `users_github_installation_id_unique_idx` count = 0 (via `pg_indexes`). Any `bad > 0` fails `run-verify.sh`.
-- [ ] **AC4 — Type trim:** `interface User` in `apps/web-platform/lib/types.ts` no longer carries a field that maps to a dropped `users` column, OR (per data-migration-expert ruling, Sharp Edge #1) the field is retained with a comment documenting it now types the resolver-synthesized shape and a separate `ResolvedWorkspaceAccess`-style type is introduced. `Conversation.repo_url` (line 594) is UNTOUCHED. `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`).
+- [ ] **AC4 — Type trim:** remove `workspace_path: string` from `interface User` (`apps/web-platform/lib/types.ts:555`) — deepen-plan review confirmed this is a SAFE straight deletion (synthesized objects use the local `KbRouteContext.userData` shape, not `interface User`; Sharp Edge #1). `Conversation.repo_url` (line 594) is UNTOUCHED. `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`) is the backstop confirming no consumer broke.
 - [ ] **AC5 — ADR status flip:** `ADR-044-workspace-repo-ownership.md` frontmatter `status: adopting` → `status: accepted`.
 - [ ] **AC6 — Closure amendment:** a dated `## Amendment 2026-06-18 — PR-2b column DROP (arc CLOSED)` section records: the drop migration number (111), the verified drift-gate COUNT=0 + timestamp, the final reader-sweep result (0 live readers), and that the dropped index's guarantee is carried by the runtime resolver + Sentry rule.
 - [ ] **AC7 — PR body** uses `Closes #5437` (this is the umbrella's final criterion; mig 111 IS the change, applied pre-deploy by the release pipeline — `Closes`, not `Ref`, is correct because the resolution lands at merge via the `migrate` job, not a separate post-merge operator step).
@@ -129,13 +164,14 @@ actions routed to another tenant.
 ### Dev apply + verification (work phase, in-session)
 
 - [ ] **AC8 — Dev apply:** migration applied to DEV via `apps/web-platform/scripts/run-migrations.sh` (or a tracking-row-mirroring apply) using Doppler `DATABASE_URL_POOLER` rewritten to session mode `:5432`. Do NOT bare a `BEGIN; <migration>; COMMIT;` apply (phantom-applied state — the tracking row must land in the same transaction as the DDL). If 111 is not yet on `origin/main`, the unmerged-apply gate requires `ALLOW_UNMERGED_DEV_APPLY=1` ack AND a dev-schema revert plan before push (learning `2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`).
-- [ ] **AC9 — Columns GONE (REST probe):** `curl -s "$SUPABASE_URL/rest/v1/users?select=github_installation_id&limit=1" -H "apikey: $ANON"` returns HTTP 400 with `{"code":"42703", … "column users.github_installation_id does not exist"}`; same for `repo_url` and `workspace_path`. (Pattern per `run-verify.sh` + the unapplied-migration learning.)
-- [ ] **AC10 — verify/111 green on dev:** `run-verify.sh` reports `bad=0` for all four checks against dev post-apply.
+- [ ] **AC9 — Columns GONE (dev manual discoverability probe — REST/42703):** `curl -s "$SUPABASE_URL/rest/v1/users?select=github_installation_id&limit=1" -H "apikey: $ANON"` returns HTTP 400 with `{"code":"42703", … "column users.github_installation_id does not exist"}`; same for `repo_url` and `workspace_path`. This is a **dev sanity probe**, distinct from the prod psql gate (AC12).
+- [ ] **AC10 — verify/111 green on dev:** `run-verify.sh` (psql against dev `DATABASE_URL_POOLER`) reports `bad=0` for all four checks post-apply.
 
 ### Post-merge (operator/pipeline — automatable, NOT operator-manual)
 
-- [ ] **AC11 — Prod apply:** the `web-platform-release.yml` `#migrate` job (`doppler run -c prd -- bash …/run-migrations.sh`) applies mig 111 to PROD on merge (path-filtered on `apps/web-platform/**`), BEFORE the deploy job. No separate operator step. `Automation: handled by release pipeline.`
-- [ ] **AC12 — Prod verify:** `run-verify.sh` (the release pipeline's verify step) reports `bad=0` for verify/111 against prod. `Automation: pipeline verify step.`
+- [ ] **AC11 — Prod apply:** the `web-platform-release.yml` `#migrate` job (`doppler run -c prd -- bash …/run-migrations.sh`) applies mig 111 to PROD on merge (path-filtered on `apps/web-platform/**`), BEFORE the deploy job (deploy `needs: migrate`). No separate operator step. `Automation: handled by release pipeline.`
+- [ ] **AC12 — Prod verify (psql, NOT REST):** the `#verify-migrations` job (`needs: migrate`) runs `run-verify.sh` which executes verify/111 via **psql** (`run-verify.sh:55`, not a REST probe) and reports `bad=0` for all four checks against prod. `Automation: pipeline verify step.`
+- [ ] **AC13 — Post-deploy 24h cross-tenant watch:** the `github_webhook_founder_ambiguous` Sentry rule (`apps/web-platform/infra/sentry/issue-alerts.tf:576`) is the load-bearing post-drop signal — verify/111 only proves the index is GONE, not that its runtime replacement FIRES. Verdict rule: **ANY `op="founder-ambiguous"` event in the first 24h = a 1:N installation collision the dropped UNIQUE index used to block → investigate.** `Automation: existing Sentry paging rule; no operator dashboard-watch.`
 
 ---
 
@@ -177,8 +213,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_github_installation_id_unique_idx
   WHERE github_installation_id IS NOT NULL;
 
 COMMENT ON INDEX public.users_github_installation_id_unique_idx IS
-  '…(restored from mig 052 §5)…';
+  'PR-H (#3244) — Cross-tenant attribution guard. The GitHub webhook '
+  'resolves founder via .maybeSingle() on github_installation_id; '
+  'without this index a 1:N mapping (two founders, same installation) '
+  'would silently route to one of them. WHERE NOT NULL keeps the '
+  'constraint compatible with pre-install rows.';
 ```
+> Restore the **verbatim** mig-052 COMMENT text (above, from `052:163-168`) — a
+> faithful schema restore reproduces the original comment, not a placeholder
+> (deepen-plan review P2).
 > Note: `workspace_path … NOT NULL DEFAULT ''` re-adds cleanly because all
 > existing rows take the default (`''`); no backfill trap.
 
@@ -257,7 +300,7 @@ failure_modes:
     alert_route: Sentry issue-alerts (web-platform project)
   - mode: cross-tenant mis-attribution if the runtime resolver guard is not live
     detection: resolveSoloFounderForInstallation `>1` branch leads to Sentry.captureException op="founder-ambiguous"
-    alert_route: infra/sentry/issue-alerts.tf github_webhook_founder_ambiguous paging rule (R7/R8)
+    alert_route: apps/web-platform/infra/sentry/issue-alerts.tf:576 github_webhook_founder_ambiguous paging rule (R7/R8) — load-bearing 24h post-deploy watch (AC13)
   - mode: prod DROP fails (lock contention / unexpected dependency)
     detection: "#migrate job non-zero exit; --single-transaction auto-rolls-back"
     alert_route: GitHub Actions release-pipeline failure notification
@@ -265,7 +308,7 @@ logs:
   where: GitHub Actions #migrate + #verify job logs; Sentry for route-level 42703
   retention: GitHub Actions default; Sentry per project retention
 discoverability_test:
-  command: curl -s "$SUPABASE_URL/rest/v1/users?select=github_installation_id&limit=1" -H "apikey: $ANON"  # expect HTTP 400 / 42703 — NO ssh
+  command: curl -s "$SUPABASE_URL/rest/v1/users?select=github_installation_id&limit=1" -H "apikey: $ANON"  # expect HTTP 400 / 42703 (no remote shell needed)
   expected_output: '{"code":"42703",...,"message":"column users.github_installation_id does not exist"}'
 ```
 
@@ -280,8 +323,11 @@ discoverability_test:
 | **Cross-tenant re-attribution** if the index's guarantee isn't actually carried by the resolver. | High | AC0.5 confirms the `{found\|none\|ambiguous\|db-error}` resolver + `founder-ambiguous` Sentry rule are live on main before drop. |
 | **Type trim breaks resolver-synthesized consumers** (Sharp Edge #1). | Medium | AC4 routes the `User.workspace_path` decision through data-migration-expert; `tsc --noEmit` gate. |
 | **Top-level `BEGIN;`/`COMMIT;`** would break the tracking-row atomicity. | Medium | Mirror mig 110 (no txn control); learning `2026-05-25-migration-body-no-top-level-begin-commit.md`. |
+| **Migrate-before-deploy window** — `#migrate` (drops columns) runs before `#deploy` (new code), so old (currently-deployed) code briefly runs against the dropped schema. | Low | **Safe because PR-2a's cutover already removed every live `users.*`{3-col} reader from the deployed image** (AC0.1); the only `users` wildcard reader (`dsar-export.ts:462` `select("*")`) degrades gracefully (PostgREST `*` returns extant columns, no 42703). This is an unstated dependency on PR-2a being **deployed to prod**, not merely merged — confirm at work-start. |
+| **Rollback reality** — `.down.sql` restores schema only; data gone. | — | If the drop breaks prod, the lever is **code-revert** (revert the deploy), NOT schema restore — the dropped columns are dead, so reverting code recovers behavior; `workspaces.*` is canonical. `apps/web-platform/docs/migration-rollback.md` is forward-only and does not mention per-migration `.down.sql` or the irreversible-data class — note this in the PR body so an operator isn't misled. |
 | **Dev drift** from applying an unmerged migration. | Low | AC8 honors the `ALLOW_UNMERGED_DEV_APPLY` gate + dev-revert-before-push. |
 | Migration-number collision on rebase. | Low | AC0.6 re-runs the collision check at work-start. |
+| PostgREST schema-cache staleness (PGRST205) post-DROP (~10 min). | Low | Self-heals; optionally run `postgrest-reload-schema.sh` post-migrate. Note in PR body so the ~10-min window isn't mistaken for an incident. |
 
 ---
 
@@ -350,15 +396,16 @@ misses).
 
 ## Sharp Edges
 
-1. **`User.workspace_path` is consumed by resolver-synthesized objects, not a
-   `users` SELECT.** `kb/upload/route.ts:104` builds `userData = { workspace_path:
-   access.workspacePath }` where `access.workspacePath` comes from
-   `resolveActiveWorkspaceKbRoot` (the ADR-044 resolver). Multiple routes
-   (`kb/file`, `kb/c4`, `agent-runner`, `sandbox`) read `.workspace_path` off such
-   synthesized objects typed against `interface User`. **Removing the field
-   blindly will produce `tsc` errors on every synthesized-object site** — the type
-   trim is NOT a free line-delete; it is a review-gated retype decision.
-   `github_installation_id` is NOT in `interface User`; `repo_url` at
+1. **`User.workspace_path` removal is SAFE — the synthesized objects are NOT
+   typed against `interface User`.** Deepen-plan review (3 agents) corrected the
+   initial framing: `kb/upload/route.ts:104` builds `userData = { workspace_path:
+   access.workspacePath, … }` as a plain inline object literal typed against the
+   **local `KbRouteContext.userData` shape** (`server/kb-route-helpers.ts:23-27`),
+   NOT `lib/types.ts interface User`. No `.workspace_path` consumer annotates a
+   variable `: User` and reads the field. Therefore **removing `User.workspace_path`
+   (`lib/types.ts:555`) does NOT break `tsc` on the synthesized-object sites** — the
+   straight deletion is correct; the `tsc --noEmit` gate (AC4) is the backstop that
+   confirms it. `github_installation_id` is NOT in `interface User`; `repo_url` at
    `lib/types.ts:594` is `Conversation.repo_url` (mig 029, out of scope).
 2. **No top-level `BEGIN;`/`COMMIT;` in the migration body.** Mig 108 uses them
    (older pattern); mig 110 explicitly does NOT. The runner's `--single-transaction`
