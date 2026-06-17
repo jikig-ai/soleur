@@ -158,7 +158,23 @@ test_empty_state() {
   assert_eq "empty state → {functions:[],event_names:[],armed_reminders:[]}" '{"functions":[],"event_names":[],"armed_reminders":[]}' "$(echo "$out" | jq -c '.')"
 }
 
+# --- Test 9 (#5509 review P3): a degraded /v1/functions read fails LOUD, not false-clean ---
+test_functions_fetch_failure_is_loud() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  # Non-array functions body (simulates curl-failure sentinel / error envelope).
+  printf '%s' '{"error":"connection refused"}' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  local out rc=0
+  out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null) || rc=$?
+  assert_eq "non-array functions read exits non-zero (no false-clean baseline)" "1" "$rc"
+  if [[ "$out" == *"FATAL /v1/functions"* ]]; then echo "  PASS: emits a diagnosable FATAL cause"; PASS=$((PASS+1));
+  else echo "  FAIL: no FATAL cause on degraded functions read"; FAIL=$((FAIL+1)); fi
+  if [[ "$out" == *'"functions":[]'* ]]; then echo "  FAIL: emitted a false-clean empty functions object"; FAIL=$((FAIL+1));
+  else echo "  PASS: did NOT emit a false-clean functions baseline"; PASS=$((PASS+1)); fi
+}
+
 test_combined_is_pure_json_object
+test_functions_fetch_failure_is_loud
 test_functions_names
 test_event_names_distinct_all
 test_armed_projection

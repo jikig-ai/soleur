@@ -94,17 +94,29 @@ fetch_functions() {
     cat "$FUNCTIONS_FIXTURE"
     return 0
   fi
-  curl -s --max-time 15 "$FUNCTIONS_URL" || echo "[]"
+  # On a real curl failure emit a NON-array sentinel (not "[]") so run_inventory
+  # fails LOUD below. A silent "[]" would record a false-clean empty `functions`
+  # baseline that the cutover before/after diff cannot distinguish from a real
+  # loss (#5509 review P3 — false-confidence on a degraded read).
+  curl -s --max-time 15 "$FUNCTIONS_URL" || echo '"__FETCH_FAILED__"'
 }
 
 run_inventory() {
   # --- functions: names only (fall back to slug/id if the element lacks .name) ---
   local fn_body functions
   fn_body=$(fetch_functions)
-  functions=$(echo "$fn_body" | jq -c '
-    if type=="array"
-    then [ .[] | (.name // .slug // .id // empty) ] | sort
-    else [] end' 2>/dev/null || echo '[]')
+  # Fail LOUD (not false-clean []) if /v1/functions is unreachable or non-array.
+  # A legitimately-empty inngest returns a valid `[]` array → passes this gate and
+  # yields functions=[] correctly; only a fetch failure / non-array trips it.
+  if ! echo "$fn_body" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    local fn_shape
+    fn_shape=$(echo "$fn_body" | jq -c 'if type=="object" then keys else type end' 2>/dev/null || echo '"non-json"')
+    logger -t "$LOG_TAG" "ERROR: /v1/functions unreachable or non-array (shape=$fn_shape)" 2>/dev/null || true
+    echo "inngest-inventory: FATAL /v1/functions unreachable or non-array (shape=$fn_shape); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
+    echo "ERROR: /v1/functions non-array (shape=$fn_shape)" >&2
+    exit 1
+  fi
+  functions=$(echo "$fn_body" | jq -c '[ .[] | (.name // .slug // .id // empty) ] | sort')
 
   # --- eventsV2: paginate ALL events to exhaustion ---
   local all_edges="[]" after="" page=1 resp page_edges has_next end_cursor
