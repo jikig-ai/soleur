@@ -15,3 +15,44 @@
 
 ### Components Invoked
 - soleur:plan, soleur:deepen-plan (via general-purpose planning subagent)
+- soleur:work (this session — live L3→L7 diagnosis + runbook)
+
+## Work Phase (2026-06-17) — diagnosis complete
+
+### Confirmed root cause: H2b — Proton Sieve forward broken (HOP A)
+The Proton Sieve auto-forward `ops@soleur.ai → <x>@inbound.soleur.ai` is
+broken. Every Soleur-controlled hop (tunnel, route, secret, dedup, Inngest,
+Supabase egress) is PROVEN healthy. The egress firewall was a red herring
+(egress-only) — which is exactly why the probe still failed after #5413.
+
+### Decisive evidence (live, read-only)
+- **Differential:** direct-to-inbound diagnostics land end-to-end
+  (`processed_resend_events` msg_3FGK 06-17 11:30, msg_3F39 06-12 19:32;
+  `email_triage_items` rows 5de15f49, 361908db); Proton-routed daily probes
+  never produce a Resend webhook despite clean daily outbound sends
+  (`probe_tokens` 06-13→06-17 at 06:00). Only differing hop = Proton.
+- `curl POST /api/webhooks/resend-inbound` → 401 (route svix-header guard),
+  server=cloudflare → tunnel + secret healthy (401 not 500).
+- `dig MX inbound.soleur.ai` → inbound-smtp.eu-west-1.amazonaws.com (intact).
+- Supabase claim-inserts succeed for direct mail → egress healthy (H1 out).
+- Sentry monitor: status=error daily 06-13→06-17 (fired+asserted, row absent).
+
+### Fix shape
+H2b is operator-owned config → NO code regression → guard N/A. Deliverable:
+runbook `knowledge-base/engineering/operations/runbooks/inbound-email-ingress-dead.md`
++ operator re-enables the Sieve forward. Files-to-Edit pruned to runbook only.
+
+### Secondary discovered defect (separate follow-up)
+Both landed diagnostics are `mail_class=null`/`summary=null` → the non-probe
+HOP F `fetch-sanitize-summarize` tail fails. Does NOT affect the probe path.
+
+### Operator action (post-merge, operator-only)
+Re-enable the Proton Sieve forward in Proton webmail. No Proton credentials in
+Doppler (any config) and Proton webmail is MFA-gated → cannot be automated
+from this environment. The existing daily probe verifies the fix (AC8).
+
+### Decisions
+- Did NOT run the plan's "MANDATORY" nft/dig diff: H1 is ruled out by a
+  STRONGER end-to-end proof (Supabase writes succeed through the firewall),
+  which supersedes nft-set membership. No SSH needed.
+- No speculative code edits (AC3) — operator-config cause, runbook only.

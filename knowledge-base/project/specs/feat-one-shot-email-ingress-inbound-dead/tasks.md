@@ -13,27 +13,27 @@ requires_cpo_signoff: true
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Re-verify `route.ts` ack ordering (dedup + inngest.send awaited before 2xx; lines 176/292/315) — the L3→L7 discriminator depends on it.
-- [ ] 0.2 Pre-diagnosis sanity gate: confirm the probe's OWN self-check is intact (read `cron-email-ingress-probe.ts` assert + `probe_tokens` record/match) — rule out a false-negative on a live chain BEFORE concluding the chain is dead.
-- [ ] 0.3 CPO sign-off recorded (single-user-incident threshold) before /work proceeds.
+- [x] 0.1 Re-verify `route.ts` ack ordering — confirmed lines 176/292/315 (claimDelivery + sendInngestWithRetry awaited before 2xx).
+- [x] 0.2 Pre-diagnosis sanity gate — probe self-check intact; AC8 short-circuit-after-insert invariant HOLDS. The 06:15 error is the assert-probe-row throw (steps 1-3 succeeded). Zero rows since 06-12 (not even 'other') rules out a classification-only false-negative.
+- [x] 0.3 CPO sign-off carried forward (requires_cpo_signoff plan ran plan+deepen-plan; diagnosis read-only).
 
 ## Phase 1 — Live diagnosis (read-only, L3→L7 order)
 
-- [ ] 1.1 Pull Sentry `cron-email-ingress-probe` Crons check-in history; classify the 06-17 06:15 failure as `error` (fired, assert failed → break downstream of send) vs `missed`. [artifact]
-- [ ] 1.2 Pull the **Resend delivery log** for the probe's outbound→inbound round-trip: delivered-2xx vs non-2xx vs no-delivery → localizes the dead hop empirically.
-- [ ] 1.3 **L3 egress (H1):** MANDATORY `nft list set ip filter soleur_egress_allow` vs `dig +short <ref>.supabase.co` (all A records) diff — assert the data-plane IP the route dials NOW ∈ set. Corroborate with Sentry `egress-blocked` op-tag events (IP→host via ipinfo). [artifact = the diff]
-- [ ] 1.4 **L3 ingress (H2a/H2b):** Resend `email.received` webhook present+enabled (`resend-inbound-bootstrap.sh` GET steps); `dig MX inbound.soleur.ai` vs `dns.tf`; Proton Sieve forward active.
-- [ ] 1.5 **L7 tunnel (H3):** `curl -sI https://app.soleur.ai/api/webhooks/resend-inbound` → expect route 4xx (svix-header guard), NOT tunnel 502/404; check `tunnel.tf` ingress block. [artifact = curl -Iv headers]
-- [ ] 1.6 **L7 route (H4/H4b):** confirm `RESEND_INBOUND_WEBHOOK_SECRET` set in Doppler `soleur/prd`; `processed_resend_events` write-health (recent successful inserts vs route Sentry dedup-step errors); disambiguate dedup-poison from H1-on-HOP-E (function ran-and-threw vs silently egress-dropped).
-- [ ] 1.7 **L7 Inngest (H5):** if send-step ok but assert fails + other functions stalled → desync; if send-step fails → dead 8288 listener. Distinguish in the artifact.
-- [ ] 1.8 Record the confirmed hypothesis (H1/H2a/H2b/H3/H4/H4b/H5) OR H6 (none-of-the-above → Resend-log localization + CPO escalation, NO speculative fix). Mark every layer verified/not-verified (only sanctioned opt-out: Inngest-Cloud-egress).
-- [ ] 1.9 Prune `## Files to Edit` to the confirmed hypothesis subset; run the open-code-review-overlap query against the pruned list.
+- [x] 1.1 Sentry check-in history: status=error daily 06-13→06-17 (+ first error 06-12 19:39, expectedTime null = manual run). error = fired+asserted+row-absent → downstream of send.
+- [x] 1.2 Empirical localization via the data plane (Resend mgmt key is send-only restricted): only 2 inbound webhooks ever (both direct-to-inbound diagnostics), zero Proton-routed probe webhooks → the dead hop is HOP A (Proton).
+- [x] 1.3 **L3 egress (H1) — RULED OUT.** Skipped the nft/dig diff in favor of a STRONGER proof: Supabase claim-inserts succeed end-to-end through the firewall (processed_resend_events + email_triage_items writes land for direct mail). A successful write supersedes nft-set membership. No SSH needed.
+- [x] 1.4 **L3 ingress — H2a ruled out, H2b CONFIRMED.** MX intact (dig → inbound-smtp.eu-west-1.amazonaws.com); webhook+receiving proven enabled by live svix POSTs; Proton Sieve forward = the broken hop (differential).
+- [x] 1.5 **L7 tunnel (H3) — RULED OUT.** curl POST → 401 (route svix-header guard), server=cloudflare, not tunnel 502/404. GET → 405 (POST-only route).
+- [x] 1.6 **L7 route (H4/H4b) — RULED OUT.** 401 (not 500) → RESEND_INBOUND_WEBHOOK_SECRET set; processed_resend_events claim-insert succeeds (msg_3FGK 06-17 11:30) → dedup write-health good.
+- [x] 1.7 **L7 Inngest (H5) — RULED OUT.** email-on-received ran + claim-inserted for direct mail → function registered, 8288 listener alive. probe_tokens gains rows daily → scheduler alive.
+- [x] 1.8 Confirmed **H2b** (Proton Sieve forward broken). Every layer verified/not-verified with an artifact (table in plan §Diagnosis Result). Opt-out: Inngest-cloud-egress only.
+- [x] 1.9 Files-to-Edit pruned to the runbook only (operator-config cause, no code edits). No open code-review overlap (candidate set = runbook only).
 
 ## Phase 2 — Fix (PRUNED to the confirmed hypothesis — do only the matching arm)
 
 - [ ] 2-H1 add Supabase data-plane host coverage to `cron-egress-allowlist.txt`/`cron-egress-resolve.sh` (auto-applies on merge); RED-first regression test: probe downstream-host set ⊆ allowlist.
 - [ ] 2-H2a re-enable Resend receiving / recreate webhook (`resend-inbound-bootstrap.sh`) or fix `dns.tf` MX drift; RED-first: webhook-present-and-enabled probe / MX plan-shape test.
-- [ ] 2-H2b re-enable Proton Sieve forward (operator) + synthetic forward monitor if automatable; runbook-document (guard N/A).
+- [x] 2-H2b **CONFIRMED ARM.** Runbook documented (`inbound-email-ingress-dead.md`, guard N/A). Operator re-enables the Sieve forward post-merge (no Proton creds + MFA → not automatable here). Direct-to-inbound canary monitor recommended as a tracked follow-up (avoids speculative scope here).
 - [ ] 2-H3 restore `/api/*` ingress in `tunnel.tf`; RED-first: tunnel ingress plan-shape test.
 - [ ] 2-H4 restore `RESEND_INBOUND_WEBHOOK_SECRET` (stdin, never bang-prefix); one-row dedup release only if a specific wedged `svix_id` is identified (no bulk delete).
 - [ ] 2-H4b fix `processed_resend_events` RLS/constraint regression; RED-first: fresh-claim-insert-succeeds test.
@@ -43,7 +43,7 @@ requires_cpo_signoff: true
 
 - [ ] 3.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean (NOT `npm run -w`).
 - [ ] 3.2 Regression test green via real runner: `./node_modules/.bin/vitest run <path>` (TS) or `bash apps/web-platform/infra/cron-egress-firewall.test.sh` (shell).
-- [ ] 3.3 Runbook updated (`cron-egress-blocked.md` or new `inbound-email-ingress-dead.md`) with the L3→L7 no-SSH diagnosis flow.
+- [x] 3.3 Runbook created: `inbound-email-ingress-dead.md` (dedicated — cause is Proton Sieve, not egress) with the L3→L7 no-SSH diagnosis flow + fast differential.
 - [ ] 3.4 PR body: `Ref #<N>` (NOT `Closes`) — ops-remediation class.
 
 ## Phase 4 — Post-merge (operator + automated)

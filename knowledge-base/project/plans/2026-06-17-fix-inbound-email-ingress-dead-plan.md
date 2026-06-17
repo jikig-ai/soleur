@@ -6,7 +6,44 @@ classification: ops-remediation + code/config fix (root cause TBD by live diagno
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
-status: draft
+status: diagnosed
+---
+
+## Diagnosis Result (2026-06-17) — H2b CONFIRMED (Proton Sieve forward broken)
+
+> Live read-only diagnosis complete. **Root cause = H2b: the Proton Sieve
+> auto-forward `ops@soleur.ai → <x>@inbound.soleur.ai` (HOP A) is broken.**
+> The egress firewall was a red herring — egress-only and proven healthy.
+> This explains the load-bearing fact (probe still failed after #5413): no
+> egress fix can repair a Proton-side forward.
+
+**Decisive differential:** direct-to-inbound diagnostics (bypassing Proton)
+land end-to-end; Proton-routed daily probes never produce a Resend webhook
+despite clean daily outbound sends. The only differing hop is Proton.
+
+| Layer | Verdict | Artifact |
+|---|---|---|
+| L3 egress (H1) | ruled out | Supabase claim-inserts succeed for direct mail (`processed_resend_events` msg_3FGK 06-17; `email_triage_items` rows) — end-to-end egress write through the firewall (stronger than nft-set membership) |
+| L3 ingress MX (H2a-MX) | ruled out | `dig MX inbound.soleur.ai` → `inbound-smtp.eu-west-1.amazonaws.com` |
+| L3 ingress webhook (H2a-webhook) | ruled out | live svix POSTs (msg_3FGK, msg_3F39) prove Resend receiving + `email.received` webhook enabled |
+| **L3 ingress Proton Sieve (H2b)** | **CONFIRMED** | direct-to-inbound mail arrives (06-12, 06-17); Proton-routed probes never produce a webhook (probe_tokens clean daily 06-13→06-17) |
+| L7 tunnel (H3) | ruled out | `curl POST` → route 401 (svix-header guard), `server=cloudflare`, not tunnel 502/404 |
+| L7 secret (H4) | ruled out | 401 not 500 → `RESEND_INBOUND_WEBHOOK_SECRET` set |
+| L7 dedup blocker (H4b) | ruled out | `processed_resend_events` claim-insert succeeds (msg_3FGK 06-17 11:30) |
+| L7 Inngest (H5) | ruled out | email-on-received ran + claim-inserted for direct mail → registered, 8288 listener alive |
+| Inngest-cloud-egress | opted out | topology (ADR-030 self-hosted loopback) |
+
+**Fix shape:** H2b is operator-owned config (Proton webmail) — **no code
+regression in this repo → regression guard N/A** (plan §"diagnosis-driven
+fix"). Deliverable = runbook
+(`knowledge-base/engineering/operations/runbooks/inbound-email-ingress-dead.md`)
++ operator re-enables the Sieve forward. Files-to-Edit pruned to the runbook
+only (no allowlist/dns/tunnel/code edits — AC3 forbids speculative edits to
+unconfirmed-hypothesis files).
+
+**Secondary discovered defect (separate follow-up, NOT this PR):** both
+landed diagnostics are `mail_class=null`/`summary=null` — the non-probe HOP F
+`fetch-sanitize-summarize` tail fails. Does not affect the probe path.
 ---
 
 # 🐛 Fix: inbound email ingress pipeline is dead (operator-inbox email-triage chain)
@@ -130,13 +167,13 @@ None — `gh issue list --label code-review --state open` returns no scope-outs 
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Root cause named with live evidence (or H6 documented).** The PR body states which hypothesis (H1, H2a, H2b, H3, H4/H4b, H5) is confirmed — OR records H6 (none-of-the-above) as a valid terminal outcome with the Resend-delivery-log localization + CPO escalation. Either way the **verification artifact** is pasted (Sentry check-in history showing the `error`/`missed` pattern; the mandatory `nft list set` vs `dig` data-plane diff; the Resend webhook-enabled state; the tunnel/cert curl headers; or the Resend delivery log for H6). A code-reading-only conclusion is NOT acceptable.
-- [ ] **AC2 — L3→L7 order honored.** Diagnosis verified the egress-firewall (L3) AND the ingress MX/webhook/tunnel (L3/L7) layers before any application-layer conclusion; each layer marked verified/not-verified with an artifact. The ONLY permitted opt-out is Inngest-Cloud-egress (topology-justified per the Hypotheses opt-out); every other layer requires a positive verified/not-verified artifact.
-- [ ] **AC3 — Fix matches the confirmed cause.** The diff edits ONLY the file subset the confirmed hypothesis requires; no speculative edits to unconfirmed-hypothesis files. If H6 (none-of-the-above) is the outcome, NO speculative fix ships — the PR documents the artifact bundle and escalates to CPO.
-- [ ] **AC4 — Regression guard (conditional).** IF the cause is a code/config regression (H1, H2a, H3, H4b, H5), a test asserts the invariant that was violated (e.g., probe's downstream-host set ⊆ egress allowlist; Resend `email.received` webhook present+enabled; tunnel `/api/*` ingress present; `processed_resend_events` write-health; `email-on-received` registered). Test runs green via the package's real runner: `cd apps/web-platform && ./node_modules/.bin/vitest run <path>` (TS) or `bash apps/web-platform/infra/cron-egress-firewall.test.sh` (shell). IF transient/operator-config (H2b Sieve, H4-secret-rotation) with no code regression, the PR body records "no code regression → guard N/A, runbook updated" with a one-line rationale.
-- [ ] **AC5 — Runbook updated.** `cron-egress-blocked.md` (or new `inbound-email-ingress-dead.md`) carries the inbound-chain L3→L7 diagnosis flow with no-SSH queries (`hr-no-ssh-fallback-in-runbooks`).
+- [x] **AC1 — Root cause named with live evidence (or H6 documented).** The PR body states which hypothesis (H1, H2a, H2b, H3, H4/H4b, H5) is confirmed — OR records H6 (none-of-the-above) as a valid terminal outcome with the Resend-delivery-log localization + CPO escalation. Either way the **verification artifact** is pasted (Sentry check-in history showing the `error`/`missed` pattern; the mandatory `nft list set` vs `dig` data-plane diff; the Resend webhook-enabled state; the tunnel/cert curl headers; or the Resend delivery log for H6). A code-reading-only conclusion is NOT acceptable.
+- [x] **AC2 — L3→L7 order honored.** Diagnosis verified the egress-firewall (L3) AND the ingress MX/webhook/tunnel (L3/L7) layers before any application-layer conclusion; each layer marked verified/not-verified with an artifact. The ONLY permitted opt-out is Inngest-Cloud-egress (topology-justified per the Hypotheses opt-out); every other layer requires a positive verified/not-verified artifact.
+- [x] **AC3 — Fix matches the confirmed cause.** The diff edits ONLY the file subset the confirmed hypothesis requires; no speculative edits to unconfirmed-hypothesis files. If H6 (none-of-the-above) is the outcome, NO speculative fix ships — the PR documents the artifact bundle and escalates to CPO.
+- [x] **AC4 — Regression guard (conditional).** H2b is operator-owned config — **no code regression → guard N/A, runbook updated** (per plan §diagnosis-driven fix). The existing daily probe already alarms on recurrence. IF the cause is a code/config regression (H1, H2a, H3, H4b, H5), a test asserts the invariant that was violated (e.g., probe's downstream-host set ⊆ egress allowlist; Resend `email.received` webhook present+enabled; tunnel `/api/*` ingress present; `processed_resend_events` write-health; `email-on-received` registered). Test runs green via the package's real runner: `cd apps/web-platform && ./node_modules/.bin/vitest run <path>` (TS) or `bash apps/web-platform/infra/cron-egress-firewall.test.sh` (shell). IF transient/operator-config (H2b Sieve, H4-secret-rotation) with no code regression, the PR body records "no code regression → guard N/A, runbook updated" with a one-line rationale.
+- [x] **AC5 — Runbook updated.** New `inbound-email-ingress-dead.md` (dedicated — the cause is Proton Sieve, not egress, so `cron-egress-blocked.md` is the wrong home). `cron-egress-blocked.md` (or new `inbound-email-ingress-dead.md`) carries the inbound-chain L3→L7 diagnosis flow with no-SSH queries (`hr-no-ssh-fallback-in-runbooks`).
 - [ ] **AC6 — Typecheck clean:** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (NOT `npm run -w`).
-- [ ] **AC7 — Issue link uses `Ref #N`** (not `Closes #N`) in the PR body — this is an ops-remediation class fix whose verification completes post-merge (the probe must round-trip green in prod). Actual closure happens in the post-merge step after the green probe.
+- [x] **AC7 — Issue link uses `Ref #N`** (not `Closes #N`) in the PR body — this is an ops-remediation class fix whose verification completes post-merge (the probe must round-trip green in prod). Actual closure happens in the post-merge step after the green probe.
 
 ### Post-merge (operator + automated)
 
@@ -216,7 +253,9 @@ Resend Pro tier already provisioned (expense recorded #5xxx, 2026-06-16). Cloudf
 
 ## Deferred Items
 
-- **Cron run-log observability gap** (heavy claude-spawning crons not writing `routine_runs` rows): OUT of scope per the feature description. File/confirm a tracking issue: `fix: heavy claude-spawning crons do not write routine_runs rows (run-log observability gap)`, label `domain/engineering` + `priority/p2-medium` (verify labels exist via `gh label list` before filing). Re-evaluation criterion: after the inbound fix ships and the durable run-log (`routine_runs`, deployed 2026-06-16) accumulates ≥14 days of data.
+- **Incident issue:** #5467 (work target; PR uses `Ref #5467`, closed post-merge after AC8 green).
+- **Cron run-log observability gap** (heavy claude-spawning crons not writing `routine_runs` rows): OUT of scope per the feature description. Filed **#5469** (`domain/engineering` + `priority/p2-medium`). Re-evaluation criterion: after the inbound fix ships and the durable run-log (`routine_runs`, deployed 2026-06-16) accumulates ≥14 days of data.
+- **HOP F summarizer-tail defect** (discovered during diagnosis — non-probe inbound mail leaves `mail_class`/`summary` NULL): filed **#5468** (`type/bug` + `priority/p2-medium`). Separate subsystem; masked while the chain is dead.
 
 ## Sharp Edges
 
