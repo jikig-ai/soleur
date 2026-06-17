@@ -17,15 +17,25 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-// Rows returned by the workspaces query, and the captured filter args.
+// Arm-1 scan rows (ready + NULL install) and the captured filter args.
 let WORKSPACE_ROWS: { id: string; repo_url: string | null }[] = [];
 let WORKSPACE_QUERY_ERROR: { message: string } | null = null;
-// Rows returned by the `users` scan — shared by arm 2 (#4712) and arm 3 (#4717).
-// repo_url + github_installation_id are arm-3 columns (optional for arm-2 rows).
+// PR-2b Shape B: arms 2 (#4712) and 3 (#4717) now read READINESS from the solo
+// `workspaces` row (authoritative per mig 108) — NOT the stale `users.repo_status`.
+// Step A scans `workspaces` for repo_status='ready' → {id, repo_url}; arm 3's
+// repo_url now comes from HERE, not from `users`. These rows are distinct from
+// WORKSPACE_ROWS (arm 1 additionally filters `.is(github_installation_id,null)`;
+// the Step-A scan does not). The mock returns READY_WORKSPACE_ROWS only when the
+// chain did NOT call `.is(...)`.
+let READY_WORKSPACE_ROWS: { id: string; repo_url: string | null }[] = [];
+let READY_WORKSPACE_QUERY_ERROR: { message: string } | null = null;
+// Step B fetches kb_sync_history from `users` by `.in("id", ids)`. kb_sync_history
+// is `users`-only (mig 017) and STAYS a users read. repo_url is NO LONGER selected
+// from `users` (PR-2b cutover) — it comes from READY_WORKSPACE_ROWS. github_installation_id
+// is the backfilled-solo default source for the per-row workspaces install resolver.
 let USERS_ROWS: {
   id: string;
   kb_sync_history: unknown;
-  repo_url?: string | null;
   github_installation_id?: number | null;
 }[] = [];
 let USERS_QUERY_ERROR: { message: string } | null = null;
@@ -37,9 +47,14 @@ let USERS_QUERY_ERROR: { message: string } | null = null;
 // per-id — used by the newly-connected scenarios (NULL users install, populated
 // workspaces install) that the old users-predicate would have false-excluded.
 let WORKSPACE_INSTALL_BY_ID: Record<string, number | null> = {};
-const eqSpy = vi.fn();
+// PER-TABLE eq spies (deepen P1 / AC7): a SINGLE shared eqSpy cannot prove the
+// `repo_status='ready'` filter moved to the `workspaces` chain — it stays green
+// even if the filter is wrongly applied to `users`. wsEqSpy pins the readiness
+// filter to the workspaces chain; usersEqSpy MUST never see ("repo_status","ready").
+const wsEqSpy = vi.fn();
+const usersEqSpy = vi.fn();
+const usersInSpy = vi.fn();
 const isSpy = vi.fn();
-const notSpy = vi.fn();
 
 function resolveWorkspaceInstall(id: string | undefined): number | null {
   if (id !== undefined && id in WORKSPACE_INSTALL_BY_ID) {
@@ -50,20 +65,24 @@ function resolveWorkspaceInstall(id: string | undefined): number | null {
 
 const serviceFrom = vi.fn((table: string) => {
   if (table === "workspaces") {
-    // Two consumers share this chain: the arm-1 scan
-    // (.select().eq("repo_status","ready").is("github_installation_id",null) → await)
-    // and the per-row resolver (.select().eq("id", wsId).maybeSingle()). Capture
-    // the id-eq so maybeSingle returns that workspace's install.
+    // THREE consumers share this chain, distinguished by which terminal/filter
+    // they call:
+    //   (a) arm-1 scan: .eq("repo_status","ready").is("github_installation_id",null) → await
+    //   (b) arms 2/3 Step-A scan: .eq("repo_status","ready") → await (NO .is())
+    //   (c) per-row resolver: .eq("id", wsId).maybeSingle()
+    // `sawIs` separates (a) from (b) at await time; `idEqVal` drives (c).
     let idEqVal: string | undefined;
+    let sawIs = false;
     const chain = {
       select: () => chain,
       eq: (col: string, val: unknown) => {
-        eqSpy(col, val);
+        wsEqSpy(col, val);
         if (col === "id") idEqVal = val as string;
         return chain;
       },
       is: (col: string, val: unknown) => {
         isSpy(col, val);
+        sawIs = true;
         return chain;
       },
       maybeSingle: () =>
@@ -71,24 +90,29 @@ const serviceFrom = vi.fn((table: string) => {
           data: { github_installation_id: resolveWorkspaceInstall(idEqVal) },
           error: null,
         }),
-      then: (resolve: (v: unknown) => unknown) =>
-        Promise.resolve({
-          data: WORKSPACE_QUERY_ERROR ? null : WORKSPACE_ROWS,
-          error: WORKSPACE_QUERY_ERROR,
-        }).then(resolve),
+      then: (resolve: (v: unknown) => unknown) => {
+        // (a) arm-1 (sawIs) → WORKSPACE_ROWS; (b) Step-A scan → READY_WORKSPACE_ROWS.
+        const err = sawIs ? WORKSPACE_QUERY_ERROR : READY_WORKSPACE_QUERY_ERROR;
+        const rows = sawIs ? WORKSPACE_ROWS : READY_WORKSPACE_ROWS;
+        return Promise.resolve({
+          data: err ? null : rows,
+          error: err,
+        }).then(resolve);
+      },
     } as Record<string, unknown>;
     return chain;
   }
   if (table === "users") {
-    // item-2 scan: .select("id, kb_sync_history").eq("repo_status","ready").not("github_installation_id","is",null)
+    // PR-2b Shape B Step B: .select("id, kb_sync_history").in("id", ids) → await.
+    // No `.eq("repo_status",…)` — readiness moved to the workspaces chain.
     const chain = {
       select: () => chain,
       eq: (col: string, val: unknown) => {
-        eqSpy(col, val);
+        usersEqSpy(col, val);
         return chain;
       },
-      not: (col: string, op: string, val: unknown) => {
-        notSpy(col, op, val);
+      in: (col: string, vals: unknown) => {
+        usersInSpy(col, vals);
         return chain;
       },
       then: (resolve: (v: unknown) => unknown) =>
@@ -110,7 +134,6 @@ const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),
-  hashUserId: (s: string) => `hash-${s}`,
 }));
 
 const postSentryHeartbeatSpy = vi.fn(async () => {});
@@ -149,13 +172,16 @@ function makeStep() {
 beforeEach(() => {
   WORKSPACE_ROWS = [];
   WORKSPACE_QUERY_ERROR = null;
+  READY_WORKSPACE_ROWS = [];
+  READY_WORKSPACE_QUERY_ERROR = null;
   USERS_ROWS = [];
   USERS_QUERY_ERROR = null;
   WORKSPACE_INSTALL_BY_ID = {};
   serviceFrom.mockClear();
-  eqSpy.mockClear();
+  wsEqSpy.mockClear();
+  usersEqSpy.mockClear();
+  usersInSpy.mockClear();
   isSpy.mockClear();
-  notSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
   postSentryHeartbeatSpy.mockClear();
   getDefaultBranchHeadCommitAtSpy.mockReset();
@@ -182,7 +208,7 @@ describe("cron-workspace-sync-health — filters", () => {
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
-    expect(eqSpy).toHaveBeenCalledWith("repo_status", "ready");
+    expect(wsEqSpy).toHaveBeenCalledWith("repo_status", "ready");
     expect(isSpy).toHaveBeenCalledWith("github_installation_id", null);
   });
 });
@@ -268,22 +294,27 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
   const okTrue = { at: "2026-05-31T00:00:00Z", trigger: "webhook_push", ok: true, sync_completed_at: 2 };
   const legacy = { date: "2026-05-29", count: 3 };
 
-  it("scans users for ready (no install predicate — #5470 dropped users.github_installation_id)", async () => {
+  it("reads readiness from workspaces (Shape B), then fetches users by .in(id) — NEVER eq(repo_status) on users", async () => {
+    READY_WORKSPACE_ROWS = [{ id: "user-X", repo_url: null }];
     USERS_ROWS = [{ id: "user-X", kb_sync_history: [okTrue, okFalse] }];
     WORKSPACE_INSTALL_BY_ID = { "user-X": 42 };
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
+    // Readiness filter is PINNED to the workspaces chain (deepen P1 / AC7) — a
+    // shared eqSpy could not prove this. The users chain must NEVER see it.
+    expect(wsEqSpy).toHaveBeenCalledWith("repo_status", "ready");
+    expect(usersEqSpy).not.toHaveBeenCalledWith("repo_status", "ready");
+    // Step B fetches kb_sync_history from users by the ready workspace ids.
     expect(serviceFrom).toHaveBeenCalledWith("users");
-    expect(eqSpy).toHaveBeenCalledWith("repo_status", "ready");
-    // The users scan no longer carries the install predicate (it would break at
-    // PR-2b's column drop); install is resolved per-row from workspaces instead.
-    expect(notSpy).not.toHaveBeenCalledWith("github_installation_id", "is", null);
-    expect(eqSpy).toHaveBeenCalledWith("id", "user-X"); // per-row workspaces resolve
+    expect(usersInSpy).toHaveBeenCalledWith("id", ["user-X"]);
+    // Per-row workspaces install resolve (eq("id", user.id) on the workspaces chain).
+    expect(wsEqSpy).toHaveBeenCalledWith("id", "user-X");
   });
 
   it("reports a user whose LATEST row is ok:false exactly once (op:stale-sync-failed, hashed userId)", async () => {
     // Installed user (backfilled-solo: the workspace install mirrors the user's).
+    READY_WORKSPACE_ROWS = [{ id: "user-X", repo_url: null }];
     USERS_ROWS = [{ id: "user-X", kb_sync_history: [okTrue, okFalse], github_installation_id: 99 }];
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
@@ -301,10 +332,11 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
     // not a residual users-column read — the mock's backfilled-solo fallback
     // sources both from the same value, so without this assertion the test would
     // pass even if the code reverted to reading users.github_installation_id.
-    expect(eqSpy).toHaveBeenCalledWith("id", "user-X");
+    expect(wsEqSpy).toHaveBeenCalledWith("id", "user-X");
   });
 
   it("does NOT report when the latest row is ok:true (even if an older row failed)", async () => {
+    READY_WORKSPACE_ROWS = [{ id: "user-recovered", repo_url: null }];
     USERS_ROWS = [{ id: "user-recovered", kb_sync_history: [okFalse, okTrue] }];
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
@@ -313,6 +345,7 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
   });
 
   it("does NOT report when the latest row is a legacy {date,count} row", async () => {
+    READY_WORKSPACE_ROWS = [{ id: "user-legacy", repo_url: null }];
     USERS_ROWS = [{ id: "user-legacy", kb_sync_history: [okFalse, legacy] }];
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
@@ -321,6 +354,7 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
   });
 
   it("does NOT report when history is empty (went-quiet / NULL-install class, deferred #4717)", async () => {
+    READY_WORKSPACE_ROWS = [{ id: "user-empty", repo_url: null }];
     USERS_ROWS = [{ id: "user-empty", kb_sync_history: [] }];
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
@@ -328,14 +362,13 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("#5470 Test Scenario 6: reports a newly-connected user (NULL legacy users install, populated workspaces install) — the old predicate false-excluded this row", async () => {
-    // users.github_installation_id is NULL (newly-connected, post-PR-2 write-
-    // cutover) but the solo workspace install IS populated. The old
-    // .not("github_installation_id","is",null) users-predicate would have
-    // excluded this row → false negative; the per-row workspaces resolve catches it.
-    USERS_ROWS = [
-      { id: "user-new", kb_sync_history: [okTrue, okFalse], github_installation_id: null },
-    ];
+  it("Direction A (latent-bug fix): reports a newly-connected user (NO users.repo_status write, workspaces.repo_status='ready')", async () => {
+    // Pre-PR-2b the arm filtered on STALE users.repo_status, which was never
+    // written for newly-connected users → false-EXCLUDED. Shape B scans the
+    // authoritative workspaces.repo_status, so this row is now CAUGHT. The
+    // backfilled-solo install resolves the per-row workspaces install.
+    READY_WORKSPACE_ROWS = [{ id: "user-new", repo_url: null }];
+    USERS_ROWS = [{ id: "user-new", kb_sync_history: [okTrue, okFalse] }];
     WORKSPACE_INSTALL_BY_ID = { "user-new": 777 };
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
@@ -350,9 +383,43 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
     );
   });
 
+  it("Direction B (symmetric drop): does NOT report a stale-users-ready user whose live workspaces.repo_status != 'ready'", async () => {
+    // Pre-PR-2b the STALE users.repo_status='ready' kept this user in the scan
+    // even though the LIVE workspaces.repo_status flipped to 'error'. workspaces
+    // is the source of truth (mig 108): the Step-A scan returns no ready row for
+    // this user, so it is never fetched in Step B → not reported. The drop is
+    // intentional (deepen P1) — exactly the rows whose users column froze.
+    READY_WORKSPACE_ROWS = []; // workspaces.repo_status='error' → excluded from Step A
+    USERS_ROWS = [{ id: "user-stale", kb_sync_history: [okTrue, okFalse] }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    // Step A returned no ready workspaces → users is never fetched at all.
+    expect(usersInSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("zero ready workspaces → step-scoped early return, heartbeat STILL posts (no bubble to handler)", async () => {
+    // Step A returns no ready rows → the `ids.length===0` early return fires
+    // INSIDE the step.run callback (returns {reported:0}), it does NOT bubble to
+    // the handler — so the separate sentry-heartbeat step.run still runs (deepen P2).
+    READY_WORKSPACE_ROWS = [];
+    const handler = await importHandler();
+    const result = await handler({ step: makeStep(), logger });
+
+    expect(usersInSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true }),
+    );
+    // Arm-1 top-level return unaffected.
+    expect(result).toEqual({ ok: true, findings: [], error: null });
+  });
+
   it("#5470: skips a row whose solo workspace has no install (per-row equivalent of the dropped predicate)", async () => {
     // Latest ok:false but the workspace install is NULL → genuinely not connected
     // → skipped (not reported), exactly as the old predicate filtered it out.
+    READY_WORKSPACE_ROWS = [{ id: "user-noinstall", repo_url: null }];
     USERS_ROWS = [
       { id: "user-noinstall", kb_sync_history: [okTrue, okFalse], github_installation_id: null },
     ];
@@ -363,7 +430,10 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("reports the users-scan DB error once (op:scan-stale) and does not crash the function", async () => {
+  it("reports the users-fetch DB error once (op:scan-stale) and does not crash the function", async () => {
+    // Step A returns ready workspaces so Step B (the users .in() fetch) runs and
+    // errors. Both arms reuse their existing slugs (no new op minted — plan).
+    READY_WORKSPACE_ROWS = [{ id: "user-X", repo_url: "https://github.com/acme/widget" }];
     USERS_QUERY_ERROR = { message: "users scan failed" };
     const handler = await importHandler();
     const result = await handler({ step: makeStep(), logger });
@@ -393,6 +463,9 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
 // reports op:"went-quiet" (hashed userId). Read-only; never throws past its step.
 describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
   const DAY = 24 * 60 * 60 * 1000;
+  // PR-2b Shape B: repo_url now comes from the `workspaces` Step-A row, NOT users.
+  // This helper pushes the workspaces side into READY_WORKSPACE_ROWS and returns
+  // the users-side row ({id, kb_sync_history, github_installation_id}) for USERS_ROWS.
   function userRow(
     overrides: Partial<{
       id: string;
@@ -416,7 +489,9 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
       ok: true,
       sync_completed_at: okAt,
     };
-    return { id, repo_url, github_installation_id, kb_sync_history: [...extraHistory, okTrue] };
+    // The ready workspace carries the repo_url (Step A); the user carries history.
+    READY_WORKSPACE_ROWS.push({ id, repo_url });
+    return { id, github_installation_id, kb_sync_history: [...extraHistory, okTrue] };
   }
 
   it("fires once when the default-branch HEAD commit is newer than lastOk and gap > N days", async () => {
@@ -446,6 +521,34 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
+  it("Direction B (symmetric drop): drops a stale-users-ready, would-be-quiet user whose live workspaces.repo_status != 'ready' — at the workspaces gate, NOT a stale users path", async () => {
+    // Mirror of arm 2's Direction B. The user looks went-quiet (latest row
+    // ok:true, 10d stale, with a default-branch commit since) but workspaces is
+    // the source of truth (mig 108): Step A returns NO ready row for this user,
+    // so it is never fetched in Step B → never probed → never reported. This
+    // proves the drop happens at the workspaces readiness gate, not via any
+    // residual stale `users.repo_status` read.
+    READY_WORKSPACE_ROWS = []; // workspaces.repo_status='error' → excluded from Step A
+    USERS_ROWS = [
+      {
+        id: "user-quietstale",
+        github_installation_id: 123,
+        kb_sync_history: [
+          { at: new Date(Date.now() - 10 * DAY).toISOString(), trigger: "webhook_push", ok: true, sync_completed_at: 1 },
+        ],
+      },
+    ];
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now()); // brand-new commit
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    // Step A returned no ready workspaces → users is never fetched, the GitHub
+    // probe is never called, and nothing is reported.
+    expect(usersInSpy).not.toHaveBeenCalled();
+    expect(getDefaultBranchHeadCommitAtSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
   it("does NOT fire (or probe) when the last sync is fresh (gap <= N days)", async () => {
     USERS_ROWS = [userRow({ lastOkDaysAgo: 1 })];
     getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now());
@@ -460,10 +563,10 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     vi.useFakeTimers();
     const fixed = new Date("2026-06-01T00:00:00Z").getTime();
     vi.setSystemTime(fixed);
+    READY_WORKSPACE_ROWS = [{ id: "user-B", repo_url: "https://github.com/acme/widget" }];
     USERS_ROWS = [
       {
         id: "user-B",
-        repo_url: "https://github.com/acme/widget",
         github_installation_id: 123,
         kb_sync_history: [
           { at: new Date(fixed - 3 * DAY).toISOString(), trigger: "webhook_push", ok: true, sync_completed_at: fixed - 3 * DAY },
@@ -486,9 +589,9 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     const fixed = new Date("2026-06-01T00:00:00Z").getTime();
     vi.setSystemTime(fixed);
     const lastOk = fixed - 10 * DAY;
+    const baseWs = { id: "user-slack", repo_url: "https://github.com/acme/widget" };
     const baseRow = {
       id: "user-slack",
-      repo_url: "https://github.com/acme/widget",
       github_installation_id: 123,
       kb_sync_history: [
         { at: new Date(lastOk).toISOString(), trigger: "webhook_push", ok: true, sync_completed_at: lastOk },
@@ -496,6 +599,7 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     };
 
     // (i) commit 2min after lastOk — inside the 5min slack → must NOT fire.
+    READY_WORKSPACE_ROWS = [baseWs];
     USERS_ROWS = [baseRow];
     getDefaultBranchHeadCommitAtSpy.mockResolvedValue(lastOk + 2 * 60 * 1000);
     let handler = await importHandler();
@@ -504,6 +608,7 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
 
     // (ii) commit 6min after lastOk — beyond the slack → fires.
     reportSilentFallbackSpy.mockReset();
+    READY_WORKSPACE_ROWS = [baseWs];
     USERS_ROWS = [baseRow];
     getDefaultBranchHeadCommitAtSpy.mockResolvedValue(lastOk + 6 * 60 * 1000);
     handler = await importHandler();
@@ -515,10 +620,10 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
   });
 
   it("does NOT fire for a latest ok:false row (arm 2 owns it; arm 3 skips)", async () => {
+    READY_WORKSPACE_ROWS = [{ id: "user-F", repo_url: "https://github.com/acme/widget" }];
     USERS_ROWS = [
       {
         id: "user-F",
-        repo_url: "https://github.com/acme/widget",
         github_installation_id: 123,
         kb_sync_history: [
           { at: new Date(Date.now() - 10 * DAY).toISOString(), trigger: "webhook_push", ok: false, error_class: "sync_failed", sync_completed_at: 1 },
@@ -540,9 +645,15 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
 
   it("does NOT fire or probe a user missing github_installation_id or repo_url", async () => {
     const oldOk = (id: string) => ({ at: new Date(Date.now() - 10 * DAY).toISOString(), trigger: "webhook_push", ok: true, sync_completed_at: 1, _id: id });
+    // repo_url now comes from the workspaces Step-A row: user-norepo's workspace
+    // carries a null repo_url; user-noinstall has a repo but no install.
+    READY_WORKSPACE_ROWS = [
+      { id: "user-noinstall", repo_url: "https://github.com/acme/widget" },
+      { id: "user-norepo", repo_url: null },
+    ];
     USERS_ROWS = [
-      { id: "user-noinstall", repo_url: "https://github.com/acme/widget", github_installation_id: null, kb_sync_history: [oldOk("a")] },
-      { id: "user-norepo", repo_url: null, github_installation_id: 123, kb_sync_history: [oldOk("b")] },
+      { id: "user-noinstall", github_installation_id: null, kb_sync_history: [oldOk("a")] },
+      { id: "user-norepo", github_installation_id: 123, kb_sync_history: [oldOk("b")] },
     ];
     getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now());
     const handler = await importHandler();
@@ -583,9 +694,13 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
   });
 
   it("does NOT fire for empty or legacy {date,count} history", async () => {
+    READY_WORKSPACE_ROWS = [
+      { id: "user-empty", repo_url: "https://github.com/acme/a" },
+      { id: "user-legacy", repo_url: "https://github.com/acme/b" },
+    ];
     USERS_ROWS = [
-      { id: "user-empty", repo_url: "https://github.com/acme/a", github_installation_id: 123, kb_sync_history: [] },
-      { id: "user-legacy", repo_url: "https://github.com/acme/b", github_installation_id: 123, kb_sync_history: [{ date: "2026-05-29", count: 3 }] },
+      { id: "user-empty", github_installation_id: 123, kb_sync_history: [] },
+      { id: "user-legacy", github_installation_id: 123, kb_sync_history: [{ date: "2026-05-29", count: 3 }] },
     ];
     getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now());
     const handler = await importHandler();
@@ -614,7 +729,9 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
   });
 
-  it("reports op:scan-went-quiet on a users-scan DB error and still posts the heartbeat", async () => {
+  it("reports op:scan-went-quiet on a users-fetch DB error and still posts the heartbeat", async () => {
+    // Step A returns a ready workspace so Step B (users .in() fetch) runs and errors.
+    READY_WORKSPACE_ROWS = [{ id: "user-X", repo_url: "https://github.com/acme/widget" }];
     USERS_QUERY_ERROR = { message: "users scan failed" };
     const handler = await importHandler();
     const result = await handler({ step: makeStep(), logger });
