@@ -109,6 +109,20 @@ The Step-0 block MUST use the canonical `prd_terraform` triplet (the bare-AWS ex
 
 Verify the exact `-chdir` / triplet form against the runbook + workflow at /work time before pasting.
 
+### Research Insights (deepen-plan, 2026-06-17)
+
+**Precedent-diff gate (Phase 4.4) — in-runbook canonical form found.** The runbook ALREADY contains the canonical apply form this plan adopts. § Key rotation (`inngest-server.md:114-123`) uses verbatim:
+```
+doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply
+```
+and § Fresh-host bootstrap (`:72`) + § Heartbeat-miss (`:102`) use the `terraform -chdir=apps/web-platform/infra ...` shape. This is a STRONGER precedent than the cross-runbook drift learning — Step 0 should match this in-file form exactly (`--name-transformer tf-var` + `-chdir`), so the runbook stays internally consistent.
+
+**Load-bearing deviation — Step 0 keeps the explicit bare-AWS R2 exports; the rotation precedent omits them (intentional).** The § Key rotation block does NOT prepend the two `export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...` lines or a `terraform init` — it assumes a WARM operator shell where `.terraform/` already cached the R2 backend creds from a prior `init` (a rotation is rarely the first command of a session). Step 0 of a **cutover** can plausibly be the operator's FIRST apply of the session (cold shell), so Step 0 MUST keep the explicit `init` + bare-AWS exports (per learning `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`) — without them the R2/S3 backend silently fails to authenticate at `init`. This is a deliberate divergence from the rotation precedent, not a copy error. /work should NOT "simplify" Step 0 to match the terser rotation block. (Note: the rotation block's omission is arguably a latent rough edge of its own, but fixing it is out of scope here — flag only.)
+
+**AC6 tooling confirmed available.** `actionlint` is on PATH at v1.7.7 (verified at deepen time). AC6's `actionlint .github/workflows/apply-web-platform-infra.yml` is executable at /work time — no fallback needed. Composite-action caveat (the `actionlint`-rejects-`action.yml` Sharp Edge) does NOT apply: the target is a true workflow (`on:` + `jobs:`), not a composite action.
+
+**No PAT-shaped variable, no UI surface, no new infra (gates 4.8/4.9/2.8 pass).** The plan introduces no `var.*_token`/`var.*_pat`, touches no `components/**`/`app/**/page.tsx`, and adds no `.tf` resource (only references two existing addresses by name in a `-target=` line + runbook prose). Phase 4.7 observability skip is correct (pure-docs + CI-allowlist).
+
 ## Domain Review
 
 **Domains relevant:** none
