@@ -21,9 +21,9 @@ anomaly was "the probe still failed AFTER the grace-window egress fix."
 ## What it actually was
 
 The Proton **Sieve `redirect`** (the #5103 `forward-and-keep` filter
-`ops@soleur.ai → triage@inbound.soleur.ai`) was **enabled and matching**, but
+`ops@soleur[.]ai → triage@inbound[.]soleur[.]ai`) was **enabled and matching**, but
 its `redirect :copy` **never delivered**: forwarding breaks SPF/DMARC alignment
-(the forwarded copy keeps `From: notifications@soleur.ai` while the envelope is
+(the forwarded copy keeps `From: notifications@soleur[.]ai` while the envelope is
 now Proton; soleur.ai's apex SPF authorizes only `_spf.protonmail.ch`), so
 Resend's inbound MX dropped the forwarded copy. The `:copy` kept the original,
 so probes **piled up unread in the ops@ inbox** while never reaching the
@@ -45,9 +45,9 @@ proven healthy by Supabase claim-inserts succeeding for direct-to-inbound mail.
    forward.** Prefer the provider's **native forwarding** (Proton uses SRS,
    which rewrites the envelope sender so SPF passes). Native forward also has a
    confirmation handshake; when the target is your own programmatic inbox
-   (`triage@inbound.soleur.ai` via Resend), the confirmation email lands in your
-   own pipeline / Resend dashboard, so the loop is completable without a human
-   mailbox.
+   (`triage@inbound[.]soleur[.]ai` via Resend), the confirmation email lands in
+   your own pipeline / Resend dashboard, so the loop is completable without a
+   human mailbox.
 4. **"Received" ≠ "forwarded" — search the source mailbox.** The probes were in
    the ops@ **inbox** (not spam), which killed both the "disabled filter" and
    "spam-foldered" hypotheses and pointed straight at the redirect action.
