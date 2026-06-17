@@ -203,21 +203,21 @@ C4 Container-view edge (verification harness → deployed web-platform + prod Su
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] AC1: `git grep -n "playwright-core" apps/web-platform/scripts/live-verify` returns **zero**; `run.ts` imports `{ chromium }` from `@playwright/test` (no new dep).
-- [ ] AC2: the gate asserts **ref(from anon JWT) + UID + email** before sign-in/launch; `chromium.launch` has exactly one call site (inside the post-gate function) — unit test: wrong-ref, wrong-UID, and wrong-email sessions each throw before launch.
-- [ ] AC2b: **gate path is service-role-free** — `git grep -n "SUPABASE_SERVICE_ROLE_KEY" apps/web-platform/scripts/live-verify` returns **zero**.
-- [ ] AC2c: **harness is message-free** — `git grep -nE "from\(.messages.\)|/messages|insertMessage" apps/web-platform/scripts/live-verify` returns **zero**; teardown asserts 0 messages before delete.
-- [ ] AC2d: every teardown DELETE carries `user_id=<allowlisted UID>` as a predicate and is a **no-op when the marker is empty/undefined** — unit test proves 0 rows on empty marker.
-- [ ] AC3: `redact.ts` redacts a fixture containing a **WS connect URL with `?access_token=<<JWT>>`**, an `Authorization: Bearer <<JWT>>` header, an `sb-<<ref>>-auth-token` cookie, and a `refresh_token` JSON key; passes benign text through — unit test (synthetic `<<...>>` placeholders per push-protection).
-- [ ] AC4: `bun run scripts/live-verify/run.ts --dry-run` against a reachable URL prints exactly one `RESULT: ` line, creates **no** conversation row, **destroys the session, and writes no artifact**.
-- [ ] AC5: the trigger lives in committed `trigger-paths.txt` — a docs-only changed-file set yields `skip`; a `components/chat/**` set yields a run (test over the file's pattern). Drift canary fails when a new realtime/WS/auth top-level dir is absent from the file.
-- [ ] AC6: the gate ships **report-only** (records + surfaces tri-state, does NOT block "done"); the SKILL.md gate text cites `wg-dark-launch-deploy-gates`, references #5463, and states the blocking flip requires re-homing into a GH-Action with Sentry-observable result.
-- [ ] AC6b: ADR partial-supersedes ADR-049 (scoped to realtime class) and `/soleur:gdpr-gate` is run inline at /work Phase 0 (ADR-049 armed clause) — gate output recorded in the PR.
-- [ ] AC7: `apps/web-platform/infra/live-verify.tf` uses `random_password` + `doppler_secret config="prd"` (no `variable {sensitive=true}` operator-mint); `terraform validate` passes (run after `terraform init`).
-- [ ] AC8: `seed-live-verify-user.test.sh` passes — refuses non-prd `DOPPLER_CONFIG`, non-`service_role` JWT, wrong ref; AND asserts **no secret-shaped string reaches stdout/stderr** on success or failure (no `set -x`, no echoed `-d` bodies — mirror dev-signin's password discipline).
-- [ ] AC9: `.env.example` contains `LIVE_VERIFY_USER_PASSWORD` and `PRODUCTION_URL` — `grep -qE 'LIVE_VERIFY_USER_PASSWORD' apps/web-platform/.env.example`.
-- [ ] AC10: ADR file exists under `knowledge-base/engineering/architecture/decisions/`.
-- [ ] AC11: typecheck green — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] AC1: `grep -rn "playwright-core" apps/web-platform/scripts/live-verify` returns **zero**; `run.ts` imports `{ chromium }` from `@playwright/test` (no new dep). Verified.
+- [x] AC2: the gate asserts **ref(from anon JWT)** before sign-in and **UID + email** after sign-in, all before launch; `chromium.launch` has exactly one call site (inside the branded post-gate function) — `gate.test.ts` proves wrong-ref/wrong-UID/wrong-email each throw before launch.
+- [x] AC2b: **gate path is service-role-free** — `grep -rn "SUPABASE_SERVICE_ROLE_KEY" apps/web-platform/scripts/live-verify` returns **zero**. Verified.
+- [x] AC2c (re-read per CTO ruling as **action-send-free**): `grep -rnE "from\(.messages.\)|/messages|insertMessage" apps/web-platform/scripts/live-verify` returns **zero** — the harness performs no code-level `messages`/`action_sends` write (the one message is sent through the browser UI). Teardown asserts the principal has **0 `action_sends`** before delete (stronger than per-conversation, and avoids reading `.from("messages")`).
+- [x] AC2d: the teardown DELETE carries `user_id=<allowlisted UID>` as a predicate and is a **no-op when the marker is empty/undefined** — `gate.test.ts` proves 0 DB calls on empty convId AND empty UID.
+- [x] AC3: `redact.test.ts` (committed) redacts a WS connect URL `access_token`/`apikey`, `Authorization: Bearer`, `sb-<ref>-auth-token` cookie, `refresh_token` JSON key, email; passes benign text; idempotent. Synthetic concatenated fixtures.
+- [ ] AC4: `bun run scripts/live-verify/run.ts --dry-run` against a reachable URL prints exactly one `RESULT: ` line, creates no conversation row, destroys the session, writes no artifact. **Deferred to post-bootstrap** (needs a reachable deployed URL + seeded Doppler prd creds — the `--dry-run` path is implemented and unit-covered; the live invocation is a post-merge step, report-only per #5463).
+- [x] AC5: the trigger lives in committed `trigger-paths.txt` — `trigger.test.ts` proves docs-only → skip, `components/chat/**` + `ws-handler.ts` + `middleware.ts` + `(auth)` → run; drift canary fails on an uncovered new realtime/WS/auth top-level dir.
+- [x] AC6: the gate ships **report-only** (records + surfaces tri-state, does NOT block "done"); SKILL.md Phase 5.5 cites `wg-dark-launch-deploy-gates`, references #5463, states the blocking flip requires re-homing into a GH-Action with Sentry-observable result.
+- [x] AC6b: ADR-064 partial-supersedes ADR-049 (scoped to realtime class) and `/soleur:gdpr-gate` was run inline at /work Phase 0 (ADR-049 armed clause) — advisory PASS, zero Critical, output recorded in the PR.
+- [x] AC7: `live-verify.tf` uses `random_password` + `doppler_secret config="prd"` (no operator-mint variable); `terraform validate` passes (Success; fmt clean) + the PR's `plan (apps/web-platform/infra)` CI check is green.
+- [x] AC8: `seed-live-verify-user.test.sh` passes — refuses non-prd / non-`service_role` / wrong-ref, AND asserts no secret-shaped string reaches stdout/stderr (no `set -x`; password/key never echoed; decode pipelines excluded).
+- [x] AC9: `.env.example` contains `LIVE_VERIFY_USER_PASSWORD` and `PRODUCTION_URL`. Verified.
+- [x] AC10: ADR-064 exists under `knowledge-base/engineering/architecture/decisions/`.
+- [x] AC11: typecheck green — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 
 ### Post-merge (operator/pipeline)
 - [ ] AC12: one-time bootstrap via a single committed script `apps/web-platform/scripts/bootstrap-live-verify.sh`, **run once by the agent locally** (`doppler run -p soleur -c prd -- bash …`) — **NEVER wired into `.github/workflows/`** (keeps prod service-role out of CI; security P0-1). It runs `terraform apply -target=random_password.live_verify_user -target=doppler_secret.live_verify_user_password` then the seed (synthetic user + `public.users`/`api_keys` ladder, idempotent). Negative AC: `grep -rl "bootstrap-live-verify\|seed-live-verify" .github/workflows/` returns **zero**.
