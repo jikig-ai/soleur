@@ -30,16 +30,15 @@ trap 'rm -f "$PAYLOAD_FILE"' EXIT
 # from a Terraform template (hooks.json.tmpl) with secrets interpolated —
 # the on-disk file is the template, not the rendered output.
 #
-# #5450 — the four inngest cutover scripts (inngest-enumerate-reminders.sh,
+# #5450/#5492 — the four inngest cutover scripts (inngest-enumerate-reminders.sh,
 # inngest-rearm-reminders.sh, inngest-wiped-volume-verify.sh,
-# cat-inngest-verify-state.sh) are TRANSIENT one-shot orchestration (removable
-# post-cutover, plan P2-sec-c). They are delivered by this push but intentionally
-# NOT added to deploy_pipeline_fix's per-file triggers_replace hash (server.tf)
-# nor the ship drift-guard arrays — that would churn 4 drift-guard surfaces for
-# scripts with a deliberately short life. Editing THIS file re-fires the push (it
-# IS in the hash), so they always ride a payload change; a rare body-only edit to
-# one script before the cutover must also touch this file (or be delivered via a
-# manual infra-config push) to reach the host.
+# cat-inngest-verify-state.sh) are delivered by this push (payload below +
+# infra-config-apply FILE_MAP + infra-config-install DEST_SPEC). They ARE
+# registered in deploy_pipeline_fix's per-file triggers_replace hash (server.tf)
+# + the ship DEPLOY_PIPELINE_FIX_TRIGGERS array/regex + the gate test, so a
+# body-only edit to any one re-fires the apply and reaches /usr/local/bin
+# (#5492: an earlier "transient, don't register" decision blocked the enumerate
+# fix from deploying — no hashed file had changed).
 cat > "$PAYLOAD_FILE" <<PAYLOAD
 {
   "ci_deploy_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/ci-deploy.sh")",

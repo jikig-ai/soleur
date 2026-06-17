@@ -612,6 +612,16 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/infra-config-install.sh"),
     file("${path.module}/push-infra-config.sh"),
     file("${path.module}/cat-infra-config-state.sh"),
+    # NOTE (#5492): the four inngest cutover host scripts ARE webhook-delivered
+    # (push-infra-config.sh payload + FILE_MAP + DEST_SPEC). Registering them here
+    # makes a body-only edit to any one re-fire deploy_pipeline_fix so the fix
+    # reaches /usr/local/bin — without this, #5492's enumerate fix would NOT have
+    # deployed (no hashed file changed). Keep in lockstep with the ship
+    # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
+    file("${path.module}/inngest-enumerate-reminders.sh"),
+    file("${path.module}/inngest-rearm-reminders.sh"),
+    file("${path.module}/inngest-wiped-volume-verify.sh"),
+    file("${path.module}/cat-inngest-verify-state.sh"),
     local.hooks_json,
   ]))
 

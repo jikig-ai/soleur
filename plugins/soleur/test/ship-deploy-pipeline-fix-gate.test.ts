@@ -41,6 +41,10 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/infra-config-install.sh",
   "apps/web-platform/infra/push-infra-config.sh",
   "apps/web-platform/infra/cat-infra-config-state.sh",
+  "apps/web-platform/infra/inngest-enumerate-reminders.sh",
+  "apps/web-platform/infra/inngest-rearm-reminders.sh",
+  "apps/web-platform/infra/inngest-wiped-volume-verify.sh",
+  "apps/web-platform/infra/cat-inngest-verify-state.sh",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {
