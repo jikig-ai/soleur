@@ -4,11 +4,15 @@
 # BEFORE this IaC merges, else the auto-applied apply fails resolving the var
 # before -target pruning).
 #
-# Operator-supplied-secret pattern — mirrors github-app.tf:40-80 (and
-# inngest.tf:63-107). The key is minted in the Resend dashboard (no creation
-# API — vendor limit) and set as TF_VAR_resend_receiving_api_key in Doppler
-# prd_terraform; this resource publishes it to the `prd` Doppler config where
-# the Next.js app reads it at runtime (fetch-received-email.ts).
+# Operator-supplied-secret pattern — mirrors the operator-minted secrets in
+# github-app.tf:40-65 (github_app_id / github_app_private_key take their value
+# from var.*, like this resource; inngest.tf's secrets are TF-generated via
+# random_id, so they mirror only the ignore_changes-rotation note below, not
+# the operator-supplied shape). The key is minted in the Resend dashboard (no
+# creation API — vendor limit) and set as TF_VAR_resend_receiving_api_key in
+# Doppler prd_terraform; this resource publishes it to the `prd` Doppler config
+# where the Next.js app reads it at runtime
+# (apps/web-platform/server/email-triage/fetch-received-email.ts).
 #
 # NOT threaded into the cloud-init monitor env files (disk/resource/container
 # monitors are send-only and must not carry the receiving key — least-privilege,
@@ -17,7 +21,8 @@
 # Why ignore_changes on value: rotation via the Resend dashboard + Doppler is
 # invisible to subsequent `terraform plan` (the provider skips the value
 # read-back), so without ignore_changes every apply would churn this secret.
-# Same policy as the operator-supplied secrets in github-app.tf / inngest.tf.
+# Same ignore_changes-on-value policy as github-app.tf's operator-supplied
+# secrets and inngest.tf's TF-generated secrets.
 
 resource "doppler_secret" "resend_receiving_api_key" {
   project    = "soleur"
