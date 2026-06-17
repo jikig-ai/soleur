@@ -41,9 +41,9 @@ export async function DELETE(request: Request) {
 
   // ADR-044 PR-2a (confused-deputy honesty): disconnect still tears down the
   // SOLO workspace (`deleteWorkspace(user.id)` + solo-keyed clears below — team
-  // on-disk teardown is #4560/Phase-5). If a TEAM workspace is active, the legacy
+  // on-disk teardown is #5462/Phase-5). If a TEAM workspace is active, the legacy
   // path would SILENTLY disconnect the caller's PERSONAL repo instead of the
-  // team's. Refuse explicitly until #4560. Resolved server-side from session
+  // team's. Refuse explicitly until #5462. Resolved server-side from session
   // state (never request input) → IDOR-safe; a strict no-op for solo
   // (activeWorkspaceId === user.id).
   const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);

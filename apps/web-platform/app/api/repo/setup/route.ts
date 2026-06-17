@@ -41,10 +41,10 @@ export async function POST(request: Request) {
 
   // ADR-044 PR-2a (confused-deputy honesty): repo setup still provisions the
   // SOLO workspace on disk (`provisionWorkspaceWithRepo(user.id, …)` below — team
-  // on-disk provisioning is #4560/Phase-5). If a TEAM workspace is active, the
+  // on-disk provisioning is #5462/Phase-5). If a TEAM workspace is active, the
   // legacy path would SILENTLY clone into the caller's PERSONAL solo workspace
   // (the user believes they connected the team's repo but connected their own).
-  // Refuse explicitly until #4560 lands real team provisioning. Resolved
+  // Refuse explicitly until #5462 lands real team provisioning. Resolved
   // server-side from session state (never request input) → IDOR-safe; a strict
   // no-op for solo (activeWorkspaceId === user.id).
   const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);

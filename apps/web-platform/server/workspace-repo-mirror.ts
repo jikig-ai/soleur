@@ -29,7 +29,7 @@ interface ServiceClientLike {
  * `workspaces`, showing a stale/absent repo.
  *
  * Connect/disconnect flows are SOLO-ONLY today (team-invite repo flows are
- * deferred to #4560 / Phase 5 — they will resolve the target workspace
+ * deferred to #5462 / Phase 5 — they will resolve the target workspace
  * first), so the solo workspace id equals the user id.
  *
  * Service-role write: members cannot UPDATE `workspaces` directly (no

@@ -92,25 +92,36 @@ This amendment records the **always-enforce-workspace** invariant: every user ow
 - **Option A2 (chosen): membership-verified resolve-once + explicit db-error + non-member-claim reset-to-solo.** One `resolveActiveWorkspace` per dispatch threaded into every consumer (path/repo/install/self-heal); a probe DB error returns `{ok:false,"db-error"}` (transient, never dispatched); a non-member claim resets to the user's own workspace with a deduped divergence breadcrumb. Pros: structurally cross-tenant-safe (TR1); makes the formerly-invisible divergence queryable; non-destructive (read-path only). Cons: forward-places the owner-gate (no-op until PR-2).
 - **Option B2 (rejected): keep dual user/workspace keying with a silent solo fallback.** Retain the silent `resolveActiveWorkspaceIdWithMembership` (solo fallback on miss AND error, no Sentry). Rejected — **this is the #5437 incident**: the silent fallback masks a non-member claim as success, diverges the clone target from repo+install inside the same dispatch, and strands the member with no signal. A `MIN(created_at)`/first-membership fallback (the #4767 class) is rejected for the same reason: it can return a sibling tenant's workspace.
 
-## Amendment 2026-06-17 — PR-2 splits into PR-2a (refusal guard) + PR-2b (drop), gated on #4560
+## Amendment 2026-06-17 — PR-2 splits into PR-2a (refusal guard) + PR-2b (drop), gated on the team write-cutover (#5462)
+
+> **Correction 2026-06-17 (citation fix).** An earlier draft of this amendment
+> cited **#4560** as the issue "delivering the team write-cutover" that PR-2b is
+> blocked on. That was a mis-citation: **#4560 is journey-state UI polish**
+> (J1/J2/J3/J7 — empty-workspace CTAs, mid-flight-switch prompts, failure copy,
+> deferred from #4558) and will never relocate the connect-time writes. The team
+> write-cutover (team on-disk provisioning + `users.*` → `workspaces.*` write
+> relocation + `repo_error` re-key + co-membered backfill reconcile) was
+> **untracked**; it is now filed as **#5462**. All "the write-cutover work"
+> references below have been corrected #4560 → #5462. Genuine journey-state
+> deferrals (the #4558 plan's J1/J2/J3/J7) correctly remain #4560.
 
 `status` stays `adopting`. Implementing PR-2 surfaced that the plan's "additive
 write relocation (`users.*` → `workspaces.*`, then drop)" is **not a decoupled
-additive step** — it is structurally the deferred **#4560 / Phase-5
+additive step** — it is structurally the **#5462 / Phase-5
 team-workspace provisioning** effort. Evidence (verified in code, ruled on by the
 `cto` agent):
 
 - `app/api/repo/setup/route.ts` provisions the **solo** workspace on disk
   (`provisionWorkspaceWithRepo(user.id, …)` clones into `/workspaces/<user.id>`);
   relocating the write to an arbitrary team workspace id requires team on-disk
-  provisioning — the #4560 work. The route comment is explicit: *"Team-invite
+  provisioning — the #5462 work. The route comment is explicit: *"Team-invite
   repo-setup flows (Phase 5) will resolve the target workspace_id first."*
 - The owner-gate's own invariant — *"`p_workspace_id` MUST equal the id the
   handler mutates"* — couples the gate change to the write relocation; one cannot
   land without the other.
 - `repo_error` deliberately stays on `users` (read keyed on the dispatching
   user); `current-repo-url.ts` assigns the team-workspace `repo_error`
-  relocation to #4560, and `workspaces.repo_error` is never written.
+  relocation to #5462, and `workspaces.repo_error` is never written.
 - The genuinely-additive pre-drop steps were **already shipped**: mig 079 added
   the `workspaces` repo columns AND the full credential protection
   (`REVOKE SELECT ON workspaces FROM authenticated` + re-GRANT excluding
@@ -130,7 +141,7 @@ team-workspace provisioning** effort. Evidence (verified in code, ruled on by th
 - **PR-2b (deferred, the destructive drop):** drops `users.repo_url` /
   `workspace_path` / `github_installation_id` (+ the mig-052 partial-UNIQUE
   index), with the pre-decommission drift gate above. **Blocked on BOTH** (a)
-  **#4560** delivering the team write-cutover so the `users.*` writes can stop,
+  **#5462** delivering the team write-cutover so the `users.*` writes can stop,
   AND (b) the PR-1 `repo-resolver-divergence` breadcrumb showing zero divergence
   over a real prod soak window. At PR-2a authoring time the breadcrumb had **0
   events** because PR-1 had merged ~28 min earlier — *no soak yet*, not
@@ -139,6 +150,45 @@ team-workspace provisioning** effort. Evidence (verified in code, ruled on by th
 
 ### Considered Options (amendment)
 
-- **Option A3 (chosen): ship the thin refusal guard now (PR-2a), defer the drop to PR-2b/#4560.** Converts a live silent confused-deputy (team-active connect/disconnect targeting the personal solo workspace) into an honest 422, decoupled from #4560, forward-compatible (#4560 replaces the refusal with real team provisioning). Small, testable, no one-way-door.
-- **Option B3 (rejected): fold #4560 into this PR and do the full write-cutover + drop now.** Large (team on-disk provisioning + gate/write co-relocation + `repo_error` re-key + co-membered backfill reconcile), couples the irreversible column drop to a large untested change, and discards the operator-confirmed soak deferral.
+- **Option A3 (chosen): ship the thin refusal guard now (PR-2a), defer the drop to PR-2b/#5462.** Converts a live silent confused-deputy (team-active connect/disconnect targeting the personal solo workspace) into an honest 422, decoupled from #5462, forward-compatible (#5462 replaces the refusal with real team provisioning). Small, testable, no one-way-door.
+- **Option B3 (rejected): fold #5462 into this PR and do the full write-cutover + drop now.** Large (team on-disk provisioning + gate/write co-relocation + `repo_error` re-key + co-membered backfill reconcile), couples the irreversible column drop to a large untested change, and discards the operator-confirmed soak deferral.
 - **Option C3 (rejected): ship zero code, only re-sequence the issues.** Correct bookkeeping but leaves the silent confused-deputy live; the refusal is cheap and strictly improves correctness.
+
+## Amendment 2026-06-17 — PR-2b prerequisite verification (soak baseline + drift-gate authority)
+
+A `/soleur:go` PR-2b attempt on 2026-06-17 ran the prerequisite gates **before**
+creating any migration and **halted** — neither precondition was met. Recorded
+here so the next attempt starts from verified facts, not assumptions.
+
+**Prereq (1) — team write-cutover merged + soaked: NOT MET (hard block).**
+Connect-time writes on `main` still target `users.*`: `repo/setup/route.ts:213-214`
+(`repo_url`, `github_installation_id`), `repo/setup/route.ts:257` (`workspace_path`),
+`repo/install/route.ts:120` + `repo/detect-installation/route.ts:141`
+(`github_installation_id`). The write-cutover (#5462) has not merged; dropping the
+columns now would make every connect/install write throw — a single-user incident.
+
+**Prereq (2) — PR-1 divergence zero-over-soak: baseline only, not yet a pass.**
+Pulled from the Sentry issues API on 2026-06-17 (org `jikigai-eu`, project
+`web-platform`, EU host, via the `SENTRY_ISSUE_RW_TOKEN` Doppler secret —
+the alert-rule IaC `SENTRY_AUTH_TOKEN` lacks `event:read` and 403s on `/issues/`):
+
+- `query=feature:repo-resolver-divergence` over the max `14d` window (spans the
+  entire post-PR-1 period; PR-1/#5435 merged **2026-06-16 23:06 UTC**) →
+  **0 matching issues**. Token read-capability confirmed by a control query
+  returning real project issues. So the breadcrumb has fired **zero times** since
+  the read-path cutover.
+- **Caveat (do not mistake this for a pass):** 0 events over ~1 day with an
+  **internal-only** user population is consistent with *both* "read path is clean"
+  *and* "no team/member dispatch traffic exercised the path at all." Absence of the
+  breadcrumb is weak evidence. The breadcrumb only fires on
+  `non-member-claim-reset` / `self-heal-failed`, which require an actual joined
+  member dispatching.
+
+**Authoritative gate for an internal-only population.** Because the breadcrumb
+soak is a *proxy*, with only internal users the calendar-soak requirement is
+substitutable by **direct enumeration**: run the pre-decommission drift-gate query
+(see Consequences §"Pre-decommission drift gate") against prod and require
+`COUNT = 0`, plus synthetically exercise the member/team dispatch path. Treat the
+drift-gate COUNT as authoritative and the breadcrumb as informational. This retires
+the *calendar*-soak requirement for internal-only — it does **not** unblock PR-2b,
+which still waits on the #5462 write-cutover (prereq 1) regardless of soak.
