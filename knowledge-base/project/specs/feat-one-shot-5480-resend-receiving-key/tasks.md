@@ -18,31 +18,31 @@ adr: ADR-065
 
 ## Phase 1 — IaC (the three prescribed edits)
 
-- [ ] 1.1 `apps/web-platform/infra/variables.tf` — add `variable "resend_receiving_api_key"`
+- [x] 1.1 `apps/web-platform/infra/variables.tf` — add `variable "resend_receiving_api_key"`
       (`type = string`, `sensitive = true`, **no `default`**) after the `resend_api_key` block
       (~line 156). Verbatim text in plan §Files to Edit #1.
-- [ ] 1.2 Create `apps/web-platform/infra/resend.tf` (NEW FILE) with
+- [x] 1.2 Create `apps/web-platform/infra/resend.tf` (NEW FILE) with
       `resource "doppler_secret" "resend_receiving_api_key"` (`project = "soleur"`, `config = "prd"`,
       `name = "RESEND_RECEIVING_API_KEY"`, `value = var.resend_receiving_api_key`,
       `visibility = "masked"`, `lifecycle { ignore_changes = [value] }`). Verbatim text + header
       comment in plan §Files to Edit #2. Mirror `github-app.tf:40-80`.
-- [ ] 1.3 `.github/workflows/apply-web-platform-infra.yml` — append exactly one line
+- [x] 1.3 `.github/workflows/apply-web-platform-infra.yml` — append exactly one line
       `-target=doppler_secret.resend_receiving_api_key` to the **non-SSH plan allowlist**, after
       `-target=hcloud_firewall_attachment.web` (line 350) and before the `terraform show` step. Add a
       trailing `\` to the prior line. Do NOT touch the line-526 `terraform_data` SSH apply block.
 
 ## Phase 2 — Pre-merge verification (read-only / format-only)
 
-- [ ] 2.1 `cd apps/web-platform/infra && terraform fmt -check variables.tf resend.tf` passes (AC5).
+- [x] 2.1 `cd apps/web-platform/infra && terraform fmt -check variables.tf resend.tf` passes (AC5).
       (`terraform validate` is NOT runnable pre-merge — the no-default var errors until the operator
       sets `TF_VAR_*`; that error IS the ADR-065 gate. Defer validate to the post-merge auto-apply.)
-- [ ] 2.2 AC1: `grep -A4 'variable "resend_receiving_api_key"' apps/web-platform/infra/variables.tf`
+- [x] 2.2 AC1: `grep -A4 'variable "resend_receiving_api_key"' apps/web-platform/infra/variables.tf`
       shows `sensitive = true`, no `default` line.
-- [ ] 2.3 AC2: `grep -E 'config|name|value|visibility|ignore_changes' apps/web-platform/infra/resend.tf`
+- [x] 2.3 AC2: `grep -E 'config|name|value|visibility|ignore_changes' apps/web-platform/infra/resend.tf`
       shows all five.
-- [ ] 2.4 AC3 (least-privilege): `grep -rn 'resend_receiving_api_key\|RESEND_RECEIVING_API_KEY'
+- [x] 2.4 AC3 (least-privilege): `grep -rn 'resend_receiving_api_key\|RESEND_RECEIVING_API_KEY'
       apps/web-platform/infra/cloud-init.yml apps/web-platform/infra/server.tf` returns **zero**.
-- [ ] 2.5 AC4: `grep -c -- '-target=doppler_secret.resend_receiving_api_key'
+- [x] 2.5 AC4: `grep -c -- '-target=doppler_secret.resend_receiving_api_key'
       .github/workflows/apply-web-platform-infra.yml` returns `1`, in the non-SSH plan step.
 
 ## Phase 3 — Ship
