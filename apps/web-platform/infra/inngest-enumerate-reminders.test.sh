@@ -117,18 +117,27 @@ test_pagination_page2_captured() {
   assert_eq "page-2 reminder_id correct" "rem-p2" "$(echo "$out" | jq -r '.[0].reminder_id')"
 }
 
-# --- Test 6: P2-sec-a — comment bodies must NOT be on stdout's emitted records' top level... ---
-# The re-arm record carries action (incl. body — needed for re-arm fidelity), but
-# the script's STDERR/log summary must emit counts + reminder_ids only, never the
-# comment body. Assert the log line does not leak the body.
-test_log_no_body_leak() {
+# --- Test 6 (#5503): SUCCESS-path output must be PURE JSON on the webhook stream ---
+# adnanh/webhook v2.8.2 returns cmd.CombinedOutput() (stdout AND stderr) even on a 200,
+# and the cutover workflow parses that body as a JSON array (`jq -e 'type == "array"'`).
+# So the success path must write NOTHING non-JSON to EITHER stream; the observability
+# summary goes to journald via `logger` ONLY. RED before #5503 (the stderr summary was
+# merged ahead of the JSON → array parse failed → cutover blocked); GREEN after.
+# (Replaces the former stderr-summary assertion — that summary no longer exists on stderr.)
+test_success_combined_output_pure_json() {
   local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
   make_page false "" "[$(make_edge "01L" "rem-log" "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+  # Combined stdout+stderr, mimicking the webhook CombinedOutput the workflow parses.
+  local combined; combined=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1)
+  if echo "$combined" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "  PASS: combined stdout+stderr parses as a JSON array"; PASS=$((PASS + 1));
+  else
+    echo "  FAIL: combined stdout+stderr is NOT a pure JSON array (success-path stream pollution)"; FAIL=$((FAIL + 1)); fi
+  assert_eq "combined output is the 1-record array" "1" "$(echo "$combined" | jq 'length' 2>/dev/null || echo BAD)"
+  # The summary is journald-only now: success-path stderr must be empty, so no prose
+  # (and so no reminder_id / comment body) can leak into the webhook response stream.
   local err; err=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1 1>/dev/null)
-  assert_contains "log mentions the reminder_id" "$err" "rem-log"
-  if [[ "$err" == *"SECRET-BODY"* ]]; then
-    echo "  FAIL: comment body leaked into the log/stderr summary"; FAIL=$((FAIL + 1));
-  else echo "  PASS: comment body NOT leaked into the log/stderr summary"; PASS=$((PASS + 1)); fi
+  assert_eq "success-path stderr is empty (summary is journald-only)" "" "$err"
 }
 
 # --- Test 7: empty event set → emits [] (not an error) ---
@@ -202,7 +211,7 @@ test_completed_dropped
 test_past_dropped
 test_terminal_status_matrix
 test_pagination_page2_captured
-test_log_no_body_leak
+test_success_combined_output_pure_json
 test_empty_set
 test_no_shell_string_interpolation_in_gql
 test_default_from_is_recent_not_epoch

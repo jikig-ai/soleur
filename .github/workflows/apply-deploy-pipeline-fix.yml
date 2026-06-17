@@ -77,6 +77,15 @@ on:
       - "apps/web-platform/infra/infra-config-install.sh"
       - "apps/web-platform/infra/push-infra-config.sh"
       - "apps/web-platform/infra/cat-infra-config-state.sh"
+      # #5505 — the 4 inngest cutover scripts are webhook-delivered AND registered in
+      # server.tf's deploy_pipeline_fix triggers_replace hash, so a body-only edit to
+      # any of them must fire this apply. Without these, the inngest-only #5504 merge
+      # did NOT auto-deploy and the fix needed a manual workflow_dispatch. Kept in sync
+      # with TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts (#5505 parity test).
+      - "apps/web-platform/infra/inngest-enumerate-reminders.sh"
+      - "apps/web-platform/infra/inngest-rearm-reminders.sh"
+      - "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
+      - "apps/web-platform/infra/cat-inngest-verify-state.sh"
       - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
