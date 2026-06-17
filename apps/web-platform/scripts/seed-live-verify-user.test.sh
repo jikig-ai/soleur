@@ -105,6 +105,30 @@ if printf '%s' "$SERVICE_JWT$ANON_JWT$WRONGREF_JWT" | grep -qF "placeholder-not-
   : # impossible; keeps shellcheck quiet about the var
 fi
 
+# 5. repo_status literal correctness (#5472) — static-source checks.
+#   The public.users PATCH must use repo_status: "ready". The users CHECK
+#   constraint (mig 011_repo_connection.sql) admits only
+#   not_connected|cloning|ready|error — a "connected" literal 23514s
+#   (check-constraint violation) and aborts the seed. Target the
+#   tc_accepted_version-bearing object line specifically so this does NOT
+#   conflate with the workspaces PATCH, which legitimately also carries
+#   repo_status: "ready".
+if grep -qE 'tc_accepted_version.*repo_status: "ready"' "$SEED"; then
+  echo "  ok: public.users PATCH uses repo_status: \"ready\""
+else
+  echo "  FAIL: public.users PATCH (tc_accepted_version line) does not carry repo_status: \"ready\"" >&2
+  fail=1
+fi
+
+# The forbidden literal that violates the users CHECK constraint (23514) must
+# appear nowhere in the seed.
+if grep -qF 'repo_status: "connected"' "$SEED"; then
+  echo "  FAIL: seed contains forbidden literal repo_status: \"connected\" (mig 011 CHECK → 23514)" >&2
+  fail=1
+else
+  echo "  ok: no forbidden repo_status: \"connected\" literal in seed"
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "seed-live-verify-user.test.sh: FAILED" >&2
   exit 1
