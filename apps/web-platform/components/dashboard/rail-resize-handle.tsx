@@ -5,8 +5,10 @@ import { useRef } from "react";
 // Widenable KB rail (amendment). A thin right-edge drag handle that resizes the
 // EXPANDED KB nav rail (`aside`). The rail is a single fixed-width `aside`, not
 // a react-resizable-panels `Panel`, so the library's `Separator` cannot drive
-// it; this handle reuses that component's VISUAL idiom (amber-active grip dots,
-// `kb-desktop-layout.tsx`) without importing it — no new dependency.
+// it; this handle reuses that component's amber-active hover/active idiom
+// (`kb-desktop-layout.tsx`) without importing it — no new dependency. The grip
+// affordance is a single straight vertical bar (sharp 0px corners, brand
+// mandate) centered on the right edge — clearer than the old faint dot triad.
 //
 // a11y: role="separator" + aria-orientation + aria-valuenow/min/max + keyboard
 // Arrow nudge so non-pointer / AT users can widen too (Web Interface Guidelines:
@@ -101,11 +103,10 @@ export function RailResizeHandle({
       onKeyDown={handleKeyDown}
       className="group absolute inset-y-0 right-0 z-10 hidden w-1 cursor-col-resize touch-none bg-transparent transition-colors duration-150 hover:bg-soleur-text-secondary/50 focus-visible:bg-amber-500/50 focus-visible:outline-none active:bg-amber-500/50 md:block"
     >
-      <div className="pointer-events-none absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
-        <span className="h-0.5 w-0.5 rounded-full bg-soleur-text-muted group-hover:bg-soleur-text-secondary" />
-        <span className="h-0.5 w-0.5 rounded-full bg-soleur-text-muted group-hover:bg-soleur-text-secondary" />
-        <span className="h-0.5 w-0.5 rounded-full bg-soleur-text-muted group-hover:bg-soleur-text-secondary" />
-      </div>
+      <span
+        data-testid="kb-rail-resize-grip"
+        className="pointer-events-none absolute left-1/2 top-1/2 h-8 w-0.5 -translate-x-1/2 -translate-y-1/2 bg-soleur-text-muted group-hover:bg-soleur-text-secondary"
+      />
     </div>
   );
 }
