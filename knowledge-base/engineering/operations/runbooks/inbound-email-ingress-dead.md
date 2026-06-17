@@ -135,7 +135,7 @@ an artifact.
 
 | Confirmed | Remediation | Regression guard |
 |---|---|---|
-| **H2b Proton Sieve forward** | Operator re-enables the Sieve forward in Proton webmail (Settings → Filters / Forwarding: `ops@soleur.ai → <x>@inbound.soleur.ai`). Confirm Proton has not spam-foldered/blocked the `notifications@soleur.ai` sender. | N/A (operator-owned). The existing daily probe already alarms on recurrence; see *Recommended hardening*. |
+| **H2b Proton forward** | First check the Sieve filter is enabled AND that probes actually reach the `ops@soleur.ai` inbox (search `SOLEUR-PROBE`). If they reach the inbox but don't forward, the Sieve `redirect` is failing SPF/DMARC alignment → replace it with Proton's **native auto-forward** (`Settings → Transfert → ops@soleur.ai → triage@inbound.soleur.ai`; uses SRS). Confirmation link is emailed to `triage@inbound.soleur.ai` → read it in Resend → Receiving and open it. Rule creation needs the operator's Proton password (human gate). | N/A (operator-owned). The existing daily probe alarms on recurrence; see *Recommended hardening*. |
 | H1 egress drop | add the data-plane host coverage in `cron-egress-allowlist.txt` / `cron-egress-resolve.sh` (auto-applies on merge) | `cron-egress-firewall.test.sh` host-coverage assertion |
 | H2a webhook/MX | re-run `resend-inbound-bootstrap.sh` (idempotent) / fix `dns.tf` MX | webhook-enabled probe / MX plan-shape test |
 | H3 tunnel | restore `/api/*` ingress in `tunnel.tf` (auto-applies) | tunnel ingress plan-shape test |
@@ -147,25 +147,48 @@ an artifact.
 - **Symptom:** `cron-email-ingress-probe` RED daily 06-13→06-17; last
   `email_triage_items` row 2026-06-12 19:32. Probe still failed 06-17 06:15
   **after** the #5413 grace-window egress fix.
-- **Root cause: H2b — Proton Sieve forward `ops@soleur.ai → inbound.soleur.ai`
-  broken (HOP A).** The egress firewall was a red herring — egress-only and
-  proven healthy.
+- **Root cause: H2b (HOP A, Proton) — the Sieve `redirect` action did not
+  deliver.** Confirmed in the live mailbox: the Sieve filter
+  `ops@ → inbound triage (forward-and-keep, #5103)` was **enabled**, its
+  condition (`address :all :is ["To","Cc"] "ops@soleur.ai"`) **matched**, and
+  the spam-guard did **not** fire — every daily probe sat in the
+  `ops@soleur.ai` **inbox** (NOT spam). The `redirect :copy
+  "triage@inbound.soleur.ai"` simply never delivered: **forwarding breaks
+  SPF/DMARC alignment** (the forwarded copy keeps `From: notifications@soleur.ai`
+  but the envelope is now Proton; soleur.ai's apex SPF authorizes only
+  `_spf.protonmail.ch`), so Resend's inbound MX dropped the forwarded copy.
+  The `:copy` is why originals stayed visible in the inbox. The egress
+  firewall was a red herring — egress-only and proven healthy.
 - **Evidence:** direct-to-inbound diagnostics landed (processed_resend_events
-  `msg_3FGK…` 06-17 11:30, `msg_3F39…` 06-12 19:32; email_triage_items rows
-  `5de15f49`, `361908db`); Proton-routed daily probes never produced a Resend
-  webhook despite clean daily outbound sends (probe_tokens 06-13→06-17 at
-  06:00). Route POST → 401 (tunnel + secret healthy). MX intact. Supabase
-  claim-inserts succeed (egress healthy).
-- **Secondary defect (separate follow-up):** both landed diagnostics are
-  `mail_class=null`/`summary=null` — the non-probe HOP F summarizer tail
-  fails. Does not affect the probe path.
+  `msg_3FGK…` 06-17 11:30, `msg_3F39…` 06-12 19:32); Proton-routed daily
+  probes landed in the `ops@soleur.ai` inbox (`SOLEUR-PROBE-*`, 06-13→06-17)
+  but produced NO Resend webhook (Resend Receiving shows only the 2 direct
+  diagnostics). Route POST → 401 (tunnel + secret healthy). MX intact.
+  Supabase claim-inserts succeed (egress healthy).
+- **Fix applied: replace the fragile Sieve `redirect` with Proton's native
+  auto-forward** (`Settings → Transfert → ops@soleur.ai → triage@inbound.soleur.ai`).
+  Native forwarding uses SRS so the forwarded mail passes SPF. It requires a
+  one-time confirmation: Proton emails a link to `triage@inbound.soleur.ai`
+  (which lands in our Resend inbound) — read it in the **Resend dashboard →
+  Receiving** and open the link to activate. Creating the rule requires the
+  operator's Proton password (a true human gate; not automatable headlessly).
+- **Secondary defect (separate, #5468):** non-probe inbound mail finalizes
+  `mail_class=null`/`summary=null`. Root cause found during this diagnosis:
+  the prod `RESEND_API_KEY` is **send-only**, so
+  `fetchReceivedEmail` (`resend.emails.receiving.get`) throws → the HOP F
+  `fetch-sanitize-summarize` tail fails. Fix = a read-capable Resend key in
+  Doppler `soleur/prd` + redeploy. Does NOT affect the probe path (probe
+  finalizes `mail_class='probe'` before HOP F).
 
 ## Recommended hardening
 
-The daily probe alarms when this chain breaks but cannot self-localize
-Proton-vs-infra — the 2026-06-17 diagnosis needed a manual direct-to-inbound
-canary. Adding a **direct-to-inbound canary step** to
-`cron-email-ingress-probe` (send a 2nd marker straight to
-`<x>@inbound.soleur.ai`, assert both) would make a future break self-report
-"Proton forward broken" vs "inbound infra broken" without a manual
-differential. Tracked as a post-incident follow-up.
+1. **Prefer native Proton forwarding over a Sieve `redirect`** for the
+   `ops@ → triage@inbound.soleur.ai` hop — the Sieve redirect silently fails
+   SPF/DMARC alignment at the receiver; native forwarding (SRS) does not.
+2. **Direct-to-inbound canary in the probe.** The daily probe alarms when the
+   chain breaks but cannot self-localize Proton-vs-infra — the 2026-06-17
+   diagnosis needed a manual direct-to-inbound canary. Adding a canary step to
+   `cron-email-ingress-probe` (send a 2nd marker straight to
+   `triage@inbound.soleur.ai`, assert both) would make a future break
+   self-report "Proton forward broken" vs "inbound infra broken". Tracked as a
+   post-incident follow-up.

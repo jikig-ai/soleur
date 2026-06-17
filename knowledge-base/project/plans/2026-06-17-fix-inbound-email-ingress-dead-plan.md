@@ -33,17 +33,28 @@ despite clean daily outbound sends. The only differing hop is Proton.
 | L7 Inngest (H5) | ruled out | email-on-received ran + claim-inserted for direct mail → registered, 8288 listener alive |
 | Inngest-cloud-egress | opted out | topology (ADR-030 self-hosted loopback) |
 
-**Fix shape:** H2b is operator-owned config (Proton webmail) — **no code
-regression in this repo → regression guard N/A** (plan §"diagnosis-driven
-fix"). Deliverable = runbook
-(`knowledge-base/engineering/operations/runbooks/inbound-email-ingress-dead.md`)
-+ operator re-enables the Sieve forward. Files-to-Edit pruned to the runbook
-only (no allowlist/dns/tunnel/code edits — AC3 forbids speculative edits to
-unconfirmed-hypothesis files).
+**Precise mechanism (confirmed in the live mailbox):** the Sieve filter
+`ops@ → inbound triage (forward-and-keep, #5103)` is **enabled** and its
+condition matches; every daily probe sits in the `ops@soleur.ai` **inbox**
+(NOT spam, so the spam-guard isn't firing). The `redirect :copy
+"triage@inbound.soleur.ai"` action **does not deliver** — forwarding breaks
+SPF/DMARC alignment (apex soleur.ai SPF authorizes only Proton), so Resend's
+inbound MX drops the forwarded copy.
 
-**Secondary discovered defect (separate follow-up, NOT this PR):** both
-landed diagnostics are `mail_class=null`/`summary=null` — the non-probe HOP F
-`fetch-sanitize-summarize` tail fails. Does not affect the probe path.
+**Fix shape:** H2b is operator-owned Proton config — **no code regression in
+this repo → regression guard N/A** (plan §"diagnosis-driven fix"). Remediation
+= replace the fragile Sieve `redirect` with Proton's **native auto-forward**
+(SRS-based, survives SPF); the one-time confirmation link emailed to
+`triage@inbound.soleur.ai` is read via the Resend dashboard. Rule creation
+needs the operator's Proton password (true human gate). Repo deliverable =
+runbook only (AC3 forbids speculative edits to unconfirmed-hypothesis files).
+
+**Secondary discovered defect (separate follow-up #5468):** non-probe inbound
+mail finalizes `mail_class=null`/`summary=null`. Root cause found during this
+diagnosis: the prod `RESEND_API_KEY` is **send-only**, so `fetchReceivedEmail`
+(`resend.emails.receiving.get`) throws → the HOP F summarizer tail fails. Fix
+= read-capable Resend key in Doppler + redeploy. Does not affect the probe
+path (probe finalizes before HOP F).
 ---
 
 # 🐛 Fix: inbound email ingress pipeline is dead (operator-inbox email-triage chain)
