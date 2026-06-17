@@ -385,25 +385,55 @@ async function driveAndVerify(
       };
     }
 
-    // Start a fresh conversation and send ONE benign message — the only path
-    // that materializes the conversations row the rail observes via realtime
-    // (messages is not in the supabase_realtime publication; conversations is).
+    // Capture a high-water mark BEFORE the send so the materialization poll
+    // below only ever matches a FRESH row, never a leftover from a prior run.
+    const sinceIso = new Date().toISOString();
+
+    // Start a fresh conversation and send ONE benign message.
     await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
       waitUntil: "domcontentloaded",
     });
     const input = page.getByRole("textbox").first();
     await input.waitFor({ state: "visible", timeout: 20_000 });
     await input.fill("live-verify rail check — automated, please ignore");
-    await page.getByRole("button", { name: "Send message" }).click();
 
-    // The app navigates to /dashboard/chat/<id> when the conversation
-    // materializes. Bound the wait on that observable state (no fixed sleep).
-    await page.waitForURL(/\/dashboard\/chat\/[0-9a-f-]{36}$/, {
-      timeout: 30_000,
-    });
-    const convId = page.url().split("/").pop() ?? "";
-    if (!/^[0-9a-f-]{36}$/.test(convId)) {
-      return { kind: "FAIL", detail: "conversation id not resolvable from URL" };
+    // The Send button is disabled until the WS reaches status === "connected"
+    // (chat-surface.tsx: `disabled={status !== "connected"}`); clicking a
+    // disabled Send is a silent no-op (handleSend early-returns when not
+    // connected). Playwright's click auto-waits for the button to be enabled,
+    // so a never-connect surfaces as a click timeout we convert into a clear
+    // CANT-RUN rather than a downstream "no conversation" false-FAIL.
+    try {
+      await page
+        .getByRole("button", { name: "Send message" })
+        .click({ timeout: 35_000 });
+    } catch {
+      return {
+        kind: "CANT-RUN",
+        reason: "send-button-never-enabled:ws-not-connected",
+      };
+    }
+
+    // Materialization signal #1 (authoritative, browser-independent): the
+    // conversations row persists. The deployed app no longer NAVIGATES to
+    // /dashboard/chat/<id> on a fresh send — it materializes the conversation
+    // IN PLACE by dispatching CONVERSATION_CREATED_EVENT so the rail refetches
+    // (the #5391/#5436 rail-race fix replaced the URL navigation). The old
+    // waitForURL(/dashboard/chat/<uuid>/) assertion therefore could NEVER match
+    // against the current app — poll the persisted row instead and derive the
+    // id from it (not from the URL).
+    const convId = await pollFreshConversationId(
+      supabase,
+      verified,
+      sinceIso,
+      30_000,
+    );
+    if (!convId) {
+      return {
+        kind: "FAIL",
+        detail:
+          "send did not persist a conversation within budget (workspace-binding / WS-auth)",
+      };
     }
 
     // Stamp the crash-reaper marker immediately (own session, RLS).
@@ -413,8 +443,8 @@ async function driveAndVerify(
       .eq("id", convId)
       .eq("user_id", verified.uid);
 
-    // THE assertion (#5391/#5436): the freshly-created conversation appears in
-    // the Recent Conversations rail. Bounded wait on the rail row link.
+    // Materialization signal #2 — THE assertion (#5391/#5436): the freshly
+    // persisted conversation appears in the Recent Conversations rail.
     const railRow = page.locator(`${RAIL} a[href$="/dashboard/chat/${convId}"]`);
     let railOk = false;
     try {
@@ -425,10 +455,13 @@ async function driveAndVerify(
     }
 
     const result: Result = railOk
-      ? { kind: "PASS", detail: "fresh conversation appeared in the rail" }
+      ? {
+          kind: "PASS",
+          detail: "fresh conversation persisted and appeared in the rail",
+        }
       : {
           kind: "FAIL",
-          detail: `conversation ${convId} did NOT appear in the rail within budget (the #5391/#5436 class)`,
+          detail: `conversation ${convId} persisted but did NOT appear in the rail within budget (the #5391/#5436 class)`,
         };
 
     // Teardown as the synthetic user's own session (RLS), regardless of result.
@@ -439,6 +472,37 @@ async function driveAndVerify(
   } finally {
     if (browser) await browser.close();
   }
+}
+
+/**
+ * Poll the conversations table for a row created by the synthetic principal
+ * AFTER `sinceIso` (the pre-send high-water mark). The deployed app materializes
+ * a fresh conversation IN PLACE (CONVERSATION_CREATED_EVENT → rail refetch), not
+ * via a URL navigation, so the persisted row — not the URL — is the authoritative
+ * "the send actually worked" signal. Returns the conversation id (uuid) or null
+ * on timeout. Uses the synthetic user's own session (RLS); never a broad scan.
+ */
+export async function pollFreshConversationId(
+  supabase: ReturnType<typeof createServerClient>,
+  verified: VerifiedPrincipal,
+  sinceIso: string,
+  timeoutMs: number,
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const { data } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("user_id", verified.uid)
+      .gt("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const id = data?.[0]?.id;
+    if (typeof id === "string" && /^[0-9a-f-]{36}$/.test(id)) return id;
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 1_000));
+  } while (Date.now() < deadline);
+  return null;
 }
 
 // ---------------------------------------------------------------------------
