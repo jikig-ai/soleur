@@ -56,8 +56,17 @@ echo "==> Step 1: terraform apply (-target the two live-verify resources)"
 # ignore it, and SSO-fallback-fail). Export the bare AWS_* OUTSIDE the wrapper so
 # they survive into the child env unrenamed. Mirrors apply-web-platform-infra.yml's
 # "Extract backend credentials" step + variables.tf:1-13.
-AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform)
-AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform)
+# The `|| { … }` handles a doppler non-zero exit (secret absent / auth failure);
+# the -z check below handles a present-but-empty value. Both fail closed with a
+# friendly message (mirrors apply-web-platform-infra.yml:220-231).
+AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform) || {
+  echo "::error::Failed to read AWS_ACCESS_KEY_ID from Doppler prd_terraform (R2 backend cred)" >&2
+  exit 1
+}
+AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform) || {
+  echo "::error::Failed to read AWS_SECRET_ACCESS_KEY from Doppler prd_terraform (R2 backend cred)" >&2
+  exit 1
+}
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
   echo "::error::R2 backend creds empty in Doppler prd_terraform (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)" >&2
