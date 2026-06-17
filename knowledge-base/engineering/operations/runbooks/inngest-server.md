@@ -299,30 +299,55 @@ setting).
    doppler secrets set INNGEST_CUTOVER_QUIESCE=1 -p soleur -c prd --no-interactive
    # POST /api/internal/schedule-reminder now returns 503 + Retry-After: 120.
    ```
-2. **Enumerate armed-but-unfired reminders** from the OLD server's GraphQL (verdict 0.4 — no app-side
-   ledger needed). Query received `reminder.scheduled` events over a window spanning the future, then
-   keep those whose payload `fire_at` is still future AND have no completed run (cross-ref `runs` to
-   avoid double-posting a comment that already fired):
-   ```bash
-   FROM=$(date -u -d '-2 days' +%Y-%m-%dT%H:%M:%SZ)
-   curl -s http://127.0.0.1:8288/v0/gql -X POST -H 'content-type: application/json' \
-     -d "{\"query\":\"{ eventsV2(first:200, filter:{from:\\\"$FROM\\\", eventNames:[\\\"reminder.scheduled\\\"]}){ edges { node { id name receivedAt } } } }\"}"
-   # For each event still future-dated and not yet run, re-send it to the NEW server post-deploy.
-   ```
+2. **Reminder survival — DEFAULT: dual-run-drain; FALLBACK: no-SSH enumerate + re-arm.** Armed
+   `reminder.scheduled` events live ONLY in Inngest state (verdict 0.4 — no app-side ledger). A
+   fresh-Postgres cutover drops any still-armed reminder unless it is allowed to fire first OR is
+   enumerated and re-armed. There is **no operator shell step** here — both paths are no-SSH.
+   - **DEFAULT — dual-run-drain (simplest, no re-arm risk):** with arming quiesced (step 1), let the
+     OLD SQLite server keep running until its already-armed reminders fire on their own. When the
+     soonest pending fire-time has passed, proceed to deploy (step 4). No enumeration, no re-arm, no
+     double-fire window. Best when only a few near-term reminders are armed.
+   - **FALLBACK — enumerate + re-arm (when draining is not viable):** when too many reminders are armed
+     or they fire too far out to wait, enumerate the still-armed set with no remote shell:
+     ```bash
+     gh workflow run cutover-inngest.yml --field op=enumerate    # logs count + reminder_ids
+     ```
+     This drives `/hooks/inngest-enumerate-reminders` (host script queries the OLD server's
+     `eventsV2`, reconstructs the FULL re-armable payload from each event's `raw` envelope — the legacy
+     `id name receivedAt` query was payload-incomplete — drops already-fired events via the `runs`
+     cross-ref, and paginates to exhaustion). Review the logged `reminder_id`s, then re-arm AFTER the
+     deploy + quiesce-clear in step 6 (`op=rearm`). The re-arm routes back through
+     `schedule-reminder`, which recomputes the Inngest dedup `id`/`ts` so an event that ALSO survived
+     in state dedups instead of double-firing.
 3. **Drain in-flight runs** — confirm zero `Running` status for ~60s (or accept-and-document that
    in-flight runs are abandoned; the reminder `post-comment`/`run-check` steps are not idempotent on
    replay, so a re-arm of an already-fired reminder would double-post).
 4. **Deploy** via the release pipeline (no SSH): `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap:vinngest-v1.1.14`.
    The `verify_inngest_health` HARD gate fails the deploy if `--postgres-uri` is set but `--redis-uri`
    is absent OR `inngest-redis.service` is inactive.
-5. **Verify the REAL invariant** (not a process-restart proxy): arm a throwaway future reminder, then
-   recreate the inngest container with a wiped local volume (the wiped-volume test from spike 0.2, in
-   prod shape) and confirm it still fires. Confirm `/health` 200 + `/v1/functions` shows ≥1 cron.
-6. **Re-open arming + re-arm recovered work**:
+5. **Verify durability.**
+   - **DEFAULT (non-destructive):** the deploy's own `verify_inngest_health` HARD gate (step 4) already
+     asserts `--postgres-uri` ⇒ `--redis-uri` present + `inngest-redis` active + `/health` 200 +
+     `/v1/functions` ≥1 cron. Combined with the spike-0.2 evidence (a wiped-volume restart survived on
+     durable Redis), this is sufficient proof for a normal cutover — no extra step needed.
+   - **OPT-IN (destructive, end-to-end proof):** to exercise the real wiped-volume invariant in prod
+     shape with no remote shell:
+     ```bash
+     gh workflow run cutover-inngest.yml --field op=verify-wiped-volume   # async; polls verify-status
+     ```
+     This drives `/hooks/inngest-wiped-volume-verify`, which **aborts loudly unless the armed set is
+     empty** (the real safety gate — it will NOT wipe with a real reminder pending), arms an
+     unregistered-`named-check` throwaway that fires a run but posts **zero** comments, wipes
+     `/var/lib/inngest`, restarts, and asserts `/health` + `/v1/functions` + the throwaway fired. Only
+     run it once the armed set is drained/re-armed.
+6. **Re-open arming + re-arm recovered work** (no remote shell):
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE= -p soleur -c prd --no-interactive  # clears the flag
-   # Re-send each pending reminder collected in step 2 to the new server.
+   # FALLBACK path only: re-arm the reminders enumerated in step 2.
+   gh workflow run cutover-inngest.yml --field op=rearm
    ```
+   Run `op=rearm` ONLY after the quiesce flag is cleared — the host script aborts loud (does not
+   silently drop) if it gets a 503 because quiesce is still set.
 7. **Rollback tripwire** — reverting ExecStart to `--sqlite-dir` is data-safe ONLY before any *real*
    (non-throwaway) reminder is armed against Postgres. After that the stale SQLite is missing those
    reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed

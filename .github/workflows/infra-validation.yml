@@ -183,6 +183,22 @@ jobs:
       - name: Run cat-deploy-state.sh tests
         run: bash apps/web-platform/infra/cat-deploy-state.test.sh
 
+      # No-SSH inngest cutover orchestration (#5450).
+      - name: Run inngest-enumerate-reminders.sh tests
+        run: bash apps/web-platform/infra/inngest-enumerate-reminders.test.sh
+
+      - name: Run inngest-rearm-reminders.sh tests
+        run: bash apps/web-platform/infra/inngest-rearm-reminders.test.sh
+
+      - name: Run inngest-wiped-volume-verify.sh tests
+        run: bash apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
+
+      - name: Run cat-inngest-verify-state.sh tests
+        run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
+
+      - name: Run cutover-inngest.yml workflow tests
+        run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
