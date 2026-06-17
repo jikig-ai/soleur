@@ -180,7 +180,17 @@ async function applyFinalize(
  * WITHOUT raising P0001 against this mail_class write, so applyFinalize's
  * P0001 re-select does NOT cover this race. The `.is(...null)` WHERE guard
  * makes a degraded write a no-op (zero rows) when a sibling already classed
- * the row — `written:false` then signals "a sibling won; suppress the notify".
+ * the row FIRST — `written:false` then signals "a sibling won; suppress the
+ * notify".
+ *
+ * The guard serializes only the statutory-finalize-FIRST ordering. In the
+ * reverse ordering (degraded write commits first, then a sibling statutory
+ * finalize lands its disjoint `statutory_class` write — which the WORM trigger
+ * permits, NULL→value), the row ends BENIGNLY co-classed `mail_class='other'`
+ * AND `statutory_class='dsar'`: the statutory signal is never lost, the row is
+ * retained under the `statutory_class IS NOT NULL` carve-out, and the statutory
+ * run still pings statutory-grade. A degraded `summary` sitting beside a correct
+ * `statutory_class` is the only artifact — acceptable at single-user threshold.
  * Returns whether the degraded row was actually written.
  */
 async function applyDegradedFinalize(

@@ -1206,6 +1206,11 @@ describe("degraded-finalize tail (fetch/summarize failure)", () => {
     // UPDATE's .is("statutory_class", null).is("mail_class", null) guard makes
     // it hit ZERO rows; that zero-row result must suppress the degraded notify
     // (the race winner already pinged statutory-grade).
+    // NOTE: this test pins the zero-row→suppress-notify BEHAVIOR. The guard
+    // clauses' EXISTENCE is pinned separately by the sibling test below
+    // ("carries the disjoint-column race guard"); both are required — deleting
+    // the sibling would make this behavior test vacuous (the mock branch keys
+    // on the .is filter, so a missing guard falls through to a no-row default).
     fetchReceivedEmailSpy.mockRejectedValue(
       new Error("fetch-received-email failed: restricted_api_key"),
     );
