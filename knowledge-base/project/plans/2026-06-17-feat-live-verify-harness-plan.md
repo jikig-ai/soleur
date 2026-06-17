@@ -193,7 +193,7 @@ C4 Container-view edge (verification harness → deployed web-platform + prod Su
 - `apps/web-platform/scripts/live-verify/run.ts` (orchestrator; project-bind + ref+UID+email gate)
 - `apps/web-platform/scripts/live-verify/redact.ts` (standalone leakage boundary; fixture-tested)
 - `apps/web-platform/scripts/live-verify/trigger-paths.txt` (committed trigger source-of-truth)
-- `apps/web-platform/scripts/live-verify/*.test.ts` (allowlist-gate, redact, trigger-pattern, drift-canary)
+- `apps/web-platform/test/live-verify/*.test.ts` (allowlist-gate, redact, trigger-pattern, drift-canary) — NB: under `test/`, not `scripts/` — vitest node `include` is `test/**` + `lib/**` only, so co-located `scripts/**` tests are silently skipped
 - `knowledge-base/engineering/architecture/decisions/ADR-XXX-live-production-verification-harness.md` (via `/soleur:architecture`)
 
 ## Files to Edit
