@@ -27,7 +27,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>>
 describe("RailResizeHandle", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("renders the vertical-bar grip in its own block", () => {
+  it("renders the vertical-bar grip", () => {
     setup();
     expect(screen.getByTestId("kb-rail-resize-grip")).toBeInTheDocument();
   });
