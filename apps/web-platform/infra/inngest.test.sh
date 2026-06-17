@@ -161,6 +161,17 @@ assert "server ExecStart sets --sdk-url loopback app route (port 3000)" \
 # (the systemd `$$` escape must not be accidentally unescaped — Sharp Edge).
 assert "server ExecStart keeps signing-key strip + event-key" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_SIGNING_KEY#signkey-prod-' && printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_EVENT_KEY'"
+# #5450 durable backend — build-time flag-presence guard (verify_inngest_health's
+# runtime gate cites this). Both flags MUST be present; the session pooler MUST
+# be :5432 (transaction :6543 breaks inngest's prepared statements — verdict 0.5).
+assert "server ExecStart sets --postgres-uri" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF -- '--postgres-uri'"
+assert "server ExecStart sets --redis-uri (loopback)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF -- '--redis-uri \"redis://:'"
+assert "server ExecStart bounds --postgres-max-open-conns" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE -- '--postgres-max-open-conns [0-9]+'"
+assert "server ExecStart never hardcodes the :6543 transaction pooler" \
+  "! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF ':6543'"
 
 # AC2: an ExecStart change must take effect on redeploy. Two guarantees:
 #   (a) reconcile-always — the server unit write lives OUTSIDE the
@@ -184,6 +195,38 @@ assert "bootstrap restarts inngest-server.service (new ExecStart loads on redepl
 # which would vacuously pass on any comment line merely mentioning "resume".
 assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
   "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
+
+# --- Durable backend assets (#5450) ---
+echo ""
+echo "--- Durable backend: Redis assets + secrets (#5450) ---"
+REDIS_CONF="$SCRIPT_DIR/inngest-redis.conf"
+REDIS_SERVICE="$SCRIPT_DIR/inngest-redis.service"
+REDIS_BOOTSTRAP="$SCRIPT_DIR/inngest-redis-bootstrap.sh"
+assert "inngest-redis.conf exists"        "[[ -f '$REDIS_CONF' ]]"
+assert "inngest-redis.service exists"     "[[ -f '$REDIS_SERVICE' ]]"
+assert "inngest-redis-bootstrap.sh exists + executable" "[[ -x '$REDIS_BOOTSTRAP' ]]"
+# redis.conf required durability settings (AC).
+assert "redis.conf appendonly yes"        "grep -qE '^appendonly yes' '$REDIS_CONF'"
+assert "redis.conf appendfsync everysec"  "grep -qE '^appendfsync everysec' '$REDIS_CONF'"
+assert "redis.conf maxmemory-policy noeviction" "grep -qE '^maxmemory-policy noeviction' '$REDIS_CONF'"
+assert "redis.conf bounds maxmemory"      "grep -qE '^maxmemory [0-9]' '$REDIS_CONF'"
+assert "redis.conf bounds AOF rewrite"    "grep -qE '^auto-aof-rewrite-percentage' '$REDIS_CONF' && grep -qE '^auto-aof-rewrite-min-size' '$REDIS_CONF'"
+assert "redis.conf dir on /mnt/data"      "grep -qE '^dir /mnt/data/redis' '$REDIS_CONF'"
+assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CONF'"
+# The unit MUST pin to the persistent mount (architecture P1-2) + inject the
+# password via doppler (never a literal in the file).
+assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
+assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
+assert "redis.service runs under doppler run prd" "grep -qE 'doppler run --project soleur --config prd' '$REDIS_SERVICE'"
+# Secrets: random_password (not operator-mint) + doppler_secret.
+assert "random_password.inngest_redis_password_prd" "grep -qE 'resource \"random_password\" \"inngest_redis_password_prd\"' '$INNGEST_TF'"
+assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+= \"INNGEST_REDIS_PASSWORD\"' '$INNGEST_TF'"
+# inngest-bootstrap installs the redis assets + runs the bootstrap BEFORE the
+# inngest-server restart (the new ExecStart fails closed if Redis is down).
+REDIS_RUN_LINE=$(grep -nE 'inngest-redis-bootstrap.sh$' "$BOOTSTRAP_SH" 2>/dev/null | tail -1 | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+assert "bootstrap runs inngest-redis-bootstrap.sh BEFORE the inngest-server restart" \
+  "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
