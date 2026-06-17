@@ -350,7 +350,13 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
     const pathsIdx = onSection.indexOf("paths:");
     expect(pathsIdx).toBeGreaterThanOrEqual(0);
     const pathsBlock = onSection.slice(pathsIdx);
-    paths = [...pathsBlock.matchAll(/^\s+-\s+"([^"]+)"/gm)].map((m) => m[1]);
+    // Anchor to the apps/web-platform/infra/ prefix so a future workflow_dispatch
+    // `type: choice` input with quoted `options:` list items (which would also fall
+    // inside this slice of the `on:` section) cannot leak in as a phantom path
+    // (P3, #5505 review). Comment lines `# - "x"` are already excluded by `^\s+-`.
+    paths = [...pathsBlock.matchAll(/^\s+-\s+"(apps\/web-platform\/infra\/[^"]+)"/gm)].map(
+      (m) => m[1],
+    );
     expect(paths.length).toBeGreaterThan(0);
   });
 
