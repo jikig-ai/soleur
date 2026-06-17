@@ -27,6 +27,11 @@ function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>>
 describe("RailResizeHandle", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("renders the vertical-bar grip in its own block", () => {
+    setup();
+    expect(screen.getByTestId("kb-rail-resize-grip")).toBeInTheDocument();
+  });
+
   it("renders a11y separator semantics", () => {
     const { handle } = setup();
     expect(handle).toHaveAttribute("role", "separator");
