@@ -87,6 +87,18 @@ vi.mock("../../server/logger", () => ({
 
 import { syncPull, syncPush } from "../../server/session-sync";
 
+// ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved
+// workspace id. These tests force the catch path; a minimal stub suffices.
+const STUB_SERVICE = {
+  from: () => ({
+    update: () => ({
+      eq: () => ({
+        select: () => Promise.resolve({ data: [{ id: "user-1" }], error: null }),
+      }),
+    }),
+  }),
+} as never;
+
 beforeEach(() => {
   reportSilentFallbackSpy.mockReset();
   gitWithInstallationAuthSpy.mockReset();
@@ -101,7 +113,7 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
       return Buffer.from("");
     });
 
-    await syncPull("user-1", "/tmp/workspace");
+    await syncPull("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const matching = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>
@@ -125,7 +137,7 @@ describe("session-sync — Sentry mirror sweep (#4224 Phase 3)", () => {
       return Buffer.from("");
     });
 
-    await syncPush("user-1", "/tmp/workspace");
+    await syncPush("user-1", "/tmp/workspace", STUB_SERVICE, "user-1");
 
     const matching = reportSilentFallbackSpy.mock.calls.filter(
       ([, ctx]) =>

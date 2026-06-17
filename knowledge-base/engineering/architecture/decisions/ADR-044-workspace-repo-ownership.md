@@ -311,14 +311,118 @@ contexts need.
 
 `git grep 'users.*github_installation_id' apps/web-platform/server/inngest/` returns **0**.
 
-**Remaining #5470 set (still on `users`, NOT in this PR's `server/inngest/**` scope):**
+**Remaining #5470 set — CLOSED (Amendment 2026-06-17b):**
 
-- `app/api/webhooks/github/route.ts` — the reverse `.eq("github_installation_id", …)`
-  founder lookup needs the **fan-out reconcile** shape (workspaces install is non-unique),
-  a materially different change.
-- `server/session-sync.ts` `updateLastSynced` — a **write** of `users.repo_last_synced_at`
-  (different column + verb).
+- ~~`app/api/webhooks/github/route.ts`~~ — the reverse `.eq("github_installation_id", …)`
+  founder lookup. **CLOSED:** relocated to a solo-workspace self-join resolver with a
+  `>1` fail-closed branch (Amendment 2026-06-17b below).
+- ~~`server/session-sync.ts` `updateLastSynced`~~ — the `users.repo_last_synced_at` write.
+  **CLOSED:** relocated to `writeRepoColsToWorkspace` (service-role-injected) keyed on the
+  caller's resolved active-workspace id (Amendment 2026-06-17b below).
 
-These two remain tracked under the #5470 / #5437 umbrella; PR-2b's `users.github_installation_id`
-column drop is now unblocked **for the two Inngest readers**, with the webhook + session-sync
-sites the residual blockers.
+With both sites relocated, **every** `users.github_installation_id` reader/writer and the
+last `users.*` repo-column write are off `users`. PR-2b's `users.github_installation_id`
+column DROP is now fully unblocked (the residual step is PR-2b itself).
+
+## Amendment 2026-06-17b — webhook founder attribution + session-sync write (remaining set CLOSED)
+
+Closes the two-site "Remaining #5470 set" above. Two surfaces relocated off `users`
+in one branch as two reviewable commits (PR-A webhook, PR-B session-sync). Ref #5437.
+
+**Verified fact:** the webhook Step 5 founder lookup was the SOLE remaining
+`users.github_installation_id` **1:N reverse-lookup** (`.eq("github_installation_id", …)`).
+The full reader sweep also surfaced a THIRD stranded reader the original framing missed —
+`app/api/repo/detect-installation/route.ts` did a `users.select("github_installation_id")`
+**self-read** (`.eq("id", user.id)`), a column-location cutover (not a 1:N lookup); it now
+reads via `resolveInstallationIdForWorkspace(user.id, serviceClient)` (the solo workspace
+carries the install, same value). `github_username` is NOT relocated by ADR-044 and stays a
+`users` read.
+
+### CTO binding ruling (transcribed verbatim) — Decision: Option C (hybrid)
+
+- **Push stays exactly as-is.** The reconcile fan-out (`workspace-reconcile-on-push.ts`)
+  re-derives workspaces from `(installation_id, repo_url)`, so the per-event founder lookup
+  is unnecessary. The only push change: `founderId` must no longer be sourced from the
+  deleted `users` read. **`founderId` is dropped from the `WORKSPACE_RECONCILE_REQUESTED`
+  payload entirely** (vestigial — never destructured/read for routing) and
+  `WORKSPACE_RECONCILE_SCHEMA_V` is bumped `2`→`3`. In-flight v=2 events deadletter via the
+  consumer's non-throwing schema-gate; the next push re-drives (reconcile is idempotent by
+  `(installation_id, repo_url)`).
+- **Non-push events** (`pull_request`, `workflow_run` failure, `issues`,
+  `repository_advisory`, `secret_scanning_alert` — all five `HEADER_TO_ACTION_CLASS`
+  entries) resolve a **SINGLE** founder via the solo-workspace rule. Steps 6 (`isGranted`)
+  and 7 (dispatch) remain single-decision, structurally unchanged. **Do NOT fan out
+  Steps 6/7** (Option A rejected — fanning out grant-checks / N dispatches multiplies the
+  consent + installation-token surface by N: the cross-tenant hazard).
+
+**Non-push founder resolution rule** (replaces the Step 5 `users` read) — service-role read
+on `workspaces` filtered to SOLO workspaces via the membership self-join:
+
+```sql
+SELECT w.id
+FROM workspaces w
+JOIN workspace_members m
+  ON m.workspace_id = w.id
+ AND m.user_id      = w.id        -- solo invariant: member.user_id == workspace.id (ADR-038 N2)
+ AND m.role         = 'owner'
+WHERE w.github_installation_id = :installationId
+```
+
+`founderId := w.id` (== owner `users.id` by the invariant, so value-compatible with the old
+`users` read; `isGranted` + the installation-token path need no other change). There is no
+`is_solo` column — solo identity is structural; the `m.user_id = w.id` join is the only sound
+discriminator and deliberately excludes team workspaces sharing the install (a team `id` is a
+fresh uuid, never == a member's user_id).
+
+**Fail-closed by match count** (implemented as the `resolveSoloFounderForInstallation`
+discriminated union `{found|none|ambiguous|db-error}`):
+- **0 rows** → `logger.warn` + `releaseDedupRow()` + **404** (GitHub does not retry 4xx).
+- **1 row** → proceed to Step 6 with `founderId = w.id`.
+- **>1 rows** (two users + same fork — genuinely reachable now the column is NON-UNIQUE) →
+  **fail closed: do NOT pick one. `Sentry.captureException` (tag `op:"founder-ambiguous"`,
+  level error) + `releaseDedupRow()` + 404-drop. ZERO `inngest.send`, ZERO `isGranted`.**
+  Dropping a re-drivable event is strictly safer than misattributing it (an unrecoverable
+  cross-tenant action/repo-write). This is the single most important new code path.
+- **DB error** → `Sentry.captureException` (`op:"founder-resolve"`) + `releaseDedupRow()` +
+  **500** (preserves the existing Step 5 `founderErr` contract — never a silent 200).
+
+**Test invariants:** the `>1` fail-closed (Test Scenario 3) is mandatory; the solo self-join
+excludes team workspaces (Scenario 4); same-user double-solo-row drift trips ambiguous
+(Scenario 11); the resolver covers all five action classes (Scenario 12).
+
+**Structural-guarantee note (R7):** the dropped mig-052 partial-UNIQUE on
+`users.github_installation_id` has **NO structural replacement** on `workspaces` (the
+"one solo workspace per installation" invariant is now enforced **nowhere structurally** —
+only by the connect path + this PR's **runtime `>1` fail-closed**). A connect bug or
+co-member reconcile (mig 110) that duplicates an install onto a second solo row would make
+every non-push event for that install 404-drop until the duplicate is removed operationally
+— a STANDING single-user availability incident (R8), so `op:"founder-ambiguous"` must
+**page**, not just log. A cross-table partial-index predicate is not directly expressible;
+the accepted posture is the runtime branch + the paging Sentry signal.
+
+### Session-sync write (PR-B)
+
+`updateLastSynced` signature changed to `updateLastSynced(service, workspaceId)`; it writes
+`workspaces.repo_last_synced_at` via the **service-role-injected** `writeRepoColsToWorkspace`
+(`workspaces` has exactly one RLS policy — `workspaces_select_for_members`, SELECT only;
+there is NO `GRANT UPDATE` and NO UPDATE policy, so a tenant UPDATE is impossible). The
+service client is **injected by the allowlisted caller** (`agent-runner.ts`); `session-sync.ts`
+does NOT acquire service-role and stays OFF `.service-role-allowlist`, mirroring the in-file
+`appendKbSyncRowForWorkspace` precedent. `agent-runner.ts` resolves `resolveActiveWorkspace`
+ONCE (resolve-id-first) and threads the SAME id into BOTH `resolveActiveWorkspacePath(…, id)`
+and `updateLastSynced(service, id)` — the explicit #5435 dual-resolver-divergence fix
+(session-sync NEVER re-resolves). A `{ok:false,reason:"db-error"}` on the membership probe
+fails closed (skip sync). Test Scenario 10 (team-active member's write lands on the TEAM
+workspace, never `userId`) is the load-bearing write-side invariant.
+
+### C4 edge note
+
+The connection-owner edges for the webhook reverse-lookup and the session-sync repo-column
+write are now **workspace-sourced** (read=Workspace / write=Workspace for these edges). No
+`.c4` model file references an ADR-044 view (grep of `knowledge-base/**/*.c4` is empty), so
+this edge change is captured in this ADR prose rather than a `.c4` edit.
+
+### Sequencing
+
+The edges are workspace-sourced as of this branch. The column DROP invariant fully holds
+only after PR-2b (the residual step); `Ref #5437` keeps the umbrella open.
