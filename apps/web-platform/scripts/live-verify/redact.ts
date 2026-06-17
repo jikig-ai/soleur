@@ -30,8 +30,18 @@ const RULES: Array<[RegExp, string]> = [
   ],
   // Authorization: Bearer <token>  (request headers in captured network frames)
   [/(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]+/gi, `$1${PLACEHOLDER}`],
-  // Supabase auth cookie: sb-<ref>-auth-token=<value>
-  [/(sb-[a-z0-9-]+-auth-token=)[^;\s"']+/gi, `$1${PLACEHOLDER}`],
+  // Supabase auth cookie: sb-<ref>-auth-token=<value>, including the chunked
+  // form sb-<ref>-auth-token.0=, .1=, … that @supabase/ssr emits for large
+  // sessions (without the `.N` allowance the chunked names escape — security
+  // review P1).
+  [/(sb-[a-z0-9-]+-auth-token(?:\.\d+)?=)[^;\s"']+/gi, `$1${PLACEHOLDER}`],
+  // @supabase/ssr serialized session value: `base64-<base64url(JSON session)>`.
+  // The blob embeds access_token + refresh_token + email but has NO JWT `.`
+  // separators, so the generic JWT/email/cookie rules all miss it. Redact the
+  // opaque value wholesale wherever it appears (cookie value, network frame,
+  // DOM) — this is the structural shape the scrubber's threat model targets
+  // (security review P1; default cookieEncoding="base64url").
+  [/base64-[A-Za-z0-9_-]{40,}/g, "[REDACTED_SB_SESSION]"],
   // JSON token keys: "access_token":"...", "refresh_token":"...", etc.
   [
     /(["'](?:access_token|refresh_token|provider_token)["']\s*:\s*")[^"]+/gi,

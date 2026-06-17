@@ -34,6 +34,24 @@ describe("redact", () => {
     expect(out).toContain("Path=/");
   });
 
+  it("redacts a CHUNKED sb-<ref>-auth-token.N cookie value", () => {
+    const cookie = `sb-abcdefghijklmnopqrst-auth-token.0=${FAKE_JWT}; Path=/; HttpOnly`;
+    const out = redact(cookie);
+    expect(out).not.toContain(FAKE_JWT);
+    expect(out).toContain("sb-abcdefghijklmnopqrst-auth-token.0=");
+    expect(out).toContain("Path=/");
+  });
+
+  it("redacts the @supabase/ssr `base64-<blob>` session value (no JWT dots)", () => {
+    // The SSR cookie value embeds access_token + refresh_token + email inside an
+    // opaque base64url blob with no `.` separators — security review P1.
+    const blob = "base64-" + ("AbCdEf0123456789_-".repeat(3)); // ≥40 base64url chars
+    const out = redact(`captured cookie value: ${blob} end`);
+    expect(out).not.toContain(blob);
+    expect(out).toContain("[REDACTED_SB_SESSION]");
+    expect(out).toContain("end");
+  });
+
   it("redacts refresh_token / access_token JSON keys", () => {
     const refresh = "rT_" + "0123456789abcdefXYZ";
     const json = `{"access_token":"${FAKE_JWT}","refresh_token":"${refresh}","expires_in":3600}`;

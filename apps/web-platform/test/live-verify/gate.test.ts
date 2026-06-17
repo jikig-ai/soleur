@@ -149,3 +149,73 @@ describe("teardown predicate guard (AC2d)", () => {
     expect(from).not.toHaveBeenCalled();
   });
 });
+
+describe("teardown action-send-free + ordering (data-integrity)", () => {
+  const cfg = baseConfig();
+  const verified: VerifiedPrincipal = {
+    __brand: "verified-live-verify-principal",
+    uid: cfg.expectedUid,
+  } as VerifiedPrincipal;
+  const CONV = "44444444-4444-4444-4444-444444444444";
+
+  // Chainable supabase stub: records the (op:table) sequence and resolves the
+  // action_sends count query to `actionSendsCount`. Every chain link is
+  // awaitable so `await sb.from(...).select(...).eq(...)` works.
+  function makeStub(actionSendsCount: number, order: string[]) {
+    const builder = (table: string) => {
+      const b: Record<string, unknown> = {};
+      Object.assign(b, {
+        select: () => b,
+        update: () => {
+          order.push(`update:${table}`);
+          return b;
+        },
+        delete: () => {
+          order.push(`delete:${table}`);
+          return b;
+        },
+        eq: () => b,
+        like: () => b,
+        then: (resolve: (v: unknown) => unknown) =>
+          resolve(
+            table === "action_sends"
+              ? { count: actionSendsCount, error: null }
+              : { data: null, error: null },
+          ),
+      });
+      return b;
+    };
+    return { from: (t: string) => builder(t) } as unknown as Parameters<
+      typeof teardownConversation
+    >[0];
+  }
+
+  it("escalates to CANT-RUN (and never deletes) when the principal has action_sends", async () => {
+    const order: string[] = [];
+    const supabase = makeStub(1, order);
+
+    const result = await teardownConversation(supabase, cfg, verified, CONV);
+
+    expect(result.kind).toBe("CANT-RUN");
+    if (result.kind === "CANT-RUN") {
+      expect(result.reason).toContain("CANT-TEARDOWN-has-action-sends");
+      expect(result.reason).toContain("#5463");
+    }
+    // The WORM guard: no conversation delete/update was issued.
+    expect(order).not.toContain("delete:conversations");
+    expect(order).not.toContain("update:conversations");
+  });
+
+  it("archives BEFORE deleting (slot-release ordering) on a clean teardown", async () => {
+    const order: string[] = [];
+    const supabase = makeStub(0, order);
+
+    const result = await teardownConversation(supabase, cfg, verified, CONV);
+
+    expect(result.kind).toBe("PASS");
+    const archiveIdx = order.indexOf("update:conversations");
+    const deleteIdx = order.indexOf("delete:conversations");
+    expect(archiveIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteIdx).toBeGreaterThan(archiveIdx);
+  });
+});
