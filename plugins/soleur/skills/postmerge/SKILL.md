@@ -389,7 +389,7 @@ The harness emits exactly one structured line: `RESULT: PASS`,
 is treated as `CANT-RUN:no-result-line` (fail-closed semantics for the result
 *recording*, even though the gate is report-only for "done"). If the harness
 cannot bootstrap (synthetic principal not yet seeded — see
-`scripts/bootstrap-live-verify.sh`), expect `CANT-RUN:CONFIG:…`.
+`apps/web-platform/scripts/bootstrap-live-verify.sh`), expect `CANT-RUN:CONFIG:…`.
 
 **3. Record + surface the tri-state.** Always surface the result; never silently
 drop it:
