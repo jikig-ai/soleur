@@ -249,6 +249,28 @@ the already-covered `sentry_issue_alert` type. Apply-created issue-alert count i
 now 3 (`byok_art_33_breach`, `byok_cap_exceeded`, `chat_message_save_failure`);
 the 4 `auth-*` rules remain import-only.
 
+**Amendment (2026-06-17, #5495) — read-only inline-read credential class.** This ADR's
+credential taxonomy (`Authentication / secret-store divergence` above) now records a third
+class alongside the IaC token and the runtime check-in token: a **read-only Internal
+Integration `inline-read-prd`** with the minimal permission set **Issue & Event = Read,
+Organization = Read, everything else No Access** → scopes `[event:read, org:read]`. Its token
+`SENTRY_ISSUE_RO_TOKEN` lives in **Doppler `soleur/prd`** (not GitHub secrets — unlike the IaC
+token — because it is consumed by an inline CLI under `doppler run`, mirroring
+`SENTRY_ISSUE_RW_TOKEN`). It backs `scripts/sentry-issue.sh`, a GET-only inline reader for
+no-SSH agent debugging (issue-detail + latest-event by id). Rationale: the issue/event
+endpoints require `event:read`, which `SENTRY_API_TOKEN`/`SENTRY_AUTH_TOKEN` lack (they 403 on
+`/issues/<id>/`); reusing the `event:admin` `SENTRY_ISSUE_RW_TOKEN` for a read path is
+over-scoped, so a least-privilege read token is the data-minimisation-aligned posture
+(CLO; Art. 30 PA-08 touched). **Mint path:** the Sentry provider exposes no Terraform token
+resource, so the token is minted by Soleur automation — Playwright against the `eu.sentry.io`
+dashboard (primary; the `POST …/sentry-apps/` API path needs `org:admin`, which no existing
+token carries and which public docs do not confirm), not an operator UI step. **Host:** the
+org-subdomain `jikigai-eu.sentry.io` per the Cluster/Host Glossary (NOT `de.sentry.io`, which
+is ingest-only). **Scope note:** the inline read CLI is a **read path, not a sixth/seventh
+observability layer** — `observability-coverage-reviewer` must not accept it as a
+`failure_modes:` layer citation. Runbook
+`knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`.
+
 ## Consequences
 
 ### Positive

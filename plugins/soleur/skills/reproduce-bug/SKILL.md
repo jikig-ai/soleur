@@ -23,7 +23,7 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
      "https://jikigai-eu.sentry.io/api/0/projects/$ORG/$PROJ/issues/?query=<keyword>&statsPeriod=24h&limit=5" \
      | jq -r '.[]? | "\(.lastSeen) | \(.title) | n=\(.count)"'
    ```
-   Then drill into the issue's latest event for `extra` (carries the operative detail — a blocked `DST=` IP, a vendor status, the failing arg). Note: a cron-monitor **error check-in** carries no stack trace; the real exception is a separate `reportSilentFallback`/`captureException` issue — query for it.
+   Then drill into the issue's latest event for `extra` (carries the operative detail — a blocked `DST=` IP, a vendor status, the failing arg). Note: a cron-monitor **error check-in** carries no stack trace; the real exception is a separate `reportSilentFallback`/`captureException` issue — query for it. **Named helper:** once you have an issue id, `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (add `--latest-event` for the stack/exception) wraps this read-by-id with the least-privilege `SENTRY_ISSUE_RO_TOKEN`. Runbook: `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`.
 
 2. **Better Stack** logs (the app's pino stream, historical) via the repo-root [betterstack-query.sh](../../../../scripts/betterstack-query.sh) helper (ClickHouse SQL over the Telemetry warehouse). Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. The failing fetch's error (with the HOSTNAME) lives here.
 
