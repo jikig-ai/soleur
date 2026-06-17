@@ -1,7 +1,7 @@
 ---
 adr: ADR-044
 title: Relocate repo-connection state from users to workspaces; uniqueness guarantee moves from DB constraint to normalizeRepoUrl contract
-status: adopting
+status: accepted
 date: 2026-05-28
 amends: [ADR-038]
 related_adrs: [ADR-038, ADR-023]
@@ -446,3 +446,50 @@ this edge change is captured in this ADR prose rather than a `.c4` edit.
 
 The edges are workspace-sourced as of this branch. The column DROP invariant fully holds
 only after PR-2b (the residual step); `Ref #5437` keeps the umbrella open.
+
+## Amendment 2026-06-18 — PR-2b column DROP (arc CLOSED)
+
+**Status flip:** `adopting → accepted`. This is the FINAL, irreversible step of the
+ADR-044 arc. The repo-connection ownership boundary has fully moved
+`users → workspaces`.
+
+**Drop migration:** `112_drop_legacy_users_repo_columns.sql` (+ `.down.sql` +
+`verify/112_…sql`). It drops the dead partial-UNIQUE index
+`users_github_installation_id_unique_idx` (mig 052), then
+`DROP COLUMN github_installation_id, repo_url, workspace_path` from `public.users`.
+`public.workspaces` is untouched (the cutover TARGET). The `.down.sql` is a
+**SCHEMA-ONLY** rollback — the dropped column DATA is NOT recoverable; the
+canonical copy lives on `workspaces.*`.
+
+**Pre-drop safety gates (verified 2026-06-18, work-start, against `origin/main` /
+PROD):**
+- **Drift gate COUNT = 0 against PROD** (read-only, `DATABASE_URL_POOLER`):
+  `SELECT count(*) FROM users u JOIN workspaces w ON w.id=u.id WHERE
+  u.repo_url IS DISTINCT FROM w.repo_url OR u.github_installation_id IS DISTINCT
+  FROM w.github_installation_id` = 0. Context: 16 users / 18 workspaces;
+  `repo_url_drift=0`, `install_drift=0`, `total_drift=0`. Nothing unique is
+  destroyed — `users.*` and `workspaces.*` are consistent.
+- **Reader sweep = 0 live readers.** The multi-line `from("users") … (the three
+  columns)` sweep and the dual-shape `.eq()/.in()/.match()` sweep over
+  `apps/web-platform/{app,server,lib}` return only comments, different-column
+  selects (`email`/`health_snapshot`/`github_username`/`workspace_status`),
+  `workspaces`/`conversations` queries, and synthesized-object reads. Zero live
+  `users`-table reads/filters of `github_installation_id`, `repo_url`, or
+  `workspace_path`.
+
+**Cross-tenant guarantee carried, not lost.** The dropped index's structural
+guarantee (one founder per installation) is permanently replaced at runtime by
+the `resolveSoloFounderForInstallation` `{found|none|ambiguous|db-error}` resolver
+(`>1` fail-closed, `server/resolve-founder-for-installation.ts`) + the
+`github_webhook_founder_ambiguous` Sentry paging rule
+(`apps/web-platform/infra/sentry/issue-alerts.tf:576`, `op="founder-ambiguous"`),
+both adopted in Amendment 2026-06-17b (R7/R8) and verified live here. The
+load-bearing post-drop signal is that paging rule (verify/112 only proves the
+index is GONE, not that its replacement FIRES).
+
+**C4:** No `.c4` model edit — the connection-owner relationship is not modeled at
+column granularity, and the workspace-sourced edge is already recorded in the
+prose above (grep of `knowledge-base/**/*.c4` for the dropped identifiers is
+empty). No-op recorded here so a future reader is not misled.
+
+**The ADR-044 arc is COMPLETE.** No further slice is gated. Note: `users.{repo_provider, repo_status, repo_last_synced_at}` remain as dead-but-retained columns intentionally OUTSIDE PR-2b's named drop set (a future minor cleanup), so "arc complete" refers to the ADR-044 decision arc, not zero-residual-columns.

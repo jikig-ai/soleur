@@ -379,6 +379,11 @@ export async function emailOnReceivedHandler({
       .from("email_triage_items")
       .insert({
         user_id: ownerId,
+        // mig 111: workspace grain. The owner is validated just above as the
+        // solo/residual workspace owner (workspace_id = user_id = ownerId AND
+        // role='owner'), so the owning workspace IS ownerId. Reads are gated on
+        // workspace-owner membership; the notification recipient is unchanged.
+        workspace_id: ownerId,
         claim_key: claimKey,
         message_id: data.messageId,
         resend_email_id: data.resendEmailId,

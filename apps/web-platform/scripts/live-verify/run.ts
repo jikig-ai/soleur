@@ -123,8 +123,26 @@ export function buildLaunchOptions(opts: {
   channel?: string;
   executablePath?: string;
 }): LaunchOptions {
-  if (opts.executablePath) return { executablePath: opts.executablePath };
-  if (opts.channel) return { channel: opts.channel };
+  // Harden the system-browser override path (#5485 — a local runner whose OS the
+  // bundled chromium can't run) against the Wayland GPU crash that drops every
+  // page context mid-run as "Target page, context or browser has been closed".
+  //   --disable-gpu        load-bearing here: kills the Vulkan/SwiftShader GPU
+  //                        path that crashes this HEADLESS harness on Wayland.
+  //   --ozone-platform=x11 inert while headless (no window); kept as cheap
+  //                        insurance for running the override path HEADED for
+  //                        local debugging, and for parity with the proven
+  //                        headed MCP-browser fix (fdc4a0895).
+  // Both are no-ops on a native-X11 host. The no-override (CI bundled-chromium)
+  // path returns `{}` byte-identical, so ubuntu-latest — which has no X server
+  // for --ozone-platform=x11 — is unaffected. See knowledge-base/project/
+  // learnings/workflow-patterns/2026-06-17-playwright-mcp-wayland-vulkan-launch-crash.md.
+  const WAYLAND_STABILIZATION_ARGS = ["--ozone-platform=x11", "--disable-gpu"];
+  if (opts.executablePath) {
+    return { executablePath: opts.executablePath, args: WAYLAND_STABILIZATION_ARGS };
+  }
+  if (opts.channel) {
+    return { channel: opts.channel, args: WAYLAND_STABILIZATION_ARGS };
+  }
   return {};
 }
 
