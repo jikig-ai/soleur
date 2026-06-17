@@ -29,6 +29,17 @@ trap 'rm -f "$PAYLOAD_FILE"' EXIT
 # hooks.json is passed pre-encoded via HOOKS_JSON_B64 because it is rendered
 # from a Terraform template (hooks.json.tmpl) with secrets interpolated —
 # the on-disk file is the template, not the rendered output.
+#
+# #5450 — the four inngest cutover scripts (inngest-enumerate-reminders.sh,
+# inngest-rearm-reminders.sh, inngest-wiped-volume-verify.sh,
+# cat-inngest-verify-state.sh) are TRANSIENT one-shot orchestration (removable
+# post-cutover, plan P2-sec-c). They are delivered by this push but intentionally
+# NOT added to deploy_pipeline_fix's per-file triggers_replace hash (server.tf)
+# nor the ship drift-guard arrays — that would churn 4 drift-guard surfaces for
+# scripts with a deliberately short life. Editing THIS file re-fires the push (it
+# IS in the hash), so they always ride a payload change; a rare body-only edit to
+# one script before the cutover must also touch this file (or be delivered via a
+# manual infra-config push) to reach the host.
 cat > "$PAYLOAD_FILE" <<PAYLOAD
 {
   "ci_deploy_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/ci-deploy.sh")",
