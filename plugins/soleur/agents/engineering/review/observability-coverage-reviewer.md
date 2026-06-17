@@ -32,6 +32,15 @@ Run `git diff origin/main...HEAD --name-only` and partition into:
 - **Runbooks**: `knowledge-base/engineering/operations/runbooks/*.md`
 - **Plans**: `knowledge-base/project/plans/*-plan.md`
 
+### Step 1.5: Pull live signal yourself (you can read Better Stack + Sentry)
+
+You are not limited to reasoning about the producer side. When a diff's failure mode or a plan's claim is checkable against **live** production telemetry, read it yourself inline (no SSH, `hr-no-dashboard-eyeball-pull-data-yourself`):
+
+- **Better Stack logs** (host/app pino over a time window): `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep <symptom>` (runbook `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`).
+- **Sentry issue/event by id**: `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`).
+
+These are **read paths, not a seventh observability layer** — do NOT accept "queried via sentry-issue.sh / betterstack-query.sh" as a `failure_modes:` layer citation in Step 2 (the six layers below are the producer-side surfaces a plan must wire; the CLIs are how a reviewer consumes them).
+
 ### Step 2: Layer-citation check (`hr-observability-layer-citation`)
 
 For each plan in the diff: parse the `## Observability` block's `failure_modes:` list. For each entry, locate either a `detection` or `alert_route` line that explicitly names ONE of the six layers above (substrings: `sentry-correlation`, `pino`, `vector`, `host_metrics`, `release`, `Sentry monitor`, `inngest-heartbeat`, `webhook response`, `workflow run log`, `::error::`). Failure mode without a named layer = **P1 finding**. Provide the missing-layer suggestion in the report.
