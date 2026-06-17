@@ -330,11 +330,89 @@ Compare against expectations from the PR description and review. Flag if any fil
 4. Check browser console for errors (especially CSP violations)
 5. Verify no broken resources or layout regressions
 
-If Playwright MCP is unavailable, warn and skip:
+If Playwright MCP is unavailable, do NOT warn-and-skip — **fall through to the
+committed harness path** (Phase 5.5 below), which drives the deployed app via the
+chromium bundled in `@playwright/test` with no MCP-browser dependency. The
+warn-and-skip punt is exactly what let the #5391/#5421/#5436 broken fixes pass
+green. Record `Browser verification: DELEGATED-TO-LIVE-VERIFY` and proceed.
 
-```text
-WARNING: Playwright MCP unavailable. Skipping browser verification.
+## Phase 5.5: Live Verification (path-triggered, REPORT-ONLY)
+
+Verifies the **deployed artifact** for the PR classes where the mock-hermetic e2e
+suite structurally lies (realtime / server-commit-timing / session-auth /
+DOM-server-timing — the #5391→#5421→#5436 class). The harness
+(`apps/web-platform/scripts/live-verify/run.ts`, #5452 / ADR-064) signs in as a
+dedicated **synthetic prod principal** (never an operator/real-user session),
+drives the deployed UI, and asserts a freshly-started conversation appears in the
+Recent Conversations rail.
+
+**Dark-launch posture (`wg-dark-launch-deploy-gates`):** this gate ships
+**REPORT-ONLY**. It records and surfaces a tri-state result but does **NOT** block
+"done". The empty→FAIL-closed + FAIL-blocks-done flip is tracked in **#5463**, and
+that flip **also requires re-homing the harness into a GitHub Action /
+`workflow_dispatch` with a Sentry-observable result** (ADR-033 Option C) — a
+boolean flip inside this agent-driven skill is NOT acceptable for a blocking gate
+(it would recreate the #4932 non-deterministic-blocking-gate class).
+
+**1. Path trigger (FR7).** The trigger set is the committed source-of-truth
+`apps/web-platform/scripts/live-verify/trigger-paths.txt` (not SKILL.md prose).
+Reuse Phase 4's changed-file list and match:
+
+```bash
+changed=$(gh pr diff <number> --name-only)
+patterns=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+  apps/web-platform/scripts/live-verify/trigger-paths.txt)
+if printf '%s\n' "$changed" | grep -qE -f <(printf '%s\n' "$patterns"); then
+  TRIGGERED=1
+else
+  TRIGGERED=0   # pure logic/docs/copy/config → skip (fail-open; the drift
+                # canary test guards against an un-listed new realtime dir)
+fi
 ```
+
+If `TRIGGERED=0`: record `Live verification: SKIPPED (no triggering paths)` and
+continue to Phase 6.
+
+**2. Run the harness (report-only).** The harness needs Doppler `prd` secrets
+(`LIVE_VERIFY_USER_PASSWORD`, `LIVE_VERIFY_EXPECTED_UID/REF`, the Supabase
+anon-key, `PRODUCTION_URL`). It is service-role-free (AC2b) and message-minimal
+(I-action-send-free). Run from the app dir under `prd`:
+
+```bash
+cd apps/web-platform && \
+  doppler run -p soleur -c prd -- bun run scripts/live-verify/run.ts \
+  2>&1 | grep -E '^RESULT: '
+```
+
+The harness emits exactly one structured line: `RESULT: PASS`,
+`RESULT: FAIL — <redacted detail>`, or `RESULT: CANT-RUN:<reason>`. Empty output
+is treated as `CANT-RUN:no-result-line` (fail-closed semantics for the result
+*recording*, even though the gate is report-only for "done"). If the harness
+cannot bootstrap (synthetic principal not yet seeded — see
+`apps/web-platform/scripts/bootstrap-live-verify.sh`), expect `CANT-RUN:CONFIG:…`.
+
+**3. Record + surface the tri-state.** Always surface the result; never silently
+drop it:
+
+- `PASS` → record `Live verification: PASS`.
+- `FAIL` → record `Live verification: FAIL — <detail>` and **surface prominently**
+  (this is the regression the gate exists to catch). Report-only: it does not
+  block "done" on this PR, but it is the signal the #5463 flip will gate on.
+- `CANT-RUN:<reason>` → record `Live verification: CANT-RUN:<reason>` and
+  **auto-file a tracking issue** (`wg-when-deferring-a-capability`):
+
+```bash
+gh issue create --label type/chore \
+  --title "live-verify CANT-RUN: <reason> (PR #<number>)" \
+  --body "deferred-automation backlog item; the live-verify harness could not complete.
+reason: <reason>
+re-evaluate when: synthetic principal seeded / deploy URL reachable / teardown invariant restored.
+Tracks the #5463 blocking-flip precondition."
+```
+
+A `CANT-RUN:CANT-TEARDOWN-has-action-sends` reason is an invariant breach (the
+synthetic principal acquired a WORM `action_sends` row) — escalate it, do NOT
+reap-next-run.
 
 ## Phase 6: Update Issue and Compound
 
@@ -348,7 +426,8 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 - Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 - File freshness: <PASSED/N files checked>
-- Browser verification: <PASSED/SKIPPED>
+- Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
+- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
 "
 ```
 
@@ -372,7 +451,8 @@ Production health: <PASSED/SKIPPED/FAILED>
 Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
-Browser verification: <PASSED/SKIPPED>
+Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
+Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run /soleur:feature-tweet #N / NONE — ineligible>
 ```
 
