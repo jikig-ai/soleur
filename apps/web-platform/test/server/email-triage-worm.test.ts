@@ -74,6 +74,7 @@ function isoDaysAgo(days: number): string {
 
 interface StubOverrides {
   user_id?: string | null;
+  workspace_id?: string | null;
   claim_key?: string;
   message_id?: string | null;
   sender?: string | null;
@@ -93,10 +94,19 @@ async function insertStub(
   overrides: StubOverrides = {},
 ): Promise<{ id: string; claim_key: string }> {
   const claimKey = overrides.claim_key ?? `resend:${randomUUID()}`;
+  // mig 111: workspace grain. Default workspace_id = the row's owner (residual
+  // personal-workspace shape: handle_new_user creates workspace id=user_id with
+  // an owner membership). Reads/acks are gated on workspace-owner membership.
+  const effectiveUserId =
+    overrides.user_id === undefined ? userId : overrides.user_id;
   const { data, error } = await service
     .from("email_triage_items")
     .insert({
-      user_id: overrides.user_id === undefined ? userId : overrides.user_id,
+      user_id: effectiveUserId,
+      workspace_id:
+        overrides.workspace_id === undefined
+          ? effectiveUserId
+          : overrides.workspace_id,
       claim_key: claimKey,
       message_id:
         overrides.message_id === undefined
@@ -293,15 +303,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(ackErr!.code).toBe("P0001");
     });
 
-    test("(f) set_email_triage_status: one-way transitions + auth.uid() pin", async () => {
+    test("(f) set_email_triage_status: one-way transitions + workspace-owner pin (mig 111)", async () => {
       const stub = await insertStub(service, userA.id);
 
-      // Wrong user first (row still 'new' so only the authz gate can fire).
+      // Non-owner-of-the-row's-workspace first (row still 'new' so only the
+      // authz gate can fire). userB is not an Owner of workspace userA.
       const { error: wrongUserErr } = await tenantB.rpc(
         "set_email_triage_status",
         { p_id: stub.id, p_status: "acknowledged" },
       );
-      expect(wrongUserErr, "wrong-user call must be rejected").not.toBeNull();
+      expect(wrongUserErr, "non-owner call must be rejected").not.toBeNull();
 
       // Owner: 'new' → 'acknowledged' succeeds.
       const { error: ackErr } = await tenantA.rpc("set_email_triage_status", {
@@ -599,6 +610,60 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .eq("user_id", userA.id);
       expect(sweepErr).toBeNull();
       expect(sweepRows?.length ?? 0).toBe(0);
+    });
+
+    test("(j) shared workspace inbox (mig 111): a co-Owner of the row's workspace can read + acknowledge", async () => {
+      const stub = await insertStub(service, userA.id); // workspace_id = userA.id
+
+      // Before the grant: userB is NOT an Owner of workspace userA → no read.
+      const { data: before } = await tenantB
+        .from("email_triage_items")
+        .select("id")
+        .eq("id", stub.id);
+      expect(before?.length ?? 0).toBe(0);
+
+      // Promote userB to Owner of workspace userA (the shared-inbox grant —
+      // handle_new_user owner-row shape: attestation_id NULL).
+      const { error: memberErr } = await service
+        .from("workspace_members")
+        .insert({
+          workspace_id: userA.id,
+          user_id: userB.id,
+          role: "owner",
+          attestation_id: null,
+        });
+      expect(memberErr, "grant userB co-owner of workspace userA").toBeNull();
+
+      try {
+        // Now a co-Owner CAN read userA's row via the owner-membership RLS.
+        const { data: shared, error: sharedErr } = await tenantB
+          .from("email_triage_items")
+          .select("id, subject")
+          .eq("id", stub.id);
+        expect(sharedErr).toBeNull();
+        expect(shared?.length, "co-owner reads the shared row").toBe(1);
+
+        // ...and CAN act on it (the status RPC authorizes any workspace Owner).
+        const { error: ackErr } = await tenantB.rpc("set_email_triage_status", {
+          p_id: stub.id,
+          p_status: "acknowledged",
+        });
+        expect(ackErr, "co-owner new→acknowledged").toBeNull();
+        const { data: row } = await service
+          .from("email_triage_items")
+          .select("status")
+          .eq("id", stub.id)
+          .single();
+        expect(row!.status).toBe("acknowledged");
+      } finally {
+        // Best-effort teardown (this is the last case; afterAll's user-delete
+        // also cascades the membership). Ignore WORM/remove-RPC restrictions.
+        await service
+          .from("workspace_members")
+          .delete()
+          .eq("workspace_id", userA.id)
+          .eq("user_id", userB.id);
+      }
     });
   },
 );

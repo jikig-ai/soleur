@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     other value = default view).
 //   - Server-side ordering contract: unacknowledged statutory first
 //     (statutory_class NOT NULL AND status = 'new'), then received_at DESC.
-//   - Belt-and-suspenders `.eq("user_id", user.id)` alongside RLS.
+//   - mig 111: reads gated SOLELY by workspace-owner RLS — no `.eq("user_id")`.
 //   - HTTP-only exports: GET is the only HTTP verb exported
 //     (cq-nextjs-route-files-http-only-exports).
 
@@ -178,8 +178,9 @@ describe("GET /api/inbox/emails", () => {
     expect(recorded.or).toContain(PINNED_EXCLUSION_OR);
     // Archived exclusion.
     expect(recorded.neq).toContainEqual(["status", "archived"]);
-    // Belt-and-suspenders owner scope on top of RLS.
-    expect(recorded.eq).toContainEqual(["user_id", "u1"]);
+    // mig 111: workspace-shared reads gated SOLELY by RLS — NO `.eq("user_id")`
+    // filter (it would re-narrow below RLS and hide the shared inbox).
+    expect(recorded.eq).not.toContainEqual(["user_id", "u1"]);
     // DB-side base ordering.
     expect(recorded.order).toContainEqual(["received_at", { ascending: false }]);
     // L1: pinned statutory query runs (uncapped) + the rest query is the

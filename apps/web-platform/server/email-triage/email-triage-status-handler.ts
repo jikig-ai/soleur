@@ -7,10 +7,10 @@
  * Auth: callers wrap the returned handler in `withUserRateLimit` + the
  * user-context Supabase client (NEVER the service client — RLS bypass).
  * The `set_email_triage_status` SECURITY DEFINER RPC enforces BOTH
- * ownership (auth.uid() pin; missing row and foreign row collapse to the
- * same 42501 — no existence oracle) and the one-way transition matrix
- * (new → acknowledged|archived) IN the DB; everything here is
- * defense-in-depth.
+ * authorization (mig 111: any Owner of the row's workspace; missing row and
+ * non-owned row collapse to the same 42501 — no existence oracle) and the
+ * one-way transition matrix (new → acknowledged|archived) IN the DB;
+ * everything here is defense-in-depth.
  *
  * `withUserRateLimit`'s wrapper signature does not thread Next's dynamic
  * params, so the [id] segment is parsed from the URL path (UUID-validated
