@@ -65,10 +65,16 @@ jobs:
                 -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
                 -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
                 "$BASE/inngest-enumerate-reminders" || echo "000")
-              if [[ "$CODE" != "200" ]]; then
-                echo "::error::enumerate returned HTTP $CODE"; exit 1
-              fi
               BODY=$(cat /tmp/enum-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                # Surface the host script's cause in the run log (#5492). webhook
+                # v2.8.2 CombinedOutput() returns stdout+stderr and
+                # include-command-output-in-response-on-error carries it into the
+                # response body — but it is only diagnosable if we dump it here.
+                # Strip CR/LF so the ::error:: annotation stays one line.
+                CAUSE="${BODY//[$'\n\r']/ }"
+                echo "::error::enumerate returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+              fi
               if ! echo "$BODY" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 echo "::error::enumerate did not return a JSON array"; echo "$BODY"; exit 1
               fi
