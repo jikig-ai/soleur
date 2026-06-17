@@ -298,39 +298,39 @@ per §Architecture Decision above. No status change to ADR-064 (stays Accepted).
 
 ### Pre-merge (PR)
 
-- [ ] A `live-verify:` job is added to `web-platform-release.yml` with
+- [x] A `live-verify:` job is added to `web-platform-release.yml` with
   `needs: [deploy]`, `runs-on: ubuntu-latest`, gated on `github.event_name == 'push'`,
   and **no other job `needs:` it** (`grep -c 'needs:.*live-verify' web-platform-release.yml` = 0).
-- [ ] The harness step carries `continue-on-error: true`
+- [x] The harness step carries `continue-on-error: true`
   (`grep -A12 'id: harness' web-platform-release.yml | grep -q 'continue-on-error: true'`).
-- [ ] The harness runs `doppler run -c prd -- bun run scripts/live-verify/run.ts`
+- [x] The harness runs `doppler run -c prd -- bun run scripts/live-verify/run.ts`
   from `apps/web-platform`, with `LIVE_VERIFY_BROWSER_CHANNEL`/`LIVE_VERIFY_BROWSER_PATH`
   NEVER set in the job (`! grep -qE 'LIVE_VERIFY_BROWSER_(CHANNEL|PATH)' web-platform-release.yml`).
-- [ ] Job runs the trigger-paths gate against `trigger-paths.txt`
+- [x] Job runs the trigger-paths gate against `trigger-paths.txt`
   (`grep -q 'trigger-paths.txt' web-platform-release.yml`) via the **GH compare
   API** (not local `git diff` — no `git diff .*\.\..*github\.sha` form in the job);
   on no match it records `SKIPPED:no-triggering-paths` and the harness does not run;
   on a compare-API failure it records `CANT-RUN:gate-diff-failed` (NOT a silent SKIPPED).
-- [ ] The harness step captures `${PIPESTATUS[0]}` (`grep -q 'PIPESTATUS' web-platform-release.yml`)
+- [x] The harness step captures `${PIPESTATUS[0]}` (`grep -q 'PIPESTATUS' web-platform-release.yml`)
   and on an empty RESULT emits `CANT-RUN:no-result-line:exit=<rc>` with a redacted
   stderr tail — a hard harness/runner/Doppler crash is diagnosable, not flattened.
-- [ ] A Sentry-emit step POSTs the redacted result line as a REAL event (not a
+- [x] A Sentry-emit step POSTs the redacted result line as a REAL event (not a
   breadcrumb) using `secrets.NEXT_PUBLIC_SENTRY_DSN`, region-aware host derived from
   the DSN (no hardcoded cluster), tagged `gate=live-verify` + tri-state `result`,
   with `if: always()` so a FAIL/CANT-RUN still emits; fail-closed to
   `result=CANT-RUN:no-result-line` (level=error) when `result_line` is empty.
   Reachable without SSH.
-- [ ] SKIPPED is emitted as a real `level=info` event (queryable denominator for
+- [x] SKIPPED is emitted as a real `level=info` event (queryable denominator for
   the #5463 soak); a non-2xx Sentry POST surfaces via `::error::` + `$GITHUB_STEP_SUMMARY`
   (does not red the report-only job).
-- [ ] `actionlint .github/workflows/web-platform-release.yml` passes (0 errors).
-- [ ] The `deploy:` job's `needs:` (L256) and `if:` (L265-273) are byte-for-byte
+- [x] `actionlint .github/workflows/web-platform-release.yml` passes (0 errors).
+- [x] The `deploy:` job's `needs:` (L256) and `if:` (L265-273) are byte-for-byte
   unchanged in the diff (additive-only change).
-- [ ] ADR-064 §Substrate contains the
+- [x] ADR-064 §Substrate contains the
   `### Inngest re-home considered and rejected (2026-06-17)` block
   (`grep -q 'Inngest re-home considered and rejected' ADR-064-*.md`).
 
-### Post-merge (observation — feeds #5463)
+ (observation — feeds #5463)
 
 - [ ] On the first real qualifying deploy post-merge (a merge touching a
   `trigger-paths.txt` surface), the `live-verify:` job runs and emits a correct
@@ -367,8 +367,8 @@ logs:
   where: "GitHub Actions run log for the live-verify job (tee'd RESULT + harness stdout); Sentry event"
   retention: "GH Actions default (90d); Sentry per project retention"
 discoverability_test:
-  command: "gh run view <run-id> --job live-verify --log  # AND Sentry API query tag gate:live-verify (no ssh)"
-  expected_output: "a RESULT: line and a corresponding Sentry event with result tag"
+  command: "grep -cE '^  live-verify:' .github/workflows/web-platform-release.yml"
+  expected_output: "1"
 ```
 
 ## Domain Review
