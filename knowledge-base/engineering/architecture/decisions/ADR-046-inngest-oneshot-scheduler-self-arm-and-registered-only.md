@@ -4,7 +4,7 @@ title: Inngest one-time scheduler — registered-functions-only + self-arm-in-co
 status: active
 date: 2026-05-30
 issue: "#4654"
-related: [ADR-030, ADR-033]
+related: [ADR-030, ADR-033, 5450]
 ---
 
 # ADR-046: Inngest one-time scheduler — registered-functions-only + self-arm-in-code

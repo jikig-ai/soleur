@@ -20,7 +20,7 @@ EnvironmentFile=/etc/default/inngest-server
 # $INNGEST_REDIS_PASSWORD (NOT its value) appears in `ps`/journal — same
 # defense as inngest-server.service. Shipped as a FILE (not a TF inline heredoc)
 # because the doppler-wrapped nested single-quotes do not survive templating.
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/bin/redis-server /etc/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'
 Restart=on-failure
 RestartSec=5
 # Sized for the modest queue/run-state; bound so a runaway cannot starve the
@@ -30,8 +30,9 @@ CPUQuota=50%
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
+# conf + AOF both live under /mnt/data/redis (the only path writable from the
+# webhook.service deploy namespace — /etc is read-only there, ProtectSystem=strict).
 ReadWritePaths=/mnt/data/redis
-ReadOnlyPaths=/etc/redis/inngest-redis.conf
 TimeoutStopSec=30
 
 [Install]

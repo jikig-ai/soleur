@@ -311,10 +311,11 @@ fi
 # Skip gracefully if the assets are absent (a pre-#5450 image on a not-yet-
 # migrated host) — verify_inngest_health is the hard durability gate.
 if [[ -f /tmp/inngest-redis.conf && -f /tmp/inngest-redis.service && -x /tmp/inngest-redis-bootstrap.sh ]]; then
-  log "installing durable Redis assets (#5450)"
-  mkdir -p /etc/redis
-  install -m 0644 /tmp/inngest-redis.conf /etc/redis/inngest-redis.conf
-  install -m 0644 /tmp/inngest-redis.service /etc/systemd/system/inngest-redis.service
+  log "installing durable Redis (#5450)"
+  # Only the bootstrap SCRIPT lands here (/usr/local/bin is webhook-namespace
+  # writable); the script installs the conf onto /mnt/data and the unit into
+  # /etc/systemd/system itself (the conf canNOT go to /etc/redis — read-only in
+  # the deploy namespace; see inngest-redis-bootstrap.sh header).
   install -m 0755 /tmp/inngest-redis-bootstrap.sh /usr/local/bin/inngest-redis-bootstrap.sh
   if /usr/local/bin/inngest-redis-bootstrap.sh; then
     log "durable Redis ready"

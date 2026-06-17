@@ -3,20 +3,39 @@
 #
 # Installs redis-server, neutralises the distro default instance (it binds 6379
 # and would collide with ours), creates the AOF dir on the PERSISTENT /mnt/data
-# volume, and enables the dedicated inngest-redis.service. Delivered as a FILE
-# whose file() is hashed into server.tf triggers_replace.config_hash (NOT inline
-# remote-exec, which is a silent no-op — 2026-06-14 learning). Re-runnable: every
-# step is a no-op when already satisfied.
+# volume, installs the conf + unit, and enables inngest-redis.service.
 #
-# The .conf and .service are delivered alongside (cloud-init write_files for a
-# fresh host; tf file provisioner for the existing host). This script only does
-# the imperative install + dir + enable that write_files cannot.
+# DELIVERY: this script, inngest-redis.conf, and inngest-redis.service are all
+# BAKED INTO the soleur-inngest-bootstrap OCI image (the vector.toml pattern) and
+# staged to /tmp by the image entrypoint (existing-host deploy) / cloud-init
+# docker-cp (fresh host). inngest-bootstrap.sh installs THIS script to
+# /usr/local/bin and runs it; it installs the conf + unit from /tmp itself.
+#
+# CONF LIVES UNDER /mnt/data/redis, NOT /etc/redis: on the existing-host deploy
+# path inngest-bootstrap.sh runs inside webhook.service's ProtectSystem=strict
+# mount namespace, where /etc is read-only and only ReadWritePaths (which
+# includes /mnt/data, NOT /etc/redis) are writable. /usr/local/bin and
+# /etc/systemd/system ARE in that ReadWritePaths set, so the script + unit land
+# there; the conf must live on /mnt/data. Re-runnable: every step no-ops when
+# already satisfied.
 set -euo pipefail
 
 log() { echo "[inngest-redis-bootstrap] $*"; }
 
 REDIS_DATA_DIR="/mnt/data/redis"
+REDIS_CONF="$REDIS_DATA_DIR/inngest-redis.conf"
 UNIT="inngest-redis.service"
+UNIT_FILE="/etc/systemd/system/$UNIT"
+
+# Defense-in-depth (CWE-367, mirrors inngest-bootstrap.sh): refuse to install
+# from a symlinked /tmp staging path (a pre-existing local user could pre-create
+# a symlink to land attacker content into a root-installed file).
+assert_not_symlink() {
+  if [[ -L "$1" ]]; then
+    log "ERROR: refusing to install from symlinked staging path $1"
+    exit 1
+  fi
+}
 
 # 1. Install redis-server (idempotent — skip the slow apt path when present).
 if ! command -v redis-server >/dev/null 2>&1; then
@@ -43,13 +62,33 @@ chown deploy:deploy "$REDIS_DATA_DIR"
 chmod 0750 "$REDIS_DATA_DIR"
 log "AOF dir $REDIS_DATA_DIR ready (deploy:deploy 0750)"
 
-# 4. Enable + (re)start the dedicated unit. daemon-reload picks up a changed
+# 4. Install the conf (onto /mnt/data — webhook-namespace-writable) + the unit
+#    (/etc/systemd/system is in ReadWritePaths). Sourced from the /tmp staging
+#    the OCI entrypoint / cloud-init populated. Skip the conf install if absent
+#    only when it is already in place (re-run without staging).
+if [[ -f /tmp/inngest-redis.conf ]]; then
+  assert_not_symlink /tmp/inngest-redis.conf
+  install -m 0644 /tmp/inngest-redis.conf "$REDIS_CONF"
+elif [[ ! -f "$REDIS_CONF" ]]; then
+  log "ERROR: /tmp/inngest-redis.conf not staged and $REDIS_CONF absent"
+  exit 1
+fi
+if [[ -f /tmp/inngest-redis.service ]]; then
+  assert_not_symlink /tmp/inngest-redis.service
+  install -m 0644 /tmp/inngest-redis.service "$UNIT_FILE"
+fi
+if [[ ! -f "$UNIT_FILE" ]]; then
+  log "ERROR: $UNIT_FILE not installed (no /tmp staging and not pre-present)"
+  exit 1
+fi
+
+# 5. Enable + (re)start the dedicated unit. daemon-reload picks up a changed
 #    unit file; enable --now is a no-op when already active with the same shape.
 systemctl daemon-reload
 systemctl enable "$UNIT" >/dev/null 2>&1 || true
 systemctl restart "$UNIT"
 
-# 5. Liveness assert — fail LOUD (non-zero) if Redis did not come up, so the
+# 6. Liveness assert — fail LOUD (non-zero) if Redis did not come up, so the
 #    deploy gate / provisioner surfaces it (no silent non-durable state).
 if ! systemctl is-active --quiet "$UNIT"; then
   log "ERROR: $UNIT did not become active"

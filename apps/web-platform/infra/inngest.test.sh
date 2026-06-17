@@ -218,6 +218,18 @@ assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CO
 assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
 assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
 assert "redis.service runs under doppler run prd" "grep -qE 'doppler run --project soleur --config prd' '$REDIS_SERVICE'"
+# #5450 F1 regression guard: the conf MUST live under /mnt/data/redis, NOT
+# /etc/redis — on the existing-host deploy the bootstrap runs inside
+# webhook.service's ProtectSystem=strict namespace where /etc is read-only and
+# only ReadWritePaths (incl. /mnt/data) are writable. A conf install to
+# /etc/redis fails-closed at cutover. Lock both the unit's read path and the
+# bootstrap's write path to /mnt/data/redis.
+assert "redis.service reads conf from /mnt/data/redis (not /etc/redis)" \
+  "grep -qF '/mnt/data/redis/inngest-redis.conf' '$REDIS_SERVICE' && ! grep -qF '/etc/redis' '$REDIS_SERVICE'"
+assert "redis-bootstrap installs conf under /mnt/data (never /etc/redis)" \
+  "grep -qF '\$REDIS_DATA_DIR/inngest-redis.conf' '$REDIS_BOOTSTRAP' && ! grep -qE 'install .* /etc/redis' '$REDIS_BOOTSTRAP'"
+assert "inngest-bootstrap does not write the conf into /etc/redis (namespace trap)" \
+  "! grep -qE 'install .* /etc/redis|mkdir -p /etc/redis' '$BOOTSTRAP_SH'"
 # Secrets: random_password (not operator-mint) + doppler_secret.
 assert "random_password.inngest_redis_password_prd" "grep -qE 'resource \"random_password\" \"inngest_redis_password_prd\"' '$INNGEST_TF'"
 assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+= \"INNGEST_REDIS_PASSWORD\"' '$INNGEST_TF'"
