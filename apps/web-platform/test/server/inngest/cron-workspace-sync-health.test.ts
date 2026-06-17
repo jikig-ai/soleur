@@ -53,7 +53,6 @@ let WORKSPACE_INSTALL_BY_ID: Record<string, number | null> = {};
 // filter to the workspaces chain; usersEqSpy MUST never see ("repo_status","ready").
 const wsEqSpy = vi.fn();
 const usersEqSpy = vi.fn();
-const wsInSpy = vi.fn();
 const usersInSpy = vi.fn();
 const isSpy = vi.fn();
 
@@ -135,7 +134,6 @@ const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),
-  hashUserId: (s: string) => `hash-${s}`,
 }));
 
 const postSentryHeartbeatSpy = vi.fn(async () => {});
@@ -182,7 +180,6 @@ beforeEach(() => {
   serviceFrom.mockClear();
   wsEqSpy.mockClear();
   usersEqSpy.mockClear();
-  wsInSpy.mockClear();
   usersInSpy.mockClear();
   isSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
@@ -521,6 +518,34 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("Direction B (symmetric drop): drops a stale-users-ready, would-be-quiet user whose live workspaces.repo_status != 'ready' — at the workspaces gate, NOT a stale users path", async () => {
+    // Mirror of arm 2's Direction B. The user looks went-quiet (latest row
+    // ok:true, 10d stale, with a default-branch commit since) but workspaces is
+    // the source of truth (mig 108): Step A returns NO ready row for this user,
+    // so it is never fetched in Step B → never probed → never reported. This
+    // proves the drop happens at the workspaces readiness gate, not via any
+    // residual stale `users.repo_status` read.
+    READY_WORKSPACE_ROWS = []; // workspaces.repo_status='error' → excluded from Step A
+    USERS_ROWS = [
+      {
+        id: "user-quietstale",
+        github_installation_id: 123,
+        kb_sync_history: [
+          { at: new Date(Date.now() - 10 * DAY).toISOString(), trigger: "webhook_push", ok: true, sync_completed_at: 1 },
+        ],
+      },
+    ];
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now()); // brand-new commit
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    // Step A returned no ready workspaces → users is never fetched, the GitHub
+    // probe is never called, and nothing is reported.
+    expect(usersInSpy).not.toHaveBeenCalled();
+    expect(getDefaultBranchHeadCommitAtSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 

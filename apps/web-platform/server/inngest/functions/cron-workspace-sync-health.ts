@@ -50,6 +50,50 @@ interface ScanResult {
   error: string | null;
 }
 
+// PR-2b Shape B (#5437) shared Step-A query for arms 2 & 3. PURE: it does ONLY
+// the authoritative-readiness query against `workspaces` and returns the rows +
+// error — it owns NO step boundary, NO reportSilentFallback, NO projection, and
+// NO early-return policy. Each arm keeps those itself (own op-slug, own
+// {reported:0}/{wentQuiet:0} shape, own readyIds/repoUrlById projection) so the
+// arms stay independently observable and their step-return contracts are local.
+//
+// INTENTIONAL team-workspace drop (data-integrity): this returns ALL ready
+// workspaces incl. TEAM rows (team workspaces have a fresh-uuid id). Step B's
+// `.in("id", readyIds)` against `users` matches nothing for a team id (a team
+// uuid is never a users.id), so team workspaces are silently dropped from arms
+// 2 & 3 — INTENTIONAL: kb_sync_history is users-keyed (mig 017); team sync-health
+// is out of scope for these arms (arm 1 still reports team workspaces, with a
+// null install). `workspaces.repo_status` has no index (seq scan; negligible at
+// current scale — the future optimization is a partial index
+// `workspaces_repo_status_ready_idx WHERE repo_status='ready'`, NOT added here
+// to keep this PR migration-free).
+type ReadyWorkspaceRow = { id: string; repo_url: string | null };
+// Minimal structural shape of the service-role client this helper needs — the
+// `.from(table).select(cols).eq(col,val)` thenable. Mirrors the injected-client
+// pattern in resolve-installation-id-for-workspace.ts (no full SupabaseClient
+// type dependency, no `any`).
+type ReadyScanChain = {
+  select: (cols: string) => ReadyScanChain;
+  eq: (col: string, val: string) => ReadyScanChain;
+  then: (
+    resolve: (v: {
+      data: ReadyWorkspaceRow[] | null;
+      error: { message: string } | null;
+    }) => unknown,
+  ) => Promise<unknown>;
+};
+async function scanReadyWorkspaces(service: {
+  from: (table: string) => unknown;
+}): Promise<{
+  rows: ReadyWorkspaceRow[];
+  error: { message: string } | null;
+}> {
+  const { data, error } = await (service.from("workspaces") as ReadyScanChain)
+    .select("id, repo_url")
+    .eq("repo_status", "ready");
+  return { rows: data ?? [], error };
+}
+
 export async function cronWorkspaceSyncHealthHandler({
   step,
   logger,
@@ -58,6 +102,10 @@ export async function cronWorkspaceSyncHealthHandler({
   const scan = await step.run("scan-ready-null-installation", async (): Promise<ScanResult> => {
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
+    // `workspaces.repo_status` has no index (seq scan; negligible at current
+    // scale; the future optimization is a partial index
+    // `workspaces_repo_status_ready_idx WHERE repo_status='ready'` — NOT added
+    // here to keep this PR migration-free). Same applies to arms 2/3's Step-A.
     const { data, error } = await service
       .from("workspaces")
       .select("id, repo_url")
@@ -121,11 +169,10 @@ export async function cronWorkspaceSyncHealthHandler({
   await step.run("scan-stale-sync-failed", async (): Promise<{ reported: number }> => {
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
-    // Step A: authoritative readiness from workspaces (solo id == users.id).
-    const { data: wsRows, error: wsError } = await service
-      .from("workspaces")
-      .select("id, repo_url")
-      .eq("repo_status", "ready");
+    // Step A: authoritative readiness from workspaces (solo id == users.id) via
+    // the shared PURE helper. The reportSilentFallback (own op-slug) + the
+    // {reported:0} early-return policy stay HERE in the arm, not in the helper.
+    const { rows: wsRows, error: wsError } = await scanReadyWorkspaces(service);
     if (wsError) {
       reportSilentFallback(wsError, {
         feature: SENTRY_FEATURE,
@@ -134,7 +181,7 @@ export async function cronWorkspaceSyncHealthHandler({
       });
       return { reported: 0 };
     }
-    const readyIds = ((wsRows as { id: string }[] | null) ?? []).map((w) => w.id);
+    const readyIds = wsRows.map((w) => w.id);
     // Step-scoped early return MUST return the step's shape ({reported:0}) — it
     // returns from THIS callback, never bubbling to the handler (a bare bubble
     // would skip the separate sentry-heartbeat step and false-alarm a missed
@@ -142,6 +189,9 @@ export async function cronWorkspaceSyncHealthHandler({
     if (readyIds.length === 0) return { reported: 0 };
     // Step B: kb_sync_history lives on users only — fetch by the same ids. Reuse
     // the scan-stale op slug on error (no new slug — op-contract continuity).
+    // Cardinality: internal-only/solo-workspace scale keeps `readyIds` small; if
+    // ready-workspace cardinality crosses ~few-hundred, chunk this `.in()`
+    // (PostgREST URL-length ceiling ~200-400 ids).
     const { data, error } = await service
       .from("users")
       .select("id, kb_sync_history")
@@ -236,13 +286,12 @@ export async function cronWorkspaceSyncHealthHandler({
     try {
       const { createServiceClient } = await import("@/lib/supabase/service");
       const service = createServiceClient();
-      // Step A: authoritative readiness + repo_url from workspaces. Build the Map
-      // DIRECTLY from wsRows (not via a derived ids index) so it can't drift if
-      // anyone later filters ids.
-      const { data: wsRows, error: wsError } = await service
-        .from("workspaces")
-        .select("id, repo_url")
-        .eq("repo_status", "ready");
+      // Step A: authoritative readiness + repo_url from workspaces via the shared
+      // PURE helper. The reportSilentFallback (own op-slug), the {wentQuiet:0}
+      // early-return, and the repoUrlById projection all stay HERE in the arm.
+      // Build the Map DIRECTLY from wsRows (not via a derived ids index) so it
+      // can't drift if anyone later filters ids.
+      const { rows: wsRows, error: wsError } = await scanReadyWorkspaces(service);
       if (wsError) {
         reportSilentFallback(wsError, {
           feature: SENTRY_FEATURE,
@@ -251,16 +300,15 @@ export async function cronWorkspaceSyncHealthHandler({
         });
         return { wentQuiet: 0 };
       }
-      const repoUrlById = new Map(
-        ((wsRows as { id: string; repo_url: string | null }[] | null) ?? []).map(
-          (w) => [w.id, w.repo_url],
-        ),
-      );
+      const repoUrlById = new Map(wsRows.map((w) => [w.id, w.repo_url]));
       const readyIds = [...repoUrlById.keys()];
       // Step-scoped early return (returns the step's {wentQuiet:0} shape, never
       // bubbles to the handler → sentry-heartbeat still fires).
       if (readyIds.length === 0) return { wentQuiet: 0 };
       // Step B: kb_sync_history lives on users only — fetch by the same ids.
+      // Cardinality: internal-only/solo-workspace scale keeps `readyIds` small;
+      // if ready-workspace cardinality crosses ~few-hundred, chunk this `.in()`
+      // (PostgREST URL-length ceiling ~200-400 ids).
       const { data, error } = await service
         .from("users")
         .select("id, kb_sync_history")
