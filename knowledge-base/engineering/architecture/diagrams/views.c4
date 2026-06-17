@@ -30,6 +30,7 @@ views {
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
       platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,
       platform.infra.supabase, platform.infra.tunnel, platform.infra.hetzner,
+      platform.infra.inngest, platform.infra.inngestPostgres, platform.infra.inngestRedis,
       anthropic, github, cloudflare, doppler, stripe, plausible
 
     style element.tag == #external {

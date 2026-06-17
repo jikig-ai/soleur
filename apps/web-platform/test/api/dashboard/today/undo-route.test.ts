@@ -21,6 +21,7 @@ const {
   mockServiceFrom,
   mockValidateOrigin,
   mockCreateGitHubAppClient,
+  mockResolveInstallationId,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockTenantFrom: vi.fn(),
@@ -30,6 +31,7 @@ const {
     origin: "https://app.soleur.ai",
   })),
   mockCreateGitHubAppClient: vi.fn(),
+  mockResolveInstallationId: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -49,6 +51,11 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 }));
 vi.mock("@/server/github/app-client", () => ({
   createGitHubAppClient: mockCreateGitHubAppClient,
+}));
+// ADR-044 PR-2 (#5462): the install id is now resolved via the membership-checked
+// `resolveInstallationId` RPC (was a direct `users.github_installation_id` read).
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: mockResolveInstallationId,
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
@@ -106,19 +113,13 @@ function setupServiceChain(state: ServiceState) {
       return eqChain;
     }),
   };
-  const usersChain = {
-    select: vi.fn(() => usersChain),
-    eq: vi.fn(() => usersChain),
-    maybeSingle: vi.fn(async () => ({
-      data: { github_installation_id: state.installationId },
-      error: null,
-    })),
-  };
   (mockServiceFrom as unknown as { mockImplementation: (impl: (table: string) => unknown) => void }).mockImplementation((table: string) => {
     if (table === "action_sends") return sendReadChain;
-    if (table === "users") return usersChain;
     throw new Error(`unexpected service-role table ${table}`);
   });
+  // ADR-044 PR-2: the install id is resolved via the membership-checked RPC
+  // (mocked), not a `users` service read. `null` → 403 unauthorized.
+  mockResolveInstallationId.mockResolvedValue(state.installationId);
   return captured;
 }
 

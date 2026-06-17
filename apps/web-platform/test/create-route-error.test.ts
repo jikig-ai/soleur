@@ -6,7 +6,7 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 
 const {
   mockGetUser,
-  mockServiceFrom,
+  mockResolveInstallationId,
   mockCreateRepo,
   mockCaptureException,
   GitHubApiError,
@@ -22,7 +22,7 @@ const {
   }
   return {
     mockGetUser: vi.fn(),
-    mockServiceFrom: vi.fn(),
+    mockResolveInstallationId: vi.fn(),
     mockCreateRepo: vi.fn(),
     mockCaptureException: vi.fn(),
     GitHubApiError,
@@ -37,9 +37,14 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     auth: { getUser: mockGetUser },
   }),
-  createServiceClient: () => ({
-    from: mockServiceFrom,
-  }),
+}));
+
+// ADR-044 PR-2: the install is resolved via the membership-checked resolver
+// (was a direct users.github_installation_id select). The error-handling tests
+// need a valid numeric id so the handler reaches createRepo; the "not installed"
+// case (null) short-circuits to 400 before createRepo.
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: mockResolveInstallationId,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -90,16 +95,9 @@ describe("POST /api/repo/create — error handling", () => {
       data: { user: { id: "user-123" } },
     });
 
-    mockServiceFrom.mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: { github_installation_id: 999 },
-            error: null,
-          }),
-        }),
-      }),
-    });
+    // Resolver returns a valid install so the error-handling tests reach
+    // createRepo (the "not installed" → 400 case is covered elsewhere).
+    mockResolveInstallationId.mockResolvedValue(999);
   });
 
   test("returns 409 with specific message for GitHub 422 (duplicate name)", async () => {
