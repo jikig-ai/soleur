@@ -204,6 +204,64 @@ Stopping inngest-server before VACUUM is required (SQLite write lock). Downtime 
 
 **Automation deferred:** the operator runs this manually for now. If event volume increases to where monthly manual cleanup becomes a chore, file a follow-up issue to wire a weekly systemd timer alongside `inngest-heartbeat.timer`.
 
+## Durable backend (Supabase Postgres + self-hosted Redis) — #5450
+
+> Migrating Inngest off bundled SQLite + in-memory Redis (ephemeral root disk) onto
+> **Supabase Postgres** (`--postgres-uri`, dedicated EU project, session pooler :5432) +
+> **self-hosted Redis** (`--redis-uri`, AOF on `/mnt/data`). Closes the silent-loss gap where a
+> host re-provision drops every HTTP-armed `event-scheduled-reminder`. Executes the Postgres
+> migration ADR-030 deferred. Plan: `knowledge-base/project/plans/2026-06-17-feat-inngest-durable-backend-supabase-postgres-plan.md`.
+
+### Host-rebuild durability matrix (per mechanism)
+
+"Dies with session?" (process restart) is distinct from "Survives host re-provision?" (fresh root disk).
+The bug is the **host-rebuild** column, not the session column.
+
+| Mechanism | Re-arms on web redeploy? | Survives process restart? | Survives host re-provision (pre-migration) | Survives host re-provision (post-migration) |
+|---|---|---|---|---|
+| `cron-*` (recurring) | Yes (registered every deploy) | Yes | Yes (re-armed on next deploy) | Yes |
+| `oneshot-*` (first-arm) | n/a | Yes | Yes (boot-arm re-arms, ADR-046 I4) | Yes |
+| `oneshot-*` (conditional re-arm, diverged ts) | n/a | Yes | **No — silent loss** | Yes (durable queue) |
+| `event-scheduled-reminder` (HTTP-armed future `ts`) | No | Yes (queue in Redis) | **No — silent loss** | **Yes (durable Redis AOF)** |
+
+### Phase 0 spike verdicts (2026-06-17, inngest v1.19.4, local docker harness — the Phase 1 gate)
+
+CLI semantics (`inngest start --help`): `--postgres-uri` = "configuration and history persistence
+(defaults to SQLite)"; `--redis-uri` = "external **queue and run state** (defaults to self-contained
+**in-memory Redis** with periodic snapshot backups)". The armed-event **queue lives in Redis**, not Postgres.
+
+- **0.2 FR1 durability boundary — durable Redis is MANDATORY.** Wiped-volume restart (recreate the
+  inngest container = fresh root disk; Postgres + external-Redis volumes persist):
+  - Postgres-only (default in-memory Redis): armed future-`ts` event **LOST** (did not fire).
+  - Postgres + external durable Redis (AOF, `appendfsync everysec`): armed event **SURVIVED**, fired at its `ts`.
+  - → Ship **both** `--postgres-uri` and `--redis-uri`. Postgres alone does NOT persist the queue.
+- **0.3 Fail-closed vs silent fallback — Inngest FAILS CLOSED.** With a reachable-but-refused backend
+  it exits non-zero (`failed to connect … connection refused`); `/health` never returns 200; **no**
+  silent degrade to a healthy SQLite state. → The existing `/health` 200 gate already catches an
+  *unreachable* backend. The residual silent-non-durable risk is **flags-absent** (ExecStart drops the
+  flags → defaults to SQLite **while** `/health`=200). The hard gate therefore asserts: (a) the running
+  inngest cmdline contains `--postgres-uri` AND `--redis-uri`, (b) `inngest-redis` unit active + Redis
+  ping, (c) Postgres reachable — NOT a "fail-open post-start assertion".
+- **0.4 Cutover-recovery — enumeration is FEASIBLE; no app-side ledger required.** The server's GraphQL
+  (`/v0/gql` `eventsV2(filter:{from!,until,eventNames,query,includeInternalEvents})`) returns received
+  events by time window, including future-dated `reminder.scheduled`. Cutover recovery = quiesce arming →
+  enumerate the OLD server's future-dated, not-yet-fired `reminder.scheduled` events → re-arm on the new
+  Postgres+Redis server (cross-ref `runs` to exclude already-fired → avoid double-posting a comment).
+  Dual-run-drain (run old SQLite server until armed reminders fire) is the simpler fallback. **No
+  `scheduled_reminders` Supabase migration / boot reconciler is needed** (removes that conditional Phase-1 scope).
+- **0.5 Pooler mode — session :5432 only.** Inngest uses sqlc prepared statements; Supabase
+  **transaction pooler :6543 breaks them** (PgBouncer transaction mode). Use **Supavisor session
+  pooler :5432**. Spike used direct session-semantics Postgres and prepared statements worked. Live
+  Supabase dedicated-project pooler reachability + owner-role grants confirmed at apply-time (the EU
+  Inngest project is provisioned via the delivered idempotent SQL bootstrap, not during the local spike).
+
+### Availability coupling (permanent, post-migration)
+
+Post-cutover Inngest **cannot start** without Supabase + Redis reachable (the in-memory fallback is
+gone — proven fail-closed in 0.3). Pre-migration it survived a Supabase outage on local SQLite; it no
+longer will. Knowingly traded for durability + PITR + ADR-030 closure. The dedicated Inngest Supabase
+project + co-located Redis keep the blast radius off the main app's project.
+
 ## Concurrency conventions
 
 - **One `terraform apply` at a time.** The R2 backend has `use_lockfile = false` (R2 does not support S3 conditional writes). Concurrent applies race silently. R7 in the plan documents this.

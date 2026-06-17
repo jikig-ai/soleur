@@ -10,13 +10,13 @@ issue: 5450
 
 > Phase 0 is a **hard predecessor** — no Phase 1 code is authored until Phase 0 verdicts are recorded in `inngest-server.md`.
 
-## Phase 0 — Spike (local + DEV Supabase; no prod writes)
-- [ ] 0.1 Stand up local `inngest start` (CLI ≥ v1.4.0) against a dedicated DEV Inngest Supabase project.
-- [ ] 0.2 **FR1 wiped-volume durability:** arm a future-`ts` event → recreate the container with a wiped local volume → confirm it fires under (a) in-memory Redis, (b) external AOF Redis. Record the required config.
-- [ ] 0.3 **Fail-closed vs fallback:** start with an unreachable backend; record whether Inngest exits non-zero or silently falls back to in-memory.
-- [ ] 0.4 **Cutover-recovery strategy:** determine enumeration API vs dual-run-drain vs app-side ledger for recovering armed reminders across the SQLite→fresh-Postgres cutover; record drain semantics for in-flight runs (ADR-030 I1/I2/I6).
-- [ ] 0.5 **Pooler + grants:** confirm session :5432 works / :6543 breaks; validate the dedicated-project owner role.
-- [ ] 0.6 Record all verdicts in `inngest-server.md` (gate to Phase 1).
+## Phase 0 — Spike (local; no prod writes) — DONE 2026-06-17
+- [x] 0.1 Stood up local `inngest start` **v1.19.4** (prod-pinned) via docker-compose against local Postgres+Redis. *Deviation: used local docker Postgres, NOT a dedicated DEV Inngest Supabase project — provisioning a Supabase project is outward-facing; the durability mechanism (0.2-0.4) is backend-agnostic and Supabase-specific 0.5 is deferred to apply-time.*
+- [x] 0.2 **FR1 wiped-volume durability:** Postgres-only (in-memory Redis) → armed event **LOST**; Postgres + external AOF Redis → **SURVIVED**. **Durable Redis MANDATORY.** (runbook § Durable backend, verdict 0.2)
+- [x] 0.3 **Fail-closed vs fallback:** Inngest **fails closed** (exit≠0, `/health` never 200, no silent SQLite). Residual risk = flags-absent → hard gate asserts cmdline flags + backend reachability. (verdict 0.3)
+- [x] 0.4 **Cutover-recovery strategy:** enumeration **FEASIBLE** via `eventsV2` filter → quiesce + enumerate future-dated `reminder.scheduled` + re-arm (dual-run-drain fallback). **No app-side ledger / `scheduled_reminders` migration needed.** (verdict 0.4)
+- [x] 0.5 **Pooler + grants:** session :5432 (prepared statements work); :6543 transaction-mode breaks them. *Live Supabase dedicated-project pooler + owner-role confirmed at apply-time (Phase 1 SQL bootstrap).* (verdict 0.5)
+- [x] 0.6 All verdicts recorded in `inngest-server.md` § Durable backend (gate to Phase 1 satisfied).
 
 ## Phase 1 — Provision (Terraform / cloud-init only; no operator SSH)
 - [ ] 1.1 Delivered idempotent SQL bootstrap for the dedicated Inngest project role/grants (`file()` in `config_hash`); no Supabase TF provider unless 0.x requires it.
