@@ -81,12 +81,13 @@ export async function getCurrentRepoUrl(
 
 /**
  * The active workspace's repo readiness signal for the Concierge dispatch gate
- * (#5394). Reads `repo_status` from `workspaces` (the ADR-044 source of truth,
- * correct for shared/team workspaces) and the sanitized error REASON from
- * `users.repo_error` — `workspaces.repo_error` is NEVER written
- * (`workspace-repo-mirror.ts:6`), so the reason can only come from `users`.
- * Both reads go through the TENANT client (own-row RLS: "Users can read own
- * profile"), keeping cc-dispatcher OFF the service-role allowlist.
+ * (#5394). Reads `repo_status` AND the sanitized error REASON `repo_error` from
+ * the SAME `workspaces` row (the ADR-044 source of truth, correct for
+ * shared/team workspaces). Migration 110 added `workspaces.repo_error` to the
+ * non-credential `authenticated` column GRANT, and PR-2 (#5462) relocated the
+ * write there — so both signals key on the active workspace. The read goes
+ * through the TENANT client (RLS `workspaces_select_for_members`), keeping
+ * cc-dispatcher OFF the service-role allowlist.
  *
  * FAIL-OPEN: any transient/auth/query error coerces to
  * `{ repoStatus: "not_connected" }` so a `ready` founder is NEVER blocked by a
@@ -94,14 +95,11 @@ export async function getCurrentRepoUrl(
  * through to the existing repo-less path / #5392 fallback (the safety net this
  * gate layers on top of).
  *
- * Source-key note (forward-looking, for the #5462 team-workspace author): the
- * `repo_status` key is the active WORKSPACE while the `repo_error` key is the
- * dispatching USER. Today connect/disconnect is solo-only
- * (`workspace.id === user.id`), so the two keys coincide. Once team-invite repo
- * flows land (#5462), a member dispatching against a workspace whose `error`
- * status was caused by ANOTHER member reads their own (null) `repo_error` → the
- * gate's message degrades to the generic `"setup failed"` fallback (NOT a
- * misclassification and NOT a cross-member leak — readiness is still correct).
+ * Cross-member correctness (PR-2 fix): because `repo_error` now keys on the same
+ * active workspace as `repo_status`, a member dispatching against a workspace
+ * whose `error` was caused by ANOTHER member reads the WORKSPACE's reason (not
+ * their own null) — the prior dispatching-user-vs-active-workspace key mismatch
+ * is resolved.
  */
 export async function getCurrentRepoStatus(
   userId: string,
@@ -129,20 +127,13 @@ export async function getCurrentRepoStatus(
   const targetWorkspaceId =
     workspaceId ?? (await resolveCurrentWorkspaceId(userId, tenant));
 
-  // workspaces.repo_status (source of truth) + users.repo_error (the only row
-  // that holds the sanitized reason) in parallel — adds no sequential await.
-  const [statusRes, errorRes] = await Promise.all([
-    tenant
-      .from("workspaces")
-      .select("repo_status")
-      .eq("id", targetWorkspaceId)
-      .maybeSingle(),
-    tenant
-      .from("users")
-      .select("repo_error")
-      .eq("id", userId)
-      .maybeSingle(),
-  ]);
+  // workspaces.repo_status + workspaces.repo_error (the ADR-044 source of truth
+  // for BOTH, keyed on the active workspace) in a single row read.
+  const statusRes = await tenant
+    .from("workspaces")
+    .select("repo_status, repo_error")
+    .eq("id", targetWorkspaceId)
+    .maybeSingle();
 
   if (statusRes.error) {
     reportSilentFallback(statusRes.error, {
@@ -156,11 +147,8 @@ export async function getCurrentRepoStatus(
   const repoStatus =
     (statusRes.data?.repo_status as string | null | undefined) ??
     "not_connected";
-  // A users-read error must not block dispatch — the reason is only consumed on
-  // the `error` branch, so a null reason degrades to generic copy, never a hard
-  // fail. (No reportSilentFallback: the status read is the load-bearing signal.)
   const repoError =
-    (errorRes.data?.repo_error as string | null | undefined) ?? null;
+    (statusRes.data?.repo_error as string | null | undefined) ?? null;
 
   return { repoStatus, repoError };
 }

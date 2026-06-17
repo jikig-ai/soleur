@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { verifyInstallationOwnership, getInstallationAccount } from "@/server/github-app";
+import { resolveActiveWorkspace } from "@/server/workspace-resolver";
+import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
 import logger from "@/server/logger";
 
 /**
@@ -115,30 +117,64 @@ export async function POST(request: Request) {
     );
   }
 
-  const { error: updateError } = await serviceClient
-    .from("users")
-    .update({ github_installation_id: body.installationId })
-    .eq("id", user.id);
+  // ADR-044 PR-2: the installation grant lands AUTHORITATIVELY on the active
+  // `workspaces` row (was the `users` row). Resolve the target id server-side via
+  // the membership-verified resolver (IDOR-safe; fail-closed 503 on db-error,
+  // never write a credential into the caller's solo workspace under a team claim).
+  const activeResolution = await resolveActiveWorkspace(user.id, supabase);
+  if (!activeResolution.ok) {
+    return NextResponse.json(
+      { error: "Could not resolve your active workspace. Please retry." },
+      { status: 503 },
+    );
+  }
+  const activeWorkspaceId = activeResolution.workspaceId;
 
-  if (updateError) {
+  // Owner-gate (confused-deputy parity with setup/disconnect): a credential write
+  // to a team workspace must be owner-only — a non-owner member must not overwrite
+  // the team's installation grant with their own. No-op for solo (a solo user owns
+  // workspace_id=user.id).
+  const ownerRes = await supabase.rpc("is_workspace_owner", {
+    p_workspace_id: activeWorkspaceId,
+    p_user_id: user.id,
+  });
+  if (ownerRes.error) {
     logger.error(
-      { err: updateError, userId: user.id },
-      "Failed to store installation ID",
+      { err: ownerRes.error, userId: user.id, workspaceId: activeWorkspaceId },
+      "is_workspace_owner check failed during install",
     );
     return NextResponse.json(
       { error: "Failed to store installation ID" },
       { status: 500 },
     );
   }
+  if (ownerRes.data !== true) {
+    return NextResponse.json(
+      { error: "Only the workspace owner can connect the GitHub App to this workspace." },
+      { status: 403 },
+    );
+  }
 
-  // ADR-044: mirror the installation grant to the solo workspace so the
-  // workspaces-only credential read (resolve_workspace_installation_id) sees it.
-  const { mirrorRepoColsToSoloWorkspace } = await import(
-    "@/server/workspace-repo-mirror"
-  );
-  await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
-    github_installation_id: body.installationId,
-  });
+  // Fail-closed: a silently-failed credential write (db error OR 0-row no-op) would
+  // leave the workspaces-only credential read (resolve_workspace_installation_id)
+  // unable to see the install — surface a 500 so the (idempotent) install retries.
+  try {
+    await writeRepoColsToWorkspace(
+      serviceClient,
+      activeWorkspaceId,
+      { github_installation_id: body.installationId },
+      { throwOnError: true },
+    );
+  } catch (writeErr) {
+    logger.error(
+      { err: writeErr, userId: user.id, workspaceId: activeWorkspaceId },
+      "Failed to store installation ID on the active workspace",
+    );
+    return NextResponse.json(
+      { error: "Failed to store installation ID" },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }

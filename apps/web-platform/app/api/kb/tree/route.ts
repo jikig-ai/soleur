@@ -6,6 +6,7 @@ import { buildTree } from "@/server/kb-reader";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
 import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
+import { resolveInstallationId } from "@/server/resolve-installation-id";
 
 async function getHandler(_req: Request, user: User) {
   const serviceClient = createServiceClient();
@@ -32,18 +33,26 @@ async function getHandler(_req: Request, user: User) {
   let needsReconnect = false;
   if (access.activeWorkspaceId === user.id) {
     // Intentionally caller-id-scoped: solo own-row sync metadata only (AC2).
+    // `kb_sync_history` stays on `users` (not relocated by ADR-044). The install
+    // id moved to `workspaces` (PR-2), so it is read via the membership-checked
+    // RPC keyed on the active workspace — a direct `users.github_installation_id`
+    // read would go NULL for a newly-connected user.
     const { data: ownRow } = await serviceClient
       .from("users")
-      .select("kb_sync_history, github_installation_id")
+      .select("kb_sync_history")
       .eq("id", user.id)
       .single();
     const historyArr = Array.isArray(ownRow?.kb_sync_history)
       ? (ownRow.kb_sync_history as unknown[])
       : [];
     lastSync = historyArr.length > 0 ? historyArr[historyArr.length - 1] : null;
+    const installationId = await resolveInstallationId(
+      user.id,
+      access.activeWorkspaceId,
+    );
     needsReconnect = await resolveNeedsReconnect(
       access.repoStatus,
-      ownRow?.github_installation_id ?? null,
+      installationId,
       user.id,
     );
   }

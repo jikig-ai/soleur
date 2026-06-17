@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { createRepo, GitHubApiError } from "@/server/github-app";
+import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
@@ -45,14 +46,14 @@ export async function POST(request: Request) {
 
   const isPrivate = body.private !== false; // Default to private
 
-  const serviceClient = createServiceClient();
-  const { data: userData, error: fetchError } = await serviceClient
-    .from("users")
-    .select("github_installation_id")
-    .eq("id", user.id)
-    .single();
+  // ADR-044 PR-2: resolve the install for the caller's ACTIVE workspace via the
+  // membership-checked RPC (was a direct `users.github_installation_id` read,
+  // which goes NULL for a newly-connected user once the write relocated to
+  // `workspaces`). Returns null for "no install" OR a transient read error
+  // (Sentry-mirrored inside the resolver) — both map to the existing 400.
+  const installationId = await resolveInstallationId(user.id);
 
-  if (fetchError || !userData?.github_installation_id) {
+  if (!installationId) {
     return NextResponse.json(
       { error: "GitHub App not installed. Please install the app first." },
       { status: 400 },
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
 
   try {
     const result = await createRepo(
-      userData.github_installation_id,
+      installationId,
       name,
       isPrivate,
     );
