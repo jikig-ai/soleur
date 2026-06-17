@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { SlidingWindowCounter } from "@/server/rate-limiter";
 import { deleteWorkspace } from "@/server/workspace";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import logger from "@/server/logger";
 
 const disconnectLimiter = new SlidingWindowCounter({
@@ -35,6 +36,24 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       { error: "Too many requests. Please wait before trying again." },
       { status: 429 },
+    );
+  }
+
+  // ADR-044 PR-2a (confused-deputy honesty): disconnect still tears down the
+  // SOLO workspace (`deleteWorkspace(user.id)` + solo-keyed clears below — team
+  // on-disk teardown is #4560/Phase-5). If a TEAM workspace is active, the legacy
+  // path would SILENTLY disconnect the caller's PERSONAL repo instead of the
+  // team's. Refuse explicitly until #4560. Resolved server-side from session
+  // state (never request input) → IDOR-safe; a strict no-op for solo
+  // (activeWorkspaceId === user.id).
+  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
+  if (activeWorkspaceId !== user.id) {
+    return NextResponse.json(
+      {
+        error:
+          "Disconnecting a repository from a team workspace isn't supported yet. Switch to your personal workspace to disconnect.",
+      },
+      { status: 422 },
     );
   }
 

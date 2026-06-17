@@ -1,10 +1,12 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { mockQueryChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks (declared before the route import)
 // ---------------------------------------------------------------------------
 const mockGetUser = vi.fn();
 const mockRpc = vi.fn();
+const mockTenantFrom = vi.fn();
 const mockServiceFrom = vi.fn();
 const mockAdminGetUserById = vi.fn();
 const mockValidateOrigin = vi.fn();
@@ -19,6 +21,9 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     auth: { getUser: mockGetUser },
     rpc: mockRpc,
+    // ADR-044 PR-2a: tenant read of user_session_state for the active-workspace
+    // guard (resolveCurrentWorkspaceId). Defaulted to solo in beforeEach.
+    from: mockTenantFrom,
   }),
   createServiceClient: () => ({
     from: mockServiceFrom,
@@ -159,7 +164,34 @@ describe("POST /api/repo/setup — install resolution", () => {
     mockProvisionWorkspaceWithRepo.mockResolvedValue("/workspaces/user-1");
     // ADR-044 PR-1 owner-gate: default owner; non-owner test overrides.
     mockRpc.mockResolvedValue({ data: true, error: null });
+    // ADR-044 PR-2a: default the active-workspace resolver to SOLO
+    // (current_workspace_id null → resolveCurrentWorkspaceId returns user.id),
+    // so the team-workspace refusal guard is a no-op for every existing test.
+    mockTenantFrom.mockReturnValue(
+      mockQueryChain({ current_workspace_id: null }, null),
+    );
     setupServiceClient();
+  });
+
+  test("ADR-044 PR-2a: TEAM workspace active → 422 refusal, no owner-gate, no clone", async () => {
+    const TEAM_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
+    // Active workspace is a TEAM (≠ user.id). Team on-disk provisioning is
+    // #4560/Phase-5; until then setup would SILENTLY clone into the caller's
+    // PERSONAL solo workspace (confused deputy). Refuse explicitly.
+    mockTenantFrom.mockReturnValue(
+      mockQueryChain({ current_workspace_id: TEAM_WORKSPACE_ID }, null),
+    );
+
+    const res = await POST(
+      makeRequest({ repoUrl: "https://github.com/jikig-ai/soleur" }),
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error).toMatch(/team workspace/i);
+
+    // The refusal precedes the owner-gate AND the clone.
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockProvisionWorkspaceWithRepo).not.toHaveBeenCalled();
   });
 
   test("ADR-044 owner-gate: non-owner → 403, no clone", async () => {
