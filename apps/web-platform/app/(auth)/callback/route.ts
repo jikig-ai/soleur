@@ -372,14 +372,18 @@ async function ensureWorkspaceProvisioned(
     // Workspace identifier === userId per migration 053 §1.1.7 N2 invariant
     // (the workspace_members backfill makes workspaces.id = owner_user_id;
     // the handle_new_user trigger preserves this for new signups).
-    const workspacePath = await provisionWorkspace(userId);
+    // provisionWorkspace's on-disk side effect (ensureDir/scaffold/git init) is
+    // preserved; its return (the path) is no longer written — workspace_path is
+    // derived now (workspacePathForWorkspaceId), ADR-044 PR-2b. The dropped key
+    // relies on its DB-side `text NOT NULL DEFAULT ''` to satisfy NOT NULL on this
+    // trigger-failure INSERT path (mig 001); PR-2b-proper drops the column entirely.
+    await provisionWorkspace(userId);
     const { error: insertError } = await serviceClient
       .from("users")
       .upsert(
         {
           id: userId,
           email,
-          workspace_path: workspacePath,
           workspace_status: "ready",
         },
         { onConflict: "id", ignoreDuplicates: true },
@@ -400,10 +404,12 @@ async function ensureWorkspaceProvisioned(
 
   if (existing.workspace_status !== "ready") {
     try {
-      const workspacePath = await provisionWorkspace(userId);
+      // provisionWorkspace call kept for its on-disk side effect; return discarded
+      // (workspace_path is derived now, ADR-044 PR-2b).
+      await provisionWorkspace(userId);
       await serviceClient
         .from("users")
-        .update({ workspace_path: workspacePath, workspace_status: "ready" })
+        .update({ workspace_status: "ready" })
         .eq("id", userId);
     } catch (err) {
       Sentry.withIsolationScope(() => {

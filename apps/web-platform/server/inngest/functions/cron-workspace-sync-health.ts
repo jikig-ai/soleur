@@ -103,20 +103,49 @@ export async function cronWorkspaceSyncHealthHandler({
   // kb_sync_history row is ok:false — a persistent recorded sync failure that
   // item-1's NULL-install scan can never catch (those write zero rows). This
   // class IS installed, so the webhook reaches it, but the sync keeps failing
-  // and the user just sees a stale tree. kb_sync_history lives on `users` only
-  // (ADR-044 mirrored repo cols — not history — to workspaces), so this scan
-  // still reads `users` for the history; the INSTALL is resolved per-row from
-  // the user's solo `workspaces` row via resolveInstallationIdForWorkspace
-  // (#5470 — the legacy `users` install predicate is dropped ahead of PR-2b's
-  // column drop, which removes that column). Read-only; reports in-place and
+  // and the user just sees a stale tree.
+  //
+  // PR-2b Shape B (#5437): READINESS is now read from the authoritative
+  // `workspaces.repo_status` (mig 108 source of truth, written by #5466), NOT the
+  // STALE `users.repo_status`. Step A scans `workspaces` for repo_status='ready'
+  // (mirrors arm 1's idiom); Step B fetches `kb_sync_history` from `users` by the
+  // same ids (`.in("id", ids)`) — that column lives on `users` only (mig 017) and
+  // ADR-044 deliberately did NOT relocate it; the solo workspaces.id == users.id
+  // (ADR-038/053 N2). The INSTALL is resolved per-row from the user's solo
+  // `workspaces` row via resolveInstallationIdForWorkspace (#5470). This fixes a
+  // BIDIRECTIONAL latent bug: newly-connected users (no `users.repo_status` write
+  // but `workspaces.repo_status='ready'`) are now CAUGHT (Direction A), and
+  // stale-`users.repo_status`-ready users whose live workspace is NOT ready are
+  // now correctly DROPPED (Direction B). Read-only; reports in-place and
   // deliberately does NOT widen the function's ScanResult return.
   await step.run("scan-stale-sync-failed", async (): Promise<{ reported: number }> => {
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
+    // Step A: authoritative readiness from workspaces (solo id == users.id).
+    const { data: wsRows, error: wsError } = await service
+      .from("workspaces")
+      .select("id, repo_url")
+      .eq("repo_status", "ready");
+    if (wsError) {
+      reportSilentFallback(wsError, {
+        feature: SENTRY_FEATURE,
+        op: "scan-stale",
+        message: "Stale-sync-failed scan failed",
+      });
+      return { reported: 0 };
+    }
+    const readyIds = ((wsRows as { id: string }[] | null) ?? []).map((w) => w.id);
+    // Step-scoped early return MUST return the step's shape ({reported:0}) — it
+    // returns from THIS callback, never bubbling to the handler (a bare bubble
+    // would skip the separate sentry-heartbeat step and false-alarm a missed
+    // checkin). Mirrors the "Heartbeat isolation is STRUCTURAL" contract.
+    if (readyIds.length === 0) return { reported: 0 };
+    // Step B: kb_sync_history lives on users only — fetch by the same ids. Reuse
+    // the scan-stale op slug on error (no new slug — op-contract continuity).
     const { data, error } = await service
       .from("users")
       .select("id, kb_sync_history")
-      .eq("repo_status", "ready");
+      .in("id", readyIds);
     if (error) {
       reportSilentFallback(error, {
         feature: SENTRY_FEATURE,
@@ -173,8 +202,17 @@ export async function cronWorkspaceSyncHealthHandler({
   // out-of-band: GitHub's default-branch HEAD commit date vs. the last ok:true
   // sync. Fire only when BOTH (a) the repo pushed since the last sync (+slack,
   // cross-clock) AND (b) the last sync is older than N days — clause (a)
-  // suppresses the idle-repo false positive. Scans `users` (mirrors arm 2 → the
-  // two arms partition by latest-row ok-polarity; never double-report).
+  // suppresses the idle-repo false positive.
+  //
+  // PR-2b Shape B (#5437): like arm 2, readiness AND repo_url now come from the
+  // authoritative `workspaces` row (Step A: scan repo_status='ready' → {id,
+  // repo_url}), not the STALE `users.repo_url`/`users.repo_status`. Step B fetches
+  // `kb_sync_history` from `users` by the same ids. The arm-2/arm-3 partition is
+  // POLARITY-based (latest-row ok:false vs ok:true), enforced PER-ROW below — it
+  // does NOT depend on the two arms scanning an identical row-set, so each running
+  // its own workspaces scan at its own step boundary is harmless (idempotent
+  // loud-reporter, daily cadence; "never double-report" rests on the polarity
+  // check, not a shared population).
   //
   // DEFAULT BRANCH is the correct probe target (not "any branch"): the reconcile
   // only ever syncs the default branch — webhook-push-reconcilable.ts drops
@@ -198,10 +236,35 @@ export async function cronWorkspaceSyncHealthHandler({
     try {
       const { createServiceClient } = await import("@/lib/supabase/service");
       const service = createServiceClient();
+      // Step A: authoritative readiness + repo_url from workspaces. Build the Map
+      // DIRECTLY from wsRows (not via a derived ids index) so it can't drift if
+      // anyone later filters ids.
+      const { data: wsRows, error: wsError } = await service
+        .from("workspaces")
+        .select("id, repo_url")
+        .eq("repo_status", "ready");
+      if (wsError) {
+        reportSilentFallback(wsError, {
+          feature: SENTRY_FEATURE,
+          op: "scan-went-quiet",
+          message: "Went-quiet scan failed",
+        });
+        return { wentQuiet: 0 };
+      }
+      const repoUrlById = new Map(
+        ((wsRows as { id: string; repo_url: string | null }[] | null) ?? []).map(
+          (w) => [w.id, w.repo_url],
+        ),
+      );
+      const readyIds = [...repoUrlById.keys()];
+      // Step-scoped early return (returns the step's {wentQuiet:0} shape, never
+      // bubbles to the handler → sentry-heartbeat still fires).
+      if (readyIds.length === 0) return { wentQuiet: 0 };
+      // Step B: kb_sync_history lives on users only — fetch by the same ids.
       const { data, error } = await service
         .from("users")
-        .select("id, repo_url, kb_sync_history")
-        .eq("repo_status", "ready");
+        .select("id, kb_sync_history")
+        .in("id", readyIds);
       if (error) {
         reportSilentFallback(error, {
           feature: SENTRY_FEATURE,
@@ -214,7 +277,6 @@ export async function cronWorkspaceSyncHealthHandler({
         (data as
           | {
               id: string;
-              repo_url: string | null;
               kb_sync_history: unknown;
             }[]
           | null) ?? [];
@@ -222,9 +284,11 @@ export async function cronWorkspaceSyncHealthHandler({
       const maxGapMs = KB_WENT_QUIET_MAX_GAP_DAYS * 24 * 60 * 60 * 1000;
       let wentQuiet = 0;
       for (const r of rows) {
-        // Need a repo to probe; the install is resolved per-row below (from the
-        // user's solo workspace) just before the GitHub probe that consumes it.
-        if (!r.repo_url) continue;
+        // Need a repo to probe; repo_url comes from the workspaces Step-A Map
+        // (PR-2b — no longer a users column). The install is resolved per-row
+        // below (from the user's solo workspace) just before the GitHub probe.
+        const repoUrl = repoUrlById.get(r.id) ?? null;
+        if (!repoUrl) continue;
         // Latest row only — `at(-1).ok === true` is the went-quiet gate AND the
         // mutual-exclusion boundary with arm 2 (which fires on `ok === false`).
         // The `'ok' in latest` guard excludes legacy {date,count} rows.
@@ -244,13 +308,13 @@ export async function cronWorkspaceSyncHealthHandler({
         if (Number.isNaN(lastOkSyncAt)) continue;
         if (now - lastOkSyncAt <= maxGapMs) continue; // fresh — clause (b) fails
 
-        // owner/repo from the user's own repo_url (NOT _cron-shared constants,
-        // which point at Soleur's own repo). Mirrors workspace-reconcile-on-push's
-        // repoSlug. repo_url is canonical `https://github.com/owner/repo` at write
-        // time (normalizeRepoUrl), so a falsy owner/repo here is a near-impossible
-        // legacy/malformed row — skipping it silently is benign (the helper
-        // encodeURIComponent-guards the segments regardless).
-        const slug = r.repo_url
+        // owner/repo from the workspace's repo_url (Step-A Map, NOT _cron-shared
+        // constants, which point at Soleur's own repo). Mirrors workspace-reconcile-
+        // on-push's repoSlug. repo_url is canonical `https://github.com/owner/repo`
+        // at write time (normalizeRepoUrl), so a falsy owner/repo here is a
+        // near-impossible legacy/malformed row — skipping it silently is benign
+        // (the helper encodeURIComponent-guards the segments regardless).
+        const slug = repoUrl
           .replace(/^https?:\/\/[^/]+\//i, "")
           .replace(/\.git$/i, "");
         const [owner, repo] = slug.split("/");
