@@ -91,3 +91,54 @@ This amendment records the **always-enforce-workspace** invariant: every user ow
 
 - **Option A2 (chosen): membership-verified resolve-once + explicit db-error + non-member-claim reset-to-solo.** One `resolveActiveWorkspace` per dispatch threaded into every consumer (path/repo/install/self-heal); a probe DB error returns `{ok:false,"db-error"}` (transient, never dispatched); a non-member claim resets to the user's own workspace with a deduped divergence breadcrumb. Pros: structurally cross-tenant-safe (TR1); makes the formerly-invisible divergence queryable; non-destructive (read-path only). Cons: forward-places the owner-gate (no-op until PR-2).
 - **Option B2 (rejected): keep dual user/workspace keying with a silent solo fallback.** Retain the silent `resolveActiveWorkspaceIdWithMembership` (solo fallback on miss AND error, no Sentry). Rejected — **this is the #5437 incident**: the silent fallback masks a non-member claim as success, diverges the clone target from repo+install inside the same dispatch, and strands the member with no signal. A `MIN(created_at)`/first-membership fallback (the #4767 class) is rejected for the same reason: it can return a sibling tenant's workspace.
+
+## Amendment 2026-06-17 — PR-2 splits into PR-2a (refusal guard) + PR-2b (drop), gated on #4560
+
+`status` stays `adopting`. Implementing PR-2 surfaced that the plan's "additive
+write relocation (`users.*` → `workspaces.*`, then drop)" is **not a decoupled
+additive step** — it is structurally the deferred **#4560 / Phase-5
+team-workspace provisioning** effort. Evidence (verified in code, ruled on by the
+`cto` agent):
+
+- `app/api/repo/setup/route.ts` provisions the **solo** workspace on disk
+  (`provisionWorkspaceWithRepo(user.id, …)` clones into `/workspaces/<user.id>`);
+  relocating the write to an arbitrary team workspace id requires team on-disk
+  provisioning — the #4560 work. The route comment is explicit: *"Team-invite
+  repo-setup flows (Phase 5) will resolve the target workspace_id first."*
+- The owner-gate's own invariant — *"`p_workspace_id` MUST equal the id the
+  handler mutates"* — couples the gate change to the write relocation; one cannot
+  land without the other.
+- `repo_error` deliberately stays on `users` (read keyed on the dispatching
+  user); `current-repo-url.ts` assigns the team-workspace `repo_error`
+  relocation to #4560, and `workspaces.repo_error` is never written.
+- The genuinely-additive pre-drop steps were **already shipped**: mig 079 added
+  the `workspaces` repo columns AND the full credential protection
+  (`REVOKE SELECT ON workspaces FROM authenticated` + re-GRANT excluding
+  `github_installation_id` + `resolve_workspace_installation_id` reader RPC); PR-1
+  cut the read path over.
+
+**Decision — split PR-2:**
+
+- **PR-2a (this PR, shipped):** the confused-deputy honesty fix. `repo/setup` +
+  `repo/disconnect` resolve the active workspace server-side
+  (`resolveCurrentWorkspaceId`, IDOR-safe) and return **422** when a TEAM
+  workspace is active, instead of silently provisioning/disconnecting the
+  caller's PERSONAL solo workspace. Strict no-op for solo
+  (`activeWorkspaceId === user.id`). No `users.*` write change, no migration, no
+  column drop. `Refs #5437` (closes nothing). C4 connection edge **unchanged**:
+  still **read=Workspace / write=User (dual)** — PR-2a lands no write relocation.
+- **PR-2b (deferred, the destructive drop):** drops `users.repo_url` /
+  `workspace_path` / `github_installation_id` (+ the mig-052 partial-UNIQUE
+  index), with the pre-decommission drift gate above. **Blocked on BOTH** (a)
+  **#4560** delivering the team write-cutover so the `users.*` writes can stop,
+  AND (b) the PR-1 `repo-resolver-divergence` breadcrumb showing zero divergence
+  over a real prod soak window. At PR-2a authoring time the breadcrumb had **0
+  events** because PR-1 had merged ~28 min earlier — *no soak yet*, not
+  *proven clean*. `status: adopting → accepted` and the C4 edge → wholly-Workspace
+  move with PR-2b (when the write side actually relocates), not PR-2a.
+
+### Considered Options (amendment)
+
+- **Option A3 (chosen): ship the thin refusal guard now (PR-2a), defer the drop to PR-2b/#4560.** Converts a live silent confused-deputy (team-active connect/disconnect targeting the personal solo workspace) into an honest 422, decoupled from #4560, forward-compatible (#4560 replaces the refusal with real team provisioning). Small, testable, no one-way-door.
+- **Option B3 (rejected): fold #4560 into this PR and do the full write-cutover + drop now.** Large (team on-disk provisioning + gate/write co-relocation + `repo_error` re-key + co-membered backfill reconcile), couples the irreversible column drop to a large untested change, and discards the operator-confirmed soak deferral.
+- **Option C3 (rejected): ship zero code, only re-sequence the issues.** Correct bookkeeping but leaves the silent confused-deputy live; the refusal is cheap and strictly improves correctness.
