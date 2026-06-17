@@ -20,6 +20,7 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
+import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
@@ -606,7 +607,14 @@ export const WORKSPACE_RECONCILE_REQUESTED_EVENT =
 // boundary change; in-flight v=1 events (lacking fullName) drain to
 // {ok:false} via the non-throwing schema-gate rather than syncing with a
 // missing field. See 2026-04-18-schema-version-must-be-asserted-at-consumer-boundary.
-export const WORKSPACE_RECONCILE_SCHEMA_V = "2" as const;
+//
+// Bumped "2"→"3" (ADR-044 Amendment 2026-06-17b): `founderId` removed from
+// the payload (it was vestigial — the consumer re-derives workspaces from
+// (installation_id, repo_url) and never read it for routing). Dropping a
+// payload field is a schema-boundary change; in-flight v=2 events deadletter
+// via the non-throwing schema-gate and the next push re-drives (reconcile is
+// idempotent by (installation_id, repo_url)). See plan R6/P2-3.
+export const WORKSPACE_RECONCILE_SCHEMA_V = "3" as const;
 export const WORKSPACE_RECONCILE_SENTRY_FEATURE =
   "workspace-reconcile-push" as const;
 
@@ -754,17 +762,29 @@ export async function appendKbSyncRowForWorkspace(
   }
 }
 
-async function updateLastSynced(userId: string): Promise<void> {
-  // PR-C §2.1 (#3244): tenant-scoped UPDATE on `users`.
-  const tenant = await getFreshTenantClient(userId);
-  const { error } = await tenant
-    .from("users")
-    .update({ repo_last_synced_at: new Date().toISOString() })
-    .eq("id", userId);
-
-  if (error) {
-    log.warn({ err: error, userId }, "Failed to update repo_last_synced_at");
-  }
+/**
+ * ADR-044 PR-B: write `repo_last_synced_at` to the AUTHORITATIVE
+ * `workspaces` row (the repo/status read moved there in PR-2, so a `users`
+ * write would freeze the displayed timestamp forever).
+ *
+ * Signature is `(service, workspaceId)` — NO `userId`, NO internal resolve,
+ * NO `userId` fallback. The id is the caller's ONE membership-verified
+ * resolution (agent-runner.ts resolves `resolveActiveWorkspace` once and
+ * threads the id into BOTH the on-disk path and here), which forbids the
+ * #5435 dual-resolver divergence class: a team-active member's write lands on
+ * the TEAM workspace, never their solo `userId`. session-sync.ts does NOT
+ * acquire a service-role client (it is tenant-only, off `.service-role-allowlist`);
+ * the caller injects the service client (writeRepoColsToWorkspace needs it —
+ * `workspaces` has no UPDATE RLS policy). Best-effort: writeRepoColsToWorkspace
+ * Sentry-mirrors a write error / 0-row no-op but does not throw.
+ */
+async function updateLastSynced(
+  service: SupabaseClient,
+  workspaceId: string,
+): Promise<void> {
+  await writeRepoColsToWorkspace(service, workspaceId, {
+    repo_last_synced_at: new Date().toISOString(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +798,12 @@ async function updateLastSynced(userId: string): Promise<void> {
 export async function syncPull(
   userId: string,
   workspacePath: string,
+  // ADR-044 PR-B: injected service client + the caller's ONE resolved active
+  // workspace id (resolve-id-first; see agent-runner.ts). Threaded straight
+  // into `updateLastSynced(service, workspaceId)` — session-sync never
+  // re-resolves the workspace (forbids the #5435 dual-resolver divergence).
+  service: SupabaseClient,
+  workspaceId: string,
 ): Promise<void> {
   if (!hasRemote(workspacePath)) {
     return; // Empty workspace, no remote
@@ -827,7 +853,7 @@ export async function syncPull(
       { cwd: workspacePath, timeout: 60_000 },
     );
 
-    await updateLastSynced(userId);
+    await updateLastSynced(service, workspaceId);
     log.info({ userId }, "Sync pull completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync pull failed — continuing with local state");
@@ -852,6 +878,10 @@ export async function syncPull(
 export async function syncPush(
   userId: string,
   workspacePath: string,
+  // ADR-044 PR-B: injected service client + the caller's ONE resolved active
+  // workspace id (see syncPull / agent-runner.ts).
+  service: SupabaseClient,
+  workspaceId: string,
 ): Promise<void> {
   if (!hasRemote(workspacePath)) {
     return; // Empty workspace, no remote
@@ -971,7 +1001,7 @@ export async function syncPush(
       });
     }
 
-    await updateLastSynced(userId);
+    await updateLastSynced(service, workspaceId);
     log.info({ userId }, "Sync push completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync push failed — next session will retry");

@@ -541,6 +541,87 @@ resource "sentry_issue_alert" "workspace_sync_health" {
   }
 }
 
+# ── GitHub-webhook founder-ambiguous alert (#5437) — APPLY-CREATED ────────────
+# ADR-044 R8 asserts the founder-ambiguous standing-state MUST PAGE. The
+# non-push webhook resolver (server/resolve-founder-for-installation.ts) now
+# reads the NON-UNIQUE `workspaces.github_installation_id` (the mig-052 UNIQUE
+# was dropped), so >1 solo workspaces sharing one installation is genuinely
+# reachable. The route (app/api/webhooks/github/route.ts, `op=founder-ambiguous`
+# branch) FAILS CLOSED: it drops the event with a 404 (GitHub does not retry
+# 4xx) and never picks a founder — strictly safer than misattributing an
+# action/installation-token to the WRONG founder (the brand-survival hazard).
+# But the drop is a STANDING state: every subsequent webhook for that install
+# also drops until the duplicate solo row is removed, and the HTTP monitor
+# treats 404 as expected. This rule is the missing NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself) — the `Sentry.captureException`
+# already fires with `feature=github-webhook` + `op=founder-ambiguous` tags; no
+# app change needed.
+#
+# 2-tag AND filter (`filter_match="all"`, feature + op tagged_event) — mirrors
+# chat_message_save_failure's shape. Scoped to `op=founder-ambiguous` (NOT
+# feature-only): the `github-webhook` feature tag also carries the routine
+# no-founder 404 (`op` absent), the inngest-send-push failure
+# (`op=inngest-send-push`), and the db-error mirror (`op=founder-resolve`,
+# already paged by the workspace-resolver family). A feature-only filter would
+# over-page on the expected no-founder 404. This rule fires ONLY on the
+# standing-state ambiguity.
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue (e.g. removes the duplicate solo row, then a later
+# install drift re-introduces it). Distinct `frequency=19` avoids Sentry
+# POST-time exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,18,30,60,61,
+# 62; keyed on action-shape + frequency + match — must be unique).
+resource "sentry_issue_alert" "github_webhook_founder_ambiguous" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "github-webhook-founder-ambiguous"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 19
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "github-webhook"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "founder-ambiguous"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors chat_message_save_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the
+  # active founder. The event carries only installationId + deliveryId + count
+  # tags/extra — NO cross-tenant content — so the fallthrough does not
+  # over-disclose. Revisit recipient pinning (target_type="Member") before the
+  # first non-founder Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── KB sync silent-failure alert (#4918, re-pointed #5005) — APPLY-CREATED ─────
 # Pages on the first occurrence of an unexpected (uncaught) failure on the
 # manual KB-sync path. PIR #4913 (generate-link-tenant-mint-regression-

@@ -167,13 +167,12 @@ function wsPath(id: string) {
 function makeEvent(overrides: Partial<ReturnType<typeof baseData>> = {}) {
   return {
     name: "platform/workspace.reconcile.requested" as const,
-    v: "2" as const,
+    v: "3" as const,
     data: { ...baseData(), ...overrides },
   };
 }
 function baseData() {
   return {
-    founderId: "founder-A",
     installationId: 42,
     deliveryId: "delivery-1",
     defaultBranch: "main",

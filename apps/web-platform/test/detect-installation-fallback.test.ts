@@ -12,6 +12,9 @@ const mockVerifyInstallationOwnership = vi.fn();
 const mockListInstallationRepos = vi.fn();
 const mockResolveReachable = vi.fn();
 const mockWriteRepoColsToWorkspace = vi.fn();
+// ADR-044 Amendment 2026-06-17b: the stored-install short-circuit now reads
+// the solo workspace via this resolver (was `users.github_installation_id`).
+const mockResolveInstallationIdForWorkspace = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
@@ -55,6 +58,11 @@ vi.mock("@/server/reachable-installations", () => ({
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: (...args: unknown[]) =>
     mockWriteRepoColsToWorkspace(...args),
+}));
+
+vi.mock("@/server/resolve-installation-id-for-workspace", () => ({
+  resolveInstallationIdForWorkspace: (...args: unknown[]) =>
+    mockResolveInstallationIdForWorkspace(...args),
 }));
 
 import { POST } from "../app/api/repo/detect-installation/route";
@@ -106,6 +114,9 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     vi.resetAllMocks();
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
     mockWriteRepoColsToWorkspace.mockResolvedValue(undefined);
+    // Default: no stored install on the solo workspace (drives the find-personal
+    // path most tests exercise). T-cases set this explicitly when needed.
+    mockResolveInstallationIdForWorkspace.mockResolvedValue(null);
     // Default: reachable set is the single login-matched install (legacy shape).
     mockResolveReachable.mockImplementation(
       async (_svc: unknown, _uid: string, login: string | null) =>
