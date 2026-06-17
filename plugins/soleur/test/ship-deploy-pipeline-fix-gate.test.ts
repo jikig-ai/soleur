@@ -19,6 +19,10 @@ const POSTMERGE_RUNBOOK = resolve(
   "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md",
 );
 const SERVER_TF = resolve(REPO_ROOT, "apps/web-platform/infra/server.tf");
+const APPLY_DPF_WORKFLOW = resolve(
+  REPO_ROOT,
+  ".github/workflows/apply-deploy-pipeline-fix.yml",
+);
 
 const GATE_HEADING = "### Deploy Pipeline Fix Drift Gate";
 const NEXT_HEADING = "### Retroactive Gate Application";
@@ -41,6 +45,10 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/infra-config-install.sh",
   "apps/web-platform/infra/push-infra-config.sh",
   "apps/web-platform/infra/cat-infra-config-state.sh",
+  "apps/web-platform/infra/inngest-enumerate-reminders.sh",
+  "apps/web-platform/infra/inngest-rearm-reminders.sh",
+  "apps/web-platform/infra/inngest-wiped-volume-verify.sh",
+  "apps/web-platform/infra/cat-inngest-verify-state.sh",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {
@@ -318,5 +326,51 @@ describe("postmerge runbook updates (#3034)", () => {
     expect(runbook).toContain(
       "2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access",
     );
+  });
+});
+
+// #5505: the FIFTH coupled surface. The on.push.paths filter in
+// apply-deploy-pipeline-fix.yml is what actually decides whether the dedicated
+// auto-apply fires on merge. It must equal the hashed trigger set (TRIGGER_FILES)
+// PLUS server.tf itself (a change to the hash *definition* must also re-apply).
+// This surface was previously unguarded: #5492 added the 4 inngest scripts to
+// server.tf + the ship array/regex + TRIGGER_FILES, the gate went green, but the
+// workflow paths filter was never updated — so the inngest-only #5504 merge did
+// NOT auto-apply and the fix had to be deployed by a manual workflow_dispatch.
+describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES (#5505)", () => {
+  let paths: string[];
+
+  beforeAll(() => {
+    expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
+    const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
+    // Bound to the `on:` section (everything before the top-level `jobs:` key),
+    // then collect the quoted list items under the single `paths:` key there.
+    const jobsIdx = yml.indexOf("\njobs:");
+    const onSection = jobsIdx >= 0 ? yml.slice(0, jobsIdx) : yml;
+    const pathsIdx = onSection.indexOf("paths:");
+    expect(pathsIdx).toBeGreaterThanOrEqual(0);
+    const pathsBlock = onSection.slice(pathsIdx);
+    // Anchor to the apps/web-platform/infra/ prefix so a future workflow_dispatch
+    // `type: choice` input with quoted `options:` list items (which would also fall
+    // inside this slice of the `on:` section) cannot leak in as a phantom path
+    // (P3, #5505 review). Comment lines `# - "x"` are already excluded by `^\s+-`.
+    paths = [...pathsBlock.matchAll(/^\s+-\s+"(apps\/web-platform\/infra\/[^"]+)"/gm)].map(
+      (m) => m[1],
+    );
+    expect(paths.length).toBeGreaterThan(0);
+  });
+
+  test("paths filter equals TRIGGER_FILES ∪ {server.tf} (set equality)", () => {
+    const expected = new Set([
+      ...TRIGGER_FILES,
+      "apps/web-platform/infra/server.tf",
+    ]);
+    expect(new Set(paths)).toEqual(expected);
+  });
+
+  test("every TRIGGER_FILES entry is in the workflow paths filter (auto-apply reachability)", () => {
+    const inPaths = new Set(paths);
+    const missing = TRIGGER_FILES.filter((f) => !inPaths.has(f));
+    expect(missing).toEqual([]);
   });
 });

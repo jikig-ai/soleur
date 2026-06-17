@@ -129,6 +129,62 @@ else
   echo "  ok: no forbidden repo_status: \"connected\" literal in seed"
 fi
 
+# 6. Active-workspace binding (#5501) — static-source checks.
+#   The deployed createConversation resolves conversations.workspace_id via the
+#   fail-loud resolveUserWorkspaceBinding (agent-session-registry.ts:316), which
+#   THROWS when user_session_state has no row for the user — so a chat send never
+#   persists a conversation and the harness emits CANT-RUN:forURL. The seed MUST
+#   upsert one user_session_state row binding the synthetic principal's solo
+#   workspace + its organization. It MUST be a POST upsert (a bare PATCH no-ops on
+#   the absent row) and MUST NOT route through the set_current_workspace_id RPC
+#   (which needs auth.uid() and 28000s under a service-role caller).
+if grep -qE 'rest/v1/user_session_state\?on_conflict=user_id' "$SEED"; then
+  echo "  ok: seed upserts user_session_state (on_conflict=user_id)"
+else
+  echo "  FAIL: seed does not POST-upsert /rest/v1/user_session_state?on_conflict=user_id (#5501 binding gap)" >&2
+  fail=1
+fi
+
+if grep -qE 'resolution=merge-duplicates' "$SEED"; then
+  echo "  ok: user_session_state upsert uses resolution=merge-duplicates"
+else
+  echo "  FAIL: user_session_state write is not a merge-duplicates upsert (a no-op PATCH leaves the binding absent)" >&2
+  fail=1
+fi
+
+if grep -qE 'current_workspace_id' "$SEED" && grep -qE 'current_organization_id' "$SEED"; then
+  echo "  ok: binding writes current_workspace_id AND current_organization_id"
+else
+  echo "  FAIL: binding body missing current_workspace_id and/or current_organization_id" >&2
+  fail=1
+fi
+
+if grep -qE 'select=organization_id' "$SEED"; then
+  echo "  ok: seed resolves organization_id from the workspace row before the upsert"
+else
+  echo "  FAIL: seed does not resolve organization_id (select=organization_id) before binding" >&2
+  fail=1
+fi
+
+# Must NOT route the binding through the auth.uid()-requiring RPC (would 28000).
+if grep -qE '/rpc/set_current_workspace_id' "$SEED"; then
+  echo "  FAIL: seed calls /rpc/set_current_workspace_id — 28000s under service-role (no auth.uid())" >&2
+  fail=1
+else
+  echo "  ok: seed does not route the binding through set_current_workspace_id RPC"
+fi
+
+# Write order: the workspace must be resolved (workspace_members owner lookup)
+# BEFORE the user_session_state upsert can bind to it.
+uss_line=$(grep -nE 'rest/v1/user_session_state' "$SEED" | head -1 | cut -d: -f1)
+wm_line=$(grep -nE 'rest/v1/workspace_members' "$SEED" | head -1 | cut -d: -f1)
+if [[ -n "$uss_line" && -n "$wm_line" && "$uss_line" -gt "$wm_line" ]]; then
+  echo "  ok: user_session_state upsert (line $uss_line) comes after workspace_members lookup (line $wm_line)"
+else
+  echo "  FAIL: user_session_state upsert must come after the workspace_members owner lookup (uss=$uss_line wm=$wm_line)" >&2
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "seed-live-verify-user.test.sh: FAILED" >&2
   exit 1

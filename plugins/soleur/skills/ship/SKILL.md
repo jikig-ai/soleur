@@ -674,6 +674,10 @@ fi
 - `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
 - `apps/web-platform/infra/push-infra-config.sh`
 - `apps/web-platform/infra/cat-infra-config-state.sh`
+- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492 — webhook-delivered cutover script; registered so a body-only edit re-deploys)
+- `apps/web-platform/infra/inngest-rearm-reminders.sh` (#5492)
+- `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
+- `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
 
 **Detection:**
 
@@ -692,8 +696,12 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/infra-config-install.sh"
   "apps/web-platform/infra/push-infra-config.sh"
   "apps/web-platform/infra/cat-infra-config-state.sh"
+  "apps/web-platform/infra/inngest-enumerate-reminders.sh"
+  "apps/web-platform/infra/inngest-rearm-reminders.sh"
+  "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
+  "apps/web-platform/infra/cat-inngest-verify-state.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```

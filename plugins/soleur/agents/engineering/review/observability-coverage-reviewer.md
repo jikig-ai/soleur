@@ -12,13 +12,14 @@ You verify that every new server-side surface is debuggable from a keyboard with
 - `hr-observability-layer-citation` — every declared failure mode names which of the five observability layers covers it.
 - `hr-no-ssh-fallback-in-runbooks` — runbooks lead with no-SSH probes; SSH is last-resort only.
 
-## The five observability layers
+## The six observability layers
 
 1. **Inngest sentry-correlation middleware** (`server/inngest/middleware/sentry-correlation.ts`) — applies to every Inngest function automatically: tags Sentry scope with `inngest.fn_id` / `inngest.run_id` / `inngest.event_name`, attaches event payload as `extra`, emits per-step breadcrumbs, captures final errors.
 2. **Pino → Sentry breadcrumb mirror** (`server/logger.ts` `hooks.logMethod`) — every `logger.warn`/`logger.error` becomes a Sentry breadcrumb on the active scope; errors with an `err` field also `captureException`.
 3. **Vector journald shipper** (`infra/vector.toml`, `vector.service` on Hetzner) — every `inngest-server.service` line at WARN+ AND every system-journald line at CRIT+ ships to Sentry's envelope endpoint as a `message` event.
 4. **Vector host_metrics** (same agent) — CPU/mem/disk/network every 30s, shipped to Sentry as structured events (queryable by `metric_name`).
 5. **Sentry `release` context** (`sentry.server.config.ts`, `sentry.client.config.ts`) — every event tagged `web-platform@<version>+<sha>` for diff/regression-window analysis.
+6. **Synchronous webhook-response body / workflow-run log** (`hooks.json.tmpl` + the calling `.github/workflows/*.yml` step) — the request-scoped, no-SSH signal returned IN the failing HTTP exchange. Distinct from layers 1–5, which are ALL asynchronous (Sentry/Better Stack ingest, journald ship) and NOT keyboard-visible during the failing request. For a host script invoked by an adnanh/webhook hook, this is the ONLY signal an operator/agent sees synchronously when they trigger the op and it fails.
 
 ## Review Process
 
@@ -31,9 +32,28 @@ Run `git diff origin/main...HEAD --name-only` and partition into:
 - **Runbooks**: `knowledge-base/engineering/operations/runbooks/*.md`
 - **Plans**: `knowledge-base/project/plans/*-plan.md`
 
+### Step 1.5: Pull live signal yourself (you can read Better Stack + Sentry)
+
+You are not limited to reasoning about the producer side. When a diff's failure mode or a plan's claim is checkable against **live** production telemetry, read it yourself inline (no SSH, `hr-no-dashboard-eyeball-pull-data-yourself`):
+
+- **Better Stack logs** (host/app pino over a time window): `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep <symptom>` (runbook `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`).
+- **Sentry issue/event by id**: `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`).
+
+These are **read paths, not a seventh observability layer** — do NOT accept "queried via sentry-issue.sh / betterstack-query.sh" as a `failure_modes:` layer citation in Step 2 (the six layers below are the producer-side surfaces a plan must wire; the CLIs are how a reviewer consumes them).
+
 ### Step 2: Layer-citation check (`hr-observability-layer-citation`)
 
-For each plan in the diff: parse the `## Observability` block's `failure_modes:` list. For each entry, locate either a `detection` or `alert_route` line that explicitly names ONE of the five layers above (substrings: `sentry-correlation`, `pino`, `vector`, `host_metrics`, `release`, `Sentry monitor`, `inngest-heartbeat`). Failure mode without a named layer = **P1 finding**. Provide the missing-layer suggestion in the report.
+For each plan in the diff: parse the `## Observability` block's `failure_modes:` list. For each entry, locate either a `detection` or `alert_route` line that explicitly names ONE of the six layers above (substrings: `sentry-correlation`, `pino`, `vector`, `host_metrics`, `release`, `Sentry monitor`, `inngest-heartbeat`, `webhook response`, `workflow run log`, `::error::`). Failure mode without a named layer = **P1 finding**. Provide the missing-layer suggestion in the report.
+
+### Step 2.5: Synchronous-signal check for no-SSH webhook scripts (`hr-no-ssh-fallback-in-runbooks`)
+
+For each host script invoked by an adnanh/webhook hook (grep `apps/web-platform/infra/hooks.json.tmpl` for `execute-command` entries pointing at a script in the diff), the fatal-failure cause must be **surfaced by the SYNCHRONOUS consumer**, not just shipped to an async layer:
+
+1. webhook captures the command's output for `include-command-output-in-response[-on-error]: true` via Go `CombinedOutput()` — i.e. **both stdout AND stderr** (this is stream-agnostic; do NOT assume stdout-only). So the cause reaching EITHER stream is captured by the webhook.
+2. BUT it is only diagnosable if the **calling GitHub Actions step `cat`s the response-body file** (`/tmp/*-body`) on the non-2xx branch before `exit 1`, AND echoes it (CR/LF-stripped) into an `::error::` annotation. A workflow branch that discards the body on non-200 (e.g. `echo "::error::X returned HTTP $CODE"; exit 1` with no body dump) = **P1** — this is the #5492 class (the enumerate branch returned an opaque empty 500 for ~the whole debugging window).
+3. A fatal cause that reaches ONLY layer 3 (Vector journald → Better Stack, asynchronous) with no synchronous-consumer dump does NOT satisfy no-SSH diagnosability for a synchronous webhook op — flag **P1**. "Eventually queryable in Better Stack" ≠ "visible in the failing request."
+
+The durable rule: **the synchronous consumer (workflow step) must `cat` the response body on non-2xx before failing, and the script must emit a cause to EITHER stream.** See `knowledge-base/project/learnings/best-practices/2026-06-17-synchronous-webhook-consumer-must-dump-response-body.md`.
 
 ### Step 3: catch-block sweep (`cq-silent-fallback-must-mirror-to-sentry` reinforcement)
 

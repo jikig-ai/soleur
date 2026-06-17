@@ -117,18 +117,27 @@ test_pagination_page2_captured() {
   assert_eq "page-2 reminder_id correct" "rem-p2" "$(echo "$out" | jq -r '.[0].reminder_id')"
 }
 
-# --- Test 6: P2-sec-a — comment bodies must NOT be on stdout's emitted records' top level... ---
-# The re-arm record carries action (incl. body — needed for re-arm fidelity), but
-# the script's STDERR/log summary must emit counts + reminder_ids only, never the
-# comment body. Assert the log line does not leak the body.
-test_log_no_body_leak() {
+# --- Test 6 (#5503): SUCCESS-path output must be PURE JSON on the webhook stream ---
+# adnanh/webhook v2.8.2 returns cmd.CombinedOutput() (stdout AND stderr) even on a 200,
+# and the cutover workflow parses that body as a JSON array (`jq -e 'type == "array"'`).
+# So the success path must write NOTHING non-JSON to EITHER stream; the observability
+# summary goes to journald via `logger` ONLY. RED before #5503 (the stderr summary was
+# merged ahead of the JSON → array parse failed → cutover blocked); GREEN after.
+# (Replaces the former stderr-summary assertion — that summary no longer exists on stderr.)
+test_success_combined_output_pure_json() {
   local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
   make_page false "" "[$(make_edge "01L" "rem-log" "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+  # Combined stdout+stderr, mimicking the webhook CombinedOutput the workflow parses.
+  local combined; combined=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1)
+  if echo "$combined" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "  PASS: combined stdout+stderr parses as a JSON array"; PASS=$((PASS + 1));
+  else
+    echo "  FAIL: combined stdout+stderr is NOT a pure JSON array (success-path stream pollution)"; FAIL=$((FAIL + 1)); fi
+  assert_eq "combined output is the 1-record array" "1" "$(echo "$combined" | jq 'length' 2>/dev/null || echo BAD)"
+  # The summary is journald-only now: success-path stderr must be empty, so no prose
+  # (and so no reminder_id / comment body) can leak into the webhook response stream.
   local err; err=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1 1>/dev/null)
-  assert_contains "log mentions the reminder_id" "$err" "rem-log"
-  if [[ "$err" == *"SECRET-BODY"* ]]; then
-    echo "  FAIL: comment body leaked into the log/stderr summary"; FAIL=$((FAIL + 1));
-  else echo "  PASS: comment body NOT leaked into the log/stderr summary"; PASS=$((PASS + 1)); fi
+  assert_eq "success-path stderr is empty (summary is journald-only)" "" "$err"
 }
 
 # --- Test 7: empty event set → emits [] (not an error) ---
@@ -145,14 +154,68 @@ test_no_shell_string_interpolation_in_gql() {
   assert_contains "GraphQL request body built with jq -n" "$(cat "$TARGET")" "jq -n"
 }
 
+# --- Test 9 (#5492 AC6): the DEFAULT filter.from is a recent instant, NOT epoch ---
+# Sources the script with NO ENUMERATE_FROM override and invokes build_request_body
+# directly (sourcing does not run the network loop — BASH_SOURCE guard). RED before
+# the AC5 clamp (epoch default), GREEN after. The epoch 1970 default is what inngest
+# rejected as an out-of-range Time! bound → the opaque 500 (#5492 root cause).
+test_default_from_is_recent_not_epoch() {
+  local from
+  # Fresh `bash -c` (NOT in-process `source` — this test file marks NOW_MS readonly,
+  # which a same-process subshell would inherit and the script's NOW_MS= would then
+  # fail to assign). `bash -c 'source X'` has BASH_SOURCE!=$0 so the network loop
+  # stays guarded; a fresh exec does not inherit the readonly.
+  from=$(unset ENUMERATE_FROM; bash -c 'source "$1"; build_request_body ""' _ "$TARGET" | jq -r '.variables.filter.from')
+  assert_eq "default filter.from is not the 1970 epoch" "0" "$([[ "$from" == 1970-* ]] && echo 1 || echo 0)"
+  # Within the last ~2 years (clamped recent lookback), and a real ISO instant.
+  local from_year now_year
+  from_year=${from:0:4}; now_year=$(date -u +%Y)
+  assert_eq "default filter.from year is within 2 years of now" "1" \
+    "$([[ "$from_year" =~ ^[0-9]{4}$ && $((now_year - from_year)) -le 2 && $((now_year - from_year)) -ge 0 ]] && echo 1 || echo 0)"
+  # ENUMERATE_FROM still wins (it IS the override — no second env var).
+  local overridden
+  overridden=$(ENUMERATE_FROM="2099-01-01T00:00:00Z" bash -c 'source "$1"; build_request_body ""' _ "$TARGET" | jq -r '.variables.filter.from')
+  assert_eq "ENUMERATE_FROM override wins" "2099-01-01T00:00:00Z" "$overridden"
+}
+
+# --- Test 10 (#5492 AC7): malformed-response cause carries NO payload on EITHER stream ---
+# webhook CombinedOutput() captures stdout+stderr and the workflow cats the body
+# into the run log, so the assertion is against the COMBINED stream (2>&1), NOT
+# stdout-only. Two leak vectors: a secret in .errors[].extensions, and a secret in
+# a .data value. Only error MESSAGES + .data key NAMES may surface.
+test_malformed_cause_no_payload_leak() {
+  local d out rc
+  # Vector 1: secret in an error's extensions (the whole .errors must NOT be dumped).
+  d=$(mktemp -d)
+  printf '%s' '{"errors":[{"message":"invalid Time bound","extensions":{"secret":"SECRET-EXT-XYZ"}}]}' > "$d/page-1.json"
+  rc=0; out=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1) || rc=$?
+  rm -rf "$d"
+  assert_eq "malformed response exits non-zero" "1" "$rc"
+  assert_contains "combined output carries the upstream GraphQL message" "$out" "invalid Time bound"
+  if [[ "$out" == *"SECRET-EXT-XYZ"* ]]; then
+    echo "  FAIL: error.extensions secret leaked into combined output"; FAIL=$((FAIL + 1));
+  else echo "  PASS: error.extensions secret NOT leaked (combined stdout+stderr)"; PASS=$((PASS + 1)); fi
+  # Vector 2: secret in a .data value (well-formed-but-unexpected — no .data.eventsV2).
+  d=$(mktemp -d)
+  printf '%s' '{"data":{"eventsV2OTHER":{"raw":"SECRET-DATA-XYZ"}}}' > "$d/page-1.json"
+  rc=0; out=$(INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1) || rc=$?
+  rm -rf "$d"
+  assert_eq "data-bearing malformed response exits non-zero" "1" "$rc"
+  if [[ "$out" == *"SECRET-DATA-XYZ"* ]]; then
+    echo "  FAIL: .data value leaked into combined output"; FAIL=$((FAIL + 1));
+  else echo "  PASS: .data value NOT leaked (combined stdout+stderr; only key names surface)"; PASS=$((PASS + 1)); fi
+}
+
 test_future_unfired_included
 test_completed_dropped
 test_past_dropped
 test_terminal_status_matrix
 test_pagination_page2_captured
-test_log_no_body_leak
+test_success_combined_output_pure_json
 test_empty_set
 test_no_shell_string_interpolation_in_gql
+test_default_from_is_recent_not_epoch
+test_malformed_cause_no_payload_leak
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

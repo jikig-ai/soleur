@@ -54,10 +54,12 @@ export async function POST(request: Request) {
     // before provisioning.
     const workspacePath = await provisionWorkspace(user.id);
 
-    // Update user record with workspace path and ready status
+    // Update user record with ready status. workspace_path is NO LONGER written to
+    // the users column (derived now — ADR-044 PR-2b); the local is still consumed
+    // by the response body below (a caller-facing contract, not a users column).
     const { error: updateError } = await serviceClient
       .from("users")
-      .update({ workspace_path: workspacePath, workspace_status: "ready" })
+      .update({ workspace_status: "ready" })
       .eq("id", user.id);
 
     if (updateError) {
