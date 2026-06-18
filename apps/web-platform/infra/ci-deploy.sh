@@ -287,21 +287,21 @@ verify_inngest_health() {
     logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — --postgres-uri + --redis-uri configured and inngest-redis.service active"
   fi
 
-  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159): /health proves only
-  # process liveness. A standalone inngest restart de-plans cron triggers; they
-  # re-arm async (web-platform redeploy → modified:true sync, or the server's
-  # --poll-interval self-heal). Best-effort poll /v1/functions for a re-armed
-  # cron trigger; if none appears, log an advisory and STILL succeed (the Sentry
-  # cron monitors are the real safety net). Dependency-free substring check (jq
-  # is not a host dependency): match the cron-trigger KEY form `"cron":` (the
-  # value form `"cron":"<expr>"` always contains it), NOT a bare `"cron"` — every
-  # function slug is `cron-*`, so bare `"cron"` would false-pass on the slug
-  # alone even with zero planned cron triggers.
+  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159, #5520): /health proves
+  # only process liveness. A standalone inngest restart de-plans cron triggers;
+  # they re-arm async (web-platform redeploy → modified:true sync, or the
+  # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
+  # re-armed cron trigger; if none appears, log an advisory and STILL succeed
+  # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
+  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
+  # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
+  # minified GQL response (jq is not a host dependency).
   local functions_body=""
   for i in $(seq 1 "$cron_max_attempts"); do
-    functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
+    functions_body=$(curl -sf --max-time 5 -X POST -H "Content-Type: application/json" -d '{"query":"{ functions { triggers { type value } } }"}' http://127.0.0.1:8288/v0/gql 2>/dev/null) || true
 
-    if [[ "$functions_body" == *'"cron":'* ]]; then
+    if [[ "$functions_body" == *'"type":"CRON"'* ]]; then
       logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$cron_max_attempts)"
       return 0
     fi
