@@ -155,7 +155,15 @@ resource "doppler_secret" "inngest_redis_password_prd" {
   visibility = "masked"
 
   lifecycle {
-    ignore_changes = [value] # rotate via `terraform taint random_password.inngest_redis_password_prd`.
+    # ROTATE by replacing BOTH resources together (verified #5560):
+    #   terraform apply -replace=random_password.inngest_redis_password_prd \
+    #                   -replace=doppler_secret.inngest_redis_password_prd
+    # A lone `taint random_password` regenerates the value in tfstate but
+    # ignore_changes=[value] below SUPPRESSES the doppler_secret update, so Doppler
+    # (and the running inngest) keep the OLD password — an incomplete rotation.
+    # Re-creating the doppler_secret (the second -replace) writes the new value on
+    # create (ignore_changes applies to updates, not create). Redeploy inngest after.
+    ignore_changes = [value]
   }
 }
 
