@@ -295,14 +295,16 @@ test_fatal_cleans_spool_tempfile() {
 # Five canonical states from a seam-injected ExecStart + redis activeness. The
 # verdict rule is byte-identical in intent to the deploy-time source of truth.
 test_durability_states() {
-  assert_eq "durable: --postgres-uri + --redis-uri present, redis active" "durable" \
-    "$(run_inv_durability '/usr/bin/inngest start --postgres-uri postgres://x --redis-uri redis://y' active | jq -r '.durability_state')"
-  assert_eq "degraded: --postgres-uri but --redis-uri absent (redis active)" "degraded" \
-    "$(run_inv_durability '/usr/bin/inngest start --postgres-uri postgres://x --sqlite-dir /d' active | jq -r '.durability_state')"
-  assert_eq "degraded: --postgres-uri + --redis-uri present but redis inactive" "degraded" \
-    "$(run_inv_durability '/usr/bin/inngest start --postgres-uri postgres://x --redis-uri redis://y' inactive | jq -r '.durability_state')"
-  assert_eq "sqlite_only: no --postgres-uri (SQLite-only fail-safe)" "sqlite_only" \
+  # #5560: durability keys on the NON-SECRET --postgres-max-open-conns sentinel
+  # (the postgres/redis URIs are env-delivered now, never on argv).
+  assert_eq "durable: sentinel present, redis active" "durable" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' active | jq -r '.durability_state')"
+  assert_eq "degraded: sentinel present but redis inactive" "degraded" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' inactive | jq -r '.durability_state')"
+  assert_eq "sqlite_only: no sentinel, redis inactive (SQLite-only fail-safe)" "sqlite_only" \
     "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest' inactive | jq -r '.durability_state')"
+  assert_eq "sqlite_only: no sentinel EVEN with redis active (sentinel is the gate)" "sqlite_only" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest' active | jq -r '.durability_state')"
   assert_eq "unknown: ExecStart unreadable (empty seam)" "unknown" \
     "$(run_inv_durability '' inactive | jq -r '.durability_state')"
 }
@@ -316,7 +318,7 @@ test_durability_no_secret_leak() {
   make_functions '[]' > "$ff"
   make_page false "" "[]" > "$d/page-1.json"
   out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
-    INVENTORY_EXECSTART='/usr/bin/inngest start --postgres-uri postgres://SECRET-DSN --redis-uri redis://r' \
+    INVENTORY_EXECSTART='/usr/bin/inngest start --postgres-uri postgres://SECRET-DSN --postgres-max-open-conns 10' \
     INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
   assert_eq "ExecStart connection ref absent from combined stream (AC3)" "0" \
     "$(printf '%s' "$out" | grep -c SECRET-DSN || true)"
@@ -330,30 +332,32 @@ test_durability_purity_preserved() {
   make_functions '[]' > "$ff"
   make_page false "" "[]" > "$d/page-1.json"
   combined=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
-    INVENTORY_EXECSTART='--postgres-uri x --redis-uri y' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
+    INVENTORY_EXECSTART='--sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
   if echo "$combined" | jq -e 'type == "object" and has("functions") and has("event_names") and has("armed_reminders") and has("durability_state")' >/dev/null 2>&1; then
     echo "  PASS: combined stream is a 4-key object incl durability_state"; PASS=$((PASS + 1));
   else
     echo "  FAIL: combined stream missing a key or polluted (durability field)"; FAIL=$((FAIL + 1)); fi
   err=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
-    INVENTORY_EXECSTART='--postgres-uri x --redis-uri y' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1 1>/dev/null)
+    INVENTORY_EXECSTART='--sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1 1>/dev/null)
   assert_eq "success-path stderr empty with durability field" "" "$err"
 }
 
 # --- Test 17 (#5553 AC5): cross-file ExecStart-durability drift tripwire ---
 # Token co-occurrence guard (NOT a verdict-equivalence proof — the five Phase-2.2
-# verdicts pin THIS parser). The FULL postgres+redis+active rule is shared by the
-# source-of-truth (ci-deploy.sh) and the new mirror (inngest-inventory.sh): both
-# must carry all four load-bearing tokens. inngest-wiped-volume-verify.sh is a
-# *secondary* member of the ExecStart-parse family — its gate only checks
-# --postgres-uri presence on inngest-server.service (it deliberately does not parse
-# redis), so it is asserted only against the subset it genuinely shares. If a flag
-# or unit name is renamed in ci-deploy.sh, the matching token disappears from the
-# mirror's required set and the guard trips, forcing a human re-look at all parsers.
+# verdicts pin THIS parser). #5560: durability is detected by the NON-SECRET
+# --postgres-max-open-conns sentinel + redis activeness (the postgres/redis URIs are
+# env-delivered now, never on argv). The sentinel+active rule is shared by the
+# source-of-truth (ci-deploy.sh) and the mirror (inngest-inventory.sh): both must
+# carry the load-bearing tokens. inngest-wiped-volume-verify.sh is a *secondary*
+# member of the ExecStart-parse family — its gate only checks the sentinel presence
+# on inngest-server.service (it deliberately does not parse redis), so it is asserted
+# only against the subset it genuinely shares. If the sentinel flag or a unit name is
+# renamed in ci-deploy.sh, the matching token disappears from the mirror's required
+# set and the guard trips, forcing a human re-look at all parsers.
 test_durability_drift_guard() {
   local f tok missing=""
-  local full_tokens=(--postgres-uri --redis-uri inngest-redis.service inngest-server.service)
-  local subset_tokens=(--postgres-uri inngest-server.service)
+  local full_tokens=(--postgres-max-open-conns inngest-redis.service inngest-server.service)
+  local subset_tokens=(--postgres-max-open-conns inngest-server.service)
   for f in "$SCRIPT_DIR/ci-deploy.sh" "$TARGET"; do
     for tok in "${full_tokens[@]}"; do
       grep -qF -- "$tok" "$f" || missing="$missing $(basename "$f"):$tok"
