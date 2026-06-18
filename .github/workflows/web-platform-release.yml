@@ -563,18 +563,27 @@ jobs:
           exit 1
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Report-only live-verify gate (#5487 — item 3 of the #5463 prereq chain).
+  # BLOCKING live-verify gate (#5463 — flipped from report-only 2026-06-18 after
+  # the first real PASS, run 27786435514, satisfied wg-dark-launch-deploy-gates).
   # Runs the post-deploy harness (apps/web-platform/scripts/live-verify/run.ts)
   # on a deterministic, host-isolated ubuntu-latest runner AFTER the deploy job's
   # "Verify deploy health and version" step (ordered via `needs: [deploy]`).
   #
-  # REPORT-ONLY by TWO independent mechanisms (wg-dark-launch-deploy-gates):
-  #   (1) TOPOLOGY — NO job lists `live-verify` in its `needs:`, so a job-level
-  #       failure can NEVER gate, block, or roll back the deploy or "done".
-  #   (2) STEP-LEVEL — the harness step carries `continue-on-error: true`.
-  # Either alone suffices; both are kept so removing one later still leaves the
-  # gate report-only. The report-only→blocking flip is #5463, gated on observing
-  # >=1 real green PASS Sentry event (tag gate=live-verify) from this job.
+  # WHAT "BLOCKING" MEANS HERE: the job is still post-deploy (needs:[deploy]), so a
+  # FAIL CANNOT roll back the already-shipped image (ADR-064 §Substrate). "Blocking"
+  # = a genuine FAIL fails THIS job → the release run goes red and the all-green
+  # status breaks, surfacing a bad deploy loudly instead of recording a green run
+  # over a broken WS/auth/persist path. Enforced by the final "Enforce live-verify
+  # gate" step on the BLOCK signal computed in the emit step:
+  #   BLOCK=1 ONLY for FAIL (the #5391/#5436 persist regression) or an unverifiable
+  #           TRIGGERED run (no-result-line — "empty fails closed").
+  #   BLOCK=0 for PASS, SKIPPED, the deliberate environmental CANT-RUNs (rate-limited
+  #           / session-rejected / session-not-acked), and pre-harness INFRA failures
+  #           (setup-failed / gate-diff-failed — these fire on EVERY push, including
+  #           non-trigger-path releases, so they must never gate prod).
+  # The harness step KEEPS `continue-on-error: true` on purpose: run.ts exits 1 on
+  # BOTH FAIL and CANT-RUN, so the raw exit cannot distinguish them — the classified
+  # BLOCK signal does, and is the sole blocking authority.
   #
   # Substrate = GitHub Actions, NOT Inngest (CTO ruling 2026-06-17; ADR-064
   # §Substrate "Inngest re-home considered and rejected"): a blocking deploy-gate
@@ -686,7 +695,8 @@ jobs:
             echo "${RESULT_LINE}"
             echo "__LV_EOF__"
           } >> "$GITHUB_OUTPUT"
-      - name: Emit result to Sentry (report-only observability)
+      - name: Emit result to Sentry + compute block signal
+        id: emit
         if: always()
         env:
           NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
@@ -704,6 +714,13 @@ jobs:
           # Every job run emits EXACTLY ONE queryable event (the #5463 soak needs
           # a denominator — "ran and skipped" must be distinguishable from "never
           # ran").
+          # BLOCK is the #5463 flip authority (1 = fail the job → redden the
+          # release; 0 = record-only). Default 0; set to 1 ONLY for a genuine FAIL
+          # or an unverifiable TRIGGERED run (no-result-line — "empty fails closed").
+          # PASS/SKIPPED, the environmental CANT-RUNs, and the pre-harness infra
+          # failures (setup-failed / gate-diff-failed, which fire on every push)
+          # stay BLOCK=0 so they never gate prod. See the job-header comment.
+          BLOCK=0
           if [ -z "${TRIGGERED:-}" ] && [ -z "${GATE_FAILED:-}" ]; then
             RESULT="CANT-RUN:setup-failed"; LEVEL="error"
             MSG="RESULT: ${RESULT} (job setup failed before the trigger gate)"
@@ -714,19 +731,25 @@ jobs:
             RESULT="SKIPPED"; LEVEL="info"
             MSG="RESULT: SKIPPED:no-triggering-paths"
           elif [ -z "${RESULT_LINE:-}" ]; then
-            RESULT="CANT-RUN:no-result-line"; LEVEL="error"
+            RESULT="CANT-RUN:no-result-line"; LEVEL="error"; BLOCK=1
             MSG="RESULT: ${RESULT}:outcome=${HARNESS_OUTCOME:-unknown}:exit=${RC:-unknown}"
           else
             MSG="${RESULT_LINE}"
             case "${RESULT_LINE}" in
               "RESULT: PASS"*) RESULT="PASS"; LEVEL="info" ;;
-              "RESULT: FAIL"*) RESULT="FAIL"; LEVEL="error" ;;
-              *no-result-line*|*gate-diff-failed*) RESULT="CANT-RUN"; LEVEL="error" ;;
+              "RESULT: FAIL"*) RESULT="FAIL"; LEVEL="error"; BLOCK=1 ;;
+              *no-result-line*) RESULT="CANT-RUN"; LEVEL="error"; BLOCK=1 ;;
+              *gate-diff-failed*) RESULT="CANT-RUN"; LEVEL="error" ;;
               "RESULT: CANT-RUN"*) RESULT="CANT-RUN"; LEVEL="warning" ;;
               *) RESULT="CANT-RUN"; LEVEL="warning" ;;
             esac
           fi
-          echo "live-verify: result=${RESULT} level=${LEVEL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "live-verify: result=${RESULT} level=${LEVEL} block=${BLOCK}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "result=${RESULT}"
+            echo "level=${LEVEL}"
+            echo "block=${BLOCK}"
+          } >> "$GITHUB_OUTPUT"
           # Parse the public client DSN: https://<public_key>@<host>/<project_id>.
           # The POST host MUST carry the DSN's own region segment
           # (…ingest.<region>.sentry.io) — never default to a cluster, or the
@@ -768,3 +791,23 @@ jobs:
           else
             echo "live-verify: Sentry event emitted (result=${RESULT}, level=${LEVEL})" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Enforce live-verify gate (blocking — #5463)
+        if: always()
+        env:
+          RESULT: ${{ steps.emit.outputs.result }}
+          BLOCK: ${{ steps.emit.outputs.block }}
+        run: |
+          set -uo pipefail
+          # The report-only→blocking flip (#5463), unblocked by the first real PASS
+          # on 2026-06-18 (run 27786435514) per wg-dark-launch-deploy-gates. This is
+          # the SOLE blocking authority; BLOCK is classified in the emit step (1 only
+          # for FAIL or no-result-line). Post-deploy job → reddening the release run
+          # signals a bad deploy loudly; it does NOT roll back the already-shipped
+          # image (ADR-064 §Substrate). Sentry emit is observability and never blocks
+          # (a Sentry outage must not gate prod), so the gate keys on BLOCK, not on
+          # whether the event POSTed.
+          if [ "${BLOCK:-0}" = "1" ]; then
+            echo "::error::live-verify gate BLOCKED the release: result=${RESULT:-unknown}. Inspect the 'Run live-verify harness' step output and the gate=live-verify Sentry event."
+            exit 1
+          fi
+          echo "live-verify gate: non-blocking (result=${RESULT:-unknown})"
