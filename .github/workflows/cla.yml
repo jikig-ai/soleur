@@ -48,7 +48,14 @@ jobs:
           # (returns `claude[bot]` for the Anthropic GitHub App, DB ID 209825114).
           # REST-based gates (e.g. .github/workflows/scheduled-bug-fixer.yml) match `app/claude` —
           # do NOT harmonize the two; the surfaces are different. See #2907.
-          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot]"
+          # `soleur-ai[bot]` (bot user ID 273333864) is Soleur's own automation app, which
+          # opens bot-fix PRs via `soleur:fix-issue`. For the login match to fire, the bot's
+          # commits MUST carry the `273333864+soleur-ai[bot]@users.noreply.github.com` author
+          # email (pinned in `plugins/soleur/skills/fix-issue/SKILL.md` Phase 5) — the cloud
+          # runtime's ambient `agent@soleur.ai` email resolves to a NULL login and never
+          # matches. Login-based (non-spoofable) by design; do NOT add a plain author-name
+          # entry like `Soleur Agent`. See #5520 (the PR that exposed the null-login gap).
+          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot],soleur-ai[bot]"
           custom-notsigned-prcomment: |
             Thank you for your contribution! Before we can accept it, you need to sign our [Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html).
 
