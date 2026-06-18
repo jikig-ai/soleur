@@ -389,6 +389,7 @@ async function driveAndVerify(
     // realtime socket /realtime/v1/websocket). Only the parsed {errorCode,message}
     // is retained; raw frame payloads (the auth frame carries a token) never leak.
     let latestWsError: WsErrorFrame | null = null;
+    let sessionStarted = false;
     page.on("websocket", (ws) => {
       let pathname: string;
       try {
@@ -398,8 +399,13 @@ async function driveAndVerify(
       }
       if (pathname !== "/ws") return;
       ws.on("framereceived", ({ payload }) => {
-        const parsed = parseWsErrorFrame(payload.toString());
+        const text = payload.toString();
+        const parsed = parseWsErrorFrame(text);
         if (parsed) latestWsError = parsed;
+        // `session_started` is the server's acceptance of `start_session`; the
+        // Send gate below waits for it so the chat never races ahead of the
+        // established session (the #5463 session-rejected class).
+        if (isSessionStartedFrame(text)) sessionStarted = true;
       });
     });
 
@@ -433,6 +439,38 @@ async function driveAndVerify(
     const input = page.getByRole("textbox").first();
     await input.waitFor({ state: "visible", timeout: 20_000 });
     await input.fill("live-verify rail check — automated, please ignore");
+
+    // Gate the Send on start_session ACCEPTANCE, not merely WS-connect. The Send
+    // button enables on `status === "connected"` (chat-surface.tsx) — strictly
+    // weaker than session acceptance — so clicking the instant it enables can race
+    // ahead of the server's `session_started` reply and land the chat with no
+    // active session ("Send start_session first" → session-rejected, the #5463
+    // class observed on the first real CI run). The client auto-fires start_session
+    // on WS-connect during hydration, so we poll the frame-listener flags here:
+    //   - `session_started` seen      → session established, safe to Send
+    //   - rate-limited / rejected     → bail with the precise reason BEFORE sending
+    //   - neither within budget       → distinct `session-not-acked` CANT-RUN
+    // (so a never-acked session is diagnosable, not misattributed downstream).
+    const ackDeadline = Date.now() + 20_000;
+    while (!sessionStarted) {
+      const rejection = sendRejectionReason(latestWsError);
+      if (rejection) {
+        return { kind: "CANT-RUN", reason: rejection };
+      }
+      if (Date.now() >= ackDeadline) {
+        // latestWsError is mutated only inside the framereceived closure, which
+        // TS's control-flow analysis cannot model — it narrows the variable to
+        // `null` here (so `?.field` errors on the `never` non-null branch). The
+        // assertion re-states the true declared type; the closure does set it.
+        const lastErr = latestWsError as WsErrorFrame | null;
+        const hint = lastErr?.errorCode ?? lastErr?.message;
+        return {
+          kind: "CANT-RUN",
+          reason: hint ? `session-not-acked:${hint}` : "session-not-acked",
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
 
     // The Send button is disabled until the WS reaches status === "connected"
     // (chat-surface.tsx: `disabled={status !== "connected"}`); clicking a
@@ -545,6 +583,28 @@ export function parseWsErrorFrame(payload: string): WsErrorFrame | null {
     errorCode: typeof errorCode === "string" ? errorCode : undefined,
     message: typeof message === "string" ? message : undefined,
   };
+}
+
+/**
+ * True ONLY for a `{type:"session_started"}` frame — the server's acceptance of
+ * `start_session` (ws-handler.ts emits it with a conversationId + capabilities).
+ * The drive loop waits for this before clicking Send, because the Send button
+ * enables on the weaker `status === "connected"` (chat-surface.tsx) and a click
+ * can otherwise race ahead of session acceptance. Pure + side-effect-free for unit
+ * tests; only the `type` discriminant is read, so no payload field escapes.
+ */
+export function isSessionStartedFrame(payload: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return false;
+  }
+  return (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    (parsed as { type?: unknown }).type === "session_started"
+  );
 }
 
 // The genuine no-persist FAIL detail (session accepted but no row materialized —
