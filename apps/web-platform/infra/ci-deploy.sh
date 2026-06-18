@@ -266,25 +266,25 @@ verify_inngest_health() {
   # backend is reachable — inngest won't serve otherwise). The residual silent
   # risk is *flags-absent*: a templating/image regression that drops the backend
   # flags → inngest defaults to in-memory Redis (non-durable) WHILE /health=200.
-  # This gate is a CONSISTENCY assertion: when --postgres-uri is configured the
-  # queue MUST also be durable (--redis-uri present AND inngest-redis active), or
-  # the deploy fails loud. It is transparent to pre-migration / rollback states
-  # (no --postgres-uri → skip), so a `--sqlite-dir`-only rollback still passes.
-  # Reads only the CONFIGURED ExecStart ($VAR form — no secret value) + unit
-  # activeness; never logs the connection string. Build-time flag presence is
-  # separately drift-guarded in inngest.test.sh.
+  # This gate is a CONSISTENCY assertion: when the durable backend is configured the
+  # queue MUST also have inngest-redis active, or the deploy fails loud. It is
+  # transparent to pre-migration / rollback states (sentinel absent → skip), so a
+  # `--sqlite-dir`-only rollback still passes. Reads only the CONFIGURED ExecStart
+  # ($VAR form — no secret value) + unit activeness; never logs the connection string.
+  # Detection sentinel (#5560): the durable backend is detected by the NON-SECRET
+  # --postgres-max-open-conns flag, NOT --postgres-uri/--redis-uri — those are now
+  # delivered via the doppler-run ENVIRONMENT (never argv) so they no longer appear
+  # in the ExecStart. inngest-bootstrap.sh writes --postgres-max-open-conns ONLY in
+  # the durable branch (present iff durable). Build-time flag presence is separately
+  # drift-guarded in inngest.test.sh; parser token-parity in inngest-inventory.test.sh.
   local exec_start=""
   exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
-  if [[ "$exec_start" == *'--postgres-uri'* ]]; then
-    if [[ "$exec_start" != *'--redis-uri'* ]]; then
-      logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — --postgres-uri configured but --redis-uri absent; the queue would be non-durable in-memory Redis (silent armed-reminder loss on host rebuild, #5450)"
-      return 1
-    fi
+  if [[ "$exec_start" == *'--postgres-max-open-conns'* ]]; then
     if ! systemctl is-active --quiet inngest-redis.service; then
       logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — durable backend configured but inngest-redis.service is not active; armed reminders would not persist"
       return 1
     fi
-    logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — --postgres-uri + --redis-uri configured and inngest-redis.service active"
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — durable backend (--postgres-max-open-conns sentinel) configured and inngest-redis.service active"
   else
     # #5547 Gap 2/3: SQLite-only fail-safe ExecStart (Redis was not ready this
     # deploy → inngest-bootstrap wrote the empty BACKEND_FLAGS form). This is NOT
@@ -992,13 +992,15 @@ case "$COMPONENT" in
     # fail-safe — Redis not ready) from a healthy durable one so
     # /hooks/deploy-status .reason surfaces it without SSH. The bootstrap exits 0
     # in both cases (the server stays available). The AUTHORITATIVE signal is the
-    # WRITTEN ExecStart lacking --postgres-uri (re-derived below). The
-    # bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is only a SECONDARY
+    # WRITTEN ExecStart lacking the --postgres-max-open-conns durable sentinel
+    # (re-derived below; #5560 — the postgres/redis URIs are env-delivered now, so
+    # the non-secret --postgres-max-open-conns flag is the durable marker on argv).
+    # The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is only a SECONDARY
     # cross-check OR'd in here: the legacy stderr-tail→reason path (line ~957)
     # fires only on a NON-zero bootstrap exit, so on this 0-exit success path the
     # marker is not the load-bearing carrier — the ExecStart re-derivation is.
     inngest_exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
-    if [[ "$inngest_exec_start" != *'--postgres-uri'* ]] \
+    if [[ "$inngest_exec_start" != *'--postgres-max-open-conns'* ]] \
        || grep -q 'INNGEST_DURABLE_DEGRADED' "$BOOTSTRAP_STDERR" 2>/dev/null; then
       logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed (degraded durability — SQLite-only; durable Redis not ready, #5547)"
       final_write_state 0 "success_degraded_durability"
