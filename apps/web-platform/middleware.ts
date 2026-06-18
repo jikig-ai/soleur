@@ -1,7 +1,8 @@
 // live-verify gate exercise: deliberate no-op to trigger the report-only
-// post-deploy harness for the first time in CI (this file matches
-// scripts/live-verify/trigger-paths.txt `^apps/web-platform/middleware\.ts`,
-// re-homed by PR #5488). No behavior change; report-only cannot block deploy.
+// post-deploy harness (this file matches scripts/live-verify/trigger-paths.txt
+// `^apps/web-platform/middleware\.ts`, re-homed by PR #5488). No behavior change;
+// report-only cannot block deploy. Re-armed to validate the start_session-ack
+// fix (PR #5573) — confirm the harness now reaches PASS rather than session-rejected.
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
