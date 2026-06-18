@@ -124,6 +124,8 @@ jobs:
             echo "::notice::Inngest healthy; durability_state field absent (older on-host inventory script, pre-#5553). No durability signal until the next infra-config push re-stages inngest-inventory.sh — blind window made visible, no issue filed."
           elif [[ "$dstate_safe" == "unknown" ]]; then
             echo "::warning::Inngest healthy but durability_state=unknown — the on-host inventory could not read the inngest-server ExecStart (parser/permission regression). This is a read failure, not a confirmed degradation; investigate. No issue filed."
+          elif [[ -n "$dstate_safe" && "$dstate_safe" != "durable" && "$dstate_safe" != "sqlite_only" && "$dstate_safe" != "degraded" ]]; then
+            echo "::warning::Inngest healthy but durability_state=${dstate_safe} is UNRECOGNIZED — no advisory routing exists for this value (expected durable|degraded|sqlite_only|unknown|absent). A forward-compat drift between inngest-inventory.sh's enum and this workflow; surface it here so it is not silent."
           fi
 
       - name: Auto-dispatch inngest restart (failure)
@@ -224,7 +226,7 @@ jobs:
             printf '### Remediation\n\n'
             printf 'Re-deploy inngest with Redis ready (the deploy re-stages the redis assets → durable ExecStart), or restart `inngest-redis.service`. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the #5450 durability epic. This is the continuous between-deploy detector; the deploy-time `ci-deploy.sh` signal fires only at deploy time.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             # Keep severity accurate across sqlite_only<->degraded transitions so the
             # issue never rots at a stale severity (#5553 review P2-1): add the current
@@ -248,7 +250,7 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
-          STALE=$(gh issue list --repo "$GH_REPO" --state open \
+          STALE=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" \
             --search 'in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE" ]]; then
             gh issue close "$STALE" --repo "$GH_REPO" --comment "Inngest durable again at ${NOW} (durability_state=durable). Run: ${RUN_URL}"

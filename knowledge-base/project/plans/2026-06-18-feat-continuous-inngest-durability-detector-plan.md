@@ -402,8 +402,10 @@ No `source`-lib precedent exists in `apps/web-platform/infra/`; a sourced lib wo
 - **`gh` log-injection** via the probe body → the body never reaches the advisory step's echoes
   unsanitized; `durability_state` is a constrained enum and still passes through
   `strip_log_injection` before `$GITHUB_OUTPUT` (existing pattern, lines 109-111).
-- **Older on-host script** without the field after a partial rollout → `jq '// "unknown"'`
-  tolerance; no spurious issue; self-heals on the next infra-config push.
+- **Older on-host script** without the field after a partial rollout → `jq '// "absent"'`
+  tolerance (workflow-side coercion of a missing field); no spurious issue; self-heals on the
+  next infra-config push. (A redeployed host whose live parser fails to read the unit emits the
+  distinct literal `unknown` → `::warning::`, also no issue.)
 
 ## Implementation Reconciliations (/work)
 

@@ -143,6 +143,10 @@ fetch_functions() {
 # Test seams: INVENTORY_EXECSTART / INVENTORY_REDIS_ACTIVE (CI has no systemd).
 # Unset-only (`${VAR-…}`, not `:-`) so an explicitly-empty seam deterministically
 # means "unit read came back empty → unknown" regardless of any systemd on the runner.
+# SOLEUR-DEBT: 3rd of 3 ExecStart-durability parsers (ci-deploy.sh source-of-truth,
+# inngest-wiped-volume-verify.sh subset, this). Kept in sync by test_durability_drift_guard,
+# NOT a shared sourced lib (infra has no source-lib precedent). Upgrade trigger: a 4th
+# --postgres-uri ExecStart parser appears -> extract inngest-durability-lib.sh. Tracked: #5450.
 derive_durability_state() {
   local exec_start redis_active
   exec_start="${INVENTORY_EXECSTART-$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)}"
