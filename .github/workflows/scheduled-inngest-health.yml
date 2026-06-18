@@ -73,26 +73,37 @@ jobs:
           # Health signal: the inngest-inventory hook GETs /v0/gql. HTTP 200 with a
           # JSON object carrying .functions == inngest is up. 500 / __FETCH_FAILED__
           # / non-JSON == inngest-server is down or /v0/gql unreachable.
+          # Probe up to 3x (8s apart) and only declare down if ALL fail — a single
+          # transient blip (CF Access hiccup, inventory timeout under load) must
+          # NOT trigger an unnecessary restart. Mirrors scheduled-realtime-probe's
+          # in-run retry resilience (its 5x SUBSCRIBED loop).
           if [[ -z "$fail_mode" ]]; then
             SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-            rm -f /tmp/health-body
-            CODE=$(curl -s --max-time 30 -o /tmp/health-body -w '%{http_code}' \
-              -X GET \
-              -H "X-Signature-256: sha256=$SIG" \
-              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-              "https://deploy.soleur.ai/hooks/inngest-inventory" || echo "000")
-            BODY=$(cat /tmp/health-body 2>/dev/null || echo "")
-            if [[ "$CODE" != "200" ]]; then
-              cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
-              record_failure "inngest_down" "inventory hook HTTP ${CODE}: ${cause:-<empty body>}"
-            elif ! printf '%s' "$BODY" | jq -e 'type == "object" and (.functions | type == "array")' >/dev/null 2>&1; then
-              cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
-              record_failure "inngest_unhealthy" "inventory 200 but no functions array: ${cause}"
-            else
-              fn=$(printf '%s' "$BODY" | jq -r '.functions | length')
-              echo "Inngest healthy: functions=${fn}"
-            fi
+            last_mode=""; last_detail=""; healthy="no"
+            for attempt in 1 2 3; do
+              rm -f /tmp/health-body
+              CODE=$(curl -s --max-time 30 -o /tmp/health-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "https://deploy.soleur.ai/hooks/inngest-inventory" || echo "000")
+              BODY=$(cat /tmp/health-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+                last_mode="inngest_down"; last_detail="attempt ${attempt}/3: inventory hook HTTP ${CODE}: ${cause:-<empty body>}"
+              elif ! printf '%s' "$BODY" | jq -e 'type == "object" and (.functions | type == "array")' >/dev/null 2>&1; then
+                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+                last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: inventory 200 but no functions array: ${cause}"
+              else
+                fn=$(printf '%s' "$BODY" | jq -r '.functions | length')
+                echo "Inngest healthy on attempt ${attempt}/3: functions=${fn}"
+                healthy="yes"; break
+              fi
+              echo "Probe attempt ${attempt}/3 failed (${last_mode}); retrying…"
+              [[ "$attempt" -lt 3 ]] && sleep 8
+            done
+            [[ "$healthy" == "no" ]] && record_failure "$last_mode" "$last_detail"
           fi
 
           fail_mode_safe=$(strip_log_injection "$fail_mode")
