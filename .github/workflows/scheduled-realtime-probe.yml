@@ -86,8 +86,8 @@ jobs:
           # sequences (verified on bash 5.2); use tr+sed.
           # Copied verbatim from scheduled-oauth-probe.yml lines 80-90.
           strip_log_injection() {
-            printf '%s' "$1" | tr -d '\r\n\f\v\x7f\x85' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
           # Graceful fail mode when the operator hasn't yet provisioned the

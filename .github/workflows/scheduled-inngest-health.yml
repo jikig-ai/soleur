@@ -59,8 +59,8 @@ jobs:
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-realtime-probe.yml)
 
           strip_log_injection() {
-            printf '%s' "$1" | tr -d '\r\n\f\v\x7f\x85' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
           fail_mode=""; fail_detail=""; dstate=""
@@ -162,8 +162,8 @@ jobs:
           # Re-declared per-step — bash functions do not cross GH-Actions steps.
           # Copied verbatim from the probe step (cq-regex-unicode-separators-escape-only).
           strip_log_injection() {
-            printf '%s' "$1" | tr -d '\r\n\f\v\x7f\x85' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
           # scrub_pat: redact a leaked Supabase account PAT (sbp_…) before any print.
           # strip_log_injection strips control/separator chars but does NOT redact a
@@ -253,12 +253,15 @@ jobs:
           # failure_mode is a CONTROLLED enum this step sets (or carries from the
           # upstream probe): '' | inngest_down | inngest_unhealthy | secret_unset |
           # pool_pressure | pool_exhausted | pool_probe_unavailable. It is NEVER
-          # untrusted, so it MUST be emitted RAW — passing it through sanitize()
-          # corrupts it: strip_log_injection's `tr -d '…\x7f\x85'` deletes the
-          # LITERAL chars x,7,f,8,5 (GNU tr does not parse \xNN as hex), turning
-          # 'pool_exhausted' into 'pool_ehausted', which then fails the downstream
-          # case-match and mis-routes to the [ci/inngest-down] class (#5563). Only
-          # fail_detail (which may embed untrusted body/breakdown) is sanitized.
+          # untrusted, so it is emitted RAW — a controlled enum should never be
+          # routed through a content-mutating sanitizer. (Historically this was
+          # load-bearing: the old strip_log_injection `tr -d '…\x7f\x85'` deleted
+          # the LITERAL chars x,7,f,8,5 because GNU tr does not parse \xNN as hex,
+          # turning 'pool_exhausted' → 'pool_ehausted' and mis-routing it to the
+          # [ci/inngest-down] class — #5563. The tr is now fixed to strip C0
+          # controls + DEL byte-safely, but raw-emit of a controlled enum remains
+          # the correct invariant.) Only fail_detail (which may embed untrusted
+          # body/breakdown) is sanitized.
           fail_detail_safe="$(sanitize "$fail_detail")"
           { printf '%s\n' "failure_mode=${fail_mode}"; printf '%s\n' "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
           if [[ -n "$fail_mode" ]]; then
