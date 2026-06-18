@@ -82,7 +82,7 @@ test_combined_is_pure_json_object() {
   assert_eq "success-path stderr is empty (summary journald-only)" "" "$err"
 }
 
-# --- Test 2: functions = sorted names from /v1/functions ---
+# --- Test 2: functions = sorted names from /v0/gql functions ---
 test_functions_names() {
   local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
   make_functions '["cron-zeta","cron-alpha"]' > "$ff"
