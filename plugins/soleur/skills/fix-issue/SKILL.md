@@ -157,12 +157,14 @@ If no test baseline was established in Phase 2, treat any test failures as poten
 
 ## Phase 5: Commit, Push, and Open PR
 
-Stage, commit, and push. Stage ONLY the files this fix touched (the fixed file plus any test file from Phase 4) — never a blanket add: in bot/ephemeral workspaces the working tree can carry scaffolding that must not enter the commit (#5091, destructive PR #5026). Enumerate the changed files from `git status --porcelain` and pass each path **as a literal token** — do NOT use a shell variable (`$FIXED_FILE`) in the emitted command. Bot/cron invocations run under a containment hook whose tokenizer needs concrete paths; substitute the real path before emitting the command:
+Stage, commit, and push. Stage ONLY the files this fix touched (the fixed file plus any test file from Phase 4) — never a blanket add: in bot/ephemeral workspaces the working tree can carry scaffolding that must not enter the commit (#5091, destructive PR #5026). Enumerate the changed files from `git status --porcelain` and pass each path **as a literal token** — do NOT use a shell variable (`$FIXED_FILE`) in the emitted command. Bot/cron invocations run under a containment hook whose tokenizer needs concrete paths; substitute the real path before emitting the command.
+
+**Pin the commit author/committer to the bot's resolvable GitHub login.** The cloud runtime's ambient git config authors as `Soleur Agent <agent@soleur.ai>` — an email tied to NO GitHub account, so the commit resolves to a NULL `author.user.login` and the CLA gate (`contributor-assistant`, which keys on `author.user.login`) cannot match it against the allowlist. Override both author and committer to the `soleur-ai[bot]` GitHub-noreply email (user id `273333864`) so the commit resolves to login `soleur-ai[bot]`, which IS on the `cla.yml` allowlist. This is the login-based (non-spoofable) CLA path — do NOT rely on a plain author-name allowlist entry. See `.github/workflows/cla.yml` and #5520 (the bot-fix PR that exposed the null-login gap):
 
 ```bash
 git status --porcelain
 git add -- src/path/to/fixed-file.ts test/path/to/fixed-file.test.ts  # the ACTUAL paths, listed explicitly — never `git add -A`/`.`/`-u`
-git commit -m "[bot-fix] Fix #<N>: <short description>"
+git -c user.name="Soleur Agent" -c user.email="273333864+soleur-ai[bot]@users.noreply.github.com" commit -m "[bot-fix] Fix #<N>: <short description>"
 git push -u origin bot-fix/<N>-<SLUG>
 ```
 
