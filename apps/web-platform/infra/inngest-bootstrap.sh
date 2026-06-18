@@ -227,8 +227,9 @@ fi
 
 # Durable Redis (#5450, #5547 Gap 2) — install + start the queue store and
 # capture REDIS_READY BEFORE writing the inngest-server unit below, so the
-# ExecStart can be branched: write the durable (--postgres-uri/--redis-uri) form
-# ONLY when Redis is verifiably active, else a SQLite-only fail-safe that keeps
+# ExecStart can be branched: write the durable form (env-delivered URIs +
+# --postgres-max-open-conns sentinel since #5560) ONLY when Redis is verifiably
+# active, else a SQLite-only fail-safe that keeps
 # inngest-server AVAILABLE instead of crash-looping on 127.0.0.1:6379 (the ~3.5h
 # #5542 outage). Assets are staged to /tmp by the OCI image entrypoint (fresh-host
 # cloud-init) OR by ci-deploy.sh's `case "inngest")` docker-cp (existing-host
@@ -290,22 +291,40 @@ fi
 # 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
 # planned. Without that pin, neither this poll nor the loopback re-register PUT
 # re-plans crons after a restart (the 2026-06-11 cron-deplan incident).
-# Durable backend (#5450): the durable ExecStart adds --postgres-uri (dedicated
-# Supabase project, Supavisor SESSION pooler :5432 — transaction pooler breaks
-# inngest's sqlc prepared statements, verdict 0.5) + --redis-uri (self-hosted
-# Redis, AOF on /mnt/data). Phase-0 spike (runbook § Durable backend) proved
-# Postgres-ALONE loses armed future-ts reminders on a host re-provision; durable
-# external Redis is what survives. Both secrets inject from Doppler prd via the
-# `doppler run` wrapper (same $${...} pattern as the keys; avoids the #4116
-# EnvironmentFile-empty trap). --postgres-max-open-conns 10 stays UNDER the
-# dedicated project's session-mode pooler pool_size (15) so inngest cannot
-# self-exhaust the pool under load — #5558: 25 exceeded 15 → EMAXCONNSESSION.
+# Durable backend (#5450): the durable backend uses a dedicated Supabase project
+# (Supavisor SESSION pooler :5432 — transaction pooler breaks inngest's sqlc
+# prepared statements, verdict 0.5) + self-hosted Redis (AOF on /mnt/data).
+# Phase-0 spike (runbook § Durable backend) proved Postgres-ALONE loses armed
+# future-ts reminders on a host re-provision; durable external Redis is what survives.
+#
+# Secrets delivery (#5560): inngest reads INNGEST_POSTGRES_URI, INNGEST_REDIS_URI,
+# INNGEST_SIGNING_KEY, and INNGEST_EVENT_KEY from the ENVIRONMENT (self-hosting
+# docs). We rely on that — NO secret is passed on the `inngest start` argv, because
+# argv is world-readable via /proc/<pid>/cmdline (mode 0444); the inherited env is
+# owner-only (/proc/<pid>/environ, mode 0400). The `doppler run --config prd`
+# wrapper injects INNGEST_POSTGRES_URI / INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY by
+# name; INNGEST_REDIS_URI is constructed in @@BACKEND_ENV@@ from INNGEST_REDIS_PASSWORD
+# (Doppler holds only the password). The signing key is re-exported with the
+# `signkey-prod-` prefix stripped (the self-hosted server wants the bare hex; the
+# SDK side keeps the prefixed form in its own scope). This avoids the #4116
+# EnvironmentFile-empty trap (env stays inside the doppler-run scope, not a file).
+#
+# --postgres-max-open-conns 10 stays UNDER the dedicated project's session-mode
+# pooler pool_size (15) so inngest cannot self-exhaust the pool — #5558: 25 > 15 →
+# EMAXCONNSESSION. It is ALSO the NON-SECRET durable-detection sentinel (see the
+# @@BACKEND_FLAGS@@ note below + ci-deploy.sh / inngest-inventory.sh / wiped-volume-verify).
+# ⚠ DETECTION SENTINEL — NEVER move --postgres-max-open-conns into the SHARED prefix
+# (where --sqlite-dir lives): it MUST appear in argv iff durable. Promoting it to the
+# shared prefix would make it present in BOTH branches → every parser misclassifies the
+# SQLite-only fail-safe as durable, and inngest-wiped-volume-verify would permit a wipe
+# of real SQLite state. The drift-guard catches a RENAME, not a prefix-promotion (#5560).
 # Inngest FAILS CLOSED on an unreachable/empty backend (verdict 0.3) —
-# #5547 Gap 2: rather than write the durable flags unconditionally (which
-# crash-loops when Redis is unprovisioned), the ExecStart below carries a literal
-# @@BACKEND_FLAGS@@ sentinel that is substituted (just after the heredoc) with
-# the durable fragment ONLY when REDIS_READY=1 (Redis verifiably active), else an
-# empty fragment → a SQLite-only ExecStart that keeps inngest-server available.
+# #5547 Gap 2: rather than configure the durable backend unconditionally (which
+# crash-loops when Redis is unprovisioned), the ExecStart below carries literal
+# @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels substituted (just after the heredoc)
+# with the durable fragments ONLY when REDIS_READY=1 (Redis verifiably active), else
+# the fail-safe form (unset INNGEST_POSTGRES_URI + empty flags) → a SQLite-only
+# ExecStart that keeps inngest-server available.
 # --sqlite-dir stays in the shared prefix (load-bearing in the SQLite form,
 # vestigial-but-harmless in the durable form).
 cat > "$UNIT_FILE" <<'UNITEOF'
@@ -317,7 +336,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -339,25 +358,37 @@ TimeoutStopSec=180
 WantedBy=multi-user.target
 UNITEOF
 
-# #5547 Gap 2: substitute the @@BACKEND_FLAGS@@ sentinel based on Redis readiness.
-# REDIS_READY=1 → durable backend (--postgres-uri/--redis-uri/--postgres-max-open-conns);
-# REDIS_READY=0 → empty (SQLite-only fail-safe — inngest-server stays available on
-# the non-durable backend rather than crash-looping; verify_inngest_health then
-# SKIPs the durable gate and a rollback deploy succeeds). --sqlite-dir stays in the
-# SHARED prefix above (load-bearing in the SQLite form, vestigial-but-harmless in
-# the durable form). Use bash parameter expansion (NOT sed): the durable fragment
-# contains `/`, `&`, and the literal `$${...}` Doppler tokens, all of which sed's
-# replacement string would mangle. The fragment is single-quoted so `$${...}`
-# stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c
-# expands the injected env (same $${...} contract as the keys).
+# #5547 Gap 2 + #5560: substitute the @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels
+# based on Redis readiness. Secrets are delivered via the ENVIRONMENT (BACKEND_ENV),
+# never argv (#5560) — BACKEND_FLAGS carries only the NON-SECRET --postgres-max-open-conns
+# durable-detection sentinel.
+#   REDIS_READY=1 → durable: export INNGEST_REDIS_URI (from the password) so inngest
+#                   reads it from env; INNGEST_POSTGRES_URI is left in the doppler env
+#                   for inngest to read; argv carries --postgres-max-open-conns (sentinel).
+#   REDIS_READY=0 → SQLite-only fail-safe: `unset INNGEST_POSTGRES_URI` so inngest does
+#                   NOT pick it up from the doppler env and connect to Postgres (it is a
+#                   prd Doppler secret present in BOTH branches' scope — the unset is
+#                   LOAD-BEARING, #5560); empty flags; inngest stays available on SQLite
+#                   rather than crash-looping. verify_inngest_health then SKIPs the durable
+#                   gate (sentinel absent) and a rollback deploy succeeds.
+# --sqlite-dir stays in the SHARED prefix above (load-bearing in the SQLite form,
+# vestigial-but-harmless in the durable form). Use bash parameter expansion (NOT sed):
+# the fragments contain `/`, `&`, and the literal `$${...}` Doppler token, all of which
+# sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
+# stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
+# injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
+# inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
 if [[ "$REDIS_READY" == "1" ]]; then
-  BACKEND_FLAGS='--postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 10'
-  log "inngest-server ExecStart: durable backend (--postgres-uri + --redis-uri)"
+  BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
+  BACKEND_FLAGS='--postgres-max-open-conns 10'
+  log "inngest-server ExecStart: durable backend (env-delivered URIs; --postgres-max-open-conns sentinel)"
 else
+  BACKEND_ENV='unset INNGEST_POSTGRES_URI; '
   BACKEND_FLAGS=''
   log "inngest-server ExecStart: SQLite-only fail-safe (INNGEST_DURABLE_DEGRADED — Redis not ready)"
 fi
 unit_content="$(cat "$UNIT_FILE")"
+unit_content="${unit_content//@@BACKEND_ENV@@/$BACKEND_ENV}"
 unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
 printf '%s\n' "$unit_content" > "$UNIT_FILE"
 
