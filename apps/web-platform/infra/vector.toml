@@ -96,7 +96,45 @@ if parse_err != null {
 }
 '''
 
-# ---------------- Source 4: host metrics (CPU/mem/disk) ----------------
+# ---------------- Source 4: host-script journald (logger -t tags) (#5499) ----------------
+# Seven bash scripts under apps/web-platform/infra/ log operational events to
+# the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron
+# — NOT inside inngest-server.service (Source 1) nor the app container (Source 3)
+# — and their PRIORITY 5 (user.notice; ci-deploy.sh:665 is PRIORITY 4
+# user.warning) lines are dropped by Source 2's PRIORITY 0-2 (CRIT+) filter, so
+# they are invisible in Better Stack today. This source captures them by EXACT
+# SYSLOG_IDENTIFIER match (`logger -t <tag>` sets SYSLOG_IDENTIFIER=<tag>;
+# systemd include_matches is sd_journal_add_match exact-value equality, NOT
+# prefix/regex — a tag typo silently matches nothing).
+#
+# NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
+# these lines are PRIORITY 4-5, which Source 2 drops; the SYSLOG_IDENTIFIER
+# scoping to 7 known tags is already the narrowing. We do NOT widen
+# system_journald's PRIORITY filter — that would ship every host NOTICE+ line
+# (sshd, cron, systemd units, fail2ban) and blow the Better Stack logs quota
+# (per the 2026-06-10 quota-diagnosis learning + #5110 verdict).
+#
+# Quota (#5110 reality check): all 7 are event-driven (deploy/webhook/cron-fire),
+# not continuous request-per-line firehoses — projected tens-to-low-hundreds of
+# rows/day, well within the current ~20% headroom under the 25k/day threshold.
+# Adding a tag here is a quota decision; keep the list to genuinely-diagnostic
+# host scripts. The drift-guard + no-PRIORITY-filter fixtures in
+# vector-pii-scrub.test.sh pin this exact-tag set and the absent PRIORITY filter.
+[sources.host_scripts_journald]
+type = "journald"
+include_matches.SYSLOG_IDENTIFIER = [
+  "infra-config-apply",
+  "infra-config-install",
+  "ci-deploy",
+  "inngest-enumerate-reminders",
+  "inngest-rearm-reminders",
+  "inngest-wiped-volume-verify",
+  "inngest-inventory",
+]
+journal_directory = "/var/log/journal"
+batch_size = 16
+
+# ---------------- Source 5: host metrics (CPU/mem/disk) ----------------
 # 300s scrape (2026-06-10 quota fix) + trimmed collectors (2026-06-10 second
 # pass — AC12 verdict FAIL on #5110: 198 rows/scrape = ~57k rows/day, 2.3x
 # the 25k/day threshold; the 300s interval alone was insufficient). Measured
@@ -138,7 +176,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_journald", "system_journald", "app_container_warn_filter"]
+inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)

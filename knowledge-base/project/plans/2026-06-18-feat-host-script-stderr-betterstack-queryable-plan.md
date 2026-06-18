@@ -309,18 +309,18 @@ unchanged).
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `apps/web-platform/infra/vector.toml` contains `[sources.host_scripts_journald]`
+- [x] **AC1** `apps/web-platform/infra/vector.toml` contains `[sources.host_scripts_journald]`
       with `type = "journald"` and `include_matches.SYSLOG_IDENTIFIER` listing exactly the 7
       tags. Verify: `grep -A12 'sources.host_scripts_journald' apps/web-platform/infra/vector.toml`.
-- [ ] **AC2** The source block has NO `include_matches.PRIORITY` line. Verify:
+- [x] **AC2** The source block has NO `include_matches.PRIORITY` line. Verify:
       `awk '/\[sources.host_scripts_journald\]/{f=1} f&&/^\[/&&!/host_scripts_journald/{f=0} f&&/PRIORITY/{print "FAIL"}' apps/web-platform/infra/vector.toml` returns empty.
-- [ ] **AC3** The tag set equals the set of scripts that actually call `logger -t`. Verify:
+- [x] **AC3** The tag set equals the set of scripts that actually call `logger -t`. Verify:
       the Phase-3 drift-guard test passes — array tags == `grep -l 'logger -t' apps/web-platform/infra/*.sh`-derived tag set.
-- [ ] **AC4** `host_scripts_journald` is in `pii_scrub_drop_userdata`'s `inputs`. Verify:
+- [x] **AC4** `host_scripts_journald` is in `pii_scrub_drop_userdata`'s `inputs`. Verify:
       the input line at ~141 contains `host_scripts_journald`.
-- [ ] **AC5** `vector validate apps/web-platform/infra/vector.toml` passes (config compiles —
+- [x] **AC5** `vector validate apps/web-platform/infra/vector.toml` passes (config compiles —
       run in `validate-vector-config.yml` if a validate step exists; else local with VECTOR_BIN).
-- [ ] **AC6** `vector-pii-scrub.test.sh` (extended with Phase-3 cases) passes green in
+- [x] **AC6** `vector-pii-scrub.test.sh` (extended with Phase-3 cases) passes green in
       `validate-vector-config.yml` on the PR.
 - [ ] **AC7** PR body uses `Ref #5499` (NOT `Closes #5499`). [Corrected 2026-06-18 — deepen-plan.]
       The fix is only live AFTER the post-merge OCI-rebuild + `deploy inngest` (AC8) — `Closes`

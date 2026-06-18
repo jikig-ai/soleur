@@ -269,7 +269,7 @@ assert_grep() {
 assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
 assert_grep "warn filter reads the app_container source" '^inputs = \["app_container_journald"\]'
 assert_grep "app container routed THROUGH pii_scrub (redaction path, not sink-direct)" \
-  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter"\]'
+  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald"\]'
 assert_grep "tag_journald tags app-container lines source_kind=app_container" 'source_kind = "app_container"'
 
 # (b) Redaction parity: a cron pino WARN+ line carrying a userId + an Art-9
@@ -348,6 +348,71 @@ run_filter_fixture "filter KEEPS string-typed level (to_int parses \"40\")" \
 # quota — pin the exact single-element array so that change fails this gate.
 assert_grep "source pins exact production container name (no canary, no wildcard)" \
   '^include_matches\.CONTAINER_NAME = \["soleur-web-platform"\]$'
+
+# ============================================================
+# #5499 — host-script `logger -t` journald source: config assertions
+# ============================================================
+# Pure config greps (no vector binary needed for these — they verify the
+# source's SHAPE, not its runtime behavior, which `vector validate` covers).
+# Kept in this file so validate-vector-config.yml's apps/web-platform/test/infra/**
+# path filter runs them on every vector.toml PR.
+echo
+echo "=== #5499 host-script source assertions ==="
+
+# Extract the [sources.host_scripts_journald] block (its header line through the
+# line before the next top-level [section]). Used by the AC1/AC2/AC3 checks below.
+HOST_SCRIPTS_BLOCK=$(awk '
+  $0 ~ /^\[sources\.host_scripts_journald\]/ { in_block=1; print; next }
+  in_block && /^\[/ { in_block=0 }
+  in_block { print }
+' "$VECTOR_TOML")
+
+# AC1: the dedicated source exists and is a journald source.
+if [[ -n "$HOST_SCRIPTS_BLOCK" ]] && echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^type = "journald"$'; then
+  PASS=$((PASS+1)); echo "  PASS: host_scripts_journald source exists (type=journald)"
+else
+  FAIL=$((FAIL+1)); FAILS+=("AC1: [sources.host_scripts_journald] with type=\"journald\" not found")
+fi
+
+# AC2: the block has NO include_matches.PRIORITY line. These host-script lines
+# are PRIORITY 4-5 (user.warning / user.notice); ANY PRIORITY filter would
+# silently drop the very lines this source exists to capture. Regression guard.
+if echo "$HOST_SCRIPTS_BLOCK" | grep -qE 'PRIORITY'; then
+  FAIL=$((FAIL+1)); FAILS+=("AC2: host_scripts_journald must NOT carry an include_matches.PRIORITY line (would drop PRIORITY 4-5 host-script lines)")
+else
+  PASS=$((PASS+1)); echo "  PASS: host_scripts_journald has no PRIORITY filter (captures PRIORITY 4-5)"
+fi
+
+# AC3: drift guard — the SYSLOG_IDENTIFIER tag set MUST equal the set of infra
+# scripts that actually call `logger -t`. Derive the expected set from the
+# scripts themselves so a NEW `logger -t` tag (or a removed one) that is not
+# mirrored into this source fails CI. (`logger -t <tag>` sets the journal
+# SYSLOG_IDENTIFIER field to <tag>; the source matches that field exactly.)
+INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
+EXPECTED_TAGS=$(
+  for f in "$INFRA_DIR"/*.sh; do
+    grep -q 'logger -t' "$f" || continue
+    grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
+  done | sort -u
+)
+# Array entries are quoted strings on their own lines inside the include_matches
+# block; pull the bare tag from each.
+ACTUAL_TAGS=$(echo "$HOST_SCRIPTS_BLOCK" | grep -oP '^\s*"\K[a-z0-9-]+(?="\s*,?\s*$)' | sort -u)
+if [[ -n "$EXPECTED_TAGS" && "$EXPECTED_TAGS" == "$ACTUAL_TAGS" ]]; then
+  PASS=$((PASS+1)); echo "  PASS: SYSLOG_IDENTIFIER tag set matches the logger -t scripts ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
+else
+  FAIL=$((FAIL+1)); FAILS+=("AC3: tag-set drift — host_scripts_journald array != logger -t scripts.
+    expected (from infra/*.sh logger -t scripts):
+$(echo "$EXPECTED_TAGS" | sed 's/^/      /')
+    actual (from vector.toml source array):
+$(echo "$ACTUAL_TAGS" | sed 's/^/      /')")
+fi
+
+# AC4: redaction-boundary guard (GDPR) — host_scripts_journald must traverse the
+# 3-stage pii_scrub chain (be an input of pii_scrub_drop_userdata), never bypass
+# it to the sink. A new source skipping redaction is a privacy regression.
+assert_grep "host_scripts_journald is an input of pii_scrub_drop_userdata (redaction-boundary guard)" \
+  '^inputs = \[.*"host_scripts_journald".*\]'
 
 echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="

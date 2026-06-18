@@ -9,13 +9,13 @@ plan: knowledge-base/project/plans/2026-06-18-feat-host-script-stderr-betterstac
 
 ## Phase 0 — Preconditions (at /work start)
 
-- [ ] 0.1 Verify the `logger -t` tag set: `grep -l 'logger -t' apps/web-platform/infra/*.sh`
+- [x] 0.1 Verify the `logger -t` tag set: `grep -l 'logger -t' apps/web-platform/infra/*.sh`
       then `grep -rhoP 'LOG_TAG=\K"?[a-z0-9-]+' <those files> | tr -d '"' | sort -u`. Confirm
       exactly: infra-config-apply, infra-config-install, ci-deploy, inngest-enumerate-reminders,
       inngest-rearm-reminders, inngest-wiped-volume-verify, inngest-inventory. (cron-egress-* +
       container-restart-monitor use echo/Sentry, NOT logger -t — exclude.)
-- [ ] 0.2 Confirm `VECTOR_BIN` available (or document `vector validate` runs in CI only).
-- [ ] 0.3 Confirm the apply path is OCI-image-rebuild + `deploy inngest` (NOT terraform).
+- [x] 0.2 Confirm `VECTOR_BIN` available (or document `vector validate` runs in CI only).
+- [x] 0.3 Confirm the apply path is OCI-image-rebuild + `deploy inngest` (NOT terraform).
       vector.toml is baked into the soleur-inngest-bootstrap image
       (build-inngest-bootstrap-image.yml:164,183); apply-web-platform-infra.yml is terraform-only
       and a NO-OP for a vector.toml-only change. Do NOT rely on the apply-web-platform-infra.yml
@@ -24,20 +24,20 @@ plan: knowledge-base/project/plans/2026-06-18-feat-host-script-stderr-betterstac
 
 ## Phase 1 — Add the dedicated host-script journald source
 
-- [ ] 1.1 Edit `apps/web-platform/infra/vector.toml`: add `[sources.host_scripts_journald]`
+- [x] 1.1 Edit `apps/web-platform/infra/vector.toml`: add `[sources.host_scripts_journald]`
       after Source 3 (`app_container_journald`, ~line 69), with the 7-tag
       `include_matches.SYSLOG_IDENTIFIER` array, `type = "journald"`, `journal_directory`,
       `batch_size = 16`, and the documenting comment block (no PRIORITY filter).
 
 ## Phase 2 — Wire through the redaction chain
 
-- [ ] 2.1 Edit `apps/web-platform/infra/vector.toml`: append `"host_scripts_journald"` to the
+- [x] 2.1 Edit `apps/web-platform/infra/vector.toml`: append `"host_scripts_journald"` to the
       `inputs` array of `[transforms.pii_scrub_drop_userdata]` (~line 141), mirroring the
       #4773 boundary comment rationale.
 
 ## Phase 3 — Config-assertion parity fixture
 
-- [ ] 3.1 Edit `apps/web-platform/test/infra/vector-pii-scrub.test.sh`: add grep-based
+- [x] 3.1 Edit `apps/web-platform/test/infra/vector-pii-scrub.test.sh`: add grep-based
       config-assertion cases:
       - source block exists with `type = "journald"`
       - SYSLOG_IDENTIFIER array == scripts'-actual-`logger -t`-tag set (drift guard)
@@ -46,11 +46,11 @@ plan: knowledge-base/project/plans/2026-06-18-feat-host-script-stderr-betterstac
 
 ## Phase 4 — Verify (pre-merge)
 
-- [ ] 4.1 `vector validate apps/web-platform/infra/vector.toml` passes (AC5).
-- [ ] 4.2 Run `vector-pii-scrub.test.sh` green (AC6).
-- [ ] 4.3 Run AC1–AC4 grep/awk verifications.
+- [x] 4.1 `vector validate apps/web-platform/infra/vector.toml` passes (AC5).
+- [x] 4.2 Run `vector-pii-scrub.test.sh` green (AC6).
+- [x] 4.3 Run AC1–AC4 grep/awk verifications.
 - [ ] 4.4 PR body: `Ref #5499` (NOT `Closes` — fix is live only post-deploy; AC7).
-- [ ] 4.5 (optional) Project per-event row count: `journalctl -t ci-deploy -t infra-config-apply
+- [x] 4.5 (optional) Project per-event row count: `journalctl -t ci-deploy -t infra-config-apply
       --since '7 days ago' | wc -l` / 7 < ~1k rows/day, or estimate from deploy frequency.
 
 ## Phase 5 — Post-merge (operator / automated; OCI-rebuild path, NOT terraform)
