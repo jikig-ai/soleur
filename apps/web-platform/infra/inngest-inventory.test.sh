@@ -57,6 +57,24 @@ make_functions() {  # $1 = JSON array of names
   jq -nc --argjson names "$1" '{data:{functions:[ $names[] | {id:., name:., slug:., triggers:[]} ]}}'
 }
 
+# Build a page with $3 synthesized bulk edges (one jq call, fast) so the eventsV2
+# accumulator can be driven past MAX_ARG_STRLEN without thousands of make_edge spawns
+# (#5523). $1=hasNextPage $2=endCursor $3=count $4=node.name $5=extra-edges-json (default []).
+make_bulk_page() {
+  local hn="$1" ec="$2" n="$3" name="$4" extra="${5:-[]}"
+  jq -nc --argjson hn "$hn" --arg ec "$ec" --argjson n "$n" --arg name "$name" --argjson extra "$extra" '
+    {data:{eventsV2:{
+      totalCount:($n + ($extra|length)),
+      pageInfo:{hasNextPage:$hn,endCursor:$ec},
+      edges:( [ range($n) as $i | {
+        cursor:("\($name)-\($i)"),
+        node:{id:("\($name)-\($i)"),name:$name,occurredAt:"2026-06-10T00:00:00Z",
+              receivedAt:"2026-06-10T00:00:00Z",idempotencyKey:null,
+              raw:({data:{},id:("\($name)-\($i)"),name:$name,ts:1780358400000,v:null}|tojson),
+              runs:[]} } ] + $extra )
+    }}}'
+}
+
 # Run the script with fixtures; $1=page-dir, $2=functions-fixture-file. Returns stdout only.
 run_inv() {
   INNGEST_GQL_FIXTURE_DIR="$1" INVENTORY_FUNCTIONS_FIXTURE="$2" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null
@@ -197,6 +215,65 @@ test_functions_from_gql_shape() {
   assert_eq "a bare array (old shape) trips the guard (not silently accepted)" "1" "$brc"
 }
 
+# --- Test 11 (#5523 AC1): a large accumulated edge set does NOT overflow MAX_ARG_STRLEN ---
+# RED against the pre-fix per-page argv accumulation (jq -nc --argjson a <accumulator>):
+# once the RUNNING accumulator crosses the ~128 KB per-arg ceiling it
+# trips `jq: Argument list too long` (the live HTTP 500). GREEN after the mktemp +
+# `jq -s 'add // []'` file-spool fix (file I/O has no argv size limit). Calibrated at
+# authoring time: 5 pages × 400 cron edges builds a running accumulator past the
+# ceiling by ~page 3; each individual page stays under the limit, so this exercises the
+# accumulator overflow specifically (not a single oversized page). A known future
+# reminder on the LAST page proves the fix accumulates ALL pages, not just truncates.
+test_large_accumulator_no_argv_overflow() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  local i
+  for i in 1 2 3 4; do
+    make_bulk_page true "CUR$i" 400 "cron/bulk" "[]" > "$d/page-$i.json"
+  done
+  make_bulk_page false "" 400 "cron/bulk" \
+    "[$(make_edge 01CANARY reminder.scheduled rem-overflow-canary "$FUTURE_MS" "[]")]" > "$d/page-5.json"
+  local out rc=0
+  out=$(run_inv "$d" "$ff") || rc=$?
+  assert_eq "large accumulated edge set exits 0 (no MAX_ARG_STRLEN overflow)" "0" "$rc"
+  assert_eq "event_names spans bulk + reminder across all pages" "cron/bulk,reminder.scheduled" "$(echo "$out" | jq -r '.event_names | join(",")')"
+  assert_eq "last-page armed reminder accumulated (all pages collapsed)" "rem-overflow-canary" "$(echo "$out" | jq -r '[.armed_reminders[].reminder_id] | join(",")')"
+}
+
+# --- Test 12 (#5523 AC2): accumulation never passes the running accumulator via argv ---
+# Structural regression guard: the test FAILs if the argv accumulation form is
+# reintroduced, and asserts the accumulation reads from a spool file (jq -s / file arg).
+# Anchored on the EXACT accumulator string — NOT a bare --argjson — so the legitimate
+# `--argjson first/after` in build_request_body and `--argjson f/e/r` in the final
+# object assembly do not false-trip it (Sharp Edges: structural-guard grep specificity).
+test_no_argv_accumulation() {
+  if grep -qE 'argjson a "\$all_edges"' "$TARGET"; then
+    echo "  FAIL: argv accumulation (jq --argjson a \"\$all_edges\") reintroduced — overflows MAX_ARG_STRLEN"; FAIL=$((FAIL+1));
+  else echo "  PASS: no argv accumulation of \$all_edges"; PASS=$((PASS+1)); fi
+  if grep -qE 'jq -s|--slurpfile' "$TARGET"; then
+    echo "  PASS: accumulation collapses a spool file (jq -s / --slurpfile)"; PASS=$((PASS+1));
+  else echo "  FAIL: no file-based accumulation (jq -s / --slurpfile) found"; FAIL=$((FAIL+1)); fi
+}
+
+# --- Test 13 (#5523 AC5): the spool temp file is cleaned on a FATAL exit path ---
+# The mktemp spool is created before the eventsV2 loop; a malformed page exits 1 from
+# inside the loop. The in-function `trap 'rm -f ...' EXIT` (NOT RETURN — RETURN does not
+# fire on `exit`) must still clean the spool file. Isolate mktemp via a private TMPDIR
+# and assert nothing survives.
+test_fatal_cleans_spool_tempfile() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); local tmpd; tmpd=$(mktemp -d)
+  trap 'rm -rf "$d" "$ff" "$tmpd"' RETURN
+  make_functions '[]' > "$ff"
+  # well-formed-but-unexpected page (no .data.eventsV2) → FATAL exit 1 inside the loop,
+  # AFTER the spool file is created.
+  printf '%s' '{"data":{"eventsV2OTHER":{}}}' > "$d/page-1.json"
+  local rc=0
+  TMPDIR="$tmpd" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" >/dev/null 2>&1 || rc=$?
+  assert_eq "malformed page exits non-zero (FATAL)" "1" "$rc"
+  local leftover; leftover=$(find "$tmpd" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "no spool temp file leaked on FATAL exit (EXIT trap fired)" "0" "$leftover"
+}
+
 test_combined_is_pure_json_object
 test_functions_fetch_failure_is_loud
 test_functions_from_gql_shape
@@ -207,6 +284,9 @@ test_pagination
 test_summary_no_body_leak
 test_jq_n_body
 test_empty_state
+test_large_accumulator_no_argv_overflow
+test_no_argv_accumulation
+test_fatal_cleans_spool_tempfile
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

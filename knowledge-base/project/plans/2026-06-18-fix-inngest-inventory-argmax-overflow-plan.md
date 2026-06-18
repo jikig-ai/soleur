@@ -6,7 +6,7 @@ issue: 5523
 branch: feat-one-shot-5523-inngest-inventory-argmax
 lane: procedural
 brand_survival_threshold: none
-status: planned
+status: complete
 ---
 
 # 🐛 fix(inngest): op=inventory eventsV2 accumulation overflows ARG_MAX (jq --argjson)
@@ -131,12 +131,12 @@ blast radius, no regulated-data surface.
 
 ### Phase 0 — Preconditions (verify before editing)
 
-- [ ] `git grep -n 'argjson a "\$all_edges"' apps/web-platform/infra/` returns exactly
+- [x] `git grep -n 'argjson a "\$all_edges"' apps/web-platform/infra/` returns exactly
       two hits: `inngest-inventory.sh:154` and `inngest-enumerate-reminders.sh:126`
       (proves the fix scope; if a third appears, extend scope).
-- [ ] Confirm both scripts run `set -euo pipefail` (they do) so a failed `mktemp` or
+- [x] Confirm both scripts run `set -euo pipefail` (they do) so a failed `mktemp` or
       write aborts loudly rather than silently producing a partial accumulator.
-- [ ] Re-confirm the fix locally: `tmp=$(mktemp); echo '[{"a":1}]' >>"$tmp"; echo '[{"a":2}]' >>"$tmp"; jq -s 'add' "$tmp"` → `[{"a":1},{"a":2}]`. (verified: 2026-06-18)
+- [x] Re-confirm the fix locally: `tmp=$(mktemp); echo '[{"a":1}]' >>"$tmp"; echo '[{"a":2}]' >>"$tmp"; jq -s 'add' "$tmp"` → `[{"a":1},{"a":2}]`. (verified: 2026-06-18)
 
 ### Phase 1 — RED test (`inngest-inventory.test.sh`)
 
@@ -268,12 +268,12 @@ fixture builders (`make_page`/`make_edge` — the enumerate variant has a differ
 
 ### Phase 4 — Local verification
 
-- [ ] `bash apps/web-platform/infra/inngest-inventory.test.sh` → all pass, exit 0.
-- [ ] `bash apps/web-platform/infra/inngest-enumerate-reminders.test.sh` → all pass.
-- [ ] `bash apps/web-platform/infra/inngest-rearm-reminders.test.sh` and
+- [x] `bash apps/web-platform/infra/inngest-inventory.test.sh` → all pass, exit 0.
+- [x] `bash apps/web-platform/infra/inngest-enumerate-reminders.test.sh` → all pass.
+- [x] `bash apps/web-platform/infra/inngest-rearm-reminders.test.sh` and
       `cutover-inngest-workflow.test.sh` → still pass (no contract change, but they
       run in the same infra-validation job; confirm no collateral break).
-- [ ] `shellcheck apps/web-platform/infra/inngest-inventory.sh
+- [x] `shellcheck apps/web-platform/infra/inngest-inventory.sh
       apps/web-platform/infra/inngest-enumerate-reminders.sh` → clean (the existing
       files are shellcheck-clean; the new `trap`/`mktemp` lines carry an inline
       `# shellcheck disable=SC2064` for the intentional early-expansion).
@@ -303,29 +303,29 @@ The container restart needs no separate step (the merge IS the restart trigger).
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (RED→GREEN, inventory):** `inngest-inventory.test.sh` contains a large-edge
+- [x] **AC1 (RED→GREEN, inventory):** `inngest-inventory.test.sh` contains a large-edge
       overflow test that FAILs against the pre-fix `--argjson a "$all_edges"` line
       (reproduces `Argument list too long`) and PASSes against the file-spool fix.
       Verified by checking out the line, running the test, observing FAIL, then
       applying the fix and observing PASS.
-- [ ] **AC2 (structural guard, inventory):** the test FAILs if
+- [x] **AC2 (structural guard, inventory):** the test FAILs if
       `grep -qE 'argjson a "\$all_edges"' inngest-inventory.sh` matches (argv form
       reintroduced), and asserts the accumulation reads from a file.
-- [ ] **AC3 (RED→GREEN + guard, enumerate):** identical AC1+AC2 coverage in
+- [x] **AC3 (RED→GREEN + guard, enumerate):** identical AC1+AC2 coverage in
       `inngest-enumerate-reminders.test.sh` for `inngest-enumerate-reminders.sh`.
-- [ ] **AC4:** `git grep -n 'argjson a "\$all_edges"' apps/web-platform/infra/` returns
+- [x] **AC4:** `git grep -n 'argjson a "\$all_edges"' apps/web-platform/infra/` returns
       **zero** hits after the fix.
-- [ ] **AC5:** both scripts still emit their `set -euo pipefail` FATAL diagnostics on a
+- [x] **AC5:** both scripts still emit their `set -euo pipefail` FATAL diagnostics on a
       malformed-GraphQL page (existing Test for inventory: `test_functions_fetch_failure_is_loud`
       / the eventsV2 malformed branch). The spool temp file is cleaned on ALL exit paths
       via an in-function `trap 'rm -f ...' EXIT` (NOT `RETURN` — RETURN does not fire on
       `exit`; verified at deepen time). Add a test asserting no `mktemp`-pattern temp file
       survives a FATAL run (e.g. snapshot `ls /tmp` before/after, or trap-fire stub).
-- [ ] **AC6 (#5503 purity preserved):** `inngest-inventory.test.sh`'s
+- [x] **AC6 (#5503 purity preserved):** `inngest-inventory.test.sh`'s
       `test_combined_is_pure_json_object` and `test_summary_no_body_leak` still pass —
       the fix changes accumulation, not stream output.
-- [ ] **AC7:** `shellcheck` clean on both scripts.
-- [ ] **AC8:** PR body uses `Closes #5523` (the fix lands and is correct at merge —
+- [x] **AC7:** `shellcheck` clean on both scripts.
+- [x] **AC8:** PR body uses `Closes #5523` (the fix lands and is correct at merge —
       this is NOT an ops-remediation/post-merge-apply class; the code merge IS the fix).
 
 ### Post-merge (operator / ship-automated)
