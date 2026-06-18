@@ -74,6 +74,47 @@ Two coupled moves:
 6. **Plan's "7 consumers" was actually 8** — sibling PR #5553 merged a 3rd durable-detection parser (`inngest-inventory.sh` + a drift-guard) between plan-write and /work. **Recovery:** the Phase-0.5 `rebase origin/main` + the /work-time cross-consumer grep (`hr-type-widening-cross-consumer-grep`) surfaced the 8th consumer; folded it into the sweep inline. **Prevention:** already covered by `2026-05-20-rebase-before-applying-agents-md-plan-edits` + the sweep-class-grep-enumerated rule — this is a **confirming instance** for the durable-detection-parser family: plan-enumerated consumer counts go stale when a sibling lands a coupled subsystem mid-flight; the rebase + grep are the load-bearing recovery, not the plan's count.
 7. **3 pre-existing test failures** (2 doppler-CLI env mocks in `ci-deploy.test.sh`, 1 pin-freshness drift in `cloud-init-inngest-bootstrap.test.sh`). **Recovery:** confirmed pre-existing by running the origin/main versions in isolation. **Prevention:** per `wg-when-tests-fail-and-are-confirmed-pre`, verify against origin/main before treating a failure as a regression — both were env/time-dependent, not code.
 
+## Post-ship discovery: rotating a `doppler_secret`-backed credential needs a DUAL `-replace`, not a lone `taint` (#5575)
+
+This learning's plan prescribed (AC9) rotating `INNGEST_REDIS_PASSWORD` via
+`terraform taint random_password.inngest_redis_password_prd` (or a lone
+`-replace` of just the `random_password`). **That is an INCOMPLETE rotation.**
+
+`doppler_secret.inngest_redis_password_prd` carries `lifecycle { ignore_changes
+= [value] }`. `ignore_changes` applies to **updates**, not **creates**. So:
+
+- A lone `taint`/`-replace` of `random_password` regenerates the value **in
+  tfstate**, but on the next apply the `doppler_secret` is *updated* (not
+  recreated) — and `ignore_changes=[value]` **suppresses that update**. Doppler
+  (and therefore the running inngest, which reads the value from Doppler) keeps
+  the **OLD** password. The exposed credential is NOT actually rotated.
+
+**Correct method — replace BOTH resources together** so the `doppler_secret` is
+*recreated* (create writes the new value, bypassing `ignore_changes`):
+
+```bash
+terraform apply -replace=random_password.inngest_redis_password_prd \
+                -replace=doppler_secret.inngest_redis_password_prd
+# then redeploy inngest so it loads the new value.
+```
+
+The `INNGEST_POSTGRES_URI` rotation is a *separate* action (it is out-of-band,
+NOT a `doppler_secret` resource): reset the Supabase project DB password, then
+`doppler secrets set INNGEST_POSTGRES_URI` (stdin) — an in-place **update**,
+which is fine because no `ignore_changes` resource suppresses it.
+
+**Verification signature (Doppler prd activity log):** a correct dual-`-replace`
+shows a `1 removed` + `1 added` pair (the `doppler_secret` destroy+recreate); the
+Postgres URI re-set shows `1 updated`. A rotation that shows only `1 updated` for
+the Redis secret (or nothing) used the incomplete lone-`taint` path and did NOT
+change the live password. (This is how #5560's rotation was verified complete.)
+
+**Generalizable rule:** any `doppler_secret` (or any provider resource) with
+`ignore_changes=[value]` cannot be rotated by changing only its *source* value —
+you must `-replace` the resource that carries `ignore_changes` so the new value
+lands via *create*. Caught post-ship (#5575) and fixed in the `inngest.tf`
+rotation comment; this addendum makes it searchable beyond that one file.
+
 ## Tags
 category: security-issues
 module: apps/web-platform/infra
