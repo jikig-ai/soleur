@@ -7,7 +7,18 @@
 #
 #   { "functions":      [<registered function name/slug>, ...],   # /v0/gql functions
 #     "event_names":    [<distinct event name>, ...],             # eventsV2 (ALL)
-#     "armed_reminders": [{reminder_id,fire_at,actor,action}, ...] }  # enumerate proj.
+#     "armed_reminders": [{reminder_id,fire_at,actor,action}, ...],   # enumerate proj.
+#     "durability_state": "durable"|"degraded"|"sqlite_only"|"unknown" }  # #5553
+#
+# durability_state (#5553) is the no-SSH continuous-durability surface: a between-deploy
+# detector (.github/workflows/scheduled-inngest-health.yml) reads it every 15 min and
+# files an advisory issue when the host runs non-durable (sqlite_only/degraded) between
+# deploys — the deploy-time ci-deploy.sh signal fires only at deploy time. Derived
+# on-host from `systemctl show -p ExecStart inngest-server.service` + `systemctl is-active
+# inngest-redis.service`, mirroring the canonical ci-deploy.sh:277-287 verdict (pinned by
+# a cross-file drift-guard test). Only the ENUM is emitted — never the ExecStart string
+# (the $VAR-form connection refs stay on-host; #5503 purity). Test seams:
+# INVENTORY_EXECSTART, INVENTORY_REDIS_ACTIVE (CI has no systemd).
 #
 # Read-only: no writes, no service restart. Safe to call anytime.
 #
@@ -31,9 +42,12 @@
 # (stdout AND stderr) even on a 200, and the cutover workflow parses this body as a
 # JSON OBJECT. So on the SUCCESS path this script must write NOTHING non-JSON to
 # EITHER stream: stdout carries only the final object, and the summary goes to
-# on-host journald via `logger` ONLY (read with `journalctl -t inngest-inventory`;
-# it does NOT reach Better Stack — see #5495). Internal shell consumers use `$(...)`
-# (stdout only), so the merge happens solely at the webhook boundary.
+# on-host journald via `logger` ONLY (read with `journalctl -t inngest-inventory`).
+# The journald summary DOES now reach Better Stack: `inngest-inventory` was added to
+# Vector's tag allowlist (vector.toml:132, #5526), so the `durability=<enum>` summary
+# is the load-bearing no-SSH carrier for the between-deploy degraded state (#5553).
+# Internal shell consumers use `$(...)` (stdout only), so the merge happens solely at
+# the webhook boundary.
 #
 # Test seam: INNGEST_GQL_FIXTURE_DIR (page-N.json for eventsV2), INVENTORY_FUNCTIONS_FIXTURE
 # (a file with the /v0/gql functions-query response), INVENTORY_NOW_MS (deterministic "now").
@@ -111,6 +125,42 @@ fetch_functions() {
   # real loss (#5509 review P3 — false-confidence on a degraded read).
   curl -s --max-time 15 -X POST -H "Content-Type: application/json" \
     --data-binary "$body" "$GQL_URL" || echo '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}'
+}
+
+# Derive a no-SSH durability verdict from the live inngest-server unit (#5553),
+# mirroring the canonical ci-deploy.sh:277-287 rule EXACTLY (the deploy-time verdict
+# source of truth; kept token-identical in intent and pinned by the cross-file
+# drift-guard test). Reads only the CONFIGURED ExecStart ($VAR form — NEVER the
+# resolved connection string, #5503 purity / AC3) + inngest-redis activeness, and
+# emits ONE enum on stdout:
+#   durable     — --postgres-uri AND --redis-uri configured AND inngest-redis active
+#   degraded    — --postgres-uri configured but --redis-uri absent OR redis inactive
+#                 (the #5542 incident state: durable backend, broken durability
+#                 invariant — ci-deploy treats this as a hard FAIL)
+#   sqlite_only — no --postgres-uri (the SQLite-only fail-safe ExecStart, #5547)
+#   unknown     — ExecStart unreadable (empty); the server-down case is already
+#                 caught upstream by the .data.functions array guard
+# Test seams: INVENTORY_EXECSTART / INVENTORY_REDIS_ACTIVE (CI has no systemd).
+# Unset-only (`${VAR-…}`, not `:-`) so an explicitly-empty seam deterministically
+# means "unit read came back empty → unknown" regardless of any systemd on the runner.
+# SOLEUR-DEBT: 3rd of 3 ExecStart-durability parsers (ci-deploy.sh source-of-truth,
+# inngest-wiped-volume-verify.sh subset, this). Kept in sync by test_durability_drift_guard,
+# NOT a shared sourced lib (infra has no source-lib precedent). Upgrade trigger: a 4th
+# --postgres-uri ExecStart parser appears -> extract inngest-durability-lib.sh. Tracked: #5450.
+derive_durability_state() {
+  local exec_start redis_active
+  exec_start="${INVENTORY_EXECSTART-$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)}"
+  redis_active="${INVENTORY_REDIS_ACTIVE-$(systemctl is-active inngest-redis.service 2>/dev/null || echo inactive)}"
+  if [[ -z "$exec_start" ]]; then
+    echo "unknown"; return 0
+  fi
+  if [[ "$exec_start" == *'--postgres-uri'* ]]; then
+    if [[ "$exec_start" != *'--redis-uri'* || "$redis_active" != "active" ]]; then
+      echo "degraded"; return 0
+    fi
+    echo "durable"; return 0
+  fi
+  echo "sqlite_only"
 }
 
 run_inventory() {
@@ -192,17 +242,23 @@ run_inventory() {
       | { reminder_id: $env.data.reminder_id, fire_at: $env.data.fire_at, actor: $env.data.actor, action: $env.data.action }
     ]')
 
-  # --- Observability summary (counts + reminder_ids ONLY, never bodies) → journald only (#5503) ---
+  # --- durability_state: no-SSH continuous-durability surface (#5553) ---
+  # Enum only (durable|degraded|sqlite_only|unknown); never the ExecStart string.
+  local durability_state
+  durability_state=$(derive_durability_state)
+
+  # --- Observability summary (counts + reminder_ids + durability ENUM ONLY, never
+  #     bodies or connection strings) → journald only (#5503) ---
   local fn_count ev_count armed_count armed_ids
   fn_count=$(echo "$functions" | jq 'length')
   ev_count=$(echo "$event_names" | jq 'length')
   armed_count=$(echo "$armed" | jq 'length')
   armed_ids=$(echo "$armed" | jq -r '[.[].reminder_id] | join(",")')
-  logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids]" 2>/dev/null || true
+  logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids] durability=$durability_state" 2>/dev/null || true
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" \
-    '{functions:$f, event_names:$e, armed_reminders:$r}'
+  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" --arg d "$durability_state" \
+    '{functions:$f, event_names:$e, armed_reminders:$r, durability_state:$d}'
 }
 
 # Run only when executed directly — sourcing (the unit test) must NOT hit the network.
