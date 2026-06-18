@@ -474,6 +474,22 @@ matches for `inngest-bootstrap.sh`, `ci-deploy.sh`, `inngest-redis-bootstrap.sh`
   A flip to SQLite-only does NOT lose in-flight durable state (Postgres persists);
   newly-armed work during the SQLite window lives only on the root disk until the
   next durable deploy (the known #5450 host-rebuild gap, now alerted).
+  **Detection is DEPLOY-TIME only** (review finding, user-impact-reviewer): both
+  authoritative carriers — the `verify_inngest_health` `logger -t ci-deploy`
+  advisory and the `success_degraded_durability` deploy-status reason — fire only
+  during a deploy; the reactive `scheduled-inngest-health.yml` watchdog probes
+  `/health`, which returns 200 for a SQLite-only-but-alive server, so it does NOT
+  detect *ongoing* (between-deploy) durability degradation. The narrow residual
+  exposure (a host silently SQLite-only for an extended period, then losing
+  root-disk-only armed work on rebuild) is bounded because (a) post-Gap-1 a fresh
+  host rebuild re-runs the bootstrap which now stages the Redis assets →
+  `REDIS_READY=1` → durable, so the rebuild itself restores durability, and (b)
+  every inngest deploy re-emits the advisory + reason. A **continuous** between-
+  deploy durability detector (e.g. extend `scheduled-inngest-health.yml` to assert
+  the live ExecStart carries `--postgres-uri` via a no-SSH inventory field and file
+  an advisory issue if SQLite-only persists) is a NEW monitoring capability scoped
+  OUT of this delivery/fail-safe fix and tracked as a follow-up under the #5450
+  durability epic.
 - **R4 — `/tmp` staging collision.** Redis assets stage to world-writable `/tmp`
   (same as `/tmp/vector.toml`). The `rm -f` before each `docker cp` prevents a
   stale prior-deploy asset surviving a silent cp failure (the #5450-era

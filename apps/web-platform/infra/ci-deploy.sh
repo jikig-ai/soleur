@@ -991,10 +991,12 @@ case "$COMPONENT" in
     # #5547 Gap 3: distinguish a degraded-durability deploy (SQLite-only
     # fail-safe — Redis not ready) from a healthy durable one so
     # /hooks/deploy-status .reason surfaces it without SSH. The bootstrap exits 0
-    # in both cases (the server stays available); the authoritative signal is the
-    # WRITTEN ExecStart lacking --postgres-uri. The bootstrap-stderr
-    # INNGEST_DURABLE_DEGRADED marker is a secondary breadcrumb (ci-deploy reads
-    # $BOOTSTRAP_STDERR only on a non-zero exit, so it is not load-bearing here).
+    # in both cases (the server stays available). The AUTHORITATIVE signal is the
+    # WRITTEN ExecStart lacking --postgres-uri (re-derived below). The
+    # bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is only a SECONDARY
+    # cross-check OR'd in here: the legacy stderr-tail→reason path (line ~957)
+    # fires only on a NON-zero bootstrap exit, so on this 0-exit success path the
+    # marker is not the load-bearing carrier — the ExecStart re-derivation is.
     inngest_exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
     if [[ "$inngest_exec_start" != *'--postgres-uri'* ]] \
        || grep -q 'INNGEST_DURABLE_DEGRADED' "$BOOTSTRAP_STDERR" 2>/dev/null; then
