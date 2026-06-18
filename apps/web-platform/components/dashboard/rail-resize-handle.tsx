@@ -37,6 +37,9 @@ export interface RailResizeHandleProps {
   /** Double-click accelerator: collapse the rail. Optional — the floated
    * collapse button remains the primary affordance. */
   onCollapse?: () => void;
+  /** Accessible name for the handle. Defaults to the KB rail's literal; pass a
+   * generic label (e.g. "Resize sidebar") when the grip drives a non-KB rail. */
+  ariaLabel?: string;
 }
 
 export function RailResizeHandle({
@@ -46,6 +49,7 @@ export function RailResizeHandle({
   onWidthChange,
   onCommit,
   onCollapse,
+  ariaLabel = "Resize knowledge base sidebar",
 }: RailResizeHandleProps) {
   const dragging = useRef(false);
   const startX = useRef(0);
@@ -109,7 +113,7 @@ export function RailResizeHandle({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize knowledge base sidebar"
+      aria-label={ariaLabel}
       aria-valuenow={width}
       aria-valuemin={min}
       aria-valuemax={max}

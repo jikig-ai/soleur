@@ -938,15 +938,69 @@ test.describe("widenable KB rail — desktop", () => {
       .toBeGreaterThan(340);
   });
 
-  test("resize handle is KB-only — absent on Settings and Chat (AC13)", async ({ page }) => {
+  // INVERTED from the former gate (grip previously rendered only on the KB rail):
+  // the rail is now resizable in EVERY expanded drill state, so the grip MUST be
+  // present on Settings AND Chat. Runs with the rail EXPANDED (no seedCollapsed)
+  // — collapsed would unmount the grip and false-fail the presence assertion.
+  test("resize handle is present on Settings AND Chat (expanded), gold-active wired + generic a11y label (AC-E2E-1, AC-E2E-4)", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard/settings");
     await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
-    await expect(resizeHandle(page)).toHaveCount(0);
+    const settingsHandle = resizeHandle(page);
+    await expect(settingsHandle).toBeVisible({ timeout: 15_000 });
+    // Gold-on-active wash is wired (inherited from the merged KB grip).
+    await expect(settingsHandle).toHaveClass(/soleur-accent-gold-fill/);
+    // De-KB-ified accessible name on the non-KB rail.
+    await expect(settingsHandle).toHaveAttribute("aria-label", "Resize sidebar");
 
     await gotoOrSkip(page, "/dashboard/chat");
     await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("drag widens the NON-KB (Settings) rail and the width persists across reload via the shared key (AC-E2E-2)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/settings");
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    const before = await asideWidth(page);
+
+    await dragHandleBy(page, 140);
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(before + 50);
+    const widened = await asideWidth(page);
+
+    // Persisted to the SHARED key (D1: soleur:sidebar.kb.width) and re-applied
+    // to the main rail on reload.
+    const stored = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      RAIL_WIDTH_KEY,
+    );
+    expect(Number(stored)).toBeGreaterThan(before + 50);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(widened - 8);
+  });
+
+  test("double-click the Settings grip collapses the rail; the floated button re-expands (AC-E2E-3)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/settings");
+    const handle = resizeHandle(page);
+    await expect(handle).toBeVisible({ timeout: 15_000 });
+    // The grip's onDoubleClick handler attaches at hydration; settle first.
+    await page.waitForTimeout(1500);
+    await handle.dblclick();
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 7_000 });
     await expect(resizeHandle(page)).toHaveCount(0);
+
+    // The floated collapse button (now "Expand sidebar") re-expands the rail.
+    await page.getByRole("button", { name: /^expand sidebar$/i }).click();
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 7_000 });
   });
 });
 

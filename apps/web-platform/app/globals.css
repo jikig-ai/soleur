@@ -191,17 +191,22 @@
 }
 
 /*
- * Widenable KB nav rail. The dashboard rail (`aside`) carries a persisted width
- * (set inline as the `--kb-rail-w` custom property by (dashboard)/layout.tsx,
- * only when drilled into KB and expanded). Apply it as the element's width ONLY
- * at the md+ breakpoint so the mobile `w-64` drawer is untouched. Unlayered (this
- * rule sits outside any @layer) so it wins over Tailwind's layered `md:w-56`
- * utility regardless of source order. Deterministic — no Tailwind arbitrary-value
+ * Widenable nav rail. The dashboard rail (`aside`) carries a persisted width set
+ * inline by (dashboard)/layout.tsx whenever the rail is expanded — as `--kb-rail-w`
+ * when drilled into KB, or `--main-rail-w` in every other drill state (Dashboard /
+ * Analytics / Settings / Chat). Both resolve to the same persisted value (one
+ * useRailWidth instance); the two attributes are a structural partition so only
+ * one is ever present. Apply the width ONLY at md+ so the mobile `w-64` drawer is
+ * untouched. Unlayered (outside any @layer) so it wins over Tailwind's layered
+ * `md:w-56` regardless of source order. Deterministic — no Tailwind arbitrary-value
  * generation and no JS media-query state (both proved unreliable here; see the
  * nav-states visual gate). Falls back to 14rem (= md:w-56) if the var is unset.
  */
 @media (min-width: 768px) {
   aside[data-kb-rail-width] {
     width: var(--kb-rail-w, 14rem);
+  }
+  aside[data-main-rail-width] {
+    width: var(--main-rail-w, 14rem);
   }
 }

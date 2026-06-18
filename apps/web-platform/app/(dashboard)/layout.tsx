@@ -164,10 +164,16 @@ export default function DashboardLayout({
   // pathname.startsWith("/dashboard/(kb|settings|chat)") literal lives here.
   const drill = segmentToDrillLevel(pathname);
   const settingsActive = drill === "settings";
-  // The widen affordance is KB-only AND subordinate to collapse: the inline
-  // width + handle apply solely in this branch, so collapsed (md:w-14) and
-  // Settings/Chat (md:w-56) widths are structurally untouched (AC12/AC13).
+  // The widen affordance applies to ANY expanded rail (every drill state),
+  // subordinate to collapse. `kbExpanded` and `mainExpanded` are a structural
+  // PARTITION of "expanded" (drill === "kb" XOR drill !== "kb"), so at most one
+  // is ever true — the two `data-*-rail-width` attributes can never co-apply and
+  // the single grip mount (below) is never duplicated. Both rails share ONE
+  // persisted width (useRailWidth, key soleur:sidebar.kb.width); KB drives
+  // `--kb-rail-w`, the rest drive `--main-rail-w` (separate vars keep the
+  // existing KB CSS rule untouched). Collapsed (md:w-14) applies neither.
   const kbExpanded = drill === "kb" && !collapsed;
+  const mainExpanded = drill !== "kb" && !collapsed;
   // Phase 3 (#4915): one back per state. In the mobile KB DOC VIEW the
   // kb-content-header owns the only back ("Back to file tree", md:hidden), so the
   // mobile band's "Back to menu" is suppressed to stop the two co-rendering. This
@@ -297,10 +303,13 @@ export default function DashboardLayout({
         // is left to the base class. (Inline `style.width` would otherwise win
         // at every breakpoint and resize the mobile drawer too — Sharp Edge.)
         data-kb-rail-width={kbExpanded ? "" : undefined}
+        data-main-rail-width={mainExpanded ? "" : undefined}
         style={
           kbExpanded
             ? ({ "--kb-rail-w": `${railWidth}px` } as React.CSSProperties)
-            : undefined
+            : mainExpanded
+              ? ({ "--main-rail-w": `${railWidth}px` } as React.CSSProperties)
+              : undefined
         }
         className={`
           fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
@@ -497,13 +506,17 @@ export default function DashboardLayout({
           />
         )}
 
-        {/* Widenable KB rail (amendment): a right-edge drag handle, rendered
-            ONLY when drilled into KB and expanded. It drives the `aside`'s
-            --kb-rail-w via the persisted useRailWidth hook (transient on drag,
-            commit on pointerup). Collapsed / Settings / Chat never render it
-            (collapse precedence + KB-only). `hidden md:block` keeps it off the
-            mobile drawer. */}
-        {kbExpanded && (
+        {/* Widenable rail: a right-edge drag handle rendered whenever the rail
+            is EXPANDED, in EVERY drill state (Dashboard / Analytics / Settings /
+            Chat / KB). It drives the `aside` width via the persisted useRailWidth
+            hook (transient on drag, commit on pointerup) — KB through --kb-rail-w,
+            the rest through --main-rail-w. A SINGLE mount with only `ariaLabel`
+            branched on KB-vs-other (kbExpanded XOR mainExpanded = !collapsed, so
+            never two handles). Collapsed never renders it (collapse precedence);
+            `hidden md:block` keeps it off the mobile drawer. It is a direct child
+            of <aside> (sibling of the secondary slot) so the slot's overflow
+            never clips it. */}
+        {!collapsed && (
           <RailResizeHandle
             width={railWidth}
             min={RAIL_MIN_PX}
@@ -511,6 +524,7 @@ export default function DashboardLayout({
             onWidthChange={(px) => setRailWidth(px, false)}
             onCommit={(px) => setRailWidth(px, true)}
             onCollapse={toggleCollapsed}
+            ariaLabel={drill === "kb" ? "Resize knowledge base sidebar" : "Resize sidebar"}
           />
         )}
       </aside>

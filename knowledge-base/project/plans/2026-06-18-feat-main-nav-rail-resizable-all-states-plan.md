@@ -197,7 +197,7 @@ preflight.)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (grip mounts in all expanded drill states — SINGLE mount, branched props):** the
+- [x] **AC1 (grip mounts in all expanded drill states — SINGLE mount, branched props):** the
       layout renders exactly ONE `RailResizeHandle`, mounted under `!collapsed` (md+), in Dashboard
       root / Settings / Chat / Analytics / KB, and NOT when collapsed. Its props are branched on
       `drill === "kb"` (KB literals when KB; `ariaLabel="Resize sidebar"` otherwise) — it is NOT two
@@ -205,44 +205,44 @@ preflight.)
       `grep -q 'kbExpanded && <RailResizeHandle' …` returns NOTHING (the KB-only gate is gone) and
       the file has exactly one `<RailResizeHandle` JSX site; plus a vitest assertion rendering a
       NON-KB expanded layout (Settings) finds the handle, and a collapsed layout finds none.
-- [ ] **AC2 (main rail is genuinely drag-to-resize, CSS-var-driven):** in a non-KB expanded
+- [x] **AC2 (main rail is genuinely drag-to-resize, CSS-var-driven):** in a non-KB expanded
       state the aside width is driven by `--main-rail-w` via `data-main-rail-width`, NOT the fixed
       `md:w-56`. Verify: `grep -q 'data-main-rail-width' apps/web-platform/app/\(dashboard\)/layout.tsx`
       AND `globals.css` contains `aside[data-main-rail-width]` with `width: var(--main-rail-w, 14rem)`
       in the unlayered md+ block; e2e drag on Settings widens the aside (AC-E2E-2).
-- [ ] **AC3 (shared persisted width):** the layout uses ONE `useRailWidth()` instance (default key
+- [x] **AC3 (shared persisted width):** the layout uses ONE `useRailWidth()` instance (default key
       `soleur:sidebar.kb.width`), feeding its width to whichever rail is expanded (D1). Verify: there
       is exactly one `useRailWidth(` call in `layout.tsx`; a width set while on Settings is read back
       on KB (and vice-versa). (If the operator flips D1 to separate keys, re-add the second instance
       + the cross-key-isolation test.)
-- [ ] **AC4 (sensible min/max reused):** the rail clamps to `[RAIL_MIN_PX, railMaxPx()]`
+- [x] **AC4 (sensible min/max reused):** the rail clamps to `[RAIL_MIN_PX, railMaxPx()]`
       (224px .. min(480, 40vw)) in every expanded state — reusing the existing `use-rail-width.ts`
       clamp. Verify: `RailResizeHandle` receives `min={RAIL_MIN_PX}` / `max={railMaxPx()}`; the
       existing `use-rail-width.test.tsx` clamp/over-range cases stay green (they are key-agnostic).
-- [ ] **AC5 (a11y label de-KB-ified for non-KB mounts):** when the grip is on a non-KB rail its
+- [x] **AC5 (a11y label de-KB-ified for non-KB mounts):** when the grip is on a non-KB rail its
       accessible name is "Resize sidebar" (NOT "Resize knowledge base sidebar"); on KB it keeps
       "Resize knowledge base sidebar". Verify: `RailResizeHandle` accepts ONE optional `ariaLabel`
       (default = current KB literal); a vitest case asserts the Settings mount's accessible name is
       "Resize sidebar" and the KB mount keeps its literal.
-- [ ] **AC6 (double-click collapses everywhere the grip mounts):** double-clicking the grip in a
+- [x] **AC6 (double-click collapses everywhere the grip mounts):** double-clicking the grip in a
       non-KB expanded state toggles `collapsed` to true via the existing `onCollapse={toggleCollapsed}`.
       Verify by a vitest case (RTL) firing `fireEvent.doubleClick` on the grip in a Settings-rendered
       layout and asserting collapse; the existing `onCollapse`-fires-once unit case stays green.
-- [ ] **AC7 (grip is a SIBLING of, not nested inside, the secondary slot):** the `RailResizeHandle`
+- [x] **AC7 (grip is a SIBLING of, not nested inside, the secondary slot):** the `RailResizeHandle`
       is a direct child of `<aside>` (positioned `absolute` against it), NOT inside the
       `overflow-y-auto` `rail-secondary-slot` div — otherwise `overflow` would clip it. Verify: in
       `layout.tsx` the handle JSX sits after the drill ternary closes (sibling of the slot), and an
       e2e/vitest assertion confirms the grip is not a descendant of `[data-testid="rail-secondary-slot"]`.
-- [ ] **AC8 (mobile drawer untouched):** the grip is `hidden md:block` (never on the mobile
+- [x] **AC8 (mobile drawer untouched):** the grip is `hidden md:block` (never on the mobile
       drawer) and the mobile `w-64` drawer width is unaffected by `--main-rail-w` (the CSS rule is
       md+-gated). Verify: the existing mobile e2e (`no resize handle on mobile`) stays green; a
       vitest/e2e mobile case confirms the drawer width is 256px (w-64), not the main var.
-- [ ] **AC9 (collapse precedence):** when collapsed, the rail is `md:w-14` (56px), neither
+- [x] **AC9 (collapse precedence):** when collapsed, the rail is `md:w-14` (56px), neither
       width attribute is applied, and the grip is absent — in every drill state. Verify: a vitest
       case rendering collapsed Settings asserts no `data-main-rail-width`, no grip; the existing
       `collapse takes precedence` KB e2e stays green.
-- [ ] **AC10 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] **AC11 (tests green):** `cd apps/web-platform && ./node_modules/.bin/vitest run` passes,
+- [x] **AC10 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] **AC11 (tests green):** `cd apps/web-platform && ./node_modules/.bin/vitest run` passes,
       including the updated `nav-states-shell` describe blocks (new + inverted), `rail-resize-handle.test.tsx`,
       `use-rail-width.test.tsx`, and any new layout test. New `.test.tsx` files live under
       `apps/web-platform/test/` (the happy-dom include glob is `test/**/*.test.tsx` — co-located

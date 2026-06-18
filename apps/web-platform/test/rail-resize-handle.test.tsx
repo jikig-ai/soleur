@@ -39,6 +39,16 @@ describe("RailResizeHandle", () => {
     expect(screen.getByTestId("kb-rail-resize-grip")).toBeInTheDocument();
   });
 
+  it("defaults the accessible name to the KB literal (AC5)", () => {
+    const { handle } = setup();
+    expect(handle).toHaveAttribute("aria-label", "Resize knowledge base sidebar");
+  });
+
+  it("accepts an ariaLabel override for non-KB rails (AC5)", () => {
+    const { handle } = setup({ ariaLabel: "Resize sidebar" });
+    expect(handle).toHaveAttribute("aria-label", "Resize sidebar");
+  });
+
   it("renders a11y separator semantics", () => {
     const { handle } = setup();
     expect(handle).toHaveAttribute("role", "separator");

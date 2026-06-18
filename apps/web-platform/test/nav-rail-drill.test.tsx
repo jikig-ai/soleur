@@ -298,9 +298,10 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
   });
 });
 
-// Widenable KB rail (amendment): the resize handle renders ONLY in the
-// `drill === "kb" && !collapsed` branch (AC13 KB-only, AC12 collapse-precedence).
-describe("KB rail resize handle gating (AC12/AC13)", () => {
+// Widenable rail: the resize handle now renders in EVERY expanded drill state
+// (`!collapsed`), not only KB — collapse still takes precedence. On non-KB rails
+// the grip carries the generic "Resize sidebar" accessible name.
+describe("rail resize handle gating (all expanded drill states + collapse precedence)", () => {
   beforeEach(() => {
     mockPathname = "/dashboard";
     localStorage.clear();
@@ -323,7 +324,7 @@ describe("KB rail resize handle gating (AC12/AC13)", () => {
     expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
   });
 
-  it("does NOT render the handle on Settings or Chat drills (KB-only, AC13)", () => {
+  it("DOES render the handle on Settings and Chat drills, labeled generically", () => {
     for (const path of ["/dashboard/settings", "/dashboard/chat/x"]) {
       mockPathname = path;
       const { unmount } = render(
@@ -333,9 +334,9 @@ describe("KB rail resize handle gating (AC12/AC13)", () => {
           </DashboardLayout>
         </Wrap>,
       );
-      expect(
-        screen.queryByTestId("kb-rail-resize-handle"),
-      ).not.toBeInTheDocument();
+      const handle = screen.getByTestId("kb-rail-resize-handle");
+      expect(handle).toBeInTheDocument();
+      expect(handle).toHaveAttribute("aria-label", "Resize sidebar");
       unmount();
     }
   });
