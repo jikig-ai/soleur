@@ -2,13 +2,17 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-// Widenable KB rail (amendment). Persisted width of the EXPANDED KB nav rail so
-// deeply-nested folder/file names stop truncating at the fixed 224px default.
-// Mirrors useSidebarCollapse's shape: a useState default, a post-hydration
-// localStorage read, and a setter that clamps then persists — all localStorage
-// access in try/catch (private-mode safe). Distinct key + clamp, so it is a new
-// hook rather than a widening of useSidebarCollapse's boolean tuple.
+// Widenable nav rail (amendment). Persisted width of the EXPANDED nav rail in
+// ANY drill state (originally KB-only; widened to every rail). Lets deeply-nested
+// KB folder/file names stop truncating at the fixed 224px default, and lets the
+// main nav rail be widened too. Mirrors useSidebarCollapse's shape: a useState
+// default, a post-hydration localStorage read, and a setter that clamps then
+// persists — all localStorage access in try/catch (private-mode safe). Distinct
+// key + clamp, so it is a new hook rather than a widening of useSidebarCollapse's
+// boolean tuple.
 
+// One shared key across all rails (kept as the historical `.kb.` name so
+// existing users' stored widths are preserved; renaming would orphan them).
 export const RAIL_WIDTH_KEY = "soleur:sidebar.kb.width";
 /** Default = today's fixed `md:w-56` (14rem = 224px) — widening never narrows. */
 export const RAIL_DEFAULT_PX = 224;

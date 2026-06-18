@@ -113,10 +113,11 @@ export default function DashboardLayout({
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
-  // Widenable KB rail (amendment): persisted width applied to the `aside` ONLY
-  // when drilled into KB and expanded (collapse takes precedence; KB-only) and
-  // only at the md+ breakpoint (the mobile drawer keeps its `w-64` width). The
-  // value rides the `--kb-rail-w` CSS var + a `data-kb-rail-width` attribute,
+  // Widenable rail: ONE persisted width applied to the `aside` whenever it is
+  // expanded, in EVERY drill state (collapse still takes precedence) and only at
+  // the md+ breakpoint (the mobile drawer keeps its `w-64` width). The value
+  // rides `--kb-rail-w` + `data-kb-rail-width` on the KB rail and `--main-rail-w`
+  // + `data-main-rail-width` elsewhere (one shared useRailWidth instance), each
   // consumed by an md+ rule in globals.css — deterministic, no JS media-query
   // state (which did not flip reliably under SSR hydration here).
   const [railWidth, setRailWidth] = useRailWidth();
@@ -298,8 +299,8 @@ export default function DashboardLayout({
           (and screen readers) target only the modal's confirm button. */}
       <aside
         inert={signOutModalOpen || undefined}
-        // The KB-expanded branch drives the md+ width from a CSS variable so the
-        // inline value is scoped to the desktop rail; the mobile `w-64` drawer
+        // Whichever rail is expanded drives the md+ width from a CSS variable so
+        // the inline value is scoped to the desktop rail; the mobile `w-64` drawer
         // is left to the base class. (Inline `style.width` would otherwise win
         // at every breakpoint and resize the mobile drawer too — Sharp Edge.)
         data-kb-rail-width={kbExpanded ? "" : undefined}
