@@ -563,19 +563,47 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   #
-  # #4827/#4829 — deliberately NO depends_on the infra_config_handler_bootstrap
-  # bridge, even though both are now applied by `apply-deploy-pipeline-fix.yml`.
-  # The workflow lists BOTH resources EXPLICITLY in its `-target=` set (#4829), so
-  # a depends_on is unnecessary for ordering AND would over-couple the resource
-  # graph: a depends_on would force EVERY apply of deploy_pipeline_fix (including
-  # the operator-local full apply) to also recreate the bridge. Keeping them as
-  # independent explicit targets lets the workflow apply each on its own merits.
-  # Ordering between the SSH delivery of helper+sudoers (the bridge) and the
-  # webhook push (this resource) is handled by the handler's per-file self-heal: a
-  # push that predates the helper/sudoers records install_rejected for that file
-  # and the next push lands it. Both targets apply on the same CI run, so the
-  # window is a single apply.
-  depends_on = [terraform_data.apparmor_bwrap_profile]
+  # #5515 — DO depend on the infra_config_handler_bootstrap bridge. Both are
+  # applied by `apply-deploy-pipeline-fix.yml` (it lists each EXPLICITLY in its
+  # `-target=` set), but `-target` does NOT impose ordering — Terraform orders
+  # only by the declared dependency graph. With no edge, the two terraform_data
+  # resources applied in arbitrary/graph-parallel order, so on a merge that BOTH
+  # adds a new webhook-written FILE_MAP file (a new entry in infra-config-apply.sh's
+  # FILE_MAP + a new env key in hooks.json) AND fires this push, the push could run
+  # against the host's STALE handler+hooks.json. The new file's env var is then
+  # unset on the stale hooks.json, so the handler's per-file `missing_env` arm
+  # (infra-config-apply.sh:106-112, the #4804 self-heal window) records a failure,
+  # the file does not land, and the op that reads it (e.g. op=inventory) 500s — it
+  # lands ONE APPLY LATE, on the next unrelated apply. The bridge is the SOLE
+  # delivery path for the handler + hooks.json, so this edge forces Terraform to
+  # recreate the bridge (current handler + current hooks.json) BEFORE the push.
+  #
+  # This is a CORRECTION, not a reversal of a still-valid decision. The earlier
+  # #4827/#4829 rationale (no edge; the per-file install_rejected self-heal handles
+  # ordering) is STILL TRUE for the helper + sudoers files — those
+  # are root-managed, NOT in the webhook FILE_MAP, and their missing-on-host failure
+  # mode IS `install_rejected`. But the webhook-written FILE_MAP file class only
+  # appeared with the #5492 inngest cutover scripts, AFTER that comment was written;
+  # those files fail via the DIFFERENT `missing_env` arm, which self-heals only once
+  # the bridge-delivered hooks.json + handler are current. So the old comment was
+  # silent on this ordering, not wrong about helper/sudoers.
+  #
+  # Accepted trade-off (the over-coupling the old comment feared): an operator-local
+  # full apply that replaces deploy_pipeline_fix now also recreates the idempotent,
+  # assertion-gated bridge — including a sub-second bounce of the `webhook` listener
+  # restart (server.tf:529) — even when only an UNRELATED hashed trigger changed
+  # (e.g. a ci-deploy.sh edit, one of this resource's ~18 hashed triggers). This is
+  # acceptable: a handler edit ALREADY re-fires both via the dual-fire triggers_replace
+  # (server.tf:396-400), and the bridge's remote-exec is idempotent.
+  #
+  # Secondary benefit: the edge also serializes the bridge's synchronous
+  # webhook-listener restart (server.tf:529, an existing Terraform-managed remote-exec)
+  # BEFORE this push's `provisioner "local-exec"` below, so the push never races a
+  # mid-flight listener restart (a connection-reset window that exists today).
+  #
+  # The apparmor_bwrap_profile element is unchanged (#1570, see the note above).
+  # Do NOT "simplify" either element away — see ship-deploy-pipeline-fix-gate.test.ts.
+  depends_on = [terraform_data.apparmor_bwrap_profile, terraform_data.infra_config_handler_bootstrap]
 
   # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
   # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
