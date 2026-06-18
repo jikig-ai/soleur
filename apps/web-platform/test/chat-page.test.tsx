@@ -283,14 +283,38 @@ describe("ChatPage", () => {
   describe("ConversationContext from ?context= param", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let fetchSpy: any;
+    // Per-test responder for the KB-content fetch. Tests override this to
+    // simulate 404 / pending / network-error. Defaults to a successful roadmap.
+    let kbResponder: () => Promise<Response>;
 
     beforeEach(() => {
-      fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response(JSON.stringify({ content: "# Roadmap\nPhase 1..." }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+      kbResponder = () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ content: "# Roadmap\nPhase 1..." }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      // Route by URL: KB-content requests hit `kbResponder`; the unrelated
+      // mount-time `/api/workspace/active-repo` poll (useActiveRepo, #5394) —
+      // which now fires immediately because ChatSurface mounts while context is
+      // pending (audit M1) — gets a benign fresh 200 so it cannot consume a
+      // shared Response body or steal a `…Once` mock from the KB fetch.
+      fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof Request
+              ? input.url
+              : String(input);
+        if (url.includes("/api/kb/content/")) return kbResponder();
+        return Promise.resolve(
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      });
     });
 
     afterEach(() => {
@@ -317,9 +341,7 @@ describe("ChatPage", () => {
     });
 
     it("starts session without context when KB API returns 404 (graceful degradation)", async () => {
-      fetchSpy.mockResolvedValueOnce(
-        new Response("Not found", { status: 404 }),
-      );
+      kbResponder = () => Promise.resolve(new Response("Not found", { status: 404 }));
       mockSearchParams.set("context", "missing/file.md");
       wsReturn.status = "connected";
 
@@ -353,11 +375,10 @@ describe("ChatPage", () => {
 
     it("does not start session until context fetch resolves", async () => {
       let resolveKbFetch!: (value: Response) => void;
-      fetchSpy.mockReturnValueOnce(
+      kbResponder = () =>
         new Promise<Response>((resolve) => {
           resolveKbFetch = resolve;
-        }),
-      );
+        });
       mockSearchParams.set("context", "product/roadmap.md");
       wsReturn.status = "connected";
 
@@ -384,7 +405,7 @@ describe("ChatPage", () => {
 
     it("gracefully degrades and logs when fetch rejects (network error)", async () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      fetchSpy.mockRejectedValueOnce(new Error("network failure"));
+      kbResponder = () => Promise.reject(new Error("network failure"));
       mockSearchParams.set("context", "product/roadmap.md");
       wsReturn.status = "connected";
 

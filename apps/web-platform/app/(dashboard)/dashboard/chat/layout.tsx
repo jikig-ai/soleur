@@ -22,6 +22,12 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
+      // Start the pending-invites fetch immediately — it depends only on
+      // `user`, not on orgId/the delegation chain. Letting it overlap the
+      // sequential delegation resolution below removes a serial round-trip
+      // from chat TTFB (audit H3) instead of awaiting it after the branch.
+      const invitesPromise = getPendingInvitesForUser(user.id, user.email ?? "");
+
       const orgId = await resolveCurrentOrganizationId(user.id, supabase);
       if (orgId) {
         const identity: Identity = { userId: user.id, role: "prd", orgId };
@@ -49,7 +55,7 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
         }
       }
 
-      const invites = await getPendingInvitesForUser(user.id, user.email ?? "");
+      const invites = await invitesPromise; // already in-flight; no added latency
       if (invites.length > 0) {
         pendingInvite = {
           invitationId: invites[0].id,
