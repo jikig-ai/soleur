@@ -119,19 +119,19 @@ diff ⇒ no Check-6 scope-out bullet required; this section satisfies preflight.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (gold active, rail):** `apps/web-platform/components/dashboard/rail-resize-handle.tsx`
+- [x] **AC1 (gold active, rail):** `apps/web-platform/components/dashboard/rail-resize-handle.tsx`
       contains NO `amber-500` token; the active AND focus-visible wash use
       `soleur-accent-gold-fill`. Verify: `! grep -q 'amber-500' apps/web-platform/components/dashboard/rail-resize-handle.tsx` returns true, and `grep -c 'soleur-accent-gold-fill' …` ≥ 2 (active + focus-visible).
-- [ ] **AC2 (gold active, all 3 handles):** zero `amber-500` occurrences remain in any of the
+- [x] **AC2 (gold active, all 3 handles):** zero `amber-500` occurrences remain in any of the
       three handle files. Verify: `grep -rn 'amber-500' apps/web-platform/components/dashboard/rail-resize-handle.tsx apps/web-platform/components/kb/kb-desktop-layout.tsx apps/web-platform/components/kb/c4-workspace.tsx` returns no lines.
-- [ ] **AC3 (hover stays grey):** the grip's hover class is still `group-hover:bg-soleur-text-secondary` (no gold on hover) in all three files. Verify: `grep -c 'group-hover:bg-soleur-text-secondary' …` per file unchanged from baseline; no `hover:bg-soleur-accent-gold` anywhere.
-- [ ] **AC4 (button removed):** `(dashboard)/layout.tsx` no longer renders the floated
+- [x] **AC3 (hover stays grey):** the grip's hover class is still `group-hover:bg-soleur-text-secondary` (no gold on hover) in all three files. Verify: `grep -c 'group-hover:bg-soleur-text-secondary' …` per file unchanged from baseline; no `hover:bg-soleur-accent-gold` anywhere.
+- [~] (N/A — FR3-Alternative keeps the button) **AC4 (button removed):** `(dashboard)/layout.tsx` no longer renders the floated
       `PanelToggleIcon` collapse button, and the now-unused `PanelToggleIcon` SVG is deleted.
       Verify: `! grep -q 'PanelToggleIcon' apps/web-platform/app/\(dashboard\)/layout.tsx`.
-- [ ] **AC5 (double-click collapses, rail):** double-clicking the rail resizer toggles
+- [x] **AC5 (double-click collapses, rail):** double-clicking the rail resizer toggles
       `collapsed` to true. Verified by a vitest test (RTL) firing `fireEvent.doubleClick` on
       `data-testid="kb-rail-resize-handle"` and asserting the `onCollapse` prop fires exactly once.
-- [ ] **AC6 (double-click guard):** a double-click that immediately follows a drag of > **5px**
+- [x] **AC6 (double-click guard):** a double-click that immediately follows a drag of > **5px**
       total pointer travel does NOT collapse; and double-click does NOT persist a width when
       `latest === startWidth` (no no-op localStorage write). Covered by two vitest cases.
       (5px is the MDN/use-gesture canonical drag threshold. NOTE per code-simplicity: first
@@ -139,33 +139,33 @@ diff ⇒ no Check-6 scope-out bullet required; this section satisfies preflight.
       handle — `onDoubleClick` and pointer-drag are separate event streams; if a drag never
       produces a second same-target `click`, drop the travel guard and keep only the no-op-commit
       skip. Do not ship the guard unproven.)
-- [ ] **AC-KBD (keyboard collapse parity, FR3-Literal only):** the collapse target exposes an
+- [~] (N/A — kept button is keyboard-operable) **AC-KBD (keyboard collapse parity, FR3-Literal only):** the collapse target exposes an
       Enter/Space key that fires collapse (W3C Window Splitter pattern). Double-click is
       pointer-only; without this, removing the button strands keyboard/AT users (FM-4).
       Verified by `fireEvent.keyDown` Enter. (FR3-Alternative keeps the labeled `<button>`, so
       keyboard parity is already satisfied — AC-KBD is N/A there.)
-- [ ] **AC7 (resizer renders in all expanded drill states):** `RailResizeHandle` mounts when
+- [~] (N/A — no gate widening in FR3-Alternative) **AC7 (resizer renders in all expanded drill states):** `RailResizeHandle` mounts when
       the rail is expanded in Dashboard root / Settings / Chat / KB (not KB-only), and does
       NOT mount when collapsed. Verify by the render-gate predicate in `layout.tsx` (no longer
       `kbExpanded`-only) + a vitest assertion on at least one non-KB expanded state.
-- [ ] **AC8 (expand survives collapse):** the collapsed rail renders a visible, labeled
+- [~] (N/A — no chevron; button serves expand) **AC8 (expand survives collapse):** the collapsed rail renders a visible, labeled
       expand affordance (chevron, `aria-label="Expand sidebar"`) that calls `toggleCollapsed`.
       Verify by a vitest case rendering the collapsed layout and asserting the control exists
       and fires expand on click.
-- [ ] **AC9 (⌘B preserved):** the global ⌘B / Ctrl+B keydown handler (`layout.tsx:199`)
+- [x] **AC9 (⌘B preserved):** the global ⌘B / Ctrl+B keydown handler (`layout.tsx:199`)
       still toggles collapse, unchanged. Verify the existing handler block is intact (grep).
-- [ ] **AC10 (splitters: gold yes, double-click no):** `kb-desktop-layout.tsx` and
+- [x] **AC10 (splitters: gold yes, double-click no):** `kb-desktop-layout.tsx` and
       `c4-workspace.tsx` Separators use gold active but have NO `onDoubleClick` collapse
       handler, and each carries a code comment stating double-click-collapse is intentionally
       out of scope (no collapsed-width semantics). Verify by grep for the comment marker +
       absence of `onDoubleClick` in those two files.
-- [ ] **AC11 (contrast):** the active gold wash on the handle meets ≥ 3:1 non-text contrast
+- [x] **AC11 (contrast):** the active gold wash on the handle meets ≥ 3:1 non-text contrast
       against `--soleur-bg-surface-1`; if `#c9a962` at `/50` alpha fails, raise the alpha
       (document the chosen value in the component comment). ux-design-lead to confirm the
       value against the wireframe.
-- [ ] **AC12 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] **AC13 (tests green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/rail-resize-handle.test.tsx` and any new/affected layout test pass. (New tests live under `apps/web-platform/test/**/*.test.tsx` to match the vitest jsdom include glob — NOT co-located.)
-- [ ] **AC14 (no stray amber across resize/separator surfaces):** repo-wide,
+- [x] **AC12 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] **AC13 (tests green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/rail-resize-handle.test.tsx` and any new/affected layout test pass. (New tests live under `apps/web-platform/test/**/*.test.tsx` to match the vitest jsdom include glob — NOT co-located.)
+- [x] **AC14 (no stray amber across resize/separator surfaces):** repo-wide,
       `grep -rn 'amber-500' apps/web-platform/components apps/web-platform/app --include='*.tsx' | grep -iE 'resize|separator|handle|drag'` returns no lines (the dashboard drag-over dropzone amber at `dashboard/page.tsx:480` is OUT of scope — it is a file-drop affordance, not a resize handle; confirm it is the only remaining match and leave it).
 
 ### Post-merge (operator / automatable)
