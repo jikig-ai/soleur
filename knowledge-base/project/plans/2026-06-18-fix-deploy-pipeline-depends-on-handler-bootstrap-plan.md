@@ -10,6 +10,31 @@ requires_cpo_signoff: false
 
 🐛 **Bug** · `apps/web-platform/infra/server.tf` · infra resource-graph ordering
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Passes:** precedent-diff (Phase 4.4), network-outage deep-dive (Phase 4.5), verify-the-negative (Phase 4.45), 3 review agents (architecture-strategist, SpecFlow, plus the precedent/verify Explore agents). Halt gates 4.6/4.7/4.8/4.9 all PASS.
+
+### Verification results (all confirmed against the live worktree)
+
+- **`depends_on` precedent**: the only existing edge is `deploy_pipeline_fix → apparmor_bwrap_profile` (`server.tf:578`, single-element). The proposed two-element form is the idiomatic extension; matches repo HCL style.
+- **No cycle**: `infra_config_handler_bootstrap` has NO `depends_on` of its own → no path back → DAG preserved. AC3 `terraform validate` is the mechanical guard.
+- **Co-targeting invariant verified**: both resources are co-`-target`ed in `apply-deploy-pipeline-fix.yml`'s single `terraform apply` (plan + apply steps). The edge is inert if either target drops → Test 2 (AC7) guards this.
+- **`-target` does not order**: confirmed Terraform property — `-target` selects nodes; only the graph edge orders them. Reordering `-target=` flags is NOT a valid alternative fix.
+- **Old comment is "partially stale"**: architecture review confirms the `install_rejected` self-heal rationale covers helper/sudoers (NOT in FILE_MAP) but NOT webhook-written FILE_MAP files (which fail via the `#4804 missing_env` arm). The FILE_MAP class post-dates the #4829 comment. Fix corrects a decision that predates the failure class — not a reversal.
+- **`inngest-inventory.sh` is the real triggering file** (#5509, `op=inventory`), registered across all 5 delivery surfaces — the bug is live, not hypothetical.
+- **Restart serialization is a secondary benefit**: the edge orders the bridge's existing Terraform-managed webhook-listener restart (`server.tf:529`) before the push's `local-exec`, closing a latent restart-during-push connection-reset window.
+
+### Deepen-pass corrections folded in
+
+1. **[Premise]** Corrected the false "`inngest-inventory.sh` doesn't exist" claim (an earlier `ls` ran from the wrong cwd) → the file exists, is the concrete #5509 instance, registered everywhere.
+2. **[SpecFlow P0-A]** Added Test 2 / AC7 — the co-targeting invariant (the load-bearing assertion the HCL-array test alone misses).
+3. **[SpecFlow P1-A]** Expanded Files-to-Edit to audit BOTH workflows' concurrency-group comments for the now-two-element `depends_on`.
+4. **[SpecFlow P1-B]** AC3 durability note: the standing cycle guard is the prod `terraform plan` step, not the one-time PR-author validate.
+5. **[SpecFlow P1-C]** Disambiguated the test's extraction (bound the block, fresh `depends_on` regex — NOT the `triggers_replace` join extractor).
+6. **[SpecFlow P2-A / arch P2-1]** Documented the restart-serialization benefit AND the new restart-on-unrelated-trigger coupling in the comment-rewrite spec.
+7. **[arch P2-2]** Added optional Test 3 — cross-workflow blast-radius guard.
+
 ## Overview
 
 `terraform_data.deploy_pipeline_fix` (the HTTPS webhook push of the 11 managed deploy-config files) and `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the webhook handler `infra-config-apply.sh` + the rendered `hooks.json` to the running host) have **no ordering edge** in the Terraform graph. The CI workflow `apply-deploy-pipeline-fix.yml` lists BOTH as explicit `-target=`s in a single `terraform apply` (lines 238-239), but `-target` does **not** impose ordering — Terraform orders only by the declared dependency graph, and with no `depends_on` between them the two `terraform_data` resources apply in graph-parallel / arbitrary order.
@@ -100,7 +125,7 @@ discoverability_test:
      - State that the edge now EXISTS, citing #5515.
      - Explain WHY: a newly-added webhook-written FILE_MAP file needs the host's handler (`infra-config-apply.sh`) AND `hooks.json` (the env-key passing) current BEFORE the push, or the new file's env is unset → the handler's `missing_env` arm (`infra-config-apply.sh:105-112`, the #4804 self-heal) drops it → lands one apply late.
      - Preserve the still-true facts: both targets are explicit `-target=`s on the same CI run; the bridge is idempotent; the dual-fire `triggers_replace` already re-fires both on a handler edit.
-     - Note the accepted trade-off (the over-coupling the OLD comment feared): the operator-local full apply will now recreate the idempotent bridge whenever `deploy_pipeline_fix` is replaced — acceptable, because a handler edit already re-fires both via dual-fire, and the bridge's remote-exec is idempotent + assertion-gated.
+     - Note the accepted trade-off (the over-coupling the OLD comment feared): the operator-local full apply will now recreate the idempotent bridge whenever `deploy_pipeline_fix` is replaced — acceptable, because a handler edit already re-fires both via dual-fire, and the bridge's remote-exec is idempotent + assertion-gated. **[deepen P2-1]** State explicitly that this now also bounces the `webhook` listener (sub-second, idempotent) on operator-local full applies even when only an UNRELATED hashed trigger file changed (e.g. a `ci-deploy.sh` edit, one of `deploy_pipeline_fix`'s ~18 hashed triggers) — so a future reader does not rediscover this coupling as a surprise.
      - Distinguish this from the helper/sudoers ordering, which the `install_rejected` self-heal genuinely DOES cover (that part of the old rationale survives, for those root-managed files).
      - **[SpecFlow P2-A]** Note the secondary benefit: the edge also serializes the bridge's synchronous webhook-listener restart (`server.tf:529`, an existing Terraform-managed `remote-exec` line) BEFORE the push's `local-exec` (`server.tf:637`), so the push never races a mid-flight listener restart (a connection-reset window that exists today).
   3. **[SpecFlow P1-A]** Audit BOTH workflows' shared concurrency-group comments for staleness: `grep -n "depends_on" .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-web-platform-infra.yml`. The concurrency comment (`apply-deploy-pipeline-fix.yml:~84-101`, mirrored in `apply-web-platform-infra.yml:~84-101`) says apparmor is "pulled transitively via deploy_pipeline_fix's depends_on." After this change `deploy_pipeline_fix.depends_on` has TWO elements, so update the rationale to note that `deploy_pipeline_fix` now transitively pulls BOTH `apparmor_bwrap_profile` AND `infra_config_handler_bootstrap` into the apply-deploy-pipeline-fix run. Confirm (and the comment should state) that this does NOT change the other workflow's overlap surface — `apply-web-platform-infra.yml` SSH-`-target`s only `apparmor_bwrap_profile` (`:533`) and does NOT target either fix resource, so the new edge is never traversed by that workflow.
@@ -108,7 +133,8 @@ discoverability_test:
 - **`plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`** — add regression `test()`s (siblings to the existing `server.tf`-read tests; reuse the `SERVER_TF` constant at `:21`, the `APPLY_DPF_WORKFLOW` constant at `:22`, and the `readFileSync` pattern):
   - **Test 1 — the `depends_on` edge.** **[SpecFlow P1-C]** Reuse the top-level-block BOUNDING regex (`:231-246`) to isolate the `resource "terraform_data" "deploy_pipeline_fix"` block, then run a FRESH `/depends_on\s*=\s*\[([\s\S]*?)\]/` match against that bounded slice and assert the array contains BOTH `terraform_data.apparmor_bwrap_profile` AND `terraform_data.infra_config_handler_bootstrap`. Do NOT reuse the `triggers_replace` join extractor — it matches a different construct (`sha256(join(...))`), not the `depends_on` list.
   - **Test 2 — the co-targeting invariant (the load-bearing one).** **[SpecFlow P0-A]** The `depends_on` edge is only load-bearing because BOTH resources are co-`-target`ed in `apply-deploy-pipeline-fix.yml`'s single `terraform apply` (if either target were dropped, the edge would be inert or silently do nothing, and Test 1 would still pass green). Read `APPLY_DPF_WORKFLOW` (`readFileSync` at `:346`) and assert the `terraform apply` step contains BOTH `-target=terraform_data.deploy_pipeline_fix` AND `-target=terraform_data.infra_config_handler_bootstrap`.
-  - Header comment explains the #5515 rationale (the `missing_env` / one-apply-late failure) so a future reader does not "simplify" either assertion away.
+  - **Test 3 — cross-workflow blast-radius guard (optional, deepen P2-2).** Assert `apply-web-platform-infra.yml` (the OTHER infra workflow, which shares the concurrency group) contains NEITHER `-target=terraform_data.deploy_pipeline_fix` NOR `-target=terraform_data.infra_config_handler_bootstrap`. This pins the invariant that the new edge is never traversed by that workflow (it SSH-targets only `apparmor_bwrap_profile` among shared resources), so a future edit cannot silently widen its blast radius. Read the workflow path (add a sibling `const APPLY_WEBPLAT_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/apply-web-platform-infra.yml")`).
+  - Header comment explains the #5515 rationale (the `missing_env` / one-apply-late failure) so a future reader does not "simplify" any assertion away.
   - **Runner**: this file is in the `bun` suite of `scripts/test-all.sh` (line ~57: "plugins/soleur"); run it with `cd <repo-root> && bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`. (Verified: the file already uses `bun:test` imports; sibling tests run under bun.)
 
 ## Files to Create

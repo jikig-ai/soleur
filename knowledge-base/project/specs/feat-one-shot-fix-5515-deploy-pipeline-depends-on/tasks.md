@@ -10,8 +10,9 @@ plan: knowledge-base/project/plans/2026-06-18-fix-deploy-pipeline-depends-on-han
 
 - [ ] 1.1 In `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`, add **Test 1** (the `depends_on` edge): bound the `terraform_data "deploy_pipeline_fix"` block with the existing top-level-block regex (`:231-246`), then a FRESH `/depends_on\s*=\s*\[([\s\S]*?)\]/` match; assert it contains BOTH `terraform_data.apparmor_bwrap_profile` AND `terraform_data.infra_config_handler_bootstrap`. (Do NOT reuse the `triggers_replace` join extractor.)
 - [ ] 1.2 Add **Test 2** (co-targeting invariant, SpecFlow P0-A): read `APPLY_DPF_WORKFLOW`, assert the `terraform apply` step co-`-target`s BOTH `terraform_data.deploy_pipeline_fix` AND `terraform_data.infra_config_handler_bootstrap`.
-- [ ] 1.3 Add a header comment to both tests citing #5515 + the `missing_env`/one-apply-late rationale.
-- [ ] 1.4 Run `cd <repo-root> && bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` — Test 1 MUST be RED (edge not yet added); Test 2 should already be GREEN (workflow already co-targets).
+- [ ] 1.3 Add **Test 3** (cross-workflow blast-radius guard, deepen P2-2, optional): add `APPLY_WEBPLAT_WORKFLOW` const for `.github/workflows/apply-web-platform-infra.yml`; assert it targets NEITHER fix resource.
+- [ ] 1.4 Add a header comment to the tests citing #5515 + the `missing_env`/one-apply-late rationale.
+- [ ] 1.5 Run `cd <repo-root> && bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` — Test 1 MUST be RED (edge not yet added); Tests 2/3 should already be GREEN.
 
 ## Phase 2 — GREEN (the fix)
 
