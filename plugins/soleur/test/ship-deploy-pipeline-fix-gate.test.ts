@@ -439,8 +439,8 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     const applyIdx = yml.indexOf("terraform apply -target=");
     expect(applyIdx).toBeGreaterThanOrEqual(0);
     // The multi-line `\`-continued apply command ends at the first non-continued
-    // line; bound generously to the next ~600 chars (the command spans a handful
-    // of -target= lines plus trailing flags).
+    // line; bound generously to the next 800 chars (the command spans a handful
+    // of -target= lines plus trailing flags — the two needed -target=s are adjacent).
     const applyBlock = yml.slice(applyIdx, applyIdx + 800);
     expect(applyBlock).toContain(
       "-target=terraform_data.deploy_pipeline_fix",
@@ -461,5 +461,36 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     expect(yml).not.toContain(
       "-target=terraform_data.infra_config_handler_bootstrap",
     );
+  });
+
+  // Test 4 — the bridge's half of the contract (review gap, both test agents).
+  // The depends_on edge only delivers a CURRENT handler+hooks.json before the push
+  // if infra_config_handler_bootstrap actually RECREATES when the handler or
+  // hooks.json changes — i.e. its own triggers_replace must hash both. If a future
+  // edit dropped infra-config-apply.sh or local.hooks_json from the bridge's hash,
+  // the bridge would not recreate on a hooks.json-only change, the stale hooks.json
+  // would persist, and a new FILE_MAP file would AGAIN land one apply late — with
+  // Tests 1-3 still green. This guards the symmetric failure to #5515.
+  test("Test 4 — infra_config_handler_bootstrap triggers_replace hashes the handler AND hooks.json", () => {
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "infra_config_handler_bootstrap"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+
+    const blockMatch = resourceBlock.match(
+      /triggers_replace\s*=\s*sha256\(join\(\s*",\s*"\s*,\s*\[([\s\S]*?)\]\s*\)\s*\)/,
+    );
+    expect(blockMatch).not.toBeNull();
+    const inner = blockMatch![1];
+    expect(inner).toContain('file("${path.module}/infra-config-apply.sh")');
+    expect(inner).toContain("local.hooks_json");
   });
 });
