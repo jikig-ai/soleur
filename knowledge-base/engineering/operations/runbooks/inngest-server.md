@@ -271,7 +271,7 @@ CLI semantics (`inngest start --help`): `--postgres-uri` = "configuration and hi
   inngest container = fresh root disk; Postgres + external-Redis volumes persist):
   - Postgres-only (default in-memory Redis): armed future-`ts` event **LOST** (did not fire).
   - Postgres + external durable Redis (AOF, `appendfsync everysec`): armed event **SURVIVED**, fired at its `ts`.
-  - → Ship **both** `--postgres-uri` and `--redis-uri`. Postgres alone does NOT persist the queue.
+  - → Configure **both** Postgres and durable Redis (since #5560 both are delivered via the doppler-run **environment** — `INNGEST_POSTGRES_URI` + a constructed `INNGEST_REDIS_URI` — NOT on argv; see § Secret delivery). Postgres alone does NOT persist the queue.
 - **0.3 Fail-closed vs silent fallback — Inngest FAILS CLOSED.** With a reachable-but-refused backend
   it exits non-zero (`failed to connect … connection refused`); `/health` never returns 200; **no**
   silent degrade to a healthy SQLite state. → The existing `/health` 200 gate already catches an

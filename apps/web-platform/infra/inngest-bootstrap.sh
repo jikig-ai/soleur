@@ -227,8 +227,9 @@ fi
 
 # Durable Redis (#5450, #5547 Gap 2) — install + start the queue store and
 # capture REDIS_READY BEFORE writing the inngest-server unit below, so the
-# ExecStart can be branched: write the durable (--postgres-uri/--redis-uri) form
-# ONLY when Redis is verifiably active, else a SQLite-only fail-safe that keeps
+# ExecStart can be branched: write the durable form (env-delivered URIs +
+# --postgres-max-open-conns sentinel since #5560) ONLY when Redis is verifiably
+# active, else a SQLite-only fail-safe that keeps
 # inngest-server AVAILABLE instead of crash-looping on 127.0.0.1:6379 (the ~3.5h
 # #5542 outage). Assets are staged to /tmp by the OCI image entrypoint (fresh-host
 # cloud-init) OR by ci-deploy.sh's `case "inngest")` docker-cp (existing-host
@@ -312,6 +313,11 @@ fi
 # pooler pool_size (15) so inngest cannot self-exhaust the pool — #5558: 25 > 15 →
 # EMAXCONNSESSION. It is ALSO the NON-SECRET durable-detection sentinel (see the
 # @@BACKEND_FLAGS@@ note below + ci-deploy.sh / inngest-inventory.sh / wiped-volume-verify).
+# ⚠ DETECTION SENTINEL — NEVER move --postgres-max-open-conns into the SHARED prefix
+# (where --sqlite-dir lives): it MUST appear in argv iff durable. Promoting it to the
+# shared prefix would make it present in BOTH branches → every parser misclassifies the
+# SQLite-only fail-safe as durable, and inngest-wiped-volume-verify would permit a wipe
+# of real SQLite state. The drift-guard catches a RENAME, not a prefix-promotion (#5560).
 # Inngest FAILS CLOSED on an unreachable/empty backend (verdict 0.3) —
 # #5547 Gap 2: rather than configure the durable backend unconditionally (which
 # crash-loops when Redis is unprovisioned), the ExecStart below carries literal

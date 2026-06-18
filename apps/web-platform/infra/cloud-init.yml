@@ -619,7 +619,7 @@ runcmd:
   # #5547 durable-Redis delivery-on-existing-host + SQLite fail-safe ExecStart
   # (the bootstrap now branches the ExecStart on REDIS_READY), on top of the
   # #5499 host-script journald → Better Stack vector.toml source (#5526), the
-  # #5450 durable-backend change (--postgres-uri/--redis-uri ExecStart + the
+  # #5450 durable-backend change (durable ExecStart, env-delivered URIs since #5560 + the
   # inngest-redis.{conf,service} + inngest-redis-bootstrap.sh assets baked into
   # the image), and the post-v1.1.14 cutover-op fixes (#5518/#5528/#5520).
   # Running hosts get it via the deploy webhook path: push
