@@ -297,8 +297,10 @@ fi
 # Postgres-ALONE loses armed future-ts reminders on a host re-provision; durable
 # external Redis is what survives. Both secrets inject from Doppler prd via the
 # `doppler run` wrapper (same $${...} pattern as the keys; avoids the #4116
-# EnvironmentFile-empty trap). --postgres-max-open-conns 25 bounds the pooler
-# budget. Inngest FAILS CLOSED on an unreachable/empty backend (verdict 0.3) —
+# EnvironmentFile-empty trap). --postgres-max-open-conns 10 stays UNDER the
+# dedicated project's session-mode pooler pool_size (15) so inngest cannot
+# self-exhaust the pool under load — #5558: 25 exceeded 15 → EMAXCONNSESSION.
+# Inngest FAILS CLOSED on an unreachable/empty backend (verdict 0.3) —
 # #5547 Gap 2: rather than write the durable flags unconditionally (which
 # crash-loops when Redis is unprovisioned), the ExecStart below carries a literal
 # @@BACKEND_FLAGS@@ sentinel that is substituted (just after the heredoc) with
@@ -349,7 +351,7 @@ UNITEOF
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c
 # expands the injected env (same $${...} contract as the keys).
 if [[ "$REDIS_READY" == "1" ]]; then
-  BACKEND_FLAGS='--postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 25'
+  BACKEND_FLAGS='--postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 10'
   log "inngest-server ExecStart: durable backend (--postgres-uri + --redis-uri)"
 else
   BACKEND_FLAGS=''
