@@ -63,6 +63,20 @@ export type Result =
   | { kind: "FAIL"; detail: string }
   | { kind: "CANT-RUN"; reason: string };
 
+// The two fields of a server `{type:"error"}` WS frame the harness classifies
+// on. Deliberately NOT the raw payload — adjacent frames (the auth frame) carry
+// a token, so only these two scalars ever leave parseWsErrorFrame
+// (I-ephemerality).
+export type WsErrorFrame = { errorCode?: string; message?: string };
+
+// The drive-phase decision seam. CANT-RUN / FAIL are terminal; PROCEED means the
+// session was accepted and a row persisted, so the caller runs the rail
+// assertion (the only place a PASS or the rail-race-class FAIL is decided).
+export type DriveDecision =
+  | { kind: "CANT-RUN"; reason: string }
+  | { kind: "FAIL"; detail: string }
+  | { kind: "PROCEED"; convId: string };
+
 export interface Config {
   supabaseUrl: string;
   anonKey: string;
@@ -366,6 +380,29 @@ async function driveAndVerify(
     await context.addCookies(buildInjectedCookies(jar.cookies.entries(), prodHost));
     const page = await context.newPage();
 
+    // Capture the latest server-side `{type:"error"}` frame on the APP WS so a
+    // send REJECTION (rate limit / no active session) classifies as CANT-RUN, not
+    // a false rail FAIL. Registered BEFORE the first goto on purpose: the client
+    // fires `start_session` from a React effect on WS-connect during hydration —
+    // the rate_limited reply lands before the Send click, so a listener attached
+    // later would miss it. Match ONLY the app WS path "/ws" (not the Supabase
+    // realtime socket /realtime/v1/websocket). Only the parsed {errorCode,message}
+    // is retained; raw frame payloads (the auth frame carries a token) never leak.
+    let latestWsError: WsErrorFrame | null = null;
+    page.on("websocket", (ws) => {
+      let pathname: string;
+      try {
+        pathname = new URL(ws.url()).pathname;
+      } catch {
+        return;
+      }
+      if (pathname !== "/ws") return;
+      ws.on("framereceived", ({ payload }) => {
+        const parsed = parseWsErrorFrame(payload.toString());
+        if (parsed) latestWsError = parsed;
+      });
+    });
+
     if (cfg.dryRun) {
       // Read-only auth proof: load the chat-composer route and confirm the
       // authenticated app shell renders (the conversations rail), creating
@@ -422,19 +459,27 @@ async function driveAndVerify(
     // waitForURL(/dashboard/chat/<uuid>/) assertion therefore could NEVER match
     // against the current app — poll the persisted row instead and derive the
     // id from it (not from the URL).
-    const convId = await pollFreshConversationId(
+    const polledId = await pollFreshConversationId(
       supabase,
       verified,
       sinceIso,
       30_000,
+      // Abort the poll the moment a server-side send rejection is captured, so a
+      // rate_limited / session-rejected error WINS over the 30s no-row timeout
+      // (otherwise an environmental rejection would wait out the budget and
+      // false-FAIL as a rail regression). Checked at the top of every 1s tick.
+      () => classifyDriveResult({ convId: null, wsError: latestWsError }).kind === "CANT-RUN",
     );
-    if (!convId) {
-      return {
-        kind: "FAIL",
-        detail:
-          "send did not persist a conversation within budget (workspace-binding / WS-auth)",
-      };
-    }
+
+    // A captured rate_limited / session-rejected WS error → CANT-RUN (surfaced,
+    // non-blocking); no row + no error → the genuine FAIL; row present → PROCEED
+    // to the rail assertion. Return the CANT-RUN/FAIL terminals BEFORE
+    // teardownConversation — no row was created, so a teardown call here would
+    // mask the real reason with CANT-TEARDOWN-empty-predicate.
+    const decision = classifyDriveResult({ convId: polledId, wsError: latestWsError });
+    if (decision.kind === "CANT-RUN") return decision;
+    if (decision.kind === "FAIL") return decision;
+    const convId = decision.convId;
 
     // Stamp the crash-reaper marker immediately (own session, RLS).
     await supabase
@@ -475,21 +520,89 @@ async function driveAndVerify(
 }
 
 /**
+ * Parse a server WS frame, returning ONLY `{errorCode, message}` for a
+ * `{type:"error"}` frame and `null` for anything else (non-JSON, non-object,
+ * non-error). Pure + side-effect-free so it is unit-testable without a browser.
+ * The raw payload is never returned — adjacent frames (the auth frame) carry a
+ * token, so only these two scalars are allowed to escape (I-ephemerality).
+ */
+export function parseWsErrorFrame(payload: string): WsErrorFrame | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as { type?: unknown }).type !== "error"
+  ) {
+    return null;
+  }
+  const { errorCode, message } = parsed as { errorCode?: unknown; message?: unknown };
+  return {
+    errorCode: typeof errorCode === "string" ? errorCode : undefined,
+    message: typeof message === "string" ? message : undefined,
+  };
+}
+
+/**
+ * Decide the drive-phase outcome from the poll result + the latest captured WS
+ * error. Precedence (pure, unit-testable):
+ *   1. errorCode === "rate_limited"           → CANT-RUN:rate-limited
+ *   2. message includes "Send start_session first" → CANT-RUN:session-rejected
+ *   3. a persisted row id                      → PROCEED (caller runs the rail assertion)
+ *   4. otherwise                               → FAIL (the genuine no-persist case)
+ *
+ * The session-rejected match is the NARROW "Send start_session first" hint, NOT a
+ * bare "No active session" substring — three ws-handler sites emit that prefix for
+ * established-session drops (a genuine FAIL class) that the broad match would mask.
+ * rate_limited is checked first so it wins even when a stale row id is present.
+ */
+export function classifyDriveResult(input: {
+  convId: string | null;
+  wsError: WsErrorFrame | null;
+}): DriveDecision {
+  const { convId, wsError } = input;
+  if (wsError?.errorCode === "rate_limited") {
+    return { kind: "CANT-RUN", reason: "rate-limited" };
+  }
+  if (wsError?.message?.includes("Send start_session first")) {
+    return { kind: "CANT-RUN", reason: "session-rejected" };
+  }
+  if (convId) {
+    return { kind: "PROCEED", convId };
+  }
+  return {
+    kind: "FAIL",
+    detail:
+      "send did not persist a conversation within budget (workspace-binding / WS-auth)",
+  };
+}
+
+/**
  * Poll the conversations table for a row created by the synthetic principal
  * AFTER `sinceIso` (the pre-send high-water mark). The deployed app materializes
  * a fresh conversation IN PLACE (CONVERSATION_CREATED_EVENT → rail refetch), not
  * via a URL navigation, so the persisted row — not the URL — is the authoritative
  * "the send actually worked" signal. Returns the conversation id (uuid) or null
  * on timeout. Uses the synthetic user's own session (RLS); never a broad scan.
+ *
+ * `shouldAbort` (optional) is checked at the top of every tick; when it returns
+ * true the poll returns null immediately so the caller can classify on a captured
+ * WS error rather than waiting out the full timeout (the rate-limit race-win).
  */
 export async function pollFreshConversationId(
   supabase: ReturnType<typeof createServerClient>,
   verified: VerifiedPrincipal,
   sinceIso: string,
   timeoutMs: number,
+  shouldAbort?: () => boolean,
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   do {
+    if (shouldAbort?.()) return null;
     const { data } = await supabase
       .from("conversations")
       .select("id")
