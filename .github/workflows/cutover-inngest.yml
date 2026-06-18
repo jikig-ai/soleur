@@ -2,7 +2,8 @@
 # Drives the cutover's host-side steps through the deploy webhook (HMAC +
 # CF-Access), NEVER SSH (hr-no-ssh-fallback-in-runbooks):
 #   op=enumerate           → GET  /hooks/inngest-enumerate-reminders  (list still-armed reminders)
-#   op=rearm               → POST /hooks/inngest-rearm-reminders      (re-arm them post-quiesce-clear)
+#   op=capture             → POST /hooks/inngest-rearm-reminders (mode=capture) → persist records on-host PRE-deploy (#5542)
+#   op=rearm               → POST /hooks/inngest-rearm-reminders      (re-arm from the capture post-quiesce-clear)
 #   op=verify-wiped-volume → POST /hooks/inngest-wiped-volume-verify  (async; opt-in destructive proof)
 #   op=backup              → hcloud API create_image (no webhook; pre-cutover server snapshot) (#5509)
 #   op=inventory           → GET  /hooks/inngest-inventory            (full-state baseline for before/after diff) (#5509)
@@ -20,6 +21,7 @@ on:
         type: choice
         options:
           - enumerate
+          - capture
           - rearm
           - verify-wiped-volume
           - backup
@@ -97,10 +99,13 @@ jobs:
               ;;
 
             rearm)
-              # POST hook → the host script self-enumerates and re-arms each via
-              # the schedule-reminder route. A 503 means INNGEST_CUTOVER_QUIESCE is
-              # still set (clear it first); the host script aborts loud on that.
-              PAYLOAD='{}'
+              # POST hook (mode=rearm-from-capture) → the host script CONSUMES the
+              # on-host capture persisted by op=capture (pre-deploy) and re-arms each
+              # via the schedule-reminder route, deleting the capture on full success.
+              # A missing/corrupt capture is FATAL (non-200) — it never silently
+              # self-enumerates the post-deploy empty backend (#5542). A 503 means
+              # INNGEST_CUTOVER_QUIESCE is still set (clear it first); aborts loud.
+              PAYLOAD='{"mode":"rearm-from-capture"}'
               SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
               rm -f /tmp/rearm-body
               CODE=$(curl -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
@@ -116,6 +121,38 @@ jobs:
                 echo "::error::re-arm returned HTTP $CODE (a non-200 includes the host script's loud abort, e.g. quiesce still set)"; exit 1
               fi
               echo "::notice::re-arm completed"
+              ;;
+
+            capture)
+              # POST hook (mode=capture) → the host script self-enumerates the OLD
+              # server and persists the still-armed records to an on-host file
+              # (/var/lib/inngest/cutover-capture.json) for post-deploy re-arm. Run
+              # BEFORE the deploy: a post-deploy self-enumerate sees the empty new
+              # backend and would lose every reminder (#5542). Records stay on-host
+              # (P2-sec-a) — only counts + reminder_ids surface here.
+              PAYLOAD='{"mode":"capture"}'
+              SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/capture-body
+              CODE=$(curl -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                -d "$PAYLOAD" \
+                "$BASE/inngest-rearm-reminders" || echo "000")
+              BODY=$(cat /tmp/capture-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                CAUSE="${BODY//[$'\n\r']/ }"
+                echo "::error::capture returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+              fi
+              if ! echo "$BODY" | jq -e 'type == "object" and has("captured") and has("reminder_ids") and has("capture_file")' >/dev/null 2>&1; then
+                echo "::error::capture did not return the expected {captured,reminder_ids,capture_file} object"; echo "$BODY"; exit 1
+              fi
+              N=$(echo "$BODY" | jq -r '.captured')
+              IDS=$(echo "$BODY" | jq -r '.reminder_ids | join(",")')
+              FILE=$(echo "$BODY" | jq -r '.capture_file')
+              echo "::notice::capture: persisted $N reminder(s) to $FILE for post-deploy re-arm — [$IDS]"
               ;;
 
             verify-wiped-volume)

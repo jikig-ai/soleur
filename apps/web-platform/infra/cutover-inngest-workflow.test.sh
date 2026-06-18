@@ -31,6 +31,8 @@ assert "choice includes rearm" "grep -qE '^[[:space:]]+-[[:space:]]*rearm$' '$WF
 assert "choice includes verify-wiped-volume" "grep -qE '^[[:space:]]+-[[:space:]]*verify-wiped-volume$' '$WF'"
 assert "choice includes backup (#5509)" "grep -qE '^[[:space:]]+-[[:space:]]*backup$' '$WF'"
 assert "choice includes inventory (#5509)" "grep -qE '^[[:space:]]+-[[:space:]]*inventory$' '$WF'"
+assert "choice includes capture (#5542)" "grep -qE '^[[:space:]]+-[[:space:]]*capture$' '$WF'"
+assert "capture arm POSTs mode=capture" "grep -qE '\"mode\":\"capture\"' '$WF'"
 
 # op is passed via env, never interpolated into a run: command (injection-safe)
 assert "op passed via env (OP: \${{ inputs.op }})" "grep -qE 'OP:[[:space:]]*\\\$\{\{[[:space:]]*inputs.op' '$WF'"
@@ -69,6 +71,11 @@ for hook in inngest-enumerate-reminders inngest-rearm-reminders inngest-wiped-vo
   assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook\"' '$WF'"
   assert "hook id '$hook' exists in hooks.json.tmpl" "grep -qE '\"id\": \"$hook\"' '$HOOKS_TMPL'"
 done
+
+# #5542 — the rearm hook bridges the cutover mode from the POST payload to the
+# host script via pass-environment (capture vs rearm). Without this, op=capture
+# cannot reach the script and the pre-deploy capture never persists.
+assert "rearm hook bridges mode via pass-environment (INNGEST_REARM_MODE)" "grep -qE 'INNGEST_REARM_MODE' '$HOOKS_TMPL'"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
