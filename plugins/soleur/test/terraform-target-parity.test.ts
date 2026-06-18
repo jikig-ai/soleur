@@ -333,6 +333,130 @@ resource "terraform_data" "synthetic_untargeted_ssh" {
   });
 });
 
+// ─── Non-SSH resource coverage (#5566) ──────────────────────────────────────
+// The original guard above only covers SSH-provisioned `terraform_data` resources.
+// But apply-web-platform-infra.yml applies a TARGET-SCOPED plan: EVERY managed
+// resource needs a matching `-target=` line or it silently never applies (no CI
+// error). #5566: `github_actions_secret.supabase_access_token` was added to
+// inngest.tf without a `-target` line → the SUPABASE_ACCESS_TOKEN GH secret was
+// never created and only surfaced via the 12h drift cron. This block asserts
+// every managed resource is reachable by a `-target=` line OR is in the
+// documented operator-applied exclusion set below.
+
+/** Every managed `resource "TYPE" "NAME"` address (excludes `data` sources). */
+function extractAllResources(stripped: string): string[] {
+  const re = /(?:^|\n)\s*resource\s+"([a-z0-9_]+)"\s+"([A-Za-z0-9_]+)"\s*\{/g;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stripped)) !== null) out.push(`${m[1]}.${m[2]}`);
+  return out;
+}
+
+/** Every `-target=<type>.<name>` address (any resource type) in a workflow. */
+function extractAllTargets(workflowText: string): Set<string> {
+  const set = new Set<string>();
+  for (const m of workflowText.matchAll(
+    /-target=([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
+  )) {
+    set.add(m[1]);
+  }
+  return set;
+}
+
+// Resources intentionally NOT in the per-PR CI `-target=` allow-list.
+// Documented in apply-web-platform-infra.yml's header (lines ~25-35):
+//   - hcloud_* (server/volume/ssh_key) + root_authorized_keys are managed by the
+//     operator's initial full apply + the drift detector, never per-PR.
+const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
+  "hcloud_server.web",
+  "hcloud_ssh_key.default",
+  "hcloud_volume.workspaces",
+  "hcloud_volume_attachment.workspaces",
+  "terraform_data.root_authorized_keys",
+]);
+// AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
+// whether that is intentional (operator-applied) or a forgotten allow-list entry
+// (the #5566 class). Snapshotted here so this guard catches FUTURE misses; #5577
+// classifies each into OPERATOR_APPLIED_EXCLUSIONS or the workflow `-target` list.
+// Do NOT grow this set — a NEW un-targeted resource must fail the test, not be
+// added here.
+const AUDIT_PENDING_UNCOVERED = new Set<string>([
+  "cloudflare_record.dkim_resend_inbound",
+  "cloudflare_record.mx_receiving_inbound",
+  "cloudflare_record.mx_send_inbound",
+  "cloudflare_record.spf_send_inbound",
+  "doppler_secret.live_verify_user_password",
+  "random_password.live_verify_user",
+]);
+
+describe("terraform -target parity — ALL managed resources are reachable (non-SSH, #5566)", () => {
+  let allResources: string[];
+  let allTargets: Set<string>;
+
+  beforeAll(() => {
+    allResources = listInfraTfFiles().flatMap((f) =>
+      extractAllResources(stripComments(readFileSync(f, "utf8"))),
+    );
+    allTargets = new Set<string>([
+      ...extractAllTargets(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
+      ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
+    ]);
+  });
+
+  test("every managed resource has a -target line, an operator-applied exclusion, or a pending-audit snapshot", () => {
+    const uncovered = allResources.filter(
+      (a) =>
+        !allTargets.has(a) &&
+        !OPERATOR_APPLIED_EXCLUSIONS.has(a) &&
+        !AUDIT_PENDING_UNCOVERED.has(a),
+    );
+    // A non-empty list means a NEW resource was added without a -target line
+    // (the #5566 silent-un-applied class) — add the -target to
+    // apply-web-platform-infra.yml, or classify it into the exclusion set above.
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the #5566 resource (github_actions_secret.supabase_access_token) is now targeted", () => {
+    // Regression anchor: the exact resource whose missing -target line was the
+    // #5566 gap must stay covered.
+    expect(allTargets.has("github_actions_secret.supabase_access_token")).toBe(
+      true,
+    );
+  });
+
+  test("every github_actions_secret + doppler_service_token is targeted (CI-publish types, no operator-apply ambiguity)", () => {
+    const ciPublish = allResources.filter(
+      (a) =>
+        a.startsWith("github_actions_secret.") ||
+        a.startsWith("doppler_service_token."),
+    );
+    expect(ciPublish.length).toBeGreaterThan(0); // non-vacuity
+    const uncovered = ciPublish.filter((a) => !allTargets.has(a));
+    expect(uncovered).toEqual([]);
+  });
+
+  test("guard FAILS on a synthetic new un-targeted resource (non-vacuity)", () => {
+    const synthetic = `
+resource "github_actions_secret" "synthetic_forgotten_secret" {
+  repository      = "soleur"
+  secret_name     = "SYNTHETIC"
+  plaintext_value = var.x
+}
+`;
+    const parsed = extractAllResources(stripComments(synthetic));
+    expect(parsed).toEqual(["github_actions_secret.synthetic_forgotten_secret"]);
+    const uncovered = parsed.filter(
+      (a) =>
+        !allTargets.has(a) &&
+        !OPERATOR_APPLIED_EXCLUSIONS.has(a) &&
+        !AUDIT_PENDING_UNCOVERED.has(a),
+    );
+    expect(uncovered).toEqual([
+      "github_actions_secret.synthetic_forgotten_secret",
+    ]);
+  });
+});
+
 describe("concurrency-group + cloudflared-pin parity across the two workflows (#4844 P0)", () => {
   // The shared concurrency group is the SOLE state serializer (R2 has no lock).
   // GHA silently fails to serialize on divergent group strings, so assert the

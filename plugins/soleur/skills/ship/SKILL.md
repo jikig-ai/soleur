@@ -1043,21 +1043,25 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
-Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body for unintentional auto-close-keyword + #N references. GitHub's parser is markdown-blind: matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days by this trap — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
+Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
+- **Markdown-blind:** matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
+- **Negation-blind + commit-message surface:** GitHub's parser ignores negation, so `Does not close #N` still closes #N. And on a **squash merge** (this repo's default) the squash commit is built from the **branch commit messages**, which the parser reads on merge — so a keyword in a commit body auto-closes even when the PR body is clean. That gap closed #5463 twice (a negated body in #5519, then a negated commit message `Does not close #5463` in #5564). ALWAYS scan commit messages, not just the PR body.
 
-Write the proposed `PR_TITLE` and `PR_BODY` to temp files, then run the shared scanner:
+Write the proposed `PR_TITLE`, `PR_BODY`, and the branch commit messages (`git log origin/main..HEAD --format=%B`) to temp files, then run the shared scanner:
 
 ```bash
-TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp)
+TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
+git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
 T_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_TITLE")
 B_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_BODY")
+C_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_COMMITS")
 ```
 
-If `T_MATCHES` OR `B_MATCHES` is non-empty:
+If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
 
-1. Display every match with line context: `printf 'In title:\n%s\nIn body:\n%s\n' "${T_MATCHES:-(none)}" "${B_MATCHES:-(none)}"`.
+1. Display every match with line context: `printf 'In title:\n%s\nIn body:\n%s\nIn commits:\n%s\n' "${T_MATCHES:-(none)}" "${B_MATCHES:-(none)}" "${C_MATCHES:-(none)}"`. A commit-message trap is fixed by rewording the commit (`git commit --amend` / `git rebase -i`), not by editing the PR body.
 2. Compare each match against the intended `ISSUE_NUMBER` set from the detection step above. Any match where the issue number is in `ISSUE_NUMBER` AND the match line is the canonical `Closes #N` body line (one keyword, one number, on its own line, no surrounding prose) is intentional — keep it. Any other match is a candidate trap.
 3. **Headless mode:** If unintentional matches remain after the comparison, abort with an error listing every match — do NOT silently create the PR. The operator must either edit the body to remove the trap OR (when the match IS intentional, e.g., `Closes #N` was filtered out by step 2's heuristic incorrectly) add a `<!-- auto-close-scanner: confirm -->` marker to the body and re-run.
 4. **Interactive mode:** Use AskUserQuestion to surface every unintentional match and offer (a) edit the body to remove the trap, (b) add the `<!-- auto-close-scanner: confirm -->` marker (intentional), or (c) abort and let the operator edit manually.
