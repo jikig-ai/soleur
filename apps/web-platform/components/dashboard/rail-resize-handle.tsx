@@ -17,6 +17,14 @@ import { useRef } from "react";
 // Persistence discipline: transient drag deltas fire `onWidthChange` (state
 // only, no storage write) and the committed value persists once on pointerup
 // (and on each keyboard nudge) via `onCommit` — avoids thrashing localStorage.
+// A no-op pointerup (no actual movement) skips `onCommit` entirely.
+//
+// Double-click accelerator: double-clicking the handle calls `onCollapse` to
+// collapse the rail (an additive shortcut beside the kept collapse button —
+// FR3-Alternative). No drag-vs-click guard is needed: a real resize drag moves
+// the pointer past the browser's click threshold, so it never emits the two
+// `click` events a `dblclick` requires — dragging therefore cannot fire
+// `onDoubleClick`, and a genuine double-click (negligible movement) collapses.
 
 export interface RailResizeHandleProps {
   width: number;
@@ -26,6 +34,9 @@ export interface RailResizeHandleProps {
   onWidthChange: (px: number) => void;
   /** Persisted commit (pointerup / keyboard nudge). */
   onCommit: (px: number) => void;
+  /** Double-click accelerator: collapse the rail. Optional — the floated
+   * collapse button remains the primary affordance. */
+  onCollapse?: () => void;
 }
 
 export function RailResizeHandle({
@@ -34,6 +45,7 @@ export function RailResizeHandle({
   max,
   onWidthChange,
   onCommit,
+  onCollapse,
 }: RailResizeHandleProps) {
   const dragging = useRef(false);
   const startX = useRef(0);
@@ -73,7 +85,14 @@ export function RailResizeHandle({
     } catch {
       // no-op.
     }
-    onCommit(latest.current);
+    // Skip the redundant localStorage write when the rail never actually moved.
+    if (latest.current !== startWidth.current) {
+      onCommit(latest.current);
+    }
+  }
+
+  function handleDoubleClick() {
+    onCollapse?.();
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
@@ -100,8 +119,13 @@ export function RailResizeHandle({
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
-      className="group absolute inset-y-0 right-0 z-10 hidden w-1 cursor-col-resize touch-none bg-transparent transition-colors duration-150 hover:bg-soleur-text-secondary/50 focus-visible:bg-amber-500/50 focus-visible:outline-none active:bg-amber-500/50 md:block"
+      // Active/focus wash is brand gold (`soleur-accent-gold-fill`) at /70 alpha
+      // — /70 clears the 3:1 non-text contrast bar on the dark surface where /50
+      // does not (AC11). Hover stays grey (`soleur-text-secondary`); gold appears
+      // only while you click/drag or keyboard-focus, never on hover.
+      className="group absolute inset-y-0 right-0 z-10 hidden w-1 cursor-col-resize touch-none bg-transparent transition-colors duration-150 hover:bg-soleur-text-secondary/50 focus-visible:bg-soleur-accent-gold-fill/70 focus-visible:outline-none active:bg-soleur-accent-gold-fill/70 md:block"
     >
       <span
         data-testid="kb-rail-resize-grip"
