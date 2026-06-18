@@ -135,7 +135,22 @@ run_inventory() {
   functions=$(echo "$fn_body" | jq -c '[ .data.functions[] | (.name // .slug // .id // empty) ] | sort')
 
   # --- eventsV2: paginate ALL events to exhaustion ---
-  local all_edges="[]" after="" page=1 resp page_edges has_next end_cursor
+  # #5523: accumulate page edges via a SPOOL FILE, not argv. The old form passed the
+  # entire running accumulator to jq as a single command-line argument every page
+  # (via --argjson); once it crossed the
+  # kernel per-arg ceiling (MAX_ARG_STRLEN, ~128 KB) the execve(2) of jq failed with
+  # "Argument list too long" (the live HTTP 500). Appending each page's edges array to
+  # a temp file and collapsing once with `jq -s 'add // []'` reads via file I/O — no
+  # argv size limit. Pattern precedent: github-community.sh:294 (the same #5523-class
+  # learning's fix). `// []` keeps a zero-page run well-formed.
+  local edges_file after="" page=1 resp has_next end_cursor all_edges
+  edges_file=$(mktemp)
+  # shellcheck disable=SC2064  # expand $edges_file NOW so the trap body captures this
+  # value, not whatever the name resolves to at fire time. EXIT (not RETURN): RETURN
+  # does NOT fire on `exit`, so the two `exit 1` FATAL branches below would leak the
+  # spool file under RETURN. Registered INSIDE run_inventory, so the sourced-by-test
+  # path (run_inventory is never called when sourced — BASH_SOURCE guard) never sets it.
+  trap "rm -f '$edges_file'" EXIT
   while :; do
     resp=$(fetch_page "$after" "$page")
     if ! echo "$resp" | jq -e '.data.eventsV2' >/dev/null 2>&1; then
@@ -150,14 +165,17 @@ run_inventory() {
       echo "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" >&2
       exit 1
     fi
-    page_edges=$(echo "$resp" | jq -c '.data.eventsV2.edges // []')
-    all_edges=$(jq -nc --argjson a "$all_edges" --argjson b "$page_edges" '$a + $b')
+    # Append this page's edges array as ONE JSON value (one line) to the spool file;
+    # file I/O has no argv size limit (unlike the old per-page --argjson accumulation).
+    echo "$resp" | jq -c '.data.eventsV2.edges // []' >> "$edges_file"
     has_next=$(echo "$resp" | jq -r '.data.eventsV2.pageInfo.hasNextPage // false')
     end_cursor=$(echo "$resp" | jq -r '.data.eventsV2.pageInfo.endCursor // ""')
     [[ "$has_next" == "true" && -n "$end_cursor" ]] || break
     after="$end_cursor"
     page=$((page + 1))
   done
+  # Collapse all spooled per-page arrays into one flat edge array via file input.
+  all_edges=$(jq -s 'add // []' "$edges_file")
 
   # --- event_names: distinct sorted set across ALL events ---
   local event_names
