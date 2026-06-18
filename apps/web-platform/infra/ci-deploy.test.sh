@@ -2205,21 +2205,25 @@ echo ""
 echo "--- #5547 Gap 3: verify_inngest_health degraded advisory + success_degraded_durability ---"
 # Source-scoped (runtime-driving the deploy path is out of scope per the #4652
 # AC3 wiring comment above). AC5 — verify_inngest_health emits a degraded
-# ADVISORY (NOT return 1) via `logger -t "$LOG_TAG"` when the ExecStart lacks
-# --postgres-uri (the SQLite-only fail-safe), while the durable FAIL branches
-# (--postgres-uri present but --redis-uri absent / inngest-redis not active)
-# still `return 1`.
+# ADVISORY (NOT return 1) via `logger -t "$LOG_TAG"` when the ExecStart lacks the
+# durable sentinel (the SQLite-only fail-safe), while the durable FAIL branch
+# (inngest-redis not active) still `return 1`. #5560: the "--redis-uri absent" FAIL
+# branch was REMOVED — the postgres/redis URIs are env-delivered now, so the only
+# durable-failure signal on argv is the sentinel + the redis-service-active check.
 VIH_FN=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 VIH_ADVISORY=$(printf '%s\n' "$VIH_FN" | grep -cE 'logger -t "\$LOG_TAG" "INNGEST_DURABLE: advisory' || true)
-VIH_FAIL_NO_REDIS=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*--redis-uri absent' || true)
 VIH_FAIL_NOT_ACTIVE=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*not active' || true)
+VIH_SENTINEL=$(printf '%s\n' "$VIH_FN" | grep -cF -- '--postgres-max-open-conns' || true)
+# Negative: the removed --redis-uri-absent FAIL branch must NOT reappear (it would
+# be dead code — redis-uri is never on argv after #5560).
+VIH_FAIL_NO_REDIS=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*--redis-uri absent' || true)
 TOTAL=$((TOTAL + 1))
-if [[ "$VIH_ADVISORY" -ge 1 && "$VIH_FAIL_NO_REDIS" -ge 1 && "$VIH_FAIL_NOT_ACTIVE" -ge 1 ]]; then
+if [[ "$VIH_ADVISORY" -ge 1 && "$VIH_FAIL_NOT_ACTIVE" -ge 1 && "$VIH_SENTINEL" -ge 1 && "$VIH_FAIL_NO_REDIS" -eq 0 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: verify_inngest_health emits degraded advisory (postgres-absent) + both durable FAIL branches intact (#5547 AC5)"
+  echo "  PASS: verify_inngest_health emits degraded advisory + redis-not-active FAIL, keys on --postgres-max-open-conns sentinel, no dead --redis-uri-absent branch (#5547 AC5 / #5560)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: AC5 (advisory=$VIH_ADVISORY fail_no_redis=$VIH_FAIL_NO_REDIS fail_not_active=$VIH_FAIL_NOT_ACTIVE; verify_inngest_health in ci-deploy.sh)"
+  echo "  FAIL: AC5 (advisory=$VIH_ADVISORY fail_not_active=$VIH_FAIL_NOT_ACTIVE sentinel=$VIH_SENTINEL dead_redis_branch=$VIH_FAIL_NO_REDIS; verify_inngest_health in ci-deploy.sh)"
 fi
 
 # AC5b — on a 0-exit bootstrap that left inngest on the SQLite-only ExecStart,

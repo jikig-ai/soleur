@@ -133,20 +133,26 @@ fetch_functions() {
 # drift-guard test). Reads only the CONFIGURED ExecStart ($VAR form — NEVER the
 # resolved connection string, #5503 purity / AC3) + inngest-redis activeness, and
 # emits ONE enum on stdout:
-#   durable     — --postgres-uri AND --redis-uri configured AND inngest-redis active
-#   degraded    — --postgres-uri configured but --redis-uri absent OR redis inactive
+#   durable     — durable sentinel (--postgres-max-open-conns) present AND inngest-redis active
+#   degraded    — durable sentinel present but redis inactive
 #                 (the #5542 incident state: durable backend, broken durability
 #                 invariant — ci-deploy treats this as a hard FAIL)
-#   sqlite_only — no --postgres-uri (the SQLite-only fail-safe ExecStart, #5547)
+#   sqlite_only — no durable sentinel (the SQLite-only fail-safe ExecStart, #5547)
 #   unknown     — ExecStart unreadable (empty); the server-down case is already
 #                 caught upstream by the .data.functions array guard
+# Detection sentinel (#5560): durability is keyed on the NON-SECRET
+# --postgres-max-open-conns flag, NOT --postgres-uri/--redis-uri — those URIs are now
+# delivered via the doppler-run ENVIRONMENT (never argv) so they no longer appear in
+# the ExecStart. inngest-bootstrap.sh writes --postgres-max-open-conns ONLY in the
+# durable branch (present iff durable). This keeps the parser reading the $VAR-form
+# ExecStart only (NEVER a resolved connection string, #5503 purity / AC3).
 # Test seams: INVENTORY_EXECSTART / INVENTORY_REDIS_ACTIVE (CI has no systemd).
 # Unset-only (`${VAR-…}`, not `:-`) so an explicitly-empty seam deterministically
 # means "unit read came back empty → unknown" regardless of any systemd on the runner.
 # SOLEUR-DEBT: 3rd of 3 ExecStart-durability parsers (ci-deploy.sh source-of-truth,
 # inngest-wiped-volume-verify.sh subset, this). Kept in sync by test_durability_drift_guard,
 # NOT a shared sourced lib (infra has no source-lib precedent). Upgrade trigger: a 4th
-# --postgres-uri ExecStart parser appears -> extract inngest-durability-lib.sh. Tracked: #5450.
+# durable-sentinel ExecStart parser appears -> extract inngest-durability-lib.sh. Tracked: #5450.
 derive_durability_state() {
   local exec_start redis_active
   exec_start="${INVENTORY_EXECSTART-$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)}"
@@ -154,8 +160,8 @@ derive_durability_state() {
   if [[ -z "$exec_start" ]]; then
     echo "unknown"; return 0
   fi
-  if [[ "$exec_start" == *'--postgres-uri'* ]]; then
-    if [[ "$exec_start" != *'--redis-uri'* || "$redis_active" != "active" ]]; then
+  if [[ "$exec_start" == *'--postgres-max-open-conns'* ]]; then
+    if [[ "$redis_active" != "active" ]]; then
       echo "degraded"; return 0
     fi
     echo "durable"; return 0

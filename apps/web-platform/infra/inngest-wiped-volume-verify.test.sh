@@ -97,7 +97,7 @@ MOCK
 run_verify() {
   local data_dir execstart
   data_dir="${MOCKBIN}/inngest-data"; mkdir -p "$data_dir"; echo "sqlite" > "$data_dir/main.db"
-  execstart="${1:-/usr/local/bin/inngest start --postgres-uri postgres://x --redis-uri redis://y --sqlite-dir /var/lib/inngest}"
+  execstart="${1:-/usr/local/bin/inngest start --sqlite-dir /var/lib/inngest --postgres-max-open-conns 10}"
   PATH="${MOCKBIN}:$PATH" \
     INNGEST_ENUMERATE_CMD="$ENUM_STUB" \
     INNGEST_DATA_DIR="$data_dir" \
@@ -127,14 +127,14 @@ test_abort_on_real_reminder() {
   teardown
 }
 
-# --- Test 2 (B1 secondary): no --postgres-uri in ExecStart → ABORT (durable sanity) ---
+# --- Test 2 (B1 secondary): no durable sentinel in ExecStart → ABORT (durable sanity) ---
 test_abort_on_non_durable_backend() {
   setup
   make_enum_stub '[]'
   local out rc=0
   out=$(run_verify "/usr/local/bin/inngest start --sqlite-dir /var/lib/inngest") || rc=$?
-  assert_eq "exits non-zero when ExecStart lacks --postgres-uri" "1" "$rc"
-  assert_contains "abort names the durable-backend sanity" "$out" "postgres-uri"
+  assert_eq "exits non-zero when ExecStart lacks --postgres-max-open-conns sentinel" "1" "$rc"
+  assert_contains "abort names the durable-backend sanity" "$out" "postgres-max-open-conns"
   assert_eq "data dir NOT wiped (non-durable)" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
   teardown
 }

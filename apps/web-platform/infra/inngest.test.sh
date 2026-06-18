@@ -157,10 +157,14 @@ assert "server ExecStart sets --poll-interval 60" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE 'inngest start .*--poll-interval 60'"
 assert "server ExecStart sets --sdk-url loopback app route (port 3000)" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url http://127.0.0.1:3000/api/inngest'"
-# Regression guard: the signing-key strip + event-key must survive the edit
-# (the systemd `$$` escape must not be accidentally unescaped — Sharp Edge).
-assert "server ExecStart keeps signing-key strip + event-key" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_SIGNING_KEY#signkey-prod-' && printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_EVENT_KEY'"
+# Regression guard: the signing-key strip survives the edit as an ENV export (#5560 —
+# inngest reads INNGEST_SIGNING_KEY from env; the `signkey-prod-` strip is preserved so
+# the self-hosted server gets the bare hex). The systemd `$$` escape must not be
+# accidentally unescaped (Sharp Edge). INNGEST_EVENT_KEY is no longer on the ExecStart
+# at all (read from the doppler env by name) — asserted absent by the #5560 security
+# invariant below.
+assert "server ExecStart re-exports the stripped signing-key (env-delivered, #5560)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"'"
 # --- #5547 Gap 2: REDIS_READY-gated durable/SQLite-fail-safe ExecStart ---
 # The durable backend flags (#5450) moved OUT of the single-quoted server-unit
 # heredoc into a REDIS_READY-gated BACKEND_FLAGS fragment that is substituted
@@ -189,61 +193,88 @@ else
   echo "  FAIL: ordering env-file($ENV_FILE_LINE) < REDIS_READY($REDIS_READY_LINE) < server-cat($SERVER_CAT_LINE) (#5547 AC2)"
 fi
 
-# AC3 — the heredoc carries the @@BACKEND_FLAGS@@ sentinel on the inngest start
-# line, --sqlite-dir /var/lib/inngest is in the SHARED prefix (present in BOTH
-# branches), and a (non-sed) substitution strips the sentinel so none survives
-# in the written unit.
-SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE 'inngest start .*@@BACKEND_FLAGS@@' || true)
+# AC3 — the heredoc carries BOTH the @@BACKEND_ENV@@ and @@BACKEND_FLAGS@@ sentinels
+# on the inngest start line, --sqlite-dir /var/lib/inngest is in the SHARED prefix
+# (present in BOTH branches), and a (non-sed) substitution strips each sentinel so
+# none survives in the written unit (#5547 AC3 + #5560 env-delivery).
+ENV_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE '@@BACKEND_ENV@@exec /usr/local/bin/inngest start' || true)
+FLAGS_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE 'inngest start .*@@BACKEND_FLAGS@@' || true)
 SQLITE_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cF -- '--sqlite-dir /var/lib/inngest' || true)
-SENTINEL_SUBST=$(grep -cE '@@BACKEND_FLAGS@@/' "$BOOTSTRAP_SH" || true)
+ENV_SUBST=$(grep -cE '@@BACKEND_ENV@@/' "$BOOTSTRAP_SH" || true)
+FLAGS_SUBST=$(grep -cE '@@BACKEND_FLAGS@@/' "$BOOTSTRAP_SH" || true)
 TOTAL=$((TOTAL + 1))
-if [[ "$SENTINEL_IN_HEREDOC" -ge 1 && "$SQLITE_IN_HEREDOC" -ge 1 && "$SENTINEL_SUBST" -ge 1 ]]; then
+if [[ "$ENV_SENTINEL_IN_HEREDOC" -ge 1 && "$FLAGS_SENTINEL_IN_HEREDOC" -ge 1 && "$SQLITE_IN_HEREDOC" -ge 1 && "$ENV_SUBST" -ge 1 && "$FLAGS_SUBST" -ge 1 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: heredoc carries @@BACKEND_FLAGS@@ sentinel + --sqlite-dir shared prefix; substitution strips it (#5547 AC3)"
+  echo "  PASS: heredoc carries @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels + --sqlite-dir shared prefix; both substitutions strip them (#5547 AC3 / #5560)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: AC3 (sentinel_in_heredoc=$SENTINEL_IN_HEREDOC sqlite_shared=$SQLITE_IN_HEREDOC sentinel_subst=$SENTINEL_SUBST)"
+  echo "  FAIL: AC3 (env_sentinel=$ENV_SENTINEL_IN_HEREDOC flags_sentinel=$FLAGS_SENTINEL_IN_HEREDOC sqlite_shared=$SQLITE_IN_HEREDOC env_subst=$ENV_SUBST flags_subst=$FLAGS_SUBST)"
 fi
 
-# Durable fragment (#5450 build-time guard, reconciled to the fragment shape —
-# AC8). Both flags MUST be present; the session pooler MUST be :5432 (transaction
-# :6543 breaks inngest's prepared statements — verdict 0.5).
-DURABLE_FRAGMENT=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-uri" "$BOOTSTRAP_SH" | head -1 || true)
+# Durable env + flags (#5450/#5560 build-time guard, reconciled to the env-delivery
+# shape — AC8). Secrets are delivered via the ENVIRONMENT, never argv: the durable
+# BACKEND_ENV exports INNGEST_REDIS_URI from the password (loopback :6379, NEVER the
+# pooler :6543); the durable BACKEND_FLAGS carries ONLY the non-secret
+# --postgres-max-open-conns sentinel (NO --postgres-uri/--redis-uri flags).
+DURABLE_ENV=$(grep -E "^[[:space:]]*BACKEND_ENV='export INNGEST_REDIS_URI=" "$BOOTSTRAP_SH" | head -1 || true)
+DURABLE_FLAGS=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF -- '--postgres-uri' \
-   && printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF -- '--redis-uri "redis://:' \
-   && printf '%s\n' "$DURABLE_FRAGMENT" | grep -qE -- '--postgres-max-open-conns [0-9]+' \
-   && ! printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF ':6543'; then
+if printf '%s\n' "$DURABLE_ENV" | grep -qF -- 'export INNGEST_REDIS_URI="redis://:' \
+   && printf '%s\n' "$DURABLE_ENV" | grep -qF -- '@127.0.0.1:6379' \
+   && ! printf '%s\n' "$DURABLE_ENV" | grep -qF ':6543' \
+   && printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--postgres-max-open-conns [0-9]+' \
+   && ! printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--(postgres|redis)-uri'; then
   PASS=$((PASS + 1))
-  echo "  PASS: durable BACKEND_FLAGS fragment sets --postgres-uri + --redis-uri (loopback) + --postgres-max-open-conns, never :6543 (#5547 AC8/#5450)"
+  echo "  PASS: durable backend delivers INNGEST_REDIS_URI via env (loopback :6379, never :6543); BACKEND_FLAGS is sentinel-only, no secret flags (#5450/#5560)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: durable fragment shape (line: $DURABLE_FRAGMENT)"
+  echo "  FAIL: durable env/flags shape (env: $DURABLE_ENV | flags: $DURABLE_FLAGS)"
 fi
 
-# AC4 — the durable fragment preserves the LITERAL $${INNGEST_*} Doppler tokens
+# AC4 — the durable env fragment preserves the LITERAL $${INNGEST_REDIS_PASSWORD}
+# Doppler token, and the ExecStart re-exports the stripped $${INNGEST_SIGNING_KEY}
 # (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
-# single-quoted so the $$ is matched literally (never the shell PID).
+# single-quoted so the $$ is matched literally (never the shell PID). #5560: the
+# postgres URI + event key are read from the env by name with NO bootstrap token.
+EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | head -1 || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF '$${INNGEST_POSTGRES_URI}' \
-   && printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF '$${INNGEST_REDIS_PASSWORD}'; then
+if printf '%s\n' "$DURABLE_ENV" | grep -qF '$${INNGEST_REDIS_PASSWORD}' \
+   && printf '%s\n' "$EXECSTART_LINE" | grep -qF '$${INNGEST_SIGNING_KEY#signkey-prod-}'; then
   PASS=$((PASS + 1))
-  echo "  PASS: durable fragment preserves literal \$\${INNGEST_POSTGRES_URI}/\$\${INNGEST_REDIS_PASSWORD} (#5547 AC4)"
+  echo "  PASS: durable env preserves literal \$\${INNGEST_REDIS_PASSWORD}; ExecStart re-exports stripped \$\${INNGEST_SIGNING_KEY} (#5560 AC4)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: durable fragment must preserve literal \$\${INNGEST_*} tokens (line: $DURABLE_FRAGMENT)"
+  echo "  FAIL: must preserve literal \$\${INNGEST_REDIS_PASSWORD} (env: $DURABLE_ENV) + \$\${INNGEST_SIGNING_KEY} re-export (execstart: $EXECSTART_LINE)"
 fi
 
-# SQLite-only fail-safe: an EMPTY fragment is assigned when Redis is not ready,
-# so the written ExecStart omits --postgres-uri/--redis-uri and inngest stays
-# available on SQLite (verify_inngest_health then SKIPs the durable gate).
+# #5560 SECURITY INVARIANT (negative): the ExecStart template carries NO secret on
+# argv — no --signing-key/--event-key flags, and no --postgres-uri/--redis-uri flags
+# (those are env-delivered). The only $${...} on the ExecStart line is the signing-key
+# re-export (an env export, not an argv flag).
 TOTAL=$((TOTAL + 1))
-if grep -qE "^[[:space:]]*BACKEND_FLAGS=(''|\"\")[[:space:]]*\$" "$BOOTSTRAP_SH"; then
+if printf '%s\n' "$EXECSTART_LINE" | grep -qF 'exec /usr/local/bin/inngest start' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--signing-key|--event-key' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--(postgres|redis)-uri'; then
   PASS=$((PASS + 1))
-  echo "  PASS: SQLite-only fail-safe assigns an empty BACKEND_FLAGS when REDIS_READY=0 (#5547 AC3)"
+  echo "  PASS: ExecStart passes NO secret on argv (no --signing-key/--event-key/--postgres-uri/--redis-uri); uses exec (#5560 security invariant)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: missing empty BACKEND_FLAGS branch for the SQLite-only fail-safe (#5547)"
+  echo "  FAIL: ExecStart must carry no secret flags + use exec (line: $EXECSTART_LINE)"
+fi
+
+# SQLite-only fail-safe: an EMPTY BACKEND_FLAGS + an `unset INNGEST_POSTGRES_URI`
+# BACKEND_ENV are assigned when Redis is not ready, so the written ExecStart omits
+# the durable sentinel AND inngest does not pick up INNGEST_POSTGRES_URI from the
+# doppler env (the unset is load-bearing — #5560). inngest stays available on SQLite
+# (verify_inngest_health then SKIPs the durable gate).
+TOTAL=$((TOTAL + 1))
+if grep -qE "^[[:space:]]*BACKEND_FLAGS=(''|\"\")[[:space:]]*\$" "$BOOTSTRAP_SH" \
+   && grep -qE "^[[:space:]]*BACKEND_ENV='unset INNGEST_POSTGRES_URI; '" "$BOOTSTRAP_SH"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: SQLite-only fail-safe assigns empty BACKEND_FLAGS + 'unset INNGEST_POSTGRES_URI' BACKEND_ENV when REDIS_READY=0 (#5547 AC3 / #5560)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: fail-safe must set empty BACKEND_FLAGS AND unset INNGEST_POSTGRES_URI (#5547/#5560)"
 fi
 
 # AC2: an ExecStart change must take effect on redeploy. Two guarantees:
