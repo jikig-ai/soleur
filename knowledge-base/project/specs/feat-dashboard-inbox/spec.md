@@ -44,11 +44,15 @@ workspace-Owner RLS — so this is a presentation/navigation gap only.
 
 ### FR1: `/dashboard/inbox` list page
 
-A new client page at `app/(dashboard)/dashboard/inbox/page.tsx` that fetches
-`GET /api/inbox/emails` and renders each item with the existing `EmailTriageRow`
-(`{item, onChanged}`), passing a refetch callback as `onChanged`. Header mirrors the
-Routines template (h1 "Inbox" + one-line description, centered column). Links each row to
-the existing detail route. Maps to wireframe `09-dashboard-inbox-active-populated.png`.
+[Updated 2026-06-18, post-plan-review] A new **Server page** at
+`app/(dashboard)/dashboard/inbox/page.tsx` (`force-dynamic`, cookie-session auth gate) that
+renders a `<Suspense>`-wrapped **client surface** `components/inbox/inbox-surface.tsx` — the
+Routines pattern, required because a bare `"use client"` page calling `useSearchParams` on this
+static route fails `next build`. The surface fetches `GET /api/inbox/emails` and renders each
+item with the existing `EmailTriageRow` (`{item, onChanged}`), passing a refetch callback as
+`onChanged`. Header mirrors the Routines template (h1 "Inbox" + one-line description, centered
+`max-w-5xl` column). Links each row to the existing detail route. Maps to wireframe
+`09-dashboard-inbox-active-populated.png`.
 
 ### FR2: Active / Archived tabs driving `?status=archived`
 
@@ -80,13 +84,15 @@ keys on the inbox fetch alone (decoupled from unrelated async). Maps to wirefram
 
 ## Technical Requirements
 
-### TR1: Client component, reuse the bounded API
+### TR1: Server page + client surface, reuse the bounded API
 
-Use CTO option A — a client page that fetches `/api/inbox/emails`, mirroring
-`dashboard/page.tsx`'s `emailItems`/`fetchEmailItems` pattern. Do NOT re-implement the
-route's filter logic (unfinalized-stub / probe / statutory-pin exclusion, `route.ts:18-44`)
-in the page. Do NOT add `.eq("user_id", ...)` anywhere (would re-narrow below workspace
-RLS and hide co-Owner rows — ADR-066).
+[Updated 2026-06-18] Server page (auth gate) → `<Suspense>`-wrapped client surface that
+fetches `/api/inbox/emails`, mirroring `dashboard/page.tsx`'s `emailItems`/`fetchEmailItems`
+pattern (but non-silent on error). Reuse `ErrorCard` (`components/ui/error-card.tsx`), the
+`TabButton`/`role="tab"` pattern (`routines-surface.tsx`), and the exported `EmailTriageItem`
+type (`email-triage-row.tsx:28` — do not redeclare). Do NOT re-implement the route's filter
+logic (unfinalized-stub / probe / statutory-pin exclusion, `route.ts:18-44`) in the surface.
+The surface does no DB access; no `.eq("user_id", ...)` anywhere (RLS lives in the API/DB — ADR-066).
 
 ### TR2: Visible error + retry, Sentry-mirrored
 
