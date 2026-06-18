@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { createWebSocketMock } from "./mocks/use-websocket";
+import { urlOf } from "./mocks/resolve-fetch-url";
 
 const mockStartSession = vi.fn();
 const mockSendMessage = vi.fn();
@@ -301,13 +302,7 @@ describe("ChatPage", () => {
       // pending (audit M1) — gets a benign fresh 200 so it cannot consume a
       // shared Response body or steal a `…Once` mock from the KB fetch.
       fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-        const url =
-          typeof input === "string"
-            ? input
-            : input instanceof Request
-              ? input.url
-              : String(input);
-        if (url.includes("/api/kb/content/")) return kbResponder();
+        if (urlOf(input).includes("/api/kb/content/")) return kbResponder();
         return Promise.resolve(
           new Response(JSON.stringify({}), {
             status: 200,

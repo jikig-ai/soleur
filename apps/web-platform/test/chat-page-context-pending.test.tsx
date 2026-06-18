@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { createWebSocketMock } from "./mocks/use-websocket";
+import { urlOf } from "./mocks/resolve-fetch-url";
 
 // Audit M1: the conversation page used to `return null` while the optional
 // `?context=` KB fetch was in flight, leaving the route blank. The fix renders
@@ -71,13 +72,7 @@ describe("ChatPage — context-pending render (audit M1)", () => {
     // active-repo mount poll (useActiveRepo, #5394) gets a benign 200 so it
     // doesn't interfere now that ChatSurface mounts while context is pending.
     fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url =
-        typeof input === "string"
-          ? input
-          : input instanceof Request
-            ? input.url
-            : String(input);
-      if (url.includes("/api/kb/content/")) return new Promise<Response>(() => {});
+      if (urlOf(input).includes("/api/kb/content/")) return new Promise<Response>(() => {});
       return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
     });
     mockSearchParams.set("context", "product/roadmap.md");
@@ -102,13 +97,7 @@ describe("ChatPage — context-pending render (audit M1)", () => {
       resolveKbFetch = resolve;
     });
     fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url =
-        typeof input === "string"
-          ? input
-          : input instanceof Request
-            ? input.url
-            : String(input);
-      if (url.includes("/api/kb/content/")) return kbPromise;
+      if (urlOf(input).includes("/api/kb/content/")) return kbPromise;
       return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
     });
     mockSearchParams.set("context", "product/roadmap.md");

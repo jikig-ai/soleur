@@ -26,7 +26,12 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
       // `user`, not on orgId/the delegation chain. Letting it overlap the
       // sequential delegation resolution below removes a serial round-trip
       // from chat TTFB (audit H3) instead of awaiting it after the branch.
-      const invitesPromise = getPendingInvitesForUser(user.id, user.email ?? "");
+      // `.catch(() => [])` keeps the promise from floating into an unhandled
+      // rejection if a delegation-chain await throws before line ~58 (control
+      // would jump to the outer catch and never reach `await invitesPromise`).
+      const invitesPromise = getPendingInvitesForUser(user.id, user.email ?? "").catch(
+        () => [],
+      );
 
       const orgId = await resolveCurrentOrganizationId(user.id, supabase);
       if (orgId) {
