@@ -285,6 +285,17 @@ verify_inngest_health() {
       return 1
     fi
     logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — --postgres-uri + --redis-uri configured and inngest-redis.service active"
+  else
+    # #5547 Gap 2/3: SQLite-only fail-safe ExecStart (Redis was not ready this
+    # deploy → inngest-bootstrap wrote the empty BACKEND_FLAGS form). This is NOT
+    # a failure — the server is available on the non-durable backend, so do NOT
+    # return 1 (that would block a legitimate SQLite-only rollback). This
+    # `logger -t "$LOG_TAG"` advisory is the AUTHORITATIVE no-SSH carrier for the
+    # degraded state: LOG_TAG=ci-deploy is in Vector Source 4's tag allowlist →
+    # Better Stack Logs. (The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is
+    # NOT a carrier on this 0-exit path — ci-deploy reads $BOOTSTRAP_STDERR only
+    # on a non-zero bootstrap exit.)
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: advisory — inngest-server running SQLite-only (non-durable); durable Redis was not ready this deploy (#5547). Server is available; armed reminders will NOT survive a host rebuild until a deploy with Redis ready."
   fi
 
   # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159, #5520): /health proves
@@ -879,6 +890,23 @@ case "$COMPONENT" in
     # replaced.
     rm -f /tmp/vector.toml
     docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
+    # Durable Redis assets (#5450) — stage to /tmp like /vector.toml above. The
+    # existing-host deploy runs inngest-bootstrap.sh DIRECTLY on the host (the
+    # Alpine extract container has no systemctl), so it bypasses the OCI image
+    # ENTRYPOINT that stages these on the fresh-host cloud-init path
+    # (cloud-init.yml mirrors this same docker-cp block). Without these lines the
+    # bootstrap's `[[ -f /tmp/inngest-redis.conf && ... ]]` guard is always false
+    # → Redis never installs → the durable ExecStart crash-loops on 127.0.0.1:6379
+    # (#5547 Gap 1, the ~3.5h #5542 outage symptom). `rm -f` FIRST so a stale
+    # prior-deploy asset can't survive a silent cp failure (same defense as the
+    # /tmp/vector.toml rm above). `2>/dev/null || true` keeps a pre-#5450 rollback
+    # image (no /inngest-redis.* baked) functional — the bootstrap's Gap-2
+    # fail-safe then keeps inngest on the SQLite-only ExecStart.
+    rm -f /tmp/inngest-redis.conf /tmp/inngest-redis.service /tmp/inngest-redis-bootstrap.sh
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.conf" /tmp/inngest-redis.conf 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.service" /tmp/inngest-redis.service 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis-bootstrap.sh" /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+    chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     # Read ENV vars baked into the image at build time (see
     # .github/workflows/build-inngest-bootstrap-image.yml — ENV
     # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...
@@ -960,8 +988,24 @@ case "$COMPONENT" in
       exit 1
     fi
 
-    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
-    final_write_state 0 "success"
+    # #5547 Gap 3: distinguish a degraded-durability deploy (SQLite-only
+    # fail-safe — Redis not ready) from a healthy durable one so
+    # /hooks/deploy-status .reason surfaces it without SSH. The bootstrap exits 0
+    # in both cases (the server stays available). The AUTHORITATIVE signal is the
+    # WRITTEN ExecStart lacking --postgres-uri (re-derived below). The
+    # bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is only a SECONDARY
+    # cross-check OR'd in here: the legacy stderr-tail→reason path (line ~957)
+    # fires only on a NON-zero bootstrap exit, so on this 0-exit success path the
+    # marker is not the load-bearing carrier — the ExecStart re-derivation is.
+    inngest_exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
+    if [[ "$inngest_exec_start" != *'--postgres-uri'* ]] \
+       || grep -q 'INNGEST_DURABLE_DEGRADED' "$BOOTSTRAP_STDERR" 2>/dev/null; then
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed (degraded durability — SQLite-only; durable Redis not ready, #5547)"
+      final_write_state 0 "success_degraded_durability"
+    else
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+      final_write_state 0 "success"
+    fi
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"

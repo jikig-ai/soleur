@@ -122,83 +122,6 @@ install -m 0755 "$TMPDIR/inngest" "$INSTALL_PATH"
 
 fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always run
 
-# Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
-# OUTSIDE the SKIP_BINARY_INSTALL guard, matching the heartbeat-unit (and
-# Vector-unit) precedent below. An ExecStart-only change (#4652:
-# --poll-interval / --sdk-url) must land even on a same-CLI-version redeploy
-# where SKIP_BINARY_INSTALL fires; leaving the write inside the guard would
-# skip it and the host would keep the OLD ExecStart indefinitely (same masking
-# class as the #4144 heartbeat-fix cascade). The binary download/install +
-# upgrade-drain stay inside the guard above (no need to re-download on a
-# no-op redeploy); only the unit write + the restart below are reconciled
-# every bootstrap. Mirrors webhook.service hardening (User=deploy,
-# ProtectSystem=strict, PrivateTmp, ReadWritePaths).
-#
-# Signing-key prefix strip: Terraform sets INNGEST_SIGNING_KEY to the SDK-
-# format `signkey-prod-<64hex>`, but `inngest start --signing-key` requires
-# the bare 64-hex (the CLI literally errors `signing-key must be hex string
-# with even number of chars` on the prefixed form). Strip in-place via bash
-# `${VAR#prefix}`. The SDK consumer (apps/web-platform container) still uses
-# the full prefixed value — that's what the SDK helper expects per
-# `node_modules/inngest/helpers/strings.js`. Both sides resolve to the same
-# 32-byte HMAC seed; the prefix is purely a SDK-side string marker.
-# Surfaced 2026-05-19 via #4017 substrate audit.
-#
-# --poll-interval 60 + --sdk-url: the server polls the co-located web-platform
-# app serve route (loopback port 3000 per Dockerfile PORT=3000; /api/inngest is
-# in PUBLIC_PATHS per the #4017 fix so the poll is not 307→/login) every 60s,
-# re-syncing AND re-planning any dropped/de-planned function within one
-# interval — without a restart. This is what lets the #4650 watchdog demote its
-# restart-on-first-tick to a guarded backstop (#4652).
-# #5159: re-planning via this poll REQUIRES the SDK to register the canonical
-# PUBLIC serve URL (serveHost pinned in app/api/inngest/route.ts) — a
-# 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
-# planned. Without that pin, neither this poll nor the loopback re-register PUT
-# re-plans crons after a restart (the 2026-06-11 cron-deplan incident).
-# Durable backend (#5450): the ExecStart below adds --postgres-uri (dedicated
-# Supabase project, Supavisor SESSION pooler :5432 — transaction pooler breaks
-# inngest's sqlc prepared statements, verdict 0.5) + --redis-uri (self-hosted
-# Redis, AOF on /mnt/data). Phase-0 spike (runbook § Durable backend) proved
-# Postgres-ALONE loses armed future-ts reminders on a host re-provision; durable
-# external Redis is what survives. Both secrets inject from Doppler prd via the
-# `doppler run` wrapper (same $${...} pattern as the keys; avoids the #4116
-# EnvironmentFile-empty trap). --sqlite-dir is kept but vestigial when
-# --postgres-uri is set (verified); rollback = drop the two new flags in one
-# revert step. --postgres-max-open-conns 25 bounds the pooler budget. Inngest
-# FAILS CLOSED on an unreachable/empty backend (verdict 0.3) — so this ExecStart
-# must not deploy until INNGEST_POSTGRES_URI + INNGEST_REDIS_PASSWORD are
-# populated in Doppler prd (cutover ordering; verify_inngest_health hard-gates).
-cat > "$UNIT_FILE" <<'UNITEOF'
-[Unit]
-Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 25 --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
-Restart=on-failure
-RestartSec=5
-User=deploy
-Group=deploy
-# Resource guardrails: cx33 has 8GB RAM + 4 vCPU shared with web-platform.
-# Cap inngest-server so a runaway loop can't starve the app container.
-# Sized for alpha-internal (<10 events/sec). Bump MemoryMax if the SQLite
-# store grows past ~500MB or sustained throughput exceeds ~100 events/sec.
-MemoryMax=512M
-CPUQuota=100%
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-ReadWritePaths=/var/lib/inngest /var/lock
-ReadOnlyPaths=/usr/local/bin /etc/default/inngest-server
-TimeoutStopSec=180
-
-[Install]
-WantedBy=multi-user.target
-UNITEOF
-
 # Heartbeat ping script + service + 60s timer.
 # The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
 # `doppler run --project soleur --config prd` (same pattern as
@@ -302,14 +225,17 @@ DOPPLEREOF
   chmod 0640 /etc/default/inngest-server
 fi
 
-# Durable Redis (#5450) — install + start the queue store BEFORE the
-# inngest-server restart below, because the new ExecStart fails closed when
-# --redis-uri is unreachable (Phase-0 verdict 0.3). Assets are staged to /tmp by
-# the OCI image entrypoint (mirrors /tmp/vector.toml). The unit's
-# EnvironmentFile=/etc/default/inngest-server now exists (written just above), so
-# Redis can start with its Doppler-injected password on fresh AND existing hosts.
-# Skip gracefully if the assets are absent (a pre-#5450 image on a not-yet-
-# migrated host) — verify_inngest_health is the hard durability gate.
+# Durable Redis (#5450, #5547 Gap 2) — install + start the queue store and
+# capture REDIS_READY BEFORE writing the inngest-server unit below, so the
+# ExecStart can be branched: write the durable (--postgres-uri/--redis-uri) form
+# ONLY when Redis is verifiably active, else a SQLite-only fail-safe that keeps
+# inngest-server AVAILABLE instead of crash-looping on 127.0.0.1:6379 (the ~3.5h
+# #5542 outage). Assets are staged to /tmp by the OCI image entrypoint (fresh-host
+# cloud-init) OR by ci-deploy.sh's `case "inngest")` docker-cp (existing-host
+# deploy — #5547 Gap 1). The unit's EnvironmentFile=/etc/default/inngest-server
+# now exists (written just above), so Redis can start with its Doppler-injected
+# password on fresh AND existing hosts.
+REDIS_READY=0
 if [[ -f /tmp/inngest-redis.conf && -f /tmp/inngest-redis.service && -x /tmp/inngest-redis-bootstrap.sh ]]; then
   log "installing durable Redis (#5450)"
   # Only the bootstrap SCRIPT lands here (/usr/local/bin is webhook-namespace
@@ -317,14 +243,121 @@ if [[ -f /tmp/inngest-redis.conf && -f /tmp/inngest-redis.service && -x /tmp/inn
   # /etc/systemd/system itself (the conf canNOT go to /etc/redis — read-only in
   # the deploy namespace; see inngest-redis-bootstrap.sh header).
   install -m 0755 /tmp/inngest-redis-bootstrap.sh /usr/local/bin/inngest-redis-bootstrap.sh
+  # REDIS_READY is driven by the bootstrap EXIT CODE alone: inngest-redis-bootstrap.sh
+  # step 6 self-asserts `systemctl is-active --quiet` and exits non-zero otherwise,
+  # so exit-0 ⟹ the unit is active — a second is-active re-check here would be
+  # redundant (#5547, code-simplicity finding).
   if /usr/local/bin/inngest-redis-bootstrap.sh; then
+    REDIS_READY=1
     log "durable Redis ready"
   else
-    log "warn: inngest-redis-bootstrap.sh failed — inngest-server will fail closed if Redis is required; verify_inngest_health will catch it"
+    log "warn: INNGEST_DURABLE_DEGRADED — inngest-redis-bootstrap.sh failed; falling back to the SQLite-only ExecStart so inngest-server stays available (durability degraded; verify_inngest_health emits the no-SSH advisory). #5547 Gap 2"
   fi
 else
-  log "durable Redis assets not staged at /tmp/inngest-redis.* — skipping (pre-#5450 image?)"
+  log "warn: INNGEST_DURABLE_DEGRADED — durable Redis assets not staged at /tmp/inngest-redis.* (pre-#5450 image or undelivered assets); falling back to the SQLite-only ExecStart. #5547 Gap 1/2"
 fi
+
+# Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
+# OUTSIDE the SKIP_BINARY_INSTALL guard, matching the heartbeat-unit (and
+# Vector-unit) precedent below. An ExecStart-only change (#4652:
+# --poll-interval / --sdk-url) must land even on a same-CLI-version redeploy
+# where SKIP_BINARY_INSTALL fires; leaving the write inside the guard would
+# skip it and the host would keep the OLD ExecStart indefinitely (same masking
+# class as the #4144 heartbeat-fix cascade). The binary download/install +
+# upgrade-drain stay inside the guard above (no need to re-download on a
+# no-op redeploy); only the unit write + the restart below are reconciled
+# every bootstrap. Mirrors webhook.service hardening (User=deploy,
+# ProtectSystem=strict, PrivateTmp, ReadWritePaths).
+#
+# Signing-key prefix strip: Terraform sets INNGEST_SIGNING_KEY to the SDK-
+# format `signkey-prod-<64hex>`, but `inngest start --signing-key` requires
+# the bare 64-hex (the CLI literally errors `signing-key must be hex string
+# with even number of chars` on the prefixed form). Strip in-place via bash
+# `${VAR#prefix}`. The SDK consumer (apps/web-platform container) still uses
+# the full prefixed value — that's what the SDK helper expects per
+# `node_modules/inngest/helpers/strings.js`. Both sides resolve to the same
+# 32-byte HMAC seed; the prefix is purely a SDK-side string marker.
+# Surfaced 2026-05-19 via #4017 substrate audit.
+#
+# --poll-interval 60 + --sdk-url: the server polls the co-located web-platform
+# app serve route (loopback port 3000 per Dockerfile PORT=3000; /api/inngest is
+# in PUBLIC_PATHS per the #4017 fix so the poll is not 307→/login) every 60s,
+# re-syncing AND re-planning any dropped/de-planned function within one
+# interval — without a restart. This is what lets the #4650 watchdog demote its
+# restart-on-first-tick to a guarded backstop (#4652).
+# #5159: re-planning via this poll REQUIRES the SDK to register the canonical
+# PUBLIC serve URL (serveHost pinned in app/api/inngest/route.ts) — a
+# 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
+# planned. Without that pin, neither this poll nor the loopback re-register PUT
+# re-plans crons after a restart (the 2026-06-11 cron-deplan incident).
+# Durable backend (#5450): the durable ExecStart adds --postgres-uri (dedicated
+# Supabase project, Supavisor SESSION pooler :5432 — transaction pooler breaks
+# inngest's sqlc prepared statements, verdict 0.5) + --redis-uri (self-hosted
+# Redis, AOF on /mnt/data). Phase-0 spike (runbook § Durable backend) proved
+# Postgres-ALONE loses armed future-ts reminders on a host re-provision; durable
+# external Redis is what survives. Both secrets inject from Doppler prd via the
+# `doppler run` wrapper (same $${...} pattern as the keys; avoids the #4116
+# EnvironmentFile-empty trap). --postgres-max-open-conns 25 bounds the pooler
+# budget. Inngest FAILS CLOSED on an unreachable/empty backend (verdict 0.3) —
+# #5547 Gap 2: rather than write the durable flags unconditionally (which
+# crash-loops when Redis is unprovisioned), the ExecStart below carries a literal
+# @@BACKEND_FLAGS@@ sentinel that is substituted (just after the heredoc) with
+# the durable fragment ONLY when REDIS_READY=1 (Redis verifiably active), else an
+# empty fragment → a SQLite-only ExecStart that keeps inngest-server available.
+# --sqlite-dir stays in the shared prefix (load-bearing in the SQLite form,
+# vestigial-but-harmless in the durable form).
+cat > "$UNIT_FILE" <<'UNITEOF'
+[Unit]
+Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/inngest-server
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
+Restart=on-failure
+RestartSec=5
+User=deploy
+Group=deploy
+# Resource guardrails: cx33 has 8GB RAM + 4 vCPU shared with web-platform.
+# Cap inngest-server so a runaway loop can't starve the app container.
+# Sized for alpha-internal (<10 events/sec). Bump MemoryMax if the SQLite
+# store grows past ~500MB or sustained throughput exceeds ~100 events/sec.
+MemoryMax=512M
+CPUQuota=100%
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/inngest /var/lock
+ReadOnlyPaths=/usr/local/bin /etc/default/inngest-server
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+# #5547 Gap 2: substitute the @@BACKEND_FLAGS@@ sentinel based on Redis readiness.
+# REDIS_READY=1 → durable backend (--postgres-uri/--redis-uri/--postgres-max-open-conns);
+# REDIS_READY=0 → empty (SQLite-only fail-safe — inngest-server stays available on
+# the non-durable backend rather than crash-looping; verify_inngest_health then
+# SKIPs the durable gate and a rollback deploy succeeds). --sqlite-dir stays in the
+# SHARED prefix above (load-bearing in the SQLite form, vestigial-but-harmless in
+# the durable form). Use bash parameter expansion (NOT sed): the durable fragment
+# contains `/`, `&`, and the literal `$${...}` Doppler tokens, all of which sed's
+# replacement string would mangle. The fragment is single-quoted so `$${...}`
+# stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c
+# expands the injected env (same $${...} contract as the keys).
+if [[ "$REDIS_READY" == "1" ]]; then
+  BACKEND_FLAGS='--postgres-uri "$${INNGEST_POSTGRES_URI}" --redis-uri "redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379" --postgres-max-open-conns 25'
+  log "inngest-server ExecStart: durable backend (--postgres-uri + --redis-uri)"
+else
+  BACKEND_FLAGS=''
+  log "inngest-server ExecStart: SQLite-only fail-safe (INNGEST_DURABLE_DEGRADED — Redis not ready)"
+fi
+unit_content="$(cat "$UNIT_FILE")"
+unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
+printf '%s\n' "$unit_content" > "$UNIT_FILE"
 
 # Record the installed version BEFORE restart so the idempotency short-circuit
 # fires on subsequent invocations even if the restart races with a check.
