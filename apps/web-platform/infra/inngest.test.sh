@@ -161,17 +161,90 @@ assert "server ExecStart sets --sdk-url loopback app route (port 3000)" \
 # (the systemd `$$` escape must not be accidentally unescaped — Sharp Edge).
 assert "server ExecStart keeps signing-key strip + event-key" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_SIGNING_KEY#signkey-prod-' && printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_EVENT_KEY'"
-# #5450 durable backend — build-time flag-presence guard (verify_inngest_health's
-# runtime gate cites this). Both flags MUST be present; the session pooler MUST
-# be :5432 (transaction :6543 breaks inngest's prepared statements — verdict 0.5).
-assert "server ExecStart sets --postgres-uri" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF -- '--postgres-uri'"
-assert "server ExecStart sets --redis-uri (loopback)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF -- '--redis-uri \"redis://:'"
-assert "server ExecStart bounds --postgres-max-open-conns" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE -- '--postgres-max-open-conns [0-9]+'"
-assert "server ExecStart never hardcodes the :6543 transaction pooler" \
-  "! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF ':6543'"
+# --- #5547 Gap 2: REDIS_READY-gated durable/SQLite-fail-safe ExecStart ---
+# The durable backend flags (#5450) moved OUT of the single-quoted server-unit
+# heredoc into a REDIS_READY-gated BACKEND_FLAGS fragment that is substituted
+# into the written unit (the heredoc carries a literal @@BACKEND_FLAGS@@
+# sentinel). This keeps inngest-server AVAILABLE on a SQLite-only ExecStart when
+# Redis is unprovisioned instead of crash-looping on 127.0.0.1:6379 (the ~3.5h
+# #5542 outage). The asserts below therefore scope the durable-flag checks to
+# the fragment ASSIGNMENT line, not SERVER_UNIT_BLOCK (AC8 reconcile).
+echo ""
+echo "--- #5547 Gap 2: REDIS_READY-gated durable/SQLite ExecStart fragment ---"
+
+# AC2 — REDIS_READY is assigned AFTER the /etc/default/inngest-server env-file
+# materialization (the Redis unit reads it for the Doppler-injected password —
+# the load-bearing ordering dependency) AND BEFORE the server-unit cat> (so the
+# substitution can branch the ExecStart on it).
+ENV_FILE_LINE=$(grep -nE 'cat > /etc/default/inngest-server <<DOPPLEREOF' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+REDIS_READY_LINE=$(grep -nE '^[[:space:]]*REDIS_READY=' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+SERVER_CAT_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+TOTAL=$((TOTAL + 1))
+if [[ -n "$ENV_FILE_LINE" && -n "$REDIS_READY_LINE" && -n "$SERVER_CAT_LINE" \
+      && "$ENV_FILE_LINE" -lt "$REDIS_READY_LINE" && "$REDIS_READY_LINE" -lt "$SERVER_CAT_LINE" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: REDIS_READY assigned after env-file materialization, before server-unit cat> (#5547 AC2)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ordering env-file($ENV_FILE_LINE) < REDIS_READY($REDIS_READY_LINE) < server-cat($SERVER_CAT_LINE) (#5547 AC2)"
+fi
+
+# AC3 — the heredoc carries the @@BACKEND_FLAGS@@ sentinel on the inngest start
+# line, --sqlite-dir /var/lib/inngest is in the SHARED prefix (present in BOTH
+# branches), and a (non-sed) substitution strips the sentinel so none survives
+# in the written unit.
+SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE 'inngest start .*@@BACKEND_FLAGS@@' || true)
+SQLITE_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cF -- '--sqlite-dir /var/lib/inngest' || true)
+SENTINEL_SUBST=$(grep -cE '@@BACKEND_FLAGS@@/' "$BOOTSTRAP_SH" || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$SENTINEL_IN_HEREDOC" -ge 1 && "$SQLITE_IN_HEREDOC" -ge 1 && "$SENTINEL_SUBST" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: heredoc carries @@BACKEND_FLAGS@@ sentinel + --sqlite-dir shared prefix; substitution strips it (#5547 AC3)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: AC3 (sentinel_in_heredoc=$SENTINEL_IN_HEREDOC sqlite_shared=$SQLITE_IN_HEREDOC sentinel_subst=$SENTINEL_SUBST)"
+fi
+
+# Durable fragment (#5450 build-time guard, reconciled to the fragment shape —
+# AC8). Both flags MUST be present; the session pooler MUST be :5432 (transaction
+# :6543 breaks inngest's prepared statements — verdict 0.5).
+DURABLE_FRAGMENT=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-uri" "$BOOTSTRAP_SH" | head -1 || true)
+TOTAL=$((TOTAL + 1))
+if printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF -- '--postgres-uri' \
+   && printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF -- '--redis-uri "redis://:' \
+   && printf '%s\n' "$DURABLE_FRAGMENT" | grep -qE -- '--postgres-max-open-conns [0-9]+' \
+   && ! printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF ':6543'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: durable BACKEND_FLAGS fragment sets --postgres-uri + --redis-uri (loopback) + --postgres-max-open-conns, never :6543 (#5547 AC8/#5450)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: durable fragment shape (line: $DURABLE_FRAGMENT)"
+fi
+
+# AC4 — the durable fragment preserves the LITERAL $${INNGEST_*} Doppler tokens
+# (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
+# single-quoted so the $$ is matched literally (never the shell PID).
+TOTAL=$((TOTAL + 1))
+if printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF '$${INNGEST_POSTGRES_URI}' \
+   && printf '%s\n' "$DURABLE_FRAGMENT" | grep -qF '$${INNGEST_REDIS_PASSWORD}'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: durable fragment preserves literal \$\${INNGEST_POSTGRES_URI}/\$\${INNGEST_REDIS_PASSWORD} (#5547 AC4)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: durable fragment must preserve literal \$\${INNGEST_*} tokens (line: $DURABLE_FRAGMENT)"
+fi
+
+# SQLite-only fail-safe: an EMPTY fragment is assigned when Redis is not ready,
+# so the written ExecStart omits --postgres-uri/--redis-uri and inngest stays
+# available on SQLite (verify_inngest_health then SKIPs the durable gate).
+TOTAL=$((TOTAL + 1))
+if grep -qE "^[[:space:]]*BACKEND_FLAGS=(''|\"\")[[:space:]]*\$" "$BOOTSTRAP_SH"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: SQLite-only fail-safe assigns an empty BACKEND_FLAGS when REDIS_READY=0 (#5547 AC3)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: missing empty BACKEND_FLAGS branch for the SQLite-only fail-safe (#5547)"
+fi
 
 # AC2: an ExecStart change must take effect on redeploy. Two guarantees:
 #   (a) reconcile-always — the server unit write lives OUTSIDE the
@@ -233,11 +306,15 @@ assert "inngest-bootstrap does not write the conf into /etc/redis (namespace tra
 # Secrets: random_password (not operator-mint) + doppler_secret.
 assert "random_password.inngest_redis_password_prd" "grep -qE 'resource \"random_password\" \"inngest_redis_password_prd\"' '$INNGEST_TF'"
 assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+= \"INNGEST_REDIS_PASSWORD\"' '$INNGEST_TF'"
-# inngest-bootstrap installs the redis assets + runs the bootstrap BEFORE the
-# inngest-server restart (the new ExecStart fails closed if Redis is down).
-REDIS_RUN_LINE=$(grep -nE 'inngest-redis-bootstrap.sh$' "$BOOTSTRAP_SH" 2>/dev/null | tail -1 | cut -d: -f1 || true)
+# inngest-bootstrap runs the redis bootstrap (the REDIS_READY probe) BEFORE the
+# inngest-server restart (the ExecStart is branched on REDIS_READY). Anchor on
+# the INVOCATION line (`if /usr/local/bin/inngest-redis-bootstrap.sh; then`), not
+# the `install …` line — after the #5547 reorder the install line still ends in
+# `inngest-redis-bootstrap.sh` and a `$`-anchored `tail -1` could pick it; the
+# invocation is the line whose ordering vs the restart actually matters.
+REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
-assert "bootstrap runs inngest-redis-bootstrap.sh BEFORE the inngest-server restart" \
+assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
 # --- `terraform fmt -check` for HCL hygiene ---
