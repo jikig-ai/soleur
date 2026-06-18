@@ -262,8 +262,8 @@ write_body() {
 # Per-route mock behavior. Order matters: 8288 must match before generic /health
 # because the canary loop's curl -sf for /health does NOT pass -w.
 case "$URL" in
-  *"8288/v1/functions"*)
-    # Cron-plan registry probe (#4650 AC9). Must match before 8288/health
+  *"8288/v0/gql"*)
+    # Cron-plan registry probe (#4650 AC9, #5520). Must match before 8288/health
     # so the substring routes here. Default: a function WITH a cron trigger
     # (healthy plan). Overrides simulate the two H9 failure modes.
     if [[ "${MOCK_CURL_INNGEST_FUNCTIONS_FAIL:-}" == "1" ]]; then
@@ -271,10 +271,10 @@ case "$URL" in
     fi
     if [[ "${MOCK_CURL_INNGEST_FUNCTIONS_NOCRON:-}" == "1" ]]; then
       # H9b: registered but cron de-planned — only the event trigger survives.
-      write_body '[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"event":"cron/community-monitor.manual-trigger"}]}]'
+      write_body '{"data":{"functions":[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"type":"EVENT","value":"cron/community-monitor.manual-trigger"}]}]}}'
       exit 0
     fi
-    write_body '[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"cron":"0 8 * * *"},{"event":"cron/community-monitor.manual-trigger"}]}]'
+    write_body '{"data":{"functions":[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"type":"CRON","value":"0 8 * * *"},{"type":"EVENT","value":"cron/community-monitor.manual-trigger"}]}]}}'
     exit 0
     ;;
   *"8288/health"*)
@@ -2062,7 +2062,7 @@ CRON_PIN_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=10\b' "$DEPLOY_S
 CRON_SEQ_COUNT=$(grep -cE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" || true)
 HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 http://127\.0\.0\.1:8288/v1/functions' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 .*http://127\.0\.0\.1:8288/v0/gql' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 # Probe pin scoped to the function region — a third `curl -sf --max-time 5`
 # exists outside verify_inngest_health (the deploy-arm web-platform health
 # probe), so a file-global count would be wrong.

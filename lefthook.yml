@@ -232,6 +232,27 @@ pre-commit:
       priority: 10
       glob: "knowledge-base/**/*.md"
       run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md
+    # Auto-regenerate the compiled LikeC4 model whenever a .c4 source is staged,
+    # then re-stage it — mirrors the generate-kb-index precedent above (its
+    # priority 10 + `run: <script> && git add <generated-file>` shape). NOTE the
+    # glob differs deliberately: generate-kb-index uses `**` because KB markdown
+    # is nested, but the .c4 sources are FLAT depth-1, so this glob is single-star
+    # (gobwas `**` requires ≥1 intermediate dir and would silently skip depth-1
+    # files — see 2026-03-21-lefthook-gobwas-glob-double-star.md). The script
+    # renders off-tree + validates (refuses to publish an empty/invalid model),
+    # so a broken .c4 BLOCKS the commit instead of clobbering the good artifact.
+    # The CI freshness test (plugins/soleur/test/c4-model-freshness.test.sh)
+    # backstops a --no-verify bypass. c4-model.md is hand-authored prose — never
+    # machine-rewritten; the advisory line only nudges a human review.
+    c4-model-regenerate:
+      priority: 10
+      glob: "knowledge-base/engineering/architecture/diagrams/*.c4"
+      run: |
+        bash scripts/regenerate-c4-model.sh || exit 1
+        git add knowledge-base/engineering/architecture/diagrams/model.likec4.json || exit 1
+        git diff --cached --name-only | grep -qx 'knowledge-base/engineering/architecture/diagrams/c4-model.md' \
+          || echo "NOTE: .c4 model changed but c4-model.md was not staged — review its ## Notes prose for staleness (advisory; commit not blocked)." >&2
+        exit 0
     # priority 11: runs after generate-kb-index (priority 10) so the linter
     # sees the final staged file. Single-star glob is intentional — content
     # files are flat; gobwas's ** requires 1+ directory levels and would

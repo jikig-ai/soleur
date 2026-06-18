@@ -318,18 +318,25 @@ setting).
      OLD SQLite server keep running until its already-armed reminders fire on their own. When the
      soonest pending fire-time has passed, proceed to deploy (step 4). No enumeration, no re-arm, no
      double-fire window. Best when only a few near-term reminders are armed.
-   - **FALLBACK — enumerate + re-arm (when draining is not viable):** when too many reminders are armed
-     or they fire too far out to wait, enumerate the still-armed set with no remote shell:
+   - **FALLBACK — capture + re-arm (when draining is not viable):** when too many reminders are armed
+     or they fire too far out to wait, **persist the still-armed set ON-HOST BEFORE the deploy** — a
+     post-deploy `op=rearm` self-enumerate would query the NEW (empty) Postgres+Redis backend and
+     silently lose every reminder (#5542):
      ```bash
-     gh workflow run cutover-inngest.yml --field op=enumerate    # logs count + reminder_ids
+     gh workflow run cutover-inngest.yml --field op=enumerate   # OPTIONAL visibility: logs count + reminder_ids
+     gh workflow run cutover-inngest.yml --field op=capture     # MANDATORY: persists records on-host pre-deploy
      ```
-     This drives `/hooks/inngest-enumerate-reminders` (host script queries the OLD server's
-     `eventsV2`, reconstructs the FULL re-armable payload from each event's `raw` envelope — the legacy
-     `id name receivedAt` query was payload-incomplete — drops already-fired events via the `runs`
-     cross-ref, and paginates to exhaustion). Review the logged `reminder_id`s, then re-arm AFTER the
-     deploy + quiesce-clear in step 6 (`op=rearm`). The re-arm routes back through
-     `schedule-reminder`, which recomputes the Inngest dedup `id`/`ts` so an event that ALSO survived
-     in state dedups instead of double-firing.
+     `op=capture` drives `/hooks/inngest-rearm-reminders` with `mode=capture`: the host script queries
+     the OLD server's `eventsV2`, reconstructs the FULL re-armable payload from each event's `raw`
+     envelope (the legacy `id name receivedAt` query was payload-incomplete), drops already-fired events
+     via the `runs` cross-ref, paginates to exhaustion, and writes the records to
+     `/var/lib/inngest/cutover-capture.json` — under the `--sqlite-dir` volume, which survives the
+     cutover's systemd restart (a config change, not a host re-provision). Records stay on-host
+     (P2-sec-a) — only counts + `reminder_id`s surface in the run log. Then re-arm AFTER the deploy +
+     quiesce-clear in step 6 (`op=rearm`), which **consumes the capture file** (NOT a post-deploy
+     self-enumerate) and deletes it on full success. The re-arm routes back through `schedule-reminder`,
+     which recomputes the Inngest dedup `id`/`ts` so an event that ALSO survived in state dedups instead
+     of double-firing.
 3. **Drain in-flight runs** — confirm zero `Running` status for ~60s (or accept-and-document that
    in-flight runs are abandoned; the reminder `post-comment`/`run-check` steps are not idempotent on
    replay, so a re-arm of an already-fired reminder would double-post).
@@ -367,11 +374,23 @@ setting).
 6. **Re-open arming + re-arm recovered work** (no remote shell):
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE= -p soleur -c prd --no-interactive  # clears the flag
-   # FALLBACK path only: re-arm the reminders enumerated in step 2.
+   # FALLBACK path only: re-arm from the on-host capture persisted in step 2 (op=capture).
    gh workflow run cutover-inngest.yml --field op=rearm
    ```
    Run `op=rearm` ONLY after the quiesce flag is cleared — the host script aborts loud (does not
-   silently drop) if it gets a 503 because quiesce is still set.
+   silently drop) if it gets a 503 because quiesce is still set. `op=rearm` (mode `rearm-from-capture`)
+   consumes `/var/lib/inngest/cutover-capture.json` from step 2 and deletes it on FULL success; a
+   missing/corrupt capture is FATAL (non-200), never a silent self-enumerate of the empty new backend.
+   - **Retry window (re-arm is replay-on-full-set).** On a partial failure the capture is RETAINED and a
+     re-run re-POSTs the entire set; `schedule-reminder` recomputes the dedup `id`/`ts` so a
+     still-pending reminder dedups instead of double-arming — but a reminder that *fires* between attempts
+     is non-idempotent (it double-posts its comment, same hazard as step 3). So retry `op=rearm` promptly
+     and only while quiesce is cleared; do not let hours pass between a partial re-arm and its retry.
+   - **Aborted cutover leaves a landmine.** If you run `op=capture` then ABORT before `op=rearm`, the
+     capture file persists on-host. A steady-state `op=rearm` (mode `rearm`, the default) deliberately
+     IGNORES it (self-enumerates the live backend), so it will not hijack a routine re-arm — but it is
+     stale clutter. After an aborted cutover, re-run the cutover from `op=capture` (which overwrites it),
+     or let the next successful cutover `op=rearm` consume it.
 7. **Rollback tripwire** — reverting ExecStart to `--sqlite-dir` is data-safe ONLY before any *real*
    (non-throwaway) reminder is armed against Postgres. After that the stale SQLite is missing those
    reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed

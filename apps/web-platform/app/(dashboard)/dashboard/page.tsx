@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useConversations } from "@/hooks/use-conversations";
@@ -792,9 +793,22 @@ export default function DashboardPage() {
       )}
 
       {/* Email-triage rows — siblings of conversation rows. Server returns
-          unacknowledged statutory pinned first; render in given order. */}
+          unacknowledged statutory pinned first; render in given order. The
+          "View all" link is the second entry point to /dashboard/inbox (the
+          top-level nav entry is the always-available path). */}
       {emailItems.length > 0 && (
         <div className="mb-2 space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-soleur-text-muted">
+              Needs attention
+            </span>
+            <Link
+              href="/dashboard/inbox"
+              className="text-xs text-soleur-accent-gold-fg transition-colors hover:text-soleur-text-primary"
+            >
+              View all →
+            </Link>
+          </div>
           {emailItems.map((item) => (
             <EmailTriageRow
               key={item.id}
