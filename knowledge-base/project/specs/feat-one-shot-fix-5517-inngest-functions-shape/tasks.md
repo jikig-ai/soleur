@@ -7,16 +7,23 @@ plan: knowledge-base/project/plans/2026-06-18-fix-inngest-inventory-functions-sh
 
 # Tasks — fix(inngest): op=inventory /v1/functions shape correction (#5517)
 
-## Phase 0 — Capture the REAL /v1/functions shape (BLOCKING; no-SSH)
+## Phase 0 — Capture the real functions shape (BLOCKING; no-SSH)
 
-- [ ] 0.1 Add a bounded raw-shape diagnostic to `inngest-inventory.sh` FATAL/stderr path
-      (bytes → stderr/journald only, NOT success-path stdout — #5503 purity).
+> deepen-plan research (2026-06-18): `GET /v1/functions` is an UNREGISTERED route in v1.19.4 (bare
+> number = router fallback). GraphQL `functions: [Function!]` at `/v0/gql` EXISTS and is PREFERRED
+> (reuses enumerate's eventsV2 machinery, no appName discovery). REST `/v1/apps/{appName}/functions`
+> is the array fallback.
+
+- [ ] 0.1 Add a bounded raw-shape diagnostic ONLY on the `inngest-inventory.sh` FATAL/exit-1 path
+      (novel stderr pattern — never success-path; #5503 purity prohibits success stderr).
 - [ ] 0.2 Ship that diagnostic commit; let it deliver via the infra-config push.
-- [ ] 0.3 Trigger `op=inventory` (`gh workflow run cutover-inngest.yml -f op=inventory`); read
-      the captured raw `/v1/functions` bytes from the `::error::` cause line / journald.
-- [ ] 0.4 Capture `/health` 200 alongside (settle H1 vs H2 — healthy-server-returns-number).
-- [ ] 0.5 Determine the real shape + paste the captured bytes into the PR body. Decide:
-      REST-shape-correction (default) vs GraphQL fallback (requires its own /v0/gql schema-pin).
+- [ ] 0.3 Trigger `op=inventory` (`gh workflow run cutover-inngest.yml -f op=inventory`); read the
+      captured raw bytes from the `::error::` cause line / journald.
+- [ ] 0.4 Live-probe `POST /v0/gql { functions { slug name triggers } }` (introspect the real
+      `Function` field set) AND `/health` 200 alongside (settle H1 vs H2).
+- [ ] 0.5 Decide per the plan's decision tree: GraphQL `functions` (default) → REST
+      `/v1/apps/{appName}/functions` → count-only. Paste captured bytes + `Function` fields into PR body;
+      pin the GraphQL `functions` shape in `inngest-graphql-schema.md`.
 
 ## Phase 1 — RED: failing test against the captured fixture
 
@@ -28,7 +35,9 @@ plan: knowledge-base/project/plans/2026-06-18-fix-inngest-inventory-functions-sh
 ## Phase 2 — GREEN: correct projection + guard + contract
 
 - [ ] 2.1 Update guard shape check `inngest-inventory.sh:111` (`type=="array"` → captured-shape check).
-- [ ] 2.2 Update projection `:119` to the captured shape (names / count / unwrap / GraphQL-pinned).
+- [ ] 2.2 Re-point projection `:119` to the GraphQL `functions` query (default; mirror enumerate's
+      eventsV2 fetch+jq) — or REST `/v1/apps/{appName}/functions` array / count-only per Phase 0.
+      Pin the GraphQL `functions` + `Function` field set in `inngest-graphql-schema.md`.
 - [ ] 2.3 Update header (`:8`, `:16-19`) + emitted-object contract + add `# verified: 2026-06-18`;
       remove stale "JSON array of registered functions" prose.
 - [ ] 2.4 IF `functions` type changed: reconcile `cutover-inngest.yml:239` (`.functions | length`)

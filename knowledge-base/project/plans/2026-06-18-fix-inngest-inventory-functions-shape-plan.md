@@ -65,12 +65,59 @@ documents ONLY `eventsV2` — it does **not** document a top-level `functions` G
 Adopting GraphQL requires the same live-probe + schema-pin discipline that produced the
 `eventsV2` shape. See §Research Reconciliation and §Sharp Edges.
 
+## Research Insights (deepen-plan, 2026-06-18)
+
+Two parallel research agents (inngest-API-contract + verify-the-negative/precedent-diff) ran on
+2026-06-18. Key findings that **materially change the recommended fix path**:
+
+- **`GET /v1/functions` is NOT a registered route in inngest v1.19.4.** Source-code inspection of
+  `pkg/devserver/api.go`, `pkg/api/apiv1/apiv1.go`, and `pkg/coreapi/coreapi.go` shows the `/v1`
+  router registers `GET /v1/apps/{appName}/functions` — there is **no bare `/v1/functions`**. The
+  observed bare-number response is almost certainly a **router 404/fallback body** (or a pre-refactor
+  artifact), NOT a function payload. *Hypothesis to confirm against the Phase-0 live capture* — but it
+  reframes the bug: the script is hitting a **wrong/unregistered path**, not parsing a real shape wrong.
+  - Correct REST: `GET /v1/apps/{appName}/functions` → a **bare JSON array** `[{...}]` of
+    `cqrs.Function` objects (direct `json.NewEncoder(w).Encode(fns)`, NOT `{data:[…]}`-wrapped). But
+    this requires knowing the `appName`(s) first.
+  - **GraphQL `functions` field EXISTS and is the cleanest path** (contradicts the issue's
+    "likely more reliable" hedge AND my plan-v1 claim that the schema pin lacks it): `pkg/coreapi/gql.query.graphql`
+    declares top-level `functions: [Function!]` at `POST /v0/gql` — a rich object array (the same
+    source the devserver UI uses), no auth on loopback. This is the SAME GraphQL endpoint enumerate
+    already uses for `eventsV2`, so the script already has the curl+jq+`#5503`-purity machinery.
+  - **Verdict: prefer the GraphQL `functions` query** (single endpoint, no `appName` discovery needed,
+    object array → names project cleanly). Phase 0 MUST still live-probe BOTH `/v0/gql { functions { ... } }`
+    AND introspect the live `Function` type's fields (the v1.19.4 `Function` field set is the unknown
+    to pin in the schema doc — `slug`/`name`/`triggers` are likely but unconfirmed).
+- **The schema-pin doc gap is real and must be closed:** `inngest-graphql-schema.md` documents only
+  `eventsV2`. Adding the `functions` query field requires the SAME live-probe + schema-pin discipline
+  (`2026-06-17-inngest-eventsv2-raw-payload-and-receivedat-filter`). Pin the captured `Function` field
+  set in that doc as part of this PR.
+- **Phase-0 option (A) has NO precedent and risks `#5503` purity** (precedent-diff agent): neither
+  `inngest-inventory.sh` nor `inngest-enumerate-reminders.sh` echoes bounded raw bytes to stderr; the
+  `#5503` block at `inngest-enumerate-reminders.sh:146-158` explicitly PROHIBITS success-path stderr
+  echoes (webhook `CombinedOutput()` merges streams). The existing FATAL stderr lines surface only
+  derived metadata (`shape=`), never raw bytes. **Re-prefer Phase-0 option (A) only on the FATAL/exit-1
+  path** (where stdout is already non-JSON and the body is not parsed as success), bounding to a short
+  prefix — OR, better, capture via a **read-only GraphQL probe through an existing host hook / a one-shot
+  diagnostic that runs the `/v0/gql { functions }` query and surfaces its shape on the FATAL line**. Do
+  NOT add any success-path stderr echo.
+- **All 6 verify-the-negative claims confirmed** (citations): projection `:119`, guard `:111-118`,
+  sibling latent bug `inngest-wiped-volume-verify.sh:132-134` (bare-number → `jq … else 0` → false
+  `no_functions` abort after a healthy restart — Phase 3 fold-in is justified), consumer
+  `cutover-inngest.yml:239,246`, and the FATAL diagnostic captures `type` only, never the value.
+
+**Net effect on the plan:** Phase 2's default projection switches from "correct the REST array parse"
+to "**re-point to the GraphQL `functions` query** (paralleling enumerate's `eventsV2`), pin the
+`Function` field set in the schema doc, project names." The REST `/v1/apps/{appName}/functions` array
+path remains a documented fallback if GraphQL `functions` proves unavailable on the live host. Phase 0
+remains the BLOCKING gate — confirm the live shape before committing the projection.
+
 ## Research Reconciliation — Issue Claims vs. Codebase / Schema Reality
 
 | Claim (issue / prose) | Reality (verified this session) | Plan response |
 | --- | --- | --- |
 | `/v1/functions` returns a JSON array of function objects (`inngest-inventory.sh:8,16,119`) | Live host returns a bare JSON **number** (`shape="number"` in the FATAL line) | Capture the real bytes (Phase 0), then correct the projection to the captured shape (Phase 2). |
-| GraphQL `/v0/gql functions` field is "likely more reliable" (issue Fix step 1) | The verified schema pin documents ONLY `eventsV2`; **no** top-level `functions` query field is pinned | Do NOT adopt GraphQL on faith. If chosen, it requires its own live schema-pin (same discipline as `eventsV2`). REST-shape-correction is the default; GraphQL is a fallback gated on Phase 0 evidence. |
+| GraphQL `/v0/gql functions` field is "likely more reliable" (issue Fix step 1) | **Confirmed by source-code research:** `pkg/coreapi/gql.query.graphql` declares top-level `functions: [Function!]` at `POST /v0/gql` (rich object array, no auth on loopback). The schema PIN doc lacks it, but the field exists. Separately, `GET /v1/functions` is NOT a registered route in v1.19.4 (correct REST is `/v1/apps/{appName}/functions`). | **GraphQL `functions` is now the PREFERRED path** (single endpoint, reuses enumerate's `eventsV2` machinery, no `appName` discovery). Still requires a Phase-0 live probe + a schema-doc pin of the v1.19.4 `Function` field set. REST `/v1/apps/{appName}/functions` array is the documented fallback. |
 | The `#5509` fail-loud guard is the bug | Guard is **working as intended** (no false-clean baseline) | Keep the guard verbatim. Only the *array assumption upstream of it* changes. |
 | `#5515 -replace workaround landed inngest-inventory.sh` | `#5515` is an unrelated OPEN bug (webhook FILE_MAP one-apply-late); the inventory script landed via PR `#5510` (commit `b8850c968`) | Loose prose in the issue; not load-bearing. Delivery is verified end-to-end per the issue Summary. No action. |
 | `op=backup` / `op=enumerate` / `re-arm` affected | Issue states these are **live/unaffected** | Out of scope. This PR touches only the `functions` projection + its fixture/test. |
@@ -166,17 +213,26 @@ options; prefer (A):
   (`/v1/functions` carries function metadata, not reminder payloads — low sensitivity, but keep it
   bounded).
 
-**Capture target:** the literal bytes of `GET 127.0.0.1:8288/v1/functions` on the prod host, plus
-(if pursuing the GraphQL fallback) the live `/v0/gql` introspection of any `functions` query field.
+**Capture target (per deepen-plan research — PREFER GraphQL):**
+1. **GraphQL (preferred):** probe `POST 127.0.0.1:8288/v0/gql` with `query { functions { slug name triggers } }`
+   (the exact `Function` field set is the unknown — start minimal, introspect). Capture the response +
+   the live `Function` type fields. This is the same endpoint enumerate already uses for `eventsV2`.
+2. **REST diagnostic (confirm the bug's true cause):** capture the literal bytes of
+   `GET 127.0.0.1:8288/v1/functions` (the bare number — almost certainly a 404/fallback body since the
+   route is unregistered) AND, if pursuing the REST fallback, `GET /v1/apps/{appName}/functions` after
+   discovering the app name(s).
+3. **`/health` 200** alongside, to settle H1 vs H2 (healthy server returning the number → confirms the
+   wrong-path hypothesis, not a degraded read).
 
-**Output of Phase 0:** the captured bytes pasted into the PR body + landed as the AC1 fixture, and
-a one-line determination: "real shape is `<X>`; projection will `<Y>`."
+**Output of Phase 0:** the captured GraphQL `functions` response + `Function` field set pasted into the
+PR body, landed as the AC1 fixture, pinned in `inngest-graphql-schema.md`; and a one-line determination:
+"projection will re-point to GraphQL `functions` (or REST `/v1/apps/{appName}/functions` fallback)."
 
-> If Phase 0 reveals the endpoint genuinely returns only a count (no names recoverable from REST),
-> evaluate the GraphQL fallback — but ONLY after live-probing `/v0/gql` for a `functions` field and
-> pinning it in the schema doc (same discipline as `eventsV2`). If neither REST nor GraphQL can
-> recover names, the inventory's `functions` becomes a count-only signal and the header/contract +
-> AC2 are scoped to "count" — document this explicitly rather than faking a names array.
+> Decision tree after Phase 0: (a) GraphQL `functions` returns a name-bearing object array → re-point
+> the projection there (DEFAULT, paralleling `eventsV2`); (b) GraphQL unavailable but REST
+> `/v1/apps/{appName}/functions` works → use it (requires `appName` discovery); (c) neither recovers
+> names → `functions` becomes a count-only signal, header/contract + AC2 scoped to "count" — document
+> explicitly rather than faking a names array.
 
 ### Phase 1 — RED: write the failing test against the captured fixture
 
@@ -217,6 +273,9 @@ The new test must FAIL against the current `:119` projection (proving it drives 
 - `apps/web-platform/infra/inngest-wiped-volume-verify.test.sh` — cover the corrected sibling shape.
 - `.github/workflows/cutover-inngest.yml` — ONLY IF the `functions` value type changes
   (`:239` `.functions | length`, `:246` diff block) — reconcile the consumer (AC8).
+- `knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md`
+  — pin the live-probed v1.19.4 GraphQL `functions: [Function!]` query field + the `Function` type's
+  field set (the doc currently covers only `eventsV2`). Required if the GraphQL path is adopted.
 
 ## Files to Create
 
@@ -257,7 +316,7 @@ logs:
   where: "host journald (`journalctl -t inngest-inventory`); GitHub Actions run log for the cause line"
   retention: "journald host-local (rotated); Actions logs per GH retention"
 discoverability_test:
-  command: "gh workflow run cutover-inngest.yml -f op=inventory && gh run watch"  # NO ssh
+  command: "gh workflow run cutover-inngest.yml -f op=inventory && gh run watch"  # no-SSH; runs through the existing GitHub Actions + webhook hook path
   expected_output: "::notice::inventory: functions=<corrected value> … (no FATAL line)"
 ```
 
@@ -312,10 +371,19 @@ the projection:
 - **The captured `/v1/functions` shape MUST land as a fixture in the diff — a "probed" annotation is
   not evidence** (`2026-06-16-external-api-shape-ac-must-land-captured-fixture-not-probed-claim`).
   Review must re-confirm the fixture matches the captured bytes, not trust prose.
-- **The GraphQL fallback the issue suggests is NOT a verified path.** The schema pin documents only
-  `eventsV2`; there is no pinned `functions` GraphQL query field. Adopting GraphQL requires a live
-  `/v0/gql` introspection + a schema-doc pin first (same discipline that produced `eventsV2`).
-  Default to correcting the REST projection unless Phase 0 proves REST cannot recover names.
+- **GraphQL `functions` IS a real field but its v1.19.4 `Function` field set is unpinned.** Research
+  confirmed `functions: [Function!]` exists at `/v0/gql`, but the schema PIN doc
+  (`inngest-graphql-schema.md`) documents only `eventsV2`. Phase 0 MUST live-probe the `Function`
+  fields and pin them in that doc as part of this PR (same discipline as `eventsV2`) — do NOT assume
+  `slug`/`name`/`triggers` without confirming.
+- **`GET /v1/functions` is an unregistered route in v1.19.4 (root cause refinement).** The correct REST
+  path is `/v1/apps/{appName}/functions`. The bare number the script reads is almost certainly a
+  router fallback body, not a real projection target. Phase 0 confirms; this is why GraphQL is preferred
+  (no `appName` discovery needed).
+- **Phase-0 raw-shape diagnostic is a NOVEL stderr pattern — confine it to the FATAL/exit-1 path.** No
+  precedent exists for echoing bounded raw bytes to stderr; the `#5503` block PROHIBITS success-path
+  stderr echoes. Any diagnostic MUST live on the already-non-JSON FATAL/exit-1 path (bounded prefix),
+  never the success path.
 - **The sibling `inngest-wiped-volume-verify.sh` has the SAME latent bug** (`type=="array" → length else 0`
   silently reports `0` on the real number shape → false `no_functions` abort after a successful
   restart). Fold the correction in (default) or file a tracking issue — do not leave the sibling
