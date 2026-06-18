@@ -63,7 +63,7 @@ jobs:
               | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
           }
 
-          fail_mode=""; fail_detail=""
+          fail_mode=""; fail_detail=""; dstate=""
           record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
 
           if [[ -z "${WEBHOOK_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
@@ -103,14 +103,29 @@ jobs:
               echo "Probe attempt ${attempt}/3 failed (${last_mode}); retrying…"
               [[ "$attempt" -lt 3 ]] && sleep 8
             done
+            # On a healthy body, read the no-SSH durability surface (#5553). The
+            # inventory hook emits durability_state as a constrained enum; an OLDER
+            # on-host script (pre-#5553) lacks the field → coerce to "absent" (benign,
+            # self-heals on next deploy). A literal "unknown" means a redeployed host
+            # whose on-host parser could not read the ExecStart (a real read failure).
+            if [[ "$healthy" == "yes" ]]; then
+              dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "absent"' 2>/dev/null || echo "absent")
+            fi
             [[ "$healthy" == "no" ]] && record_failure "$last_mode" "$last_detail"
           fi
 
           fail_mode_safe=$(strip_log_injection "$fail_mode")
           fail_detail_safe=$(strip_log_injection "$fail_detail")
-          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
+          dstate_safe=$(strip_log_injection "${dstate:-}")
+          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; echo "durability_state=${dstate_safe}"; } >> "$GITHUB_OUTPUT"
           if [[ -n "$fail_mode_safe" ]]; then
             echo "::error::Inngest health probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
+          elif [[ "$dstate_safe" == "absent" ]]; then
+            echo "::notice::Inngest healthy; durability_state field absent (older on-host inventory script, pre-#5553). No durability signal until the next infra-config push re-stages inngest-inventory.sh — blind window made visible, no issue filed."
+          elif [[ "$dstate_safe" == "unknown" ]]; then
+            echo "::warning::Inngest healthy but durability_state=unknown — the on-host inventory could not read the inngest-server ExecStart (parser/permission regression). This is a read failure, not a confirmed degradation; investigate. No issue filed."
+          elif [[ -n "$dstate_safe" && "$dstate_safe" != "durable" && "$dstate_safe" != "sqlite_only" && "$dstate_safe" != "degraded" ]]; then
+            echo "::warning::Inngest healthy but durability_state=${dstate_safe} is UNRECOGNIZED — no advisory routing exists for this value (expected durable|degraded|sqlite_only|unknown|absent). A forward-compat drift between inngest-inventory.sh's enum and this workflow; surface it here so it is not silent."
           fi
 
       # Pool-utilization probe (#5562) — leading indicator + EMAXCONNSESSION
@@ -359,6 +374,74 @@ jobs:
             --search 'in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_PROBE" ]]; then
             gh issue close "$STALE_PROBE" --repo "$GH_REPO" --comment "Inngest pool probe healthy again at ${NOW}. Run: ${RUN_URL}"
+          fi
+
+      # --- #5553: continuous between-deploy durability detector ---------------
+      # The deploy-time ci-deploy.sh durability signal fires only at deploy time;
+      # a host that runs non-durable BETWEEN deploys re-alerts no one (a SQLite-only-
+      # but-alive server returns 200 + functions array, so the inngest_down/unhealthy
+      # checks above pass). These two steps close that gap using the inventory hook's
+      # no-SSH durability_state enum.
+      - name: File or comment durability advisory (non-durable)
+        if: steps.probe.outputs.failure_mode == '' && (steps.probe.outputs.durability_state == 'sqlite_only' || steps.probe.outputs.durability_state == 'degraded')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DSTATE: ${{ steps.probe.outputs.durability_state }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/inngest-degraded-durability] Inngest non-durable between deploys"
+          ISSUE_SEARCH='in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"'
+          gh label create "ci/inngest-degraded-durability" --repo "$GH_REPO" \
+            --description "Between-deploy detector: inngest running non-durable (sqlite_only/degraded)" --color "D93F0B" 2>/dev/null || true
+          # Severity: degraded (durable backend configured but the durability invariant
+          # is broken — the #5542 incident state) is canonically MORE severe than
+          # sqlite_only (server alive on the fail-safe). [#5553 review P0-1]
+          if [[ "$DSTATE" == "degraded" ]]; then PRIO="priority/p1-high"; else PRIO="priority/p2-medium"; fi
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Inngest running non-durable between deploys\n\n'
+            printf -- '- **Durability state:** `%s`\n' "$DSTATE"
+            printf -- '- **Severity:** `%s`\n' "$PRIO"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What this means\n\n'
+            printf '`sqlite_only` — the host is on the SQLite-only fail-safe ExecStart: the server is alive, but armed reminders survive only until the next host rebuild, then are lost.\n\n'
+            printf '`degraded` — `--postgres-uri` is configured but `--redis-uri` is absent OR `inngest-redis.service` is inactive. This is the #5542 incident state (durable backend, broken durability invariant); armed-reminder loss risk is present now, not just on rebuild.\n\n'
+            printf '### Remediation\n\n'
+            printf 'Re-deploy inngest with Redis ready (the deploy re-stages the redis assets → durable ExecStart), or restart `inngest-redis.service`. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the #5450 durability epic. This is the continuous between-deploy detector; the deploy-time `ci-deploy.sh` signal fires only at deploy time.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            # Keep severity accurate across sqlite_only<->degraded transitions so the
+            # issue never rots at a stale severity (#5553 review P2-1): add the current
+            # severity label, drop the opposite.
+            if [[ "$PRIO" == "priority/p1-high" ]]; then OTHER_PRIO="priority/p2-medium"; else OTHER_PRIO="priority/p1-high"; fi
+            gh issue edit "$EXISTING" --repo "$GH_REPO" --add-label "$PRIO" --remove-label "$OTHER_PRIO" 2>/dev/null || true
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still non-durable at ${NOW} — \`durability_state=${DSTATE}\` (severity ${PRIO}). Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/inngest-degraded-durability" --label "$PRIO" --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close durability advisory (durable)
+        if: steps.probe.outputs.failure_mode == '' && steps.probe.outputs.durability_state == 'durable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" \
+            --search 'in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" --comment "Inngest durable again at ${NOW} (durability_state=durable). Run: ${RUN_URL}"
           fi
 
       - name: Sentry check-in (final)
