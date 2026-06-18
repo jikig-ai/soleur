@@ -43,3 +43,4 @@ Re-armable record reconstructed from `JSON.parse(node.raw)`: `{reminder_id, fire
 
 ## runbook gotcha (image invocation)
 - `inngest/inngest:v1.19.4` has `ENTRYPOINT=null`, `CMD=["inngest"]` → must invoke `docker run … inngest/inngest:v1.19.4 inngest start --host 0.0.0.0 --port 8288 --sqlite-dir <dir> --signing-key <k> --event-key <k>`.
+- `--signing-key` is REQUIRED and must be a **pure even-length hex string** (e.g. `$(printf 'ab%.0s' {1..32})` = 64 hex chars) — a prefixed form like `signkey-prod-<hex>` fails with `signing-key must be hex string with even number of chars` (the v1.19.4 `start` parser hex-decodes the entire value, prefix included). Omitting it fails with `signing-key is required`. The loopback `/v0/gql` read API needs no auth regardless of the key value (#5517 capture).
