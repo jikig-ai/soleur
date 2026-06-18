@@ -10,6 +10,24 @@ brand_survival_threshold: none
 
 # 🐛 fix: live-verify harness classifies server-side send rejections as CANT-RUN, not FAIL
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Passes run:** repo-research-analyst, learnings-researcher (plan phase); verify-the-negative grep pass + architecture-strategist (deepen phase). Gates 4.6/4.7/4.8/4.9 all pass.
+
+### Key improvements from deepen-plan
+1. **P0 — WS listener timing fixed.** The original plan said register `page.on("websocket")` "before the Send click." Architecture review proved the client fires `start_session` from a React effect on WS-connect during hydration (chat-surface.tsx:347-365) — BEFORE the click — and `page.on("websocket")` only captures sockets opened after attachment. The plan now registers the listener immediately after `context.newPage()`, BEFORE the first `page.goto`. Without this the fix silently fails in its own target scenario.
+2. **P1 — session-rejected match narrowed.** Changed from the broad `"No active session"` substring to the start-rejection signature `"Send start_session first"`. Four ws-handler sites share the bare `"No active session."` prefix; three (2094/2441/2509) signal an *established*-session drop (a genuine FAIL class) that the broad match would have masked. Added a negative test AC2b.
+3. **P2 — teardown ordering + no-clobber pinned.** The short-circuit CANT-RUN must `return` BEFORE the `teardownConversation` call (else `CANT-TEARDOWN-empty-predicate` masks the reason); `latestWsError` is monotonic-once-set (success frames parse to `null`). Added AC6b.
+4. **Wording corrections** from the verify-the-negative pass: clarified that the CONFIG/catch CANT-RUN paths (run.ts:602/628) DO `redact()`/set `exitCode=1`, while the new driveAndVerify CANT-RUN returns keep exit 0 by construction (AC7b).
+
+### Confirmed sound (no change needed)
+- App WS URL `/ws` vs Supabase realtime `/realtime/v1/websocket` filter (R-2).
+- `errorCode: "rate_limited"` already in `WSErrorCode` (no type change).
+- Playwright 1.58 API shapes (`page.on("websocket")`, `ws.url()`, `ws.on("framereceived", {payload})`).
+- AC4 precedence (rate_limited > convId) is safe: `sinceIso` high-water mark + `reapOrphans` make a coexisting stale fresh-convId unreachable within one run.
+- Test file location `test/live-verify/` collected by vitest `unit` project; pure-function extraction matches repo precedent.
+
 ## Overview
 
 The post-deploy live-verify harness (`apps/web-platform/scripts/live-verify/run.ts`,
@@ -99,9 +117,9 @@ ws-handler.ts:2164 / ADR-064 I-action-send-free note), so `pollFreshConversation
   - **Add** exported pure `parseWsErrorFrame(payload: string): { errorCode?: string; message?: string } | null` — `JSON.parse` inside try/catch; return `null` for non-`{type:"error"}` frames or parse failures; return ONLY `{ errorCode, message }` (never the raw payload object). *Only error frames are parsed* (ADR-064 I-ephemerality; the auth/`start_session` frames carry a token and are never parsed).
   - **Add** an exported pure classifier, e.g.
     `classifyDriveResult(args: { convId: string | null; wsError: { errorCode?: string; message?: string } | null }): Result` —
-    precedence: (1) `wsError?.errorCode === "rate_limited"` → `{ kind:"CANT-RUN", reason:"rate-limited" }`; (2) `wsError?.message?.includes("No active session")` → `{ kind:"CANT-RUN", reason:"session-rejected" }`; (3) `convId` truthy → caller proceeds to the rail assertion (return a sentinel/`PASS`-precursor or have the caller branch — design the seam so the rail assertion stays in `driveAndVerify`); (4) `convId` null + no wsError → `{ kind:"FAIL", detail:"send did not persist a conversation within budget …" }` (the existing genuine-FAIL string, unchanged). *Pin the exact return contract in the implementation so FR1/FR2/FR3 tests assert on `kind` + `reason`/`detail`.*
-  - **Wire** a WS-error capture into `driveAndVerify`: before/at navigation (before the Send click), register `page.on("websocket", (ws) => { if (new URL(ws.url()).pathname === "/ws") ws.on("framereceived", ({ payload }) => { const e = parseWsErrorFrame(payload.toString()); if (e) latestWsError = e; }); })`. **Filter by URL path `/ws`** — do NOT match the Supabase realtime socket `wss://api.soleur.ai/realtime/v1/websocket` (its path is `/realtime/v1/websocket`). Hold the latest server error in a closure var `latestWsError`.
-  - **Race-safety / short-circuit:** after the Send click, before/around the 30s poll, check `latestWsError` so a `rate_limited`/`session-rejected` error returns its CANT-RUN immediately instead of waiting out the full 30s then returning FAIL. Concretely: run `classifyDriveResult` against `latestWsError` first; if it yields a CANT-RUN, return it (after teardown is a no-op — no row was created); otherwise poll as today and re-classify. (The poll loop MAY also break early when `latestWsError` becomes a short-circuit error mid-poll — keep it simple: a check before the poll plus a check inside the existing 1s poll tick.)
+    precedence: (1) `wsError?.errorCode === "rate_limited"` → `{ kind:"CANT-RUN", reason:"rate-limited" }`; (2) `wsError?.message?.includes("Send start_session first")` → `{ kind:"CANT-RUN", reason:"session-rejected" }` — **match the start-rejection signature `"Send start_session first"`, NOT the broad substring `"No active session"` (P1).** Four ws-handler sites emit a bare `"No active session."` (ws-handler.ts:2094/2441/2509) for an *established* session that later lost its `conversationId` — matching the broad prefix would misclassify a genuine mid-run session-drop (a real failure adjacent to the rail-race class) as session-rejected and suppress it. Only the chat-path start-rejection (ws-handler.ts:2135, `"No active session. Send start_session first."`) carries the `"Send start_session first"` tail. (3) `convId` truthy → caller proceeds to the rail assertion (return a sentinel/`PASS`-precursor or have the caller branch — design the seam so the rail assertion stays in `driveAndVerify`); (4) `convId` null + no wsError → `{ kind:"FAIL", detail:"send did not persist a conversation within budget …" }` (the existing genuine-FAIL string, unchanged). *Pin the exact return contract in the implementation so FR1/FR2/FR3 tests assert on `kind` + `reason`/`detail`.*
+  - **Wire** a WS-error capture into `driveAndVerify`: register `page.on("websocket", (ws) => { if (new URL(ws.url()).pathname === "/ws") ws.on("framereceived", ({ payload }) => { const e = parseWsErrorFrame(payload.toString()); if (e) latestWsError = e; }); })` **immediately after `context.newPage()` and BEFORE the first `page.goto`** (both the dry-run goto and the gate goto). **This timing is load-bearing (P0):** the client fires `start_session` from a React effect the instant the WS reaches `status === "connected"` (chat-surface.tsx:347-365), which happens during page-load hydration — BEFORE the Send click — and `page.on("websocket")` only captures sockets opened AFTER the listener is attached. Registering after `page.goto` (or "before the Send click") would miss the `start_session` rate_limited frame entirely and the harness would false-FAIL in exactly the scenario this fix targets. **Filter by URL path `/ws`** — do NOT match the Supabase realtime socket (its path is `/realtime/v1/websocket`, confirmed absent from prod source — only a test fixture references it). Hold the latest server **error frame** in a closure var `latestWsError`; it is set ONLY by `parseWsErrorFrame` (which returns `null` for non-error frames), so a later success frame (e.g. `conversation_created`) can NEVER clear a stored error — `latestWsError` is monotonic-once-set by error frames only.
+  - **Race-safety / short-circuit:** after the Send click, before/around the 30s poll, check `latestWsError` so a `rate_limited`/`session-rejected` error returns its CANT-RUN immediately instead of waiting out the full 30s then returning FAIL. Concretely: run `classifyDriveResult` against `latestWsError` first; if it yields a CANT-RUN, **`return` it directly — BEFORE the `teardownConversation` call site (run.ts:468)**, never after. No row was created on a rejection, so there is nothing to tear down; falling through to teardown with an empty `convId` would return `CANT-RUN:CANT-TEARDOWN-empty-predicate` and MASK the rate-limited/session-rejected reason (P2 guardrail). Otherwise poll as today and re-classify. (The poll loop MAY also break early when `latestWsError` becomes a short-circuit error mid-poll — keep it simple: a check before the poll plus a check inside the existing 1s poll tick. JS is single-threaded, so the `framereceived` callback runs to completion between `await`s — a check before the poll + per-tick is race-adequate.)
   - **Redaction:** never `console.log`/emit a raw WS payload; only `parseWsErrorFrame`'d `{errorCode,message}` ever reaches a `detail` string, and `emit()` already `redact()`s `detail`. CANT-RUN `reason` strings are flat safe literals (`rate-limited`, `session-rejected`) carrying no captured value — consistent with the existing taxonomy (`send-button-never-enabled:ws-not-connected`, `browser-launch:<name>`).
   - Keep the **30s poll budget** and the **rail assertion** (`railRow.waitFor`, run.ts:448-465) unchanged. Genuine FAIL is the `convId` persisted but rail-absent branch (run.ts:462-465) **and** the `convId` null + no-wsError branch.
 
@@ -118,12 +136,14 @@ ws-handler.ts:2164 / ADR-064 I-action-send-free note), so `pollFreshConversation
 ### Pre-merge (PR)
 
 - [ ] **AC1 (FR1):** `classifyDriveResult({ convId: null, wsError: { errorCode: "rate_limited", message: "Rate limited: too many conversations this hour." } })` returns `{ kind: "CANT-RUN", reason: "rate-limited" }`.
-- [ ] **AC2 (FR2):** `classifyDriveResult({ convId: null, wsError: { message: "No active session. Send start_session first." } })` returns `{ kind: "CANT-RUN", reason: "session-rejected" }`.
+- [ ] **AC2 (FR2):** `classifyDriveResult({ convId: null, wsError: { message: "No active session. Send start_session first." } })` returns `{ kind: "CANT-RUN", reason: "session-rejected" }`. **AC2b (negative — P1 over-match guard):** `classifyDriveResult({ convId: null, wsError: { message: "No active session." } })` (the bare established-session-drop message, WITHOUT the `"Send start_session first"` tail) returns `{ kind: "FAIL", … }` — it must NOT be classified session-rejected.
 - [ ] **AC3 (FR3 — unchanged genuine-FAIL):** `classifyDriveResult({ convId: null, wsError: null })` returns `{ kind: "FAIL", … }` (no WS error, no persisted row → FAIL — the rail-race regression class is preserved).
 - [ ] **AC4 (precedence/race):** when both a `convId` and a `rate_limited` `wsError` are present, the `rate_limited` CANT-RUN wins (the WS-error signal short-circuits over a stale/leftover poll match). *(Encodes the "WS-error wins over the poll timeout" requirement at the pure-function boundary.)*
 - [ ] **AC5 (`parseWsErrorFrame` ignores non-error frames):** `parseWsErrorFrame('{"type":"conversation_created","id":"…"}')` and `parseWsErrorFrame('not json')` both return `null`; `parseWsErrorFrame('{"type":"error","errorCode":"rate_limited","message":"…"}')` returns `{ errorCode:"rate_limited", message:"…" }` and nothing else (no `type`, no raw payload object).
-- [ ] **AC6 (no raw payload leak):** grep `run.ts` proves no `console.log`/template-literal emits a `payload` variable directly; the only emit path is `emit(result)` → `redact(detail)`. (`git grep -n "payload" apps/web-platform/scripts/live-verify/run.ts` — every hit is inside `parseWsErrorFrame` or the `framereceived` listener, never an emit.)
-- [ ] **AC7 (WS-URL filter):** the `page.on("websocket")` listener filters on `new URL(ws.url()).pathname === "/ws"`; a code-grep confirms it does NOT match `/realtime/v1/websocket`. *(Static assertion; verified by reading the listener — the Supabase realtime socket must be ignored.)*
+- [ ] **AC6 (no raw payload leak):** grep `run.ts` proves no `console.log`/template-literal emits a `payload` variable directly; the only stdout emit path is `emit(result)`. (`git grep -n "payload" apps/web-platform/scripts/live-verify/run.ts` — every hit is inside `parseWsErrorFrame` or the `framereceived` listener, never an emit.) NOTE: the new `rate-limited`/`session-rejected` CANT-RUN reasons are flat safe literals carrying no captured value; `emit()` formats CANT-RUN as `RESULT: CANT-RUN:${reason}` without `redact()` (the existing CONFIG/catch CANT-RUN paths at run.ts:602/628 already `redact()` THEIR messages because those embed `error.message` — the new driveAndVerify reasons need no redaction by construction).
+- [ ] **AC6b (no-clobber):** a success frame arriving AFTER an error frame does not clear the verdict — `parseWsErrorFrame` returns `null` for a non-error frame so the `if (e) latestWsError = e` guard never overwrites a stored error. (Pure-function analog: `classifyDriveResult({ convId: "…uuid…", wsError: { errorCode: "rate_limited" } })` still returns CANT-RUN:rate-limited per AC4 — covered — plus a code-comment pinning the monotonic-once-set property on the listener.)
+- [ ] **AC7 (WS-URL filter + listener timing):** the `page.on("websocket")` listener filters on `new URL(ws.url()).pathname === "/ws"` (does NOT match `/realtime/v1/websocket`) AND is registered immediately after `context.newPage()`, BEFORE the first `page.goto` (so the hydration-time `start_session` frame is captured — P0). *(Static assertion; verified by reading the listener placement.)*
+- [ ] **AC7b (exit-code parity):** the driveAndVerify CANT-RUN returns keep `process.exitCode` at 0 (only `FAIL` sets `process.exitCode = 1` at run.ts:623; the CONFIG/catch CANT-RUN paths set it for pre-launch gate failures, which is unchanged). The new CANT-RUN reasons flow through `emit()` with exit 0, consistent with `browser-launch:*` / `send-button-never-enabled:*`.
 - [ ] **AC8 (no workflow change):** `git diff --name-only origin/main...HEAD` does NOT include `.github/workflows/web-platform-release.yml`. The gate's `continue-on-error`, job topology, and `RESULT: CANT-RUN*` case are untouched.
 - [ ] **AC9 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
 - [ ] **AC10 (tests green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/live-verify/drive-result-ws-error.test.ts` passes; the full existing `test/live-verify/*` suite still passes (no regression to `gate.test.ts`/`cookie-injection.test.ts`).
@@ -150,12 +170,19 @@ describe("classifyDriveResult — server-send-rejection → CANT-RUN", () => {
     });
     expect(r).toEqual({ kind: "CANT-RUN", reason: "rate-limited" });
   });
-  it("AC2: 'No active session' message → CANT-RUN:session-rejected", () => {
+  it("AC2: 'No active session. Send start_session first.' → CANT-RUN:session-rejected", () => {
     const r = classifyDriveResult({
       convId: null,
       wsError: { message: "No active session. Send start_session first." },
     });
     expect(r).toEqual({ kind: "CANT-RUN", reason: "session-rejected" });
+  });
+  it("AC2b: bare 'No active session.' (established-session drop) → FAIL, NOT session-rejected", () => {
+    const r = classifyDriveResult({
+      convId: null,
+      wsError: { message: "No active session." },
+    });
+    expect(r.kind).toBe("FAIL");
   });
   it("AC3: no WS error + no row → FAIL (genuine rail-race class preserved)", () => {
     const r = classifyDriveResult({ convId: null, wsError: null });
@@ -225,7 +252,7 @@ logs:
   where: "GitHub Actions run log for the live-verify job (redacted via redact-stdin.ts stream), single RESULT line + Sentry event"
   retention: "GitHub Actions default log retention; Sentry event retention"
 discoverability_test:
-  command: "gh run list --workflow web-platform-release.yml --json databaseId,conclusion ; gh run view <id> --log | grep -E 'RESULT: CANT-RUN:(rate-limited|session-rejected)'   # NO ssh"
+  command: "gh run list --workflow web-platform-release.yml --json databaseId,conclusion ; gh run view <id> --log | grep -E 'RESULT: CANT-RUN:(rate-limited|session-rejected)'   # gh-CLI only, no remote shell"
   expected_output: "the RESULT line and/or a Sentry warning event with reason rate-limited|session-rejected"
 ```
 

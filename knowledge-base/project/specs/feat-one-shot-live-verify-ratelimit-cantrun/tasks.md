@@ -18,15 +18,21 @@ Lane: single-domain (no spec.md present; default per plan frontmatter)
 - [ ] 2.1 Add exported pure `parseWsErrorFrame(payload: string)` — JSON.parse in try/catch;
       null for non-`{type:"error"}` / parse failure; return ONLY `{errorCode,message}` (never raw payload).
 - [ ] 2.2 Add exported pure `classifyDriveResult({ convId, wsError })` with precedence:
-      rate_limited → CANT-RUN:rate-limited; "No active session" → CANT-RUN:session-rejected;
-      else convId-driven seam (PROCEED/null) for the rail assertion; convId null + no wsError → FAIL.
+      rate_limited → CANT-RUN:rate-limited; **`message.includes("Send start_session first")`** →
+      CANT-RUN:session-rejected (P1 — NOT the broad "No active session" substring, which also
+      matches established-session drops at ws-handler.ts:2094/2441/2509 → FAIL); else convId-driven
+      seam (PROCEED/null) for the rail assertion; convId null + no wsError → FAIL.
       Keep `Result`'s three public kinds unchanged (R-5). Pin the seam choice in a one-line comment.
 - [ ] 2.3 Wire WS-error capture into `driveAndVerify`: `page.on("websocket")` filtered on
       `new URL(ws.url()).pathname === "/ws"` (NOT /realtime/v1/websocket); `ws.on("framereceived",
       ({payload}) => { const e = parseWsErrorFrame(payload.toString()); if (e) latestWsError = e; })`.
-      Register before the Send click.
+      **Register immediately after `context.newPage()`, BEFORE the first `page.goto` (P0 — start_session
+      fires on WS-connect during hydration, before the Send click; a listener attached after goto misses
+      the rate_limited frame).** latestWsError is monotonic-once-set (success frames parse to null).
 - [ ] 2.4 Race short-circuit: check `latestWsError` via `classifyDriveResult` BEFORE the 30s poll
       and inside each 1s poll tick so a rate_limited/session-rejected error wins over the timeout.
+      **`return` the short-circuit CANT-RUN BEFORE the teardownConversation call (run.ts:468)** — no row
+      to tear down; falling through would mask the reason with CANT-TEARDOWN-empty-predicate (P2).
       Keep the 30s poll budget + rail assertion (run.ts:448-465) unchanged.
 - [ ] 2.5 Confirm GREEN: the new test passes; full `test/live-verify/*` suite still passes.
 
