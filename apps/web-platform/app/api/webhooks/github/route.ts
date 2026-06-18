@@ -40,6 +40,7 @@ import { isGranted } from "@/server/scope-grants/is-granted";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import { isReconcilablePush } from "@/server/webhook-push-reconcilable";
 import { resolveSoloFounderForInstallation } from "@/server/resolve-founder-for-installation";
+import { normalizeRepoUrl } from "@/lib/repo-url";
 import {
   WORKSPACE_RECONCILE_REQUESTED_EVENT,
   WORKSPACE_RECONCILE_SCHEMA_V,
@@ -305,13 +306,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true });
   }
 
-  // Non-push founder resolution: solo-workspace self-join (CTO Option C).
+  // Non-push founder resolution: solo-workspace self-join (CTO Option C),
+  // REPO-SCOPED (ADR-044 Amendment 2026-06-18 — BUG 1 fix).
   // Discriminated union — 0/1/>1/db-error each branch distinctly. The `>1`
   // (ambiguous) branch is the load-bearing fail-closed defense: dropping a
   // re-drivable event is strictly safer than misattributing an action /
   // installation-token to the WRONG founder (the brand-survival hazard).
+  //
+  // Pre-compose guard (ADR-044 Amendment 2026-06-18): the resolver scopes by
+  // (installation_id, normalizeRepoUrl(repo_url)). A non-push event with NO
+  // `repository.full_name` cannot be repo-scoped, so it drops via the SAME
+  // none/404 path WITHOUT issuing the resolver SELECT. This MUST be the
+  // PRE-COMPOSE `!full_name` check: `normalizeRepoUrl("https://github.com/")`
+  // returns "https://github.com" (NOT ""), so a post-normalize === "" check
+  // would never fire and we would SELECT on a bogus host-only repo_url.
+  const fullName = body.repository?.full_name;
+  if (!fullName) {
+    logger.warn(
+      { installationId, deliveryId, githubEvent },
+      "GitHub webhook: non-push event has no repository.full_name — cannot repo-scope founder, 404",
+    );
+    await releaseDedupRow();
+    return NextResponse.json(
+      { error: "No repository for installation" },
+      { status: 404 },
+    );
+  }
+  // Compose-before-normalize, mirroring the push reconcile precedent
+  // (workspace-reconcile-on-push.ts:150). The route owns this so the resolver
+  // receives a PRE-NORMALIZED repo_url that matches the stored value exactly.
+  const targetRepoUrl = normalizeRepoUrl(`https://github.com/${fullName}`);
   const founderResolution = await resolveSoloFounderForInstallation(
     installationId,
+    targetRepoUrl,
     supabase,
   );
   if (founderResolution.kind === "db-error") {
