@@ -146,14 +146,15 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRIOR_FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
           PRIOR_FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
-          # Live session-pool cap (default_pool_size on the inngest project's
-          # pooler). Set to the LIVE value so the 70% trip is a meaningful
-          # leading indicator. Verified live 2026-06-18 via the Management API
-          # (GET /config/database/pgbouncer): currently 30 — the #5558 stopgap
-          # raise that the #5562 decision will revert to the project default 15.
-          # Drop this env to 15 once that revert lands (see inngest.tf pooler-drift
-          # comment); a stale 15 here while the live cap is 30 would over-alert.
-          SESSION_POOL_CAP: '30'
+          # Inngest's OWN client-connection cap (--postgres-max-open-conns,
+          # inngest-bootstrap.sh:354, #5559). This is the ceiling on
+          # inngest-attributable sessions and the correct denominator for the
+          # leading indicator — NOT the pooler's default_pool_size (which is the
+          # server-side fan-in, dominated by Supabase infra baseline; counting
+          # total pg_stat_activity against it false-fires — #5563 follow-up, see
+          # the filtered query below). Decoupled from the default_pool_size 30→15
+          # revert by design. Bump this only if --postgres-max-open-conns changes.
+          INNGEST_CLIENT_CAP: '10'
         run: |
           set -uo pipefail
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from the probe step above)
@@ -191,7 +192,7 @@ jobs:
               --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
               --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
               --header "Content-Type: application/json" \
-              --data '{"query":"select state, count(*) from pg_stat_activity group by state"}' \
+              --data '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' \
               --max-time 15 \
               -w $'\n%{http_code}' \
               2>/dev/null)"
@@ -206,24 +207,36 @@ jobs:
               fail_mode="pool_probe_unavailable"
               fail_detail="curl failed (rc=${curl_rc}) against Supabase Management API — pool probe degraded."
             elif printf '%s' "$body" | grep -qF 'EMAXCONNSESSION'; then
-              # The pooler rejected the probe's own connection — already at the cap.
+              # The pooler rejected a client connection — already at the cap. This
+              # EMAXCONNSESSION 5xx-body check is the reliable cliff detector and is
+              # independent of the count metric below.
               fail_mode="pool_exhausted"
               fail_detail="Management API HTTP ${http_code} EMAXCONNSESSION — session pool at the cap. body=${body_safe}"
             elif [[ "$http_code" == 2?? ]]; then
               if printf '%s' "$body" | jq -e 'type == "array"' >/dev/null 2>&1; then
-                total=$(printf '%s' "$body" | jq '[.[].count | tonumber] | add // 0')
-                if ! [[ "$total" =~ ^[0-9]+$ ]]; then
+                # Count ONLY inngest-attributable client backends: role 'postgres'
+                # (inngest connects through the session pooler as postgres.<ref>),
+                # excluding the pooler's own warm connections (app 'Supavisor*') and
+                # the mgmt-api probe. Compared against inngest's own client cap (10,
+                # --postgres-max-open-conns), NOT total pg_stat_activity vs
+                # default_pool_size — that total is dominated by Supabase infra
+                # baseline (Supavisor/PostgREST/pg_net/pg_cron/exporter/walsenders)
+                # and false-fires (#5563 follow-up to #5562).
+                inngest_conns=$(printf '%s' "$body" | jq '[.[] | select(.usename == "postgres" and (.app | startswith("Supavisor") | not) and .app != "mgmt-api") | .n] | add // 0')
+                # Full client-backend breakdown to stdout for visibility +
+                # future-proofing the discriminator (sanitized — application_name is
+                # client-settable, defense-in-depth against log injection).
+                breakdown="$(sanitize "$(printf '%s' "$body" | jq -r '.[] | "\(.usename // "?")/\(.app)/\(.state // "null")=\(.n)"' | tr '\n' ' ' | head -c 400)")"
+                echo "Inngest client backends: ${breakdown}"
+                if ! [[ "$inngest_conns" =~ ^[0-9]+$ ]]; then
                   fail_mode="pool_probe_unavailable"
-                  fail_detail="could not sum pg_stat_activity counts (non-numeric total) — body=${body_safe}"
-                elif (( total >= SESSION_POOL_CAP )); then
-                  fail_mode="pool_exhausted"
-                  fail_detail="session count ${total} >= pool cap ${SESSION_POOL_CAP} — at/over the cap. body=${body_safe}"
-                elif (( total * 100 >= SESSION_POOL_CAP * 70 )); then
+                  fail_detail="could not compute inngest-attributable connection count (non-numeric) — breakdown: ${breakdown}"
+                elif (( inngest_conns * 100 >= INNGEST_CLIENT_CAP * 80 )); then
                   # Integer arithmetic only — float under set -u aborts the step.
                   fail_mode="pool_pressure"
-                  fail_detail="session count ${total} >= 70% of pool cap ${SESSION_POOL_CAP} (leading indicator, before EMAXCONNSESSION). body=${body_safe}"
+                  fail_detail="inngest client-attributable connections ${inngest_conns} >= 80% of client cap ${INNGEST_CLIENT_CAP} (leading indicator, before EMAXCONNSESSION). breakdown: ${breakdown}"
                 else
-                  echo "Inngest pool OK: total=${total} (cap ${SESSION_POOL_CAP}, threshold 70%). body=${body_safe}"
+                  echo "Inngest pool OK: inngest_conns=${inngest_conns} (client cap ${INNGEST_CLIENT_CAP}, threshold 80%)."
                 fi
               else
                 fail_mode="pool_probe_unavailable"
@@ -237,11 +250,19 @@ jobs:
             fi
           fi
 
-          fail_mode_safe="$(sanitize "$fail_mode")"
+          # failure_mode is a CONTROLLED enum this step sets (or carries from the
+          # upstream probe): '' | inngest_down | inngest_unhealthy | secret_unset |
+          # pool_pressure | pool_exhausted | pool_probe_unavailable. It is NEVER
+          # untrusted, so it MUST be emitted RAW — passing it through sanitize()
+          # corrupts it: strip_log_injection's `tr -d '…\x7f\x85'` deletes the
+          # LITERAL chars x,7,f,8,5 (GNU tr does not parse \xNN as hex), turning
+          # 'pool_exhausted' into 'pool_ehausted', which then fails the downstream
+          # case-match and mis-routes to the [ci/inngest-down] class (#5563). Only
+          # fail_detail (which may embed untrusted body/breakdown) is sanitized.
           fail_detail_safe="$(sanitize "$fail_detail")"
-          { printf '%s\n' "failure_mode=${fail_mode_safe}"; printf '%s\n' "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
-          if [[ -n "$fail_mode_safe" ]]; then
-            echo "::error::Inngest pool probe: ${fail_mode_safe} — ${fail_detail_safe}"
+          { printf '%s\n' "failure_mode=${fail_mode}"; printf '%s\n' "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
+          if [[ -n "$fail_mode" ]]; then
+            echo "::error::Inngest pool probe: ${fail_mode} — ${fail_detail_safe}"
           fi
 
       # Auto-restart is dispatched ONLY for the down-family (inngest_down /
@@ -316,7 +337,7 @@ jobs:
               printf -- '- **Detected at:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### Do NOT restart inngest-server\n\nA restart re-opens all of inngest'\''s pooler connections at once, churning MORE session connections and DEEPENING `EMAXCONNSESSION`. This issue is intentionally excluded from the auto-restart gate.\n\n'
-              printf '### Remediation (stale-session / client-cap)\n\n1. Read the session breakdown in **Detail** above (per-state counts + total vs cap).\n2. Confirm the client cap holds: inngest-server runs with `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`), UNDER the session-pool cap (live 30 as of 2026-06-18; project default 15).\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The live `default_pool_size` may still be the #5558 stopgap 30 — the #5562 decision is to revert it to the project default 15 and rely on the client cap (see `apps/web-platform/infra/inngest.tf`). Refs #5558 #5559.\n'
+              printf '### Remediation (stale-session / client-cap)\n\n1. Read **Detail** above: `pool_pressure` is inngest-attributable client connections vs inngest'\''s own client cap (10); `pool_exhausted` is an actual `EMAXCONNSESSION` from the pooler. The per-backend breakdown is in the run log (`Inngest client backends: …`).\n2. Confirm the client cap holds: inngest-server runs with `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). If inngest-attributable connections are near 10, inngest is opening more than expected — check for a stuck/looping function holding pooled connections.\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The leading indicator now tracks inngest'\''s client cap (10), NOT the pooler `default_pool_size` (which is Supabase-infra-dominated) — so this alert is decoupled from the separate #5562 `default_pool_size` 30→15 revert. Refs #5558 #5559.\n'
             } > "$BODY_FILE"
             EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
             if [[ -n "$EXISTING" ]]; then

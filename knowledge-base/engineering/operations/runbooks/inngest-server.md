@@ -103,21 +103,24 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
 The external watchdog (`.github/workflows/scheduled-inngest-health.yml`) runs a
 pool-utilization probe every 15 min: it reads `pg_stat_activity` on the dedicated
 inngest Supabase project (ref `pigsfuxruiopinouvjwy`) via the Management API and
-files a `[ci/inngest-pool]` issue + Sentry `error` when the session count crosses
-~70% of the pool cap (`pool_pressure`, leading indicator) or `EMAXCONNSESSION`
-fires / the count reaches the cap (`pool_exhausted`). These modes are
+files a `[ci/inngest-pool]` issue + Sentry `error` when **inngest-attributable**
+client connections cross ~80% of inngest's CLIENT cap (10, `--postgres-max-open-conns`)
+— `pool_pressure`, the leading indicator — or `EMAXCONNSESSION` fires (`pool_exhausted`,
+the cliff). It counts ONLY inngest's own connections (role `postgres`, minus the
+pooler's Supavisor warm connections + the probe), NOT total `pg_stat_activity` (which
+is dominated by Supabase infra baseline and false-fires — #5563). These modes are
 **excluded from the auto-restart gate** — a restart re-opens all of inngest's
 pooler connections at once and DEEPENS exhaustion (#5558). **Do NOT restart
 inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
 
-1. **Read the alert** (no SSH) — `gh issue view "$(gh issue list --state open --search 'in:title \"[ci/inngest-pool]\"' --json number --jq '.[0].number')" --comments`. The body carries the per-state breakdown + `total` vs cap and the run log.
-2. **Re-read the live pool** (no SSH, read-only) — confirm the trend via the same Management-API path the probe uses:
+1. **Read the alert** (no SSH) — `gh issue view "$(gh issue list --state open --search 'in:title \"[ci/inngest-pool]\"' --json number --jq '.[0].number')" --comments`. The body carries the inngest-attributable connection count vs the client cap; the full per-backend breakdown is in the run log (`Inngest client backends: …`).
+2. **Re-read the live pool** (no SSH, read-only) — confirm via the same filtered query the probe uses (per-backend breakdown; inngest = role `postgres` minus Supavisor + the probe):
    ```
    SUPA=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
    curl -s --max-time 15 -X POST \
      https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query \
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
-     -d '{"query":"select state, count(*) from pg_stat_activity group by state"}' | jq .
+     -d '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' | jq .
    ```
 3. **Clear stale sessions** (no SSH, read-only client cap is the real fix) — if `idle` / `idle in transaction` sessions are climbing, terminate them via the same `/database/query` path (still no host login):
    ```
@@ -126,7 +129,7 @@ inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
      -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
    ```
-   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`), UNDER the session-pool cap (live 30 as of 2026-06-18; project default 15). Confirm the live `default_pool_size` — the #5562 decision is to revert the #5558 stopgap 30 → the project default 15 and rely on the client cap (see `apps/web-platform/infra/inngest.tf`). The watchdog's `SESSION_POOL_CAP` env tracks the live cap (currently 30); drop it to 15 in lockstep when the revert lands.
+   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). The probe's leading indicator tracks THIS client cap (`INNGEST_CLIENT_CAP=10` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach 10 (a stuck/looping function holding pooled connections), independent of the separate #5562 `default_pool_size` 30→15 revert (see `apps/web-platform/infra/inngest.tf`).
 4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
 
 ### Last-resort (host login)
