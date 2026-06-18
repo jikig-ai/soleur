@@ -615,19 +615,21 @@ runcmd:
   # bootstrap-script SHAPE version), NOT the inngest-cli version (the latter is
   # sourced from the image's Config.Env at run time). This pin MUST be bumped to
   # the latest released bootstrap image on every bootstrap-script change, or
-  # fresh-host reprovision installs a stale script. Bumped to v1.1.14 for the
-  # #5450 durable-backend change (--postgres-uri/--redis-uri ExecStart + the
-  # inngest-redis.{conf,service} + inngest-redis-bootstrap.sh assets baked into
-  # the image). Running hosts get it via the deploy webhook path: push
+  # fresh-host reprovision installs a stale script. Bumped to v1.1.15 for the
+  # #5499 host-script journald → Better Stack vector.toml source (#5526), on top
+  # of the #5450 durable-backend change (--postgres-uri/--redis-uri ExecStart +
+  # the inngest-redis.{conf,service} + inngest-redis-bootstrap.sh assets baked
+  # into the image) and the post-v1.1.14 cutover-op fixes (#5518/#5528/#5520).
+  # Running hosts get it via the deploy webhook path: push
   # vinngest-vX.Y.Z tag → deploy inngest …:vX.Y.Z; cloud-init installs only on
   # fresh hosts.
   - |
     set -e
-    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.14
+    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.15
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT
-    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.14
+    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.15
     docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     # Durable Redis assets (#5450) — stage to /tmp like vector.toml so the
@@ -637,7 +639,7 @@ runcmd:
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.14 -f '{{range .Config.Env}}{{println .}}{{end}}')
+    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.15 -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
     INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
