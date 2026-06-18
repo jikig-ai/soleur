@@ -39,18 +39,34 @@ over.
 1. Edit the `.c4` sources (`spec.c4` / `model.c4` / `views.c4`) via the
    `soleur:architecture` skill (`architecture diagram` sub-command). Define each
    element once in `model.c4`; scope it per C4 level in `views.c4`.
-2. Regenerate `model.likec4.json` from the `.c4` sources (the
-   `soleur:architecture render` sub-command runs this). From the diagrams
-   directory:
+2. Regeneration of `model.likec4.json` is **automatic on commit** — the
+   `c4-model-regenerate` pre-commit hook (`lefthook.yml`) re-renders and
+   re-stages it from the edited `.c4` sources, and a CI freshness test
+   (`plugins/soleur/test/c4-model-freshness.test.sh`) is the merge-gating
+   backstop if the hook is bypassed (`--no-verify`). You normally do **not**
+   regenerate by hand. To regenerate ad-hoc (or when committing outside the
+   hook), run the pinned, off-tree-validated, idempotent primitive from the repo
+   root:
+
+   ```bash
+   bash scripts/regenerate-c4-model.sh
+   ```
+
+   To validate the source only (without rewriting the artifact):
 
    ```bash
    cd knowledge-base/engineering/architecture/diagrams
-   npx -y likec4@latest validate .
-   # Rebuild the committed layouted model the web viewer reads:
-   npx -y likec4@latest export json -o model.likec4.json .
+   npx -y likec4@1.50.0 validate .
    ```
 
-3. Commit the regenerated `model.likec4.json` alongside the `.c4` edits.
+   The pinned `1.50.0` MUST match `apps/web-platform/Dockerfile` +
+   `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
+   `c4-likec4-version-pin.test.ts`. The script renders off-tree and refuses to
+   publish an empty/invalid model, so a broken `.c4` never clobbers the good
+   committed artifact.
+
+3. Commit the `.c4` edits; the hook stages the regenerated `model.likec4.json`
+   alongside them.
 4. **Never hand-edit `model.likec4.json`** — it is a build output; any manual
    change is lost on the next regeneration and can desync the viewer from the
    `.c4` source.

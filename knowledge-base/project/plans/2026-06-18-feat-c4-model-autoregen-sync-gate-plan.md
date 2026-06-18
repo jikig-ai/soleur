@@ -132,61 +132,61 @@ documentation tooling only; no user-facing data, secret, or runtime path is touc
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Regen script exists and is idempotent.** `scripts/regenerate-c4-model.sh`
+- [x] **AC1 — Regen script exists and is idempotent.** `scripts/regenerate-c4-model.sh`
       exists, is `chmod +x`, uses `set -euo pipefail`, pins `likec4@1.50.0`, renders to a
       **temp path** then validates (`jq -e '(.elements | length) > 0'`) before
       publishing onto the tracked path, and is a no-op (zero git diff) when run twice
       against unchanged sources. Verify: run it twice from a clean tree; second run
       leaves `git status --short` clean for `model.likec4.json`.
-- [ ] **AC2 — Empty-model clobber protection.** When the script renders an empty model
+- [x] **AC2 — Empty-model clobber protection.** When the script renders an empty model
       (e.g. a broken `.c4`), it exits non-zero with a diagnostic and does NOT overwrite
       the existing good `model.likec4.json`. Verify: temporarily break a `.c4` element
       kind, run the script, assert exit non-zero AND the committed JSON is unchanged
       (`git diff --quiet model.likec4.json`).
-- [ ] **AC3 — lefthook pre-commit hook auto-regenerates and restages.** `lefthook.yml`
+- [x] **AC3 — lefthook pre-commit hook auto-regenerates and restages.** `lefthook.yml`
       has a new pre-commit command (`c4-model-regenerate`) with
       `glob: "knowledge-base/engineering/architecture/diagrams/*.c4"` whose `run` calls
       `scripts/regenerate-c4-model.sh && git add knowledge-base/engineering/architecture/diagrams/model.likec4.json`,
       mirroring the `generate-kb-index` precedent. Verify: stage a `.c4` edit, run
       `lefthook run pre-commit`, assert `model.likec4.json` is regenerated and staged.
-- [ ] **AC4 — Advisory `c4-model.md` staleness warning.** The same hook (or a sibling
+- [x] **AC4 — Advisory `c4-model.md` staleness warning.** The same hook (or a sibling
       warn-only command) prints a non-blocking reminder to review/update `c4-model.md`'s
       `## Notes` when `.c4` model elements changed but `c4-model.md` is NOT in the same
       staged set. Verify: stage only a `.c4` edit, run the hook, assert the warning text
       appears AND exit code is 0 (advisory, never blocking).
-- [ ] **AC5 — CI freshness test fails on drift.** A new test (a bash/`node --test` test in
+- [x] **AC5 — CI freshness test fails on drift.** A new test (a bash/`node --test` test in
       the `scripts` shard) regenerates `model.likec4.json` with the pinned CLI into a temp
       path and asserts it is byte-identical to the committed artifact; the test FAILS on a
       deliberately-staled fixture and PASSES on the in-sync tree. Verify: run the test on
       the synced tree (pass), hand-stale the JSON (fail), restore.
-- [ ] **AC6 — likec4 CLI availability in the CI shard that runs AC5.** The chosen CI job
+- [x] **AC6 — likec4 CLI availability in the CI shard that runs AC5.** The chosen CI job
       installs `likec4@1.50.0` (mirroring the gitleaks-install precedent in the
       `test-scripts` shard) so the freshness test can actually render. The job name does
       NOT add a new *required* branch-protection check unless folded into an existing
       shard; if a standalone job is added, it is wired into the synthetic `test`
       aggregator's `needs`. Verify: read `.github/workflows/ci.yml`; confirm the install
       step + job-graph wiring.
-- [ ] **AC7 — Version pin parity preserved.** `apps/web-platform/test/c4-likec4-version-pin.test.ts`
+- [x] **AC7 — Version pin parity preserved.** `apps/web-platform/test/c4-likec4-version-pin.test.ts`
       still passes; the new script/hook/CI all reference `1.50.0`. Verify:
       `grep -rn "likec4@" scripts/ lefthook.yml .github/workflows/ci.yml plugins/soleur/skills/architecture/SKILL.md`
       returns only `1.50.0` (no `@latest`).
-- [ ] **AC8 — `architecture` SKILL.md render step fixed + mandate added.** The `render`
+- [x] **AC8 — `architecture` SKILL.md render step fixed + mandate added.** The `render`
       sub-command's two `npx -y likec4@latest` lines become `npx -y likec4@1.50.0`, and
       the `diagram` / `add-*` sub-commands gain an explicit instruction: "After any `.c4`
       edit, regeneration of `model.likec4.json` is automatic on commit via the
       `c4-model-regenerate` pre-commit hook; if committing outside that hook, run
       `scripts/regenerate-c4-model.sh`." Verify: read SKILL.md; `grep -c "1.50.0"` at
       least 2 and `grep -c "@latest" plugins/soleur/skills/architecture/SKILL.md` == 0.
-- [ ] **AC9 — Skill description budget unchanged within cap.** No `description:` frontmatter
+- [x] **AC9 — Skill description budget unchanged within cap.** No `description:` frontmatter
       is edited (only body prose), so the 1800-word cumulative cap is unaffected. Verify:
       `bun test plugins/soleur/test/components.test.ts` passes.
-- [ ] **AC10 — AGENTS.md workflow-gate pointer (only if budget allows).** Evaluate adding
+- [x] **AC10 — AGENTS.md workflow-gate pointer (only if budget allows).** Evaluate adding
       a `wg-c4-source-edit-regenerates-compiled-model` pointer; if the always-loaded byte
       budget (`AGENTS.md` + `AGENTS.core.md` vs the 23000-byte cap, and per-rule 600-byte
       cap) cannot absorb it, place the mandate in the `architecture` SKILL.md + the
       diagrams `README.md` only and record the budget measurement. Verify: run the budget
       check; record the number in the PR body.
-- [ ] **AC11 — Existing C4 test suite green.** All `apps/web-platform/test/c4-*.test.ts`
+- [x] **AC11 — Existing C4 test suite green.** All `apps/web-platform/test/c4-*.test.ts`
       / `.tsx` still pass (no regression to render/version/route tests). Verify the
       webplat shard.
 
