@@ -80,6 +80,21 @@ run_inv() {
   INNGEST_GQL_FIXTURE_DIR="$1" INVENTORY_FUNCTIONS_FIXTURE="$2" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null
 }
 
+# Run with the durability seams overlaid on a minimal empty fixture set (so the
+# functions/events path is satisfied while we vary ONLY the durability inputs).
+# $1 = INVENTORY_EXECSTART value (may be ""), $2 = INVENTORY_REDIS_ACTIVE value.
+# Returns stdout only. Mirrors run_inv (#5553).
+run_inv_durability() {
+  local execstart="$1" redis="$2"
+  local d ff out; d=$(mktemp -d); ff=$(mktemp)
+  make_functions '[]' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART="$execstart" INVENTORY_REDIS_ACTIVE="$redis" bash "$TARGET" 2>/dev/null)
+  rm -rf "$d" "$ff"
+  printf '%s' "$out"
+}
+
 echo "=== inngest-inventory.sh tests ==="
 
 assert_eq "script exists and is executable" "1" "$([[ -x "$TARGET" ]] && echo 1 || echo 0)"
@@ -176,7 +191,9 @@ test_empty_state() {
   make_functions '[]' > "$ff"
   make_page false "" "[]" > "$d/page-1.json"
   local out; out=$(run_inv "$d" "$ff")
-  assert_eq "empty state → {functions:[],event_names:[],armed_reminders:[]}" '{"functions":[],"event_names":[],"armed_reminders":[]}' "$(echo "$out" | jq -c '.')"
+  # Project the three enumeration keys (durability_state is exercised by the #5553
+  # tests and depends on the runner's systemd state, so it is excluded here).
+  assert_eq "empty state → {functions:[],event_names:[],armed_reminders:[]}" '{"functions":[],"event_names":[],"armed_reminders":[]}' "$(echo "$out" | jq -c '{functions,event_names,armed_reminders}')"
 }
 
 # --- Test 9 (#5509 review P3): a degraded functions read fails LOUD, not false-clean ---
@@ -274,6 +291,85 @@ test_fatal_cleans_spool_tempfile() {
   assert_eq "no spool temp file leaked on FATAL exit (EXIT trap fired)" "0" "$leftover"
 }
 
+# --- Test 14 (#5553): durability_state verdict mirrors ci-deploy.sh:277-287 ---
+# Five canonical states from a seam-injected ExecStart + redis activeness. The
+# verdict rule is byte-identical in intent to the deploy-time source of truth.
+test_durability_states() {
+  assert_eq "durable: --postgres-uri + --redis-uri present, redis active" "durable" \
+    "$(run_inv_durability '/usr/bin/inngest start --postgres-uri postgres://x --redis-uri redis://y' active | jq -r '.durability_state')"
+  assert_eq "degraded: --postgres-uri but --redis-uri absent (redis active)" "degraded" \
+    "$(run_inv_durability '/usr/bin/inngest start --postgres-uri postgres://x --sqlite-dir /d' active | jq -r '.durability_state')"
+  assert_eq "degraded: --postgres-uri + --redis-uri present but redis inactive" "degraded" \
+    "$(run_inv_durability '/usr/bin/inngest start --postgres-uri postgres://x --redis-uri redis://y' inactive | jq -r '.durability_state')"
+  assert_eq "sqlite_only: no --postgres-uri (SQLite-only fail-safe)" "sqlite_only" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest' inactive | jq -r '.durability_state')"
+  assert_eq "unknown: ExecStart unreadable (empty seam)" "unknown" \
+    "$(run_inv_durability '' inactive | jq -r '.durability_state')"
+}
+
+# --- Test 15 (#5553 AC3): the ExecStart connection ref never reaches any stream ---
+# #5503 purity extended to durability: only the enum is emitted, never the
+# $VAR/resolved ExecStart string. Seed a sentinel DSN and assert it is absent from
+# the COMBINED (stdout+stderr) stream — mirrors the SECRET-BODY journald guard.
+test_durability_no_secret_leak() {
+  local d ff out; d=$(mktemp -d); ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART='/usr/bin/inngest start --postgres-uri postgres://SECRET-DSN --redis-uri redis://r' \
+    INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
+  assert_eq "ExecStart connection ref absent from combined stream (AC3)" "0" \
+    "$(printf '%s' "$out" | grep -c SECRET-DSN || true)"
+  assert_eq "durable verdict still emitted (no-leak path correct)" "durable" \
+    "$(printf '%s' "$out" | jq -r '.durability_state')"
+}
+
+# --- Test 16 (#5553 AC4): #5503 combined-stream purity preserved with the 4th key ---
+test_durability_purity_preserved() {
+  local d ff combined err; d=$(mktemp -d); ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  combined=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART='--postgres-uri x --redis-uri y' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
+  if echo "$combined" | jq -e 'type == "object" and has("functions") and has("event_names") and has("armed_reminders") and has("durability_state")' >/dev/null 2>&1; then
+    echo "  PASS: combined stream is a 4-key object incl durability_state"; PASS=$((PASS + 1));
+  else
+    echo "  FAIL: combined stream missing a key or polluted (durability field)"; FAIL=$((FAIL + 1)); fi
+  err=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART='--postgres-uri x --redis-uri y' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1 1>/dev/null)
+  assert_eq "success-path stderr empty with durability field" "" "$err"
+}
+
+# --- Test 17 (#5553 AC5): cross-file ExecStart-durability drift tripwire ---
+# Token co-occurrence guard (NOT a verdict-equivalence proof — the five Phase-2.2
+# verdicts pin THIS parser). The FULL postgres+redis+active rule is shared by the
+# source-of-truth (ci-deploy.sh) and the new mirror (inngest-inventory.sh): both
+# must carry all four load-bearing tokens. inngest-wiped-volume-verify.sh is a
+# *secondary* member of the ExecStart-parse family — its gate only checks
+# --postgres-uri presence on inngest-server.service (it deliberately does not parse
+# redis), so it is asserted only against the subset it genuinely shares. If a flag
+# or unit name is renamed in ci-deploy.sh, the matching token disappears from the
+# mirror's required set and the guard trips, forcing a human re-look at all parsers.
+test_durability_drift_guard() {
+  local f tok missing=""
+  local full_tokens=(--postgres-uri --redis-uri inngest-redis.service inngest-server.service)
+  local subset_tokens=(--postgres-uri inngest-server.service)
+  for f in "$SCRIPT_DIR/ci-deploy.sh" "$TARGET"; do
+    for tok in "${full_tokens[@]}"; do
+      grep -qF -- "$tok" "$f" || missing="$missing $(basename "$f"):$tok"
+    done
+  done
+  for tok in "${subset_tokens[@]}"; do
+    grep -qF -- "$tok" "$SCRIPT_DIR/inngest-wiped-volume-verify.sh" \
+      || missing="$missing inngest-wiped-volume-verify.sh:$tok"
+  done
+  assert_eq "ExecStart-durability parsers reference their load-bearing tokens" "" "$missing"
+}
+
+test_durability_states
+test_durability_no_secret_leak
+test_durability_purity_preserved
+test_durability_drift_guard
 test_combined_is_pure_json_object
 test_functions_fetch_failure_is_loud
 test_functions_from_gql_shape
