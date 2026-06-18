@@ -7,7 +7,7 @@ import {
   GITHUB_ACTIONS_BOT_DB_ID,
 } from "@/scripts/cla-evidence/allowlist";
 
-const SAMPLE_CLA_YML_ALLOWLIST = "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot]";
+const SAMPLE_CLA_YML_ALLOWLIST = "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot],soleur-ai[bot]";
 
 describe("parseAllowlistFromYaml", () => {
   it("splits comma-separated logins from cla.yml allowlist", () => {
@@ -18,6 +18,7 @@ describe("parseAllowlistFromYaml", () => {
       "renovate[bot]",
       "deruelle",
       "claude[bot]",
+      "soleur-ai[bot]",
     ]);
   });
 
@@ -39,6 +40,10 @@ describe("isAllowlistBypass — login + DB-id 41898282 filter", () => {
 
   it("returns true for claude[bot] (Anthropic GitHub App)", () => {
     expect(isAllowlistBypass("claude[bot]", 209825114, allowlist)).toBe(true);
+  });
+
+  it("returns true for soleur-ai[bot] (Soleur automation App, bot user id 273333864 — #5520)", () => {
+    expect(isAllowlistBypass("soleur-ai[bot]", 273333864, allowlist)).toBe(true);
   });
 
   it("returns FALSE for github-actions[bot] DB-id 41898282 even though login is allowlisted (learning #2)", () => {
