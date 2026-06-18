@@ -109,7 +109,12 @@ concurrency:
   # last-writer-wins-clobbering web-platform/terraform.tfstate. Both workflows
   # now SSH-apply apparmor_bwrap_profile (this one pulls it transitively via
   # deploy_pipeline_fix's depends_on; the other lists it in its SSH -target set),
-  # so they overlap on the same R2 object. GHA does NOT error on divergent group
+  # so they overlap on the same R2 object. As of #5515 deploy_pipeline_fix's
+  # depends_on has TWO elements — it now transitively pulls BOTH apparmor_bwrap_profile
+  # AND infra_config_handler_bootstrap into this run — but the overlap surface with
+  # apply-web-platform-infra.yml is UNCHANGED: that workflow SSH-`-target`s only
+  # apparmor_bwrap_profile (not the bridge), so the new edge is never traversed by it.
+  # GHA does NOT error on divergent group
   # strings — they silently fail to serialize — so do not "rename for clarity".
   group: terraform-apply-web-platform-host
   # cancel-in-progress: false — cancelling a half-applied unlocked run is the
