@@ -8,6 +8,39 @@ brand_survival_threshold: none
 status: draft
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Sections enhanced:** Overview/operator-decision, FR variants, Acceptance Criteria, Research Insights, Sharp Edges
+**Agents used:** best-practices-researcher, code-simplicity-reviewer, architecture-strategist,
+user-impact-reviewer, frontend-anti-slop scanner.
+
+### Key Improvements
+1. **FR3-Alternative (keep button + double-click accelerator) PROMOTED to plan-of-record.**
+   Five independent agents (CPO, spec-flow, code-simplicity, architecture-strategist,
+   user-impact) converged: removing the button + widening the resize gate (old FR3) creates
+   an incoherent "resize handle that doesn't resize" in 3/4 sections, an a11y misnaming
+   (`role=separator`+`aria-valuenow`+"Resize knowledge base sidebar" rendered in Settings),
+   AND a persisted-collapse boot dead-end. FR3-literal is retained as opt-in but, if chosen,
+   MUST use the architecture-recommended decomposition (a separate collapse-edge gesture, NOT
+   a widened resize handle) and the FM-driven ACs below.
+2. **Concrete implementation grounding** added (Research Insights): 5px drag threshold;
+   **Enter/Space key must collapse** for AT parity (W3C Window Splitter pattern) — double-click
+   alone strands keyboard users; gold `#c9a962` on `#141414` = **7.77:1** (passes 1.4.11 at full
+   opacity — verify the /50 render or raise to /70); Tailwind v4 `bg-soleur-accent-gold-fill/50`
+   is valid on CSS-var tokens.
+3. **Failure-mode ACs** added from user-impact pass (cold-boot-collapsed expand test;
+   keyboard collapse parity; fetch-independent chevron).
+
+### New Considerations Discovered
+- The collapse state **persists to localStorage** (`use-sidebar-collapse.ts`) → a regressed
+  expand affordance strands the user collapsed across reloads (FM-1). The expand control MUST
+  render unconditionally in the collapsed branch, independent of any data fetch.
+- frontend-anti-slop baseline: `amber-500` trips NOTHING (no off-brand-color rule; it's a
+  Tailwind builtin), and `bg-soleur-accent-gold-fill` trips nothing — the gold swap is
+  scanner-neutral. Two pre-existing advisory BRAND-NONZERO-CORNER findings in
+  kb-desktop-layout.tsx + c4-workspace.tsx are unrelated (rounded-* dots) and out of scope.
+
 # ✨ feat: Sidebar resizer — gold active state + double-click-to-collapse (all sidebars)
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). This is in
@@ -98,9 +131,19 @@ diff ⇒ no Check-6 scope-out bullet required; this section satisfies preflight.
 - [ ] **AC5 (double-click collapses, rail):** double-clicking the rail resizer toggles
       `collapsed` to true. Verified by a vitest test (RTL) firing `fireEvent.doubleClick` on
       `data-testid="kb-rail-resize-handle"` and asserting the `onCollapse` prop fires exactly once.
-- [ ] **AC6 (double-click guard):** a double-click that immediately follows a drag of > 4px
+- [ ] **AC6 (double-click guard):** a double-click that immediately follows a drag of > **5px**
       total pointer travel does NOT collapse; and double-click does NOT persist a width when
       `latest === startWidth` (no no-op localStorage write). Covered by two vitest cases.
+      (5px is the MDN/use-gesture canonical drag threshold. NOTE per code-simplicity: first
+      verify empirically during RED whether `onDoubleClick` can even fire after a drag in this
+      handle — `onDoubleClick` and pointer-drag are separate event streams; if a drag never
+      produces a second same-target `click`, drop the travel guard and keep only the no-op-commit
+      skip. Do not ship the guard unproven.)
+- [ ] **AC-KBD (keyboard collapse parity, FR3-Literal only):** the collapse target exposes an
+      Enter/Space key that fires collapse (W3C Window Splitter pattern). Double-click is
+      pointer-only; without this, removing the button strands keyboard/AT users (FM-4).
+      Verified by `fireEvent.keyDown` Enter. (FR3-Alternative keeps the labeled `<button>`, so
+      keyboard parity is already satisfied — AC-KBD is N/A there.)
 - [ ] **AC7 (resizer renders in all expanded drill states):** `RailResizeHandle` mounts when
       the rail is expanded in Dashboard root / Settings / Chat / KB (not KB-only), and does
       NOT mount when collapsed. Verify by the render-gate predicate in `layout.tsx` (no longer
@@ -190,15 +233,38 @@ diff ⇒ no Check-6 scope-out bullet required; this section satisfies preflight.
 - Run AC2 / AC14 greps; `tsc --noEmit`; vitest. Confirm no co-located test files (vitest jsdom
   glob is `test/**/*.test.tsx`).
 
-## FR3 variants (operator choice)
+## FR3 variants (operator choice) — DEFAULT CHANGED at deepen-plan
 
-- **FR3 (this plan, literal request):** remove the button; double-click resizer collapses;
-  resizer renders in all expanded drill states; collapsed-rail chevron expands.
-- **FR3-Alternative (additive — CPO/spec-flow recommended):** KEEP the floated button as the
-  universal collapse/expand affordance; add double-click-collapse to the KB resizer as a
-  redundant accelerator; do NOT widen the render gate; do NOT add a separate expand chevron
-  (the button already serves expand). Lower risk, no discoverability regression. If chosen,
-  drop AC4/AC7/AC8 and keep AC5/AC6/AC9. **Operator: pick before /work.**
+> **Plan-of-record after deepen-plan: FR3-Alternative.** Five agents converged that the literal
+> "remove the button" path (FR3-Literal) builds two compensating subsystems to fill the holes
+> it creates, and yields an a11y-misnaming + persisted-collapse dead-end. FR3-Alternative
+> delivers the identical user-visible value (gold-on-active everywhere + double-click-collapse
+> on the KB rail) at ~half the surface. **Operator: the only real question is "must the visible
+> button be gone?" If not load-bearing, ship FR3-Alternative.**
+
+- **FR3-Alternative (plan-of-record — CPO/spec-flow/code-simplicity/architecture/user-impact
+  recommended):** KEEP the floated `PanelToggleIcon` button as the universal collapse/expand
+  affordance. Add guarded double-click-collapse to the **KB-only** resizer as a redundant
+  accelerator (where it is coherent — the rail there genuinely resizes). Do NOT widen the
+  render gate; do NOT add a separate expand chevron (the button already serves expand). Keeps
+  the `kbExpanded` predicate single-meaning (ADR-047 singular-authority spirit). **Active ACs:
+  AC1, AC2, AC3, AC5, AC6, AC9, AC10, AC11, AC12, AC13, AC14, AC15.** Drops AC4 (button kept),
+  AC7 (no gate widening), AC8 (button expands). Lowest risk; no discoverability/a11y regression.
+
+- **FR3-Literal (opt-in — honors "remove the button entirely"):** remove the floated button
+  AND the `PanelToggleIcon` SVG. Because the resize handle and width-persistence are one
+  KB-scoped subsystem, do NOT widen `RailResizeHandle`'s gate (that produces a resize handle
+  with no resize semantics + `role=separator`/`aria-valuenow` misnaming in Settings/Chat —
+  architecture-strategist HIGH). Instead **decompose**: keep `RailResizeHandle` strictly
+  KB-scoped (add double-click there); introduce a **separate thin collapse-edge** component
+  (`cursor-pointer`, NO `role=separator`, NO `aria-valuenow`, `aria-label="Collapse sidebar"`,
+  double-click → `toggleCollapsed`) for non-KB expanded states; add the collapsed-rail expand
+  chevron. **Adds ACs:** AC4 (button+SVG removed), AC7' (collapse-edge — NOT the resize
+  separator — mounts non-KB; resize separator stays KB-only), AC8 (chevron expands), AC8b
+  (cold-boot-collapsed: render with `localStorage["soleur:sidebar.main.collapsed"]="1"` →
+  chevron present + fires `toggleCollapsed`; chevron is fetch-independent — FM-1/FM-2), AC-KBD
+  (Enter/Space on the collapse target fires collapse — keyboard parity, FM-4). **Operator must
+  also accept the discoverability regression for the Phase-4 non-technical ICP (CPO dissent).**
 
 ## Domain Review
 
@@ -276,6 +342,39 @@ zero open code-review references. (Verified against `gh issue list --label code-
 4. Collapsed rail → expand chevron present + click expands (AC8).
 5. ⌘B toggles collapse in both directions (AC9).
 6. All three handles: active class is gold, hover class is grey, zero `amber-500` (AC1–3, AC10).
+
+## Research Insights
+
+**Double-click vs drag (best-practices-researcher):** `onDoubleClick` and pointer-drag are
+separate event streams; a `dblclick` fires only on two `click`s at the same target with no
+intervening drag. Canonical drag threshold = **5px** (`Math.hypot(dx,dy) > 5`). Verify
+empirically whether a drag can even produce `onDoubleClick` before writing the guard.
+
+**Accessibility (W3C Window Splitter pattern):** a collapse action on a `role="separator"`
+MUST also be bound to **Enter** (the canonical keyboard collapse). Double-click is mouse-only.
+FR3-Alternative satisfies this for free (the kept `<button>` is Tab+Enter/Space activatable);
+FR3-Literal must add Enter/Space to the collapse target (AC-KBD).
+
+**Non-text contrast (WCAG 1.4.11):** `#c9a962` on `#141414` (`bg-surface-1`, dark theme) =
+**7.77:1** — far above the 3:1 minimum at full opacity. At `/50` alpha the blended value is
+lower; either test the render or use `/70` to stay safely above 3:1 (AC11). The existing global
+focus ring already uses `--soleur-accent-gold-fill` (globals.css:168), so the focus-visible
+swap aligns with established precedent.
+
+**Tailwind v4 token + opacity:** `bg-soleur-accent-gold-fill/50` is valid on CSS-var-backed
+theme tokens in v4 (the `/opacity` shorthand works; the v3 `bg-[color:var(...)]/50` form is not
+required). `soleur-accent-gold-fill` is a wired theme key already used across the app.
+
+**Precedent diff (Phase 4.4):** the gold-active idiom has a direct in-repo precedent — PR #5477
+established the grip-bar visual on this same `RailResizeHandle`; the global focus ring
+(globals.css:168) already uses the gold token. The double-click-on-separator + collapse pattern
+is NOVEL in this repo (no sibling precedent) — flagged for reviewer scrutiny. No SQL/atomic-write/
+lock/RPC patterns in scope.
+
+**frontend-anti-slop baseline:** scanner-neutral for the gold swap (verified). `amber-500`
+trips nothing (no off-brand-color Tier-1 rule), `bg-soleur-accent-gold-fill` trips nothing.
+Two pre-existing advisory `BRAND-NONZERO-CORNER` findings (rounded-* dots in kb-desktop-layout.tsx
++ c4-workspace.tsx) are unrelated and out of scope.
 
 ## Sharp Edges
 
