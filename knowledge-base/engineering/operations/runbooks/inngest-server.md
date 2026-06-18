@@ -63,19 +63,14 @@ After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server 
    ```
    gh api repos/jikig-ai/soleur/actions/workflows/build-inngest-bootstrap-image.yml/runs --jq '.workflow_runs[0]'
    ```
-   If no run exists, push a `vinngest-vX.Y.Z` tag (operator decides the X.Y.Z of the bootstrap image; current is `v1.0.0`):
+   If no run exists, release a bootstrap image — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) below for the canonical 4-step tag→build→deploy→verify flow.
+2. Deploy the published image (NO SSH — `deploy-inngest-image.yml` is
+   `workflow_dispatch`-only; it POSTs the deploy webhook → on-host `ci-deploy.sh`
+   `case "inngest")` runs the bootstrap):
    ```
-   git tag vinngest-v1.0.0 && git push origin vinngest-v1.0.0
+   gh workflow run deploy-inngest-image.yml -f tag=<TAG>   # e.g. tag=v1.1.16
    ```
-2. Fire the deploy webhook (replace `<TAG>` with the OCI tag, e.g. `v1.0.0`):
-   ```
-   doppler run -p soleur -c prd_terraform -- bash -c 'echo "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap <TAG>" | ssh -o StrictHostKeyChecking=accept-new deploy@$(terraform -chdir=apps/web-platform/infra output -raw server_ip)'
-   ```
-   The webhook spawns `ci-deploy.sh` which runs the OCI image's entrypoint `/inngest-bootstrap.sh` against the host's systemd via bind-mounts.
-3. Verify the service is active:
-   ```
-   ssh root@$(terraform -chdir=apps/web-platform/infra output -raw server_ip) systemctl status inngest-server.service inngest-heartbeat.timer
-   ```
+3. Verify via the deploy-status webhook (NO SSH) — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) step 4. Expect `{component:"inngest", tag:"<TAG>", reason:"success"}`.
 4. [§ Unpause heartbeat](#unpause-heartbeat) once you've confirmed the heartbeat timer is firing.
 
 ## Heartbeat-miss triage
@@ -137,13 +132,53 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
    inngest_cli_version = "vX.Y.Z"
    inngest_cli_sha256  = "<64-hex>"
    ```
-3. Tag + push to trigger the OCI image rebuild:
+3. Release the new bootstrap-image semver (N.N.N — separate from the embedded
+   inngest-cli version) via the canonical flow below
+   ([§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify)):
+   annotated tag → build → cloud-init pin bump → `workflow_dispatch` deploy →
+   verify. On deploy, `inngest-bootstrap.sh` detects the version mismatch,
+   pauses → drains → restarts → resumes (~5s downtime on loopback).
+
+## Bootstrap-image release (tag → build → deploy → verify)
+
+Releasing a new `soleur-inngest-bootstrap` image (changed `inngest-bootstrap.sh`,
+`inngest-redis.*`, or bumped `inngest_cli_version`) is a **4-step coordinated
+flow — the image build does NOT auto-deploy**. None of these steps use SSH
+(`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
+`knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
+
+1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag** on the commit carrying the change
+   (the repo forces annotated tags — a bare `git tag <name> <sha>` fails
+   `fatal: no tag message?`):
    ```
-   git tag vinngest-vN.N.N && git push origin vinngest-vN.N.N
+   git tag -a vinngest-v1.1.16 <main-sha> -m "inngest-bootstrap v1.1.16: <what>"
+   git push origin vinngest-v1.1.16
    ```
-   (where N.N.N is the bootstrap-image semver — separate from the embedded inngest-cli version.)
-4. Wait for the GHA workflow to complete + the image to land in GHCR.
-5. Fire the deploy webhook with the new image tag. `inngest-bootstrap.sh` detects the version mismatch, pauses → drains → restarts → resumes (~5s downtime on loopback).
+   Fires `build-inngest-bootstrap-image.yml` → builds + SHA-verifies + pushes the
+   image. It does NOT deploy.
+2. **Bump the cloud-init pin in lockstep** — `apps/web-platform/infra/cloud-init.yml`
+   (the 3 `soleur-inngest-bootstrap:vX.Y.Z` refs) → `v1.1.16` in a PR. AC6 of
+   `cloud-init-inngest-bootstrap.test.sh` asserts pin == the semver-max published
+   `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
+   fails AC6); pushing the tag without bumping turns `main` red until this PR merges.
+3. **Dispatch the deploy** (workflow_dispatch-only; the build never chains into it):
+   ```
+   gh workflow run deploy-inngest-image.yml -f tag=v1.1.16
+   ```
+4. **Verify via the deploy-status webhook (NO SSH)** — single authenticated GET:
+   ```
+   WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
+   CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
+   CSEC=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+   HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WS" | sed 's/.*= //')
+   curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
+     -H "CF-Access-Client-Id: ${CID}" -H "CF-Access-Client-Secret: ${CSEC}" \
+     "https://deploy.soleur.ai/hooks/deploy-status" | jq '{component, tag, reason, exit_code}'
+   ```
+   Expect `{component:"inngest", tag:"v1.1.16", reason:"success"}` (durable backend
+   live). `reason:"success_degraded_durability"` = the SQLite fail-safe fired
+   (Redis not ready, #5547). Use the literal host `deploy.soleur.ai` — do NOT
+   interpolate `$(doppler secrets get APP_DOMAIN_BASE …)` (reads empty / races).
 
 ## FR5 flag flip
 
