@@ -235,6 +235,11 @@ diff ⇒ no Check-6 scope-out bullet required; this section satisfies preflight.
 
 ## FR3 variants (operator choice) — DEFAULT CHANGED at deepen-plan
 
+> **OPERATOR DECISION (2026-06-18): FR3-Alternative SELECTED.** The operator confirmed: keep the
+> collapse/expand button everywhere, add double-click-to-collapse on the KB resizer as an
+> accelerator, gold-on-active on all 3 handles. FR3-Literal is NOT in scope. Active ACs: AC1,
+> AC2, AC3, AC5, AC6, AC9, AC10, AC11, AC12, AC13, AC14, AC15. Dropped: AC4, AC7, AC8.
+
 > **Plan-of-record after deepen-plan: FR3-Alternative.** Five agents converged that the literal
 > "remove the button" path (FR3-Literal) builds two compensating subsystems to fill the holes
 > it creates, and yields an a11y-misnaming + persisted-collapse dead-end. FR3-Alternative
