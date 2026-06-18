@@ -180,6 +180,19 @@ Two harness-runnability facts pinned by a live MCP/system-Chrome repro (#5485):
   chromium installs cleanly, so the GH-Action re-home substrate is unaffected. A
   launch failure now surfaces as the distinct, diagnosable
   `CANT-RUN:browser-launch:<error.name>` (fail-loud, never a silent fallback).
+- **A server-side send REJECTION is CANT-RUN, not FAIL.** The harness subscribes
+  to the app WS (`/ws`) and classifies the server `{type:"error"}` reply to the
+  send: `CANT-RUN:rate-limited` (the `start_session` per-user/hour limiter,
+  `server/start-session-rate-limit.ts`, rejected the session — `errorCode:
+  "rate_limited"`) and `CANT-RUN:session-rejected` (the chat frame hit
+  "Send start_session first" because the session never started). Both are
+  environmental — the synthetic principal shares its per-hour budget across local
+  runs and CI — so they must NOT collapse into the rail-regression `FAIL` (which,
+  once the report-only→blocking flip lands, would block a legitimate deploy).
+  Genuine `FAIL` is reserved for session-established-but-no-row (the rail-race
+  class). The `session-rejected` match is the narrow "Send start_session first"
+  hint, not a bare "No active session" (which also covers established-session
+  drops → genuine FAIL).
 - **Injected cookie `httpOnly: false` is load-bearing.** Client-guarded routes
   (`/dashboard/chat/new`, the gate path) hydrate the session via the
   `@supabase/ssr` BROWSER client, which reads the auth-token cookie from
