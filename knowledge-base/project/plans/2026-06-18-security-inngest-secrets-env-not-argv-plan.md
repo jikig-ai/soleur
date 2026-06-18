@@ -147,8 +147,9 @@ logs:
   where: journald (inngest-server.service) -> Better Stack Logs via Vector
   retention: Better Stack default
 discoverability_test:
-  command: "Better Stack Logs query for INNGEST_DURABLE: ok (latest deploy) — no ssh; or deploy.soleur.ai/hooks/deploy-status for deploy outcome"
-  expected_output: "INNGEST_DURABLE: ok — durable backend configured and inngest-redis active"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: "401"
+  note: "401 (HMAC challenge) proves the inngest serve route is reachable — a no-ssh liveness proxy. The AUTHORITATIVE durable-detection signal is the ci-deploy `INNGEST_DURABLE: ok` line in Better Stack Logs + the scheduled-inngest-health detector (both no-ssh, auth-gated)."
 ```
 
 ## Architecture Decision (ADR/C4)
