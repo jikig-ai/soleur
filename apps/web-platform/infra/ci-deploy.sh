@@ -879,6 +879,23 @@ case "$COMPONENT" in
     # replaced.
     rm -f /tmp/vector.toml
     docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
+    # Durable Redis assets (#5450) — stage to /tmp like /vector.toml above. The
+    # existing-host deploy runs inngest-bootstrap.sh DIRECTLY on the host (the
+    # Alpine extract container has no systemctl), so it bypasses the OCI image
+    # ENTRYPOINT that stages these on the fresh-host cloud-init path
+    # (cloud-init.yml mirrors this same docker-cp block). Without these lines the
+    # bootstrap's `[[ -f /tmp/inngest-redis.conf && ... ]]` guard is always false
+    # → Redis never installs → the durable ExecStart crash-loops on 127.0.0.1:6379
+    # (#5547 Gap 1, the ~3.5h #5542 outage symptom). `rm -f` FIRST so a stale
+    # prior-deploy asset can't survive a silent cp failure (same defense as the
+    # /tmp/vector.toml rm above). `2>/dev/null || true` keeps a pre-#5450 rollback
+    # image (no /inngest-redis.* baked) functional — the bootstrap's Gap-2
+    # fail-safe then keeps inngest on the SQLite-only ExecStart.
+    rm -f /tmp/inngest-redis.conf /tmp/inngest-redis.service /tmp/inngest-redis-bootstrap.sh
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.conf" /tmp/inngest-redis.conf 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.service" /tmp/inngest-redis.service 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis-bootstrap.sh" /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+    chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     # Read ENV vars baked into the image at build time (see
     # .github/workflows/build-inngest-bootstrap-image.yml — ENV
     # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...

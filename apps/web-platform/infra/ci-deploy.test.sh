@@ -2179,6 +2179,29 @@ else
 fi
 
 echo ""
+echo "--- #5547 Gap 1: existing-host deploy stages the durable Redis assets ---"
+# The existing-host deploy path runs inngest-bootstrap.sh DIRECTLY on the host
+# (the Alpine extract container has no systemctl), bypassing the OCI image
+# ENTRYPOINT that stages /tmp/inngest-redis.* on the fresh-host cloud-init path.
+# So ci-deploy.sh's `case "inngest")` MUST docker-cp the three Redis assets to
+# the /tmp staging path itself, or inngest-bootstrap.sh's Redis-install guard
+# (`[[ -f /tmp/inngest-redis.conf && ... ]]`) is always false → Redis never
+# installed → the durable ExecStart crash-loops (#5547 Gap 1).
+# Per-asset line-start greps (NOT a `grep -c >= 3`, which a WHY-comment naming
+# inngest-redis would inflate — AC1).
+TOTAL=$((TOTAL + 1))
+G1_CONF=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis\.conf' "$DEPLOY_SCRIPT" || true)
+G1_SERVICE=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis\.service' "$DEPLOY_SCRIPT" || true)
+G1_BOOTSTRAP=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis-bootstrap\.sh' "$DEPLOY_SCRIPT" || true)
+if [[ "$G1_CONF" -ge 1 && "$G1_SERVICE" -ge 1 && "$G1_BOOTSTRAP" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: ci-deploy.sh stages inngest-redis.{conf,service} + inngest-redis-bootstrap.sh to /tmp (#5547 Gap 1 / AC1)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ci-deploy.sh must docker cp all three Redis assets in case inngest (conf=$G1_CONF service=$G1_SERVICE bootstrap=$G1_BOOTSTRAP; file: ci-deploy.sh / #5547 AC1)"
+fi
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 if [[ "$FAIL" -gt 0 ]]; then
