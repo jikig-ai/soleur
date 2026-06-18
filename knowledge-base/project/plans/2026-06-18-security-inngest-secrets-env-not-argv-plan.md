@@ -54,7 +54,7 @@ This hardens the #5450 durable-backend amendment to ADR-030 without changing the
 
 **If this leaks, the user's workflow/data is exposed via:** the durable Postgres URI grants read/write to the inngest project DB (all users' run-state + armed reminders); the Redis password grants the durable queue. Soleur runs autonomous agents that execute user-influenced code on infrastructure — a local process reading `/proc/<inngest-pid>/cmdline` could harvest these creds. Local-only (no remote exposure), single-tenant alpha — bounded, but real.
 
-**Brand-survival threshold:** single-user incident. → `requires_cpo_signoff: true`. CPO ack on the approach is required at plan time (no UI; server/infra only). `user-impact-reviewer` runs at PR-review time against the diff. `security-sentinel` + `data-integrity-guardian` (wiped-volume guard) run at review.
+- **Brand-survival threshold:** single-user incident — `requires_cpo_signoff: true`. CPO ack on the approach is required at plan time (no UI; server/infra only). `user-impact-reviewer` runs at PR-review time against the diff (it APPROVED, 0 uncovered findings). `security-sentinel` + `data-integrity-guardian` (wiped-volume guard) ran at review.
 
 ## Files to Edit
 
