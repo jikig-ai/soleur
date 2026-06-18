@@ -113,8 +113,8 @@ logs:
   where: GitHub Actions run logs (terraform plan/apply output) + host journald (logger -t infra-config-apply) → Better Stack
   retention: GHA default (90d) + Better Stack ingest
 discoverability_test:
-  command: cd apps/web-platform/infra && grep -n "depends_on" server.tf
-  expected_output: deploy_pipeline_fix shows depends_on = [terraform_data.apparmor_bwrap_profile, terraform_data.infra_config_handler_bootstrap]
+  command: grep -n "infra_config_handler_bootstrap" apps/web-platform/infra/server.tf
+  expected_output: "depends_on = [terraform_data.apparmor_bwrap_profile, terraform_data.infra_config_handler_bootstrap]"
 ```
 
 ## Files to Edit
