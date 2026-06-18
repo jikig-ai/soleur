@@ -102,6 +102,8 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
 
 Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
 
+> **Secret delivery (#5560).** inngest-server reads `INNGEST_POSTGRES_URI`, `INNGEST_REDIS_URI`, `INNGEST_SIGNING_KEY`, and `INNGEST_EVENT_KEY` from the doppler-run **environment** (owner-only `/proc/<pid>/environ`), never the `inngest start` argv (world-readable `/proc/<pid>/cmdline`). A rotated value loads on the next inngest-server restart/redeploy **without** being re-exposed on argv. **Ordering matters:** when rotating because a value leaked, deploy the env-delivery build FIRST (verify `ps -eo args | grep inngest` shows no secret), THEN rotate — rotating while an old argv-form image is still running would re-leak the new value immediately. After rotation, NEVER roll back to a pre-#5560 (argv-form) image.
+
 **⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
 
 1. Identify which key to rotate. Replace `<KEY>` with `inngest_signing_key_prd` (or `_dev`, or `inngest_event_key_{prd,dev}`).
@@ -273,10 +275,12 @@ CLI semantics (`inngest start --help`): `--postgres-uri` = "configuration and hi
 - **0.3 Fail-closed vs silent fallback — Inngest FAILS CLOSED.** With a reachable-but-refused backend
   it exits non-zero (`failed to connect … connection refused`); `/health` never returns 200; **no**
   silent degrade to a healthy SQLite state. → The existing `/health` 200 gate already catches an
-  *unreachable* backend. The residual silent-non-durable risk is **flags-absent** (ExecStart drops the
-  flags → defaults to SQLite **while** `/health`=200). The hard gate therefore asserts: (a) the running
-  inngest cmdline contains `--postgres-uri` AND `--redis-uri`, (b) `inngest-redis` unit active + Redis
-  ping, (c) Postgres reachable — NOT a "fail-open post-start assertion".
+  *unreachable* backend. The residual silent-non-durable risk is **sentinel-absent** (ExecStart drops the
+  durable config → defaults to SQLite **while** `/health`=200). The hard gate therefore asserts: (a) the
+  running inngest cmdline contains the non-secret `--postgres-max-open-conns` durable sentinel (**#5560**:
+  the postgres/redis URIs + signing/event keys are delivered via the doppler-run **environment**, never
+  argv — `/proc/<pid>/cmdline` is world-readable, so detection keys on the sentinel, not `--postgres-uri`),
+  (b) `inngest-redis` unit active + Redis ping, (c) Postgres reachable — NOT a "fail-open post-start assertion".
 - **0.4 Cutover-recovery — enumeration is FEASIBLE; no app-side ledger required.** The server's GraphQL
   (`/v0/gql` `eventsV2(filter:{from!,until,eventNames,query,includeInternalEvents})`) returns received
   events by time window, including future-dated `reminder.scheduled`. Cutover recovery = quiesce arming →

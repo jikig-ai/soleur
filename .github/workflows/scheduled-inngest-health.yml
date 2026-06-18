@@ -222,7 +222,7 @@ jobs:
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
             printf '### What this means\n\n'
             printf '`sqlite_only` — the host is on the SQLite-only fail-safe ExecStart: the server is alive, but armed reminders survive only until the next host rebuild, then are lost.\n\n'
-            printf '`degraded` — `--postgres-uri` is configured but `--redis-uri` is absent OR `inngest-redis.service` is inactive. This is the #5542 incident state (durable backend, broken durability invariant); armed-reminder loss risk is present now, not just on rebuild.\n\n'
+            printf '`degraded` — the durable backend is configured (the `--postgres-max-open-conns` sentinel is present) but `inngest-redis.service` is inactive. This is the #5542 incident state (durable backend, broken durability invariant); armed-reminder loss risk is present now, not just on rebuild. (Since #5560 the postgres/redis URIs are env-delivered, not on argv — durability is keyed on the non-secret sentinel.)\n\n'
             printf '### Remediation\n\n'
             printf 'Re-deploy inngest with Redis ready (the deploy re-stages the redis assets → durable ExecStart), or restart `inngest-redis.service`. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the #5450 durability epic. This is the continuous between-deploy detector; the deploy-time `ci-deploy.sh` signal fires only at deploy time.\n'
           } > "$BODY_FILE"
