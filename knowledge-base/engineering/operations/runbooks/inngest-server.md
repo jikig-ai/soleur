@@ -98,6 +98,47 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
    ```
    should match what `doppler secrets get INNGEST_HEARTBEAT_URL -p soleur -c prd --plain` returns.
 
+## Session-pool pressure / exhaustion (`[ci/inngest-pool]`) — #5562
+
+The external watchdog (`.github/workflows/scheduled-inngest-health.yml`) runs a
+pool-utilization probe every 15 min: it reads `pg_stat_activity` on the dedicated
+inngest Supabase project (ref `pigsfuxruiopinouvjwy`) via the Management API and
+files a `[ci/inngest-pool]` issue + Sentry `error` when the session count crosses
+~70% of the pool cap (`pool_pressure`, leading indicator) or `EMAXCONNSESSION`
+fires / the count reaches the cap (`pool_exhausted`). These modes are
+**excluded from the auto-restart gate** — a restart re-opens all of inngest's
+pooler connections at once and DEEPENS exhaustion (#5558). **Do NOT restart
+inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
+
+1. **Read the alert** (no SSH) — `gh issue view "$(gh issue list --state open --search 'in:title \"[ci/inngest-pool]\"' --json number --jq '.[0].number')" --comments`. The body carries the per-state breakdown + `total` vs cap and the run log.
+2. **Re-read the live pool** (no SSH, read-only) — confirm the trend via the same Management-API path the probe uses:
+   ```
+   SUPA=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
+   curl -s --max-time 15 -X POST \
+     https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query \
+     -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
+     -d '{"query":"select state, count(*) from pg_stat_activity group by state"}' | jq .
+   ```
+3. **Clear stale sessions** (no SSH, read-only client cap is the real fix) — if `idle` / `idle in transaction` sessions are climbing, terminate them via the same `/database/query` path (still no host login):
+   ```
+   curl -s --max-time 15 -X POST \
+     https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query \
+     -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
+     -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
+   ```
+   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`), UNDER the session-pool cap (live 30 as of 2026-06-18; project default 15). Confirm the live `default_pool_size` — the #5562 decision is to revert the #5558 stopgap 30 → the project default 15 and rely on the client cap (see `apps/web-platform/infra/inngest.tf`). The watchdog's `SESSION_POOL_CAP` env tracks the live cap (currently 30); drop it to 15 in lockstep when the revert lands.
+4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
+
+### Last-resort (host login)
+
+Only after the three no-SSH steps above fail to resolve the pressure, inspect
+inngest-server's own connection count on the host:
+```
+ssh root@<host> 'journalctl -u inngest-server.service -n 50 | grep -i "conn\|pool\|EMAXCONN"'
+```
+A host-level restart is the WRONG lever here (it worsens `EMAXCONNSESSION`); the
+host login is for log inspection only, not remediation.
+
 ## Key rotation
 
 Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
