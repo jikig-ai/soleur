@@ -131,6 +131,12 @@ jobs:
     needs: migrate
     if: needs.migrate.result == 'success'
     runs-on: ubuntu-latest
+    # Hard cap the job: this job holds the `verify-migrations-web-platform`
+    # concurrency lock (cancel-in-progress: false), so a wedged step serializes
+    # ALL web-platform releases behind it. Without an explicit cap it inherits
+    # the 6h GitHub default — the #5559 deploy hung ~3h on `Install psql` and
+    # blocked every subsequent release until manually cancelled.
+    timeout-minutes: 15
     concurrency:
       group: verify-migrations-web-platform
       cancel-in-progress: false
@@ -142,9 +148,22 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Install psql
+        # Step-level cap + retry so a transient apt mirror/lock stall fails fast
+        # (and the job/concurrency lock releases) instead of hanging for hours.
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends postgresql-client
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && \
+               sudo apt-get install -y -qq --no-install-recommends postgresql-client; then
+              exit 0
+            fi
+            echo "apt attempt ${attempt} failed; retrying in 5s" >&2
+            sleep 5
+          done
+          echo "::error::Install psql failed after 3 attempts" >&2
+          exit 1
       - name: Run verify files
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
