@@ -615,3 +615,99 @@ below the model's system/container granularity):
   the 2026-06-17b and 2026-06-18 amendments above, these are captured in this
   ADR prose, not in a `.c4` edit (grep of `knowledge-base/**/*.c4` for ADR-044 /
   the relevant identifiers is empty). **No C4 impact.**
+
+## Amendment 2026-06-18 — dispatch readiness must distinguish membership-deny NULL install from not-connected
+
+**Lineage:** this is a **consequence-level extension** of the prior
+2026-06-18 subsection
+*"Consequence — dispatch readiness MUST be (repo_status-ok AND physical `.git`
+present); ready-but-`.git`-gone re-clones lock-free (Bug 2)"* (above). That
+subsection made dispatch readiness the conjunction of `repo_status`-ok **AND**
+physical `.git` presence. This amendment extends the same dispatch-readiness
+theme from *"`.git` presence"* to *"credential-read divergence"*: a third
+multi-workspace-per-installation defect, now on the dispatch **READ** path.
+
+**Defect.** A member cold-dispatch into a genuinely-connected shared/team
+workspace can spawn a **repo-less agent** even after the Bug-2 graft shipped. The
+agent **was** spawned (it ran `/soleur:go` Step 0.0 and reported "no git
+repository", `git rev-parse` exit 128), which proves the gate
+(`resolveRepoReadinessWithSelfHeal`) returned `{ok:true}` **without the graft
+running**. Root cause is a **two-read asymmetry** against the post-ADR-044 source
+of truth:
+
+- `repo_url` / `repo_status` are **non-credential** columns read via a **direct,
+  RLS-gated `.select()`** (`current-repo-url.ts`) — a member **can** read them
+  non-null.
+- `installationId` (`workspaces.github_installation_id`) is the **credential**
+  column, REVOKED from `authenticated`, read **only** via the
+  `resolve_workspace_installation_id` **SECURITY DEFINER RPC**, whose mig-079
+  comment is explicit: *"Returns NULL for non-members … deny is indistinguishable
+  from 'not connected'."*
+
+So a member of a connected team workspace can read `repo_url` (RLS pass) while
+the install RPC returns NULL (membership-deny / transient blip) → `hasConnection`
+false → the fast path returns `{ok:true}` and the graft is silently skipped
+(`repo-readiness-self-heal.ts:128,134-140`); the fire-and-forget
+`ensureWorkspaceRepoCloned` then no-ops on the null install → the agent spawns
+repo-less, with **no Sentry signal** at the dispatch path.
+
+**Decision (decided here).** At the Concierge dispatch readiness gate, a
+`decision.ok` + `.git`-absent workspace with **`repoUrl` present but
+`installationId` null** is a **resolver divergence**, NOT "not connected".
+`repoUrl` (a non-credential, RLS-readable column) is the honest signal that a
+connection *exists*; a null install against a present `repoUrl` means the
+*credential read denied*, not that the repo is absent. The gate:
+
+- **fails honestly** — returns an honest `RepoNotReadyError`
+  (`repo_setup_failed`) with a **membership-deny-aware** message ("we couldn't
+  verify your access to this repository. If you recently joined this workspace,
+  ask the workspace owner to confirm the connection") instead of the unactionable
+  "reconnect" CTA — and is **NEVER** fast-pathed into a repo-less agent spawn;
+- emits a **paging** `repo_resolver_divergence` Sentry op
+  (`op:connected-null-install-at-dispatch`, the only durable record) — closing
+  the dark dispatch path (the existing `op:ready-null-installation` lives only in
+  the daily CRON `cron-workspace-sync-health.ts`, a periodic backstop, not the
+  synchronous dispatch signal);
+- performs **ZERO `workspaces` writes** — it does **NOT** persist
+  `repo_status=error`.
+
+**The zero-write rule is load-bearing (the single most important deviation from
+the `failHonestly` precedent).** `failHonestly` persists `error` because it
+observed a *real, attempted clone that failed*; the divergence path attempted
+**nothing** (it has no install to clone with). Persisting `error` on the
+**shared `workspaces` row** here is a category error with two failure modes:
+(1) **cross-tenant corruption** — a removed/transient member whose
+`set_repo_status` membership check passes would flip a **healthy team workspace
+to `error` for every legitimate Owner**; (2) **sticky transient** —
+`installationId` is null on *any* RPC blip and `getCurrentRepoStatus` is
+deliberately fail-open, so writing `error` converts a self-recovering transient
+into a sticky failure. A transient blip therefore self-recovers on the next
+dispatch (install resolves non-null → graft path).
+
+### Considered Options (amendment)
+
+- **Widen `resolve_workspace_installation_id` to return the install on
+  membership-deny** — **REJECTED.** Re-opens the exact credential-leakage surface
+  the RPC's deny-NULL gate closes (mig 079): it would expose
+  `workspaces.github_installation_id` (a GitHub App token grant) to non-members.
+  The NULL ambiguity is inherent to a membership-gated secret and MUST be
+  disambiguated by the **caller** using the non-credential `repoUrl`/`repo_status`
+  signals, never by widening the credential read.
+- **Persist `repo_status=error` on the divergence path (mirror `failHonestly`)**
+  — **REJECTED.** Cross-tenant corruption + sticky-transient (see the zero-write
+  rule above). The Sentry op is the only durable record.
+
+### C4 edge note
+
+No `.c4` model edit. The affected member is a workspace Owner (already covered by
+the `founder` actor's multi-Owner ADR-038 description); the install RPC read
+(`api -> supabase`) and the clone edge (`engine -> github`) are already modeled;
+the fix changes the *condition* on the existing `api -> claude "Spawns agent
+sessions"` edge (block-vs-spawn), not the topology. Grep of
+`knowledge-base/**/*.c4` for the relevant identifiers is empty. **No C4 impact.**
+
+### Sequencing
+
+Behavioral correction shipped in the same PR (no soak gate; not a destructive
+migration; no schema change — the credential RPC is unmodified and no new
+migration is added).

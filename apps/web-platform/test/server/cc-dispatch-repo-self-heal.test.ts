@@ -30,6 +30,7 @@ function makeSeams(over: Partial<RepoSelfHealSeams> = {}): RepoSelfHealSeams {
     setRepoStatus: vi.fn(async () => {}),
     ensureWorkspaceRepoCloned: vi.fn(async () => "ok" as const),
     gitDirExists: vi.fn(() => false),
+    reportDivergence: vi.fn(),
     ...over,
   };
 }
@@ -137,15 +138,59 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     expect(seams.setRepoStatus).toHaveBeenCalledWith(WS, "error", expect.any(String));
   });
 
-  it("ready + .git ABSENT + NO installation → honest block, NO clone (cannot recover unconnected)", async () => {
+  // AC1/AC1b/T1 — the headline divergence case (was previously the BUG: this
+  // input fast-path-returned { ok:true } and spawned a repo-less agent). A
+  // `repo_status='ready'` workspace with a PRESENT repoUrl but a NULL
+  // installationId (the credential RPC denied/blipped — `repoUrl` is the
+  // non-credential honest signal that a connection exists) must fail honestly,
+  // emit the divergence op, and perform ZERO workspaces writes + NO clone.
+  it("ready + .git ABSENT + install NULL + repoUrl PRESENT → divergence: NO spawn, { ok:false, errorCode:'repo_setup_failed' }, emits divergence, ZERO writes/clone", async () => {
     const seams = makeSeams({ gitDirExists: vi.fn(() => false) });
     const r = await resolveRepoReadinessWithSelfHeal(
-      { ...baseArgs(), status: "ready", installationId: null },
+      { ...baseArgs(), status: "ready", installationId: null, repoUrl: REPO },
       seams,
     );
-    // not_connected-shaped: fall through to the existing repo-less path (ok),
-    // never attempt a clone with no install.
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.code).toBe("error");
+      expect(r.errorCode).toBe("repo_setup_failed");
+    }
+    expect(seams.reportDivergence).toHaveBeenCalledTimes(1);
+    // AC1b — zero workspaces writes (a removed/transient member must not corrupt
+    // a healthy team workspace's repo_status for its Owners), and no clone
+    // attempted (we have no install to clone with).
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
+    expect(seams.claimCloneLock).not.toHaveBeenCalled();
+    expect(seams.ensureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // AC2/T2 — the must-not-over-fire control: genuinely not connected (repoUrl
+  // empty, repo_status not_connected) still fast-path-returns ok and emits NO
+  // divergence op.
+  it("not_connected + .git ABSENT + install NULL + repoUrl EMPTY → genuinely not connected: { ok:true }, NO divergence emit", async () => {
+    const seams = makeSeams({ gitDirExists: vi.fn(() => false) });
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), status: "not_connected", installationId: null, repoUrl: "" },
+      seams,
+    );
     expect(r).toEqual({ ok: true });
+    expect(seams.reportDivergence).not.toHaveBeenCalled();
+    expect(seams.ensureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // T5 — a recoverable-error workspace whose install is null + repoUrl present
+  // still honest-blocks (it cannot recover without an install) but the cause is
+  // now QUERYABLE via the divergence emit. Still ZERO workspaces writes.
+  it("error + .git ABSENT + install NULL + repoUrl PRESENT → honest block { ok:false } + divergence emit, ZERO setRepoStatus", async () => {
+    const seams = makeSeams({ gitDirExists: vi.fn(() => false) });
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), status: "error", installationId: null, repoUrl: REPO },
+      seams,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("error");
+    expect(seams.reportDivergence).toHaveBeenCalledTimes(1);
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
     expect(seams.ensureWorkspaceRepoCloned).not.toHaveBeenCalled();
   });
 

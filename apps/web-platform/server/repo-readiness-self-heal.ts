@@ -37,10 +37,23 @@ import type {
   EnsureWorkspaceRepoArgs,
   ReprovisionOutcome,
 } from "@/server/ensure-workspace-repo";
+import type { RepoResolverDivergenceOp } from "@/server/repo-resolver-divergence";
 
 /** The reason persisted (and shown) when the dispatch self-heal clone fails. */
 const SELF_HEAL_FAILED_REASON =
   "automatic repository recovery failed; please reconnect";
+
+/**
+ * Client-facing reason for the connection-unresolved divergence (the credential
+ * read `resolve_workspace_installation_id` returned NULL for a workspace whose
+ * `repoUrl` is present). Membership-deny-aware — NOT the unactionable "reconnect"
+ * CTA, because a recently-joined member cannot fix a membership-gated credential
+ * read by reconnecting. Framed via `repoErrorMsg` at the return site. This reason
+ * is NEVER persisted to `workspaces` (see `failConnectionUnresolved`); it is a
+ * transient, client-only message.
+ */
+const CONNECTION_UNRESOLVED_REASON =
+  "we couldn't verify your access to this repository. If you recently joined this workspace, ask the workspace owner to confirm the connection";
 
 export interface RepoSelfHealArgs {
   userId: string;
@@ -88,6 +101,18 @@ export interface RepoSelfHealSeams {
   ) => Promise<ReprovisionOutcome>;
   /** `existsSync(<workspacePath>/.git)` — injected so the decision is fs-free in test. */
   gitDirExists: (workspacePath: string) => boolean;
+  /**
+   * Emit a dispatch-time `repo_resolver_divergence` Sentry breadcrumb. Injected
+   * (required) so this module stays DB/Sentry/IO-free in unit tests (AC4) — the
+   * production wiring in cc-dispatcher routes it to `reportRepoResolverDivergence`.
+   * Fires when a genuinely-connected workspace resolves a NULL install at
+   * dispatch (the previously-dark path this PR makes observable).
+   */
+  reportDivergence: (
+    op: RepoResolverDivergenceOp,
+    userId: string,
+    workspaceId: string,
+  ) => void;
 }
 
 /**
@@ -132,7 +157,17 @@ export async function resolveRepoReadinessWithSelfHeal(
   // `ready`-but-`.git`-absent CONNECTED workspace falls through to the lock-free
   // graft below (Bug 2). All other `{ ok:true }` shapes return unchanged.
   if (decision.ok) {
-    if (!hasConnection || seams.gitDirExists(args.workspacePath) === true) {
+    const gitAbsent = seams.gitDirExists(args.workspacePath) === false;
+    // DIVERGENCE (this PR) — a genuinely-connected workspace (`repoUrl` present,
+    // the non-credential honest signal that a connection EXISTS) whose
+    // credential read `resolve_workspace_installation_id` returned NULL
+    // (membership-deny / transient RPC blip), with `.git` absent. We have NO
+    // install to clone with, so we MUST NOT fast-path into a repo-less agent
+    // spawn (the bug). Fail honestly + emit the dispatch-time divergence op.
+    if (args.installationId === null && !!args.repoUrl && gitAbsent) {
+      return failConnectionUnresolved(args, seams);
+    }
+    if (!hasConnection || !gitAbsent) {
       return decision;
     }
     // ready + connected + `.git` ABSENT → lock-free graft (no claimCloneLock).
@@ -147,6 +182,23 @@ export async function resolveRepoReadinessWithSelfHeal(
     seams.gitDirExists(args.workspacePath) === false;
 
   if (!canRecover) {
+    // Observability mirror — a recoverable-error/cloning workspace that is
+    // genuinely connected (`repoUrl` present) but resolved a NULL install is the
+    // SAME divergence as the `decision.ok` branch above. It already blocks
+    // honestly (canRecover is false because `hasConnection` is false); we add
+    // ONLY the emit so the cause is queryable. No clone is possible (no install)
+    // and no `workspaces` write is performed here either.
+    if (
+      args.installationId === null &&
+      !!args.repoUrl &&
+      seams.gitDirExists(args.workspacePath) === false
+    ) {
+      seams.reportDivergence(
+        "connected-null-install-at-dispatch",
+        args.userId,
+        args.workspaceId,
+      );
+    }
     return decision;
   }
 
@@ -218,6 +270,43 @@ async function failHonestly(
     message:
       "Concierge dispatch self-heal clone failed; honest-blocking the dispatch after a real recovery attempt",
   });
+  return {
+    ok: false,
+    code: "error",
+    message: repoErrorMsg(reason),
+    errorCode: "repo_setup_failed",
+  };
+}
+
+/**
+ * A genuinely-connected workspace (`repoUrl` present) whose credential read
+ * returned a NULL install. We cannot clone (no install) and must NOT spawn a
+ * repo-less agent, so we block honestly with a membership-deny-aware message and
+ * emit the dispatch-time divergence op (the ONLY durable record).
+ *
+ * P0 (deepen-plan, architecture-strategist) — unlike `failHonestly`, this path
+ * attempted NO clone, so it performs **ZERO `workspaces` writes**: it does NOT
+ * call `setRepoStatus`. Persisting `repo_status=error` on the shared `workspaces`
+ * row here would (a) let a removed/transient member (whose `set_repo_status`
+ * membership check happens to pass) corrupt a healthy team workspace's readiness
+ * for its Owners, and (b) turn a transient RPC blip into a sticky failure
+ * (`installationId` is null on ANY RPC error; `getCurrentRepoStatus` is
+ * deliberately fail-open). A transient blip self-recovers on the next dispatch
+ * (install resolves non-null → graft path). Synchronous — no I/O.
+ */
+function failConnectionUnresolved(
+  args: RepoSelfHealArgs,
+  seams: RepoSelfHealSeams,
+): RepoReadiness {
+  seams.reportDivergence(
+    "connected-null-install-at-dispatch",
+    args.userId,
+    args.workspaceId,
+  );
+  // `sanitizeGitStderr` still frames the client `repoErrorMsg`, even though the
+  // reason is never persisted (no raw stderr in this static copy, but reuse the
+  // shared primitive rather than introduce a second copy path).
+  const reason = sanitizeGitStderr(CONNECTION_UNRESOLVED_REASON);
   return {
     ok: false,
     code: "error",
