@@ -175,6 +175,51 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # (stdin, never argv). Live-verified: inngest v1.19.4 connects + migrates on :5432
 # (runbook § Durable backend, verdict 0.5).
 
+# ---------------- Pooler config drift (#5558 → #5562) ----------------
+# During the #5558 EMAXCONNSESSION recovery, the dedicated inngest project's
+# Supavisor pooler `default_pool_size` was raised 15 → 30 LIVE via the Supabase
+# Management API. This is uncommitted out-of-band drift (it lives in the project
+# config, not in any repo file) — VERIFIED live 2026-06-18 via the Management API
+# (GET https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/config/database/pgbouncer
+# → {"default_pool_size":30,"pool_mode":"transaction"}). That raise was a stopgap.
+# The real fix — a CLIENT-side
+# cap, `--postgres-max-open-conns 10` in inngest-server's ExecStart — is already
+# merged (commit 0a6665ea1, #5559; inngest-bootstrap.sh:354) and holds inngest's
+# own connection count well under the project default of 15.
+#
+# DECISION (#5562): REVERT `default_pool_size` to the project default (15) and
+# rely on the client cap, rather than codify the raised 30. The leading-indicator
+# pool probe added to .github/workflows/scheduled-inngest-health.yml (#5562)
+# alerts at ~70% of the cap BEFORE EMAXCONNSESSION, which is what makes the revert
+# safe. The revert itself is a separate out-of-band operator action (NO live
+# mutation in the #5562 PR); this comment records the decision and the invariant.
+#
+# WHY a comment and not a TF resource: no Supabase provider is declared in
+# main.tf, and this pooler attribute lives on the OUT-OF-BAND inngest project
+# (ref pigsfuxruiopinouvjwy, see the INNGEST_POSTGRES_URI paragraph above) that
+# Terraform never minted. Codifying one pooler attribute would require adding a
+# whole provider for an out-of-band project — disproportionate. Mirrors the
+# INNGEST_POSTGRES_URI out-of-band-resource pattern.
+
+# ---------------- Supabase Management-API PAT → GH Actions secret (#5562) ------
+# scheduled-inngest-health.yml's pool-utilization probe reads pg_stat_activity on
+# the dedicated inngest project via the Supabase Management API, authenticated by
+# an account-scoped PAT (sbp_…). TF only PUBLISHES the out-of-band-minted PAT to
+# the GH Actions secret store (NOT operator `gh secret set`); the value comes from
+# the no-default `var.supabase_access_token` (Doppler prd_terraform via
+# TF_VAR_supabase_access_token, hr-tf-variable-no-operator-mint-default). The PAT
+# is account-scoped because Supabase exposes no project-scoped Management-API
+# credential — blast-radius is bounded by GH-secret-store-only storage + a fixed
+# read-only query + the workflow's scrub_pat redaction. No lifecycle.ignore_changes
+# (mirrors doppler-write-token.tf:47 / kb-drift.tf): rotation = re-set the TF_VAR
+# and re-apply. The GitHub write routes through the App-auth `integrations/github`
+# provider (main.tf), per hr-github-app-auth-not-pat.
+resource "github_actions_secret" "supabase_access_token" {
+  repository      = "soleur"
+  secret_name     = "SUPABASE_ACCESS_TOKEN"
+  plaintext_value = var.supabase_access_token
+}
+
 # NOTE: All `doppler_secret` resources in this file carry `ignore_changes = [value]`.
 # This means out-of-band rotation via the Doppler UI is INVISIBLE to subsequent
 # `terraform plan` runs (the provider skips the value read-back when

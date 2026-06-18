@@ -107,6 +107,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 | API Routes | Not Implemented | — | No uptime monitoring |
 | Agent Runtime | Not Implemented | — | No service health tracking |
 | Supabase PostgreSQL | Implemented | Supabase Dashboard | Built-in service health monitoring |
+| Inngest session pool (durable backend) | Implemented | `scheduled-inngest-health.yml` pool-utilization probe (#5562) | External 15-min Management-API read of `pg_stat_activity`; alerts at ~70% of the session-pool cap (leading indicator) BEFORE `EMAXCONNSESSION`, and classifies the cliff as `pool_exhausted` (alert, excluded from auto-restart). Capacity/utilization monitor, not just up/down. |
 
 ### NFR-004: Process-Level Monitoring
 
