@@ -31,10 +31,17 @@ lane: procedural
 
 - [ ] 2.1 `inngest-inventory.sh`: replace `all_edges=$(jq -nc --argjson a ... )` loop with
       `mktemp` spool + per-page `echo "$resp" | jq -c '.data.eventsV2.edges // []' >> "$edges_file"`
-      + post-loop `all_edges=$(jq -s 'add // []' "$edges_file")`; add `trap "rm -f '$edges_file'" RETURN`
-      (`# shellcheck disable=SC2064`). Keep projections reading `echo "$all_edges" | jq` (stdin) unchanged.
+      + post-loop `all_edges=$(jq -s 'add // []' "$edges_file")`; add **in-function**
+      `trap "rm -f '$edges_file'" EXIT` (NOT `RETURN` — RETURN does not fire on `exit`,
+      verified at deepen; `# shellcheck disable=SC2064` for the early expansion). Keep
+      projections reading `echo "$all_edges" | jq` (stdin) unchanged.
 - [ ] 2.2 `inngest-enumerate-reminders.sh`: apply the identical transformation to its loop
-      (line 104 + 126). Keep the two scripts in lockstep.
+      (line 104 + 126), same in-function `trap ... EXIT`. Keep the two scripts in lockstep.
+      Note: enumerate's final projection already reads via stdin — no line-186 equivalent.
+- [ ] 2.3 (follow-up, optional) inventory line 186 final assembly is a 2nd argv site
+      (`--argjson r "$armed"`). If trivially convertible to a here-string/temp-file, fold
+      in; else file a follow-up scope-out issue (bounded re-arm projection, not the #5523
+      overflow). Do NOT block #5523 on it.
 
 ## Phase 3 — enumerate test parity
 

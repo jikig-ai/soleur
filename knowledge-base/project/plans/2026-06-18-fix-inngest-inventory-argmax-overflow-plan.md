@@ -11,6 +11,38 @@ status: planned
 
 # 🐛 fix(inngest): op=inventory eventsV2 accumulation overflows ARG_MAX (jq --argjson)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Gates passed:** 4.6 User-Brand Impact (none-threshold + sensitive-path scope-out
+bullet added), 4.7 Observability (5-field schema present), 4.8 PAT-shaped vars (none),
+4.9 UI-wireframe (no UI surface). 4.4 Precedent-diff + 4.45 verify-the-negative ran.
+
+### Key Improvements (vs. the Phase-1 plan)
+1. **Trap-scope correction (load-bearing).** The Phase-1 plan prescribed
+   `trap ... RETURN`. Empirically verified at deepen time that **a RETURN trap does NOT
+   fire on `exit`** — the two `exit 1` FATAL branches would leak the spool temp file.
+   Corrected to `trap ... EXIT` registered *inside* `run_inventory`/`run_enumerate`
+   (safe because the sourced-by-test bottom guard means the function — and thus the
+   trap — is never registered when the script is sourced).
+2. **Second argv site found.** The verify-the-negative pass found inventory line 186
+   (final object assembly `jq -nc --argjson f ... --argjson r "$armed"`) is ALSO an
+   argv site. Documented as a follow-up (bounded re-arm projection, not the reported
+   overflow) so a future high-volume host doesn't silently re-trip the same class.
+3. **Precedent-diff grounding.** The mktemp+trap+`jq -s 'add // []'` fix is matched
+   against in-repo precedents: `github-community.sh:294` (identical paginate→tempfile→
+   slurp, the same #5523-class learning's fix) and `ci-deploy.sh`/`infra-config-install.sh`
+   (mktemp+trap convention). The only deliberate divergence (EXIT scope) is justified.
+4. **Sensitive-path scope-out.** Verified the `apps/[^/]+/infra/` path DOES match
+   preflight Check 6.1's regex; added the required `threshold: none, reason:` bullet so
+   ship-time preflight Check 6 won't FAIL.
+
+### New Considerations Discovered
+- `MAX_ARG_STRLEN` (~128 KB), not `getconf ARG_MAX` (2 MB), is the real ceiling —
+  reproduced the exact error at 870 KB argv on this branch.
+- The enumerate final projection reads via stdin, so enumerate has exactly ONE site to
+  fix and no line-186 equivalent — the two scripts are NOT perfectly symmetric.
+
 ## Overview
 
 `op=inventory` (`.github/workflows/cutover-inngest.yml` → GET `/hooks/inngest-inventory`)
@@ -85,8 +117,15 @@ object; summary goes to journald via `logger`; no event bodies on either stream)
 preserved and re-asserted by the existing tests + the new test.
 
 **Brand-survival threshold:** none — operator-only diagnostic surface, no end-user
-blast radius, no regulated-data surface. (The diff touches only
-`apps/web-platform/infra/*.sh`; no sensitive path per preflight Check 6.1.)
+blast radius, no regulated-data surface.
+
+- `threshold: none, reason:` the diff path `apps/[^/]+/infra/` DOES match the preflight
+  Check 6.1 sensitive-path regex (it is an infra dir), but the change is a JSON
+  *accumulation mechanism* swap (argv → file I/O) in read-only operator-only cutover
+  diagnostics that read/emit no credentials, secrets, or end-user data and process no
+  regulated data — so the threshold is correctly `none`. This scope-out bullet is
+  required because the path matches the regex (deepen-plan Phase 4.6 Step 2 / preflight
+  Check 6).
 
 ## Implementation Phases
 
@@ -155,8 +194,9 @@ done
 # After:
 local edges_file after="" page=1 resp has_next end_cursor all_edges
 edges_file=$(mktemp)
-# shellcheck disable=SC2064  # expand $edges_file now (trap fires at function return)
-trap "rm -f '$edges_file'" RETURN
+# shellcheck disable=SC2064  # expand $edges_file NOW (the trap body must capture this
+# value, not re-evaluate it at fire time). EXIT (not RETURN) — see the trap-scope note.
+trap "rm -f '$edges_file'" EXIT
 while :; do
   ...
   # append this page's edges array as ONE JSON value (one line) to the spool file;
@@ -169,21 +209,54 @@ all_edges=$(jq -s 'add // []' "$edges_file")
 ```
 
 Notes:
-- `trap ... RETURN` cleans the temp file on every function-exit path (success, the
-  two `exit 1` FATAL branches, and `set -e` abort). Use `RETURN` (function-scoped),
-  not `EXIT`, so sourcing the script for the unit test does not leave a stale trap.
-  **Verify** the existing `exit 1` branches still emit their FATAL diagnostics before
-  the trap fires (they do — `exit` runs the body first, then RETURN/EXIT traps).
+- **Trap scope — use `EXIT`, registered INSIDE `run_inventory` (verified at deepen
+  time, this corrects an earlier draft that said `RETURN`):** a `RETURN` trap does
+  **NOT** fire when the function `exit`s — the two `exit 1` FATAL branches would leak
+  the temp file under `RETURN`. Empirically verified: a `RETURN` trap fires on normal
+  function return but is skipped on `exit`; only an `EXIT` trap fires on `exit`.
+  Registering `trap 'rm -f ...' EXIT` *inside* `run_inventory` is safe for the
+  sourced-by-test design because the bottom guard
+  (`[[ "${BASH_SOURCE[0]}" == "${0}" ]]`) means `run_inventory` is **never called**
+  when the script is sourced — so the EXIT trap is never registered in the test shell.
+  (The inventory test invokes the script via `bash "$TARGET"` (direct exec, line 62);
+  the enumerate test additionally `source`s the script to unit-test `build_request_body`
+  (line 168) but never calls `run_enumerate`, so the in-function EXIT trap is still
+  never registered during sourcing.) This cleans the temp file on ALL paths:
+  success (`return`/normal end → EXIT fires), both `exit 1` FATAL branches, and
+  `set -e` abort.
+- The `exit 1` FATAL branches still emit their diagnostics before the EXIT trap fires
+  (`exit` runs pending output, then EXIT traps).
 - `jq -s 'add // []'` over a file of N JSON arrays (one per line) yields the
   concatenation; `add` on an empty file yields `null`, so `// []` guards the
   zero-page case (cannot happen — the loop always writes ≥1 page — but defensive).
 - Keep `$all_edges` as a shell variable feeding the existing `echo "$all_edges" | jq`
   projections unchanged. (stdin, not argv → safe.)
+- **Second `--argjson` site — the final object assembly at line 186.** The verify pass
+  found that `jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed"`
+  (line 186) is ALSO an argv site. `$functions` and `$event_names` are small (sorted/
+  unique name lists). `$armed` is the *projected* armed-reminder set — bounded by the
+  count of still-armed `reminder.scheduled` events with future fire + non-terminal runs,
+  each a 4-field record (`reminder_id`, `fire_at`, `actor`, `action`). On the live host
+  this is far smaller than the raw edge set (the overflow source), but it is not
+  provably < `MAX_ARG_STRLEN`. **Decision:** keep line 186 as-is for the minimal fix
+  (the reported overflow is the edge accumulator; `$armed` at realistic re-arm volumes
+  is small), BUT add a follow-up scope-out note (see Sharp Edges) so a future host with
+  thousands of armed reminders does not silently re-trip the same class at line 186.
+  If `/work` finds it trivial to also route line 186's three projections through a
+  here-string (`jq -nc '...' <<<"$(jq -nc ...)"`) or temp files, fold it in — but it is
+  not required to close #5523.
 
 **`apps/web-platform/infra/inngest-enumerate-reminders.sh`** — apply the *identical*
 transformation to its loop (line 104 `local all_edges="[]" ...` + line 126
-accumulation). Mirror the exact pattern so the two scripts stay in lockstep (they
-already share the eventsV2 query, error envelope, and #5503 purity comments verbatim).
+accumulation): same `mktemp` + in-function `trap ... EXIT` + per-page `>> "$edges_file"`
++ post-loop `jq -s 'add // []'`. Mirror the exact pattern so the two scripts stay in
+lockstep (they already share the eventsV2 query, error envelope, and #5503 purity
+comments verbatim). The enumerate test sources the script for the `build_request_body`
+unit test (line 168) but never calls `run_enumerate`, so the in-function EXIT trap is
+never registered during sourcing — verified safe at deepen time. Enumerate's final
+projection (`records=$(echo "$all_edges" | jq ...)`) already reads via stdin (`echo |
+jq`), so enumerate has NO second argv site equivalent to inventory's line 186 — only
+the one accumulation line needs the fix.
 
 ### Phase 3 — enumerate test parity
 
@@ -244,7 +317,10 @@ The container restart needs no separate step (the merge IS the restart trigger).
       **zero** hits after the fix.
 - [ ] **AC5:** both scripts still emit their `set -euo pipefail` FATAL diagnostics on a
       malformed-GraphQL page (existing Test for inventory: `test_functions_fetch_failure_is_loud`
-      / the eventsV2 malformed branch) and the temp file is cleaned via `trap RETURN`.
+      / the eventsV2 malformed branch). The spool temp file is cleaned on ALL exit paths
+      via an in-function `trap 'rm -f ...' EXIT` (NOT `RETURN` — RETURN does not fire on
+      `exit`; verified at deepen time). Add a test asserting no `mktemp`-pattern temp file
+      survives a FATAL run (e.g. snapshot `ls /tmp` before/after, or trap-fire stub).
 - [ ] **AC6 (#5503 purity preserved):** `inngest-inventory.test.sh`'s
       `test_combined_is_pure_json_object` and `test_summary_no_body_leak` still pass —
       the fix changes accumulation, not stream output.
@@ -312,10 +388,26 @@ IaC routing gate (2.8), and Architecture Decision gate (2.10) all skip: the fix 
 architectural boundary. ADR/C4: no architectural decision — a competent engineer reading
 the existing ADRs + C4 is not misled by this change.
 
+## Risks & Mitigations — Precedent Diff (deepen-plan Phase 4.4)
+
+The fix is a **pattern-bound behavior** (mktemp spool + cleanup trap + `jq -s` slurp).
+Verified against repo precedent at deepen time:
+
+| Pattern | Canonical precedent (verified) | Plan's form | Diff / rationale |
+| --- | --- | --- | --- |
+| Paginated-array merge via tempfile + `jq -s` | `plugins/soleur/skills/community/scripts/github-community.sh:294` — `... --paginate \| jq -s 'add // []' > "$tmpfile"` then `jq '...' "$tmpfile"` (the fix from the cited #5523-class learning) | `echo "$resp" \| jq -c '.data.eventsV2.edges // []' >> "$edges_file"` per page, then `all_edges=$(jq -s 'add // []' "$edges_file")` | **Same pattern.** github-community spools the raw paginated output once; we spool one `edges` array per loop iteration. Both collapse with `jq -s 'add // []'`. The `// []` guard is identical. |
+| `mktemp` + cleanup trap in infra `.sh` | `apps/web-platform/infra/ci-deploy.sh:92,137`; `infra-config-install.sh:123-124` (`tmp=$(mktemp ...); trap 'rm -f "$tmp"' EXIT`); `canary-bundle-claim-check.sh:45` | `edges_file=$(mktemp); trap "rm -f '$edges_file'" EXIT` **registered inside `run_inventory`** | **Same `EXIT` verb as the precedents; scope differs by registration site.** Infra precedents register `EXIT` at top level because they are *executed*, never sourced. `inngest-inventory.sh` / `inngest-enumerate-reminders.sh` ARE sourced by their unit tests (`[[ "${BASH_SOURCE[0]}" == "${0}" ]]` guard runs `run_inventory` only on direct exec). Registering the `EXIT` trap *inside* `run_inventory` means it is never set when sourced (the function is never called) and fires on ALL exec-path exits — normal return, `exit 1` FATAL, `set -e`. `RETURN` would be wrong: it does not fire on `exit` (verified at deepen), leaking the spool file on the FATAL branches. |
+| `mktemp` failure under `set -e` | `ci-deploy.sh:92` handles `mktemp` failure explicitly; most infra sites let `set -e` abort | `set -euo pipefail` is already in both scripts → a failed `mktemp` aborts loudly (acceptable: a disk-full host should fail the inventory, not silently truncate) | No explicit handler needed; the loud abort is the desired failure mode for a diagnostic that must not emit a partial baseline. |
+
+No novel pattern — every element has an in-repo precedent. The only deliberate
+divergence from the precedents is the trap *registration site* (inside the function vs
+top-level), forced by the sourced-for-test design; the trap verb (`EXIT`) matches the
+precedents.
+
 ## Files to Edit
 
 - `apps/web-platform/infra/inngest-inventory.sh` — replace argv accumulation (loop
-  around line 138–160) with mktemp spool + `jq -s 'add // []'`; add `trap RETURN`.
+  around line 138–160) with mktemp spool + `jq -s 'add // []'`; add in-function `trap ... EXIT`.
 - `apps/web-platform/infra/inngest-inventory.test.sh` — add large-edge overflow test
   + structural argv-guard; register in the call list (lines 200–210).
 - `apps/web-platform/infra/inngest-enumerate-reminders.sh` — identical accumulation fix
@@ -336,19 +428,34 @@ edited file paths at plan time (no open scope-outs name these infra scripts).
 
 - A plan whose `## User-Brand Impact` section is empty, contains only TBD/placeholder,
   or omits the threshold fails `deepen-plan` Phase 4.6. This plan's threshold is
-  `none` with a stated reason (operator-only, no sensitive path) — compliant.
+  `none`; the infra-dir path matches preflight Check 6.1's sensitive-path regex, so the
+  section carries the required `threshold: none, reason:` scope-out bullet — compliant.
 - **Why the projections do NOT also need file-spooling:** `event_names` and
   `armed_reminders` read `$all_edges` via `echo "$all_edges" | jq` — that is **stdin**
   (pipe), not argv, so `MAX_ARG_STRLEN` does not apply. `$all_edges` as a shell
   variable can hold arbitrarily large strings; only *passing it as a command-line
   argument* (`--argjson`) hits the kernel limit. Do not "fix" the projections by
   spooling them to file — it is unnecessary and would muddy the #5503 purity reasoning.
-- **`trap RETURN` vs `EXIT`:** the unit test **sources** the script
-  (`BASH_SOURCE[0] == 0` guard at the bottom runs `run_inventory` only on direct exec),
-  so a function-scoped `RETURN` trap is correct — an `EXIT` trap registered inside the
-  function would persist after the function returns when sourced. Verify the trap
-  expands `$edges_file` at registration time (`trap "rm -f '$edges_file'" RETURN` with
-  the SC2064 disable), not at fire time, so a later reassignment can't orphan the file.
+- **`trap ... EXIT` registered INSIDE the function (NOT `RETURN`) — verified at deepen
+  time:** the obvious instinct is `RETURN` (function-scoped, won't leak into the
+  sourcing test shell), but **a `RETURN` trap does not fire on `exit`** — the two
+  `exit 1` FATAL branches would leak the spool file. Empirically confirmed: `RETURN`
+  fires on normal return, is skipped on `exit`; only `EXIT` fires on `exit`. The
+  sourced-by-test concern is still handled: the bottom guard means `run_inventory` /
+  `run_enumerate` is never *called* when sourced, so an EXIT trap registered *inside*
+  that function is never registered in the test shell (verified: the enumerate test
+  sources the script for `build_request_body` but never calls `run_enumerate`). Expand
+  `$edges_file` at registration time (`trap "rm -f '$edges_file'" EXIT` with the SC2064
+  disable), not at fire time, so a later reassignment can't orphan the file.
+- **Second argv site at inventory line 186 (follow-up, NOT required for #5523):** the
+  final object assembly `jq -nc --argjson f "$functions" --argjson e "$event_names"
+  --argjson r "$armed"` also passes data via argv. `$functions`/`$event_names` are small
+  name lists; `$armed` is the bounded re-arm projection. At realistic re-arm volumes
+  this is far below `MAX_ARG_STRLEN`, so it is NOT the reported overflow and is left
+  as-is for the minimal fix. A host with thousands of still-armed reminders could
+  re-trip the SAME class here — if `/work` finds the here-string/temp-file conversion
+  trivial, fold it in; otherwise file a follow-up scope-out issue so it isn't lost.
+  (Enumerate has no equivalent — its final projection reads `$all_edges` via stdin.)
 - **RED-first calibration is load-bearing:** the overflow test is only valid if it
   reproduces `Argument list too long` against the *unpatched* line. Author it, run it
   against current `main`'s code, confirm FAIL, then apply the fix. A test that passes
@@ -357,18 +464,18 @@ edited file paths at plan time (no open scope-outs name these infra scripts).
   `argjson a "$all_edges"` — a bare `--argjson` grep would false-positive on the
   legitimate `--argjson first`/`--argjson after` in `build_request_body` and on the
   `--argjson now`/`--argjson f/e/r` in the projections + final object assembly.
-- **The fix touches a file listed in `apply-deploy-pipeline-fix.yml:89`** (it lists
-  `inngest-inventory.sh` in the FILE_MAP). Confirm the enumerate script is also in that
-  map (or its delivery path) so the host actually receives the fixed enumerate script —
-  if enumerate is delivered by a different mechanism, the AC10 live re-run will run stale
-  code. `grep -n 'inngest-enumerate' .github/workflows/apply-deploy-pipeline-fix.yml`
-  at /work time; if absent, add it to the FILE_MAP in the same PR.
+- **Both scripts are in the host-delivery FILE_MAP (verified at deepen time):**
+  `apply-deploy-pipeline-fix.yml` lists `apps/web-platform/infra/inngest-enumerate-reminders.sh`
+  (line 85) AND `apps/web-platform/infra/inngest-inventory.sh` (line 89), so the host
+  receives both fixed scripts after merge — the AC9/AC10 live re-runs will execute the
+  patched code, not stale code. No FILE_MAP edit needed.
 
 ## Related
 
 - Issue #5523 (this bug, OPEN at plan time)
 - PR #5518 (functions-projection fix that un-masked this defect — not the cause)
-- PR #5509/#5510 (the #5509 cutover inventory + #5503 stream-purity invariant)
+- Issue #5509 / PR #5510 (the cutover inventory + #5503 stream-purity invariant — #5509
+  is the umbrella issue, #5510 the merged PR)
 - Institutional learning:
   `knowledge-base/project/learnings/integration-issues/2026-03-28-gh-api-paginate-argument-list-too-long.md`
   (same defect class + same tempfile fix, in `github-community.sh`)
