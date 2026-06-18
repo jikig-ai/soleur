@@ -154,6 +154,13 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     if (!r.ok) {
       expect(r.code).toBe("error");
       expect(r.errorCode).toBe("repo_setup_failed");
+      // Membership-deny-aware copy — and it must NOT carry the unactionable
+      // "Reconnect in Settings → Repository" CTA (a member denied by a
+      // membership-gated credential read cannot fix it by reconnecting). This is
+      // the whole point of the divergence path; guard against a future refactor
+      // re-routing the message through `repoErrorMsg`.
+      expect(r.message).toContain("ask the workspace owner");
+      expect(r.message).not.toContain("Reconnect in Settings");
     }
     expect(seams.reportDivergence).toHaveBeenCalledTimes(1);
     // AC1b — zero workspaces writes (a removed/transient member must not corrupt

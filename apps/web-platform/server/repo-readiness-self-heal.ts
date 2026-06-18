@@ -44,16 +44,19 @@ const SELF_HEAL_FAILED_REASON =
   "automatic repository recovery failed; please reconnect";
 
 /**
- * Client-facing reason for the connection-unresolved divergence (the credential
+ * Client-facing message for the connection-unresolved divergence (the credential
  * read `resolve_workspace_installation_id` returned NULL for a workspace whose
- * `repoUrl` is present). Membership-deny-aware — NOT the unactionable "reconnect"
- * CTA, because a recently-joined member cannot fix a membership-gated credential
- * read by reconnecting. Framed via `repoErrorMsg` at the return site. This reason
- * is NEVER persisted to `workspaces` (see `failConnectionUnresolved`); it is a
- * transient, client-only message.
+ * `repoUrl` is present). Membership-deny-aware and DELIBERATELY a standalone
+ * message — it does NOT route through `repoErrorMsg`, which appends
+ * ". Reconnect in Settings → Repository." A recently-joined member cannot fix a
+ * membership-gated credential read by reconnecting, so the reconnect CTA would be
+ * actively wrong here (the precise unactionable CTA this divergence path exists
+ * to replace). This message is NEVER persisted to `workspaces` (see
+ * `failConnectionUnresolved`); it is transient, client-only, and contains no
+ * dynamic input (no sanitization needed).
  */
-const CONNECTION_UNRESOLVED_REASON =
-  "we couldn't verify your access to this repository. If you recently joined this workspace, ask the workspace owner to confirm the connection";
+const CONNECTION_UNRESOLVED_MESSAGE =
+  "We couldn't verify your access to this repository. If you recently joined this workspace, ask the workspace owner to confirm the connection.";
 
 export interface RepoSelfHealArgs {
   userId: string;
@@ -303,14 +306,13 @@ function failConnectionUnresolved(
     args.userId,
     args.workspaceId,
   );
-  // `sanitizeGitStderr` still frames the client `repoErrorMsg`, even though the
-  // reason is never persisted (no raw stderr in this static copy, but reuse the
-  // shared primitive rather than introduce a second copy path).
-  const reason = sanitizeGitStderr(CONNECTION_UNRESOLVED_REASON);
+  // Standalone message — NOT `repoErrorMsg`, which would append the unactionable
+  // ". Reconnect in Settings → Repository." CTA this path exists to replace. The
+  // message is a static constant (no dynamic input), so no sanitization is needed.
   return {
     ok: false,
     code: "error",
-    message: repoErrorMsg(reason),
+    message: CONNECTION_UNRESOLVED_MESSAGE,
     errorCode: "repo_setup_failed",
   };
 }
