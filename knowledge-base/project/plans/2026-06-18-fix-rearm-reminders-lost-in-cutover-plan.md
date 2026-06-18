@@ -19,7 +19,7 @@ status: planned
 
 ### Key Improvements
 1. **Dropped the redundant new helper script.** The plan originally floated an optional `apps/web-platform/infra/rearm-5548-reminders.sh`; verify-the-negative confirmed the existing, tested `inngest-rearm-reminders.sh` already does this (accepts records on stdin via `INNGEST_REARM_STDIN=1`). Option B now reuses it — no new code, no new test (YAGNI).
-2. **Corrected the idempotency claim.** Inngest `id` dedup is window-bounded (~24h, `inngest-oneshot-and-reminder-patterns.md:126`), NOT a permanent cross-boot guarantee. AC4 now states this so /work does not over-rely on it (moot here — empty queue).
+2. **Corrected the idempotency claim.** Inngest `id` dedup is window-bounded (~24h, `inngest-oneshot-and-reminder-patterns.md:132`), NOT a permanent cross-boot guarantee. AC4 now states this so /work does not over-rely on it (moot here — empty queue).
 3. **Pinned the colon-form tag.** `TAG_RE` (`sentry-issue-rate.ts:22`) requires `event_type:server-startup` (colon); the equals form a stale draft used would 400. AC1 + Sharp Edges pin it.
 
 ### New Considerations Discovered
@@ -60,7 +60,7 @@ NOT defer a curl invocation to the operator.
 | Spec / issue claim | Reality (verified) | Plan response |
 | --- | --- | --- |
 | 4 reminders lost; re-arm via POST /api/internal/schedule-reminder | Endpoint exists + validated: `apps/web-platform/app/api/internal/schedule-reminder/route.ts`; allowlist in `apps/web-platform/lib/inngest/scheduled-reminder-action.ts`; public-path registered `lib/routes.ts:46`. | Use the existing endpoint as-is. No code change. |
-| `verify-server-startup-rate-5417` fire_at 2026-06-19 → re-arm | **Canonical payload documented verbatim** in `knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md:71-74` and ADR-063 (first consumer). `named-check` `sentry-issue-rate`. | Re-arm with the runbook's exact blessed payload. |
+| `verify-server-startup-rate-5417` fire_at 2026-06-19 → re-arm | **Canonical payload documented verbatim** in `knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md:81-84` and ADR-063 (first consumer). `named-check` `sentry-issue-rate`. | Re-arm with the runbook's exact blessed payload. |
 | `reeval-5469-routine-runs-gate-2026-07-01` fire_at 2026-07-01 → re-arm | #5469 OPEN; re-eval criterion in the issue body (≥14 days of `routine_runs` data, after inbound fix). No prior comment posted. Action type is `issue-comment` to #5469. | Re-arm as `issue-comment` reminder to #5469. |
 | `rebase-dependabot-5432-otel-2026-06-18` (×2) original fire 2026-06-18 13:00 → re-arm only if still relevant | #5432 is the **dependabot PR itself** (OPEN, stale branch `dependabot/npm_and_yarn/apps/web-platform/multi-63c4531a38`, mergeable UNKNOWN). The reminder body is **NOT recorded anywhere** — only inferred (`@dependabot rebase`). The PIR's #5548 re-arm table (`inngest-durable-redis-missing-outage-postmortem.md:42`) names ONLY 5417 + 5469 — **5432 is out of the documented #5548 scope.** | **Do NOT re-arm in this PR.** The fire window (13:00 2026-06-18) is already past, the body is unrecorded (a fabricated payload risks a wrong/misleading comment), and a `@dependabot rebase` can be issued directly without a reminder if the PR is still wanted. Document the disposition; see `## Open Questions` + scope-out. |
 | #5542 capture bridge should have snapshotted these | Bridge `op=capture` self-enumerates the OLD server; with inngest DOWN the enumerate returns nothing — the documented loss mode. Premise holds. | No bridge change. This PR closes the residual gap manually. |
@@ -114,7 +114,7 @@ no user-facing surface, no schema, no migration, no auth flow, no regulated data
 - [x] **AC4 — Idempotency reasoning is documented.** The PR body states that the route
   recomputes `id`=reminder_id + `ts`=Date.parse(fire_at) (verified
   `route.ts:128-133`), so a re-arm dedups against any event that ALSO survived in
-  Inngest state **within Inngest's ~24h dedup window** (`inngest-oneshot-and-reminder-patterns.md:126`
+  Inngest state **within Inngest's ~24h dedup window** (`inngest-oneshot-and-reminder-patterns.md:132`
   — the `id` dedup is window-bounded, NOT a cross-boot permanent guarantee). Here the
   queue is empty (#5542), so there is nothing to dedup against; the property is only
   why re-running the SAME re-arm POST minutes apart is safe (it dedups on `id`+`ts`
@@ -185,7 +185,7 @@ above per preflight Check 6.
 ### Phase 1 — Reconstruct + freeze the two payloads (in the PR body / a payloads doc)
 
 1. **5417** — copy the runbook's blessed `sentry-issue-rate` payload verbatim
-   (`inngest-oneshot-and-reminder-patterns.md:71-74`). Set `fire_at:"2026-06-19T09:00:00Z"`.
+   (`inngest-oneshot-and-reminder-patterns.md:81-84`). Set `fire_at:"2026-06-19T09:00:00Z"`.
    NOTE the deliberate distillation: #5417's full AC12 task spec (the issue comment
    2026-06-16) also checks OOM pages (AC2 regression) + AC13 firewall self-heal — a
    richer verification than `sentry-issue-rate` expresses. ADR-063 + the runbook

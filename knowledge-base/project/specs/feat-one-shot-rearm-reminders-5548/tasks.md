@@ -29,7 +29,7 @@ execution, and a PIR/runbook note.
 ## Phase 1 — Reconstruct + freeze the two payloads
 
 - 1.1 **5417** — copy the blessed `sentry-issue-rate` payload verbatim from
-  `knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md:71-74`.
+  `knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md:81-84`.
   Set `fire_at:"2026-06-19T09:00:00Z"`. Verify `params.tag:"event_type:server-startup"`
   (COLON form — `TAG_RE` at `sentry-issue-rate.ts:22`; equals form would 400),
   `max_per_day:1`, `window_hours:72` (∈ [24,168]), `close_on_pass:true`,
