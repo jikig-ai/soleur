@@ -1,0 +1,185 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification: this monitor MUST be external to Inngest. An Inngest
+# cron cannot detect Inngest being down (a crash-looping server runs no crons) —
+# that blind spot is the exact #5542 failure this workflow closes. Pure-GH ops.
+#
+# External Inngest health watchdog (#5542 incident — the ~3.5h silent crash-loop).
+#
+# WHY THIS EXISTS: inngest-server crash-looped for hours with NO alert. The
+# existing self-healing watchdog (inngest-watchdog-restart-dispatch.yml) is
+# INTERNAL — it relies on an inngest cron firing the `inngest-desync-restart`
+# label, but a cron cannot run while inngest is fully DOWN. So a hard crash-loop
+# (e.g. durable ExecStart live but inngest-redis missing → connection refused) is
+# invisible: no internal cron, no external probe, no alert. vector ships the
+# crash logs to Better Stack but nothing alerts on them.
+#
+# This workflow is the EXTERNAL probe that runs independently of inngest: it hits
+# the loopback-health signal via the inngest-inventory deploy hook every 15 min.
+# On failure it (1) auto-dispatches restart-inngest-server.yml (github.token has
+# actions:write; a direct dispatch — NOT the label path, which github.token
+# cannot trigger due to GHA's same-token recursion guard), (2) files/updates a
+# P1 tracking issue, and (3) reports an error heartbeat to Sentry so a MISSING
+# check-in also alerts. Pattern mirrors scheduled-realtime-probe.yml.
+#
+# Security: all untrusted values (probe response body) flow through env vars +
+# strip_log_injection before any echo into ::error:: or $GITHUB_OUTPUT. No
+# github.event.* inputs are consumed. The deploy-webhook HMAC + CF Access gates
+# are unchanged (read-only GET of the inventory hook).
+#
+# Tracks #5542.
+
+name: "Scheduled: Inngest Health Watchdog"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min — inngest-down is a brand-survival outage
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-inngest-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write   # to dispatch restart-inngest-server.yml on failure
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - id: probe
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-realtime-probe.yml)
+
+          strip_log_injection() {
+            printf '%s' "$1" | tr -d '\r\n\f\v\x7f\x85' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
+          }
+
+          fail_mode=""; fail_detail=""
+          record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
+
+          if [[ -z "${WEBHOOK_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+            record_failure "secret_unset" "WEBHOOK_DEPLOY_SECRET / CF_ACCESS_* not set — cannot probe the inngest health hook."
+          fi
+
+          # Health signal: the inngest-inventory hook GETs /v0/gql. HTTP 200 with a
+          # JSON object carrying .functions == inngest is up. 500 / __FETCH_FAILED__
+          # / non-JSON == inngest-server is down or /v0/gql unreachable.
+          # Probe up to 3x (8s apart) and only declare down if ALL fail — a single
+          # transient blip (CF Access hiccup, inventory timeout under load) must
+          # NOT trigger an unnecessary restart. Mirrors scheduled-realtime-probe's
+          # in-run retry resilience (its 5x SUBSCRIBED loop).
+          if [[ -z "$fail_mode" ]]; then
+            SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            last_mode=""; last_detail=""; healthy="no"
+            for attempt in 1 2 3; do
+              rm -f /tmp/health-body
+              CODE=$(curl -s --max-time 30 -o /tmp/health-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "https://deploy.soleur.ai/hooks/inngest-inventory" || echo "000")
+              BODY=$(cat /tmp/health-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+                last_mode="inngest_down"; last_detail="attempt ${attempt}/3: inventory hook HTTP ${CODE}: ${cause:-<empty body>}"
+              elif ! printf '%s' "$BODY" | jq -e 'type == "object" and (.functions | type == "array")' >/dev/null 2>&1; then
+                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+                last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: inventory 200 but no functions array: ${cause}"
+              else
+                fn=$(printf '%s' "$BODY" | jq -r '.functions | length')
+                echo "Inngest healthy on attempt ${attempt}/3: functions=${fn}"
+                healthy="yes"; break
+              fi
+              echo "Probe attempt ${attempt}/3 failed (${last_mode}); retrying…"
+              [[ "$attempt" -lt 3 ]] && sleep 8
+            done
+            [[ "$healthy" == "no" ]] && record_failure "$last_mode" "$last_detail"
+          fi
+
+          fail_mode_safe=$(strip_log_injection "$fail_mode")
+          fail_detail_safe=$(strip_log_injection "$fail_detail")
+          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
+          if [[ -n "$fail_mode_safe" ]]; then
+            echo "::error::Inngest health probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
+          fi
+
+      - name: Auto-dispatch inngest restart (failure)
+        if: steps.probe.outputs.failure_mode == 'inngest_down' || steps.probe.outputs.failure_mode == 'inngest_unhealthy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching restart-inngest-server.yml (auto-recovery)…"
+          gh workflow run restart-inngest-server.yml --repo "$GH_REPO" --ref main || \
+            echo "::warning::restart dispatch failed — the tracking issue below carries the escalation."
+
+      - name: File or comment tracking issue (failure)
+        if: steps.probe.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/inngest-down] Inngest health watchdog failed"
+          ISSUE_SEARCH='in:title "[ci/inngest-down] Inngest health watchdog failed"'
+          gh label create "ci/inngest-down" --repo "$GH_REPO" \
+            --description "External watchdog detected inngest-server down/unhealthy" --color "B60205" 2>/dev/null || true
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Inngest health watchdog failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+            printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Auto-recovery\n\nThis run dispatched `restart-inngest-server.yml`. If inngest stays down after the restart, the durable backend likely lost its Redis (`inngest-redis.service` missing → crash-loop): the deploy must re-stage the redis assets, OR roll the ExecStart back to SQLite-only. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` + the #5542 incident.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/inngest-down" --label "priority/p1-high" --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close tracking issue (healthy)
+        if: steps.probe.outputs.failure_mode == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-down] Inngest health watchdog failed"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" --comment "Inngest healthy again at ${NOW}. Run: ${RUN_URL}"
+          fi
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-inngest-health
+          status: ${{ steps.probe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
