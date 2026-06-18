@@ -53,8 +53,48 @@ fi
 # also keeps comment bodies on-host (never transiting the workflow log, P2-sec-a).
 # INNGEST_REARM_STDIN=1 switches to reading records from stdin (manual/test).
 ENUMERATE_CMD="${INNGEST_ENUMERATE_CMD:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inngest-enumerate-reminders.sh}"
+
+# Cutover capture bridge (#5542). The FIRST SQLite→Postgres cutover replaces the
+# inngest event store, so a post-deploy self-enumerate queries the NEW (empty)
+# Redis queue and would re-arm NOTHING — silently losing every armed reminder
+# (verdict 0.2: the armed-event queue lives in Redis; the new durable Redis starts
+# empty). To bridge the gap WITHOUT transiting comment bodies through the workflow
+# (P2-sec-a), op=capture (INNGEST_REARM_MODE=capture) self-enumerates the OLD
+# server BEFORE the deploy and persists records to CAPTURE_FILE on-host; op=rearm
+# then consumes that file AFTER the deploy instead of self-enumerating the empty
+# server, and deletes it on full success. CAPTURE_FILE lives under the --sqlite-dir
+# volume, which survives the cutover's systemd restart (a config change, not a host
+# re-provision). Steady-state re-arm (no capture file) is unchanged.
+MODE="${INNGEST_REARM_MODE:-rearm}"
+CAPTURE_FILE="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}"
+
+if [[ "$MODE" == "capture" ]]; then
+  cap="$("$ENUMERATE_CMD")" || { echo "ERROR: capture: enumeration failed; nothing persisted" >&2; exit 1; }
+  if ! echo "$cap" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "ERROR: capture: enumerate did not return a JSON array" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$CAPTURE_FILE")"
+  printf '%s' "$cap" > "$CAPTURE_FILE"
+  cap_count=$(echo "$cap" | jq 'length')
+  cap_ids=$(echo "$cap" | jq -r '[.[].reminder_id] | join(",")')
+  logger -t "$LOG_TAG" "captured $cap_count reminder(s) to $CAPTURE_FILE" 2>/dev/null || true
+  # Status object to stdout — ids only, NEVER comment bodies (P2-sec-a); the
+  # webhook response carries this. Mirrors the enumerate/inventory purity contract.
+  jq -nc --argjson n "$cap_count" --arg ids "$cap_ids" --arg f "$CAPTURE_FILE" \
+    '{captured: $n, reminder_ids: ($ids | split(",") | map(select(length > 0)) | sort), capture_file: $f}'
+  exit 0
+fi
+
+# MODE=rearm. Records source priority: stdin (test/manual) > capture file (cutover
+# bridge) > self-enumerate (steady state).
+FROM_CAPTURE=0
 if [[ "${INNGEST_REARM_STDIN:-0}" == "1" ]]; then
   records="$(cat)"
+elif [[ -s "$CAPTURE_FILE" ]] && jq -e 'type == "array"' < "$CAPTURE_FILE" >/dev/null 2>&1; then
+  records="$(cat "$CAPTURE_FILE")"
+  FROM_CAPTURE=1
+  logger -t "$LOG_TAG" "consuming cutover capture file $CAPTURE_FILE (skipping self-enumerate)" 2>/dev/null || true
 else
   records="$("$ENUMERATE_CMD")" || { echo "ERROR: enumeration failed; cannot source re-arm records" >&2; exit 1; }
 fi
@@ -108,4 +148,13 @@ done
 
 echo "inngest-rearm-reminders: re-armed=$rearmed failed=$failed total=$count" >&2
 logger -t "$LOG_TAG" "done: re-armed=$rearmed failed=$failed total=$count" 2>/dev/null || true
+
+# On a fully-successful re-arm sourced from the cutover capture, delete the file so
+# a later steady-state re-arm self-enumerates the LIVE backend instead of replaying
+# a stale capture. Keep it on ANY failure so a retry can finish the set.
+if [[ "$FROM_CAPTURE" == "1" && "$failed" -eq 0 ]]; then
+  rm -f "$CAPTURE_FILE"
+  logger -t "$LOG_TAG" "consumed + removed capture file $CAPTURE_FILE" 2>/dev/null || true
+fi
+
 [[ "$failed" -gt 0 ]] && exit 1 || exit 0

@@ -143,11 +143,75 @@ MOCK
   local rc=0 out
   out=$(PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
     INNGEST_ENUMERATE_CMD="$enum_stub" \
+    INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/no-such-capture.json" \
     SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/api/internal/schedule-reminder" \
     bash "$TARGET" 2>&1) || rc=$?
   assert_eq "self-enumerate path exits 0" "0" "$rc"
   local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
   assert_contains "re-armed the self-enumerated record" "$bodies" '"reminder_id":"rem-enum"'
+  teardown_mock_curl
+}
+
+# --- Test 7: capture mode (#5542) — self-enumerate the OLD server + persist on-host ---
+test_capture_mode_persists() {
+  setup_mock_curl 200
+  local enum_stub cap_file; enum_stub="${MOCKBIN}/enum.sh"; cap_file="${MOCKBIN}/capture.json"
+  cat > "$enum_stub" <<MOCK
+#!/usr/bin/env bash
+printf '%s' '[{"reminder_id":"rem-cap","fire_at":"2026-07-01T00:00:00Z","actor":"platform","action":{"type":"named-check","check":"reeval"}}]'
+MOCK
+  chmod +x "$enum_stub"
+  local rc=0 out
+  out=$(PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_REARM_MODE=capture \
+    INNGEST_ENUMERATE_CMD="$enum_stub" \
+    INNGEST_CUTOVER_CAPTURE_FILE="$cap_file" \
+    bash "$TARGET" 2>/dev/null) || rc=$?
+  assert_eq "capture mode exits 0" "0" "$rc"
+  assert_eq "capture wrote the on-host file" "1" "$([[ -s "$cap_file" ]] && echo 1 || echo 0)"
+  assert_contains "capture file holds the enumerated record" "$(cat "$cap_file")" '"reminder_id":"rem-cap"'
+  assert_contains "capture status reports count" "$out" '"captured":1'
+  assert_contains "capture status surfaces reminder_ids" "$out" 'rem-cap'
+  assert_eq "capture made NO re-arm POST (capture != rearm)" "0" "$(grep -c '^BODY:' "$REQ_LOG" 2>/dev/null || true)"
+  teardown_mock_curl
+}
+
+# --- Test 8: rearm consumes the capture file over self-enumerate, deletes on success ---
+test_rearm_consumes_capture_file() {
+  setup_mock_curl 202
+  local enum_stub cap_file; enum_stub="${MOCKBIN}/enum.sh"; cap_file="${MOCKBIN}/capture.json"
+  # self-enumerate would return a DIFFERENT record — prove the capture file wins.
+  cat > "$enum_stub" <<MOCK
+#!/usr/bin/env bash
+printf '%s' '[{"reminder_id":"rem-SELF","fire_at":"2026-06-19T00:00:00Z","actor":"platform","action":{"type":"x"}}]'
+MOCK
+  chmod +x "$enum_stub"
+  printf '%s' '[{"reminder_id":"rem-CAPTURED","fire_at":"2026-07-01T00:00:00Z","actor":"platform","action":{"type":"named-check","check":"reeval"}}]' > "$cap_file"
+  local rc=0
+  PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_ENUMERATE_CMD="$enum_stub" \
+    INNGEST_CUTOVER_CAPTURE_FILE="$cap_file" \
+    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+  assert_eq "rearm-from-capture exits 0" "0" "$rc"
+  local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
+  assert_contains "re-armed the CAPTURED record" "$bodies" '"reminder_id":"rem-CAPTURED"'
+  assert_eq "did NOT re-arm the self-enumerated record" "0" "$(echo "$bodies" | grep -c 'rem-SELF' || true)"
+  assert_eq "capture file deleted after full success" "0" "$([[ -e "$cap_file" ]] && echo 1 || echo 0)"
+  teardown_mock_curl
+}
+
+# --- Test 9: rearm RETAINS the capture file when a re-arm POST fails (retry-safe) ---
+test_rearm_keeps_capture_on_failure() {
+  setup_mock_curl 401
+  local cap_file; cap_file="${MOCKBIN}/capture.json"
+  printf '%s' '[{"reminder_id":"rem-X","fire_at":"2026-07-01T00:00:00Z","actor":"platform","action":{"type":"x"}}]' > "$cap_file"
+  local rc=0
+  PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_ENUMERATE_CMD="/bin/false" \
+    INNGEST_CUTOVER_CAPTURE_FILE="$cap_file" \
+    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+  assert_eq "rearm exits non-zero when a POST fails" "1" "$rc"
+  assert_eq "capture file RETAINED on failure (retry-safe)" "1" "$([[ -s "$cap_file" ]] && echo 1 || echo 0)"
   teardown_mock_curl
 }
 
@@ -157,6 +221,9 @@ test_other_failure
 test_empty_noop
 test_missing_secret_fails_closed
 test_self_enumerate_default
+test_capture_mode_persists
+test_rearm_consumes_capture_file
+test_rearm_keeps_capture_on_failure
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
