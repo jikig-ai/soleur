@@ -468,7 +468,7 @@ async function driveAndVerify(
       // rate_limited / session-rejected error WINS over the 30s no-row timeout
       // (otherwise an environmental rejection would wait out the budget and
       // false-FAIL as a rail regression). Checked at the top of every 1s tick.
-      () => classifyDriveResult({ convId: null, wsError: latestWsError }).kind === "CANT-RUN",
+      () => sendRejectionReason(latestWsError) !== null,
     );
 
     // A captured rate_limited / session-rejected WS error → CANT-RUN (surfaced,
@@ -547,38 +547,52 @@ export function parseWsErrorFrame(payload: string): WsErrorFrame | null {
   };
 }
 
+// The genuine no-persist FAIL detail (session accepted but no row materialized —
+// the rail-race regression class). A single source so the wording stays in sync
+// with the ADR-064 prose that describes it.
+export const RAIL_FAIL_DETAIL =
+  "send did not persist a conversation within budget (workspace-binding / WS-auth)";
+
 /**
- * Decide the drive-phase outcome from the poll result + the latest captured WS
- * error. Precedence (pure, unit-testable):
- *   1. errorCode === "rate_limited"           → CANT-RUN:rate-limited
- *   2. message includes "Send start_session first" → CANT-RUN:session-rejected
- *   3. a persisted row id                      → PROCEED (caller runs the rail assertion)
- *   4. otherwise                               → FAIL (the genuine no-persist case)
- *
+ * Map a captured WS error to its send-rejection CANT-RUN reason, or null when the
+ * frame is NOT a send rejection. The two rejection classes:
+ *   - errorCode === "rate_limited"                → "rate-limited"
+ *   - message includes "Send start_session first" → "session-rejected"
  * The session-rejected match is the NARROW "Send start_session first" hint, NOT a
  * bare "No active session" substring — three ws-handler sites emit that prefix for
  * established-session drops (a genuine FAIL class) that the broad match would mask.
- * rate_limited is checked first so it wins even when a stale row id is present.
+ * Shared by classifyDriveResult AND the poll abort predicate so the rate-limit
+ * race-win does not depend on classifyDriveResult's internal branch ordering.
+ */
+export function sendRejectionReason(
+  wsError: WsErrorFrame | null,
+): "rate-limited" | "session-rejected" | null {
+  if (wsError?.errorCode === "rate_limited") return "rate-limited";
+  if (wsError?.message?.includes("Send start_session first")) return "session-rejected";
+  return null;
+}
+
+/**
+ * Decide the drive-phase outcome from the poll result + the latest captured WS
+ * error. Precedence (pure, unit-testable):
+ *   1. a send rejection (rate-limited / session-rejected) → CANT-RUN — checked
+ *      first so it wins even when a stale row id is present
+ *   2. a persisted row id → PROCEED (caller runs the rail assertion)
+ *   3. otherwise → FAIL (the genuine no-persist case)
  */
 export function classifyDriveResult(input: {
   convId: string | null;
   wsError: WsErrorFrame | null;
 }): DriveDecision {
   const { convId, wsError } = input;
-  if (wsError?.errorCode === "rate_limited") {
-    return { kind: "CANT-RUN", reason: "rate-limited" };
-  }
-  if (wsError?.message?.includes("Send start_session first")) {
-    return { kind: "CANT-RUN", reason: "session-rejected" };
+  const rejection = sendRejectionReason(wsError);
+  if (rejection) {
+    return { kind: "CANT-RUN", reason: rejection };
   }
   if (convId) {
     return { kind: "PROCEED", convId };
   }
-  return {
-    kind: "FAIL",
-    detail:
-      "send did not persist a conversation within budget (workspace-binding / WS-auth)",
-  };
+  return { kind: "FAIL", detail: RAIL_FAIL_DETAIL };
 }
 
 /**

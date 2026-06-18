@@ -11,7 +11,22 @@
 
 import { describe, expect, it } from "vitest";
 
-import { classifyDriveResult, parseWsErrorFrame } from "../../scripts/live-verify/run";
+import {
+  classifyDriveResult,
+  parseWsErrorFrame,
+  sendRejectionReason,
+} from "../../scripts/live-verify/run";
+
+describe("sendRejectionReason", () => {
+  it("returns the CANT-RUN reason for each send-rejection class, null otherwise", () => {
+    expect(sendRejectionReason({ errorCode: "rate_limited" })).toBe("rate-limited");
+    expect(
+      sendRejectionReason({ message: "No active session. Send start_session first." }),
+    ).toBe("session-rejected");
+    expect(sendRejectionReason({ message: "No active session" })).toBeNull(); // bare → not a rejection
+    expect(sendRejectionReason(null)).toBeNull();
+  });
+});
 
 describe("parseWsErrorFrame", () => {
   // AC5 — returns ONLY {errorCode,message}; never the raw payload (which can
