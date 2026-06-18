@@ -285,6 +285,17 @@ verify_inngest_health() {
       return 1
     fi
     logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — --postgres-uri + --redis-uri configured and inngest-redis.service active"
+  else
+    # #5547 Gap 2/3: SQLite-only fail-safe ExecStart (Redis was not ready this
+    # deploy → inngest-bootstrap wrote the empty BACKEND_FLAGS form). This is NOT
+    # a failure — the server is available on the non-durable backend, so do NOT
+    # return 1 (that would block a legitimate SQLite-only rollback). This
+    # `logger -t "$LOG_TAG"` advisory is the AUTHORITATIVE no-SSH carrier for the
+    # degraded state: LOG_TAG=ci-deploy is in Vector Source 4's tag allowlist →
+    # Better Stack Logs. (The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is
+    # NOT a carrier on this 0-exit path — ci-deploy reads $BOOTSTRAP_STDERR only
+    # on a non-zero bootstrap exit.)
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: advisory — inngest-server running SQLite-only (non-durable); durable Redis was not ready this deploy (#5547). Server is available; armed reminders will NOT survive a host rebuild until a deploy with Redis ready."
   fi
 
   # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159, #5520): /health proves
@@ -977,8 +988,22 @@ case "$COMPONENT" in
       exit 1
     fi
 
-    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
-    final_write_state 0 "success"
+    # #5547 Gap 3: distinguish a degraded-durability deploy (SQLite-only
+    # fail-safe — Redis not ready) from a healthy durable one so
+    # /hooks/deploy-status .reason surfaces it without SSH. The bootstrap exits 0
+    # in both cases (the server stays available); the authoritative signal is the
+    # WRITTEN ExecStart lacking --postgres-uri. The bootstrap-stderr
+    # INNGEST_DURABLE_DEGRADED marker is a secondary breadcrumb (ci-deploy reads
+    # $BOOTSTRAP_STDERR only on a non-zero exit, so it is not load-bearing here).
+    inngest_exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
+    if [[ "$inngest_exec_start" != *'--postgres-uri'* ]] \
+       || grep -q 'INNGEST_DURABLE_DEGRADED' "$BOOTSTRAP_STDERR" 2>/dev/null; then
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed (degraded durability — SQLite-only; durable Redis not ready, #5547)"
+      final_write_state 0 "success_degraded_durability"
+    else
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+      final_write_state 0 "success"
+    fi
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"
