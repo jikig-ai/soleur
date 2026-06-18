@@ -13,6 +13,29 @@ created: 2026-06-18
 
 Closes #5553
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Sections enhanced:** Overview (precedent-diff), User-Brand Impact (verify-the-negative), Risks, new Precedent-Diff section
+**Gates passed:** 4.6 User-Brand Impact (present, threshold `single-user incident`), 4.7 Observability (all 5 fields, no SSH in discoverability command), 4.8 PAT-shaped (none), 4.9 UI-wireframe (no UI surface — skip)
+
+### Key Improvements
+1. **Precedent-diff (Phase 4.4, scheduled-work):** The workflow we extend already carries a `gate-override: new-scheduled-cron-prefer-inngest` justification — an Inngest cron cannot detect Inngest being down, so this watchdog MUST stay external GH-Actions (ADR-033 "prefer Inngest" is correctly overridden). Our extension inherits that override by adding to the existing workflow, not creating a new cron. No new Inngest function.
+2. **Verify-the-negative (Phase 4.45) — the AC3 no-leak claim is structurally sound:** confirmed at source that `systemctl show -p ExecStart inngest-server.service` returns the **literal `$VAR`/sentinel form** (`inngest-bootstrap.sh:~318` writes `@@BACKEND_FLAGS@@` + `"$${POSTGRES_*}"` inside a single-quoted heredoc resolved only at runtime by `doppler run`), never the resolved DSN — exactly as `ci-deploy.sh:273` documents ("$VAR form — no secret value"). The substring match and emitted enum cannot touch a real secret.
+3. **Three-parser drift gate (Phase 3) justified:** verified two existing ExecStart-`--postgres-uri` parsers (`ci-deploy.sh:277-287`, `inngest-wiped-volume-verify.sh:97-98`); this is the 3rd. Infra has no `source`-lib precedent, so a cross-file drift-guard test is the correct (cheaper, convention-consistent) pin vs. a novel shared lib.
+
+### New Considerations Discovered
+- `inngest-inventory` IS in Vector's tag allowlist (`vector.toml:132`, added by #5526), so the journald `durability=<enum>` summary reaches Better Stack — the `error_reporting` observability claim holds (contrast #5495 where untagged journald did NOT reach Better Stack). **The `inngest-inventory.sh:35` header is now STALE** ("it does NOT reach Better Stack — see #5495") and Phase 1.4 MUST correct it.
+- The seam pattern is already established: `inngest-wiped-volume-verify.sh:97` uses `INNGEST_VERIFY_EXECSTART:-$(systemctl show …)`; adopt the identical env-override shape (`INVENTORY_EXECSTART`, `INVENTORY_REDIS_ACTIVE`) for CI (no `systemctl` in CI).
+
+### Deepen-plan multi-agent review corrections (3-reviewer consensus, applied)
+Architecture-strategist + observability-coverage-reviewer + code-simplicity-reviewer **independently converged** on one P0/P1: the plan's original "`degraded` → neither file nor close" routing **re-opened the exact silent-loss hole the feature exists to close**. `degraded` (= `--postgres-uri` present but `--redis-uri` absent OR `inngest-redis` inactive) is the **#5542 incident state** ("durable ExecStart live but inngest-redis missing", `scheduled-inngest-health.yml:12`) and the canonical `ci-deploy.sh:278-286` treats it as a **hard FAIL** — strictly MORE severe than `sqlite_only` (which ci-deploy treats as advisory/pass). The between-deploy window has nothing else re-checking it, and `inngest_down` only trips on non-200/missing-functions — a redis-dead-but-still-serving host returns 200 and falls in the gap. **Corrections applied below:**
+1. **`degraded` now ALERTS** — the advisory step fires on the **non-durable union** (`sqlite_only` OR `degraded`), with `priority/p1-high` for `degraded` (canonically fatal) and `priority/p2-medium` for `sqlite_only` (canonically advisory). [P0-1]
+2. **Distinguish field-absent from value-`unknown`** — probe reads `// "absent"`; a literal `"unknown"` from a redeployed host (live parser/unit-read failure) emits a `::warning::` + journald `durability=unknown` so it is visible; `absent` (older host) stays benign-silent but emits a one-line `::notice::` so the blind window is itself visible. [P1-2, P1-3, obs-P1-2]
+3. **Auto-close on "now durable"** — close/comment keys off `durability_state == 'durable'` AND comments a transition when an open issue's host moves `sqlite_only↔degraded` so the issue does not silently rot at a non-durable-non-sqlite state. [P2-1]
+4. **Drift-guard token list adds `inngest-server.service`** (the unit being parsed is load-bearing too); the guard is explicitly documented as a **token-co-occurrence tripwire, NOT a verdict-equivalence proof** — the five Phase 2.2 verdict tests are the real pin for THIS parser. [P1-1, P2-3]
+5. **`degraded` kept, not cut** (simplicity reviewer's alternative) — the architecture/observability P0 wins: `degraded` must exist AND alert; collapsing it into `unknown` would silence the most dangerous state.
+
 ## Overview
 
 The deploy-time degraded-durability signal (`verify_inngest_health`'s `logger -t ci-deploy`
@@ -35,8 +58,9 @@ This plan adds a **continuous** between-deploy detector across three materially-
    (`INVENTORY_EXECSTART`, `INVENTORY_REDIS_ACTIVE`) and cases for each durability state, plus
    re-assert the #5503 combined-stream-purity invariant with the new field present.
 3. **`.github/workflows/scheduled-inngest-health.yml`** — extend the probe to read
-   `.durability_state`; when it is `sqlite_only` (the degraded fail-safe), file/comment an
-   **advisory** `ci/inngest-degraded-durability` tracking issue and auto-close it when durable
+   `.durability_state`; when it is **non-durable** (`sqlite_only` OR `degraded`), file/comment an
+   advisory `ci/inngest-degraded-durability` tracking issue (`priority/p1-high` for `degraded` —
+   the #5542 incident state; `priority/p2-medium` for `sqlite_only`) and auto-close it when durable
    again. This is a SEPARATE signal from the existing `inngest_down` hard-outage path: the
    server is alive, so it does **not** dispatch a restart.
 
@@ -108,7 +132,11 @@ a single lost armed reminder is a single-user brand incident under that framing.
 1.3 Extend the journald summary (line 201) to append `durability=<enum>` (counts/enum only,
     no values — #5503 purity preserved): `logger -t "$LOG_TAG" "inventory: functions=… armed=… durability=$durability_state"`.
 1.4 Update the file header doc-comment (lines 7-10) to document the new 4th field and the seam
-    env vars (`INVENTORY_EXECSTART`, `INVENTORY_REDIS_ACTIVE`).
+    env vars (`INVENTORY_EXECSTART`, `INVENTORY_REDIS_ACTIVE`). **AND correct the now-stale line
+    ~35** which reads "it does NOT reach Better Stack — see #5495" — `inngest-inventory` was added
+    to Vector's tag allowlist (`vector.toml:132`, #5526), so its journald DOES now ship to Better
+    Stack; rewrite that sentence to say so (the `durability=<enum>` summary is the load-bearing
+    no-SSH carrier for the degraded state).
 
 ### Phase 2 — `inngest-inventory.test.sh`: seam + state cases (write tests, watch them drive Phase 1)
 
@@ -134,37 +162,54 @@ a single lost armed reminder is a single-user brand incident under that framing.
 3.1 Add a drift-guard test (in `inngest-inventory.test.sh`, or a tiny new assertion block) that
     greps `ci-deploy.sh`, `inngest-wiped-volume-verify.sh`, and `inngest-inventory.sh` and
     asserts all three reference the same load-bearing tokens (`--postgres-uri`, `--redis-uri`,
-    `inngest-redis.service`). This makes a future change to the durability rule in one file fail
-    CI until the others are reconciled — cheaper than a sourced lib (infra has no source-lib
-    precedent), and consistent with `ci-deploy-wrapper.test.sh:225` / `bwrap-userns-sysctl.test.sh`
-    drift-guard style. (Document the deferred shared-lib option in the Architecture note.)
+    `inngest-redis.service`, **`inngest-server.service`** — the unit being parsed is load-bearing
+    too). This makes a future change to the durability rule in one file fail CI until the others
+    are reconciled — cheaper than a sourced lib (infra has no source-lib precedent), and
+    consistent with `ci-deploy-wrapper.test.sh:225` / `bwrap-userns-sysctl.test.sh` drift-guard
+    style. **Scope note (per simplicity review):** this guard is a token-co-occurrence TRIPWIRE,
+    NOT a verdict-equivalence proof — it cannot catch a logic inversion that keeps all tokens
+    present. The five Phase 2.2 verdict tests are the real pin for THIS (the new) parser; the
+    tripwire's job is only to force a human to re-look at all three when one changes. (Document the
+    deferred shared-lib option in the Architecture note.)
 
 ### Phase 4 — `scheduled-inngest-health.yml`: continuous detector + advisory issue
 
 4.1 In the probe step (after the `inngest_down` / `inngest_unhealthy` checks at lines 92-106),
     on a **healthy** body (200 + functions array), additionally read
-    `dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "unknown"')` and expose it as a
-    `$GITHUB_OUTPUT` (`durability_state=$dstate`, run through `strip_log_injection`). Tolerate a
-    missing field (older host script not yet redeployed) as `unknown` — do **not** flap on it.
-4.2 Add a NEW step `File or comment durability advisory (degraded)` gated on
-    `steps.probe.outputs.failure_mode == '' && steps.probe.outputs.durability_state == 'sqlite_only'`.
-    It `gh label create "ci/inngest-degraded-durability"` (idempotent, mirrors line 140), then
-    files **or comments** an advisory issue titled `[ci/inngest-degraded-durability] Inngest running SQLite-only between deploys`
-    with label `priority/p2-medium` (workaround exists — server is alive; armed reminders survive
-    until a host rebuild). Body: state, detected-at, run URL, and the remediation pointer
-    (re-deploy inngest with Redis ready, or accept until next rebuild re-installs Redis; cite
-    `knowledge-base/engineering/operations/runbooks/inngest-server.md` + #5450). This is the
-    idempotent open-issue "persists across probes" mechanism: first probe files; subsequent
-    SQLite-only probes comment "still SQLite-only at <ts>"; the auto-close step (4.3) closes it
-    when durable. (No GH-Actions cross-run cache needed — ExecStart is a deterministic config
-    read, not a flaky transient; the open-issue-state IS the cross-probe persistence carrier,
+    `dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "absent"')` and expose it as a
+    `$GITHUB_OUTPUT` (`durability_state=$dstate`, run through `strip_log_injection`).
+    **Distinguish field-absent from value-unknown** (review P1-2/P1-3): `absent` = older host
+    script not yet redeployed (benign; emit a one-line `::notice::` so the blind window is itself
+    visible, but file no issue); a literal `"unknown"` = a redeployed host whose live parser could
+    not read the unit (a real parser/permission regression — emit `::warning::` + it flows to
+    journald `durability=unknown`). Do **not** flap on `absent`.
+4.2 Add a NEW step `File or comment durability advisory (non-durable)` gated on the **non-durable
+    union**: `steps.probe.outputs.failure_mode == '' && (steps.probe.outputs.durability_state ==
+    'sqlite_only' || steps.probe.outputs.durability_state == 'degraded')`. **This is the load-bearing
+    review-P0 fix:** `degraded` (durable backend configured but `--redis-uri` absent or
+    `inngest-redis` inactive) is the #5542 incident state and is canonically MORE severe than
+    `sqlite_only` — it must NOT be silenced. The step `gh label create
+    "ci/inngest-degraded-durability"` (idempotent, mirrors line 140), then files **or comments** an
+    advisory issue titled `[ci/inngest-degraded-durability] Inngest non-durable between deploys`.
+    **Label by severity:** `priority/p1-high` when `durability_state == 'degraded'` (canonically
+    fatal — durable backend half-broken, live armed-reminder loss risk now, not just on rebuild);
+    `priority/p2-medium` when `sqlite_only` (server alive on the fail-safe; armed reminders survive
+    until a host rebuild). Body: the specific state, detected-at, run URL, and the remediation
+    pointer (re-deploy inngest with Redis ready / restart `inngest-redis.service`; cite
+    `knowledge-base/engineering/operations/runbooks/inngest-server.md` + #5450). Idempotent
+    open-issue "persists across probes" mechanism: first non-durable probe files; subsequent
+    non-durable probes comment "still <state> at <ts>" (**including a state TRANSITION comment when
+    the host moves `sqlite_only↔degraded`** so the issue never silently rots — review P2-1); the
+    auto-close step (4.3) closes it when durable. (No GH-Actions cross-run cache needed — ExecStart
+    is a deterministic config read; the open-issue-state IS the cross-probe persistence carrier,
     same pattern as the existing `inngest_down` issue.)
 4.3 Add an auto-close step gated on
     `steps.probe.outputs.failure_mode == '' && steps.probe.outputs.durability_state == 'durable'`
     that closes any open `ci/inngest-degraded-durability` issue (mirror the `inngest_down`
-    auto-close at lines 160-174). Leave `unknown`/`degraded` neither-file-nor-close (avoid
-    flapping; `degraded` is the durable-but-broken transient the existing deploy-time hard gate
-    + `inngest_down` path already cover within a deploy).
+    auto-close at lines 160-174). Leave only `absent`/`unknown` neither-file-nor-close (`absent`
+    is benign-self-healing; `unknown` is surfaced via the 4.1 `::warning::` + journald, not an
+    issue, since it is a read failure not a confirmed degradation). **`degraded` is NOT in the
+    neither-branch** — it files via 4.2.
 4.4 Do NOT add a Sentry-heartbeat monitor for this advisory (the existing
     `scheduled-inngest-health` heartbeat already covers liveness; durability degradation is an
     advisory issue, not a missing-check-in). Keep the final heartbeat step (lines 176-185)
@@ -203,13 +248,17 @@ a single lost armed reminder is a single-user brand incident under that framing.
 - [ ] AC6: The workflow validates + exposes durability. Verify: `actionlint
       .github/workflows/scheduled-inngest-health.yml` exits 0, and the probe step writes
       `durability_state=` to `$GITHUB_OUTPUT` (grep the workflow for `durability_state=`).
-- [ ] AC7: The advisory-issue step is gated on healthy-AND-sqlite_only and uses label
-      `ci/inngest-degraded-durability` + `priority/p2-medium`; the auto-close step is gated on
-      healthy-AND-durable. Verify by reading the two new step `if:` conditions and the
-      `gh issue create --label` / `gh issue close` calls.
-- [ ] AC8: A missing `.durability_state` (older host script) is tolerated as `unknown` and does
-      NOT trigger the advisory issue nor a restart. Verify: the probe jq uses `// "unknown"` and
-      the advisory step matches only `== 'sqlite_only'`.
+- [ ] AC7: The advisory-issue step is gated on the **non-durable union** (healthy-AND-(`sqlite_only`
+      OR `degraded`)) and uses label `ci/inngest-degraded-durability` with severity `priority/p1-high`
+      for `degraded` and `priority/p2-medium` for `sqlite_only`; the auto-close step is gated on
+      healthy-AND-`durable`. Verify by reading the new step `if:` conditions and the
+      `gh issue create --label` / `gh issue close` calls. **`degraded` MUST file an issue** (review
+      P0-1) — it is the #5542 incident state, canonically more severe than `sqlite_only`.
+- [ ] AC8: A **missing** `.durability_state` (older host) is coerced to `absent`, files NO issue,
+      emits a `::notice::`, and does NOT restart. A present literal `"unknown"` (redeployed host,
+      unreadable unit) emits a `::warning::` (visible read-failure), files no issue. Verify: probe
+      jq uses `// "absent"`; advisory step matches the non-durable union only (`sqlite_only`/
+      `degraded`), never `absent`/`unknown`.
 - [ ] AC9: `hooks.json.tmpl` is **unchanged** (the hook already returns command output). Verify:
       `git diff --name-only origin/main | grep -c hooks.json.tmpl` returns `0`.
 - [ ] AC10: No SSH anywhere in the diff. Verify: `git diff origin/main | grep -E '^\+' | grep -c 'ssh '` returns `0`.
@@ -239,16 +288,19 @@ error_reporting:
 failure_modes:
   - mode: "host runs SQLite-only fail-safe ExecStart between deploys"
     detection: "inventory durability_state == 'sqlite_only' read by the 15-min probe"
-    alert_route: "GitHub issue ci/inngest-degraded-durability + journald→Better Stack"
-  - mode: "durable backend configured but invariant broken (--redis-uri absent or inngest-redis inactive)"
-    detection: "durability_state == 'degraded'"
-    alert_route: "neither-file-nor-close in this watchdog (deploy-time hard gate + inngest_down path own this within a deploy); visible in journald→Better Stack durability=degraded"
+    alert_route: "GitHub issue ci/inngest-degraded-durability (priority/p2-medium) + journald→Better Stack durability=sqlite_only"
+  - mode: "durable backend configured but invariant broken (--redis-uri absent or inngest-redis inactive) between deploys — the #5542 incident state"
+    detection: "durability_state == 'degraded' read by the 15-min probe (NOT caught by inngest_down: a redis-dead-but-still-serving host returns 200 + functions array)"
+    alert_route: "GitHub issue ci/inngest-degraded-durability (priority/p1-high — canonically MORE severe than sqlite_only) + journald→Better Stack durability=degraded. NOT silenced (review P0-1 fix)."
+  - mode: "redeployed host whose live parser cannot read the unit (durability_state literal 'unknown')"
+    detection: "durability_state == 'unknown' (distinct from 'absent')"
+    alert_route: "::warning:: in the Actions run log + journald→Better Stack durability=unknown (visible read-failure; not an issue since it is a read failure, not a confirmed degradation)"
   - mode: "inventory hook reports durability_state false-positive (mis-read healthy host)"
-    detection: "the 5 unit-test verdicts + cross-file drift guard pin the parse against the canonical ci-deploy.sh rule"
+    detection: "the 5 unit-test verdicts pin the parse against the canonical ci-deploy.sh rule; the cross-file drift tripwire forces a re-look when any of the 3 parsers' tokens change"
     alert_route: "CI test failure pre-merge"
   - mode: "older host script lacks the field"
-    detection: "jq '// \"unknown\"' tolerance; no spurious issue"
-    alert_route: "n/a (graceful) — resolves on next deploy that re-stages the script"
+    detection: "jq '// \"absent\"' tolerance; no spurious issue"
+    alert_route: "::notice:: in the Actions run log (blind window made visible) — resolves on next deploy that re-stages the script"
 logs:
   where: "GitHub Actions run logs (scheduled-inngest-health); on-host journald (journalctl -t inngest-inventory) → Better Stack Logs"
   retention: "Better Stack Logs default retention; GitHub Actions logs 90 days"
@@ -317,13 +369,36 @@ Only #5553 itself (the issue this plan closes) references the three target files
 
 None. (The advisory GitHub issue is created at runtime by the workflow, not committed.)
 
+## Precedent-Diff (Phase 4.4)
+
+**Scheduled-work pattern (ADR-033 "prefer Inngest" — correctly overridden):**
+
+| Aspect | Canonical (ADR-033) | This plan |
+| --- | --- | --- |
+| New scheduled work → Inngest cron function | `apps/web-platform/server/inngest/functions/cron-*.ts` | **N/A** — we extend an EXISTING GH-Actions workflow, not create a new cron. |
+| GH-Actions cron acceptable only if git/repo-scoped, no app context | The watchdog already carries `# <!-- gate-override: new-scheduled-cron-prefer-inngest -->` (`scheduled-inngest-health.yml:1-4`): an Inngest cron cannot detect Inngest being down. | Inherited — the durability detector rides the same external-probe rationale (a SQLite-only-but-alive server is exactly the kind of degraded state an internal Inngest cron would mis-report). |
+
+No new cron is created; the override is pre-existing and load-bearing. The `new-scheduled-cron-prefer-inngest` PreToolUse hook will not fire (no new `scheduled-*.yml`).
+
+**ExecStart-durability-parse pattern (3 consumers — drift-guard, not shared lib):**
+
+| Consumer | Form | Citation |
+| --- | --- | --- |
+| `ci-deploy.sh` (deploy-time verdict, source of truth) | `systemctl show -p ExecStart` → substring `--postgres-uri`/`--redis-uri` + `systemctl is-active inngest-redis.service` | `ci-deploy.sh:277-287` |
+| `inngest-wiped-volume-verify.sh` (wipe sanity) | `INNGEST_VERIFY_EXECSTART:-$(systemctl show … ExecStart)` → `*"--postgres-uri"*` | `inngest-wiped-volume-verify.sh:97-98` |
+| `inngest-inventory.sh` (THIS plan, no-SSH continuous) | identical substring rule, seam `INVENTORY_EXECSTART`/`INVENTORY_REDIS_ACTIVE` | new |
+
+No `source`-lib precedent exists in `apps/web-platform/infra/`; a sourced lib would itself be a novel pattern. Pin the three with the Phase 3 cross-file drift-guard test (style precedent: `ci-deploy-wrapper.test.sh:225`, `bwrap-userns-sysctl.test.sh:36`).
+
 ## Risks & Mitigations
 
 - **False-positive `sqlite_only`** from a parser drift vs. `ci-deploy.sh` → mitigated by Phase 3
   cross-file drift guard + the five unit verdicts pinned to the canonical rule.
-- **Issue flapping** if a host oscillates durable↔sqlite_only → mitigated by the idempotent
-  open-issue pattern (file once, comment on repeat, auto-close on durable) — identical to the
-  existing `inngest_down` path; `degraded`/`unknown` deliberately neither file nor close.
+- **Issue flapping** if a host oscillates durable↔non-durable → mitigated by the idempotent
+  open-issue pattern (file once, comment on repeat **including `sqlite_only↔degraded` transition
+  comments**, auto-close on `durable`) — identical in shape to the existing `inngest_down` path.
+  Only `absent` (older host) and `unknown` (read failure) neither file nor close; `degraded` and
+  `sqlite_only` both file (review P0-1).
 - **`gh` log-injection** via the probe body → the body never reaches the advisory step's echoes
   unsanitized; `durability_state` is a constrained enum and still passes through
   `strip_log_injection` before `$GITHUB_OUTPUT` (existing pattern, lines 109-111).
