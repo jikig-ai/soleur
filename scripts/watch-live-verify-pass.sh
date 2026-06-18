@@ -57,8 +57,16 @@ for id in $ids; do
   # Not a qualifying merge if the harness step skipped or the job/step is absent.
   [[ -z "$jobid" || "$step" == "skipped" || "$step" == "absent" ]] && continue
 
-  # Harness executed → read the authoritative RESULT line from the job log
-  # (bounded: grep -m1; never echo the full log — hr-never-run-commands-with-unbounded-output).
+  # Harness executed → read the authoritative RESULT line from the job log.
+  # `grep -m1` caps the OUTPUT to a single line and exits early (SIGPIPE-stopping
+  # the gh stream once matched) — the full job log is never echoed to stdout /
+  # $GITHUB_STEP_SUMMARY (hr-never-run-commands-with-unbounded-output). The log
+  # DOWNLOAD itself is not size-capped, but the job log is our own CI artifact
+  # (not attacker-controlled) and the RESULT line lands late in the harness step
+  # (after the verbose playwright install) — a byte cap could truncate before it
+  # and miss a real PASS, so the read is deliberately uncapped. The regex is
+  # intentionally UNANCHORED: every GH Actions log line is timestamp-prefixed, so
+  # `^RESULT:` would never match; run.ts emits exactly one RESULT line.
   result="$(gh run view --job "$jobid" --log 2>/dev/null \
               | grep -m1 -oE 'RESULT: (PASS|FAIL|CANT-RUN[^[:space:]]*)' || true)"
   if [[ "$result" == "RESULT: PASS" ]]; then

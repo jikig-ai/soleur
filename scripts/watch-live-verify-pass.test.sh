@@ -59,6 +59,10 @@ CLOSED='{"state":"CLOSED"}'
 NO_COMMENTS='{"comments":[]}'
 SENTINEL_COMMENT='{"comments":[{"body":"recorded earlier <!-- live-verify-pass-watch:recorded run=999 -->"}]}'
 RUNS='[{"databaseId":111,"headSha":"abc1234567","url":"https://github.com/jikig-ai/soleur/actions/runs/111","status":"completed"}]'
+# Step name must stay in sync with the canonical job in
+# .github/workflows/web-platform-release.yml ("Run live-verify harness (report-only)").
+# The SUT matches it by the substring "Run live-verify harness"; if that workflow
+# renames the step, update both here AND the SUT's test() pattern.
 JOBS_RAN='{"jobs":[{"name":"live-verify","databaseId":222,"steps":[{"name":"Run live-verify harness (report-only)","conclusion":"success"}]}]}'
 JOBS_SKIPPED='{"jobs":[{"name":"live-verify","databaseId":222,"steps":[{"name":"Run live-verify harness (report-only)","conclusion":"skipped"}]}]}'
 LOG_PASS='2026-06-18T08:00:00Z live-verify  RESULT: PASS — fresh conversation persisted and appeared in the rail'
