@@ -45,7 +45,7 @@ ENUMERATE_CMD="${INNGEST_ENUMERATE_CMD:-${SCRIPT_DIR}/inngest-enumerate-reminder
 DATA_DIR="${INNGEST_DATA_DIR:-/var/lib/inngest}"
 STATE_FILE="${INNGEST_VERIFY_STATE:-/var/lock/inngest-wiped-volume-verify.state}"
 HEALTH_URL="${INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health}"
-FUNCTIONS_URL="${INNGEST_FUNCTIONS_URL:-http://127.0.0.1:8288/v1/functions}"
+GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
 REARM_URL="${SCHEDULE_REMINDER_URL:-http://127.0.0.1:3000/api/internal/schedule-reminder}"
 SETTLE_SECS="${INNGEST_VERIFY_SETTLE_SECS:-120}"
 START_TS=$(date +%s)
@@ -128,10 +128,15 @@ sudo systemctl start inngest-server.service || abort "start_failed" "systemctl s
 health_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$HEALTH_URL" || echo "000")
 [[ "$health_code" == "200" ]] || abort "health_not_200" "inngest /health returned $health_code after wipe+restart"
 
-# /v1/functions has >= 1 cron (crons re-registered after restart)
-fn_body=$(curl -s --max-time 10 "$FUNCTIONS_URL" || echo "[]")
-fn_count=$(echo "$fn_body" | jq 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)
-[[ "$fn_count" -ge 1 ]] || abort "no_functions" "inngest /v1/functions returned $fn_count functions after restart"
+# >= 1 cron re-registered after restart. Query /v0/gql `functions` — GET /v1/functions
+# is an UNREGISTERED 404 route in v1.19.4 (#5517): the old `if type=="array" else 0`
+# tolerated the 404 body as 0, so this assert would FALSELY fire `no_functions` on a
+# healthy restart. >= 1 proves the SDK re-synced (durability is in Postgres+Redis,
+# not the wiped /var/lib/inngest volume).
+fn_body=$(curl -s --max-time 10 -X POST -H "Content-Type: application/json" \
+  --data-binary '{"query":"query { functions { slug } }"}' "$GQL_URL" || echo '{"data":{"functions":[]}}')
+fn_count=$(echo "$fn_body" | jq '(.data.functions // []) | length' 2>/dev/null || echo 0)
+[[ "$fn_count" -ge 1 ]] || abort "no_functions" "inngest /v0/gql functions returned $fn_count functions after restart"
 
 # Marker fired: it is no longer in the still-armed set (its run reached terminal,
 # OR its fire-time passed). enumerate excludes terminal-run + past events, so a

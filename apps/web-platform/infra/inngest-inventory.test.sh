@@ -7,8 +7,8 @@
 # reminder.scheduled), and reuses enumerate's armed-reminder projection.
 #
 # Test seam: INNGEST_GQL_FIXTURE_DIR (page-N.json eventsV2 pages),
-# INVENTORY_FUNCTIONS_FIXTURE (a /v1/functions JSON file), INVENTORY_NOW_MS.
-# No network, no inngest, no root.
+# INVENTORY_FUNCTIONS_FIXTURE (a /v0/gql functions-query response file, #5517),
+# INVENTORY_NOW_MS. No network, no inngest, no root.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,8 +50,11 @@ make_edge() {
     '{cursor:$ulid,node:{id:$ulid,name:$nm,occurredAt:$occ,receivedAt:"2026-06-10T00:00:00Z",idempotencyKey:null,raw:$raw,runs:$runs}}'
 }
 
+# Build a /v0/gql `functions` query response (#5517). The captured real shape is
+# {"data":{"functions":[{id,name,slug,triggers}]}} — GET /v1/functions is a 404 in
+# inngest v1.19.4, so the projection reads the GraphQL envelope, not a bare array.
 make_functions() {  # $1 = JSON array of names
-  jq -nc --argjson names "$1" '[ $names[] | {name:., slug:., triggers:[]} ]'
+  jq -nc --argjson names "$1" '{data:{functions:[ $names[] | {id:., name:., slug:., triggers:[]} ]}}'
 }
 
 # Run the script with fixtures; $1=page-dir, $2=functions-fixture-file. Returns stdout only.
@@ -79,7 +82,7 @@ test_combined_is_pure_json_object() {
   assert_eq "success-path stderr is empty (summary journald-only)" "" "$err"
 }
 
-# --- Test 2: functions = sorted names from /v1/functions ---
+# --- Test 2: functions = sorted names from /v0/gql functions ---
 test_functions_names() {
   local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
   make_functions '["cron-zeta","cron-alpha"]' > "$ff"
@@ -158,23 +161,45 @@ test_empty_state() {
   assert_eq "empty state → {functions:[],event_names:[],armed_reminders:[]}" '{"functions":[],"event_names":[],"armed_reminders":[]}' "$(echo "$out" | jq -c '.')"
 }
 
-# --- Test 9 (#5509 review P3): a degraded /v1/functions read fails LOUD, not false-clean ---
+# --- Test 9 (#5509 review P3): a degraded functions read fails LOUD, not false-clean ---
 test_functions_fetch_failure_is_loud() {
   local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
-  # Non-array functions body (simulates curl-failure sentinel / error envelope).
-  printf '%s' '{"error":"connection refused"}' > "$ff"
+  # A GraphQL error envelope (no .data.functions) — simulates curl-failure sentinel /
+  # server error. The corrected guard (.data.functions | type=="array") must trip.
+  printf '%s' '{"errors":[{"message":"connection refused"}],"data":null}' > "$ff"
   make_page false "" "[]" > "$d/page-1.json"
   local out rc=0
   out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null) || rc=$?
   assert_eq "non-array functions read exits non-zero (no false-clean baseline)" "1" "$rc"
-  if [[ "$out" == *"FATAL /v1/functions"* ]]; then echo "  PASS: emits a diagnosable FATAL cause"; PASS=$((PASS+1));
+  if [[ "$out" == *"FATAL /v0/gql functions"* ]]; then echo "  PASS: emits a diagnosable FATAL cause"; PASS=$((PASS+1));
   else echo "  FAIL: no FATAL cause on degraded functions read"; FAIL=$((FAIL+1)); fi
   if [[ "$out" == *'"functions":[]'* ]]; then echo "  FAIL: emitted a false-clean empty functions object"; FAIL=$((FAIL+1));
   else echo "  PASS: did NOT emit a false-clean functions baseline"; PASS=$((PASS+1)); fi
 }
 
+# --- Test 10 (#5517): functions projected from the captured /v0/gql functions shape ---
+# The real shape is {"data":{"functions":[{id,name,slug,...}]}} (GET /v1/functions is a
+# 404 in v1.19.4). The projection MUST read .data.functions, and a BARE array (the old
+# wrong assumption) must trip the guard rather than be silently accepted.
+test_functions_from_gql_shape() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  # Captured-shape fixture: a populated /v0/gql functions response (soleur crons).
+  printf '%s' '{"data":{"functions":[{"id":"01J","name":"cron-bug-fixer","slug":"cron-bug-fixer","triggers":[{"type":"CRON","value":"*/30 * * * *"}]},{"id":"01K","name":"cron-daily-triage","slug":"cron-daily-triage","triggers":[{"type":"CRON","value":"0 9 * * *"}]}]}}' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  local out; out=$(run_inv "$d" "$ff")
+  assert_eq "functions = sorted names projected from .data.functions" "cron-bug-fixer,cron-daily-triage" "$(echo "$out" | jq -r '.functions | join(",")')"
+
+  # A BARE array (the pre-#5517 wrong assumption) has no .data.functions → must FATAL.
+  local bf; bf=$(mktemp); trap 'rm -rf "$d" "$ff" "$bf"' RETURN
+  printf '%s' '[{"name":"cron-x","slug":"cron-x"}]' > "$bf"
+  local brc=0
+  INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$bf" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" >/dev/null 2>&1 || brc=$?
+  assert_eq "a bare array (old shape) trips the guard (not silently accepted)" "1" "$brc"
+}
+
 test_combined_is_pure_json_object
 test_functions_fetch_failure_is_loud
+test_functions_from_gql_shape
 test_functions_names
 test_event_names_distinct_all
 test_armed_projection

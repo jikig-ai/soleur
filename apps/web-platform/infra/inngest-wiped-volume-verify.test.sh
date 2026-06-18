@@ -44,7 +44,9 @@ setup() {
   MOCKBIN=$(mktemp -d)
   ARM_LOG="${MOCKBIN}/arm.log"; : > "$ARM_LOG"
   # mock curl: arm POST → 202 and log the --data-binary body; GET health → 200 body
-  # {"status":200}; GET functions → a 1-cron array.
+  # {"status":200}; /v0/gql functions query → a 1-cron GraphQL response (#5517);
+  # GET /v1/functions (the unregistered route) → a 404 text body, so a script still
+  # using the old path reads 0 functions and aborts (the RED this drives).
   cat > "${MOCKBIN}/curl" <<MOCK
 #!/usr/bin/env bash
 url="\${!#}"
@@ -56,8 +58,12 @@ done
 case "\$url" in
   *schedule-reminder*) [[ -n "\$body" ]] && echo "ARM_BODY: \$body" >> "$ARM_LOG"; printf '202' ;;
   *health*)    [[ -n "\$outfile" ]] && printf '{"status":200,"message":"OK"}' > "\$outfile"; printf '200' ;;
-  # /v1/functions is fetched WITHOUT -o (body on stdout) → emit the array on stdout.
-  *functions*) printf '[{"slug":"cron-x"}]' ;;
+  # /v0/gql functions query (body on stdout) → wrapped GraphQL functions response.
+  # (Explicit if, not \${:-default}: a brace-heavy JSON default terminates the
+  # parameter expansion at its first '}'.)
+  *v0/gql*)      if [[ -n "\${WVV_FUNCTIONS_BODY:-}" ]]; then printf '%s' "\$WVV_FUNCTIONS_BODY"; else printf '%s' '{"data":{"functions":[{"slug":"cron-x"}]}}'; fi ;;
+  # /v1/functions is an UNREGISTERED 404 route in v1.19.4 (#5517).
+  *v1/functions*) printf '404 page not found' ;;
   *) printf '200' ;;
 esac
 MOCK
@@ -100,6 +106,7 @@ run_verify() {
     INNGEST_VERIFY_STATE="${MOCKBIN}/verify.state" \
     INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
     INNGEST_VERIFY_SETTLE_SECS=0 \
+    WVV_FUNCTIONS_BODY="${WVV_FUNCTIONS_BODY:-}" \
     bash "$TARGET" 2>&1
 }
 
@@ -193,11 +200,26 @@ test_abort_on_spoofed_prefix_real_reminder() {
   teardown
 }
 
+# --- Test 6 (#5517): post-restart functions probe reads /v0/gql, aborts on 0 ---
+# GET /v1/functions is a 404 in v1.19.4 (would always read 0 → false no_functions
+# abort after a healthy restart). The probe must read the GraphQL functions query;
+# an empty functions array (no SDK re-sync yet) still aborts loud (durability gate).
+test_no_functions_aborts_loud() {
+  setup
+  make_enum_stub '[]'
+  local out rc=0
+  out=$(WVV_FUNCTIONS_BODY='{"data":{"functions":[]}}' run_verify) || rc=$?
+  assert_eq "empty /v0/gql functions after restart → abort non-zero" "1" "$rc"
+  assert_contains "abort names the no_functions durability gate" "$out" "functions returned 0"
+  teardown
+}
+
 test_abort_on_real_reminder
 test_abort_on_spoofed_prefix_real_reminder
 test_abort_on_non_durable_backend
 test_throwaway_posts_no_comment
 test_happy_wipe_order
+test_no_functions_aborts_loud
 test_marker_unique
 
 echo ""

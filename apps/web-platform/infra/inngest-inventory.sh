@@ -5,7 +5,7 @@
 # of everything the cutover could lose moving off the volume-based SQLite store, so
 # an operator can diff BEFORE vs AFTER and prove nothing was dropped:
 #
-#   { "functions":      [<registered function name/slug>, ...],   # /v1/functions
+#   { "functions":      [<registered function name/slug>, ...],   # /v0/gql functions
 #     "event_names":    [<distinct event name>, ...],             # eventsV2 (ALL)
 #     "armed_reminders": [{reminder_id,fire_at,actor,action}, ...] }  # enumerate proj.
 #
@@ -13,10 +13,13 @@
 #
 # Schema pinned (verified vs inngest v1.19.4):
 #   knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md
-# Loopback (127.0.0.1:8288, no auth in `start` mode): GET /v1/functions returns a
-# JSON array of registered functions; /v0/gql eventsV2 carries the event envelope in
-# `raw: String!` (parse with fromjson; `.ts` = future fire epoch-ms; `from`/`until`
-# bound receivedAt NOT fire-time → wide window + client-side future filter).
+# Loopback (127.0.0.1:8288, no auth in `start` mode): the /v0/gql `functions` query
+# returns {data:{functions:[{id,name,slug,triggers,...}]}}  # verified: 2026-06-18
+# (GET /v1/functions is an UNREGISTERED 404 in v1.19.4 → the old bare-number `shape`
+# was the "404 page not found" body's leading token, #5517); /v0/gql eventsV2 carries
+# the event envelope in `raw: String!` (parse with fromjson; `.ts` = future fire
+# epoch-ms; `from`/`until` bound receivedAt NOT fire-time → wide window + client-side
+# future filter).
 #
 # armed_reminders mirrors inngest-enumerate-reminders.sh's projection EXACTLY
 # (future fire `raw.ts > now` AND no terminal run) so the inventory's armed set and
@@ -33,13 +36,12 @@
 # (stdout only), so the merge happens solely at the webhook boundary.
 #
 # Test seam: INNGEST_GQL_FIXTURE_DIR (page-N.json for eventsV2), INVENTORY_FUNCTIONS_FIXTURE
-# (a file with the /v1/functions JSON), INVENTORY_NOW_MS (deterministic "now").
+# (a file with the /v0/gql functions-query response), INVENTORY_NOW_MS (deterministic "now").
 set -euo pipefail
 
 readonly LOG_TAG="inngest-inventory"
 
 GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
-FUNCTIONS_URL="${INNGEST_FUNCTIONS_URL:-http://127.0.0.1:8288/v1/functions}"
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-50}"
 # receivedAt lower bound — same 365-day clamp as enumerate (#5492): the epoch is
 # rejected by inngest v1.19.4 as out-of-range. ENUMERATE_FROM widens it for a deeper
@@ -59,6 +61,12 @@ readonly GQL_QUERY='query InvEvents($first: Int!, $after: String, $filter: Event
     edges { cursor node { id name occurredAt receivedAt idempotencyKey raw runs { id status startedAt endedAt } } }
   }
 }'
+
+# Registered-function query (#5517). GET /v1/functions is an UNREGISTERED 404 in
+# v1.19.4; the top-level GraphQL `functions` field (same /v0/gql endpoint eventsV2
+# uses, no auth on loopback) returns the rich object array the devserver UI shows.
+# We project names only, so id/name/slug suffice (no appName discovery needed).
+readonly FUNCTIONS_GQL_QUERY='query InvFunctions { functions { id name slug } }'
 
 # Build the GraphQL request body for one page (ALL events — NO eventNames filter, so
 # event_names captures cron/* etc.). $1 = after-cursor ("" for first). Injection-safe
@@ -88,35 +96,43 @@ fetch_page() {
     --data-binary "$body" "$GQL_URL"
 }
 
-# Fetch the registered-function list (fixture or loopback). Echoes the raw JSON array.
+# Fetch the registered-function list via /v0/gql (fixture or loopback). Echoes the raw
+# GraphQL response {data:{functions:[...]}}. Injection-safe body via jq -n.
 fetch_functions() {
   if [[ -n "$FUNCTIONS_FIXTURE" ]]; then
     cat "$FUNCTIONS_FIXTURE"
     return 0
   fi
-  # On a real curl failure emit a NON-array sentinel (not "[]") so run_inventory
-  # fails LOUD below. A silent "[]" would record a false-clean empty `functions`
-  # baseline that the cutover before/after diff cannot distinguish from a real
-  # loss (#5509 review P3 — false-confidence on a degraded read).
-  curl -s --max-time 15 "$FUNCTIONS_URL" || echo '"__FETCH_FAILED__"'
+  local body
+  body=$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}')
+  # On a real curl failure emit a GraphQL error envelope (no .data.functions) so
+  # run_inventory fails LOUD below. A silent "[]" would record a false-clean empty
+  # `functions` baseline that the cutover before/after diff cannot distinguish from a
+  # real loss (#5509 review P3 — false-confidence on a degraded read).
+  curl -s --max-time 15 -X POST -H "Content-Type: application/json" \
+    --data-binary "$body" "$GQL_URL" || echo '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}'
 }
 
 run_inventory() {
   # --- functions: names only (fall back to slug/id if the element lacks .name) ---
   local fn_body functions
   fn_body=$(fetch_functions)
-  # Fail LOUD (not false-clean []) if /v1/functions is unreachable or non-array.
-  # A legitimately-empty inngest returns a valid `[]` array → passes this gate and
-  # yields functions=[] correctly; only a fetch failure / non-array trips it.
-  if ! echo "$fn_body" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    local fn_shape
-    fn_shape=$(echo "$fn_body" | jq -c 'if type=="object" then keys else type end' 2>/dev/null || echo '"non-json"')
-    logger -t "$LOG_TAG" "ERROR: /v1/functions unreachable or non-array (shape=$fn_shape)" 2>/dev/null || true
-    echo "inngest-inventory: FATAL /v1/functions unreachable or non-array (shape=$fn_shape); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
-    echo "ERROR: /v1/functions non-array (shape=$fn_shape)" >&2
+  # Fail LOUD (not false-clean []) if the /v0/gql functions query failed or returned a
+  # non-array .data.functions. A legitimately-empty inngest returns {data:{functions:[]}}
+  # → passes this gate and yields functions=[] correctly; a fetch failure, a GraphQL
+  # error envelope, or any unexpected shape (incl. a bare array — the pre-#5517 wrong
+  # assumption) trips it. The guard is NOT loosened to accept any shape.
+  if ! echo "$fn_body" | jq -e '.data.functions | type == "array"' >/dev/null 2>&1; then
+    # #5503 purity: surface only GraphQL error MESSAGES + .data KEY NAMES, never values.
+    local fn_errs fn_keys
+    fn_errs=$(echo "$fn_body" | jq -c '[(.errors // [])[].message]' 2>/dev/null || echo '["<unparseable response>"]')
+    fn_keys=$(echo "$fn_body" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
+    logger -t "$LOG_TAG" "ERROR: /v0/gql functions unreachable or non-array: errors=$fn_errs data_keys=$fn_keys" 2>/dev/null || true
+    echo "inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=$fn_errs data_keys=$fn_keys); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
+    echo "ERROR: /v0/gql functions non-array (errors=$fn_errs data_keys=$fn_keys)" >&2
     exit 1
   fi
-  functions=$(echo "$fn_body" | jq -c '[ .[] | (.name // .slug // .id // empty) ] | sort')
+  functions=$(echo "$fn_body" | jq -c '[ .data.functions[] | (.name // .slug // .id // empty) ] | sort')
 
   # --- eventsV2: paginate ALL events to exhaustion ---
   local all_edges="[]" after="" page=1 resp page_edges has_next end_cursor
