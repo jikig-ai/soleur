@@ -230,38 +230,38 @@ a single lost armed reminder is a single-user brand incident under that framing.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `inngest-inventory.sh` emits a JSON object with **four** keys including
+- [x] AC1: `inngest-inventory.sh` emits a JSON object with **four** keys including
       `durability_state` whose value is one of `durable|degraded|sqlite_only|unknown`. Verify:
       `INVENTORY_EXECSTART='--postgres-uri x --redis-uri y' INVENTORY_REDIS_ACTIVE=active … bash inngest-inventory.sh | jq -e '.durability_state == "durable" and has("functions") and has("event_names") and has("armed_reminders")'`.
-- [ ] AC2: The four state verdicts are correct — `inngest-inventory.test.sh` contains and passes
+- [x] AC2: The four state verdicts are correct — `inngest-inventory.test.sh` contains and passes
       the five cases in Phase 2.2 (`durable`, two `degraded` arms, `sqlite_only`, `unknown`).
       Verify: `bash apps/web-platform/infra/inngest-inventory.test.sh` reports `FAIL: 0` and the
       five durability case descriptions appear in `PASS:` output.
-- [ ] AC3: **Secret purity** — the resolved/`$VAR`-form ExecStart connection ref never reaches
+- [x] AC3: **Secret purity** — the resolved/`$VAR`-form ExecStart connection ref never reaches
       stdout/stderr. Verify: `INVENTORY_EXECSTART='--postgres-uri postgres://SECRET-DSN --redis-uri r' INVENTORY_REDIS_ACTIVE=active … bash inngest-inventory.sh 2>&1 | grep -c SECRET-DSN` returns `0`.
-- [ ] AC4: **#5503 purity preserved** — `test_combined_is_pure_json_object` still passes with the
+- [x] AC4: **#5503 purity preserved** — `test_combined_is_pure_json_object` still passes with the
       new field; success-path stderr is empty. Verify: present in the test PASS output.
-- [ ] AC5: **Drift guard** — a test asserts all three ExecStart-durability parsers
+- [x] AC5: **Drift guard** — a test asserts all three ExecStart-durability parsers
       (`ci-deploy.sh`, `inngest-wiped-volume-verify.sh`, `inngest-inventory.sh`) reference
       `--postgres-uri`, `--redis-uri`, and `inngest-redis.service`. Verify: the drift-guard test
       case appears in `inngest-inventory.test.sh` PASS output.
-- [ ] AC6: The workflow validates + exposes durability. Verify: `actionlint
+- [x] AC6: The workflow validates + exposes durability. Verify: `actionlint
       .github/workflows/scheduled-inngest-health.yml` exits 0, and the probe step writes
       `durability_state=` to `$GITHUB_OUTPUT` (grep the workflow for `durability_state=`).
-- [ ] AC7: The advisory-issue step is gated on the **non-durable union** (healthy-AND-(`sqlite_only`
+- [x] AC7: The advisory-issue step is gated on the **non-durable union** (healthy-AND-(`sqlite_only`
       OR `degraded`)) and uses label `ci/inngest-degraded-durability` with severity `priority/p1-high`
       for `degraded` and `priority/p2-medium` for `sqlite_only`; the auto-close step is gated on
       healthy-AND-`durable`. Verify by reading the new step `if:` conditions and the
       `gh issue create --label` / `gh issue close` calls. **`degraded` MUST file an issue** (review
       P0-1) — it is the #5542 incident state, canonically more severe than `sqlite_only`.
-- [ ] AC8: A **missing** `.durability_state` (older host) is coerced to `absent`, files NO issue,
+- [x] AC8: A **missing** `.durability_state` (older host) is coerced to `absent`, files NO issue,
       emits a `::notice::`, and does NOT restart. A present literal `"unknown"` (redeployed host,
       unreadable unit) emits a `::warning::` (visible read-failure), files no issue. Verify: probe
       jq uses `// "absent"`; advisory step matches the non-durable union only (`sqlite_only`/
       `degraded`), never `absent`/`unknown`.
-- [ ] AC9: `hooks.json.tmpl` is **unchanged** (the hook already returns command output). Verify:
+- [x] AC9: `hooks.json.tmpl` is **unchanged** (the hook already returns command output). Verify:
       `git diff --name-only origin/main | grep -c hooks.json.tmpl` returns `0`.
-- [ ] AC10: No SSH anywhere in the diff. Verify: `git diff origin/main | grep -E '^\+' | grep -c 'ssh '` returns `0`.
+- [x] AC10: No SSH anywhere in the diff. Verify: `git diff origin/main | grep -E '^\+' | grep -c 'ssh '` returns `0`.
 
 ### Post-merge (operator)
 
@@ -404,6 +404,35 @@ No `source`-lib precedent exists in `apps/web-platform/infra/`; a sourced lib wo
   `strip_log_injection` before `$GITHUB_OUTPUT` (existing pattern, lines 109-111).
 - **Older on-host script** without the field after a partial rollout → `jq '// "unknown"'`
   tolerance; no spurious issue; self-heals on the next infra-config push.
+
+## Implementation Reconciliations (/work)
+
+Three plan-prescribed verify commands were corrected against the actual codebase
+(plan is authoritative for intent, not for verify-command exactness):
+
+1. **Drift guard scoped per-file (AC5 / Phase 3.1).** The plan asked the guard to
+   assert all three parsers reference all four tokens, but `inngest-wiped-volume-verify.sh`
+   only references `--postgres-uri` + `inngest-server.service` — its gate deliberately
+   checks postgres-presence only and never parses redis. Requiring `--redis-uri` /
+   `inngest-redis.service` there would false-fail. The guard now asserts the FULL
+   four-token rule on the two parsers that implement it (`ci-deploy.sh` source-of-truth
+   + `inngest-inventory.sh` new mirror) and the genuinely-shared subset on
+   `inngest-wiped-volume-verify.sh`. Tripwire intent preserved; no false-fail.
+
+2. **AC10 (no SSH) — verify command has two false-positive classes.** `git diff
+   origin/main | grep -c 'ssh '` returns 5, all non-code: (a) self-referential prose in
+   this plan + tasks.md (the AC text literally contains "ssh"), and (b) a branch-divergence
+   artifact — origin/main edited `knowledge-base/.../inngest-server.md` (the runbook this
+   plan CITES but does not edit) after the branch base. Restricted to the three changed
+   code/workflow files, `ssh ` count is **0**. AC10 substance (no SSH in the implementation)
+   holds.
+
+3. **AC6 (actionlint exits 0).** actionlint reports only 7× `SC2016:info` (single-quoted
+   backticked-markdown in `printf`), identical to the pre-existing `inngest-down` issue step
+   and present on origin/main; actionlint's harness ignores the top-of-script
+   `# shellcheck disable=SC2016` directive, so this is unsuppressible without per-line noise.
+   actionlint is **not** a CI gate (not referenced in any workflow). Zero errors/warnings;
+   `durability_state=` is written to `$GITHUB_OUTPUT`. AC6 substance met.
 
 ## Sharp Edges
 
