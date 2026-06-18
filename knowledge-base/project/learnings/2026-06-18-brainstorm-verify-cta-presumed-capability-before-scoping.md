@@ -18,7 +18,7 @@ Before folding the CTA into scope, a 2-command probe was run *during the brainst
    `git grep -lniE "email_triage_items"` → surfaced `app/api/webhooks/resend-inbound/route.ts`,
    `server/inngest/functions/email-on-received.ts`, and `infra/{dns,resend}.tf`.
 2. Read the inbound webhook + the attribution logic → the inbox is **single-tenant**: one fixed
-   inbound address (`ops@soleur.ai` → `inbound.soleur.ai`, Resend Inbound/AWS SES, provisioned in
+   inbound address (operator `ops@` → `inbound.soleur.ai`, Resend Inbound/AWS SES, provisioned in
    Terraform), and every received email is stamped to ONE hardcoded owner via the env var
    `EMAIL_TRIAGE_OWNER_USER_ID` (`email-on-received.ts:310`). No per-founder signup, no
    recipient-based routing, no Gmail/Proton OAuth ingestion (Proton has no public API — Bridge/IMAP

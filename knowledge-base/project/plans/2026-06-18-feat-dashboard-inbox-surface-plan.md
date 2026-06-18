@@ -22,7 +22,7 @@ and the `EmailTriageRow` component. No backend, schema, or RLS change (settled b
 ADR-066, migration 111). Effort: **XS**.
 
 The email-connection capability ("connect Gmail/Proton") is **decoupled** to #5527 — the
-inbox is single-tenant today (one `ops@soleur.ai` address, one `EMAIL_TRIAGE_OWNER_USER_ID`).
+inbox is single-tenant today (one fixed operator `ops@` address, one `EMAIL_TRIAGE_OWNER_USER_ID`).
 
 ## Research Reconciliation — Spec vs. Codebase
 

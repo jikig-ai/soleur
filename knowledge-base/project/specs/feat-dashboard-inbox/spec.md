@@ -33,7 +33,7 @@ workspace-Owner RLS — so this is a presentation/navigation gap only.
 ## Non-Goals
 
 - Any "connect / set up email" capability (per-workspace inbound addresses, Gmail OAuth,
-  Proton). The inbox is single-tenant today (one `ops@soleur.ai` address, one hardcoded
+  Proton). The inbox is single-tenant today (one fixed operator `ops@` address, one hardcoded
   `EMAIL_TRIAGE_OWNER_USER_ID`). Deferred to its own brainstorm (CLO+Ops+CTO).
 - Unread/read-state data model or nav badge counts.
 - Backend / schema / RLS changes (settled by #5494).

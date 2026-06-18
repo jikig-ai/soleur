@@ -26,7 +26,7 @@ function item(over: Partial<EmailTriageItem> = {}): EmailTriageItem {
   return {
     id: crypto.randomUUID(),
     message_id: null,
-    sender: "vendor@vendor.example",
+    sender: "vendor@example.com",
     subject: "Vendor MSA review",
     summary: "Renewal terms",
     mail_class: "operational",

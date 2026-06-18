@@ -70,7 +70,7 @@ deep-link.
 ## Non-Goals (this PR)
 
 - **No "connect / set up email" capability.** The inbox is single-tenant today: one fixed
-  inbound address `ops@soleur.ai` → `inbound.soleur.ai` (Resend Inbound / AWS SES eu-west-1,
+  inbound address (operator `ops@`) → `inbound.soleur.ai` (Resend Inbound / AWS SES eu-west-1,
   provisioned in `infra/dns.tf` + `infra/resend.tf`), attributed to one hardcoded owner via
   `EMAIL_TRIAGE_OWNER_USER_ID` (`email-on-received.ts:310`). There is no per-founder signup,
   no recipient-based routing, and no Gmail/Proton OAuth ingestion. Building that is a separate
