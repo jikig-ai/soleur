@@ -26,7 +26,16 @@ export function _resetResolverDivergenceDedupeForTests(): void {
 
 export type RepoResolverDivergenceOp =
   | "non-member-claim-reset"
-  | "self-heal-failed";
+  | "self-heal-failed"
+  // Dispatch-time divergence (this PR): a member cold-dispatch into a
+  // genuinely-connected workspace (repoUrl present / repo_status indicates a
+  // connection) whose credential read `resolve_workspace_installation_id`
+  // returned NULL (membership-deny or a transient RPC blip). The readiness gate
+  // would otherwise fast-path this into a repo-less agent spawn; instead it
+  // fails honestly and emits THIS op so the previously-dark dispatch path is
+  // queryable + paging. Distinct from the catch-block `self-heal-failed` op
+  // (an orchestration-infra crash) — see cc-dispatcher.ts emit-site notes.
+  | "connected-null-install-at-dispatch";
 
 /**
  * Emit a fingerprint-deduped `repo_resolver_divergence` breadcrumb. `userId` is

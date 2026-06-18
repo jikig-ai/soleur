@@ -1821,6 +1821,21 @@ export const realSdkQueryFactory: QueryFactory = async (
             },
             ensureWorkspaceRepoCloned,
             gitDirExists: (p) => existsSync(path.join(p, ".git")),
+            // Dispatch-time divergence emit (this PR). The readiness module
+            // recognizes a connected-but-null-install workspace and routes it
+            // here; we forward to the existing breadcrumb emitter. Distinct op +
+            // trigger from the catch-block `self-heal-failed` emit below (an
+            // orchestration crash) — the divergence is a clean `{ ok:false }`
+            // return, never a thrown error, so it never reaches that catch (no
+            // double-fire). Both workspace-id fields carry the unified
+            // activeWorkspaceId (no claim divergence on this path).
+            reportDivergence: (op, userId, workspaceId) =>
+              reportRepoResolverDivergence({
+                userId,
+                op,
+                activeClaimWorkspaceId: workspaceId,
+                resolvedWorkspaceId: workspaceId,
+              }),
           },
         );
       } catch (err) {

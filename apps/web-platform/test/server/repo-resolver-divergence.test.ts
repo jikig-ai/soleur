@@ -75,6 +75,28 @@ describe("reportRepoResolverDivergence — fingerprint-deduped breadcrumb (ADR-0
     expect(ops).toContain("self-heal-failed");
   });
 
+  // AC4 — the dispatch-time op (this PR) emits with the same security-safe extra
+  // shape (no repoUrl / installationId leaked into the breadcrumb).
+  it("connected-null-install-at-dispatch is a distinct op with the two-workspace-id extra shape", () => {
+    reportRepoResolverDivergence({
+      userId: "user-1",
+      op: "connected-null-install-at-dispatch",
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "team-x",
+    });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.op).toBe("connected-null-install-at-dispatch");
+    expect(ctx.feature).toBe("repo-resolver-divergence");
+    expect(ctx.extra).toMatchObject({
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "team-x",
+    });
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
   it("a DIFFERENT claim for the same user fires a new breadcrumb (not over-deduped on op alone)", () => {
     reportRepoResolverDivergence({
       userId: "user-1",
