@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,10 +293,18 @@ describe("resolveRepoReadinessWithSelfHeal — AC1b (.git actually lands)", () =
 
     let landings = 0;
     const sentinelClone = vi.fn(async (a: { workspacePath: string }) => {
-      // Emulate the per-attempt sentinel re-check: only land .git once.
-      if (!existsSync(join(a.workspacePath, ".git"))) {
-        await mkdir(join(a.workspacePath, ".git"), { recursive: true });
+      // Emulate the per-attempt sentinel re-check with an ATOMIC create — the
+      // real guarantee is ensure-workspace-repo.ts:239's randomUUID-temp-dir +
+      // atomic rename, NOT an existsSync→await mkdir pair (that pair has a
+      // TOCTOU window: under Promise.all the await yields, both callers observe
+      // .git absent, and both increment `landings` → flaky `2`, seen in CI but
+      // not locally). `mkdirSync` (no recursive) is atomic: exactly one caller
+      // creates .git, the loser throws EEXIST and observes the winner's .git.
+      try {
+        mkdirSync(join(a.workspacePath, ".git"));
         landings += 1;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       }
       return "ok" as const;
     });
