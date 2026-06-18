@@ -188,11 +188,18 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # own connection count well under the project default of 15.
 #
 # DECISION (#5562): REVERT `default_pool_size` to the project default (15) and
-# rely on the client cap, rather than codify the raised 30. The leading-indicator
-# pool probe added to .github/workflows/scheduled-inngest-health.yml (#5562)
-# alerts at ~70% of the cap BEFORE EMAXCONNSESSION, which is what makes the revert
-# safe. The revert itself is a separate out-of-band operator action (NO live
-# mutation in the #5562 PR); this comment records the decision and the invariant.
+# rely on the client cap, rather than codify the raised 30. The revert is a
+# separate out-of-band operator action (NO live mutation in the #5562 PR); this
+# comment records the decision and the invariant.
+#
+# NOTE (#5563 follow-up): the leading-indicator pool probe in
+# .github/workflows/scheduled-inngest-health.yml is DECOUPLED from this revert.
+# Live verification showed total pg_stat_activity is dominated by Supabase infra
+# baseline (Supavisor/PostgREST/pg_net/pg_cron/exporter/walsenders), so counting
+# it against default_pool_size false-fires. The probe now counts only
+# inngest-attributable client backends (role `postgres`, minus the pooler's own
+# Supavisor connections + the probe) against inngest's CLIENT cap (10,
+# --postgres-max-open-conns) — independent of whatever default_pool_size is set to.
 #
 # WHY a comment and not a TF resource: no Supabase provider is declared in
 # main.tf, and this pooler attribute lives on the OUT-OF-BAND inngest project
