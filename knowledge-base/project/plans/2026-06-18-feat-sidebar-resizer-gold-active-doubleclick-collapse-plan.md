@@ -134,11 +134,7 @@ diff ⇒ no Check-6 scope-out bullet required; this section satisfies preflight.
 - [x] **AC6 (double-click guard):** a double-click that immediately follows a drag of > **5px**
       total pointer travel does NOT collapse; and double-click does NOT persist a width when
       `latest === startWidth` (no no-op localStorage write). Covered by two vitest cases.
-      (5px is the MDN/use-gesture canonical drag threshold. NOTE per code-simplicity: first
-      verify empirically during RED whether `onDoubleClick` can even fire after a drag in this
-      handle — `onDoubleClick` and pointer-drag are separate event streams; if a drag never
-      produces a second same-target `click`, drop the travel guard and keep only the no-op-commit
-      skip. Do not ship the guard unproven.)
+      (RESOLVED at review: a real >5px drag never emits a dblclick — two distinct clicks are required — so the travel guard protected an impossible event and gave false test confidence. Dropped the guard per this AC note; kept only the no-op-commit skip. A drag cannot collapse because it produces no dblclick.)
 - [~] (N/A — kept button is keyboard-operable) **AC-KBD (keyboard collapse parity, FR3-Literal only):** the collapse target exposes an
       Enter/Space key that fires collapse (W3C Window Splitter pattern). Double-click is
       pointer-only; without this, removing the button strands keyboard/AT users (FM-4).

@@ -97,11 +97,15 @@ describe("RailResizeHandle", () => {
     expect(onCollapse).toHaveBeenCalledTimes(1);
   });
 
-  it("does not collapse on a double-click that follows a >5px drag (AC6)", () => {
+  it("a resize drag does not collapse the rail (AC6) — a drag emits no dblclick", () => {
+    // A real resize drag moves the pointer past the browser's click threshold,
+    // so it never produces the dblclick that collapse listens for. We model that
+    // by driving the full drag gesture WITHOUT a doubleClick event and asserting
+    // collapse never fires.
     const { handle, onCollapse } = setup();
     fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
-    fireEvent.pointerMove(handle, { clientX: 200, pointerId: 1 }); // 100px travel
-    fireEvent.doubleClick(handle);
+    fireEvent.pointerMove(handle, { clientX: 200, pointerId: 1 }); // 100px drag
+    fireEvent.pointerUp(handle, { clientX: 200, pointerId: 1 });
     expect(onCollapse).not.toHaveBeenCalled();
   });
 

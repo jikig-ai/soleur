@@ -21,12 +21,10 @@ import { useRef } from "react";
 //
 // Double-click accelerator: double-clicking the handle calls `onCollapse` to
 // collapse the rail (an additive shortcut beside the kept collapse button —
-// FR3-Alternative). A double-click that immediately follows a real drag
-// (> DRAG_THRESHOLD_PX of pointer travel) is ignored so dragging never
-// accidentally collapses the rail.
-
-/** Pointer travel (px) above which a gesture counts as a drag, not a click. */
-const DRAG_THRESHOLD_PX = 5;
+// FR3-Alternative). No drag-vs-click guard is needed: a real resize drag moves
+// the pointer past the browser's click threshold, so it never emits the two
+// `click` events a `dblclick` requires — dragging therefore cannot fire
+// `onDoubleClick`, and a genuine double-click (negligible movement) collapses.
 
 export interface RailResizeHandleProps {
   width: number;
@@ -53,9 +51,6 @@ export function RailResizeHandle({
   const startX = useRef(0);
   const startWidth = useRef(width);
   const latest = useRef(width);
-  // Max pointer travel during the current gesture — used to distinguish a
-  // genuine double-click from the tail of a drag (AC6).
-  const travel = useRef(0);
 
   function clamp(px: number): number {
     return Math.min(max, Math.max(min, Math.round(px)));
@@ -67,7 +62,6 @@ export function RailResizeHandle({
     startX.current = e.clientX;
     startWidth.current = width;
     latest.current = width;
-    travel.current = 0;
     // setPointerCapture may be absent in some test DOMs — best-effort.
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -78,10 +72,6 @@ export function RailResizeHandle({
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!dragging.current) return;
-    travel.current = Math.max(
-      travel.current,
-      Math.abs(e.clientX - startX.current),
-    );
     const next = clamp(startWidth.current + (e.clientX - startX.current));
     latest.current = next;
     onWidthChange(next);
@@ -102,8 +92,6 @@ export function RailResizeHandle({
   }
 
   function handleDoubleClick() {
-    // Ignore a double-click that is really the tail end of a drag.
-    if (travel.current > DRAG_THRESHOLD_PX) return;
     onCollapse?.();
   }
 
