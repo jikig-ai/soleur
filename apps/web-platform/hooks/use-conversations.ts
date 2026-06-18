@@ -228,7 +228,17 @@ export function useConversations(
       // shared realtime channel agree on the same workspace.
       let query = supabase
         .from("conversations")
-        .select("*")
+        // Explicit column list = the complete `Conversation` interface field
+        // set (lib/types.ts). Rows are cast `as Conversation` and spread into
+        // ConversationWithPreview below, so every typed field must be selected;
+        // pinning the list to the typed shape trims the server-only/future
+        // columns `*` would over-fetch (audit M4). Must be a string LITERAL —
+        // supabase-js infers the row type from it, so a runtime-built/joined
+        // string degrades the result to an untyped error shape. Keep in sync
+        // with the `Conversation` interface if a column is added.
+        .select(
+          "id, user_id, domain_leader, session_id, status, total_cost_usd, input_tokens, output_tokens, last_active, created_at, archived_at, context_path, repo_url, active_workflow, workflow_ended_at, workspace_id, visibility",
+        )
         .eq("repo_url", currentRepoUrl)
         .eq("workspace_id", activeRepo.workspaceId)
         .order("last_active", { ascending: false })

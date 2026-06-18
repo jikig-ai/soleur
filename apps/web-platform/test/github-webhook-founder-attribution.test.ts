@@ -103,12 +103,23 @@ function sign(body: string): string {
   return `sha256=${hex}`;
 }
 
+// ADR-044 Amendment 2026-06-18 (BUG 1): the non-push resolver is repo-scoped.
+// Non-push events that expect to REACH the resolver must carry a
+// `repository.full_name` (else the pre-compose guard drops via none/404 without
+// a SELECT). Default it into non-push bodies that don't already set repository.
+const DEFAULT_FULL_NAME = "octo/repo";
+const DEFAULT_REPO_URL = "https://github.com/octo/repo";
+
 function makeRequest(
   event: string,
   payload: Record<string, unknown>,
   deliveryId = DELIVERY_ID,
 ): Request {
-  const body = JSON.stringify(payload);
+  const withRepo =
+    event !== "push" && !("repository" in payload)
+      ? { ...payload, repository: { full_name: DEFAULT_FULL_NAME } }
+      : payload;
+  const body = JSON.stringify(withRepo);
   return new Request("https://app.soleur.ai/api/webhooks/github", {
     method: "POST",
     headers: {
@@ -149,8 +160,11 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
       }),
     );
     expect(res.status).toBe(200);
+    // Repo-scoped (ADR-044 Amendment 2026-06-18): 2nd positional arg is the
+    // normalized repo_url composed from repository.full_name.
     expect(mockResolveFounder).toHaveBeenCalledWith(
       INSTALLATION_ID,
+      DEFAULT_REPO_URL,
       expect.anything(),
     );
     expect(mockIsGranted).toHaveBeenCalledWith(
@@ -279,6 +293,7 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
     expect(res.status).toBe(200);
     expect(mockResolveFounder).toHaveBeenCalledWith(
       INSTALLATION_ID,
+      DEFAULT_REPO_URL,
       expect.anything(),
     );
     expect(mockIsGranted).toHaveBeenCalledWith(
@@ -287,5 +302,84 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
       "security.cve_alert",
     );
     expect(mockSendWithRetry).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // ADR-044 Amendment 2026-06-18 (BUG 1) — repo-scoped non-push resolution.
+  // -------------------------------------------------------------------------
+
+  // BUG 1 headline: a non-push event under a MULTI-REPO ORG install. BEFORE the
+  // fix the install-only self-join saw >1 solo workspaces → ambiguous → 404 for
+  // EVERY non-push event. AFTER repo-scoping the resolver returns `found` for the
+  // event's repo and the route dispatches (no 404). The repo_url is composed
+  // from the event's repository.full_name and passed to the resolver.
+  test("multi-repo org install → repo-scoped resolver found → dispatch, no 404", async () => {
+    mockResolveFounder.mockResolvedValue({ kind: "found", founderId: FOUNDER_ID });
+    const res = await POST(
+      makeRequest("pull_request", {
+        installation: { id: INSTALLATION_ID },
+        action: "opened",
+        repository: { full_name: "octo-org/service-a" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(mockResolveFounder).toHaveBeenCalledWith(
+      INSTALLATION_ID,
+      "https://github.com/octo-org/service-a",
+      expect.anything(),
+    );
+    expect(mockSendWithRetry).toHaveBeenCalledTimes(1);
+  });
+
+  // AC4: a non-push event with NO repository.full_name drops via the pre-compose
+  // none/404 guard — NOT an ambiguous throw — AND does NOT issue the resolver
+  // SELECT (the resolver is never called).
+  test("non-push with no repository.full_name → 404, resolver NOT called, dedup released", async () => {
+    // Build the request directly to bypass makeRequest's default-repo injection.
+    const body = JSON.stringify({
+      installation: { id: INSTALLATION_ID },
+      action: "opened",
+    });
+    const req = new Request("https://app.soleur.ai/api/webhooks/github", {
+      method: "POST",
+      headers: {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-no-fullname",
+        "x-hub-signature-256": sign(body),
+      },
+      body,
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+    expect(mockResolveFounder).not.toHaveBeenCalled();
+    expect(mockSendWithRetry).not.toHaveBeenCalled();
+    expect(mockIsGranted).not.toHaveBeenCalled();
+    expect(mockDeleteEq).toHaveBeenCalledTimes(1); // releaseDedupRow
+  });
+
+  // AC4b: the ACTUAL prod signal — an UNMAPPED event (`check_suite`) reaches the
+  // resolver BEFORE the actionClass guard. Under a multi-repo org install it now
+  // resolves `found` → falls through the actionClass guard → {received:true} 200
+  // ignore (NOT a 404-storm — the WEB-PLATFORM-3M incident).
+  test("unmapped check_suite under multi-repo org → found → 200 ignore, no dispatch", async () => {
+    mockResolveFounder.mockResolvedValue({ kind: "found", founderId: FOUNDER_ID });
+    const res = await POST(
+      makeRequest("check_suite", {
+        installation: { id: INSTALLATION_ID },
+        action: "completed",
+        repository: { full_name: "octo-org/service-b" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(mockResolveFounder).toHaveBeenCalledWith(
+      INSTALLATION_ID,
+      "https://github.com/octo-org/service-b",
+      expect.anything(),
+    );
+    // Unmapped → no dispatch, no grant check.
+    expect(mockSendWithRetry).not.toHaveBeenCalled();
+    expect(mockIsGranted).not.toHaveBeenCalled();
+    // Not a 404-drop: the dedup row is NOT released (unmapped-event 200 ignore).
+    expect(mockDeleteEq).not.toHaveBeenCalled();
   });
 });

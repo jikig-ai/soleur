@@ -17,6 +17,10 @@ vi.mock("@/server/observability", () => ({
 import { resolveSoloFounderForInstallation } from "@/server/resolve-founder-for-installation";
 
 const INSTALLATION_ID = 4242;
+// Pre-normalized repo URL (the route owns the compose-before-normalize, mirroring
+// the push reconcile). ADR-044 Decision.1 + the 2026-06-18 amendment: non-push
+// founder resolution is scoped by (installation_id, normalizeRepoUrl(repo_url)).
+const REPO_URL = "https://github.com/octo/repo";
 
 // A workspaces row as the `!inner` embed returns it: the workspace `id` plus
 // the embedded `workspace_members` array. The solo invariant is `m.user_id ===
@@ -64,6 +68,7 @@ describe("resolveSoloFounderForInstallation", () => {
     const founderId = "11111111-1111-1111-1111-111111111111";
     const result = await resolveSoloFounderForInstallation(
       INSTALLATION_ID,
+      REPO_URL,
       makeService({
         data: [
           {
@@ -86,6 +91,7 @@ describe("resolveSoloFounderForInstallation", () => {
     const teamOwnerUserId = "44444444-4444-4444-4444-444444444444";
     const result = await resolveSoloFounderForInstallation(
       INSTALLATION_ID,
+      REPO_URL,
       makeService({
         data: [
           {
@@ -103,14 +109,18 @@ describe("resolveSoloFounderForInstallation", () => {
     expect(result).toEqual({ kind: "found", founderId: soloId });
   });
 
-  // (c) two distinct solo rows → ambiguous (real Scenario 3/11). Fail-closed:
-  // the resolver MUST NOT pick one. Non-vacuous: an always-found stub returns
-  // `found`, failing this.
-  test("two distinct solo rows → { kind: 'ambiguous', count: 2 }", async () => {
+  // (c) two distinct solo rows sharing the SAME (install, repo) → ambiguous
+  // (real Scenario 3/11: two users + same fork on the same repo + same install).
+  // Fail-closed: the resolver MUST NOT pick one. This is the genuine residual
+  // that survives repo-scoping (the multi-repo-org false ambiguity no longer
+  // fires — see the cross-repo case below). Non-vacuous: an always-found stub
+  // returns `found`, failing this.
+  test("two distinct solo rows same (install, repo) → { kind: 'ambiguous', count: 2 }", async () => {
     const soloA = "55555555-5555-5555-5555-555555555555";
     const soloB = "66666666-6666-6666-6666-666666666666";
     const result = await resolveSoloFounderForInstallation(
       INSTALLATION_ID,
+      REPO_URL,
       makeService({
         data: [
           { id: soloA, workspace_members: [{ role: "owner", user_id: soloA }] },
@@ -121,10 +131,11 @@ describe("resolveSoloFounderForInstallation", () => {
     expect(result).toEqual({ kind: "ambiguous", count: 2 });
   });
 
-  // (d) zero rows → none.
+  // (d) zero rows → none (no workspace connected for this repo under the install).
   test("zero rows → { kind: 'none' }", async () => {
     const result = await resolveSoloFounderForInstallation(
       INSTALLATION_ID,
+      REPO_URL,
       makeService({ data: [] }),
     );
     expect(result).toEqual({ kind: "none" });
@@ -135,6 +146,7 @@ describe("resolveSoloFounderForInstallation", () => {
     const dbError = { message: "connection reset", code: "57P01" };
     const result = await resolveSoloFounderForInstallation(
       INSTALLATION_ID,
+      REPO_URL,
       makeService({ error: dbError }),
     );
     expect(result).toEqual({ kind: "db-error" });
@@ -145,16 +157,52 @@ describe("resolveSoloFounderForInstallation", () => {
     );
   });
 
-  // Scoping: the resolver filters on the SERVER-DERIVED installationId and the
-  // owner role (the query that backs the self-join). Asserts the query shape
-  // is keyed on installationId, never request-supplied data.
-  test("queries are scoped to installationId + owner role", async () => {
+  // Scoping: the resolver filters on the SERVER-DERIVED installationId, the
+  // normalized repo_url (the 2026-06-18 amendment), AND the owner role (the
+  // query that backs the self-join). Asserts the query shape is keyed on
+  // (installation_id, repo_url), never request-supplied data.
+  test("queries are scoped to installationId + repo_url + owner role", async () => {
     const eqCalls: Array<[string, string | number]> = [];
     await resolveSoloFounderForInstallation(
       INSTALLATION_ID,
+      REPO_URL,
       makeService({ data: [], eqCalls }),
     );
     expect(eqCalls).toContainEqual(["github_installation_id", INSTALLATION_ID]);
+    expect(eqCalls).toContainEqual(["repo_url", REPO_URL]);
     expect(eqCalls).toContainEqual(["workspace_members.role", "owner"]);
+  });
+
+  // (f) Multi-repo org install — the headline BUG 1 case. The install spans
+  // MANY repos, each with its own solo workspace. BEFORE repo-scoping, an
+  // install-only self-join returned ALL of them → `>1`/ambiguous → 404-drop.
+  // AFTER repo-scoping, the `.eq("repo_url", REPO_URL)` filter is applied at the
+  // DB level, so the resolver only ever sees the ONE solo row for the targeted
+  // repo and returns `kind:found`. We simulate the DB-level filter by passing
+  // only the matching repo's row in `data` (the mock chain records the
+  // `.eq("repo_url", …)` call that the real DB would use to discriminate).
+  test("multi-repo org install → repo_url filter yields the single matching founder, NOT ambiguous", async () => {
+    const founderForThisRepo = "77777777-7777-7777-7777-777777777777";
+    const eqCalls: Array<[string, string | number]> = [];
+    const result = await resolveSoloFounderForInstallation(
+      INSTALLATION_ID,
+      REPO_URL,
+      makeService({
+        // The DB-level repo_url filter returns ONLY this repo's solo workspace,
+        // even though the install also owns solo workspaces for OTHER repos.
+        data: [
+          {
+            id: founderForThisRepo,
+            workspace_members: [
+              { role: "owner", user_id: founderForThisRepo },
+            ],
+          },
+        ],
+        eqCalls,
+      }),
+    );
+    expect(result).toEqual({ kind: "found", founderId: founderForThisRepo });
+    // The repo_url scope is what makes this NON-ambiguous (the load-bearing fix).
+    expect(eqCalls).toContainEqual(["repo_url", REPO_URL]);
   });
 });
