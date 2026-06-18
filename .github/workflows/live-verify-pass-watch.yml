@@ -1,0 +1,32 @@
+# Daily watcher: records the FIRST qualifying live-verify CI PASS on the
+# report-only->blocking flip-tracker issue (#5463), capturing the dark-launch
+# evidence gate (wg-dark-launch-deploy-gates) automatically instead of by manual
+# polling. RECORD-ONLY — it comments evidence + a record-once sentinel; it does
+# NOT flip the gate (the flip ships separately via /soleur:one-shot 5463 as a
+# SEPARATE, later deploy).
+#
+# SELF-DISABLE: once the flip ships and #5463 closes, scripts/watch-live-verify-pass.sh
+# early-exits (state != OPEN) so each daily run is a cheap no-op. The flip PR
+# should DELETE this workflow + scripts/watch-live-verify-pass.sh as cleanup.
+name: live-verify PASS watch
+
+on:
+  schedule:
+    - cron: "23 8 * * *" # daily 08:23 UTC
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  actions: read
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Record first qualifying live-verify PASS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/watch-live-verify-pass.sh
