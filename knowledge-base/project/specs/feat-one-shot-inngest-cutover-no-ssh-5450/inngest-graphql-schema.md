@@ -30,8 +30,16 @@ Variables: `{ first, after, filter: { from: "<wide receivedAt lower bound>", eve
 
 Re-armable record reconstructed from `JSON.parse(node.raw)`: `{reminder_id, fire_at, actor, action}` (= `.data`) — exactly the `schedule-reminder` route's input (it recomputes `id`/`ts` from `reminder_id`/`fire_at`, so re-arm through the route preserves the dedup keys automatically).
 
+## `functions` query (registered-function list, #5517)
+- **`Query.functions: [Function!]`** is a registered top-level field at `POST /v0/gql` (Query introspection lists `eventsV2, functions, functionRun`). It returns the rich object array the devserver UI shows — the same loopback endpoint + no-auth as `eventsV2`.
+- **`GET /v1/functions` is an UNREGISTERED route in v1.19.4 → HTTP 404, body `404 page not found`.** A `curl -s | jq type` on that body parses the leading token `404` as a number, which is why the old inventory guard reported `shape="number"`. The correct REST path is `GET /v1/apps/{appName}/functions` (requires app-name discovery) — the GraphQL `functions` query avoids that and is preferred.
+- **`Function` field set** (introspected, v1.19.4): `id: String!`, `name: String!`, `slug: String!`, `failureHandler: Function`, `config: String!`, `configuration: FunctionConfiguration!`, `concurrency: Int!`, `triggers: [FunctionTrigger!]`, `url: String!`, `appID: String!`, `app: App!`.
+- **`FunctionTrigger` field set**: `type: FunctionTriggerTypes`, `value: String`, `condition: String`.
+- **Working names query** (what `inngest-inventory.sh` uses): `query { functions { id name slug } }` → `{"data":{"functions":[{...}]}}`; empty state → `{"data":{"functions":[]}}`. Project names with `[.data.functions[] | (.name // .slug // .id)] | sort`.
+- `triggers` is `[FunctionTrigger!]` — a selection of subfields is REQUIRED (`triggers { type value }`), a bare `triggers` is a `GRAPHQL_VALIDATION_FAILED` error.
+
 ## auth
-- **None on loopback `/v0/gql` in `start` mode** (HTTP 200 with no auth header). `--signing-key`/`--event-key` gate only SDK-sync + `/e/<key>` ingest, not the GraphQL read API.
+- **None on loopback `/v0/gql` in `start` mode** (HTTP 200 with no auth header). `--signing-key`/`--event-key` gate only SDK-sync + `/e/<key>` ingest, not the GraphQL read API. Verified for both `eventsV2` and `functions`.
 
 ## runbook gotcha (image invocation)
 - `inngest/inngest:v1.19.4` has `ENTRYPOINT=null`, `CMD=["inngest"]` → must invoke `docker run … inngest/inngest:v1.19.4 inngest start --host 0.0.0.0 --port 8288 --sqlite-dir <dir> --signing-key <k> --event-key <k>`.
