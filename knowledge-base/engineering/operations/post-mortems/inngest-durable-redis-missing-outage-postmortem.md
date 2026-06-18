@@ -39,7 +39,9 @@ The **external inngest health watchdog** (`scheduled-inngest-health.yml`) is del
 | Issue | Action | Owner |
 | --- | --- | --- |
 | #5547 | Fix the durable image's redis-asset delivery + add a fail-safe so the durable ExecStart is not applied unless `inngest-redis` is verifiably up (else keep SQLite). | open |
-| #5548 | Re-arm the reminders lost in the cutover (`verify-server-startup-rate-5417`, `reeval-5469`). | open |
+| #5548 | Re-arm the reminders lost in the cutover (`verify-server-startup-rate-5417`, `reeval-5469`). | done — see below |
+
+**#5548 re-arm (2026-06-18).** Re-armed `verify-server-startup-rate-5417` (fire 2026-06-19, `named-check` `sentry-issue-rate`) and `reeval-5469-routine-runs-gate-2026-07-01` (fire 2026-07-01, `issue-comment` to #5469) via `POST /api/internal/schedule-reminder` against the durable backend — **HTTP 202 ×2**. The `rebase-dependabot-5432-otel-2026-06-18` reminder was **not** re-armed: its fire window (13:00 2026-06-18) was already past, its body was never recorded (only inferred as `@dependabot rebase`), and it is outside this PIR's #5548 re-arm scope — `@dependabot rebase` can be commented directly on #5432 if the otel bump is still wanted. If inngest is DOWN during a future cutover, `op=capture` snapshots nothing, so survivors must be reconstructed from their source automations and re-armed this way.
 
 ## Lessons
 

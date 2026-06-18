@@ -94,24 +94,24 @@ no user-facing surface, no schema, no migration, no auth flow, no regulated data
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Payload correctness (5417).** The re-arm body for `verify-server-startup-rate-5417`
+- [x] **AC1 — Payload correctness (5417).** The re-arm body for `verify-server-startup-rate-5417`
   is byte-for-byte the runbook's blessed form: `action.type:"named-check"`,
   `check:"sentry-issue-rate"`, `report_to_issue:5417`,
   `params:{tag:"event_type:server-startup", max_per_day:1, window_hours:72, close_on_pass:true}`,
   `actor:"platform"`, `fire_at` a real future ISO instant (2026-06-19T09:00:00Z).
   Verify `params.tag` matches `TAG_RE` (`^[A-Za-z0-9_.-]+:[A-Za-z0-9_.\-/]+$`) and
   `window_hours ∈ [24,168]` per `apps/web-platform/lib/inngest/sentry-issue-rate.ts`.
-- [ ] **AC2 — Payload correctness (5469).** The re-arm body for
+- [x] **AC2 — Payload correctness (5469).** The re-arm body for
   `reeval-5469-routine-runs-gate-2026-07-01` is `action.type:"issue-comment"`,
   `issue:5469`, `actor:"platform"`, `fire_at:"2026-07-01T09:00:00Z"`, with a `body`
   that restates #5469's re-eval criterion (≥14 days `routine_runs` data after the
   inbound fix). `body` length ≤ 65000 (`MAX_COMMENT_BODY`).
-- [ ] **AC3 — Dependabot reminder disposition is recorded, not silently dropped.**
+- [x] **AC3 — Dependabot reminder disposition is recorded, not silently dropped.**
   `rebase-dependabot-5432-otel-2026-06-18` is NOT re-armed; the rationale (past fire
   window, unrecorded body, out of documented #5548 scope) is captured in the PR body
   AND a one-line note in #5548, with `@dependabot rebase` offered as the direct
   alternative if the otel bump is still wanted.
-- [ ] **AC4 — Idempotency reasoning is documented.** The PR body states that the route
+- [x] **AC4 — Idempotency reasoning is documented.** The PR body states that the route
   recomputes `id`=reminder_id + `ts`=Date.parse(fire_at) (verified
   `route.ts:128-133`), so a re-arm dedups against any event that ALSO survived in
   Inngest state **within Inngest's ~24h dedup window** (`inngest-oneshot-and-reminder-patterns.md:126`
@@ -120,7 +120,7 @@ no user-facing surface, no schema, no migration, no auth flow, no regulated data
   why re-running the SAME re-arm POST minutes apart is safe (it dedups on `id`+`ts`
   within the window). Beyond ~24h the same `id` would re-fire — not a concern for a
   one-shot re-arm but stated so /work does not over-rely on it.
-- [ ] **AC5 — `Ref #5548`, not `Closes #5548`, in the PR body.** Per the
+- [x] **AC5 — `Ref #5548`, not `Closes #5548`, in the PR body.** Per the
   ops-remediation class (`wg-use-closes-n-in-pr-body-not-title-to` extension): the
   actual closure happens post-merge, after the re-arm POST succeeds against prod and
   returns 202. (The feature description said "Closes #5548" — for an ops-remediation
@@ -129,7 +129,7 @@ no user-facing surface, no schema, no migration, no auth flow, no regulated data
 
 ### Post-merge (operator-less — automated in-session by /work)
 
-- [ ] **AC6 — Re-arm 5417 fires a 202.** Run the in-session re-arm executor
+- [x] **AC6 — Re-arm 5417 fires a 202.** Run the in-session re-arm executor
   (`## Implementation Phases` Phase 2): read `INNGEST_MANUAL_TRIGGER_SECRET` from
   Doppler `-c prd --plain`, POST the AC1 body to
   `https://app.soleur.ai/api/internal/schedule-reminder`. Expect HTTP **202**
@@ -137,9 +137,9 @@ no user-facing surface, no schema, no migration, no auth flow, no regulated data
   On **503** (Retry-After) the cutover quiesce flag is still set — abort loud, do not
   swallow (mirrors `inngest-rearm-reminders.sh` B2-iii); on **401** the secret is
   wrong; on **400** the payload failed the allowlist (re-check AC1).
-- [ ] **AC7 — Re-arm 5469 fires a 202.** Same executor, AC2 body. Expect **202**
+- [x] **AC7 — Re-arm 5469 fires a 202.** Same executor, AC2 body. Expect **202**
   `{scheduled:"reeval-5469-routine-runs-gate-2026-07-01", ...}`.
-- [ ] **AC8 — Live confirmation.** Confirm both reminders are armed against the new
+- [x] **AC8 — Live confirmation.** Confirm both reminders are armed against the new
   durable backend via `op=inventory` (the no-SSH HMAC webhook /
   `inngest-enumerate-reminders.sh` path) — `armed_reminders` reflects the 2 re-armed
   ids — OR, if inventory cannot be reached in-session, the two 202 responses are the
