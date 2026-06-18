@@ -23,6 +23,10 @@ const APPLY_DPF_WORKFLOW = resolve(
   REPO_ROOT,
   ".github/workflows/apply-deploy-pipeline-fix.yml",
 );
+const APPLY_WEBPLAT_WORKFLOW = resolve(
+  REPO_ROOT,
+  ".github/workflows/apply-web-platform-infra.yml",
+);
 
 const GATE_HEADING = "### Deploy Pipeline Fix Drift Gate";
 const NEXT_HEADING = "### Retroactive Gate Application";
@@ -373,5 +377,120 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
     const inPaths = new Set(paths);
     const missing = TRIGGER_FILES.filter((f) => !inPaths.has(f));
     expect(missing).toEqual([]);
+  });
+});
+
+// #5515: deploy_pipeline_fix (the HTTPS webhook push of the managed deploy-config
+// files) must ORDER AFTER infra_config_handler_bootstrap (the root-SSH bridge that
+// delivers the webhook handler `infra-config-apply.sh` + the rendered hooks.json to
+// the host). Without the depends_on edge, a merge that BOTH replaces the handler
+// (new FILE_MAP entry + new hooks.json env key) AND fires the push runs the push
+// against the host's STALE handler/hooks.json: the new file's env var is unset, so
+// the handler's per-file `missing_env` arm (infra-config-apply.sh:105-112, the #4804
+// self-heal) drops it and the file lands ONE APPLY LATE (op=inventory 500s until the
+// next unrelated apply). `-target` does NOT impose ordering — only the graph edge
+// does — even though apply-deploy-pipeline-fix.yml lists BOTH as explicit -target=s.
+// Do NOT "simplify" the edge away: the co-targeting (Test 2) is what makes it
+// load-bearing, and the edge is what makes the ordering deterministic.
+describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
+  let serverTf: string;
+
+  beforeAll(() => {
+    expect(existsSync(SERVER_TF)).toBe(true);
+    serverTf = readFileSync(SERVER_TF, "utf8");
+  });
+
+  // Test 1 — the depends_on edge. Bound the deploy_pipeline_fix resource block
+  // with the same top-level-block regex the triggers_replace test uses, then run a
+  // FRESH depends_on-list match against the bounded slice (NOT the triggers_replace
+  // join extractor, which matches sha256(join(...))).
+  test("Test 1 — deploy_pipeline_fix depends_on lists BOTH apparmor_bwrap_profile AND infra_config_handler_bootstrap", () => {
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "deploy_pipeline_fix"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+
+    const dependsMatch = resourceBlock.match(/depends_on\s*=\s*\[([\s\S]*?)\]/);
+    expect(dependsMatch).not.toBeNull();
+    const dependsList = dependsMatch![1];
+    expect(dependsList).toContain("terraform_data.apparmor_bwrap_profile");
+    expect(dependsList).toContain(
+      "terraform_data.infra_config_handler_bootstrap",
+    );
+  });
+
+  // Test 2 — the co-targeting invariant (the load-bearing one, SpecFlow P0-A). The
+  // depends_on edge only orders the apply if BOTH resources are co-`-target`ed in
+  // apply-deploy-pipeline-fix.yml's single `terraform apply` — if either target were
+  // dropped the edge would be inert and Test 1 would still pass green.
+  test("Test 2 — apply-deploy-pipeline-fix.yml terraform apply co-targets BOTH resources", () => {
+    expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
+    const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
+    // Bound to the `terraform apply` invocation (the durable apply, not the plan
+    // step) so a future plan-only -target= change cannot satisfy this vacuously.
+    const applyIdx = yml.indexOf("terraform apply -target=");
+    expect(applyIdx).toBeGreaterThanOrEqual(0);
+    // The multi-line `\`-continued apply command ends at the first non-continued
+    // line; bound generously to the next 800 chars (the command spans a handful
+    // of -target= lines plus trailing flags — the two needed -target=s are adjacent).
+    const applyBlock = yml.slice(applyIdx, applyIdx + 800);
+    expect(applyBlock).toContain(
+      "-target=terraform_data.deploy_pipeline_fix",
+    );
+    expect(applyBlock).toContain(
+      "-target=terraform_data.infra_config_handler_bootstrap",
+    );
+  });
+
+  // Test 3 — cross-workflow blast-radius guard (deepen P2-2). The OTHER infra
+  // workflow shares the concurrency group but must target NEITHER fix resource, so
+  // the new edge is never traversed by it (it SSH-targets only apparmor_bwrap_profile
+  // among shared resources). Pins that a future edit cannot silently widen its blast.
+  test("Test 3 — apply-web-platform-infra.yml targets NEITHER fix resource", () => {
+    expect(existsSync(APPLY_WEBPLAT_WORKFLOW)).toBe(true);
+    const yml = readFileSync(APPLY_WEBPLAT_WORKFLOW, "utf8");
+    expect(yml).not.toContain("-target=terraform_data.deploy_pipeline_fix");
+    expect(yml).not.toContain(
+      "-target=terraform_data.infra_config_handler_bootstrap",
+    );
+  });
+
+  // Test 4 — the bridge's half of the contract (review gap, both test agents).
+  // The depends_on edge only delivers a CURRENT handler+hooks.json before the push
+  // if infra_config_handler_bootstrap actually RECREATES when the handler or
+  // hooks.json changes — i.e. its own triggers_replace must hash both. If a future
+  // edit dropped infra-config-apply.sh or local.hooks_json from the bridge's hash,
+  // the bridge would not recreate on a hooks.json-only change, the stale hooks.json
+  // would persist, and a new FILE_MAP file would AGAIN land one apply late — with
+  // Tests 1-3 still green. This guards the symmetric failure to #5515.
+  test("Test 4 — infra_config_handler_bootstrap triggers_replace hashes the handler AND hooks.json", () => {
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "infra_config_handler_bootstrap"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+
+    const blockMatch = resourceBlock.match(
+      /triggers_replace\s*=\s*sha256\(join\(\s*",\s*"\s*,\s*\[([\s\S]*?)\]\s*\)\s*\)/,
+    );
+    expect(blockMatch).not.toBeNull();
+    const inner = blockMatch![1];
+    expect(inner).toContain('file("${path.module}/infra-config-apply.sh")');
+    expect(inner).toContain("local.hooks_json");
   });
 });
