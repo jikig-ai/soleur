@@ -510,6 +510,7 @@ export default function DashboardLayout({
             max={railMaxPx()}
             onWidthChange={(px) => setRailWidth(px, false)}
             onCommit={(px) => setRailWidth(px, true)}
+            onCollapse={toggleCollapsed}
           />
         )}
       </aside>

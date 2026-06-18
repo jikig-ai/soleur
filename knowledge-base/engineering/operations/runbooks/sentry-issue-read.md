@@ -53,23 +53,57 @@ rewrites `-eu`-suffixed slugs → 302/401 cascade) and NOT `de.sentry.io` (inges
 ## Re-minting the read-only token (if lost/rotated)
 
 The Sentry provider exposes **no Terraform token resource**, so the read-only token is
-minted by Soleur automation, **not** an operator UI step:
+minted by Soleur automation, **not** an operator UI step.
 
-1. **Playwright (primary).** Drive `https://eu.sentry.io` → Settings → Developer Settings
-   → New Internal Integration. Name `inline-read-prd`; permissions **Issue & Event = Read,
-   Organization = Read, everything else No Access** (yields `[event:read, org:read]`).
-   Capture the generated token via `browser_evaluate` on the token field — **never a
-   screenshot** (the token renders in the DOM). Only a real MFA/CAPTCHA/passkey gate is a
-   legitimate operator handoff (record `playwright-attempt:` evidence).
-2. **API (if an `org:admin` bootstrap credential is available).**
-   `POST https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/sentry-apps/` with the
-   same read-only permission set, then retrieve the token. (Public docs do not confirm this
-   endpoint/scope — prefer Playwright.)
-3. **Store** (value via stdin so it never lands in argv/history; never echo):
+**Primary path — same-origin API mint via the authenticated browser session.** The logged-in
+`jikigai-eu.sentry.io` session (the org owner) already carries `org:admin` + `org:integrations`
+— it *is* the bootstrap credential, so no separate org-admin token is needed. Drive it from
+`browser_evaluate` so requests inherit the session cookies; read the CSRF token from the
+`sentry-sc` cookie and send it as the `X-CSRFToken` header. This avoids the react-select
+permission UI entirely (that UI is flaky under automation — the browser context closed
+repeatedly mid-form-fill during the #5506 mint, which is what deferred AC7 in the first place).
+
+1. **Create the internal integration** — POST the **global** collection, with `organization`
+   in the body. (The org-scoped `/api/0/organizations/<org>/sentry-apps/` is **GET-only —
+   POST returns 405**; creation lives on the global endpoint.)
+
+   ```js
+   // inside browser_evaluate on any jikigai-eu.sentry.io page (authenticated)
+   const csrf = (document.cookie.split('; ').find(c => c.startsWith('sentry-sc='))||'').split('=').slice(1).join('=');
+   await fetch('/api/0/sentry-apps/', { method:'POST', credentials:'include',
+     headers:{ 'Content-Type':'application/json', 'X-CSRFToken':csrf },
+     body: JSON.stringify({ name:'inline-read-prd', organization:'jikigai-eu', isInternal:true,
+       verifyInstall:false, scopes:['event:read','org:read'], events:[], webhookUrl:'' }) });
+   // → 201; response.slug is e.g. inline-read-prd-<hash>
+   ```
+
+2. **Mint the token** — `POST /api/0/sentry-apps/<slug>/api-tokens/` (empty body). **The raw
+   token value is returned ONLY in this POST response** — the list endpoint
+   (`GET .../api-tokens/`) masks it (`tokenLastCharacters` only), so capture it here, not later.
+   Save it straight to a file with `browser_evaluate`'s `filename` param so it never prints to
+   the transcript or renders in a screenshot. If you accidentally discard the value, `DELETE`
+   the orphan token by id and mint a fresh one — never leave an uncaptured live token.
+
+3. **Store** (value via stdin so it never lands in argv/history; never echo), then **shred**
+   the temp file:
 
    ```bash
    printf '%s' "<token>" | doppler secrets set SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --no-interactive
    ```
+
+4. **Verify** end-to-end (200, and the RW-fallback warning is gone):
+
+   ```bash
+   doppler run -p soleur -c prd -- scripts/sentry-issue.sh <known-issue-id>
+   ```
+
+**Fallback — Playwright UI.** If the API path is unavailable, drive
+`https://jikigai-eu.sentry.io` (NOT `eu.sentry.io` — it rewrites `-eu` slugs) → Settings →
+Developer Settings → New Internal Integration. Name `inline-read-prd`; permissions
+**Issue & Event = Read, Organization = Read, everything else No Access** (yields
+`[event:read, org:read]`). Capture the token via `browser_evaluate` on the token field —
+**never a screenshot**. Only a real MFA/CAPTCHA/passkey gate is a legitimate operator handoff
+(record `playwright-attempt:` evidence).
 
 Integration creation logs `sentry-app.add` to the Organization Audit Log (§5(2) evidence).
 
