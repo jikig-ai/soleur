@@ -378,9 +378,19 @@ setting).
    gh workflow run cutover-inngest.yml --field op=rearm
    ```
    Run `op=rearm` ONLY after the quiesce flag is cleared — the host script aborts loud (does not
-   silently drop) if it gets a 503 because quiesce is still set. `op=rearm` consumes
-   `/var/lib/inngest/cutover-capture.json` (from step 2's `op=capture`) when present and deletes it on
-   full success; absent a capture file it self-enumerates the live backend (steady-state behaviour).
+   silently drop) if it gets a 503 because quiesce is still set. `op=rearm` (mode `rearm-from-capture`)
+   consumes `/var/lib/inngest/cutover-capture.json` from step 2 and deletes it on FULL success; a
+   missing/corrupt capture is FATAL (non-200), never a silent self-enumerate of the empty new backend.
+   - **Retry window (re-arm is replay-on-full-set).** On a partial failure the capture is RETAINED and a
+     re-run re-POSTs the entire set; `schedule-reminder` recomputes the dedup `id`/`ts` so a
+     still-pending reminder dedups instead of double-arming — but a reminder that *fires* between attempts
+     is non-idempotent (it double-posts its comment, same hazard as step 3). So retry `op=rearm` promptly
+     and only while quiesce is cleared; do not let hours pass between a partial re-arm and its retry.
+   - **Aborted cutover leaves a landmine.** If you run `op=capture` then ABORT before `op=rearm`, the
+     capture file persists on-host. A steady-state `op=rearm` (mode `rearm`, the default) deliberately
+     IGNORES it (self-enumerates the live backend), so it will not hijack a routine re-arm — but it is
+     stale clutter. After an aborted cutover, re-run the cutover from `op=capture` (which overwrites it),
+     or let the next successful cutover `op=rearm` consume it.
 7. **Rollback tripwire** — reverting ExecStart to `--sqlite-dir` is data-safe ONLY before any *real*
    (non-throwaway) reminder is armed against Postgres. After that the stale SQLite is missing those
    reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed

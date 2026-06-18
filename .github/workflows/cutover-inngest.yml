@@ -99,10 +99,13 @@ jobs:
               ;;
 
             rearm)
-              # POST hook → the host script self-enumerates and re-arms each via
-              # the schedule-reminder route. A 503 means INNGEST_CUTOVER_QUIESCE is
-              # still set (clear it first); the host script aborts loud on that.
-              PAYLOAD='{}'
+              # POST hook (mode=rearm-from-capture) → the host script CONSUMES the
+              # on-host capture persisted by op=capture (pre-deploy) and re-arms each
+              # via the schedule-reminder route, deleting the capture on full success.
+              # A missing/corrupt capture is FATAL (non-200) — it never silently
+              # self-enumerates the post-deploy empty backend (#5542). A 503 means
+              # INNGEST_CUTOVER_QUIESCE is still set (clear it first); aborts loud.
+              PAYLOAD='{"mode":"rearm-from-capture"}'
               SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
               rm -f /tmp/rearm-body
               CODE=$(curl -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
@@ -143,7 +146,7 @@ jobs:
                 CAUSE="${BODY//[$'\n\r']/ }"
                 echo "::error::capture returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
               fi
-              if ! echo "$BODY" | jq -e 'type == "object" and has("captured") and has("capture_file")' >/dev/null 2>&1; then
+              if ! echo "$BODY" | jq -e 'type == "object" and has("captured") and has("reminder_ids") and has("capture_file")' >/dev/null 2>&1; then
                 echo "::error::capture did not return the expected {captured,reminder_ids,capture_file} object"; echo "$BODY"; exit 1
               fi
               N=$(echo "$BODY" | jq -r '.captured')
