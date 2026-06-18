@@ -110,6 +110,10 @@ jobs:
     needs: release
     if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
+    # Holds the migrate-web-platform lock (cancel-in-progress: false), so an
+    # unbounded hang serializes all releases. Cap above any legitimate apply;
+    # DDL is transactional, so a timeout-kill rolls the in-flight migration back.
+    timeout-minutes: 30
     concurrency:
       group: migrate-web-platform
       cancel-in-progress: false
@@ -258,6 +262,10 @@ jobs:
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
     # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
     runs-on: ubuntu-latest
+    # Holds the verify-secrets-web-platform lock (cancel-in-progress: false);
+    # cap so a hung doppler/network call can't serialize releases. This job is a
+    # fast secrets-existence check — 10 min is generous headroom.
+    timeout-minutes: 10
     concurrency:
       group: verify-secrets-web-platform
       cancel-in-progress: false
@@ -291,6 +299,13 @@ jobs:
        (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
+    # Holds the deploy-web-platform lock (cancel-in-progress: false). The job
+    # already self-bounds via the STATUS+HEALTH poll loops below (30m + 30m
+    # sequential ceiling) plus the image build; this 90m cap is the backstop for
+    # a hang BEFORE those loops (e.g. a buildx wedge per post-mortems/
+    # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
+    # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
+    timeout-minutes: 90
     concurrency:
       group: deploy-web-platform
       cancel-in-progress: false
