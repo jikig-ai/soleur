@@ -91,45 +91,67 @@ export interface RepoSelfHealSeams {
 }
 
 /**
- * Resolve dispatch readiness, attempting the on-disk self-heal for a
- * recoverable `error` row before honestly blocking.
+ * Resolve dispatch readiness, attempting the on-disk self-heal before honestly
+ * blocking. Recovery policy is SPLIT by DB state (plan Bug 2 Phase 2.2):
  *
- * Logic (plan Phase 2 steps 1-4):
- *   1. Pure decision; `{ ok:true }` (ready/not_connected/unknown) returns
- *      immediately — the zero-seam fast path.
- *   2. `{ ok:false, code:"error" }` AND installation AND repoUrl AND `.git`
- *      ABSENT → claim the lock:
- *        - loser → `{ ok:false, code:"cloning" }` honest-wait, NO clone.
- *        - winner → re-clone; "ok" → setRepoStatus(ready,null) → `{ ok:true }`;
- *          "failed" → setRepoStatus(error,reason) + Sentry → `{ ok:false }`.
- *   3. fresh `cloning` → unchanged honest-wait (the staleness escape lives in
- *      the lock RPC; a live setup clone is never disturbed).
- *   4. else (no install / no repoUrl / `.git` present) → original `{ ok:false }`.
+ *   FAST PATH — `{ ok:true }` (ready/not_connected/unknown) AND `.git` PRESENT
+ *     → return immediately. The ONLY added cost over the legacy fast path is the
+ *     local `gitDirExists` (existsSync) probe; NO DB/JWT round-trip
+ *     (cc-dispatcher keeps `getFreshTenantClient` behind its own existsSync gate
+ *     so this orchestrator is not even entered on the common case — AC7).
+ *
+ *   READY-BUT-`.git`-ABSENT (Bug 2, NEW) — a DB-`ready` workspace whose physical
+ *     clone is gone (the member cold-dispatch headline). LOCK-FREE graft:
+ *     `claim_repo_clone_lock` CANNOT acquire a `ready` row by construction (its
+ *     WHERE matches only error|stale-cloning, migration 108:97-110), so the lock
+ *     is unavailable here — concurrency is guarded by the clone's own `.git`
+ *     sentinel re-check (ensure-workspace-repo.ts:239, per-attempt randomUUID
+ *     temp dir + atomic rename). On SUCCESS the row is ALREADY `ready`, so
+ *     `setRepoStatus` is SKIPPED (no-op + avoids a spurious member-row write +
+ *     RPC round-trip). On FAILURE → `setRepoStatus(error,reason)` + Sentry, so
+ *     the member reads the honest reason on the next dispatch (AC6c).
+ *
+ *   ERROR / STALE-CLONING (`{ ok:false, code:"error" }`) — KEEP the optimistic
+ *     `claim_repo_clone_lock` thundering-herd guard (AC7b):
+ *       - loser → `{ ok:false, code:"cloning" }` honest-wait, NO clone.
+ *       - winner → re-clone; "ok" → setRepoStatus(ready,null) → `{ ok:true }`;
+ *         "failed" → setRepoStatus(error,reason) + Sentry → `{ ok:false }`.
+ *
+ *   FRESH `cloning` → honest-wait unchanged (the staleness escape lives in the
+ *     lock RPC; a live setup clone is never disturbed).
  */
 export async function resolveRepoReadinessWithSelfHeal(
   args: RepoSelfHealArgs,
   seams: RepoSelfHealSeams,
 ): Promise<RepoReadiness> {
   const decision = seams.evaluateRepoReadiness(args.status, args.repoError);
+  const hasConnection = args.installationId !== null && !!args.repoUrl;
 
-  // 1. Fast path — ready/not_connected/unknown never touch a seam.
-  if (decision.ok) return decision;
+  // FAST PATH — ready/not_connected/unknown. Short-circuit ONLY when `.git` is
+  // present (or there is no connection to clone, e.g. not_connected). A
+  // `ready`-but-`.git`-absent CONNECTED workspace falls through to the lock-free
+  // graft below (Bug 2). All other `{ ok:true }` shapes return unchanged.
+  if (decision.ok) {
+    if (!hasConnection || seams.gitDirExists(args.workspacePath) === true) {
+      return decision;
+    }
+    // ready + connected + `.git` ABSENT → lock-free graft (no claimCloneLock).
+    return graftReadyButGitAbsent(args, seams);
+  }
 
-  // 3 + 4 (non-error, or error that cannot recover) fall through to the
-  // unchanged honest block below; only the recoverable `error` branch heals.
+  // error/stale-cloning that cannot recover (no install / no repoUrl / `.git`
+  // present) and fresh `cloning` fall through to the unchanged honest block.
   const canRecover =
     decision.code === "error" &&
-    args.installationId !== null &&
-    !!args.repoUrl &&
+    hasConnection &&
     seams.gitDirExists(args.workspacePath) === false;
 
   if (!canRecover) {
-    // fresh `cloning` → honest-wait unchanged; `error` with no install / no
-    // repoUrl / `.git` present → cannot recover, honest block unchanged.
     return decision;
   }
 
-  // 2. Recoverable error: claim the optimistic lock (RPC).
+  // Recoverable error: claim the optimistic lock (RPC) — the thundering-herd
+  // guard. Lock-FREE is the READY entry's policy only (above).
   const won = await seams.claimCloneLock(args.workspaceId);
   if (!won) {
     // Another dispatch is actively healing within the window — honest-wait,
@@ -149,20 +171,53 @@ export async function resolveRepoReadinessWithSelfHeal(
     return { ok: true };
   }
 
-  // "failed" — a real recovery attempt that did not land `.git`. Persist the
-  // honest error reason (sanitized) and mirror to Sentry, then block honestly.
+  return failHonestly(args, seams);
+}
+
+/**
+ * Bug 2 lock-free graft for a DB-`ready` workspace whose `.git` is gone. No
+ * `claimCloneLock` (a `ready` row is unacquirable by the RPC); the clone's own
+ * `.git`-sentinel re-check handles concurrency. SUCCESS skips `setRepoStatus`
+ * (already ready); FAILURE persists the honest error so the member reads it next
+ * dispatch (AC6c).
+ */
+async function graftReadyButGitAbsent(
+  args: RepoSelfHealArgs,
+  seams: RepoSelfHealSeams,
+): Promise<RepoReadiness> {
+  const outcome = await seams.ensureWorkspaceRepoCloned({
+    userId: args.userId,
+    workspacePath: args.workspacePath,
+    installationId: args.installationId,
+    repoUrl: args.repoUrl,
+  });
+
+  // SUCCESS on the ready entry — the row is ALREADY repo_status='ready'. SKIP
+  // the setRepoStatus(ready) write: it is a no-op on workspaces.repo_status and
+  // an RPC round-trip of no value.
+  if (outcome === "ok") return { ok: true };
+
+  return failHonestly(args, seams);
+}
+
+/**
+ * A genuine recovery attempt that did not land `.git`. Persist the honest error
+ * reason (sanitized) onto the workspace (read back by the gate for the
+ * dispatching member — AC6c), mirror to Sentry, then block honestly.
+ */
+async function failHonestly(
+  args: RepoSelfHealArgs,
+  seams: RepoSelfHealSeams,
+): Promise<RepoReadiness> {
   const reason = sanitizeGitStderr(SELF_HEAL_FAILED_REASON);
   await seams.setRepoStatus(args.workspaceId, "error", reason);
-  reportSilentFallback(
-    new Error("dispatch repo self-heal clone failed"),
-    {
-      feature: "cc-dispatcher",
-      op: "repo-readiness-self-heal",
-      extra: { userId: args.userId, workspaceId: args.workspaceId },
-      message:
-        "Concierge dispatch self-heal clone failed; honest-blocking the dispatch after a real recovery attempt",
-    },
-  );
+  reportSilentFallback(new Error("dispatch repo self-heal clone failed"), {
+    feature: "cc-dispatcher",
+    op: "repo-readiness-self-heal",
+    extra: { userId: args.userId, workspaceId: args.workspaceId },
+    message:
+      "Concierge dispatch self-heal clone failed; honest-blocking the dispatch after a real recovery attempt",
+  });
   return {
     ok: false,
     code: "error",

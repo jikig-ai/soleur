@@ -493,3 +493,125 @@ prose above (grep of `knowledge-base/**/*.c4` for the dropped identifiers is
 empty). No-op recorded here so a future reader is not misled.
 
 **The ADR-044 arc is COMPLETE.** No further slice is gated. Note: `users.{repo_provider, repo_status, repo_last_synced_at}` remain as dead-but-retained columns intentionally OUTSIDE PR-2b's named drop set (a future minor cleanup), so "arc complete" refers to the ADR-044 decision arc, not zero-residual-columns.
+
+## Amendment 2026-06-18 — non-push founder resolution MUST be repo-scoped (multi-repo-org false-ambiguity fix)
+
+This **amends Amendment 2026-06-17b's** "Non-push founder resolution rule" (the
+subsection above that defined `resolveSoloFounderForInstallation` and its
+`{found|none|ambiguous|db-error}` discriminated union). It is an **amendment to
+Decision.1's own contract, NOT a reversal** — it completes the same
+`(installation_id, normalizeRepoUrl(repo_url))` fan-out key that Decision.1 made
+load-bearing for the push path, and that the push reconcile
+(`workspace-reconcile-on-push.ts`) already keys on.
+
+**The false assumption.** The 2026-06-17b resolver SELECT keyed the solo
+self-join ONLY on `w.github_installation_id = :installationId`, with NO
+`repo_url` filter. That implicitly assumed **"one solo workspace per
+installation"** — exactly the assumption Decision.1 **explicitly rejected** for
+the push path (`workspaces.github_installation_id` is intentionally NON-UNIQUE;
+a single GitHub-App installation legitimately spans MANY repos across an org,
+each with its own solo workspace). For a multi-repo org install the unscoped
+self-join returns `>1` solo rows → `{kind:"ambiguous"}` → `route.ts`
+`Sentry.captureException(op:"founder-ambiguous")` + 404-drop, for **every**
+non-push event under that install (`pull_request`, `workflow_run`, `issues`,
+`repository_advisory`, `secret_scanning_alert`, AND unmapped events such as
+`check_suite` that reach the resolver BEFORE the `actionClass` guard). Confirmed
+in prod via Sentry `WEB-PLATFORM-3M` (install `122213433`).
+
+**The rule (amended).** Non-push founder resolution MUST also be scoped by
+`(installation_id, normalizeRepoUrl(repo_url))` — composing
+`https://github.com/<repository.full_name>` and normalizing it **exactly like
+the push reconcile** (compose-before-normalize; the bare `owner/repo` slug must
+become a full URL before `normalizeRepoUrl`, per the Consequences note above).
+The route composes the normalized `targetRepoUrl` and passes it to the resolver;
+the SELECT gains `.eq("repo_url", :normalizedRepoUrl)` alongside
+`.eq("github_installation_id", :installationId)`. The TS↔SQL `normalizeRepoUrl`
+parity test remains the sole load-bearing matching guard (the same hard merge
+gate Decision.1 established) — the non-push path now shares it.
+
+**What is UNCHANGED.** `founderId := w.id` (== owner `users.id` by the solo
+invariant) is unchanged; `isGranted` and the installation-token path need no
+other change. The **SINGLE-founder, no-fan-out** posture for Steps 6/7 (the
+2026-06-17b CTO ruling rejecting Option A's N-way grant-check/dispatch fan-out
+as a cross-tenant consent + installation-token surface multiplier) is
+**UNCHANGED** — repo-scoping resolves exactly ONE founder per `(install, repo)`
+in the normal case; it does not fan out. The `>1` fail-closed branch
+(`Sentry.captureException(op:"founder-ambiguous")` + `releaseDedupRow()` + 404,
+ZERO `inngest.send`, ZERO `isGranted`) is **retained** but now fires ONLY for
+the genuine same-repo + same-install residual ambiguity (two users + same fork);
+the multi-repo-org false-ambiguity it previously caught disappears. The `none`
+(0-row → 404), `db-error` (resolver `reportSilentFallback` op:`founder-resolve`
+→ route 500, re-drivable), and R8 paging-rule (`github_webhook_founder_ambiguous`,
+`op="founder-ambiguous"`) contracts are unchanged. Misattributing a non-push
+event to the WRONG repo's founder (routing one tenant's PR/CI/issue draft + an
+installation token to another founder) is a cross-tenant action-attribution
+leak; the repo_url filter (with the parity-test-guaranteed normalization) and
+the retained `>1` fail-closed branch are the backstops — dropping a re-drivable
+event is strictly safer than misattributing it.
+
+### Consequence — dispatch readiness MUST be (repo_status-ok AND physical `.git` present); ready-but-`.git`-gone re-clones lock-free (Bug 2)
+
+A second multi-workspace-per-installation defect on the dispatch side: the cold
+Concierge dispatch fast-pathed on `repo_status` alone, returning `{ok:true}` for
+a `repo_status='ready'` workspace WITHOUT verifying the clone physically exists
+on disk. A shared/team workspace whose row is `ready` (set by share/connect or a
+session-sync stamping) but whose `/workspaces/<id>/.git` is absent (never
+materialized at the member-session path) lands the interactive session where
+`git rev-parse --is-inside-work-tree` is false — persisting across retries (each
+retry re-takes the `ready` fast-path) with NO Sentry signal (the `ready` path
+never reached the `op:"repo-readiness-self-heal"` mirror).
+
+**Consequence (decided here):** dispatch readiness is the **conjunction** of
+`repo_status != cloning/error` **AND** physical `.git` presence at the resolved
+workspace path. A `ready`-but-`.git`-absent workspace is a recoverable condition
+that is **deterministically re-cloned**:
+
+- **Recovery policy is SPLIT by DB state.** `error` / stale-`cloning` rows KEEP
+  the `claim_repo_clone_lock` RPC (migration 108) — the load-bearing
+  thundering-herd guard. The `claim_repo_clone_lock` WHERE clause matches ONLY
+  `error`/stale-`cloning` rows **by construction**, so it cannot acquire a
+  `ready` row; the `ready`-but-`.git`-absent re-clone is therefore **lock-free**
+  and relies on the graft's per-attempt `randomUUID` temp dir + atomic rename +
+  `.git`-sentinel re-check (`ensure-workspace-repo.ts`) for concurrency
+  correctness (winner materializes `.git`; the loser observes it and returns
+  `{ok:true}` with `.git` present, or honest-waits — it never fast-paths
+  `{ok:true}` with `.git` still absent).
+- **Hot-path preserved.** The COMMON `ready` + `.git`-present path still
+  fast-returns `{ok:true}` — the only added cost is a local `existsSync`; the
+  `existsSync` is evaluated FIRST so `getFreshTenantClient` (a JWT round-trip)
+  stays OFF the fast path. On the `ready`-entry SUCCESS branch the
+  `setRepoStatus(ready)` write is SKIPPED (the row is already `ready`; the write
+  would be a no-op + a spurious member-row write + an RPC round-trip of no value).
+- **Member split-write re-targeted (migration 113).** `set_repo_status`
+  previously wrote the failure reason to `users.repo_error` for `auth.uid()` (the
+  caller = the member), but the readiness gate reads the OWNER's reason — so a
+  member-triggered heal FAILURE wrote the member's row while the gate re-read the
+  owner's (null/stale) row, looping the member forever with no honest reason.
+  Migration 113 **re-targets `set_repo_status`'s failure-reason write from the
+  dropped `users.repo_error` to `workspaces.repo_error`** — the column the gate
+  reads as of migration 110 — so a member-triggered heal failure surfaces the
+  correct reason instead of looping. (SECURITY DEFINER, `search_path = public,
+  pg_temp`, REVOKE/GRANT precedent per migration 108; the membership check is
+  retained.)
+
+### C4 edge note
+
+No `.c4` model edit. C4 enumeration for this change (all already covered or
+below the model's system/container granularity):
+- **Actors:** GitHub (webhook sender) is modeled as the `github` `#external`
+  system; the workspace Owner and the shared-workspace **Member** are both
+  covered by the existing `founder` actor, whose description already states
+  "A workspace Owner ... Workspaces may have MULTIPLE Owners (ADR-038 team
+  workspaces)" — it is NOT a "Solo founder"-only description, so the multi-member
+  shared-workspace clone path does not falsify it (no edit needed).
+- **External systems:** GitHub App (installation-token clone) is subsumed by the
+  `github` external system — no new vendor.
+- **Stores:** the `/workspaces` persistent volume and the
+  `workspaces.repo_status` / `workspaces.repo_error` columns are below the
+  model's granularity (the model stops at the `supabase` database element).
+- **Edges:** the non-push webhook→founder edge (now keyed on
+  `(installation, repo)`) and the dispatch-clone Member→Workspace-repo edge are
+  connection-owner relationships at column/code granularity — consistent with
+  the 2026-06-17b and 2026-06-18 amendments above, these are captured in this
+  ADR prose, not in a `.c4` edit (grep of `knowledge-base/**/*.c4` for ADR-044 /
+  the relevant identifiers is empty). **No C4 impact.**

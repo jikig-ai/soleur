@@ -174,6 +174,14 @@ export interface ChatSurfaceProps {
   variant: ChatSurfaceVariant;
   onClose?: () => void;
   initialContext?: ConversationContext;
+  /**
+   * When true, defer the WS session start until the caller's async
+   * `initialContext` resolves (audit M1). Lets the full-route page render the
+   * chat shell immediately instead of returning null, while still delivering
+   * the resolved KB context to `startSession` in one bootstrap. Defaults false
+   * (no deferral) for every other call site.
+   */
+  contextPending?: boolean;
   /** Sidebar-only props. Ignored (shallow) when variant === "full". */
   sidebarProps?: ChatSurfaceSidebarProps;
 }
@@ -182,6 +190,7 @@ export function ChatSurface({
   conversationId,
   variant,
   initialContext,
+  contextPending = false,
   sidebarProps,
 }: ChatSurfaceProps) {
   const {
@@ -345,7 +354,7 @@ export function ChatSurface({
   }, [messages]);
 
   useEffect(() => {
-    if (status !== "connected" || sessionStarted) return;
+    if (status !== "connected" || sessionStarted || contextPending) return;
 
     if (conversationId === "new") {
       if (resumeByContextPath) {
@@ -362,7 +371,7 @@ export function ChatSurface({
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending]);
 
   useEffect(() => {
     if (resumedFrom && onThreadResumed) {

@@ -40,6 +40,16 @@ curl -fsS -X POST "https://app.soleur.ai/api/internal/schedule-reminder" \
 # → 202 { "scheduled": "verify-x-2026-07-01", "fire_at": "..." }
 ```
 
+> **Cutover survivors must be re-armed by hand if inngest was DOWN.** The #5542
+> durable-backend cutover's `op=capture` bridge self-enumerates the OLD server
+> pre-deploy — if inngest is down at capture time it snapshots **nothing**, and the
+> new backend starts with an empty queue. The SQLite-era reminders are then silently
+> lost. Recovery is to reconstruct each survivor's `{reminder_id, fire_at, actor,
+> action}` from its **source automation** (the id alone is not enough) and re-POST it
+> here; a 202 proves durable acceptance into the new backend. Worked recovery: #5548
+> (re-armed `verify-server-startup-rate-5417` + `reeval-5469-routine-runs-gate-2026-07-01`
+> on 2026-06-18).
+
 `action` is an **allowlisted discriminated union** (`apps/web-platform/lib/inngest/scheduled-reminder-action.ts`):
 
 - `{ type: "issue-comment", issue, body }` — posts a comment (body ≤ 65000 chars).

@@ -79,6 +79,19 @@ function sign(body: string): string {
   return "sha256=" + createHmac("sha256", SECRET).update(body).digest("hex");
 }
 
+// ADR-044 Amendment 2026-06-18 (BUG 1): the non-push founder resolver is now
+// repo-scoped. A non-push event with NO `repository.full_name` drops via the
+// pre-compose none/404 guard WITHOUT issuing the resolver SELECT. So every
+// non-push request that expects to REACH the resolver must carry a
+// `repository.full_name`. We default it into object bodies that don't already
+// set `repository`, so existing tests still exercise the resolver path.
+const DEFAULT_FULL_NAME = "octo/repo";
+
+function withDefaultRepo(body: object): object {
+  if ("repository" in body) return body;
+  return { ...body, repository: { full_name: DEFAULT_FULL_NAME } };
+}
+
 function makeRequest(opts: {
   body: object | string;
   signature?: string;
@@ -88,7 +101,10 @@ function makeRequest(opts: {
   omitDelivery?: boolean;
   omitEvent?: boolean;
 }): Request {
-  const raw = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
+  const resolvedBody =
+    typeof opts.body === "string" ? opts.body : withDefaultRepo(opts.body);
+  const raw =
+    typeof resolvedBody === "string" ? resolvedBody : JSON.stringify(resolvedBody);
   const headers = new Headers();
   if (!opts.omitSignature) headers.set("x-hub-signature-256", opts.signature ?? sign(raw));
   if (!opts.omitDelivery) headers.set("x-github-delivery", opts.deliveryId ?? "delivery-abc-123");
@@ -247,7 +263,14 @@ describe("POST /api/webhooks/github — inngest.send retry on transient fetch fa
 
 describe("POST /api/webhooks/github — payload & routing", () => {
   it("forwards rawBody + founderId + tier in inngest.send envelope", async () => {
-    const payload = { installation: { id: 42 }, action: "opened", pull_request: { number: 7 } };
+    const payload = {
+      installation: { id: 42 },
+      action: "opened",
+      pull_request: { number: 7 },
+      // Repo-scoped resolver (ADR-044 Amendment 2026-06-18) requires full_name;
+      // set it explicitly so the asserted rawBody matches the dispatched body.
+      repository: { full_name: "octo/repo" },
+    };
     const req = makeRequest({ body: payload, event: "pull_request" });
     await POST(req);
     expect(mockInngestSend).toHaveBeenCalledWith(
@@ -292,6 +315,96 @@ describe("POST /api/webhooks/github — payload & routing", () => {
     const req = makeRequest({ body: { installation: { id: 42 } }, event: "ping" });
     const res = await POST(req);
     expect(res.status).toBe(200);
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR-044 Amendment 2026-06-18 (BUG 1) — repo-scoped non-push founder resolver.
+// ---------------------------------------------------------------------------
+describe("POST /api/webhooks/github — repo-scoped founder resolution (BUG 1)", () => {
+  // AC1/AC2: a non-push event under a multi-repo org install resolves the
+  // founder for the EVENT's repo and dispatches (no 404). The resolver is
+  // mocked to return `found` for the matching repo; the route must compose the
+  // repo_url from `repository.full_name` and pass it as the 2nd positional arg.
+  it("passes the composed+normalized repo_url to the resolver and dispatches", async () => {
+    const req = makeRequest({
+      body: {
+        installation: { id: 42 },
+        action: "opened",
+        repository: { full_name: "octo/Hello-World" },
+      },
+      event: "pull_request",
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    // 2nd positional arg is the normalized repo_url (NOT request-supplied raw).
+    expect(mockResolveFounder).toHaveBeenCalledWith(
+      42,
+      "https://github.com/octo/Hello-World",
+      expect.anything(),
+    );
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+  });
+
+  // AC4: a non-push event with NO repository.full_name drops via the pre-compose
+  // none/404 guard AND does NOT issue the resolver SELECT (resolver not called).
+  // It must NOT be an ambiguous throw — it is a deterministic 404.
+  it("non-push with no repository.full_name → 404 and does NOT call the resolver", async () => {
+    // Bypass withDefaultRepo by passing a raw string body that omits repository.
+    const raw = JSON.stringify({ installation: { id: 42 }, action: "opened" });
+    const req = makeRequest({ body: raw, event: "pull_request" });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+    expect(mockResolveFounder).not.toHaveBeenCalled();
+    expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockDeleteEq).toHaveBeenCalledTimes(1); // releaseDedupRow on 404
+  });
+
+  // AC4b: the ACTUAL prod signal (WEB-PLATFORM-3M) — an UNMAPPED event
+  // (`check_suite`) reaches the resolver at route.ts:313 BEFORE the actionClass
+  // guard. Under a multi-repo org install the repo-scoped resolver returns
+  // `found` → the event falls through to the actionClass guard (no mapping) →
+  // {received:true} 200 ignore, NOT a 404-storm.
+  it("unmapped check_suite under multi-repo org install → resolver found → 200 ignore (NOT 404)", async () => {
+    mockResolveFounder.mockResolvedValueOnce({ kind: "found", founderId: "f-cs" });
+    const req = makeRequest({
+      body: {
+        installation: { id: 122213433 },
+        action: "completed",
+        repository: { full_name: "octo/some-repo" },
+      },
+      event: "check_suite",
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    // The resolver WAS reached (the bug: it used to return ambiguous → 404).
+    expect(mockResolveFounder).toHaveBeenCalledWith(
+      122213433,
+      "https://github.com/octo/some-repo",
+      expect.anything(),
+    );
+    // Unmapped event → no dispatch, no isGranted (falls through actionClass).
+    expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockIsGranted).not.toHaveBeenCalled();
+  });
+
+  // AC4c: a db-error from the repo-scoped resolver returns 500 + releaseDedupRow
+  // (re-drivable). GitHub retries 5xx, not 4xx — this distinction from the 404
+  // of none/ambiguous is load-bearing for redelivery.
+  it("repo-scoped resolver db-error → 500 + releaseDedupRow (re-drivable)", async () => {
+    mockResolveFounder.mockResolvedValueOnce({ kind: "db-error" });
+    const req = makeRequest({
+      body: {
+        installation: { id: 42 },
+        action: "opened",
+        repository: { full_name: "octo/repo" },
+      },
+      event: "pull_request",
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 });
