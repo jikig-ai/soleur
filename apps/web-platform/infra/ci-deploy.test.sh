@@ -2179,6 +2179,67 @@ else
 fi
 
 echo ""
+echo "--- #5547 Gap 1: existing-host deploy stages the durable Redis assets ---"
+# The existing-host deploy path runs inngest-bootstrap.sh DIRECTLY on the host
+# (the Alpine extract container has no systemctl), bypassing the OCI image
+# ENTRYPOINT that stages /tmp/inngest-redis.* on the fresh-host cloud-init path.
+# So ci-deploy.sh's `case "inngest")` MUST docker-cp the three Redis assets to
+# the /tmp staging path itself, or inngest-bootstrap.sh's Redis-install guard
+# (`[[ -f /tmp/inngest-redis.conf && ... ]]`) is always false → Redis never
+# installed → the durable ExecStart crash-loops (#5547 Gap 1).
+# Per-asset line-start greps (NOT a `grep -c >= 3`, which a WHY-comment naming
+# inngest-redis would inflate — AC1).
+TOTAL=$((TOTAL + 1))
+G1_CONF=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis\.conf' "$DEPLOY_SCRIPT" || true)
+G1_SERVICE=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis\.service' "$DEPLOY_SCRIPT" || true)
+G1_BOOTSTRAP=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis-bootstrap\.sh' "$DEPLOY_SCRIPT" || true)
+if [[ "$G1_CONF" -ge 1 && "$G1_SERVICE" -ge 1 && "$G1_BOOTSTRAP" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: ci-deploy.sh stages inngest-redis.{conf,service} + inngest-redis-bootstrap.sh to /tmp (#5547 Gap 1 / AC1)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ci-deploy.sh must docker cp all three Redis assets in case inngest (conf=$G1_CONF service=$G1_SERVICE bootstrap=$G1_BOOTSTRAP; file: ci-deploy.sh / #5547 AC1)"
+fi
+
+echo ""
+echo "--- #5547 Gap 3: verify_inngest_health degraded advisory + success_degraded_durability ---"
+# Source-scoped (runtime-driving the deploy path is out of scope per the #4652
+# AC3 wiring comment above). AC5 — verify_inngest_health emits a degraded
+# ADVISORY (NOT return 1) via `logger -t "$LOG_TAG"` when the ExecStart lacks
+# --postgres-uri (the SQLite-only fail-safe), while the durable FAIL branches
+# (--postgres-uri present but --redis-uri absent / inngest-redis not active)
+# still `return 1`.
+VIH_FN=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+VIH_ADVISORY=$(printf '%s\n' "$VIH_FN" | grep -cE 'logger -t "\$LOG_TAG" "INNGEST_DURABLE: advisory' || true)
+VIH_FAIL_NO_REDIS=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*--redis-uri absent' || true)
+VIH_FAIL_NOT_ACTIVE=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*not active' || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$VIH_ADVISORY" -ge 1 && "$VIH_FAIL_NO_REDIS" -ge 1 && "$VIH_FAIL_NOT_ACTIVE" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: verify_inngest_health emits degraded advisory (postgres-absent) + both durable FAIL branches intact (#5547 AC5)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: AC5 (advisory=$VIH_ADVISORY fail_no_redis=$VIH_FAIL_NO_REDIS fail_not_active=$VIH_FAIL_NOT_ACTIVE; verify_inngest_health in ci-deploy.sh)"
+fi
+
+# AC5b — on a 0-exit bootstrap that left inngest on the SQLite-only ExecStart,
+# the case "inngest") block writes final_write_state 0 "success_degraded_durability"
+# (NOT plain "success") so /hooks/deploy-status .reason distinguishes a degraded
+# deploy from a healthy durable one. Detection re-derives from the WRITTEN
+# ExecStart via a case-local `inngest_exec_start=` (verify_inngest_health uses a
+# `local exec_start=`, so this name is unique to the deploy arm).
+G3_REASON=$(grep -cE 'final_write_state 0 "success_degraded_durability"' "$DEPLOY_SCRIPT" || true)
+G3_DETECT=$(grep -cE 'inngest_exec_start=' "$DEPLOY_SCRIPT" || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$G3_REASON" -ge 1 && "$G3_DETECT" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: case inngest writes success_degraded_durability on a degraded 0-exit deploy (#5547 AC5b)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: AC5b (degraded_reason=$G3_REASON detect=$G3_DETECT; file: ci-deploy.sh)"
+fi
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 if [[ "$FAIL" -gt 0 ]]; then

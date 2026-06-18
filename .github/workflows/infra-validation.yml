@@ -199,6 +199,9 @@ jobs:
       - name: Run inngest-inventory.sh tests
         run: bash apps/web-platform/infra/inngest-inventory.test.sh
 
+      - name: Run inngest.tf + bootstrap drift-guards
+        run: bash apps/web-platform/infra/inngest.test.sh
+
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
 
