@@ -15,9 +15,13 @@ const KbChatContent = dynamic(
 );
 
 function ResizeHandle(props: { style?: React.CSSProperties }) {
+  // Active/drag wash is brand gold (`soleur-accent-gold-fill/70`), grey on hover
+  // — consistent with the nav-rail grip. Double-click-to-collapse is
+  // intentionally NOT wired here: this is a between-pane splitter with no
+  // collapsed-width state, so a collapse gesture has no coherent target (AC10).
   return (
     <Separator
-      className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-soleur-text-secondary/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50"
+      className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-soleur-text-secondary/50 active:bg-soleur-accent-gold-fill/70 data-[resize-handle-active]:bg-soleur-accent-gold-fill/70"
       style={props.style}
     >
       <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
