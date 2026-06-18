@@ -393,39 +393,39 @@ matches for `inngest-bootstrap.sh`, `ci-deploy.sh`, `inngest-redis-bootstrap.sh`
 
 ### Pre-merge (PR / CI)
 
-- [ ] AC1 — `ci-deploy.sh` `case "inngest")` docker-cp's each of `inngest-redis.conf`,
+- [x] AC1 — `ci-deploy.sh` `case "inngest")` docker-cp's each of `inngest-redis.conf`,
   `inngest-redis.service`, `inngest-redis-bootstrap.sh` to the `/tmp/inngest-redis.*`
   staging path. Verify per-asset (NOT a `grep -c >= 3`, which a WHY-comment
   mentioning `inngest-redis` would inflate): assert a `docker cp`-line-start match
   for EACH of the three filenames independently —
   `grep -E '^[[:space:]]*docker cp .*inngest-redis\.conf'`,
   `…inngest-redis\.service`, `…inngest-redis-bootstrap\.sh` each return ≥1.
-- [ ] AC2 — `inngest-bootstrap.sh` assigns `REDIS_READY` on a line that follows
+- [x] AC2 — `inngest-bootstrap.sh` assigns `REDIS_READY` on a line that follows
   the `/etc/default/inngest-server` env-file materialization AND precedes the
   server unit `cat >` line. Verify in `inngest.test.sh` via line-number ordering
   (env-file block < `REDIS_READY=` < server-unit `cat >`).
-- [ ] AC3 — `inngest-bootstrap.sh` selects the durable backend-flags fragment when
+- [x] AC3 — `inngest-bootstrap.sh` selects the durable backend-flags fragment when
   `REDIS_READY=1` and an empty fragment (SQLite-only) when `REDIS_READY=0`;
   `--sqlite-dir /var/lib/inngest` is in the SHARED prefix (present in BOTH
   branches); no `@@BACKEND_FLAGS@@` sentinel survives in the written unit. Verify
   in `inngest.test.sh`.
-- [ ] AC4 — the durable backend fragment preserves the literal `$${INNGEST_*}`
+- [x] AC4 — the durable backend fragment preserves the literal `$${INNGEST_*}`
   Doppler tokens (NOT expanded). Verify by grepping the rendered/heredoc body for
   `\$\${INNGEST_POSTGRES_URI}` and `\$\${INNGEST_REDIS_PASSWORD}`, AND assert no
   expanded/leaked secret value appears.
-- [ ] AC5 — `verify_inngest_health` emits a degraded-durability **ADVISORY** (not
+- [x] AC5 — `verify_inngest_health` emits a degraded-durability **ADVISORY** (not
   `return 1`) via `logger -t "$LOG_TAG"` when ExecStart lacks `--postgres-uri`;
   the `INNGEST_DURABLE` **FAIL** branch still fires when `--postgres-uri` present
   but `--redis-uri` absent OR Redis not active. Verify in `ci-deploy.test.sh`.
-- [ ] AC5b — the `case "inngest")` block writes `final_write_state 0
+- [x] AC5b — the `case "inngest")` block writes `final_write_state 0
   "success_degraded_durability"` (NOT plain `success`) when a 0-exit bootstrap
   left inngest on the SQLite-only ExecStart, so `/hooks/deploy-status` `.reason`
   distinguishes degraded from healthy-durable. Verify in `ci-deploy.test.sh`.
-- [ ] AC6 — `infra-validation.yml` runs `bash apps/web-platform/infra/inngest.test.sh`.
+- [x] AC6 — `infra-validation.yml` runs `bash apps/web-platform/infra/inngest.test.sh`.
   Verify: `grep -c 'inngest.test.sh' .github/workflows/infra-validation.yml` ≥ 1.
-- [ ] AC7 — `bash apps/web-platform/infra/ci-deploy.test.sh` and
+- [x] AC7 — `bash apps/web-platform/infra/ci-deploy.test.sh` and
   `bash apps/web-platform/infra/inngest.test.sh` both pass.
-- [ ] AC8 — the existing `inngest.test.sh` `--postgres-uri` / `--redis-uri`
+- [x] AC8 — the existing `inngest.test.sh` `--postgres-uri` / `--redis-uri`
   asserts are scoped to the durable branch and still pass under the new shape.
 
 ### Post-merge (operator)
