@@ -9,7 +9,7 @@
 // state. Items render in the order the API returns them (statutory pinned
 // first) — never re-sorted.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   EmailTriageRow,
@@ -27,23 +27,33 @@ export function InboxSurface() {
   const [items, setItems] = useState<EmailTriageItem[] | null>(null);
   const [error, setError] = useState(false);
 
+  // Request-sequence guard: a fast tab switch (or an onChanged refetch that
+  // overlaps one) can leave an earlier fetch in flight that resolves AFTER the
+  // newer one and clobbers state with stale items. Only the latest request is
+  // allowed to write — superseded responses are dropped.
+  const requestId = useRef(0);
+
   const fetchItems = useCallback(async () => {
+    const id = ++requestId.current;
     setError(false);
     setItems(null);
     try {
       const res = await fetch(
         `/api/inbox/emails${archived ? "?status=archived" : ""}`,
       );
+      if (id !== requestId.current) return; // superseded by a newer fetch
       if (!res.ok) {
         setError(true);
         return;
       }
       const body = (await res.json()) as { items: EmailTriageItem[] };
+      if (id !== requestId.current) return; // superseded during json()
       // Render in API order — the route pins unacknowledged statutory rows
       // first (uncapped); never re-sort or a running statutory clock could
       // fall out of view.
       setItems(body.items ?? []);
     } catch {
+      if (id !== requestId.current) return;
       setError(true);
     }
   }, [archived]);
@@ -72,25 +82,31 @@ export function InboxSurface() {
         </TabButton>
       </div>
 
-      {error ? (
-        <ErrorCard
-          title="Failed to load inbox"
-          message="Something went wrong loading your inbox. Please try again."
-          onRetry={fetchItems}
-        />
-      ) : items === null ? (
-        <p className="py-8 text-sm text-soleur-text-secondary">Loading…</p>
-      ) : items.length === 0 ? (
-        <p className="py-8 text-sm text-soleur-text-secondary">
-          {archived ? "Nothing archived yet" : "No items needing attention"}
-        </p>
-      ) : (
-        <div className="space-y-2">
-          {items.map((item) => (
-            <EmailTriageRow key={item.id} item={item} onChanged={fetchItems} />
-          ))}
-        </div>
-      )}
+      <div role="tabpanel" aria-label={archived ? "Archived items" : "Active items"}>
+        {error ? (
+          <ErrorCard
+            title="Failed to load inbox"
+            message="Something went wrong loading your inbox. Please try again."
+            onRetry={fetchItems}
+          />
+        ) : items === null ? (
+          <p className="py-8 text-sm text-soleur-text-secondary">Loading…</p>
+        ) : items.length === 0 ? (
+          <p className="py-8 text-sm text-soleur-text-secondary">
+            {archived ? "Nothing archived yet" : "No items needing attention"}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {items.map((item) => (
+              <EmailTriageRow
+                key={item.id}
+                item={item}
+                onChanged={fetchItems}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

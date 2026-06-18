@@ -155,4 +155,47 @@ describe("InboxSurface", () => {
     fireEvent.click(screen.getByRole("tab", { name: /active/i }));
     expect(mockPush).toHaveBeenCalledWith("/dashboard/inbox");
   });
+
+  it("refetches the archived endpoint when the status param changes (tab switch)", async () => {
+    global.fetch = mockFetchOnce([item({ subject: "Active row" })]) as unknown as typeof fetch;
+    const { rerender } = render(<InboxSurface />);
+    await waitFor(() => expect(screen.getByText("Active row")).toBeTruthy());
+    expect(global.fetch).toHaveBeenLastCalledWith("/api/inbox/emails");
+
+    // Simulate the URL changing to ?status=archived (what router.push does),
+    // then re-render — the surface must refetch the archived endpoint.
+    mockStatus = "archived";
+    global.fetch = mockFetchOnce([item({ status: "archived", subject: "Archived row" })]) as unknown as typeof fetch;
+    rerender(<InboxSurface />);
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("/api/inbox/emails?status=archived"),
+    );
+    await waitFor(() => expect(screen.getByText("Archived row")).toBeTruthy());
+  });
+
+  it("drops a superseded (out-of-order) response so stale items never clobber fresh ones", async () => {
+    // Two overlapping fetches; the FIRST resolves LAST. The request-sequence
+    // guard must keep the second (newer) result and discard the first.
+    const resolvers: Array<(v: unknown) => void> = [];
+    global.fetch = vi
+      .fn()
+      .mockImplementation(
+        () => new Promise((r) => resolvers.push(r)),
+      ) as unknown as typeof fetch;
+
+    const { rerender } = render(<InboxSurface />); // fetch #1 (Active) in flight
+    mockStatus = "archived";
+    rerender(<InboxSurface />); // fetch #2 (Archived) in flight
+    await waitFor(() => expect(resolvers.length).toBe(2));
+
+    // Resolve the NEWER request first, then the older stale one.
+    resolvers[1]({ ok: true, json: async () => ({ items: [item({ subject: "Fresh archived" })] }) });
+    await waitFor(() => expect(screen.getByText("Fresh archived")).toBeTruthy());
+    resolvers[0]({ ok: true, json: async () => ({ items: [item({ subject: "Stale active" })] }) });
+
+    // Give the stale resolution a tick; it must NOT replace the fresh result.
+    await Promise.resolve();
+    expect(screen.queryByText("Stale active")).toBeNull();
+    expect(screen.getByText("Fresh archived")).toBeTruthy();
+  });
 });
