@@ -67,3 +67,41 @@ resolved
 |---|---|---|
 | #5274 | Re-evaluate single-host in-session self-heal vs. multi-host snapshot/restore (deferred; single-host suffices today on the persistent `/workspaces` volume). | agent |
 | #4755 | Member KB write/refresh route surface (rename/delete/upload/manual-sync) remains in scope; this PR fixed only the dispatch-path clone provisioning. | agent |
+
+## Follow-up 2026-06-18 — Bug 2's ready-clone graft did NOT fully close the incident (dispatch READ-path null-install divergence)
+
+After the Bug 2 ready-clone graft deployed (~14:46 UTC), the operator hit the
+**same "no git repository" symptom**, before AND after reconnecting. Root cause:
+the graft only fires when `hasConnection` is true
+(`installationId !== null && repoUrl`). The agent **was** spawned (it ran the
+`/soleur:go` Step 0.0 probe and flailed), which proves the readiness gate
+returned `{ok:true}` **without the graft running** — the clone was never
+attempted.
+
+The deep cause is a **two-read asymmetry** the ADR-044 sweep missed on the
+dispatch READ path: `repo_url`/`repo_status` are non-credential columns read via
+a direct RLS `.select()` (member-readable, non-null), while `installationId`
+(`workspaces.github_installation_id`) is the credential column read ONLY via the
+`resolve_workspace_installation_id` SECURITY DEFINER RPC, which returns NULL on
+membership-deny — "indistinguishable from not-connected" (mig 079). So a member
+of a connected team workspace reads `repoUrl` non-null while the install RPC
+denies/blips → `hasConnection` false → fast-path skip → repo-less agent, with
+**no Sentry signal** at the dispatch path.
+
+**Resolution (this PR):** the readiness gate now treats `repoUrl present +
+installationId null + .git absent` as a **resolver divergence**, fails honestly
+with a membership-deny-aware `RepoNotReadyError` (not a doomed spawn, and NOT the
+unactionable "reconnect" CTA), and emits a **paging** `repo_resolver_divergence`
+Sentry op (`connected-null-install-at-dispatch`) — closing the previously-dark
+dispatch path. The divergence path performs **zero `workspaces` writes** (a
+transient/non-member dispatch must not corrupt a healthy team workspace's
+`repo_status` for its Owners). ADR-044 amended; credential RPC unmodified; no new
+migration. No NEW open action items — this follow-up fully closes the dispatch
+arm of the incident.
+
+**Reinforced lesson (extends the cross-cutting cause above):** an ADR that
+changes a uniqueness/cardinality invariant must sweep every consumer — including
+the ones that read the changed column through a DIFFERENT access path. A
+credential column behind a deny-NULL SECURITY DEFINER RPC reads NULL exactly when
+a sibling non-credential column reads present; any gate that ANDs the two and
+treats NULL as "not connected" silently mis-handles the membership-deny case.
