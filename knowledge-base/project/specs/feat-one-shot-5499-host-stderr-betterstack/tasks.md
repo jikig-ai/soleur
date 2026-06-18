@@ -15,9 +15,12 @@ plan: knowledge-base/project/plans/2026-06-18-feat-host-script-stderr-betterstac
       inngest-rearm-reminders, inngest-wiped-volume-verify, inngest-inventory. (cron-egress-* +
       container-restart-monitor use echo/Sentry, NOT logger -t — exclude.)
 - [ ] 0.2 Confirm `VECTOR_BIN` available (or document `vector validate` runs in CI only).
-- [ ] 0.3 `grep -A6 'paths:' .github/workflows/apply-web-platform-infra.yml` — determine
-      whether a vector.toml-only edit trips the apply trigger. If not, choose the §Apply path
-      remedy (add path filter OR document the Doppler prd_terraform apply triplet).
+- [ ] 0.3 Confirm the apply path is OCI-image-rebuild + `deploy inngest` (NOT terraform).
+      vector.toml is baked into the soleur-inngest-bootstrap image
+      (build-inngest-bootstrap-image.yml:164,183); apply-web-platform-infra.yml is terraform-only
+      and a NO-OP for a vector.toml-only change. Do NOT rely on the apply-web-platform-infra.yml
+      path filter (it matches but does not deliver — false-confidence trap). Delivery is verified
+      via the `vector config installed: sha256=` log (inngest-bootstrap.sh:430).
 
 ## Phase 1 — Add the dedicated host-script journald source
 
@@ -46,13 +49,21 @@ plan: knowledge-base/project/plans/2026-06-18-feat-host-script-stderr-betterstac
 - [ ] 4.1 `vector validate apps/web-platform/infra/vector.toml` passes (AC5).
 - [ ] 4.2 Run `vector-pii-scrub.test.sh` green (AC6).
 - [ ] 4.3 Run AC1–AC4 grep/awk verifications.
-- [ ] 4.4 PR body: `Closes #5499` (AC7).
+- [ ] 4.4 PR body: `Ref #5499` (NOT `Closes` — fix is live only post-deploy; AC7).
+- [ ] 4.5 (optional) Project per-event row count: `journalctl -t ci-deploy -t infra-config-apply
+      --since '7 days ago' | wc -l` / 7 < ~1k rows/day, or estimate from deploy frequency.
 
-## Phase 5 — Post-merge (operator / automated)
+## Phase 5 — Post-merge (operator / automated; OCI-rebuild path, NOT terraform)
 
-- [ ] 5.1 Confirm apply reached host (AC8) via apply-web-platform-infra.yml run /
-      deploy-status webhook / cat-deploy-state.sh vector tail — no remote-shell.
-- [ ] 5.2 Discoverability (AC9): `doppler run -p soleur -c prd_terraform --
-      scripts/betterstack-query.sh --since 24h --grep inngest-rearm-reminders
-      --grep infra-config-apply --limit 20` returns ≥1 host-script-tagged row after a
-      host-script logger -t line fires. Then `gh issue close 5499` if not auto-closed.
+- [ ] 5.1 Cut + push a `vinngest-vX.Y.Z` tag (bump from ~v1.1.14): `git tag vinngest-vX.Y.Z &&
+      git push origin vinngest-vX.Y.Z`. Confirm build-inngest-bootstrap-image.yml publishes the
+      plain `vX.Y.Z` GHCR image.
+- [ ] 5.2 Deploy via release pipeline / deploy webhook (no SSH):
+      `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z` (inngest-server.md:336,602).
+- [ ] 5.3 Verify (AC8, no remote-shell): cat-deploy-state.sh journal tail shows
+      `vector config installed: sha256=<X>` where `<X>` == `sha256sum apps/web-platform/infra/vector.toml`
+      of the merged file. Stale sha = not applied (a terraform run is NOT evidence).
+- [ ] 5.4 Discoverability (AC9, only after 5.3 sha matches): trigger an inngest-inventory via
+      `/soleur:trigger-cron`, then `doppler run -p soleur -c prd_terraform --
+      scripts/betterstack-query.sh --since 24h --grep inngest-inventory --grep infra-config-apply
+      --limit 20` returns ≥1 host-script-tagged row. Then `gh issue close 5499`.
