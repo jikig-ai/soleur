@@ -21,6 +21,26 @@ status: ready
 
 # feat: Auto-regenerate the LikeC4 model artifact when C4 sources change
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-18
+**Sections enhanced:** Phase 2 (CI gate shape), Phase 1 (validation), conventions pinned across the plan.
+**Passes run:** verify-the-negative grep pass, precedent-diff grep pass, lefthook/CI regen-pattern exploration. Hard gates 4.6 (User-Brand Impact), 4.7 (Observability), 4.8 (PAT-shaped) all PASS; 4.9 (UI wireframe) pass-through (no UI surface in Files lists — the grep hit only Domain-Review prose).
+
+### Key Improvements (all verdicts CONFIRMED against the codebase)
+
+1. **CI freshness gate has a closer precedent than first drafted** — `.github/workflows/ci.yml` `lockfile-sync` job (lines ~155-195) is a "regenerate + `git diff --exit-code`" gate. The C4 freshness gate should mirror it directly: a small standalone step that regenerates into the tree (or temp) and `git diff --exit-code model.likec4.json`, OR the `.test.sh` form below. Both are now documented; the `.test.sh` form is chosen as primary because it auto-discovers in the `scripts` group and keeps the byte-diff logic testable.
+2. **Test-file convention pinned:** `plugins/soleur/test/c4-model-freshness.test.sh`, `source test-helpers.sh`, end with `print_results` — auto-discovered by the `scripts` group glob in `scripts/test-all.sh`; **no `ci.yml` job wiring needed beyond the `likec4@1.50.0` install step.** (Do NOT put it under `apps/web-platform/test/` — those are vitest, run in the webplat shard, which has no likec4 CLI.)
+3. **lefthook stage pattern:** use explicit `git add` (the `generate-kb-index` precedent at `lefthook.yml:231-234`), NOT `stage_fixed: true` — `stage_fixed` re-stages a file the command *modified in place* among `{staged_files}`; our regen produces the artifact at a fixed known path, so `&& git add <path>` is the exact-match precedent.
+4. **SKILL.md `@latest` defect confirmed** at `plugins/soleur/skills/architecture/SKILL.md:268` and `:270`; pin `1.50.0` is at `apps/web-platform/Dockerfile:64` (`@likec4/core`/`@likec4/diagram` `1.50.0` in package.json). Phase 3 fixes both SKILL lines.
+5. **`model.likec4.json` top-level `.elements` is an object with 43 keys** — the `jq -e '(.elements | length) > 0'` validation predicate is valid as written.
+6. **No `.c4`→JSON freshness test exists** (the near-miss `c4-likec4-version-pin.test.ts` only checks CLI↔client version parity, not source↔compiled freshness) — confirming the gap this plan closes.
+
+### New Considerations Discovered
+
+- **Render-validate caveat (from `c4-render.ts:12-19`):** `likec4 export json` exits 0 even on unresolved-reference parse failures, writing an empty-elements model. The Phase 1 script's off-tree-render + `(.elements | length) > 0` gate is exactly the runtime server's validate-before-clobber discipline — load-bearing, not optional.
+- **`git diff --exit-code` CI shape** is the single existing freshness-gate precedent in the repo (`lockfile-sync`); `INDEX.md` itself has NO CI drift check (hook-only). This plan is stronger than the INDEX.md precedent because it adds BOTH the hook and the CI gate.
+
 ## Overview
 
 Today the canonical LikeC4 architecture model can drift: an agent or operator edits a
@@ -262,6 +282,24 @@ Wire the job graph: if the freshness test runs inside the existing `test-scripts
 new required check is created (the synthetic `test` aggregator already needs
 `test-scripts`). Do NOT add a standalone required check (avoids branch-protection ruleset
 coordination).
+
+### Research Insights (Phase 2)
+
+- **Convention confirmed:** a `plugins/soleur/test/c4-model-freshness.test.sh` that
+  `source`s `test-helpers.sh` and ends with `print_results` is **auto-discovered** by the
+  `scripts` group glob in `scripts/test-all.sh` — so the ONLY `ci.yml` edit needed is the
+  `npm install -g likec4@1.50.0` step in the `test-scripts` job (no new job, no new
+  required check). The gitleaks install in that same job (`curl` + `sha256sum` verify +
+  `sudo mv`, `ci.yml` ~lines 352-361) is the precedent for installing a CLI in that bare
+  shard.
+- **Closest CI freshness precedent** is the `lockfile-sync` job (`ci.yml` ~155-195):
+  regenerate, then `if ! git diff --exit-code <file>; then echo "::error::..."; exit 1; fi`.
+  The `.test.sh` form is equivalent but testable + group-discovered; either is acceptable
+  — the test author picks one and states which in the PR body.
+- **Validate before diff:** the test must render off-tree and assert
+  `(.elements | length) > 0` before the byte-diff, otherwise a broken `.c4` produces an
+  empty model whose diff against the (good) committed file would mis-report as "drift" with
+  a confusing diff rather than "broken source." (From `c4-render.ts:12-19`.)
 
 ### Phase 3 — `architecture` SKILL.md fix + mandate
 
