@@ -279,13 +279,16 @@ logs:
          t520508_soleur_inngest_vector_prd_3_logs
   retention: 3 days (Better Stack free tier)
 discoverability_test:
-  command: |
-    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh
-      --since 24h --grep inngest-rearm-reminders --grep infra-config-apply --limit 20
-  expected_output: JSONEachRow rows whose `raw` contains a host-script SYSLOG_IDENTIFIER
-                   tag (e.g. inngest-rearm-reminders / infra-config-apply), proving the
-                   logger -t lines now reach Better Stack. (Post-apply; pre-apply returns
-                   zero rows — that's the bug this fixes.)
+  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 6h --grep source_kind --limit 3
+  expected_output: source_kind
+  note: |
+    This pre-merge-verifiable probe proves the Better Stack query path (the
+    betterstack-query.sh ClickHouse tooling + the soleur-inngest-vector-prd
+    source) is reachable and returns journald rows — runnable now without SSH.
+    Single-line on purpose (a multi-line YAML block scalar splits under
+    `bash -c`). The host-script-tag-specific assertion (`--grep inngest-inventory`
+    etc. returning >=1 row) is the POST-APPLY semantic check in AC9 — pre-apply
+    it returns zero rows, which is the bug this PR fixes.
 ```
 
 ## Architecture Decision (ADR/C4)
