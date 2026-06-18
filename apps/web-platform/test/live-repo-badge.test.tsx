@@ -124,9 +124,10 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     // The regain poll (Focus #1) must have COMMITTED before the re-revoke fires.
     // The body-settle flag used previously (`regainCommitted`, flipped in the
     // team payload's `.finally()`) is too early — it precedes the hook's
-    // `setData(team)` continuation (use-active-repo.ts:59-62, a strictly later
-    // microtask), so it proves the fetch body settled, NOT that the `false`
-    // state rendered. Gate instead on the fetch-mock call count reaching 2:
+    // `setData(next)` continuation (the `poll` callback in use-active-repo.ts,
+    // a strictly later microtask), so it proves the fetch body settled, NOT that
+    // the `false` state rendered. Gate instead on the fetch-mock call count
+    // reaching 2:
     // call 2 IS the regain fetch, so its dispatch is strictly downstream of the
     // body-settle and proves the regain `poll()` ran. The component renders
     // `null` in the regain state (interstitial-only), so there is no positive
@@ -162,6 +163,10 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
         ).toBeInTheDocument(),
       { timeout: 10_000 }, // #5113 — see first vi.waitFor in this file
     );
+    // The re-surfaced interstitial was caused by the re-revoke poll (call 3),
+    // not a lingering mount-state render: distinguishes "re-armed via a fresh
+    // false→true transition" from any path that reappears without a third poll.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("dismissing the interstitial hides it", async () => {
