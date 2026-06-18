@@ -363,7 +363,7 @@ echo "=== #5499 host-script source assertions ==="
 # line before the next top-level [section]). Used by the AC1/AC2/AC3 checks below.
 HOST_SCRIPTS_BLOCK=$(awk '
   $0 ~ /^\[sources\.host_scripts_journald\]/ { in_block=1; print; next }
-  in_block && /^\[/ { in_block=0 }
+  in_block && (/^\[/ || /^#/ || /^[[:space:]]*$/) { in_block=0 }
   in_block { print }
 ' "$VECTOR_TOML")
 
@@ -391,7 +391,10 @@ fi
 INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
 EXPECTED_TAGS=$(
   for f in "$INFRA_DIR"/*.sh; do
-    grep -q 'logger -t' "$f" || continue
+    # Match a real `logger -t` invocation (line-start or piped), NOT a comment
+    # mention (e.g. ci-deploy.sh has a `# … logger -t …` doc comment) — a
+    # stdout-only script that merely documents logger -t must not be pulled in.
+    grep -qE '(^|\|)[[:space:]]*logger -t' "$f" || continue
     grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
   done | sort -u
 )
