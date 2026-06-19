@@ -97,6 +97,46 @@ describe("reportRepoResolverDivergence — fingerprint-deduped breadcrumb (ADR-0
     expect(ctx.extra).not.toHaveProperty("installationId");
   });
 
+  // AC9 — the corrupt-worktree op (2026-06-19) carries `extra.recovered` so a
+  // self-healed re-clone (true) is triageable apart from an unrecovered
+  // honest-block (false); both shapes are safe (no repoUrl/installationId).
+  it("corrupt-worktree-at-dispatch carries extra.recovered (recovered branch)", () => {
+    reportRepoResolverDivergence({
+      userId: "user-1",
+      op: "corrupt-worktree-at-dispatch",
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "team-x",
+      recovered: true,
+    });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.op).toBe("corrupt-worktree-at-dispatch");
+    expect(ctx.feature).toBe("repo-resolver-divergence");
+    expect(ctx.extra).toMatchObject({ recovered: true });
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("corrupt-worktree-at-dispatch recovered=true vs recovered=false are NOT collapsed by the dedupe fingerprint", () => {
+    const base = {
+      userId: "user-1",
+      op: "corrupt-worktree-at-dispatch" as const,
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "team-x",
+    };
+    reportRepoResolverDivergence({ ...base, recovered: true });
+    reportRepoResolverDivergence({ ...base, recovered: false });
+    // Distinct `recovered` → distinct fingerprint → two emits (a self-heal
+    // breadcrumb AND a later unrecovered page on the same workspace both surface).
+    expect(reportSilentFallback).toHaveBeenCalledTimes(2);
+    const recovereds = (reportSilentFallback as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[1].extra.recovered,
+    );
+    expect(recovereds).toContain(true);
+    expect(recovereds).toContain(false);
+  });
+
   it("a DIFFERENT claim for the same user fires a new breadcrumb (not over-deduped on op alone)", () => {
     reportRepoResolverDivergence({
       userId: "user-1",

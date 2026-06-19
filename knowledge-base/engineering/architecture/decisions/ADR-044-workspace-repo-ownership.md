@@ -711,3 +711,89 @@ sessions"` edge (block-vs-spawn), not the topology. Grep of
 Behavioral correction shipped in the same PR (no soak gate; not a destructive
 migration; no schema change — the credential RPC is unmodified and no new
 migration is added).
+
+## Amendment 2026-06-19 — dispatch readiness is on-disk worktree VALIDITY (not mere `.git` presence)
+
+**Lineage:** extends the 2026-06-18 *"dispatch readiness must be (repo_status-ok
+AND physical `.git` present)"* consequence (the Bug-2 graft) and its
+2026-06-18 *"distinguish membership-deny NULL install from not-connected"*
+sibling. Same dispatch-readiness theme, tightening the final clause from
+*"physical `.git` present"* to *"**valid** git work tree"*.
+
+**Defect (third distinct gap).** A cold Concierge dispatch into a
+FULLY-connected workspace (install NON-null, `repoUrl` present, `repo_status`
+`ready`) whose on-disk `<ws>/.git` EXISTS but is **not a valid work tree**
+(a partial/interrupted clone, or a leftover from a failed atomic-rename) was
+fast-pathed by the presence-only `existsSync(<ws>/.git)` gate at three sites
+(`cc-dispatcher.ts` `needsSelfHeal`, the `gitDirExists` self-heal seam, and
+`ensure-workspace-repo.ts`'s `.git`-present early-return). Self-heal was skipped
+entirely, no clone was attempted, no error was set, **no Sentry signal** was
+emitted, and the agent spawned into a corrupt repo — `/soleur:go` Step 0.0's
+`git rev-parse --is-inside-work-tree` then reported "no git repository". Verified
+live: operator `52af49c2…`, active workspace `754ee124…`, both connected,
+`repo_error` null, zero divergence/self-heal Sentry events in 24h. Distinct from
+both prior 2026-06-18 fixes (install resolves NON-null; `.git` is NOT cleanly
+absent).
+
+**Decision (decided here).** Dispatch readiness = `repo_status`-ok **AND on-disk
+worktree VALIDITY**. The gate keys on a SYNCHRONOUS structural validity proxy
+(`isValidGitWorkTree`: `.git` is a FILE gitdir pointer → valid; or a directory
+with both `HEAD` and `objects` → valid; else invalid) — deliberately WEAKER than
+`git rev-parse --is-inside-work-tree` but cheap enough to keep the AC7 zero-await
+hot path (a valid `.git` touches no DB/JWT). A corrupt `.git` routes to a
+corrupt-worktree graft that:
+
+- removes the corrupt `.git` **only on a POSITIVE empty-corrupt fingerprint**
+  (`isEmptyCorruptGitDir`: `.git` is a directory AND `HEAD` ENOENT AND `objects`
+  ENOENT — no objects ⇒ no commits to lose), **never** on the negation of the
+  validity probe (an EACCES/EIO blip or a `.git` FILE must not be destroyed);
+- runs the rm+reclone **serialized under `withWorkspacePermissionLock`** (the rm
+  is a second `.git` writer the graft sentinel never guarded);
+- on a populated-but-broken / EACCES / gitdir-FILE `.git`, **honest-blocks**
+  (never destroys) rather than removing;
+- emits a new `repo_resolver_divergence` op `corrupt-worktree-at-dispatch`
+  carrying `extra.recovered` (true = self-healed re-clone; false = unrecovered
+  honest-block), routed through the existing feature-only paging alert (NO
+  Terraform change);
+- on recovery FAILURE performs **ZERO `workspaces` writes** (no `setRepoStatus`)
+  — a removed/transient MEMBER dispatching into a corrupt TEAM workspace must not
+  flip its `repo_status` to `error` for the Owners (the same hazard the
+  membership-deny-NULL amendment's `failConnectionUnresolved` avoids).
+
+A Start-Fresh `git init` tree (HEAD+objects, no origin) is VALID → preserved,
+never re-cloned. `/soleur:go` Step 0.0 still runs the authoritative `rev-parse`.
+
+### Considered Options (amendment)
+
+- *Invert the single `gitDirExists` seam to "valid" everywhere* — **REJECTED**:
+  the null-install divergence gates require TRUE ABSENCE; inverting them would
+  mis-route a corrupt-`.git` + null-install workspace to
+  `connected-null-install-at-dispatch` (wrong op, no removal). The presence seam
+  is kept for those gates; validity is a SEPARATE seam.
+- *Trigger the rm on the negation of the validity probe* — **REJECTED**:
+  `existsSync`/`stat` collapse ENOENT with EACCES/EIO, so a transient unreadable
+  populated `.git` (or a gitdir-FILE worktree) would be destroyed, losing
+  un-pushed commits. The rm is authorized ONLY by the positive empty-corrupt
+  fingerprint.
+- *Run `git rev-parse` on the hot path for full validity* — **REJECTED**: adds a
+  subprocess to the common valid-`.git` dispatch (AC7 regression). The structural
+  proxy is the hot-path gate; `rev-parse` is reserved as an off-hot-path recovery
+  discriminator. Residual: a fully-populated-but-internally-broken `.git` that
+  passes the structural proxy is not auto-recovered (rare; honest Step-0.0 error
+  + operator reconnect).
+
+### C4 edge note
+
+**No `.c4` model edit.** Same enumeration as the 2026-06-18 amendments: GitHub is
+the `github` `#external` system (clone source); the affected member is a
+workspace Owner already covered by the multi-Owner `founder` actor; the
+`/workspaces` volume and `workspaces.repo_status`/`repo_error` are below the
+`supabase`-element granularity. The corrupt-worktree path tightens the on-disk
+validity semantics of an already-modeled dispatch edge (block-vs-spawn-vs-reclone)
+and adds no actor, system, store, or access relationship. Grep of
+`knowledge-base/**/*.c4` for the relevant identifiers is empty. **No C4 impact.**
+
+### Sequencing
+
+Single atomic PR — TS-only, no migration, no Terraform change (the feature-only
+Sentry alert auto-covers the new op). Behavioral correction; no soak gate.

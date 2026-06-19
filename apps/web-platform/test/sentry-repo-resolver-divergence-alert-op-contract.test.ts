@@ -33,7 +33,13 @@ const OPS = [
   "non-member-claim-reset",
   "self-heal-failed",
   "connected-null-install-at-dispatch",
+  "corrupt-worktree-at-dispatch",
 ];
+
+// F8 reverse guard: any op that is NOT expected to route through the feature-only
+// paging alert must be listed here WITH a justification. Empty by design — every
+// divergence op is operator-actionable and SHOULD page.
+const EXCLUDED: string[] = [];
 
 /** Extract the body of the repo_resolver_divergence resource block. */
 function divergenceAlertBlock(): string {
@@ -64,6 +70,21 @@ describe("repo-resolver-divergence alert feature contract", () => {
 
   it("every RepoResolverDivergenceOp member is declared in the emitter union", () => {
     for (const op of OPS) expect(emitter).toContain(op);
+  });
+
+  it("F8 reverse guard: every op in the emitter's union is covered by OPS ∪ EXCLUDED (a new op cannot be silently dropped)", () => {
+    // Parse the union members from the source: lines of the shape `| "op-name"`.
+    const unionMembers = Array.from(
+      emitter.matchAll(/^\s*\|\s*"([a-z0-9-]+)"/gm),
+    ).map((m) => m[1]);
+    expect(unionMembers.length).toBeGreaterThanOrEqual(OPS.length);
+    const covered = new Set([...OPS, ...EXCLUDED]);
+    for (const op of unionMembers) {
+      expect(
+        covered.has(op),
+        `union op "${op}" is neither in OPS (alert-covered) nor EXCLUDED (justified non-paging) — add it`,
+      ).toBe(true);
+    }
   });
 
   it("AC6: the alert is feature-only — no op-scoped filter can dark a new op", () => {
