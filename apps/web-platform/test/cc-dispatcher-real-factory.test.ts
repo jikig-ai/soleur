@@ -69,9 +69,7 @@ const {
   // Hoisted to a named spy (was an inline anonymous vi.fn) so the
   // installation-id the clone receives is inspectable — the load-bearing
   // assertion for the clone-consumes-self-healed-install fix.
-  mockEnsureWorkspaceRepoCloned: vi.fn(
-    async (): Promise<"ok" | "failed"> => "ok",
-  ),
+  mockEnsureWorkspaceRepoCloned: vi.fn(async () => undefined),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -201,10 +199,6 @@ vi.mock("@/server/observability", () => ({
   // These dispatcher tests do not exercise the debounce TTL, so
   // the stub forwards every call straight through to the spy.
   mirrorWithDebounce: mockReportSilentFallback,
-  mirrorP0Deduped: vi.fn(),
-  // Deterministic PII-safe hash stub — the checkout gate's breadcrumb hashes
-  // userId via this (matching the dispatch-catch convention).
-  hashUserId: (id: string) => `hash-${id}`,
   __resetMirrorDebounceForTests: vi.fn(),
   MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
@@ -1215,50 +1209,6 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         repoStatus: "not_connected",
         repoError: null,
       });
-      await realSdkQueryFactory(makeArgs());
-      expect(mockQuery).toHaveBeenCalledOnce();
-    });
-
-    // Routine-authoring strand fix — the post-clone checkout gate. A `ready`
-    // status flows PAST the status gate into the self-heal clone, which
-    // GENUINELY fails for a CONNECTED repo (token 403 / network / timeout) and
-    // leaves the workspace `.git`-less — the exact NOT_GIT state that stranded
-    // the routine-authoring agent reconstructing the repo over `gh api`
-    // ("Agent stopped responding after: Querying GitHub"). The factory must
-    // honest-block, NOT spawn the agent into the empty tree.
-    it("checkout gate: connected repo + clone 'failed' → honest-block (RepoNotReadyError code=error, NO errorCode, checkout-missing copy) and NO agent spawn", async () => {
-      const { RepoNotReadyError, REPO_CHECKOUT_MISSING_MSG } = await import(
-        "@/server/repo-readiness"
-      );
-      mockResolveInstallationId.mockResolvedValueOnce(130018654);
-      mockGetCurrentRepoUrl.mockResolvedValueOnce(
-        "https://github.com/jikig-ai/soleur",
-      );
-      mockEnsureWorkspaceRepoCloned.mockResolvedValueOnce("failed");
-
-      let err: unknown;
-      try {
-        await realSdkQueryFactory(makeArgs());
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(RepoNotReadyError);
-      const checkoutErr = err as InstanceType<typeof RepoNotReadyError>;
-      expect(checkoutErr.code).toBe("error");
-      // Retry-first copy → NO errorCode (not a hard reconnect CTA).
-      expect(checkoutErr.errorCode).toBeUndefined();
-      expect(checkoutErr.message).toBe(REPO_CHECKOUT_MISSING_MSG);
-      // Load-bearing: the agent is NEVER spawned against the `.git`-less tree, so
-      // the `gh api` strand cannot happen.
-      expect(mockQuery).not.toHaveBeenCalled();
-    });
-
-    it("checkout gate: connected repo + clone 'ok' → dispatch proceeds UNCHANGED (no false block)", async () => {
-      mockResolveInstallationId.mockResolvedValueOnce(130018654);
-      mockGetCurrentRepoUrl.mockResolvedValueOnce(
-        "https://github.com/jikig-ai/soleur",
-      );
-      mockEnsureWorkspaceRepoCloned.mockResolvedValueOnce("ok");
       await realSdkQueryFactory(makeArgs());
       expect(mockQuery).toHaveBeenCalledOnce();
     });

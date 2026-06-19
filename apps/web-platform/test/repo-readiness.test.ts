@@ -3,7 +3,6 @@ import {
   evaluateRepoReadiness,
   RepoNotReadyError,
   REPO_CLONING_MSG,
-  REPO_CHECKOUT_MISSING_MSG,
   repoErrorMsg,
 } from "@/server/repo-readiness";
 
@@ -96,21 +95,5 @@ describe("repoErrorMsg", () => {
     expect(repoErrorMsg("disk full")).toBe(
       "Repository setup failed: disk full. Reconnect in Settings → Repository.",
     );
-  });
-});
-
-describe("REPO_CHECKOUT_MISSING_MSG", () => {
-  it("is retry-first with a reconnect fallback, and leaks no internal detail", () => {
-    expect(REPO_CHECKOUT_MISSING_MSG).toContain("try again in a moment");
-    expect(REPO_CHECKOUT_MISSING_MSG).toContain(
-      "reconnect in Settings → Repository",
-    );
-    // No internal enum / path / tool name leaks to the user.
-    expect(REPO_CHECKOUT_MISSING_MSG).not.toMatch(/\.git|gh api|workspace|null/);
-    // Future-proof against a later "helpful" edit that interpolates context:
-    // no absolute fs paths, no GitHub tokens, no raw id digit-runs.
-    expect(REPO_CHECKOUT_MISSING_MSG).not.toMatch(/\/(home|tmp|root|Users)\//);
-    expect(REPO_CHECKOUT_MISSING_MSG).not.toMatch(/gh[pousr]_/);
-    expect(REPO_CHECKOUT_MISSING_MSG).not.toMatch(/\d{5,}/);
   });
 });
