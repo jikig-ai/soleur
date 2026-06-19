@@ -29,19 +29,26 @@ Lane: single-domain · Domain: engineering · Threshold: single-user incident
 
 ## Phase 4 — Teardown FK-cascade parity + fail-loud
 
-- [ ] 4.1 Expand `tenant-isolation-teardown.ts` `anonymiseSequence` to FK-RESTRICT parity with `account-delete.ts` (order from 0.3), correct per-RPC args (`p_founder_id` / `p_departing_user` / `p_user_id`).
-- [ ] 4.2 Per-RPC fatality class: `restrict` → throw after loop / before `deleteUser`; `set-null`/`graceful` + missing-function (PGRST202/42883) → warn-and-continue (documented per `cq-silent-fallback-must-mirror-to-sentry`).
+- [ ] 4.1 Expand `tenant-isolation-teardown.ts` `anonymiseSequence` to FK-RESTRICT parity with `account-delete.ts` (order from 0.3), correct per-RPC args (`p_founder_id` for `anonymise_audit_github_token_use`, `p_departing_user` for `anonymise_departed_user_across_workspaces`, `p_user_id` otherwise).
+- [ ] 4.2 Per-RPC fatality class: RESTRICT → throw after loop / before `deleteUser`; SET-NULL → warn-and-continue (documented per `cq-silent-fallback-must-mirror-to-sentry`). **`PGRST202`/`42883` on a RESTRICT-class RPC = FATAL** (arg-name typo guard); graceful-degrade-on-missing-function scoped ONLY to `anonymise_workspace_invitations` (mirrors account-delete's documented branch).
 - [ ] 4.3 Keep `deleteUser` throw-on-non-"not found"; retry wrapper now only for transient.
 
 ## Phase 5 — Drift guard test
 
-- [ ] 5.1 Create `test/server/teardown-anonymise-parity.test.ts`: source-grep both files; assert teardown RESTRICT-class set ⊇ account-delete RESTRICT-class set. Runs in default ci.yml.
+- [ ] 5.1 Create `test/server/teardown-anonymise-parity.test.ts`: source-grep both files; assert teardown RESTRICT-class set ⊇ account-delete RESTRICT-class set. Derive each RPC's fatality class from the FK-defining migration (`grep REFERENCES.*users + ON DELETE` in supabase/migrations/), not a hand-labeled list. Runs in default ci.yml.
 
 ## Phase 6 — Verify
 
 - [ ] 6.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 - [ ] 6.2 `./node_modules/.bin/vitest run test/server/teardown-anonymise-parity.test.ts test/helpers/gotrue-retry.test.ts` + touched mock consumers.
 - [ ] 6.3 Push; confirm `tenant-integration.yml` green on PR (`gh run list --workflow=tenant-integration.yml`), zero deleteUser retry warnings.
+
+## Phase 7 — Dormant same-class fixes (P1 scope gap from deepen review)
+
+- [ ] 7.1 `test/conversations-rail-cross-tenant.integration.test.ts:124-125` — `users.update({repo_url})` → `workspaces` UPDATE (or remove if only deny is asserted). Gate: `SUPABASE_DEV_INTEGRATION`.
+- [ ] 7.2 `test/dsar-export-cross-tenant.integration.test.ts:98-101` — drop `workspace_path` from the `users` upsert (column gone; trigger pre-creates the row). Gate: `SUPABASE_DEV_INTEGRATION`.
+- [ ] 7.3 `test/mu1-integration.test.ts:161-162,:215` — `select("workspace_path")` + AC2 gating → read from `workspaces`/RPC. Gate: `MU1_INTEGRATION`.
+- [ ] 7.4 Confirm AC1 full-tree grep returns 0 after Phase 7 (exclude comment-only `ws-handler-cc-pdf-breadcrumb.test.ts:37-38`).
 
 ## Follow-up (file as issue)
 

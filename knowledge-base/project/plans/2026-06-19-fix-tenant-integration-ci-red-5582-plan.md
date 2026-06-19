@@ -13,6 +13,30 @@ requires_cpo_signoff: true
 
 # 🐛 fix(ci): Tenant integration (dev-Supabase) red on main — users-table `42703` + GoTrue `deleteUser` 500s
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-19
+**Sections enhanced:** Overview premise, AC scope, Files to Edit, Implementation Phase 4, Sharp Edges.
+**Verification passes:** verify-the-negative (10/10 load-bearing premises CONFIRMED against source via grep), precedent-diff (account-delete.ts cascade), architecture-strategist review.
+
+### Key improvements from deepen pass
+1. **P1 scope gap closed.** Three additional dropped-column-bug files outside `test/server/` (`conversations-rail-cross-tenant.integration.test.ts`, `dsar-export-cross-tenant.integration.test.ts`, `mu1-integration.test.ts`) — gated behind `SUPABASE_DEV_INTEGRATION`/`MU1_INTEGRATION`, so **dormant** w.r.t. the current red `tenant-integration.yml` signal, but they make a broad AC1 grep unsatisfiable and carry the same latent `42703` drift. Folded into scope (Phase 7) + AC1 scope clarified.
+2. **AC7/Phase 4.2 tightened.** A `PGRST202`/`42883` on a **RESTRICT-class** RPC is now **fatal** (it almost always means an arg-name typo — `p_founder_id`/`p_departing_user` vs `p_user_id` — which `withGoTrueRetry` would otherwise mask as a transient deleteUser 500). Genuinely-absent-on-dev functions stay graceful only for the documented graceful-degrade RPC (`anonymise_workspace_invitations`).
+3. **AC8 fatality-class derivation.** The drift guard derives each RPC's RESTRICT-vs-SET-NULL fatality class from the **FK-defining migration**, not the plan's hand-labeled snapshot.
+4. **Synthetic-email literal corrected** from `*@example.test` to the real teardown boundary pattern `tenant-isolation-<16hex>@soleur.test` (`tenant-isolation-teardown.ts:13-14`).
+5. **Drift-guard design decision recorded:** keep the source-grep parity test (AC8); do NOT import a canonical RPC list from `server/account-delete.ts` into the test helper (account-delete's anonymise calls are interleaved with control flow — no clean array exists; a `test/→server/` import would over-couple and breach the test-only boundary).
+
+### Verified facts (deepen pass, all CONFIRMED)
+- `workspaces.github_installation_id` REVOKE'd from `authenticated`, absent from re-GRANT (`079:88-91`) → tenant `select` yields `42501`, not RLS deny. `repo_url`/`repo_status` ARE re-GRANTed (`079:89-91`).
+- `resolve_workspace_installation_id` membership-checked DEFINER, returns NULL on deny, `GRANT EXECUTE TO authenticated` (`079:103-127`).
+- `conversations.repo_url` exists (`029:19`), NOT dropped by mig 112.
+- `users.email`/`users.role` survive mig 112 (`001:8`, `054`).
+- `handle_new_user` INSERTs `workspaces(id=NEW.id) ON CONFLICT DO NOTHING` (`112:77-79`) → seeds UPDATE, not INSERT.
+- `account-delete.ts` arg divergence: `anonymise_audit_github_token_use{p_founder_id}` (`:434`), `anonymise_departed_user_across_workspaces{p_departing_user}` (`:563`); all others `p_user_id`.
+- Teardown has exactly 8 RPCs, missing `anonymise_email_triage_items` (`tenant-isolation-teardown.ts:68-75`).
+- `anonymise_email_triage_items` (`account-delete.ts:925`, step 3.97) precedes `auth.admin.deleteUser` (`:1040`, step 4) — the precedent the teardown mirrors.
+- anonymise RPCs are idempotent `UPDATE…WHERE` returning `{data:0,error:null}` on no-op (e.g. `anonymise_email_triage_items` mig 102:406-412) → fail-loud is SAFE for empty synthetic users.
+
 ## Overview
 
 The **Tenant integration (dev-Supabase)** workflow (`.github/workflows/tenant-integration.yml`) has been red on `main` since ~2026-06-17 22:38 UTC. It is **not a required check** (path-filtered, by design — the path filter is load-bearing to avoid burning dev-Supabase rate budget on ~95% of PRs), so PRs keep auto-merging while the cross-tenant isolation guarantee goes **unverified in CI**.
@@ -45,20 +69,22 @@ There are **two independent root causes**, both confirmed against the codebase (
 
 **If this leaks, the user's data is exposed via:** a future cross-tenant RLS regression merging unnoticed because the only live verification (`tenant-integration.yml`) was red/ignored — Founder A reading Founder B's `repo_url`, `github_installation_id` (a connection credential), KB workspace path, or statutory email-triage items.
 
+(Synthetic users are the teardown's boundary-guarded pattern `tenant-isolation-<16hex>@soleur.test`, `tenant-isolation-teardown.ts:13-14` — NOT `@example.test`.)
+
 **Brand-survival threshold:** single-user incident — the suites are the live safety net for tenant isolation; their blast radius on regression is a single-founder trust breach. (CPO sign-off required at plan time; `user-impact-reviewer` invoked at review-time per review/SKILL.md.)
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — no dropped `users` columns referenced anywhere in tests/helpers.** `git grep -nE "from\\(\"users\"\\)" -- 'apps/web-platform/test/**/*.ts'` cross-checked: zero `.select`/`.update`/`.eq`/`.in`/`.match` referencing `workspace_path`, `repo_url`, or `github_installation_id` **on the `users` table** (multiline-aware: `rg -nU 'from\("users"\)[\s\S]{0,400}?(workspace_path|repo_url|github_installation_id)' apps/web-platform/test`). Returns 0. (`conversations.repo_url` and `workspaces.repo_url` are explicitly allowed.)
+- [ ] **AC1 — no dropped `users` columns referenced in any in-scope test/helper.** Multiline-aware sweep `rg -nU 'from\("users"\)[\s\S]{0,400}?(workspace_path|repo_url|github_installation_id)' apps/web-platform/test` returns **0** across the FULL `apps/web-platform/test` tree (this fix folds in the 3 dormant `test/*.integration.test.ts` files per Phase 7, so the grep is satisfiable at full scope — not narrowed to `test/server/`). `conversations.repo_url` and `workspaces.repo_url` are explicitly allowed (they are on different tables). Note: `test/ws-handler-cc-pdf-breadcrumb.test.ts:37-38` only *comments* the word `workspace_path` (a mock-doc note, no `.from("users")` read) — exclude comment-only matches.
 - [ ] **AC2 — Class-1 users-RLS guards still assert on `users`.** `current-repo-url.tenant-isolation.test.ts` and `kb-route-helpers.tenant-isolation.test.ts` keep a SELECT on `users` against `userB.id` and assert deny, retargeted to a surviving column (`email` or `role`). Each suite **preserves its existing deny shape** (current-repo-url: `error===null && data===null` via `maybeSingle`; kb-route-helpers: `error.code==='PGRST116'` via `single`). Grep proof: both files still contain `.from("users")` in the deny test.
 - [ ] **AC3 — `github_installation_id` deny via RPC, not column SELECT.** Any test that previously asserted a tenant deny on `github_installation_id` now calls `aClient.rpc("resolve_workspace_installation_id", { p_workspace_id: userB.id })` and asserts the result is `null` (membership deny == not-connected by design); the baseline calls it for the user's own workspace and asserts the seeded value. No test does `select("github_installation_id")` against `workspaces` with a tenant client.
 - [ ] **AC4 — Class-2 repo-state seeds `UPDATE` the auto-created `workspaces` row.** Seeds use `service.from("workspaces").update({...}).eq("id", user.id)` (the mig-053 `handle_new_user` trigger pre-creates `workspaces(id = users.id)`; `INSERT` would PK-collide). Verified: each Class-2 suite's `beforeAll` no longer writes the dropped `users` columns.
 - [ ] **AC5 — Class-3 suites untouched except the broken seed.** `conversations-tools.tenant-isolation.test.ts` and `conversation-visibility.tenant-isolation.test.ts` retain their `conversations.repo_url` reads/inserts; only the broken `service.from("users").update({ repo_url })` seed in `conversation-visibility` (~`:80-83`) is removed.
 - [ ] **AC6 — teardown `anonymiseSequence` reaches FK-RESTRICT parity with `account-delete.ts`.** The sequence includes every `RESTRICT`-FK anonymise RPC production calls, with **correct per-RPC arg names** (`anonymise_audit_github_token_use` → `{ p_founder_id }`, `anonymise_departed_user_across_workspaces` → `{ p_departing_user }`, all others `{ p_user_id }`). Verify via a parity test (AC8).
-- [ ] **AC7 — RESTRICT-class anonymise failures fail loudly.** Teardown promotes a non-tolerable error from a RESTRICT-class anonymise RPC to a thrown error (so a future regression is a red test), while SET-NULL-class (`anonymise_audit_github_token_use`, `anonymise_workspace_activity`) and graceful-degrade (`anonymise_workspace_invitations`, "function does not exist") stay warn-and-continue. A `PGRST202`/`42883` (missing function) on a RESTRICT-class RPC is treated per the graceful-degrade rule (dev may lack a mid-flight migration) — documented inline.
-- [ ] **AC8 — drift guard.** A unit/source test (`test/server/teardown-anonymise-parity.test.ts` or extend an existing components/source test) asserts the teardown's RESTRICT-class RPC set ⊇ the set of `anonymise_*` RPCs invoked in `account-delete.ts` for RESTRICT FKs (greps both files), so the 8-vs-23 gap cannot silently reopen on the next `anonymise_*` migration. Runs in the default `ci.yml` (no dev Supabase needed — it's a source grep).
+- [ ] **AC7 — RESTRICT-class anonymise failures fail loudly; arg-typo is fatal.** Teardown promotes a non-tolerable error from a RESTRICT-class anonymise RPC to a **thrown** error (so a future regression is a red test), while SET-NULL-class (`anonymise_audit_github_token_use`, `anonymise_workspace_activity`) stays warn-and-continue. **`PGRST202`/`42883` on a RESTRICT-class RPC is FATAL** (it almost always means an arg-name typo — `p_founder_id`/`p_departing_user` vs `p_user_id` — which `withGoTrueRetry`'s `TRANSIENT_DELETE_RE` would otherwise mask as a transient deleteUser 500, `gotrue-retry.ts:36`). The graceful-degrade-on-missing-function exception is scoped to the ONE production-documented case (`anonymise_workspace_invitations`, mirroring `account-delete.ts`'s explicit branch) — NOT a blanket policy.
+- [ ] **AC8 — drift guard with derived fatality class.** A source test (`test/server/teardown-anonymise-parity.test.ts` or an extended components/source test) asserts the teardown's RESTRICT-class RPC set ⊇ the set of `anonymise_*` RPCs `account-delete.ts` calls behind a RESTRICT FK. The RESTRICT-vs-SET-NULL **fatality class for each RPC is derived from the FK-defining migration** (`grep "REFERENCES.*users" + ON DELETE` in `supabase/migrations/`), NOT from a hand-labeled list — so a mislabel cannot codify a wrong fatality. Runs in default `ci.yml` (pure source/migration grep, no dev Supabase).
 - [ ] **AC9 — `tsc` + default test suite green.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; `./node_modules/.bin/vitest run test/server/teardown-anonymise-parity.test.ts` (and the gotrue-retry unit test) pass.
 
 ### Post-merge (operator / CI)
@@ -114,7 +140,16 @@ File: `test/helpers/tenant-isolation-teardown.ts`.
 
 ### Phase 5 — Drift guard test
 
-5.1. Add `test/server/teardown-anonymise-parity.test.ts` (or extend an existing source-grep test): read both `tenant-isolation-teardown.ts` and `account-delete.ts`, grep `anonymise_*` invocations, and assert the teardown's RESTRICT-class set ⊇ account-delete's RESTRICT-class set. Pure source grep — runs in default CI, no dev Supabase. This makes the 8-vs-23 reopening a red test.
+5.1. Add `test/server/teardown-anonymise-parity.test.ts` (or extend an existing source-grep test): read both `tenant-isolation-teardown.ts` and `account-delete.ts`, grep `anonymise_*` invocations, and assert the teardown's RESTRICT-class set ⊇ account-delete's RESTRICT-class set. Derive each RPC's fatality class (RESTRICT vs SET NULL) from the FK-defining migration (`grep -E "REFERENCES.*\busers\b" + ON DELETE` in `supabase/migrations/`), not a hand-labeled constant. Pure source/migration grep — runs in default CI, no dev Supabase. This makes the 8-vs-23 reopening a red test.
+
+### Phase 7 — Dormant same-class fixes (P1 scope gap from deepen review)
+
+Three `apps/web-platform/test/*.integration.test.ts` files carry the identical dropped-column bug but are gated behind `SUPABASE_DEV_INTEGRATION=1` / `MU1_INTEGRATION=1` (NOT `TENANT_INTEGRATION_TEST`), so they are **not** in the current red `tenant-integration.yml` signal — yet they make AC1's full-tree grep unsatisfiable and carry latent `42703` drift. Fix mechanically (same as Class 2/3):
+
+7.1. `test/conversations-rail-cross-tenant.integration.test.ts:124-125` — `service.from("users").update({ repo_url })` → seed `workspaces.repo_url` via UPDATE on the trigger-created row (`.eq("id", u.id)`), or remove if the test only needs RLS deny.
+7.2. `test/dsar-export-cross-tenant.integration.test.ts:98-101` — `service.from("users").upsert({ ..., workspace_path: "" })` → drop the `workspace_path` field (column gone; the upsert seeds the user row, which the trigger already creates — verify whether the upsert is even needed post-trigger).
+7.3. `test/mu1-integration.test.ts:161-162, :215` — `select("workspace_path")` + `AC2_HAS_REPO_URL`/`AC2_HAS_INSTALL_ID` gating blocks → read from `workspaces` (repo_url/repo_status via tenant select; github_installation_id via `resolve_workspace_installation_id`).
+7.4. Exclude `test/ws-handler-cc-pdf-breadcrumb.test.ts:37-38` — comment-only mention of `workspace_path`, no `users` read; no change.
 
 ### Phase 6 — Verify
 
@@ -138,6 +173,9 @@ File: `test/helpers/tenant-isolation-teardown.ts`.
 - `apps/web-platform/test/helpers/agent-runner-mocks.ts` (Phase 2.3)
 - `apps/web-platform/test/helpers/share-mocks.ts` (Phase 2.3 — verify)
 - `apps/web-platform/test/helpers/mock-supabase.ts` (Phase 2.3 — verify)
+- `apps/web-platform/test/conversations-rail-cross-tenant.integration.test.ts` (Phase 7 — dormant `SUPABASE_DEV_INTEGRATION` gate)
+- `apps/web-platform/test/dsar-export-cross-tenant.integration.test.ts` (Phase 7 — dormant `SUPABASE_DEV_INTEGRATION` gate)
+- `apps/web-platform/test/mu1-integration.test.ts` (Phase 7 — dormant `MU1_INTEGRATION` gate)
 
 ## Files to Create
 
@@ -155,7 +193,7 @@ The issue text reads "SSH/connectivity"-adjacent (the `500` symptom), but the ne
 
 **Domains relevant:** none (single-domain engineering: CI test + test-helper code).
 
-No cross-domain implications — pure test/CI fix. No UI surface (no `components/**`, `app/**/page.tsx`, or `app/**/layout.tsx` in Files to Create/Edit → Product/UX Gate does not fire). No new infrastructure, no vendor, no secret, no migration → Infra-as-Code gate (2.8) skipped. No regulated-data **surface** change (tests read/anonymise synthetic `*@example.test` users only; no new processing activity, schema, auth flow, or API route) → GDPR gate (2.7) skipped. No architectural decision created or changed (the fix *consumes* ADR-044's already-decided users→workspaces relocation; it neither extends nor reverses it) → ADR/C4 gate (2.10) skipped.
+No cross-domain implications — pure test/CI fix. No UI surface (no `components/**`, `app/**/page.tsx`, or `app/**/layout.tsx` in Files to Create/Edit → Product/UX Gate does not fire). No new infrastructure, no vendor, no secret, no migration → Infra-as-Code gate (2.8) skipped. No regulated-data **surface** change (tests read/anonymise synthetic `tenant-isolation-<16hex>@soleur.test` users only; no new processing activity, schema, auth flow, or API route) → GDPR gate (2.7) skipped. No architectural decision created or changed (the fix *consumes* ADR-044's already-decided users→workspaces relocation; it neither extends nor reverses it) → ADR/C4 gate (2.10) skipped.
 
 ## Observability
 
@@ -192,6 +230,8 @@ discoverability_test:
 - **Teardown arg names diverge:** `anonymise_audit_github_token_use(p_founder_id)`, `anonymise_departed_user_across_workspaces(p_departing_user)` — the rest are `p_user_id`. A wrong arg name yields `PGRST202`, which warn-and-continue would swallow, leaving the FK unbroken and the 500 storm invisible. Carry per-RPC arg shapes.
 - **`withGoTrueRetry` masks deterministic FK blocks.** It retries "Database error deleting user" 5×; on a missing-anonymise FK every retry hits the same wall. The root-cause fix (parity) is what removes it — do not "fix" by raising the retry budget.
 - **Authoritative green is `tenant-integration.yml` only.** The default `ci.yml test-webplat` runs without `TENANT_INTEGRATION_TEST=1` and `skipIf`-skips these suites — a green `ci.yml` proves nothing about this fix.
+- **`PGRST202` on a RESTRICT-class RPC is an arg-name typo, not a missing function — make it fatal.** Routing ALL `PGRST202` to graceful-degrade (the naive teardown shape) re-buries exactly the arg-name bug (`p_founder_id`/`p_departing_user` ≠ `p_user_id`) that leaves the FK unbroken and the deleteUser 500 masked by `withGoTrueRetry`. Only `anonymise_workspace_invitations` has a production-documented graceful-degrade branch; scope the exception to it.
+- **Phase 7 files are dormant, not part of the current red signal.** They are gated by `SUPABASE_DEV_INTEGRATION`/`MU1_INTEGRATION`, so fixing them does not change the `tenant-integration.yml` green criterion — but skipping them leaves AC1's full-tree grep red and the latent `42703` drift in place. Fold them in.
 
 ## Alternative Approaches Considered
 
