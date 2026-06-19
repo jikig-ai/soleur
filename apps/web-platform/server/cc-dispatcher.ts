@@ -122,6 +122,7 @@ import {
 import {
   evaluateRepoReadiness,
   RepoNotReadyError,
+  REPO_CHECKOUT_MISSING_MSG,
   type RepoReadiness,
 } from "./repo-readiness";
 // FIX 1a — dispatch self-heal orchestrator. Wraps the PURE evaluateRepoReadiness
@@ -1610,7 +1611,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // this one site is server-authoritative for the whole Concierge surface.
     // `ready`/`not_connected` flow UNCHANGED into the self-heal + reclaim path
     // (AC6: the gate keys on repo_status, never `.git` presence — a ready-but-
-    // .git-gone reclaim never reaches a cloning/error branch). The dispatch
+    // .git-gone reclaim never reaches a cloning/error branch). The ready-but-
+    // .git-gone case (CONNECTED repo, dir present, `.git` absent because the
+    // self-heal clone FAILED) is caught separately by the POST-clone
+    // `cloneOutcome === "failed"` gate right after `ensureWorkspaceRepoCloned`
+    // below — this status gate deliberately stays a pure repo_status predicate.
+    // The dispatch
     // catch (below) routes this to an honest client message and SKIPS the
     // Sentry mirror (an expected transient state, not an incident).
     // #5394 Layer A — ZERO-AWAIT fast path. `ready`/`not_connected` (and any
@@ -1863,12 +1869,49 @@ export const realSdkQueryFactory: QueryFactory = async (
     // wired through). In every non-promotion branch `effectiveInstallationId ===
     // installationId`, so the clone uses exactly the stored install it did before
     // whenever the entitlement gate did not promote — the fix never widens access.
-    await ensureWorkspaceRepoCloned({
+    const cloneOutcome = await ensureWorkspaceRepoCloned({
       userId: args.userId,
       workspacePath,
       installationId: effectiveInstallationId,
       repoUrl,
     });
+
+    // Post-clone checkout gate (routine-authoring strand fix).
+    // `ensureWorkspaceRepoCloned` returns "failed" ONLY when the workspace had a
+    // CONNECTED repo, no `.git`, AND the self-heal clone genuinely threw (token
+    // 403 / network / timeout — already Sentry-mirrored inside it via
+    // `reportSilentFallback`). That leaves the workspace DIR present but `.git`
+    // ABSENT — a state BOTH existing guards miss: the `repo_status` gate above
+    // FAIL-OPENS on `ready`, and the runner's `worktree_enter_failed` keys on
+    // DIR existence (which `ensureWorkspaceDirExists` just guaranteed). So
+    // without this the agent dispatches into an empty tree and, for routine-
+    // authoring (and any repo work), reconstructs the repo over `gh api` and
+    // strands the turn ("Agent stopped responding after: Querying GitHub").
+    // Honest-block instead of silently degrading. Every "ok" outcome — cloned,
+    // `.git` already present, or not-connected/repo-less (#5392) — is UNCHANGED.
+    if (cloneOutcome === "failed") {
+      // Observability layer: a Better Stack log + a Sentry BREADCRUMB (warn ≥ the
+      // breadcrumb threshold), but NO Sentry issue (no captureException — the
+      // payload carries no `err`). The underlying clone failure already mirrored
+      // to Sentry as an issue inside `ensureWorkspaceRepoCloned`; this breadcrumb
+      // records that the silent degrade was converted into an honest block. The
+      // thrown RepoNotReadyError is info-logged at the dispatch catch (benign
+      // block, no second issue).
+      log.warn(
+        {
+          feature: "cc-dispatcher",
+          op: "repo-checkout-missing-gate",
+          userIdHash: hashUserId(args.userId),
+          workspaceId: activeWorkspaceId,
+        },
+        "repo-checkout gate: self-heal clone returned 'failed' (connected repo, no on-disk .git) — honest-blocking dispatch (would otherwise strand the agent in a .git-less tree)",
+      );
+      // Reuse RepoNotReadyError("error") — the dispatch catch routes it to an
+      // honest `{type:"error", message}` frame. No `errorCode` (retry-first copy,
+      // not a hard reconnect CTA): a transient clone failure self-heals on the
+      // next dispatch's idempotent re-clone.
+      throw new RepoNotReadyError("error", REPO_CHECKOUT_MISSING_MSG);
+    }
 
     // Issue A: mint a short-lived GitHub App installation token for the
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
@@ -2864,6 +2907,19 @@ export async function dispatchSoleurGo(
   // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
   // recovery-it-gates.md), never before. Idempotent with the cold factory call
   // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  //
+  // KNOWN WARM-PATH RESIDUAL (routine-authoring strand fix): the cold factory's
+  // `cloneOutcome === "failed"` honest-block has NO warm equivalent here. A warm
+  // turn whose workspace is present-DIR but `.git`-ABSENT does NOT trip
+  // `worktree_enter_failed` (that keys on DIR existence, which
+  // `ensureWorkspaceDirExists` guarantees), so this fire-and-forget reprovision
+  // re-clones but cannot block, and the agent could re-strand reconstructing the
+  // repo over `gh api`. Routine-authoring is cold-FIRST so the headline incident
+  // is covered; the warm residual is backed only by the ROUTINE_AUTHORING_DIRECTIVE
+  // STOP-instruction (model compliance, not a deterministic guard). A deterministic
+  // warm guard would reuse the same `"failed"` seam but requires threading the
+  // ACTIVE workspace id into `reprovisionWorkspaceOnDispatch` (it resolves the
+  // DEFAULT workspace today) — tracked as a follow-up, not blocking this fix.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
   void reprovisionWorkspaceOnDispatch(userId)
     .then((outcome) => {

@@ -31,6 +31,17 @@ export function repoErrorMsg(reason: string): string {
 }
 
 /**
+ * Honest copy shown when a CONNECTED repo's on-disk checkout is missing at
+ * dispatch — the session-start self-heal clone (`ensureWorkspaceRepoCloned`)
+ * did not land `.git`, so the agent would otherwise run against an empty tree
+ * and strand reconstructing the repo over `gh api`. Retry-first (a transient
+ * clone failure self-heals on the next dispatch); reconnect is the durable
+ * remedy. Imported by both the gate site and its test so the string never
+ * drifts. */
+export const REPO_CHECKOUT_MISSING_MSG =
+  "Couldn't prepare your repository for this session — please try again in a moment. If it keeps happening, reconnect in Settings → Repository.";
+
+/**
  * Thrown by the Concierge dispatch factory when the active workspace's
  * `repo_status` is `cloning` or `error`. One class for both states because the
  * dispatch catch handles them identically — emit `{type:"error", message,
@@ -38,6 +49,13 @@ export function repoErrorMsg(reason: string): string {
  * not an incident). The distinction between the two is DATA (`code` +
  * `errorCode?`), not a second type. Mirrors the `MissingByokKeyError` shape
  * (`extends Error`, fixed `this.name`).
+ *
+ * REUSE: the post-clone checkout-missing gate (cc-dispatcher.ts, after the
+ * self-heal clone) also throws this with `code:"error"` and NO `errorCode` for a
+ * fail-open `ready` workspace whose self-heal clone returned "failed" (connected
+ * repo, `.git` absent). So `code:"error"` does NOT imply a `repo_status=error`
+ * row — the thrown `.code` is only read by the dispatch-catch benign info-log,
+ * and the absent `errorCode` makes the emit render no reconnect CTA (retry-first).
  */
 export class RepoNotReadyError extends Error {
   constructor(
