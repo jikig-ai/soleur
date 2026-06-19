@@ -1,0 +1,1527 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "oJQ80",
+      "x": 0,
+      "y": 0,
+      "name": "Reusable Components",
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": 32,
+      "children": [
+        {
+          "type": "frame",
+          "id": "MJ25H",
+          "name": "component/EmailTriageRow",
+          "reusable": true,
+          "width": 760,
+          "fill": "$red-tint-bg",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "$red-tint-border"
+          },
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "g9Pyk",
+              "name": "topRow",
+              "width": "fill_container",
+              "gap": 8,
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "e2AlB",
+                  "name": "pillGroup",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "hSj3z",
+                      "name": "statusPill",
+                      "fill": "$red-pill-bg",
+                      "cornerRadius": 999,
+                      "padding": [
+                        2,
+                        10
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "BzbcI",
+                          "name": "pillLabel",
+                          "fill": "$red-500",
+                          "content": "Statutory",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "jnPHb",
+                      "name": "pinnedBadge",
+                      "fill": "$red-pill-bg",
+                      "cornerRadius": 999,
+                      "padding": [
+                        2,
+                        8
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "8lTFH",
+                          "name": "pinnedLabel",
+                          "fill": "$red-500",
+                          "content": "Pinned",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "NP2cx",
+                  "name": "relTime",
+                  "fill": "$text-muted",
+                  "content": "2h ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "3lqTY",
+              "name": "subject",
+              "fill": "$text-primary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "DSAR request — data deletion",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "PUE11",
+              "name": "summary",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Data subject requests erasure of their personal data under GDPR Art. 17.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "Wv226",
+              "name": "sender",
+              "fill": "$text-muted",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "privacy@acme-vendor.example",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "qTNws",
+              "name": "dueText",
+              "fill": "$red-500",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Respond by Jul 2, 2026 (30 days)",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "EhVBC",
+              "x": 0,
+              "y": 0,
+              "name": "legalWarning",
+              "enabled": false,
+              "fill": "$amber-400",
+              "textGrowth": "fixed-width",
+              "width": "fill_container(0)",
+              "content": "Rules did not match — verify against the original, normally retained in the Proton ops@ mailbox",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "jwbJQ",
+              "x": 0,
+              "y": 0,
+              "name": "ackNote",
+              "enabled": false,
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container(0)",
+              "content": "Acknowledged — workflow state, not legal resolution",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "dHIQX",
+              "name": "actionRow",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": [
+                4,
+                0,
+                0,
+                0
+              ],
+              "justifyContent": "end",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "u0BWN",
+                  "name": "actionBtn",
+                  "fill": "#00000000",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$red-tint-border"
+                  },
+                  "padding": [
+                    6,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "BH6ce",
+                      "name": "actionBtnLabel",
+                      "fill": "$red-500",
+                      "content": "Acknowledge",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Uk6Ba",
+          "name": "component/Sidebar",
+          "reusable": true,
+          "width": 224,
+          "height": 880,
+          "fill": "$bg-surface-1",
+          "stroke": {
+            "thickness": {
+              "right": 1
+            },
+            "fill": "$border-default"
+          },
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "9O0DU",
+              "name": "workspaceBand",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Abazg",
+                  "name": "wsTile",
+                  "width": 36,
+                  "height": 36,
+                  "fill": "$bg-surface-2",
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mTANm",
+                      "name": "wsMono",
+                      "fill": "$text-secondary",
+                      "content": "S",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "50gEE",
+                  "name": "wsName",
+                  "fill": "$text-primary",
+                  "content": "Soleur",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TWCAL",
+              "name": "nav",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "padding": 12,
+              "children": [
+                {
+                  "id": "drw1u",
+                  "type": "ref",
+                  "ref": "es0fL",
+                  "name": "n1",
+                  "x": 12,
+                  "y": 12,
+                  "descendants": {
+                    "7ormE": {
+                      "iconFontName": "layout-grid"
+                    },
+                    "aWs0N": {
+                      "content": "Dashboard"
+                    }
+                  }
+                },
+                {
+                  "id": "gqA4l",
+                  "type": "ref",
+                  "ref": "es0fL",
+                  "name": "n2",
+                  "x": 12,
+                  "y": 53,
+                  "descendants": {
+                    "7ormE": {
+                      "iconFontName": "book-open"
+                    },
+                    "aWs0N": {
+                      "content": "Knowledge Base"
+                    }
+                  }
+                },
+                {
+                  "id": "C1Wv3",
+                  "type": "ref",
+                  "ref": "es0fL",
+                  "name": "n3",
+                  "x": 12,
+                  "y": 94,
+                  "descendants": {
+                    "7ormE": {
+                      "iconFontName": "repeat"
+                    },
+                    "aWs0N": {
+                      "content": "Routines"
+                    }
+                  }
+                },
+                {
+                  "id": "X4huj",
+                  "type": "ref",
+                  "ref": "es0fL",
+                  "name": "n4",
+                  "x": 12,
+                  "y": 135,
+                  "descendants": {
+                    "7ormE": {
+                      "iconFontName": "chart-bar"
+                    },
+                    "aWs0N": {
+                      "content": "Analytics"
+                    }
+                  }
+                },
+                {
+                  "id": "GfOrS",
+                  "type": "ref",
+                  "ref": "es0fL",
+                  "fill": "$gold-fill-10",
+                  "name": "n5",
+                  "x": 12,
+                  "y": 176,
+                  "descendants": {
+                    "lJoUM": {
+                      "enabled": true
+                    },
+                    "7ormE": {
+                      "iconFontName": "inbox",
+                      "fill": "$gold-text"
+                    },
+                    "aWs0N": {
+                      "content": "Inbox",
+                      "fill": "$gold-text"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "es0fL",
+          "name": "component/NavItem",
+          "reusable": true,
+          "width": 200,
+          "fill": "#00000000",
+          "cornerRadius": 8,
+          "gap": 12,
+          "padding": [
+            10,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "rectangle",
+              "cornerRadius": 999,
+              "id": "lJoUM",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 8,
+              "name": "activeBar",
+              "enabled": false,
+              "fill": "$gold-fill",
+              "width": 3,
+              "height": 20
+            },
+            {
+              "type": "icon_font",
+              "id": "7ormE",
+              "name": "navIcon",
+              "width": 16,
+              "height": 16,
+              "iconFontName": "layout-grid",
+              "iconFontFamily": "lucide",
+              "fill": "$text-muted"
+            },
+            {
+              "type": "text",
+              "id": "aWs0N",
+              "name": "navLabel",
+              "fill": "$text-muted",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "KIrzQ",
+          "name": "component/TabControl",
+          "reusable": true,
+          "clip": true,
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "$border-default"
+          },
+          "children": [
+            {
+              "type": "frame",
+              "id": "PioSz",
+              "name": "tabActive",
+              "fill": "$bg-surface-2",
+              "padding": [
+                8,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "bT8Vs",
+                  "name": "tabActiveLbl",
+                  "fill": "$text-primary",
+                  "content": "Active",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "elmaS",
+              "name": "tabArchived",
+              "fill": "$bg-surface-1",
+              "padding": [
+                8,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Jonft",
+                  "name": "tabArchivedLbl",
+                  "fill": "$text-secondary",
+                  "content": "Archived",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "r2xUX",
+      "x": 520,
+      "y": 0,
+      "name": "Screen 1 — Inbox Active (populated)",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "children": [
+        {
+          "id": "Hrz7r",
+          "type": "ref",
+          "ref": "Uk6Ba",
+          "name": "sb1",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "type": "frame",
+          "id": "gSAJG",
+          "name": "main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "$bg-base",
+          "layout": "vertical",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "PvkOE",
+              "name": "contentCol",
+              "width": 1040,
+              "layout": "vertical",
+              "padding": [
+                32,
+                24
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "7W9xy",
+                  "name": "header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    0,
+                    0,
+                    24,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "5KWiw",
+                      "name": "h1",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Inbox",
+                      "fontFamily": "Inter",
+                      "fontSize": 24,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "HByQy",
+                      "name": "desc",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Statutory and operational email needing your attention, triaged automatically.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "id": "cY1Oe",
+                  "type": "ref",
+                  "ref": "KIrzQ",
+                  "name": "tab1",
+                  "x": 24,
+                  "y": 110
+                },
+                {
+                  "type": "frame",
+                  "id": "0354j",
+                  "name": "rowsWrap",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    20,
+                    0,
+                    0,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "id": "ZojwF",
+                      "type": "ref",
+                      "ref": "MJ25H",
+                      "width": "fill_container",
+                      "name": "r1a",
+                      "x": 0,
+                      "y": 20,
+                      "descendants": {
+                        "g9Pyk": {
+                          "width": "fill_container"
+                        },
+                        "NP2cx": {
+                          "x": 920
+                        },
+                        "3lqTY": {
+                          "width": "fill_container"
+                        },
+                        "PUE11": {
+                          "width": "fill_container"
+                        },
+                        "Wv226": {
+                          "width": "fill_container"
+                        },
+                        "qTNws": {
+                          "width": "fill_container"
+                        },
+                        "dHIQX": {
+                          "width": "fill_container"
+                        },
+                        "u0BWN": {
+                          "x": 857
+                        }
+                      }
+                    },
+                    {
+                      "id": "QwYn4",
+                      "type": "ref",
+                      "ref": "MJ25H",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border-default"
+                      },
+                      "name": "r1b",
+                      "x": 0,
+                      "y": 198,
+                      "descendants": {
+                        "g9Pyk": {
+                          "width": "fill_container"
+                        },
+                        "hSj3z": {
+                          "fill": "$blue-pill-bg"
+                        },
+                        "BzbcI": {
+                          "content": "Vendor",
+                          "fill": "$blue-400"
+                        },
+                        "jnPHb": {
+                          "enabled": false
+                        },
+                        "NP2cx": {
+                          "x": 921,
+                          "content": "5h ago"
+                        },
+                        "3lqTY": {
+                          "width": "fill_container",
+                          "content": "Vendor MSA review — renewal terms"
+                        },
+                        "PUE11": {
+                          "width": "fill_container",
+                          "content": "Counterparty returned redlines on the master service agreement renewal."
+                        },
+                        "Wv226": {
+                          "width": "fill_container",
+                          "content": "legal@northwind-supply.example"
+                        },
+                        "qTNws": {
+                          "width": "fill_container(960)",
+                          "enabled": false
+                        },
+                        "dHIQX": {
+                          "width": "fill_container"
+                        },
+                        "u0BWN": {
+                          "x": 892,
+                          "stroke": {
+                            "thickness": 1,
+                            "fill": "$border-default"
+                          }
+                        },
+                        "BH6ce": {
+                          "content": "Archive",
+                          "fill": "$text-secondary"
+                        }
+                      }
+                    },
+                    {
+                      "id": "ZLk8W",
+                      "type": "ref",
+                      "ref": "MJ25H",
+                      "width": "fill_container",
+                      "fill": "$amber-tint-bg",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$amber-tint-border"
+                      },
+                      "name": "r1c",
+                      "x": 0,
+                      "y": 355,
+                      "descendants": {
+                        "g9Pyk": {
+                          "width": "fill_container"
+                        },
+                        "hSj3z": {
+                          "fill": "$amber-pill-bg"
+                        },
+                        "BzbcI": {
+                          "content": "Legal review",
+                          "fill": "$amber-400"
+                        },
+                        "jnPHb": {
+                          "enabled": false
+                        },
+                        "NP2cx": {
+                          "x": 923,
+                          "content": "1d ago"
+                        },
+                        "3lqTY": {
+                          "width": "fill_container",
+                          "content": "Contract notice — auto-renewal clause"
+                        },
+                        "PUE11": {
+                          "width": "fill_container",
+                          "content": "Inbound notice mentions a renewal deadline; classifier was not confident."
+                        },
+                        "Wv226": {
+                          "width": "fill_container",
+                          "content": "billing@cloudhost-partner.example"
+                        },
+                        "qTNws": {
+                          "width": "fill_container(960)",
+                          "enabled": false
+                        },
+                        "EhVBC": {
+                          "enabled": true
+                        },
+                        "dHIQX": {
+                          "width": "fill_container"
+                        },
+                        "u0BWN": {
+                          "x": 892,
+                          "stroke": {
+                            "thickness": 1,
+                            "fill": "$border-default"
+                          }
+                        },
+                        "BH6ce": {
+                          "content": "Archive",
+                          "fill": "$text-secondary"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "17cb4",
+      "x": 520,
+      "y": 980,
+      "name": "Screen 2 — Inbox Archived",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "children": [
+        {
+          "id": "M5TA9",
+          "type": "ref",
+          "ref": "Uk6Ba",
+          "name": "sb2",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "type": "frame",
+          "id": "v089W",
+          "name": "main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "$bg-base",
+          "layout": "vertical",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "7Ehej",
+              "name": "contentCol",
+              "width": 1040,
+              "layout": "vertical",
+              "padding": [
+                32,
+                24
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "BdxU5",
+                  "name": "header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    0,
+                    0,
+                    24,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "GOhUX",
+                      "name": "h1",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Inbox",
+                      "fontFamily": "Inter",
+                      "fontSize": 24,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "U0KKc",
+                      "name": "desc",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Statutory and operational email needing your attention, triaged automatically.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "id": "nD0Ns",
+                  "type": "ref",
+                  "ref": "KIrzQ",
+                  "name": "tab2",
+                  "x": 24,
+                  "y": 110,
+                  "descendants": {
+                    "PioSz": {
+                      "fill": "$bg-surface-1"
+                    },
+                    "bT8Vs": {
+                      "fill": "$text-secondary"
+                    },
+                    "elmaS": {
+                      "fill": "$bg-surface-2"
+                    },
+                    "Jonft": {
+                      "fill": "$text-primary"
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "9l9Em",
+                  "name": "archNoteWrap",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "padding": [
+                    14,
+                    0,
+                    0,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "1RyaL",
+                      "name": "archNote",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Archived — still retained. Items here stay on record; nothing is deleted.",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "HjKt9",
+                  "name": "rowsWrap",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    12,
+                    0,
+                    0,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "id": "sQ4qe",
+                      "type": "ref",
+                      "ref": "MJ25H",
+                      "width": "fill_container",
+                      "opacity": 0.7,
+                      "fill": "$bg-surface-1",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border-default"
+                      },
+                      "name": "a1",
+                      "x": 0,
+                      "y": 12,
+                      "descendants": {
+                        "g9Pyk": {
+                          "width": "fill_container"
+                        },
+                        "hSj3z": {
+                          "fill": "$bg-surface-2"
+                        },
+                        "BzbcI": {
+                          "content": "Done · retained",
+                          "fill": "$text-secondary"
+                        },
+                        "jnPHb": {
+                          "enabled": false
+                        },
+                        "NP2cx": {
+                          "x": 866,
+                          "content": "Archived 2d ago"
+                        },
+                        "3lqTY": {
+                          "width": "fill_container",
+                          "content": "Vendor MSA review — renewal terms"
+                        },
+                        "PUE11": {
+                          "width": "fill_container",
+                          "content": "Counterparty returned redlines on the master service agreement renewal."
+                        },
+                        "Wv226": {
+                          "width": "fill_container",
+                          "content": "legal@northwind-supply.example"
+                        },
+                        "qTNws": {
+                          "width": "fill_container(960)",
+                          "enabled": false
+                        },
+                        "dHIQX": {
+                          "width": "fill_container(960)",
+                          "enabled": false
+                        },
+                        "u0BWN": {
+                          "x": 857
+                        }
+                      }
+                    },
+                    {
+                      "id": "hN1HB",
+                      "type": "ref",
+                      "ref": "MJ25H",
+                      "width": "fill_container",
+                      "opacity": 0.7,
+                      "fill": "$bg-surface-1",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border-default"
+                      },
+                      "name": "a2",
+                      "x": 0,
+                      "y": 132,
+                      "descendants": {
+                        "g9Pyk": {
+                          "width": "fill_container"
+                        },
+                        "hSj3z": {
+                          "fill": "$bg-surface-2"
+                        },
+                        "BzbcI": {
+                          "content": "Done · retained",
+                          "fill": "$text-secondary"
+                        },
+                        "jnPHb": {
+                          "enabled": false
+                        },
+                        "NP2cx": {
+                          "x": 866,
+                          "content": "Archived 4d ago"
+                        },
+                        "3lqTY": {
+                          "width": "fill_container",
+                          "content": "Newsletter — product changelog"
+                        },
+                        "PUE11": {
+                          "width": "fill_container",
+                          "content": "Weekly roundup of shipped features; no action required."
+                        },
+                        "Wv226": {
+                          "width": "fill_container",
+                          "content": "news@devtools-weekly.example"
+                        },
+                        "qTNws": {
+                          "width": "fill_container(960)",
+                          "enabled": false
+                        },
+                        "dHIQX": {
+                          "width": "fill_container(960)",
+                          "enabled": false
+                        },
+                        "u0BWN": {
+                          "x": 857
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Fk46K",
+      "x": 520,
+      "y": 1960,
+      "name": "Screen 3 — Inbox Empty (Active)",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "children": [
+        {
+          "id": "Bi5wc",
+          "type": "ref",
+          "ref": "Uk6Ba",
+          "name": "sb3",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "type": "frame",
+          "id": "1saDu",
+          "name": "main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "$bg-base",
+          "layout": "vertical",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "6XtM1",
+              "name": "contentCol",
+              "width": 1040,
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                32,
+                24
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "2HmeM",
+                  "name": "header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    0,
+                    0,
+                    24,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "LGs6m",
+                      "name": "h1",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Inbox",
+                      "fontFamily": "Inter",
+                      "fontSize": 24,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "AXbQj",
+                      "name": "desc",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Statutory and operational email needing your attention, triaged automatically.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "id": "puk8L",
+                  "type": "ref",
+                  "ref": "KIrzQ",
+                  "name": "tab3",
+                  "x": 24,
+                  "y": 110
+                },
+                {
+                  "type": "frame",
+                  "id": "4TR5M",
+                  "name": "emptyState",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    80,
+                    0
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "Q3yRn",
+                      "name": "emptyIcon",
+                      "width": 40,
+                      "height": 40,
+                      "iconFontName": "inbox",
+                      "iconFontFamily": "lucide",
+                      "fill": "$text-muted"
+                    },
+                    {
+                      "type": "text",
+                      "id": "JGn6z",
+                      "name": "emptyHeading",
+                      "fill": "$text-primary",
+                      "content": "No items needing attention",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "6B8KV",
+                      "name": "emptySub",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": 460,
+                      "content": "You're all caught up. New statutory and operational email will appear here as it arrives.",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Zoe3A",
+      "x": 520,
+      "y": 2940,
+      "name": "Screen 4 — Command Center (View all link)",
+      "width": 1440,
+      "height": 920,
+      "fill": "$bg-base",
+      "children": [
+        {
+          "id": "8nH9g",
+          "type": "ref",
+          "ref": "Uk6Ba",
+          "name": "sb4",
+          "x": 0,
+          "y": 0,
+          "descendants": {
+            "drw1u": {
+              "fill": "$gold-fill-10"
+            },
+            "drw1u/lJoUM": {
+              "enabled": true
+            },
+            "drw1u/7ormE": {
+              "fill": "$gold-text"
+            },
+            "drw1u/aWs0N": {
+              "fill": "$gold-text"
+            },
+            "GfOrS": {
+              "fill": "#00000000"
+            },
+            "GfOrS/lJoUM": {
+              "enabled": false
+            },
+            "GfOrS/7ormE": {
+              "fill": "$text-muted"
+            },
+            "GfOrS/aWs0N": {
+              "fill": "$text-muted"
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "Ykkm4",
+          "name": "main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "$bg-base",
+          "layout": "vertical",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "pewku",
+              "name": "contentCol",
+              "width": 896,
+              "layout": "vertical",
+              "gap": 24,
+              "padding": [
+                32,
+                24
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RPbJI",
+                  "name": "dashH1",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Dashboard",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "wVuKV",
+                  "name": "inboxSection",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "JN8fB",
+                      "name": "sectionHeader",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gs6xX",
+                          "name": "sectionTitle",
+                          "fill": "$text-primary",
+                          "content": "Needs attention",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "DJnUl",
+                          "name": "viewAllLink",
+                          "gap": 4,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "arrgI",
+                              "name": "viewAllLbl",
+                              "fill": "$gold-text",
+                              "content": "View all",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "RKBl0",
+                              "name": "viewAllArrow",
+                              "fill": "$gold-text",
+                              "content": "→",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "vFYQN",
+                      "name": "secRows",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "id": "hGY28",
+                          "type": "ref",
+                          "ref": "MJ25H",
+                          "width": "fill_container",
+                          "name": "c1",
+                          "x": 0,
+                          "y": 0,
+                          "descendants": {
+                            "g9Pyk": {
+                              "width": "fill_container"
+                            },
+                            "NP2cx": {
+                              "x": 776
+                            },
+                            "3lqTY": {
+                              "width": "fill_container"
+                            },
+                            "PUE11": {
+                              "width": "fill_container"
+                            },
+                            "Wv226": {
+                              "width": "fill_container"
+                            },
+                            "qTNws": {
+                              "width": "fill_container"
+                            },
+                            "dHIQX": {
+                              "width": "fill_container"
+                            },
+                            "u0BWN": {
+                              "x": 713
+                            }
+                          }
+                        },
+                        {
+                          "id": "JFidr",
+                          "type": "ref",
+                          "ref": "MJ25H",
+                          "width": "fill_container",
+                          "fill": "$bg-surface-1",
+                          "stroke": {
+                            "thickness": 1,
+                            "fill": "$border-default"
+                          },
+                          "name": "c2",
+                          "x": 0,
+                          "y": 178,
+                          "descendants": {
+                            "g9Pyk": {
+                              "width": "fill_container"
+                            },
+                            "hSj3z": {
+                              "fill": "$blue-pill-bg"
+                            },
+                            "BzbcI": {
+                              "content": "Vendor",
+                              "fill": "$blue-400"
+                            },
+                            "jnPHb": {
+                              "enabled": false
+                            },
+                            "NP2cx": {
+                              "x": 777,
+                              "content": "5h ago"
+                            },
+                            "3lqTY": {
+                              "width": "fill_container",
+                              "content": "Vendor MSA review — renewal terms"
+                            },
+                            "PUE11": {
+                              "width": "fill_container",
+                              "content": "Counterparty returned redlines on the master service agreement renewal."
+                            },
+                            "Wv226": {
+                              "width": "fill_container",
+                              "content": "legal@northwind-supply.example"
+                            },
+                            "qTNws": {
+                              "width": "fill_container(816)",
+                              "enabled": false
+                            },
+                            "dHIQX": {
+                              "width": "fill_container"
+                            },
+                            "u0BWN": {
+                              "x": 748,
+                              "stroke": {
+                                "thickness": 1,
+                                "fill": "$border-default"
+                              }
+                            },
+                            "BH6ce": {
+                              "content": "Archive",
+                              "fill": "$text-secondary"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg-base": {
+      "type": "color",
+      "value": "#0a0a0a"
+    },
+    "bg-surface-1": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "bg-surface-2": {
+      "type": "color",
+      "value": "#1c1c1c"
+    },
+    "border-default": {
+      "type": "color",
+      "value": "#2a2a2a"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#ffffff"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "text-muted": {
+      "type": "color",
+      "value": "#6a6a6a"
+    },
+    "text-on-accent": {
+      "type": "color",
+      "value": "#1a1612"
+    },
+    "gold-fill": {
+      "type": "color",
+      "value": "#c9a962"
+    },
+    "gold-text": {
+      "type": "color",
+      "value": "#d4b36a"
+    },
+    "gold-fill-10": {
+      "type": "color",
+      "value": "#c9a96219"
+    },
+    "red-500": {
+      "type": "color",
+      "value": "#ef4444"
+    },
+    "red-tint-bg": {
+      "type": "color",
+      "value": "#ef44440f"
+    },
+    "red-tint-border": {
+      "type": "color",
+      "value": "#ef44444d"
+    },
+    "red-pill-bg": {
+      "type": "color",
+      "value": "#ef44441a"
+    },
+    "amber-400": {
+      "type": "color",
+      "value": "#fbbf24"
+    },
+    "amber-500": {
+      "type": "color",
+      "value": "#f59e0b"
+    },
+    "amber-tint-bg": {
+      "type": "color",
+      "value": "#f59e0b0f"
+    },
+    "amber-tint-border": {
+      "type": "color",
+      "value": "#f59e0b4d"
+    },
+    "amber-pill-bg": {
+      "type": "color",
+      "value": "#f59e0b26"
+    },
+    "blue-400": {
+      "type": "color",
+      "value": "#60a5fa"
+    },
+    "blue-pill-bg": {
+      "type": "color",
+      "value": "#3b82f61a"
+    }
+  }
+}

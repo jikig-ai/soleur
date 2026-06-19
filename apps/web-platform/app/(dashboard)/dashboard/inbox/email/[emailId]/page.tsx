@@ -13,6 +13,7 @@
 // The catalog citation is deliberately plain text (the catalog is a repo
 // doc, not a served route).
 
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { reportSilentFallback } from "@/server/observability";
@@ -97,6 +98,15 @@ export default async function EmailTriageDetailPage({
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-8">
+      {/* Back link — a notification deep-link lands here cold (browser-back
+          returns to the mail client), so the inbox needs an explicit in-app
+          return path (#5512). */}
+      <Link
+        href="/dashboard/inbox"
+        className="mb-4 inline-flex items-center text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+      >
+        ← Inbox
+      </Link>
       <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6">
         <div className="mb-4 flex items-center justify-between gap-2">
           <span

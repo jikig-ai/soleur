@@ -59,6 +59,26 @@ run_enum() {
   INNGEST_GQL_FIXTURE_DIR="$dir" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null
 }
 
+# Build a page with $3 synthesized bulk reminder.scheduled edges (one jq call, fast) so
+# the eventsV2 accumulator can be driven past MAX_ARG_STRLEN without thousands of
+# make_edge spawns (#5523). $1=hasNextPage $2=endCursor $3=count $4=fire_ms (bulk edges
+# share one fire time — past-dated → dropped by the future filter, keeping records small)
+# $5=extra-edges-json (default []).
+make_bulk_page() {
+  local hn="$1" ec="$2" n="$3" fire_ms="$4" extra="${5:-[]}"
+  jq -nc --argjson hn "$hn" --arg ec "$ec" --argjson n "$n" --argjson ts "$fire_ms" --argjson extra "$extra" '
+    {data:{eventsV2:{
+      totalCount:($n + ($extra|length)),
+      pageInfo:{hasNextPage:$hn,endCursor:$ec},
+      edges:( [ range($n) as $i | {
+        cursor:("bulk-\($i)"),
+        node:{id:("bulk-\($i)"),name:"reminder.scheduled",occurredAt:"2026-06-01T12:00:00Z",
+              receivedAt:"2026-06-10T00:00:00Z",idempotencyKey:null,
+              raw:({data:{reminder_id:("bulk-\($i)"),fire_at:"2026-06-01T12:00:00Z",actor:"platform",action:{type:"issue-comment",issue:7,body:"SECRET-BODY"}},id:("bulk-\($i)"),name:"reminder.scheduled",ts:$ts,v:null}|tojson),
+              runs:[]} } ] + $extra )
+    }}}'
+}
+
 echo "=== inngest-enumerate-reminders.sh tests ==="
 
 assert_eq "script exists and is executable" "1" "$([[ -x "$TARGET" ]] && echo 1 || echo 0)"
@@ -206,6 +226,55 @@ test_malformed_cause_no_payload_leak() {
   else echo "  PASS: .data value NOT leaked (combined stdout+stderr; only key names surface)"; PASS=$((PASS + 1)); fi
 }
 
+# --- Test 11 (#5523 AC3-overflow): large accumulated edge set does NOT overflow MAX_ARG_STRLEN ---
+# RED against the pre-fix per-page argv accumulation (jq -nc --argjson a <accumulator>):
+# once the RUNNING accumulator crosses the ~128 KB per-arg ceiling it trips
+# `jq: Argument list too long` (the live HTTP 500). GREEN after the mktemp +
+# `jq -s 'add // []'` file-spool fix. Calibrated at authoring time: 5 pages × 400
+# past-dated reminder edges builds a running accumulator past the ceiling by ~page 3;
+# each page stays under the per-arg limit, so this exercises the accumulator overflow
+# specifically. A future reminder on the LAST page proves the fix accumulates ALL pages.
+test_large_accumulator_no_argv_overflow() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  local i
+  for i in 1 2 3 4; do
+    make_bulk_page true "CUR$i" 400 "$PAST_MS" "[]" > "$d/page-$i.json"
+  done
+  make_bulk_page false "" 400 "$PAST_MS" \
+    "[$(make_edge "01CANARY" "rem-overflow-canary" "$FUTURE_MS" "[]")]" > "$d/page-5.json"
+  local out rc=0
+  out=$(run_enum "$d") || rc=$?
+  assert_eq "large accumulated edge set exits 0 (no MAX_ARG_STRLEN overflow)" "0" "$rc"
+  assert_eq "only the last-page future reminder survives (all pages collapsed)" "rem-overflow-canary" "$(echo "$out" | jq -r '[.[].reminder_id] | join(",")')"
+}
+
+# --- Test 12 (#5523 AC3-structural): accumulation never passes the running accumulator via argv ---
+# Anchored on the EXACT accumulator string — NOT a bare --argjson — so the legitimate
+# `--argjson first/after` in build_request_body does not false-trip it.
+test_no_argv_accumulation() {
+  if grep -qE 'argjson a "\$all_edges"' "$TARGET"; then
+    echo "  FAIL: argv accumulation (jq --argjson a accumulator) reintroduced — overflows MAX_ARG_STRLEN"; FAIL=$((FAIL+1));
+  else echo "  PASS: no argv accumulation of the running edge set"; PASS=$((PASS+1)); fi
+  if grep -qE 'jq -s|--slurpfile' "$TARGET"; then
+    echo "  PASS: accumulation collapses a spool file (jq -s / --slurpfile)"; PASS=$((PASS+1));
+  else echo "  FAIL: no file-based accumulation (jq -s / --slurpfile) found"; FAIL=$((FAIL+1)); fi
+}
+
+# --- Test 13 (#5523 cleanup): the spool temp file is cleaned on a FATAL exit path ---
+# The mktemp spool is created before the loop; a malformed page exits 1 from inside it.
+# The in-function `trap 'rm -f ...' EXIT` (NOT RETURN — RETURN does not fire on `exit`)
+# must still clean the spool. Isolate mktemp via a private TMPDIR and assert nothing survives.
+test_fatal_cleans_spool_tempfile() {
+  local d; d=$(mktemp -d); local tmpd; tmpd=$(mktemp -d)
+  trap 'rm -rf "$d" "$tmpd"' RETURN
+  printf '%s' '{"data":{"eventsV2OTHER":{}}}' > "$d/page-1.json"
+  local rc=0
+  TMPDIR="$tmpd" INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" >/dev/null 2>&1 || rc=$?
+  assert_eq "malformed page exits non-zero (FATAL)" "1" "$rc"
+  local leftover; leftover=$(find "$tmpd" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "no spool temp file leaked on FATAL exit (EXIT trap fired)" "0" "$leftover"
+}
+
 test_future_unfired_included
 test_completed_dropped
 test_past_dropped
@@ -216,6 +285,9 @@ test_empty_set
 test_no_shell_string_interpolation_in_gql
 test_default_from_is_recent_not_epoch
 test_malformed_cause_no_payload_leak
+test_large_accumulator_no_argv_overflow
+test_no_argv_accumulation
+test_fatal_cleans_spool_tempfile
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

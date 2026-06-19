@@ -266,42 +266,53 @@ verify_inngest_health() {
   # backend is reachable — inngest won't serve otherwise). The residual silent
   # risk is *flags-absent*: a templating/image regression that drops the backend
   # flags → inngest defaults to in-memory Redis (non-durable) WHILE /health=200.
-  # This gate is a CONSISTENCY assertion: when --postgres-uri is configured the
-  # queue MUST also be durable (--redis-uri present AND inngest-redis active), or
-  # the deploy fails loud. It is transparent to pre-migration / rollback states
-  # (no --postgres-uri → skip), so a `--sqlite-dir`-only rollback still passes.
-  # Reads only the CONFIGURED ExecStart ($VAR form — no secret value) + unit
-  # activeness; never logs the connection string. Build-time flag presence is
-  # separately drift-guarded in inngest.test.sh.
+  # This gate is a CONSISTENCY assertion: when the durable backend is configured the
+  # queue MUST also have inngest-redis active, or the deploy fails loud. It is
+  # transparent to pre-migration / rollback states (sentinel absent → skip), so a
+  # `--sqlite-dir`-only rollback still passes. Reads only the CONFIGURED ExecStart
+  # ($VAR form — no secret value) + unit activeness; never logs the connection string.
+  # Detection sentinel (#5560): the durable backend is detected by the NON-SECRET
+  # --postgres-max-open-conns flag, NOT --postgres-uri/--redis-uri — those are now
+  # delivered via the doppler-run ENVIRONMENT (never argv) so they no longer appear
+  # in the ExecStart. inngest-bootstrap.sh writes --postgres-max-open-conns ONLY in
+  # the durable branch (present iff durable). Build-time flag presence is separately
+  # drift-guarded in inngest.test.sh; parser token-parity in inngest-inventory.test.sh.
   local exec_start=""
   exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
-  if [[ "$exec_start" == *'--postgres-uri'* ]]; then
-    if [[ "$exec_start" != *'--redis-uri'* ]]; then
-      logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — --postgres-uri configured but --redis-uri absent; the queue would be non-durable in-memory Redis (silent armed-reminder loss on host rebuild, #5450)"
-      return 1
-    fi
+  if [[ "$exec_start" == *'--postgres-max-open-conns'* ]]; then
     if ! systemctl is-active --quiet inngest-redis.service; then
       logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — durable backend configured but inngest-redis.service is not active; armed reminders would not persist"
       return 1
     fi
-    logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — --postgres-uri + --redis-uri configured and inngest-redis.service active"
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — durable backend (--postgres-max-open-conns sentinel) configured and inngest-redis.service active"
+  else
+    # #5547 Gap 2/3: SQLite-only fail-safe ExecStart (Redis was not ready this
+    # deploy → inngest-bootstrap wrote the empty BACKEND_FLAGS form). This is NOT
+    # a failure — the server is available on the non-durable backend, so do NOT
+    # return 1 (that would block a legitimate SQLite-only rollback). This
+    # `logger -t "$LOG_TAG"` advisory is the AUTHORITATIVE no-SSH carrier for the
+    # degraded state: LOG_TAG=ci-deploy is in Vector Source 4's tag allowlist →
+    # Better Stack Logs. (The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is
+    # NOT a carrier on this 0-exit path — ci-deploy reads $BOOTSTRAP_STDERR only
+    # on a non-zero bootstrap exit.)
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: advisory — inngest-server running SQLite-only (non-durable); durable Redis was not ready this deploy (#5547). Server is available; armed reminders will NOT survive a host rebuild until a deploy with Redis ready."
   fi
 
-  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159): /health proves only
-  # process liveness. A standalone inngest restart de-plans cron triggers; they
-  # re-arm async (web-platform redeploy → modified:true sync, or the server's
-  # --poll-interval self-heal). Best-effort poll /v1/functions for a re-armed
-  # cron trigger; if none appears, log an advisory and STILL succeed (the Sentry
-  # cron monitors are the real safety net). Dependency-free substring check (jq
-  # is not a host dependency): match the cron-trigger KEY form `"cron":` (the
-  # value form `"cron":"<expr>"` always contains it), NOT a bare `"cron"` — every
-  # function slug is `cron-*`, so bare `"cron"` would false-pass on the slug
-  # alone even with zero planned cron triggers.
+  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159, #5520): /health proves
+  # only process liveness. A standalone inngest restart de-plans cron triggers;
+  # they re-arm async (web-platform redeploy → modified:true sync, or the
+  # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
+  # re-armed cron trigger; if none appears, log an advisory and STILL succeed
+  # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
+  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
+  # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
+  # minified GQL response (jq is not a host dependency).
   local functions_body=""
   for i in $(seq 1 "$cron_max_attempts"); do
-    functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
+    functions_body=$(curl -sf --max-time 5 -X POST -H "Content-Type: application/json" -d '{"query":"{ functions { triggers { type value } } }"}' http://127.0.0.1:8288/v0/gql 2>/dev/null) || true
 
-    if [[ "$functions_body" == *'"cron":'* ]]; then
+    if [[ "$functions_body" == *'"type":"CRON"'* ]]; then
       logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$cron_max_attempts)"
       return 0
     fi
@@ -879,6 +890,23 @@ case "$COMPONENT" in
     # replaced.
     rm -f /tmp/vector.toml
     docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
+    # Durable Redis assets (#5450) — stage to /tmp like /vector.toml above. The
+    # existing-host deploy runs inngest-bootstrap.sh DIRECTLY on the host (the
+    # Alpine extract container has no systemctl), so it bypasses the OCI image
+    # ENTRYPOINT that stages these on the fresh-host cloud-init path
+    # (cloud-init.yml mirrors this same docker-cp block). Without these lines the
+    # bootstrap's `[[ -f /tmp/inngest-redis.conf && ... ]]` guard is always false
+    # → Redis never installs → the durable ExecStart crash-loops on 127.0.0.1:6379
+    # (#5547 Gap 1, the ~3.5h #5542 outage symptom). `rm -f` FIRST so a stale
+    # prior-deploy asset can't survive a silent cp failure (same defense as the
+    # /tmp/vector.toml rm above). `2>/dev/null || true` keeps a pre-#5450 rollback
+    # image (no /inngest-redis.* baked) functional — the bootstrap's Gap-2
+    # fail-safe then keeps inngest on the SQLite-only ExecStart.
+    rm -f /tmp/inngest-redis.conf /tmp/inngest-redis.service /tmp/inngest-redis-bootstrap.sh
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.conf" /tmp/inngest-redis.conf 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.service" /tmp/inngest-redis.service 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis-bootstrap.sh" /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+    chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     # Read ENV vars baked into the image at build time (see
     # .github/workflows/build-inngest-bootstrap-image.yml — ENV
     # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...
@@ -960,8 +988,26 @@ case "$COMPONENT" in
       exit 1
     fi
 
-    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
-    final_write_state 0 "success"
+    # #5547 Gap 3: distinguish a degraded-durability deploy (SQLite-only
+    # fail-safe — Redis not ready) from a healthy durable one so
+    # /hooks/deploy-status .reason surfaces it without SSH. The bootstrap exits 0
+    # in both cases (the server stays available). The AUTHORITATIVE signal is the
+    # WRITTEN ExecStart lacking the --postgres-max-open-conns durable sentinel
+    # (re-derived below; #5560 — the postgres/redis URIs are env-delivered now, so
+    # the non-secret --postgres-max-open-conns flag is the durable marker on argv).
+    # The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is only a SECONDARY
+    # cross-check OR'd in here: the legacy stderr-tail→reason path (line ~957)
+    # fires only on a NON-zero bootstrap exit, so on this 0-exit success path the
+    # marker is not the load-bearing carrier — the ExecStart re-derivation is.
+    inngest_exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
+    if [[ "$inngest_exec_start" != *'--postgres-max-open-conns'* ]] \
+       || grep -q 'INNGEST_DURABLE_DEGRADED' "$BOOTSTRAP_STDERR" 2>/dev/null; then
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed (degraded durability — SQLite-only; durable Redis not ready, #5547)"
+      final_write_state 0 "success_degraded_durability"
+    else
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+      final_write_state 0 "success"
+    fi
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"

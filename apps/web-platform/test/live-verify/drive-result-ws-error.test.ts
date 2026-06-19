@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyDriveResult,
+  isSessionStartedFrame,
   parseWsErrorFrame,
   sendRejectionReason,
 } from "../../scripts/live-verify/run";
@@ -59,6 +60,41 @@ describe("parseWsErrorFrame", () => {
       parseWsErrorFrame(JSON.stringify(["1", "1", "realtime:command-center-own", "phx_reply", {}])),
     ).toBeNull();
     expect(parseWsErrorFrame(JSON.stringify("error"))).toBeNull();
+  });
+});
+
+describe("isSessionStartedFrame", () => {
+  // The Send gate waits for this frame so the chat never races ahead of session
+  // acceptance (the #5463 session-rejected class observed on the first real CI run).
+  it("returns true ONLY for a {type:'session_started'} frame", () => {
+    expect(
+      isSessionStartedFrame(
+        JSON.stringify({
+          type: "session_started",
+          conversationId: "11111111-1111-1111-1111-111111111111",
+          capabilities: { promptKinds: [], incomingTypes: [] },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for other frames (auth_ok / chat / error / session_resumed)", () => {
+    expect(isSessionStartedFrame(JSON.stringify({ type: "auth_ok" }))).toBe(false);
+    expect(isSessionStartedFrame(JSON.stringify({ type: "chat", content: "hi" }))).toBe(false);
+    expect(
+      isSessionStartedFrame(JSON.stringify({ type: "error", errorCode: "rate_limited" })),
+    ).toBe(false);
+    // session_resumed is a distinct accept frame; the fresh-send gate keys on
+    // session_started specifically — guard against a future loosening to substring.
+    expect(isSessionStartedFrame(JSON.stringify({ type: "session_resumed" }))).toBe(false);
+  });
+
+  it("returns false for non-JSON / non-object payloads (Phoenix arrays, bare strings)", () => {
+    expect(isSessionStartedFrame("not json at all")).toBe(false);
+    expect(
+      isSessionStartedFrame(JSON.stringify(["1", "1", "realtime:x", "phx_reply", {}])),
+    ).toBe(false);
+    expect(isSessionStartedFrame(JSON.stringify("session_started"))).toBe(false);
   });
 });
 

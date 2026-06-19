@@ -124,8 +124,8 @@ jobs:
             # bash `tr` is byte-oriented and cannot match multi-byte
             # sequences. Mirrors scheduled-realtime-probe.yml's
             # strip_log_injection function (tr + sed two-stage).
-            env_safe=$(printf '%s' "$env_name" | tr -d '\r\n\f\v\x7f\x85' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g')
+            env_safe=$(printf '%s' "$env_name" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')
             echo "::error::dev_scheduled config resolves to environment=${env_safe} (expected: dev). Token rotated to wrong scope; reset before running tenant-integration."
             exit 1
           fi

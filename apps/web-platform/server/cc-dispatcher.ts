@@ -1753,11 +1753,13 @@ export const realSdkQueryFactory: QueryFactory = async (
       userId: args.userId,
     });
 
-    // #5394 Layer A (FIX 1a) — gate-reordering self-heal. For the recoverable
-    // branch only (`repoReadiness.ok === false`), attempt the existing
-    // idempotent re-clone under an optimistic lock and RE-EVALUATE before
-    // honestly blocking. `ready`/`not_connected` already returned `{ ok:true }`
-    // above and skip this block (zero extra work on the hot path).
+    // #5394 Layer A (FIX 1a) + Bug 2 — gate-reordering self-heal. The
+    // recoverable `error`/stale-`cloning` branch (`repoReadiness.ok === false`)
+    // attempts the existing idempotent re-clone under the optimistic lock and
+    // RE-EVALUATES before honestly blocking. Bug 2 ADDS the `ready`-but-`.git`-
+    // absent branch (DB-ready, physical clone gone): the orchestrator grafts it
+    // LOCK-FREE. The common `ready`+`.git`-present case still skips this block
+    // entirely (the `existsSync` short-circuit below — zero DB/JWT work, AC7).
     //
     // Write boundary (AC5b): the lock + status writes go ONLY via the tenant
     // `.rpc()` to the SECURITY DEFINER fns `claim_repo_clone_lock` /
@@ -1765,7 +1767,21 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `authenticated`, so a direct tenant UPDATE silently no-ops; cc-dispatcher
     // stays OFF the service-role allowlist. The self-heal reuses
     // `effectiveInstallationId` (AC6), not the raw stored `installationId`.
-    if (!repoReadiness.ok) {
+    // Bug 2 (#5274/#4755) — widen the gate so a DB-`ready` workspace whose
+    // physical `.git` is GONE is deterministically (re-)cloned instead of
+    // fast-pathing on repo_status alone and dead-ending the member ("workspace
+    // isn't ready", persisting across retries with no Sentry signal). The
+    // `existsSync` MUST be evaluated FIRST (short-circuit `||`) so the JWT
+    // round-trip `getFreshTenantClient` stays OFF the common `ready`+`.git`-
+    // present hot path (AC7). The orchestrator below grafts the ready entry
+    // LOCK-FREE (claim_repo_clone_lock cannot acquire a ready row) and consumes
+    // the clone outcome honestly (RepoNotReadyError on failure) — no longer
+    // relying on the discarded fire-and-forget ensureWorkspaceRepoCloned at the
+    // `:1866` self-heal as the only observation of a clone failure.
+    const needsSelfHeal =
+      !repoReadiness.ok ||
+      !existsSync(path.join(workspacePath, ".git"));
+    if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
         const tenant = await getFreshTenantClient(args.userId);
@@ -1805,6 +1821,21 @@ export const realSdkQueryFactory: QueryFactory = async (
             },
             ensureWorkspaceRepoCloned,
             gitDirExists: (p) => existsSync(path.join(p, ".git")),
+            // Dispatch-time divergence emit (this PR). The readiness module
+            // recognizes a connected-but-null-install workspace and routes it
+            // here; we forward to the existing breadcrumb emitter. Distinct op +
+            // trigger from the catch-block `self-heal-failed` emit below (an
+            // orchestration crash) — the divergence is a clean `{ ok:false }`
+            // return, never a thrown error, so it never reaches that catch (no
+            // double-fire). Both workspace-id fields carry the unified
+            // activeWorkspaceId (no claim divergence on this path).
+            reportDivergence: (op, userId, workspaceId) =>
+              reportRepoResolverDivergence({
+                userId,
+                op,
+                activeClaimWorkspaceId: workspaceId,
+                resolvedWorkspaceId: workspaceId,
+              }),
           },
         );
       } catch (err) {

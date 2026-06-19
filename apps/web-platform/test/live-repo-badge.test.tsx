@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
 import { __resetActiveRepoCoalesceForTests } from "@/hooks/use-active-repo";
 
@@ -24,8 +24,9 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
   it("renders NOTHING on the happy path (repo name now lives in the pill, not here)", async () => {
     // Flag when the poll's body settles so the absence assertions below run
     // AFTER the state commit — a bare wait-on-absence passes on the first
-    // tick (pre-poll) and proves nothing. Mirrors the regainCommitted
-    // pattern in the re-arm test.
+    // tick (pre-poll) and proves nothing. (The re-arm test below anchors on the
+    // stronger fetch-call-count signal because it has no positive DOM observable
+    // for its regain state; here the terminal empty-DOM assertion suffices.)
     let pollCommitted = false;
     vi.stubGlobal(
       "fetch",
@@ -89,19 +90,13 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
       repoStatus: "ready",
       fellBackToSolo: false,
     };
-    let regainCommitted = false;
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(solo) }) // mount: revoked
       .mockResolvedValueOnce({
         ok: true,
-        // focus: regained access — flag when its body settles so the next
-        // focus fires only AFTER this poll commits (no overlapping in-flight
-        // fetches → deterministic ordering despite fetch coalescing).
-        json: () =>
-          Promise.resolve(team).finally(() => {
-            regainCommitted = true;
-          }),
+        // focus: regained access (fellBackToSolo:false) — stays hidden, no re-arm.
+        json: () => Promise.resolve(team),
       })
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(solo) }); // focus: revoked AGAIN
     vi.stubGlobal("fetch", fetchMock);
@@ -125,12 +120,40 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     // clear; here they fire back-to-back, so reset to force a fresh fetch.
     __resetActiveRepoCoalesceForTests();
     fireEvent.focus(window);
-    await vi.waitFor(() => expect(regainCommitted).toBe(true), {
-      timeout: 10_000, // #5113 — see first vi.waitFor in this file
-    });
-    expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
 
-    // a FRESH revocation (false→true transition) must re-surface the alert
+    // The regain poll (Focus #1) must have COMMITTED before the re-revoke fires.
+    // The body-settle flag used previously (`regainCommitted`, flipped in the
+    // team payload's `.finally()`) is too early — it precedes the hook's
+    // `setData(next)` continuation (the `poll` callback in use-active-repo.ts,
+    // a strictly later microtask), so it proves the fetch body settled, NOT that
+    // the `false` state rendered. Gate instead on the fetch-mock call count
+    // reaching 2:
+    // call 2 IS the regain fetch, so its dispatch is strictly downstream of the
+    // body-settle and proves the regain `poll()` ran. The component renders
+    // `null` in the regain state (interstitial-only), so there is no positive
+    // DOM observable for the `team`/`false` state — the call count is the
+    // deterministic in-harness proof (#5297 AC2/AC2b).
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), {
+      timeout: 10_000, // #5113 — tolerate forked-worker CPU starvation
+    });
+    // Drain the setData(team) commit + the boolean-dep fellBackToSolo:false
+    // effect so the `false` value observably renders before the re-revoke.
+    // `act` flushes microtasks AND React's effect queue in one deterministic
+    // drain — no wall-clock dependency (rejected: setTimeout / vi.advanceTimers*,
+    // which would re-arm the flake and pump the hook's real cloning-poll).
+    await act(async () => {});
+    // AC2b: regain provably committed (call 2 ran) before Focus #3 — converts
+    // "node happens to be absent" into "regain provably ran". mount-`solo` and
+    // re-revoke-`solo` are identical, so the terminal toBeInTheDocument() alone
+    // cannot distinguish "re-armed" from "never left"; this supplies the
+    // transition-through-`false` evidence.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // a FRESH revocation (false→true transition) must re-surface the alert.
+    // Reset the latch AFTER the act flush (never before): resetting `inFlight`
+    // while the prior poll's setData(team) continuation is still pending would
+    // let two setData continuations run concurrently with no ordering guarantee
+    // (the coalesce-reset/continuation interleave hazard, #5297).
     __resetActiveRepoCoalesceForTests();
     fireEvent.focus(window);
     await vi.waitFor(
@@ -140,6 +163,10 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
         ).toBeInTheDocument(),
       { timeout: 10_000 }, // #5113 — see first vi.waitFor in this file
     );
+    // The re-surfaced interstitial was caused by the re-revoke poll (call 3),
+    // not a lingering mount-state render: distinguishes "re-armed via a fresh
+    // false→true transition" from any path that reappears without a third poll.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("dismissing the interstitial hides it", async () => {

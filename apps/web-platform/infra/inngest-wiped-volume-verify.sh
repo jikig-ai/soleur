@@ -18,11 +18,12 @@
 #   1. Emptiness gate (B1 — the REAL safety gate): run the enumeration; if ANY
 #      non-throwaway armed reminder is present, ABORT LOUD. A wipe with a real
 #      armed reminder present could destroy the operator's pending action. This
-#      is the gate that matters — NOT the postgres-uri check, which ALWAYS passes
+#      is the gate that matters — NOT the durable-sentinel check, which ALWAYS passes
 #      post-#5459 and protects nothing.
-#   2. Durable-backend sanity (secondary): the running ExecStart must carry
-#      --postgres-uri. A wipe of a SQLite-only backend destroys real state. This
-#      is a belt-and-suspenders assert, not the primary gate.
+#   2. Durable-backend sanity (secondary): the running ExecStart must carry the
+#      non-secret --postgres-max-open-conns durable sentinel (#5560 — postgres/redis
+#      URIs are env-delivered now, never argv). A wipe of a SQLite-only backend
+#      destroys real state. This is a belt-and-suspenders assert, not the primary gate.
 #
 # THROWAWAY MARKER (P2-sec-b): an UNREGISTERED `named-check` (check name
 # `__cutover-verify-noop__`). The handler accepts it (route validates only that
@@ -95,7 +96,7 @@ fi
 
 # ---- Gate 2: durable-backend sanity (secondary) ------------------------------
 execstart="${INNGEST_VERIFY_EXECSTART:-$(systemctl show inngest-server.service -p ExecStart 2>/dev/null || true)}"
-[[ "$execstart" == *"--postgres-uri"* ]] || abort "non_durable_backend" "inngest ExecStart has no --postgres-uri (SQLite-only) — a wipe would destroy real state"
+[[ "$execstart" == *"--postgres-max-open-conns"* ]] || abort "non_durable_backend" "inngest ExecStart has no --postgres-max-open-conns durable sentinel (SQLite-only) — a wipe would destroy real state"
 
 # ---- Arm the throwaway marker (unregistered named-check → no comment) --------
 SECRET="$(read_secret)"

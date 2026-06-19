@@ -7,7 +7,18 @@
 #
 #   { "functions":      [<registered function name/slug>, ...],   # /v0/gql functions
 #     "event_names":    [<distinct event name>, ...],             # eventsV2 (ALL)
-#     "armed_reminders": [{reminder_id,fire_at,actor,action}, ...] }  # enumerate proj.
+#     "armed_reminders": [{reminder_id,fire_at,actor,action}, ...],   # enumerate proj.
+#     "durability_state": "durable"|"degraded"|"sqlite_only"|"unknown" }  # #5553
+#
+# durability_state (#5553) is the no-SSH continuous-durability surface: a between-deploy
+# detector (.github/workflows/scheduled-inngest-health.yml) reads it every 15 min and
+# files an advisory issue when the host runs non-durable (sqlite_only/degraded) between
+# deploys — the deploy-time ci-deploy.sh signal fires only at deploy time. Derived
+# on-host from `systemctl show -p ExecStart inngest-server.service` + `systemctl is-active
+# inngest-redis.service`, mirroring the canonical ci-deploy.sh:277-287 verdict (pinned by
+# a cross-file drift-guard test). Only the ENUM is emitted — never the ExecStart string
+# (the $VAR-form connection refs stay on-host; #5503 purity). Test seams:
+# INVENTORY_EXECSTART, INVENTORY_REDIS_ACTIVE (CI has no systemd).
 #
 # Read-only: no writes, no service restart. Safe to call anytime.
 #
@@ -31,9 +42,12 @@
 # (stdout AND stderr) even on a 200, and the cutover workflow parses this body as a
 # JSON OBJECT. So on the SUCCESS path this script must write NOTHING non-JSON to
 # EITHER stream: stdout carries only the final object, and the summary goes to
-# on-host journald via `logger` ONLY (read with `journalctl -t inngest-inventory`;
-# it does NOT reach Better Stack — see #5495). Internal shell consumers use `$(...)`
-# (stdout only), so the merge happens solely at the webhook boundary.
+# on-host journald via `logger` ONLY (read with `journalctl -t inngest-inventory`).
+# The journald summary DOES now reach Better Stack: `inngest-inventory` was added to
+# Vector's tag allowlist (vector.toml:132, #5526), so the `durability=<enum>` summary
+# is the load-bearing no-SSH carrier for the between-deploy degraded state (#5553).
+# Internal shell consumers use `$(...)` (stdout only), so the merge happens solely at
+# the webhook boundary.
 #
 # Test seam: INNGEST_GQL_FIXTURE_DIR (page-N.json for eventsV2), INVENTORY_FUNCTIONS_FIXTURE
 # (a file with the /v0/gql functions-query response), INVENTORY_NOW_MS (deterministic "now").
@@ -113,6 +127,48 @@ fetch_functions() {
     --data-binary "$body" "$GQL_URL" || echo '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}'
 }
 
+# Derive a no-SSH durability verdict from the live inngest-server unit (#5553),
+# mirroring the canonical ci-deploy.sh:277-287 rule EXACTLY (the deploy-time verdict
+# source of truth; kept token-identical in intent and pinned by the cross-file
+# drift-guard test). Reads only the CONFIGURED ExecStart ($VAR form — NEVER the
+# resolved connection string, #5503 purity / AC3) + inngest-redis activeness, and
+# emits ONE enum on stdout:
+#   durable     — durable sentinel (--postgres-max-open-conns) present AND inngest-redis active
+#   degraded    — durable sentinel present but redis inactive
+#                 (the #5542 incident state: durable backend, broken durability
+#                 invariant — ci-deploy treats this as a hard FAIL)
+#   sqlite_only — no durable sentinel (the SQLite-only fail-safe ExecStart, #5547)
+#   unknown     — ExecStart unreadable (empty); the server-down case is already
+#                 caught upstream by the .data.functions array guard
+# Detection sentinel (#5560): durability is keyed on the NON-SECRET
+# --postgres-max-open-conns flag, NOT --postgres-uri/--redis-uri — those URIs are now
+# delivered via the doppler-run ENVIRONMENT (never argv) so they no longer appear in
+# the ExecStart. inngest-bootstrap.sh writes --postgres-max-open-conns ONLY in the
+# durable branch (present iff durable). This keeps the parser reading the $VAR-form
+# ExecStart only (NEVER a resolved connection string, #5503 purity / AC3).
+# Test seams: INVENTORY_EXECSTART / INVENTORY_REDIS_ACTIVE (CI has no systemd).
+# Unset-only (`${VAR-…}`, not `:-`) so an explicitly-empty seam deterministically
+# means "unit read came back empty → unknown" regardless of any systemd on the runner.
+# SOLEUR-DEBT: 3rd of 3 ExecStart-durability parsers (ci-deploy.sh source-of-truth,
+# inngest-wiped-volume-verify.sh subset, this). Kept in sync by test_durability_drift_guard,
+# NOT a shared sourced lib (infra has no source-lib precedent). Upgrade trigger: a 4th
+# durable-sentinel ExecStart parser appears -> extract inngest-durability-lib.sh. Tracked: #5450.
+derive_durability_state() {
+  local exec_start redis_active
+  exec_start="${INVENTORY_EXECSTART-$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)}"
+  redis_active="${INVENTORY_REDIS_ACTIVE-$(systemctl is-active inngest-redis.service 2>/dev/null || echo inactive)}"
+  if [[ -z "$exec_start" ]]; then
+    echo "unknown"; return 0
+  fi
+  if [[ "$exec_start" == *'--postgres-max-open-conns'* ]]; then
+    if [[ "$redis_active" != "active" ]]; then
+      echo "degraded"; return 0
+    fi
+    echo "durable"; return 0
+  fi
+  echo "sqlite_only"
+}
+
 run_inventory() {
   # --- functions: names only (fall back to slug/id if the element lacks .name) ---
   local fn_body functions
@@ -135,7 +191,22 @@ run_inventory() {
   functions=$(echo "$fn_body" | jq -c '[ .data.functions[] | (.name // .slug // .id // empty) ] | sort')
 
   # --- eventsV2: paginate ALL events to exhaustion ---
-  local all_edges="[]" after="" page=1 resp page_edges has_next end_cursor
+  # #5523: accumulate page edges via a SPOOL FILE, not argv. The old form passed the
+  # entire running accumulator to jq as a single command-line argument every page
+  # (via --argjson); once it crossed the
+  # kernel per-arg ceiling (MAX_ARG_STRLEN, ~128 KB) the execve(2) of jq failed with
+  # "Argument list too long" (the live HTTP 500). Appending each page's edges array to
+  # a temp file and collapsing once with `jq -s 'add // []'` reads via file I/O — no
+  # argv size limit. Pattern precedent: github-community.sh:294 (the same #5523-class
+  # learning's fix). `// []` keeps a zero-page run well-formed.
+  local edges_file after="" page=1 resp has_next end_cursor all_edges
+  edges_file=$(mktemp)
+  # shellcheck disable=SC2064  # expand $edges_file NOW so the trap body captures this
+  # value, not whatever the name resolves to at fire time. EXIT (not RETURN): RETURN
+  # does NOT fire on `exit`, so the two `exit 1` FATAL branches below would leak the
+  # spool file under RETURN. Registered INSIDE run_inventory, so the sourced-by-test
+  # path (run_inventory is never called when sourced — BASH_SOURCE guard) never sets it.
+  trap "rm -f '$edges_file'" EXIT
   while :; do
     resp=$(fetch_page "$after" "$page")
     if ! echo "$resp" | jq -e '.data.eventsV2' >/dev/null 2>&1; then
@@ -150,14 +221,17 @@ run_inventory() {
       echo "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" >&2
       exit 1
     fi
-    page_edges=$(echo "$resp" | jq -c '.data.eventsV2.edges // []')
-    all_edges=$(jq -nc --argjson a "$all_edges" --argjson b "$page_edges" '$a + $b')
+    # Append this page's edges array as ONE JSON value (one line) to the spool file;
+    # file I/O has no argv size limit (unlike the old per-page --argjson accumulation).
+    echo "$resp" | jq -c '.data.eventsV2.edges // []' >> "$edges_file"
     has_next=$(echo "$resp" | jq -r '.data.eventsV2.pageInfo.hasNextPage // false')
     end_cursor=$(echo "$resp" | jq -r '.data.eventsV2.pageInfo.endCursor // ""')
     [[ "$has_next" == "true" && -n "$end_cursor" ]] || break
     after="$end_cursor"
     page=$((page + 1))
   done
+  # Collapse all spooled per-page arrays into one flat edge array via file input.
+  all_edges=$(jq -s 'add // []' "$edges_file")
 
   # --- event_names: distinct sorted set across ALL events ---
   local event_names
@@ -174,17 +248,23 @@ run_inventory() {
       | { reminder_id: $env.data.reminder_id, fire_at: $env.data.fire_at, actor: $env.data.actor, action: $env.data.action }
     ]')
 
-  # --- Observability summary (counts + reminder_ids ONLY, never bodies) → journald only (#5503) ---
+  # --- durability_state: no-SSH continuous-durability surface (#5553) ---
+  # Enum only (durable|degraded|sqlite_only|unknown); never the ExecStart string.
+  local durability_state
+  durability_state=$(derive_durability_state)
+
+  # --- Observability summary (counts + reminder_ids + durability ENUM ONLY, never
+  #     bodies or connection strings) → journald only (#5503) ---
   local fn_count ev_count armed_count armed_ids
   fn_count=$(echo "$functions" | jq 'length')
   ev_count=$(echo "$event_names" | jq 'length')
   armed_count=$(echo "$armed" | jq 'length')
   armed_ids=$(echo "$armed" | jq -r '[.[].reminder_id] | join(",")')
-  logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids]" 2>/dev/null || true
+  logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids] durability=$durability_state" 2>/dev/null || true
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" \
-    '{functions:$f, event_names:$e, armed_reminders:$r}'
+  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" --arg d "$durability_state" \
+    '{functions:$f, event_names:$e, armed_reminders:$r, durability_state:$d}'
 }
 
 # Run only when executed directly — sourcing (the unit test) must NOT hit the network.
