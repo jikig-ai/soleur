@@ -290,6 +290,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     // only via the membership-scoped `resolve_workspace_installation_id` RPC.
     // A non-member caller gets NULL (deny == not-connected by design), never
     // B's seeded installation id.
+
+    // Positive control (pairs with the deny below so it is non-vacuous): A
+    // resolves its OWN workspace's seeded installation id via the RPC. Without
+    // this, a broken RPC that returned NULL for everyone would make the deny
+    // pass green-but-wrong.
+    test("baseline: A resolves own github_installation_id via workspaces RPC", async () => {
+      const { data, error } = await aClient.rpc(
+        "resolve_workspace_installation_id",
+        { p_workspace_id: userA.id },
+      );
+      expect(error).toBeNull();
+      expect(Number(data)).toBe(parseInt(userA.id.slice(0, 8), 16));
+    });
+
     test("github_installation_id: A cannot resolve B's installation id (membership deny → NULL)", async () => {
       const { data, error } = await aClient.rpc(
         "resolve_workspace_installation_id",

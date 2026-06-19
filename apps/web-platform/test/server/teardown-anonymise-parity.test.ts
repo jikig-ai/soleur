@@ -50,7 +50,10 @@ const MIGRATIONS_DIR = join(WEB_PLATFORM_ROOT, "supabase", "migrations");
  */
 function extractAccountDeleteAnonymise(src: string): Map<string, string> {
   const out = new Map<string, string>();
-  const rpcRe = /"(anonymise_[a-z_]+)"/g;
+  // Anchor to the actual `.rpc("anonymise_x"` CALL shape — NOT any quoted
+  // `anonymise_*` literal (error/log-message strings also contain RPC names
+  // and would otherwise inflate the production set into a false parity demand).
+  const rpcRe = /\.rpc\(\s*"(anonymise_[a-z_]+)"/g;
   let m: RegExpExecArray | null;
   while ((m = rpcRe.exec(src)) !== null) {
     const rpc = m[1]!;
@@ -133,7 +136,16 @@ function findFunctionBody(rpc: string): string | null {
     .filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql"))
     .sort()
     .reverse(); // latest definition wins
-  const sigRe = new RegExp(`function\\s+public\\.${rpc}\\b`, "gi");
+  // Anchor to the DEFINITION (`CREATE [OR REPLACE] FUNCTION`) — a bare
+  // `function public.<rpc>` also matches the REVOKE/GRANT/COMMENT ON FUNCTION
+  // lines that follow it in the same migration; with last-match-wins those
+  // later matches slice forward into the NEXT function's `$$…$$` body and
+  // silently mis-resolve this RPC's tables (the inert-FATALITY bug #5582
+  // review caught: anonymise_workspace_activity resolving to conversations).
+  const sigRe = new RegExp(
+    `create\\s+(?:or\\s+replace\\s+)?function\\s+public\\.${rpc}\\b`,
+    "gi",
+  );
   for (const file of files) {
     const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
     let m: RegExpExecArray | null;
@@ -214,18 +226,32 @@ describe("teardown anonymise parity (drift guard)", () => {
   test("AC8 FATALITY — every `set-null`-labeled RPC is genuinely non-RESTRICT per its FK migration", () => {
     const fkMap = buildFkClassMap();
     const mislabeled: string[] = [];
+    const unresolvable: string[] = [];
     for (const entry of sequence) {
       if (entry.klass !== "set-null") continue;
       const classes = resolveRpcOnDeleteClasses(entry.rpc, fkMap);
-      // If we could resolve at least one FK table and ANY is RESTRICT, the
-      // `set-null` label is dangerous (it would warn-and-continue on a real
-      // 500 cause). An unresolvable RPC is skipped (parity already guards it).
-      if (classes.size > 0 && classes.has("restrict")) {
+      if (classes.size === 0) {
+        // FAIL LOUD, do not skip: an unresolvable `set-null` RPC means the
+        // FATALITY check is INERT for it (the exact inertness the #5582 review
+        // caught when findFunctionBody mis-resolved the body). The label claims
+        // "safe to warn-and-continue" but nothing verifies it — treat as a
+        // verification failure so the resolver/label is fixed, not trusted.
+        unresolvable.push(entry.rpc);
+        continue;
+      }
+      // Resolved ≥1 FK table — if ANY is RESTRICT the `set-null` label is
+      // dangerous (it would warn-and-continue on a real 500 cause).
+      if (classes.has("restrict")) {
         mislabeled.push(
           `${entry.rpc}: labeled set-null but FK migration says RESTRICT (${[...classes].join(",")})`,
         );
       }
     }
+    expect(
+      unresolvable,
+      `set-null RPC(s) whose FK class could not be resolved from migrations — ` +
+        `FATALITY verification is inert for them; fix the resolver or the label:\n  ${unresolvable.join("\n  ")}`,
+    ).toEqual([]);
     expect(
       mislabeled,
       `set-null mislabel would re-bury a deterministic deleteUser 500:\n  ${mislabeled.join("\n  ")}`,
