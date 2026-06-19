@@ -262,8 +262,8 @@ write_body() {
 # Per-route mock behavior. Order matters: 8288 must match before generic /health
 # because the canary loop's curl -sf for /health does NOT pass -w.
 case "$URL" in
-  *"8288/v1/functions"*)
-    # Cron-plan registry probe (#4650 AC9). Must match before 8288/health
+  *"8288/v0/gql"*)
+    # Cron-plan registry probe (#4650 AC9, #5520). Must match before 8288/health
     # so the substring routes here. Default: a function WITH a cron trigger
     # (healthy plan). Overrides simulate the two H9 failure modes.
     if [[ "${MOCK_CURL_INNGEST_FUNCTIONS_FAIL:-}" == "1" ]]; then
@@ -271,10 +271,10 @@ case "$URL" in
     fi
     if [[ "${MOCK_CURL_INNGEST_FUNCTIONS_NOCRON:-}" == "1" ]]; then
       # H9b: registered but cron de-planned — only the event trigger survives.
-      write_body '[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"event":"cron/community-monitor.manual-trigger"}]}]'
+      write_body '{"data":{"functions":[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"type":"EVENT","value":"cron/community-monitor.manual-trigger"}]}]}}'
       exit 0
     fi
-    write_body '[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"cron":"0 8 * * *"},{"event":"cron/community-monitor.manual-trigger"}]}]'
+    write_body '{"data":{"functions":[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"type":"CRON","value":"0 8 * * *"},{"type":"EVENT","value":"cron/community-monitor.manual-trigger"}]}]}}'
     exit 0
     ;;
   *"8288/health"*)
@@ -2062,7 +2062,7 @@ CRON_PIN_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=10\b' "$DEPLOY_S
 CRON_SEQ_COUNT=$(grep -cE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" || true)
 HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 http://127\.0\.0\.1:8288/v1/functions' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 .*http://127\.0\.0\.1:8288/v0/gql' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 # Probe pin scoped to the function region — a third `curl -sf --max-time 5`
 # exists outside verify_inngest_health (the deploy-arm web-platform health
 # probe), so a file-global count would be wrong.
@@ -2176,6 +2176,71 @@ if [[ "$MEM_FLAG_COUNT" -eq 2 && "$SWAP_FLAG_COUNT" -eq 2 && "$INIT_FLAG_COUNT" 
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: memory-cap source gate (mem=$MEM_FLAG_COUNT/2 swap=$SWAP_FLAG_COUNT/2 init=$INIT_FLAG_COUNT/2 node_opt=$NODE_OPT_COUNT/2 compose=$NODE_OPT_COMPOSE_COUNT/2 consts=$CAP_CONST_COUNT/4; file: ci-deploy.sh)"
+fi
+
+echo ""
+echo "--- #5547 Gap 1: existing-host deploy stages the durable Redis assets ---"
+# The existing-host deploy path runs inngest-bootstrap.sh DIRECTLY on the host
+# (the Alpine extract container has no systemctl), bypassing the OCI image
+# ENTRYPOINT that stages /tmp/inngest-redis.* on the fresh-host cloud-init path.
+# So ci-deploy.sh's `case "inngest")` MUST docker-cp the three Redis assets to
+# the /tmp staging path itself, or inngest-bootstrap.sh's Redis-install guard
+# (`[[ -f /tmp/inngest-redis.conf && ... ]]`) is always false → Redis never
+# installed → the durable ExecStart crash-loops (#5547 Gap 1).
+# Per-asset line-start greps (NOT a `grep -c >= 3`, which a WHY-comment naming
+# inngest-redis would inflate — AC1).
+TOTAL=$((TOTAL + 1))
+G1_CONF=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis\.conf' "$DEPLOY_SCRIPT" || true)
+G1_SERVICE=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis\.service' "$DEPLOY_SCRIPT" || true)
+G1_BOOTSTRAP=$(grep -cE '^[[:space:]]*docker cp .*inngest-redis-bootstrap\.sh' "$DEPLOY_SCRIPT" || true)
+if [[ "$G1_CONF" -ge 1 && "$G1_SERVICE" -ge 1 && "$G1_BOOTSTRAP" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: ci-deploy.sh stages inngest-redis.{conf,service} + inngest-redis-bootstrap.sh to /tmp (#5547 Gap 1 / AC1)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ci-deploy.sh must docker cp all three Redis assets in case inngest (conf=$G1_CONF service=$G1_SERVICE bootstrap=$G1_BOOTSTRAP; file: ci-deploy.sh / #5547 AC1)"
+fi
+
+echo ""
+echo "--- #5547 Gap 3: verify_inngest_health degraded advisory + success_degraded_durability ---"
+# Source-scoped (runtime-driving the deploy path is out of scope per the #4652
+# AC3 wiring comment above). AC5 — verify_inngest_health emits a degraded
+# ADVISORY (NOT return 1) via `logger -t "$LOG_TAG"` when the ExecStart lacks the
+# durable sentinel (the SQLite-only fail-safe), while the durable FAIL branch
+# (inngest-redis not active) still `return 1`. #5560: the "--redis-uri absent" FAIL
+# branch was REMOVED — the postgres/redis URIs are env-delivered now, so the only
+# durable-failure signal on argv is the sentinel + the redis-service-active check.
+VIH_FN=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+VIH_ADVISORY=$(printf '%s\n' "$VIH_FN" | grep -cE 'logger -t "\$LOG_TAG" "INNGEST_DURABLE: advisory' || true)
+VIH_FAIL_NOT_ACTIVE=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*not active' || true)
+VIH_SENTINEL=$(printf '%s\n' "$VIH_FN" | grep -cF -- '--postgres-max-open-conns' || true)
+# Negative: the removed --redis-uri-absent FAIL branch must NOT reappear (it would
+# be dead code — redis-uri is never on argv after #5560).
+VIH_FAIL_NO_REDIS=$(printf '%s\n' "$VIH_FN" | grep -cE 'INNGEST_DURABLE: FAIL .*--redis-uri absent' || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$VIH_ADVISORY" -ge 1 && "$VIH_FAIL_NOT_ACTIVE" -ge 1 && "$VIH_SENTINEL" -ge 1 && "$VIH_FAIL_NO_REDIS" -eq 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: verify_inngest_health emits degraded advisory + redis-not-active FAIL, keys on --postgres-max-open-conns sentinel, no dead --redis-uri-absent branch (#5547 AC5 / #5560)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: AC5 (advisory=$VIH_ADVISORY fail_not_active=$VIH_FAIL_NOT_ACTIVE sentinel=$VIH_SENTINEL dead_redis_branch=$VIH_FAIL_NO_REDIS; verify_inngest_health in ci-deploy.sh)"
+fi
+
+# AC5b — on a 0-exit bootstrap that left inngest on the SQLite-only ExecStart,
+# the case "inngest") block writes final_write_state 0 "success_degraded_durability"
+# (NOT plain "success") so /hooks/deploy-status .reason distinguishes a degraded
+# deploy from a healthy durable one. Detection re-derives from the WRITTEN
+# ExecStart via a case-local `inngest_exec_start=` (verify_inngest_health uses a
+# `local exec_start=`, so this name is unique to the deploy arm).
+G3_REASON=$(grep -cE 'final_write_state 0 "success_degraded_durability"' "$DEPLOY_SCRIPT" || true)
+G3_DETECT=$(grep -cE 'inngest_exec_start=' "$DEPLOY_SCRIPT" || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$G3_REASON" -ge 1 && "$G3_DETECT" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: case inngest writes success_degraded_durability on a degraded 0-exit deploy (#5547 AC5b)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: AC5b (degraded_reason=$G3_REASON detect=$G3_DETECT; file: ci-deploy.sh)"
 fi
 
 echo ""

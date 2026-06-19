@@ -116,4 +116,16 @@ bash "$SCANNER" "$FIXTURES/checkbox-trigger.txt" >/dev/null 2>&1
 assert_eq "0" "$?" "scanner exit code is 0 on match (fail-soft, surfaces via stdout)"
 echo ""
 
+# --- TS9: negation-blind — a NEGATED keyword still matches (the #5564 trap) ---
+# GitHub's auto-close parser ignores negation: "Does not close #N" closes #N.
+# This is the exact commit-message line that closed #5463 prematurely via #5564.
+# The scanner MUST flag it (catching the trap the human reader's eye glosses over).
+echo "TS9: negation-blind — 'Does not close #5463' (the #5564 commit-message trap) still matches"
+TMP_NEG=$(mktemp)
+printf 'Smoke-tests the harness end-to-end.\nDoes not close #5463 (flip tracked separately).\n' > "$TMP_NEG"
+OUT=$(run_scan "$TMP_NEG")
+rm -f "$TMP_NEG"
+assert_eq "1" "$(count_lines "$OUT")" "negated 'Does not close #5463' produces exactly 1 match"
+echo ""
+
 print_results

@@ -57,9 +57,42 @@ make_functions() {  # $1 = JSON array of names
   jq -nc --argjson names "$1" '{data:{functions:[ $names[] | {id:., name:., slug:., triggers:[]} ]}}'
 }
 
+# Build a page with $3 synthesized bulk edges (one jq call, fast) so the eventsV2
+# accumulator can be driven past MAX_ARG_STRLEN without thousands of make_edge spawns
+# (#5523). $1=hasNextPage $2=endCursor $3=count $4=node.name $5=extra-edges-json (default []).
+make_bulk_page() {
+  local hn="$1" ec="$2" n="$3" name="$4" extra="${5:-[]}"
+  jq -nc --argjson hn "$hn" --arg ec "$ec" --argjson n "$n" --arg name "$name" --argjson extra "$extra" '
+    {data:{eventsV2:{
+      totalCount:($n + ($extra|length)),
+      pageInfo:{hasNextPage:$hn,endCursor:$ec},
+      edges:( [ range($n) as $i | {
+        cursor:("\($name)-\($i)"),
+        node:{id:("\($name)-\($i)"),name:$name,occurredAt:"2026-06-10T00:00:00Z",
+              receivedAt:"2026-06-10T00:00:00Z",idempotencyKey:null,
+              raw:({data:{},id:("\($name)-\($i)"),name:$name,ts:1780358400000,v:null}|tojson),
+              runs:[]} } ] + $extra )
+    }}}'
+}
+
 # Run the script with fixtures; $1=page-dir, $2=functions-fixture-file. Returns stdout only.
 run_inv() {
   INNGEST_GQL_FIXTURE_DIR="$1" INVENTORY_FUNCTIONS_FIXTURE="$2" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null
+}
+
+# Run with the durability seams overlaid on a minimal empty fixture set (so the
+# functions/events path is satisfied while we vary ONLY the durability inputs).
+# $1 = INVENTORY_EXECSTART value (may be ""), $2 = INVENTORY_REDIS_ACTIVE value.
+# Returns stdout only. Mirrors run_inv (#5553).
+run_inv_durability() {
+  local execstart="$1" redis="$2"
+  local d ff out; d=$(mktemp -d); ff=$(mktemp)
+  make_functions '[]' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART="$execstart" INVENTORY_REDIS_ACTIVE="$redis" bash "$TARGET" 2>/dev/null)
+  rm -rf "$d" "$ff"
+  printf '%s' "$out"
 }
 
 echo "=== inngest-inventory.sh tests ==="
@@ -158,7 +191,9 @@ test_empty_state() {
   make_functions '[]' > "$ff"
   make_page false "" "[]" > "$d/page-1.json"
   local out; out=$(run_inv "$d" "$ff")
-  assert_eq "empty state → {functions:[],event_names:[],armed_reminders:[]}" '{"functions":[],"event_names":[],"armed_reminders":[]}' "$(echo "$out" | jq -c '.')"
+  # Project the three enumeration keys (durability_state is exercised by the #5553
+  # tests and depends on the runner's systemd state, so it is excluded here).
+  assert_eq "empty state → {functions:[],event_names:[],armed_reminders:[]}" '{"functions":[],"event_names":[],"armed_reminders":[]}' "$(echo "$out" | jq -c '{functions,event_names,armed_reminders}')"
 }
 
 # --- Test 9 (#5509 review P3): a degraded functions read fails LOUD, not false-clean ---
@@ -197,6 +232,148 @@ test_functions_from_gql_shape() {
   assert_eq "a bare array (old shape) trips the guard (not silently accepted)" "1" "$brc"
 }
 
+# --- Test 11 (#5523 AC1): a large accumulated edge set does NOT overflow MAX_ARG_STRLEN ---
+# RED against the pre-fix per-page argv accumulation (jq -nc --argjson a <accumulator>):
+# once the RUNNING accumulator crosses the ~128 KB per-arg ceiling it
+# trips `jq: Argument list too long` (the live HTTP 500). GREEN after the mktemp +
+# `jq -s 'add // []'` file-spool fix (file I/O has no argv size limit). Calibrated at
+# authoring time: 5 pages × 400 cron edges builds a running accumulator past the
+# ceiling by ~page 3; each individual page stays under the limit, so this exercises the
+# accumulator overflow specifically (not a single oversized page). A known future
+# reminder on the LAST page proves the fix accumulates ALL pages, not just truncates.
+test_large_accumulator_no_argv_overflow() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  local i
+  for i in 1 2 3 4; do
+    make_bulk_page true "CUR$i" 400 "cron/bulk" "[]" > "$d/page-$i.json"
+  done
+  make_bulk_page false "" 400 "cron/bulk" \
+    "[$(make_edge 01CANARY reminder.scheduled rem-overflow-canary "$FUTURE_MS" "[]")]" > "$d/page-5.json"
+  local out rc=0
+  out=$(run_inv "$d" "$ff") || rc=$?
+  assert_eq "large accumulated edge set exits 0 (no MAX_ARG_STRLEN overflow)" "0" "$rc"
+  assert_eq "event_names spans bulk + reminder across all pages" "cron/bulk,reminder.scheduled" "$(echo "$out" | jq -r '.event_names | join(",")')"
+  assert_eq "last-page armed reminder accumulated (all pages collapsed)" "rem-overflow-canary" "$(echo "$out" | jq -r '[.armed_reminders[].reminder_id] | join(",")')"
+}
+
+# --- Test 12 (#5523 AC2): accumulation never passes the running accumulator via argv ---
+# Structural regression guard: the test FAILs if the argv accumulation form is
+# reintroduced, and asserts the accumulation reads from a spool file (jq -s / file arg).
+# Anchored on the EXACT accumulator string — NOT a bare --argjson — so the legitimate
+# `--argjson first/after` in build_request_body and `--argjson f/e/r` in the final
+# object assembly do not false-trip it (Sharp Edges: structural-guard grep specificity).
+test_no_argv_accumulation() {
+  if grep -qE 'argjson a "\$all_edges"' "$TARGET"; then
+    echo "  FAIL: argv accumulation (jq --argjson a \"\$all_edges\") reintroduced — overflows MAX_ARG_STRLEN"; FAIL=$((FAIL+1));
+  else echo "  PASS: no argv accumulation of \$all_edges"; PASS=$((PASS+1)); fi
+  if grep -qE 'jq -s|--slurpfile' "$TARGET"; then
+    echo "  PASS: accumulation collapses a spool file (jq -s / --slurpfile)"; PASS=$((PASS+1));
+  else echo "  FAIL: no file-based accumulation (jq -s / --slurpfile) found"; FAIL=$((FAIL+1)); fi
+}
+
+# --- Test 13 (#5523 AC5): the spool temp file is cleaned on a FATAL exit path ---
+# The mktemp spool is created before the eventsV2 loop; a malformed page exits 1 from
+# inside the loop. The in-function `trap 'rm -f ...' EXIT` (NOT RETURN — RETURN does not
+# fire on `exit`) must still clean the spool file. Isolate mktemp via a private TMPDIR
+# and assert nothing survives.
+test_fatal_cleans_spool_tempfile() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); local tmpd; tmpd=$(mktemp -d)
+  trap 'rm -rf "$d" "$ff" "$tmpd"' RETURN
+  make_functions '[]' > "$ff"
+  # well-formed-but-unexpected page (no .data.eventsV2) → FATAL exit 1 inside the loop,
+  # AFTER the spool file is created.
+  printf '%s' '{"data":{"eventsV2OTHER":{}}}' > "$d/page-1.json"
+  local rc=0
+  TMPDIR="$tmpd" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" >/dev/null 2>&1 || rc=$?
+  assert_eq "malformed page exits non-zero (FATAL)" "1" "$rc"
+  local leftover; leftover=$(find "$tmpd" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "no spool temp file leaked on FATAL exit (EXIT trap fired)" "0" "$leftover"
+}
+
+# --- Test 14 (#5553): durability_state verdict mirrors ci-deploy.sh:277-287 ---
+# Five canonical states from a seam-injected ExecStart + redis activeness. The
+# verdict rule is byte-identical in intent to the deploy-time source of truth.
+test_durability_states() {
+  # #5560: durability keys on the NON-SECRET --postgres-max-open-conns sentinel
+  # (the postgres/redis URIs are env-delivered now, never on argv).
+  assert_eq "durable: sentinel present, redis active" "durable" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' active | jq -r '.durability_state')"
+  assert_eq "degraded: sentinel present but redis inactive" "degraded" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' inactive | jq -r '.durability_state')"
+  assert_eq "sqlite_only: no sentinel, redis inactive (SQLite-only fail-safe)" "sqlite_only" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest' inactive | jq -r '.durability_state')"
+  assert_eq "sqlite_only: no sentinel EVEN with redis active (sentinel is the gate)" "sqlite_only" \
+    "$(run_inv_durability '/usr/bin/inngest start --sqlite-dir /var/lib/inngest' active | jq -r '.durability_state')"
+  assert_eq "unknown: ExecStart unreadable (empty seam)" "unknown" \
+    "$(run_inv_durability '' inactive | jq -r '.durability_state')"
+}
+
+# --- Test 15 (#5553 AC3): the ExecStart connection ref never reaches any stream ---
+# #5503 purity extended to durability: only the enum is emitted, never the
+# $VAR/resolved ExecStart string. Seed a sentinel DSN and assert it is absent from
+# the COMBINED (stdout+stderr) stream — mirrors the SECRET-BODY journald guard.
+test_durability_no_secret_leak() {
+  local d ff out; d=$(mktemp -d); ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART='/usr/bin/inngest start --postgres-uri postgres://SECRET-DSN --postgres-max-open-conns 10' \
+    INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
+  assert_eq "ExecStart connection ref absent from combined stream (AC3)" "0" \
+    "$(printf '%s' "$out" | grep -c SECRET-DSN || true)"
+  assert_eq "durable verdict still emitted (no-leak path correct)" "durable" \
+    "$(printf '%s' "$out" | jq -r '.durability_state')"
+}
+
+# --- Test 16 (#5553 AC4): #5503 combined-stream purity preserved with the 4th key ---
+test_durability_purity_preserved() {
+  local d ff combined err; d=$(mktemp -d); ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  combined=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART='--sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1)
+  if echo "$combined" | jq -e 'type == "object" and has("functions") and has("event_names") and has("armed_reminders") and has("durability_state")' >/dev/null 2>&1; then
+    echo "  PASS: combined stream is a 4-key object incl durability_state"; PASS=$((PASS + 1));
+  else
+    echo "  FAIL: combined stream missing a key or polluted (durability field)"; FAIL=$((FAIL + 1)); fi
+  err=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    INVENTORY_EXECSTART='--sqlite-dir /var/lib/inngest --postgres-max-open-conns 10' INVENTORY_REDIS_ACTIVE=active bash "$TARGET" 2>&1 1>/dev/null)
+  assert_eq "success-path stderr empty with durability field" "" "$err"
+}
+
+# --- Test 17 (#5553 AC5): cross-file ExecStart-durability drift tripwire ---
+# Token co-occurrence guard (NOT a verdict-equivalence proof — the five Phase-2.2
+# verdicts pin THIS parser). #5560: durability is detected by the NON-SECRET
+# --postgres-max-open-conns sentinel + redis activeness (the postgres/redis URIs are
+# env-delivered now, never on argv). The sentinel+active rule is shared by the
+# source-of-truth (ci-deploy.sh) and the mirror (inngest-inventory.sh): both must
+# carry the load-bearing tokens. inngest-wiped-volume-verify.sh is a *secondary*
+# member of the ExecStart-parse family — its gate only checks the sentinel presence
+# on inngest-server.service (it deliberately does not parse redis), so it is asserted
+# only against the subset it genuinely shares. If the sentinel flag or a unit name is
+# renamed in ci-deploy.sh, the matching token disappears from the mirror's required
+# set and the guard trips, forcing a human re-look at all parsers.
+test_durability_drift_guard() {
+  local f tok missing=""
+  local full_tokens=(--postgres-max-open-conns inngest-redis.service inngest-server.service)
+  local subset_tokens=(--postgres-max-open-conns inngest-server.service)
+  for f in "$SCRIPT_DIR/ci-deploy.sh" "$TARGET"; do
+    for tok in "${full_tokens[@]}"; do
+      grep -qF -- "$tok" "$f" || missing="$missing $(basename "$f"):$tok"
+    done
+  done
+  for tok in "${subset_tokens[@]}"; do
+    grep -qF -- "$tok" "$SCRIPT_DIR/inngest-wiped-volume-verify.sh" \
+      || missing="$missing inngest-wiped-volume-verify.sh:$tok"
+  done
+  assert_eq "ExecStart-durability parsers reference their load-bearing tokens" "" "$missing"
+}
+
+test_durability_states
+test_durability_no_secret_leak
+test_durability_purity_preserved
+test_durability_drift_guard
 test_combined_is_pure_json_object
 test_functions_fetch_failure_is_loud
 test_functions_from_gql_shape
@@ -207,6 +384,9 @@ test_pagination
 test_summary_no_body_leak
 test_jq_n_body
 test_empty_state
+test_large_accumulator_no_argv_overflow
+test_no_argv_accumulation
+test_fatal_cleans_spool_tempfile
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
