@@ -256,6 +256,25 @@ describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () =>
     expect(screen.queryByTestId("nav-section-title")).toBeNull();
   });
 
+  // Composition-boundary invariant: the MOBILE band never adopts the collapsed
+  // icon mode even if `collapsed` is passed (the mobile top bar never collapses).
+  // isRailCollapsed = variant === "rail" && collapsed gates this; the layout
+  // never passes the combination, so this is the only guard that the mobile band
+  // can't silently start rendering the rail's icon/data-collapsed.
+  it("ignores `collapsed` for the mobile variant — full pill, no icon, no data-collapsed", async () => {
+    render(
+      <WorkspaceContextBand pathname="/dashboard" variant="mobile" collapsed />,
+    );
+    // mobile renders the full interactive pill (multi-org), not the icon tile
+    expect(
+      await screen.findByRole("button", { name: /switch workspace/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-identity-icon")).toBeNull();
+    expect(screen.getByTestId("workspace-context-band")).not.toHaveAttribute(
+      "data-collapsed",
+    );
+  });
+
   // The band carries data-collapsed="true" only for the collapsed RAIL — e2e
   // selectors (nav-states-shell.e2e.ts) depend on it.
   it("sets data-collapsed=\"true\" on the rail band only when collapsed", async () => {
