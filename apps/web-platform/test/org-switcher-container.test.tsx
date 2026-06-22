@@ -105,6 +105,19 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
     expect(subtitle).toHaveTextContent("jikig-ai/soleur");
   });
 
+  it("collapsed renders the icon-only identity (no pill, no switch chrome) and never the confirm dialog", async () => {
+    render(<OrgSwitcherContainer collapsed />);
+    // icon-only identity from the same data path
+    const icon = await screen.findByTestId("workspace-identity-icon");
+    expect(icon).toHaveAttribute("title", "jikigai");
+    // the switch chrome is suppressed at 56px
+    expect(
+      screen.queryByRole("button", { name: /switch workspace/i }),
+    ).toBeNull();
+    // there is no pending switch, so no confirm dialog regardless
+    expect(screen.queryByTestId("workspace-switch-confirm")).toBeNull();
+  });
+
   it("selecting a workspace shows a confirm step BEFORE switching (no immediate RPC)", async () => {
     render(<OrgSwitcherContainer />);
     await openAndSelectAcme();

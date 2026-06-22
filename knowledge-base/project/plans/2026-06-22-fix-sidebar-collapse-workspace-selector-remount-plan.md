@@ -323,23 +323,23 @@ So the regression test must observe the *mount/fetch lifecycle*, not just the DO
 
 ### Pre-merge (PR)
 
-- [ ] Collapsing then expanding the sidebar fires **zero** additional
+- [x] Collapsing then expanding the sidebar fires **zero** additional
       `/api/workspace/list-memberships` requests (mount-counter test, Test Strategy #1).
-- [ ] `OrgSwitcherContainer` is imported by **exactly**
+- [x] `OrgSwitcherContainer` is imported by **exactly**
       `components/dashboard/workspace-context-band.tsx` (`nav-single-mount.test.ts`
       green — single importer preserved).
-- [ ] `WorkspaceContextBand` rail variant renders ONE subtree (no `collapsed`
+- [x] `WorkspaceContextBand` rail variant renders ONE subtree (no `collapsed`
       early-return). Grep: the file contains no `if (variant === "rail" && collapsed)
       … return` early-return for the band body.
-- [ ] Collapsed rail still renders `data-testid="workspace-identity-icon"` with
+- [x] Collapsed rail still renders `data-testid="workspace-identity-icon"` with
       `title` = active workspace name and no `▾`/`Switch workspace` button
       (band + e2e green).
-- [ ] Expanded rail renders the full pill with avatar + name + `▾` (multi) / static
+- [x] Expanded rail renders the full pill with avatar + name + `▾` (multi) / static
       chip (solo) — unchanged (`org-switcher.test.tsx` green).
-- [ ] `useActiveWorkspace` hook is deleted (or, if a non-layout consumer was found in
+- [x] `useActiveWorkspace` hook is deleted (or, if a non-layout consumer was found in
       Phase 0.4, the layout no longer calls it and the deferral is noted) — and the
       layout no longer threads `activeWorkspaceName/Id/HasLogo` into the band.
-- [ ] `tsc --noEmit` clean; full vitest suite green; e2e `nav-states-shell.e2e.ts`
+- [x] `tsc --noEmit` clean; full vitest suite green; e2e `nav-states-shell.e2e.ts`
       collapsed/expanded assertions green.
 
 ### Post-merge (operator)
