@@ -48,15 +48,17 @@ export default function ChatPage() {
     };
   }, [contextParam]);
 
-  // Gate ChatSurface mount on context resolution so the WS session start
-  // receives the KB content in the same bootstrap call rather than racing.
-  if (contextLoading) return null;
-
+  // Render the chat shell immediately (no blank screen — audit M1) but pass
+  // `contextPending` so ChatSurface defers its WS session start until the KB
+  // context resolves. This preserves the original invariant — the session
+  // still starts once, with the resolved `initialContext` in the same
+  // bootstrap call — without gating the whole mount on the fetch.
   return (
     <ChatSurface
       variant="full"
       conversationId={params.conversationId}
       initialContext={initialContext}
+      contextPending={contextLoading}
     />
   );
 }

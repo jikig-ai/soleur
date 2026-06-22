@@ -1,0 +1,129 @@
+# Deploy a specific inngest-bootstrap OCI image tag via the deploy webhook (#5450 Step 4).
+# Sends `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z` to ci-deploy.sh
+# and polls /hooks/deploy-status for completion. This is the no-SSH trigger the cutover
+# runbook's Step 4 deploy needs (restart-inngest-server.yml only sends `restart inngest _
+# latest`, which restarts the CURRENT on-host image — it cannot pull a specific redis-bearing
+# tag). The `tag` input is validated `^v[0-9]+\.[0-9]+\.[0-9]+$` so the command is never
+# free-form (no injection via the dispatch input). Image is fixed; only the tag varies.
+name: Deploy Inngest Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing GHCR image tag to deploy (e.g., v1.1.15)'
+        required: true
+        type: string
+  # push trigger scoped to this file forces GitHub to register the workflow in the
+  # Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-inngest-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-inngest-restart
+      cancel-in-progress: false
+    steps:
+      - name: Validate tag (injection-safe — digits + dots only)
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$TAG' is not a vX.Y.Z image tag"; exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Trigger deploy via webhook
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          # TAG is validated digits+dots only (prior step); the command is fixed-shape.
+          PAYLOAD="{\"command\":\"deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap ${TAG}\"}"
+          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 30 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=$SIGNATURE" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -d "$PAYLOAD" \
+            "https://deploy.soleur.ai/hooks/deploy")
+          if [[ "$HTTP_CODE" != "202" ]]; then
+            echo "::error::Deploy webhook rejected (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+          # Freshness anchor for the verify step (#5145): deploy-state is a single
+          # slot, so the first poll after the 202 can read the PREVIOUS terminal
+          # state before this run's webhook exec writes "running".
+          echo "TRIGGER_TS=$(date +%s)" >> "$GITHUB_ENV"
+          echo "Deploy of inngest ${TAG} initiated (HTTP 202), polling status..."
+
+      - name: Verify deploy completion
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          # Window must exceed ci-deploy.sh's verify_inngest_health worst case incl.
+          # TimeoutStopSec hung-stop (mirrors restart-inngest-server.yml; #5145).
+          MAX_POLLS=120
+          POLL_INTERVAL=5
+          FRESH_FLOOR=$((TRIGGER_TS - 60))
+          for i in $(seq 1 "$MAX_POLLS"); do
+            rm -f /tmp/status-body
+            curl -s --max-time 10 \
+              -o /tmp/status-body \
+              -w '%{http_code}' \
+              -X GET \
+              -H "X-Signature-256: sha256=$SIGNATURE" \
+              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+              "https://deploy.soleur.ai/hooks/deploy-status" >/dev/null 2>&1 || true
+            BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
+            if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "Attempt $i/$MAX_POLLS: non-JSON or empty body — retrying"
+              sleep "$POLL_INTERVAL"; continue
+            fi
+            EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+            REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+            COMPONENT=$(echo "$BODY" | jq -r '.component // "unknown"')
+            START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
+            case "$EXIT_CODE" in
+              0)
+                if [ "$COMPONENT" = "inngest" ] && [ "$START_TS" -ge "$FRESH_FLOOR" ]; then
+                  echo "::notice::Inngest deploy ${TAG} completed (reason=$REASON)"
+                  echo "$BODY" | jq .; exit 0
+                fi
+                echo "Attempt $i/$MAX_POLLS: not this run's terminal inngest state yet (component=$COMPONENT start_ts=$START_TS floor=$FRESH_FLOOR)"
+                ;;
+              -1) echo "Attempt $i/$MAX_POLLS: deploy still running (reason=$REASON)" ;;
+              -2) echo "Attempt $i/$MAX_POLLS: no prior deploy recorded" ;;
+              -3) echo "Attempt $i/$MAX_POLLS: corrupt state read, retrying" ;;
+              *)
+                if [ "$COMPONENT" = "inngest" ] && [ "$START_TS" -ge "$FRESH_FLOOR" ]; then
+                  echo "::error::Inngest deploy ${TAG} FAILED (exit_code=$EXIT_CODE, reason=$REASON) — likely inngest-redis-bootstrap or verify_inngest_health"
+                  echo "$BODY" | jq .; exit 1
+                fi
+                echo "Attempt $i/$MAX_POLLS: stale non-zero state predates this trigger — waiting"
+                ;;
+            esac
+            sleep "$POLL_INTERVAL"
+          done
+          echo "::error::Deploy verify timed out after $((MAX_POLLS * POLL_INTERVAL))s"
+          exit 1

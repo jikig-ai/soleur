@@ -1,0 +1,480 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification: this monitor MUST be external to Inngest. An Inngest
+# cron cannot detect Inngest being down (a crash-looping server runs no crons) —
+# that blind spot is the exact #5542 failure this workflow closes. Pure-GH ops.
+#
+# External Inngest health watchdog (#5542 incident — the ~3.5h silent crash-loop).
+#
+# WHY THIS EXISTS: inngest-server crash-looped for hours with NO alert. The
+# existing self-healing watchdog (inngest-watchdog-restart-dispatch.yml) is
+# INTERNAL — it relies on an inngest cron firing the `inngest-desync-restart`
+# label, but a cron cannot run while inngest is fully DOWN. So a hard crash-loop
+# (e.g. durable ExecStart live but inngest-redis missing → connection refused) is
+# invisible: no internal cron, no external probe, no alert. vector ships the
+# crash logs to Better Stack but nothing alerts on them.
+#
+# This workflow is the EXTERNAL probe that runs independently of inngest: it hits
+# the loopback-health signal via the inngest-inventory deploy hook every 15 min.
+# On failure it (1) auto-dispatches restart-inngest-server.yml (github.token has
+# actions:write; a direct dispatch — NOT the label path, which github.token
+# cannot trigger due to GHA's same-token recursion guard), (2) files/updates a
+# P1 tracking issue, and (3) reports an error heartbeat to Sentry so a MISSING
+# check-in also alerts. Pattern mirrors scheduled-realtime-probe.yml.
+#
+# Security: all untrusted values (probe response body) flow through env vars +
+# strip_log_injection before any echo into ::error:: or $GITHUB_OUTPUT. No
+# github.event.* inputs are consumed. The deploy-webhook HMAC + CF Access gates
+# are unchanged (read-only GET of the inventory hook).
+#
+# Tracks #5542.
+
+name: "Scheduled: Inngest Health Watchdog"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min — inngest-down is a brand-survival outage
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-inngest-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write   # to dispatch restart-inngest-server.yml on failure
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - id: probe
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-realtime-probe.yml)
+
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          fail_mode=""; fail_detail=""; dstate=""
+          record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
+
+          if [[ -z "${WEBHOOK_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+            record_failure "secret_unset" "WEBHOOK_DEPLOY_SECRET / CF_ACCESS_* not set — cannot probe the inngest health hook."
+          fi
+
+          # Health signal: the inngest-inventory hook GETs /v0/gql. HTTP 200 with a
+          # JSON object carrying .functions == inngest is up. 500 / __FETCH_FAILED__
+          # / non-JSON == inngest-server is down or /v0/gql unreachable.
+          # Probe up to 3x (8s apart) and only declare down if ALL fail — a single
+          # transient blip (CF Access hiccup, inventory timeout under load) must
+          # NOT trigger an unnecessary restart. Mirrors scheduled-realtime-probe's
+          # in-run retry resilience (its 5x SUBSCRIBED loop).
+          if [[ -z "$fail_mode" ]]; then
+            SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            last_mode=""; last_detail=""; healthy="no"
+            for attempt in 1 2 3; do
+              rm -f /tmp/health-body
+              CODE=$(curl -s --max-time 30 -o /tmp/health-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "https://deploy.soleur.ai/hooks/inngest-inventory" || echo "000")
+              BODY=$(cat /tmp/health-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+                last_mode="inngest_down"; last_detail="attempt ${attempt}/3: inventory hook HTTP ${CODE}: ${cause:-<empty body>}"
+              elif ! printf '%s' "$BODY" | jq -e 'type == "object" and (.functions | type == "array")' >/dev/null 2>&1; then
+                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+                last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: inventory 200 but no functions array: ${cause}"
+              else
+                fn=$(printf '%s' "$BODY" | jq -r '.functions | length')
+                echo "Inngest healthy on attempt ${attempt}/3: functions=${fn}"
+                healthy="yes"; break
+              fi
+              echo "Probe attempt ${attempt}/3 failed (${last_mode}); retrying…"
+              [[ "$attempt" -lt 3 ]] && sleep 8
+            done
+            # On a healthy body, read the no-SSH durability surface (#5553). The
+            # inventory hook emits durability_state as a constrained enum; an OLDER
+            # on-host script (pre-#5553) lacks the field → coerce to "absent" (benign,
+            # self-heals on next deploy). A literal "unknown" means a redeployed host
+            # whose on-host parser could not read the ExecStart (a real read failure).
+            if [[ "$healthy" == "yes" ]]; then
+              dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "absent"' 2>/dev/null || echo "absent")
+            fi
+            [[ "$healthy" == "no" ]] && record_failure "$last_mode" "$last_detail"
+          fi
+
+          fail_mode_safe=$(strip_log_injection "$fail_mode")
+          fail_detail_safe=$(strip_log_injection "$fail_detail")
+          dstate_safe=$(strip_log_injection "${dstate:-}")
+          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; echo "durability_state=${dstate_safe}"; } >> "$GITHUB_OUTPUT"
+          if [[ -n "$fail_mode_safe" ]]; then
+            echo "::error::Inngest health probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
+          elif [[ "$dstate_safe" == "absent" ]]; then
+            echo "::notice::Inngest healthy; durability_state field absent (older on-host inventory script, pre-#5553). No durability signal until the next infra-config push re-stages inngest-inventory.sh — blind window made visible, no issue filed."
+          elif [[ "$dstate_safe" == "unknown" ]]; then
+            echo "::warning::Inngest healthy but durability_state=unknown — the on-host inventory could not read the inngest-server ExecStart (parser/permission regression). This is a read failure, not a confirmed degradation; investigate. No issue filed."
+          elif [[ -n "$dstate_safe" && "$dstate_safe" != "durable" && "$dstate_safe" != "sqlite_only" && "$dstate_safe" != "degraded" ]]; then
+            echo "::warning::Inngest healthy but durability_state=${dstate_safe} is UNRECOGNIZED — no advisory routing exists for this value (expected durable|degraded|sqlite_only|unknown|absent). A forward-compat drift between inngest-inventory.sh's enum and this workflow; surface it here so it is not silent."
+          fi
+
+      # Pool-utilization probe (#5562) — leading indicator + EMAXCONNSESSION
+      # classification. Reads pg_stat_activity session counts on the dedicated
+      # inngest Supabase project (ref pigsfuxruiopinouvjwy) via the Management API.
+      # Runs AFTER the liveness probe and only evaluates pool state when the
+      # liveness verdict is empty — a genuinely-down inngest MUST keep its restart
+      # path (record_failure-first wins). Sets THREE names, on TWO routes:
+      #   pool_pressure / pool_exhausted → pool-family alert (NO restart — a restart
+      #     churns MORE session connections and worsens EMAXCONNSESSION; #5558).
+      #   pool_probe_unavailable          → soft probe-health alert (broken probe is
+      #     itself visible — closes the dark-probe zone).
+      # This step re-emits the EFFECTIVE failure_mode/failure_detail (id: poolprobe)
+      # so all downstream steps read ONE source of truth.
+      - name: Pool-utilization probe (leading indicator + EMAXCONNSESSION)
+        id: poolprobe
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PRIOR_FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
+          PRIOR_FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
+          # Inngest's OWN client-connection cap (--postgres-max-open-conns,
+          # inngest-bootstrap.sh:354, #5559). This is the ceiling on
+          # inngest-attributable sessions and the correct denominator for the
+          # leading indicator — NOT the pooler's default_pool_size (which is the
+          # server-side fan-in, dominated by Supabase infra baseline; counting
+          # total pg_stat_activity against it false-fires — #5563 follow-up, see
+          # the filtered query below). Decoupled from the default_pool_size 30→15
+          # revert by design. Bump this only if --postgres-max-open-conns changes.
+          INNGEST_CLIENT_CAP: '10'
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from the probe step above)
+
+          # Re-declared per-step — bash functions do not cross GH-Actions steps.
+          # Copied verbatim from the probe step (cq-regex-unicode-separators-escape-only).
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          # scrub_pat: redact a leaked Supabase account PAT (sbp_…) before any print.
+          # strip_log_injection strips control/separator chars but does NOT redact a
+          # token; GitHub's exact-match secret masking can be defeated by truncation.
+          # Ported verbatim from apps/web-platform/scripts/postgrest-reload-schema.sh.
+          scrub_pat() {
+            printf '%s' "$1" | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'
+          }
+          sanitize() { scrub_pat "$(strip_log_injection "$1")"; }
+
+          # Start from the upstream liveness verdict (carried via env).
+          fail_mode="$PRIOR_FAIL_MODE"; fail_detail="$PRIOR_FAIL_DETAIL"
+
+          if [[ -n "$fail_mode" ]]; then
+            echo "Upstream failure_mode='${fail_mode}' set — skipping pool probe (a down inngest keeps its restart path)."
+          elif [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+            fail_mode="pool_probe_unavailable"
+            fail_detail="SUPABASE_ACCESS_TOKEN unset — cannot read pg_stat_activity (pool probe degraded, not a restart)."
+          else
+            # Endpoint pinned to api.supabase.com — NO env override. An overridable
+            # host is a PAT-exfil-via-redirect seam (mirrors postgrest-reload-schema.sh's
+            # deliberate refusal of a host seam). curl 2>/dev/null keeps the
+            # Authorization header out of $response; scrub_pat is the second line.
+            response="$(curl --silent --show-error \
+              --request POST \
+              --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
+              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+              --header "Content-Type: application/json" \
+              --data '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' \
+              --max-time 15 \
+              -w $'\n%{http_code}' \
+              2>/dev/null)"
+            curl_rc=$?
+            http_code="${response##*$'\n'}"
+            body="${response%$'\n'*}"
+            # Truncate BEFORE sanitize (matches the probe step's head -c 400); scrub
+            # runs after truncation so redaction sees the final string.
+            body_safe="$(sanitize "$(printf '%s' "$body" | tr '\n' ' ' | head -c 400)")"
+
+            if [[ "$curl_rc" != "0" ]]; then
+              fail_mode="pool_probe_unavailable"
+              fail_detail="curl failed (rc=${curl_rc}) against Supabase Management API — pool probe degraded."
+            elif printf '%s' "$body" | grep -qF 'EMAXCONNSESSION'; then
+              # The pooler rejected a client connection — already at the cap. This
+              # EMAXCONNSESSION 5xx-body check is the reliable cliff detector and is
+              # independent of the count metric below.
+              fail_mode="pool_exhausted"
+              fail_detail="Management API HTTP ${http_code} EMAXCONNSESSION — session pool at the cap. body=${body_safe}"
+            elif [[ "$http_code" == 2?? ]]; then
+              if printf '%s' "$body" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                # Count ONLY inngest-attributable client backends: role 'postgres'
+                # (inngest connects through the session pooler as postgres.<ref>),
+                # excluding the pooler's own warm connections (app 'Supavisor*') and
+                # the mgmt-api probe. Compared against inngest's own client cap (10,
+                # --postgres-max-open-conns), NOT total pg_stat_activity vs
+                # default_pool_size — that total is dominated by Supabase infra
+                # baseline (Supavisor/PostgREST/pg_net/pg_cron/exporter/walsenders)
+                # and false-fires (#5563 follow-up to #5562).
+                inngest_conns=$(printf '%s' "$body" | jq '[.[] | select(.usename == "postgres" and (.app | startswith("Supavisor") | not) and .app != "mgmt-api") | .n] | add // 0')
+                # Full client-backend breakdown to stdout for visibility +
+                # future-proofing the discriminator (sanitized — application_name is
+                # client-settable, defense-in-depth against log injection).
+                breakdown="$(sanitize "$(printf '%s' "$body" | jq -r '.[] | "\(.usename // "?")/\(.app)/\(.state // "null")=\(.n)"' | tr '\n' ' ' | head -c 400)")"
+                echo "Inngest client backends: ${breakdown}"
+                if ! [[ "$inngest_conns" =~ ^[0-9]+$ ]]; then
+                  fail_mode="pool_probe_unavailable"
+                  fail_detail="could not compute inngest-attributable connection count (non-numeric) — breakdown: ${breakdown}"
+                elif (( inngest_conns * 100 >= INNGEST_CLIENT_CAP * 80 )); then
+                  # Integer arithmetic only — float under set -u aborts the step.
+                  fail_mode="pool_pressure"
+                  fail_detail="inngest client-attributable connections ${inngest_conns} >= 80% of client cap ${INNGEST_CLIENT_CAP} (leading indicator, before EMAXCONNSESSION). breakdown: ${breakdown}"
+                else
+                  echo "Inngest pool OK: inngest_conns=${inngest_conns} (client cap ${INNGEST_CLIENT_CAP}, threshold 80%)."
+                fi
+              else
+                fail_mode="pool_probe_unavailable"
+                fail_detail="Management API HTTP ${http_code} but body is not a JSON array — body=${body_safe}"
+              fi
+            else
+              # 401/403/other non-2xx without EMAXCONNSESSION → soft mode (print body;
+              # a Mgmt-API 401 is often a validation/scope signal, not pure auth).
+              fail_mode="pool_probe_unavailable"
+              fail_detail="Management API non-2xx HTTP ${http_code} (no EMAXCONNSESSION) — pool probe degraded. body=${body_safe}"
+            fi
+          fi
+
+          # failure_mode is a CONTROLLED enum this step sets (or carries from the
+          # upstream probe): '' | inngest_down | inngest_unhealthy | secret_unset |
+          # pool_pressure | pool_exhausted | pool_probe_unavailable. It is NEVER
+          # untrusted, so it is emitted RAW — a controlled enum should never be
+          # routed through a content-mutating sanitizer. (Historically this was
+          # load-bearing: the old strip_log_injection `tr -d '…\x7f\x85'` deleted
+          # the LITERAL chars x,7,f,8,5 because GNU tr does not parse \xNN as hex,
+          # turning 'pool_exhausted' → 'pool_ehausted' and mis-routing it to the
+          # [ci/inngest-down] class — #5563. The tr is now fixed to strip C0
+          # controls + DEL byte-safely, but raw-emit of a controlled enum remains
+          # the correct invariant.) Only fail_detail (which may embed untrusted
+          # body/breakdown) is sanitized.
+          fail_detail_safe="$(sanitize "$fail_detail")"
+          { printf '%s\n' "failure_mode=${fail_mode}"; printf '%s\n' "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
+          if [[ -n "$fail_mode" ]]; then
+            echo "::error::Inngest pool probe: ${fail_mode} — ${fail_detail_safe}"
+          fi
+
+      # Auto-restart is dispatched ONLY for the down-family (inngest_down /
+      # inngest_unhealthy). pool_pressure / pool_exhausted / pool_probe_unavailable
+      # are structurally EXCLUDED — a restart churns more session connections and
+      # worsens EMAXCONNSESSION (#5558). Do NOT add pool modes to this gate.
+      - name: Auto-dispatch inngest restart (failure)
+        if: steps.poolprobe.outputs.failure_mode == 'inngest_down' || steps.poolprobe.outputs.failure_mode == 'inngest_unhealthy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching restart-inngest-server.yml (auto-recovery)…"
+          gh workflow run restart-inngest-server.yml --repo "$GH_REPO" --ref main || \
+            echo "::warning::restart dispatch failed — the tracking issue below carries the escalation."
+
+      - name: File or comment tracking issue (failure)
+        if: steps.poolprobe.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAIL_MODE: ${{ steps.poolprobe.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.poolprobe.outputs.failure_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          # Branch the tracking issue on failure-mode CLASS, three distinct titles so
+          # auto-close never cross-matches:
+          #   pool  → [ci/inngest-pool]       session-pool pressure/exhaustion (do-NOT-restart remediation)
+          #   probe → [ci/inngest-pool-probe] the probe itself is degraded (401/scope/non-JSON) — NOT pool-hot;
+          #           a distinct title so an operator is not misled into pool remediation when the pool is fine
+          #   down  → [ci/inngest-down]       the existing liveness restart body
+          case "$FAIL_MODE" in
+            pool_pressure|pool_exhausted) ISSUE_CLASS="pool" ;;
+            pool_probe_unavailable)       ISSUE_CLASS="probe" ;;
+            *)                            ISSUE_CLASS="down" ;;
+          esac
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          if [[ "$ISSUE_CLASS" == "probe" ]]; then
+            ISSUE_TITLE="[ci/inngest-pool-probe] Inngest pool probe unavailable"
+            ISSUE_SEARCH='in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"'
+            gh label create "ci/inngest-pool-probe" --repo "$GH_REPO" \
+              --description "External watchdog: the pool-utilization probe itself is degraded (not pool-hot)" --color "5319E7" 2>/dev/null || true
+            {
+              printf '## Inngest pool probe unavailable\n\n'
+              printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+              printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### The probe is degraded — the pool is NOT necessarily hot\n\nThe Management-API pool read failed (401/403/scope, non-JSON body, or curl error). This is a dark-probe alert: the watchdog cannot see the session pool, so pool pressure could degrade the durable backend invisibly (the #5558 class). Do NOT restart inngest-server (the pool reading is unknown, not exhausted).\n\n'
+              printf '### Remediation\n\n1. Read the printed response body in the **Detail** above / run log — a Supabase Management-API 401 is often a validation/scope signal, not pure auth.\n2. Verify `SUPABASE_ACCESS_TOKEN` is set as a GH Actions secret (TF `github_actions_secret.supabase_access_token`) AND in Doppler `prd`, and that the PAT owner has read access to project `pigsfuxruiopinouvjwy`.\n3. Re-run the read-only probe per the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+            } > "$BODY_FILE"
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Probe still unavailable at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+            else
+              gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+                --label "ci/inngest-pool-probe" --label "priority/p1-high" --body-file "$BODY_FILE"
+            fi
+          elif [[ "$ISSUE_CLASS" == "pool" ]]; then
+            ISSUE_TITLE="[ci/inngest-pool] Inngest session-pool pressure/exhaustion"
+            ISSUE_SEARCH='in:title "[ci/inngest-pool] Inngest session-pool pressure/exhaustion"'
+            gh label create "ci/inngest-pool" --repo "$GH_REPO" \
+              --description "External watchdog detected inngest session-pool pressure/exhaustion (do NOT restart)" --color "FBCA04" 2>/dev/null || true
+            {
+              printf '## Inngest session-pool pressure / exhaustion\n\n'
+              printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+              printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### Do NOT restart inngest-server\n\nA restart re-opens all of inngest'\''s pooler connections at once, churning MORE session connections and DEEPENING `EMAXCONNSESSION`. This issue is intentionally excluded from the auto-restart gate.\n\n'
+              printf '### Remediation (stale-session / client-cap)\n\n1. Read **Detail** above: `pool_pressure` is inngest-attributable client connections vs inngest'\''s own client cap (10); `pool_exhausted` is an actual `EMAXCONNSESSION` from the pooler. The per-backend breakdown is in the run log (`Inngest client backends: …`).\n2. Confirm the client cap holds: inngest-server runs with `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). If inngest-attributable connections are near 10, inngest is opening more than expected — check for a stuck/looping function holding pooled connections.\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The leading indicator now tracks inngest'\''s client cap (10), NOT the pooler `default_pool_size` (which is Supabase-infra-dominated) — so this alert is decoupled from the separate #5562 `default_pool_size` 30→15 revert. Refs #5558 #5559.\n'
+            } > "$BODY_FILE"
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still hot at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Do NOT restart. Run: ${RUN_URL}"
+            else
+              gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+                --label "ci/inngest-pool" --label "priority/p1-high" --body-file "$BODY_FILE"
+            fi
+          else
+            ISSUE_TITLE="[ci/inngest-down] Inngest health watchdog failed"
+            ISSUE_SEARCH='in:title "[ci/inngest-down] Inngest health watchdog failed"'
+            gh label create "ci/inngest-down" --repo "$GH_REPO" \
+              --description "External watchdog detected inngest-server down/unhealthy" --color "B60205" 2>/dev/null || true
+            {
+              printf '## Inngest health watchdog failed\n\n'
+              printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+              printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### Auto-recovery\n\nThis run dispatched `restart-inngest-server.yml`. If inngest stays down after the restart, the durable backend likely lost its Redis (`inngest-redis.service` missing → crash-loop): the deploy must re-stage the redis assets, OR roll the ExecStart back to SQLite-only. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` + the #5542 incident.\n'
+            } > "$BODY_FILE"
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+            else
+              gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+                --label "ci/inngest-down" --label "priority/p1-high" --body-file "$BODY_FILE"
+            fi
+          fi
+
+      - name: Auto-close tracking issue (healthy)
+        if: steps.poolprobe.outputs.failure_mode == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search strings are intentional
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Healthy means BOTH liveness AND pool are fine. Close each class's issue
+          # with its OWN title search — never a union search (a union close-search
+          # would close the wrong issue; #5562 plan R5 / union-AC trap).
+          STALE_DOWN=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-down] Inngest health watchdog failed"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_DOWN" ]]; then
+            gh issue close "$STALE_DOWN" --repo "$GH_REPO" --comment "Inngest healthy again at ${NOW}. Run: ${RUN_URL}"
+          fi
+          STALE_POOL=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-pool] Inngest session-pool pressure/exhaustion"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_POOL" ]]; then
+            gh issue close "$STALE_POOL" --repo "$GH_REPO" --comment "Inngest session pool back under threshold at ${NOW}. Run: ${RUN_URL}"
+          fi
+          STALE_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_PROBE" ]]; then
+            gh issue close "$STALE_PROBE" --repo "$GH_REPO" --comment "Inngest pool probe healthy again at ${NOW}. Run: ${RUN_URL}"
+          fi
+
+      # --- #5553: continuous between-deploy durability detector ---------------
+      # The deploy-time ci-deploy.sh durability signal fires only at deploy time;
+      # a host that runs non-durable BETWEEN deploys re-alerts no one (a SQLite-only-
+      # but-alive server returns 200 + functions array, so the inngest_down/unhealthy
+      # checks above pass). These two steps close that gap using the inventory hook's
+      # no-SSH durability_state enum.
+      - name: File or comment durability advisory (non-durable)
+        if: steps.probe.outputs.failure_mode == '' && (steps.probe.outputs.durability_state == 'sqlite_only' || steps.probe.outputs.durability_state == 'degraded')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DSTATE: ${{ steps.probe.outputs.durability_state }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/inngest-degraded-durability] Inngest non-durable between deploys"
+          ISSUE_SEARCH='in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"'
+          gh label create "ci/inngest-degraded-durability" --repo "$GH_REPO" \
+            --description "Between-deploy detector: inngest running non-durable (sqlite_only/degraded)" --color "D93F0B" 2>/dev/null || true
+          # Severity: degraded (durable backend configured but the durability invariant
+          # is broken — the #5542 incident state) is canonically MORE severe than
+          # sqlite_only (server alive on the fail-safe). [#5553 review P0-1]
+          if [[ "$DSTATE" == "degraded" ]]; then PRIO="priority/p1-high"; else PRIO="priority/p2-medium"; fi
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Inngest running non-durable between deploys\n\n'
+            printf -- '- **Durability state:** `%s`\n' "$DSTATE"
+            printf -- '- **Severity:** `%s`\n' "$PRIO"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What this means\n\n'
+            printf '`sqlite_only` — the host is on the SQLite-only fail-safe ExecStart: the server is alive, but armed reminders survive only until the next host rebuild, then are lost.\n\n'
+            printf '`degraded` — the durable backend is configured (the `--postgres-max-open-conns` sentinel is present) but `inngest-redis.service` is inactive. This is the #5542 incident state (durable backend, broken durability invariant); armed-reminder loss risk is present now, not just on rebuild. (Since #5560 the postgres/redis URIs are env-delivered, not on argv — durability is keyed on the non-secret sentinel.)\n\n'
+            printf '### Remediation\n\n'
+            printf 'Re-deploy inngest with Redis ready (the deploy re-stages the redis assets → durable ExecStart), or restart `inngest-redis.service`. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the #5450 durability epic. This is the continuous between-deploy detector; the deploy-time `ci-deploy.sh` signal fires only at deploy time.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            # Keep severity accurate across sqlite_only<->degraded transitions so the
+            # issue never rots at a stale severity (#5553 review P2-1): add the current
+            # severity label, drop the opposite.
+            if [[ "$PRIO" == "priority/p1-high" ]]; then OTHER_PRIO="priority/p2-medium"; else OTHER_PRIO="priority/p1-high"; fi
+            gh issue edit "$EXISTING" --repo "$GH_REPO" --add-label "$PRIO" --remove-label "$OTHER_PRIO" 2>/dev/null || true
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still non-durable at ${NOW} — \`durability_state=${DSTATE}\` (severity ${PRIO}). Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/inngest-degraded-durability" --label "$PRIO" --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close durability advisory (durable)
+        if: steps.probe.outputs.failure_mode == '' && steps.probe.outputs.durability_state == 'durable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" \
+            --search 'in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" --comment "Inngest durable again at ${NOW} (durability_state=durable). Run: ${RUN_URL}"
+          fi
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-inngest-health
+          status: ${{ steps.poolprobe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

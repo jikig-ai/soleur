@@ -541,6 +541,66 @@ resource "sentry_issue_alert" "workspace_sync_health" {
   }
 }
 
+# server/repo-resolver-divergence.ts: emits `feature=repo-resolver-divergence`
+# breadcrumbs via reportSilentFallback for the dual-resolver divergence class
+# (ADR-044). The divergence file shipped the QUERYABLE signal but called the
+# NOTIFICATION rule a fast-follow — this rule is that fast-follow. The
+# dispatch-time op `connected-null-install-at-dispatch` (added this PR) is the
+# member cold-dispatch into a genuinely-connected workspace whose credential
+# read `resolve_workspace_installation_id` returned NULL — previously a SILENT
+# repo-less agent spawn (the "no git repository" Concierge incident). Without
+# this rule the events sit in Sentry un-notified
+# (hr-no-dashboard-eyeball-pull-data-yourself).
+#
+# feature-ONLY filter (no `op` IS_IN): the `repo-resolver-divergence` feature tag
+# is dedicated and EVERY op (non-member-claim-reset / self-heal-failed /
+# connected-null-install-at-dispatch) is operator-actionable. Op-scoping would
+# risk silently darking a future op (the failure mode test/sentry-repo-resolver
+# -divergence-alert-op-contract.test.ts pins against). Feature-only future-proofs
+# new ops.
+#
+# `action_match="any"` + first_seen/reappeared/regression lifecycle conditions:
+# Sentry folds repeated fires of the same fingerprint into one issue and re-pages
+# only on regression after the operator resolves it (anti-fatigue). Distinct
+# `frequency=20` avoids Sentry POST-time exact-duplicate dedup (taken by
+# siblings: 5,10,11,12,13,14,15,16,17,18,19,30,60,61,62); not evaluated by
+# lifecycle-condition rules but must be unique.
+resource "sentry_issue_alert" "repo_resolver_divergence" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "repo-resolver-divergence"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 20
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "repo-resolver-divergence"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── GitHub-webhook founder-ambiguous alert (#5437) — APPLY-CREATED ────────────
 # ADR-044 R8 asserts the founder-ambiguous standing-state MUST PAGE. The
 # non-push webhook resolver (server/resolve-founder-for-installation.ts) now

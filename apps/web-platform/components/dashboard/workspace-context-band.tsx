@@ -144,12 +144,14 @@ export function WorkspaceContextBand({
           the leading top room is pt-2 (was pt-3) so — together with the tightened
           brand-row padding above — the gap between the collapse toggle and this
           pill no longer reads as a large empty band. */}
-      {/* md:pr-10 reserves right clearance for the floated collapse toggle
-          (layout.tsx, `absolute right-3 top-10` → occupies the right ~36px of the
-          rail header). Without it the multi-workspace switcher's `▾` chevron
-          (org-switcher.tsx, `shrink-0` at the card's right edge) sits under the
+      {/* md:pr-20 reserves right clearance for the TWO floated controls
+          (layout.tsx): the collapse toggle (`absolute right-3 top-10` → the right
+          12–36px) and, just left of it, the full-hide toggle (`right-10 top-10` →
+          40–64px). pr-20 (80px) clears the leftmost (hide) edge at 64px with a
+          16px margin. Without it the multi-workspace switcher's `▾` chevron
+          (org-switcher.tsx, `shrink-0` at the card's right edge) sits under a
           toggle. Desktop-only (md:) — the mobile band is below the md breakpoint
-          and unaffected.
+          and unaffected. (Was md:pr-10 when only the collapse toggle floated.)
 
           md:min-h-[64px] (drill === null only) reserves the floated toggle's full
           vertical footprint — top-10 (40px) + h-6 (24px) = 64px from the aside top
@@ -165,7 +167,7 @@ export function WorkspaceContextBand({
           returns early above and never reaches this div. Idiom precedent:
           components/shared/cta-banner.tsx min-h-[1rem]. */}
       <div
-        className={`flex items-center gap-2 px-3 pt-2 md:pr-10${
+        className={`flex items-center gap-2 px-3 pt-2 md:pr-20${
           drill === null ? " md:min-h-[64px]" : ""
         }`}
       >

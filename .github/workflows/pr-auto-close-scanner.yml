@@ -1,7 +1,11 @@
 name: "PR auto-close keyword scanner (#3407)"
 
-# Scans PR title + body for GitHub auto-close keyword + #N references using the
-# regex from plugins/soleur/skills/ship/scripts/auto-close-scan.sh.
+# Scans PR title, body, AND commit messages for GitHub auto-close keyword + #N
+# references using the regex from plugins/soleur/skills/ship/scripts/auto-close-scan.sh.
+# Commit messages are included because this repo squash-merges, and the squash
+# commit (which GitHub's negation-blind parser reads on merge) is built from the
+# branch commit messages — a keyword there closes an issue even when the PR body
+# is clean. That gap closed #5463 twice (#5519, #5564).
 #
 # SECURITY: this workflow uses the env-block pattern (PR_TITLE/PR_BODY mapped to
 # env vars, then accessed via "$PR_TITLE"/"$PR_BODY" in the run script) — never
@@ -27,7 +31,9 @@ name: "PR auto-close keyword scanner (#3407)"
 
 on:
   pull_request:
-    types: [opened, edited]
+    # `synchronize` is required so a commit-message trap pushed AFTER the PR opens
+    # is re-scanned — `edited` only fires on title/body changes, not new commits.
+    types: [opened, edited, synchronize]
 
 permissions:
   contents: read
@@ -61,15 +67,26 @@ jobs:
             exit 0
           fi
 
-          TMP_T=$(mktemp); TMP_B=$(mktemp)
+          TMP_T=$(mktemp); TMP_B=$(mktemp); TMP_C=$(mktemp)
           printf '%s\n' "$PR_TITLE" > "$TMP_T"
           printf '%s\n' "$PR_BODY"  > "$TMP_B"
+          # Commit messages feed the squash-merge commit (this repo's default),
+          # which is the text GitHub's auto-close parser reads on merge to main.
+          # A negated keyword in a commit body ("Does not close #N") still fires
+          # the close — the parser is negation-blind — yet a title/body-only scan
+          # misses it. That exact gap closed #5463 twice (#5519, then #5564). The
+          # commit messages are untrusted PR-author input, so they are treated as
+          # data: written to a file, scanned, and backtick-stripped before any
+          # embedding (same model as PR_BODY).
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" \
+            --jq '.[].commit.message' > "$TMP_C" 2>/dev/null || true
 
           T_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
           B_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
+          C_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_C")
 
-          if [[ -z "$T_MATCHES_RAW" && -z "$B_MATCHES_RAW" ]]; then
-            echo "No auto-close keyword + #N references detected in title or body."
+          if [[ -z "$T_MATCHES_RAW" && -z "$B_MATCHES_RAW" && -z "$C_MATCHES_RAW" ]]; then
+            echo "No auto-close keyword + #N references detected in title, body, or commits."
             exit 0
           fi
 
@@ -81,19 +98,21 @@ jobs:
           # trust, downstream agents read bot comments). See PR #3411 P2-1.
           T_MATCHES=$(printf '%s' "$T_MATCHES_RAW" | tr -d '`')
           B_MATCHES=$(printf '%s' "$B_MATCHES_RAW" | tr -d '`')
+          C_MATCHES=$(printf '%s' "$C_MATCHES_RAW" | tr -d '`')
 
-          MSG="auto-close keyword + #N detected in PR title or body. Verify each match is intentional. If unintentional, edit the PR. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
+          MSG="auto-close keyword + #N detected in PR title, body, or a commit message. Verify each match is intentional. NOTE: GitHub's parser is negation-blind — 'does not close #N' still closes #N — and commit messages feed the squash-merge commit, so a keyword there auto-closes on merge even if the PR body is clean. If unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
           MSG_SAFE="${MSG//[$'\n\r']/}"
           echo "::warning::${MSG_SAFE}"
 
           # Build the comment body with a stable header line so we can match a
           # prior bot comment for in-place edit (idempotency — see #3407 R3).
           COMMENT_HEADER='## Auto-close keyword scanner (#3407)'
-          COMMENT_BODY=$(printf '%s\n\n%s\n\n### Title matches\n```\n%s\n```\n\n### Body matches\n```\n%s\n```\n\nIf any match is unintentional, edit the PR. To silence this scanner on subsequent body edits, add `<!-- auto-close-scanner: confirm -->` to the PR body.\n' \
+          COMMENT_BODY=$(printf '%s\n\n%s\n\n### Title matches\n```\n%s\n```\n\n### Body matches\n```\n%s\n```\n\n### Commit message matches\n```\n%s\n```\n\nIf any match is unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add `<!-- auto-close-scanner: confirm -->` to the PR body.\n' \
             "$COMMENT_HEADER" \
             "$MSG" \
             "${T_MATCHES:-(none)}" \
-            "${B_MATCHES:-(none)}")
+            "${B_MATCHES:-(none)}" \
+            "${C_MATCHES:-(none)}")
 
           # Find a prior bot comment with the same header → edit in place.
           # Otherwise post a new comment. Either path keeps the surface to a
