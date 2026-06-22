@@ -673,8 +673,10 @@ test.describe("widenable KB rail — desktop", () => {
 
   test("collapse takes precedence over a widened width (AC12)", async ({ page }) => {
     await setupNavMocks(page);
-    // Pre-seed a widened width, then collapse — the rail must still be 56px and
-    // the handle gone; the stored width is preserved for re-expand.
+    // Pre-seed a widened width, then collapse — the rail must still be 56px. The
+    // handle now STAYS mounted when collapsed (it is the sole expand affordance,
+    // post ▢-button removal), but the stored 400px width must NOT apply while
+    // collapsed; it is preserved for re-expand.
     await page.addInitScript((key) => {
       localStorage.setItem(key, "400");
     }, RAIL_WIDTH_KEY);
@@ -683,7 +685,9 @@ test.describe("widenable KB rail — desktop", () => {
 
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
-    await expect(resizeHandle(page)).toHaveCount(0);
+    // The grip stays mounted when collapsed (so the user can drag/double-click
+    // to expand) — collapse precedence is about WIDTH, not handle presence.
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 7_000 });
     // The rail hydrates expanded (224px) → collapsed (56px) over a 200ms
     // `md:transition-[width]`. Poll until the width settles, matching the
     // sibling widenable-rail tests — a single synchronous read races the
