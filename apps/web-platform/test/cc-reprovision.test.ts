@@ -169,15 +169,19 @@ describe("reprovisionWorkspaceOnDispatch — membership-verified single resolve 
 
   it("(b) member of team: confirmed team claim → path/install/repo all key to the TEAM id (no solo/team split)", async () => {
     mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM });
+    // Make the resolved path team-derived so the clone-target assertion below
+    // genuinely distinguishes team-vs-solo (not just the threading args).
+    const TEAM_WS = `/workspaces/${TEAM}`;
+    mockFetchUserWorkspacePath.mockResolvedValue(TEAM_WS);
 
     await reprovisionWorkspaceOnDispatch(USER);
 
     expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, TEAM);
     expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, TEAM);
     expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, TEAM);
-    // The clone targets the membership-verified team workspace, not solo.
+    // The clone targets the membership-verified team workspace path, not solo.
     expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: USER, workspacePath: WS }),
+      expect.objectContaining({ userId: USER, workspacePath: TEAM_WS }),
     );
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
