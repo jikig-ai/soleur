@@ -711,3 +711,91 @@ sessions"` edge (block-vs-spawn), not the topology. Grep of
 Behavioral correction shipped in the same PR (no soak gate; not a destructive
 migration; no schema change — the credential RPC is unmodified and no new
 migration is added).
+
+## Amendment 2026-06-22 — PR-3: extend resolve-once-and-thread to the per-dispatch reprovision resolver
+
+PR-1's always-enforce-workspace invariant was applied in the **cold dispatch
+factory** (`cc-dispatcher.ts realSdkQueryFactory:1536`): resolve the active
+workspace ONCE via the membership-verified `resolveActiveWorkspace` and thread the
+single id into every consumer (path/repo/install/self-heal). PR-3 records that the
+SAME invariant was **missing** on a second, separate per-dispatch consumer:
+`reprovisionWorkspaceOnDispatch` (`server/cc-reprovision.ts`), fire-and-forget on
+**every** dispatch — warm AND cold — at `cc-dispatcher.ts:2899`.
+
+### Symptom (member-stranding, reincarnated on the warm path)
+
+A team-workspace **Member** (not Owner) opening the new **routines panel** in
+Concierge (`components/routines/routines-surface.tsx`, dispatching with
+`initialContext { type: "routine-authoring" }`) was told to "connect/reconnect a
+GitHub repository in Settings → Repository" — an action a member cannot perform.
+The `routine-authoring` directive hard-STOPs the agent when
+`git rev-parse --is-inside-work-tree` is non-true, so the missing clone surfaces
+more sharply there than on a chat dispatch, but the defect is on the **shared**
+reprovision path, not routines-specific.
+
+### Root cause
+
+`reprovisionWorkspaceOnDispatch` re-derived the workspace id through **three
+divergent resolvers**: `fetchUserWorkspacePath` (→ `resolveActiveWorkspace`,
+membership-verified, resets a non-member claim to solo) vs. `resolveInstallationId`
+and `getCurrentRepoUrl` (→ `resolveCurrentWorkspaceId`, **raw claim**, no
+membership check). For a member whose membership state diverged from the claim
+(removed/stale claim, or a transient membership-probe `db-error` where the
+verified resolver fails closed to solo while the raw-claim resolvers keep the
+team), the clone **location** (solo `/workspaces/<userId>`) diverged from
+**repo+install** (team) — the team repo grafted into the solo path (no `.git`) or
+no-op'd. This is the exact #4767 divergence PR-1 killed in the factory, surviving
+on the warm/reprovision path with **zero divergence observability**.
+
+### Decision
+
+- **Option A4 (chosen): resolve once + thread + fail-closed-skip + breadcrumb.**
+  Inside `reprovisionWorkspaceOnDispatch`, call `resolveActiveWorkspace(userId,
+  tenant)` ONCE (one `getFreshTenantClient`), thread the single membership-verified
+  `activeWorkspaceId` into `fetchUserWorkspacePath`/`resolveInstallationId`/
+  `getCurrentRepoUrl`, and emit the deduped `repo_resolver_divergence` breadcrumb
+  (new op `reprovision-non-member-claim-reset`) on a non-member-claim reset. The
+  ONE deliberate divergence from the factory: on a `{ok:false,"db-error"}` this
+  **fire-and-forget recovery SKIPS** (returns `"ok"`) rather than throwing
+  `WorkspaceNotReadyError` — the factory is the dispatch readiness *boundary* (it
+  must throw to surface the not-ready CTA); the reprovision is a post-recovery
+  helper whose `ReprovisionOutcome` only gates the honest message, so the skip
+  preserves the existing fail-soft contract (no false reclaim) while never cloning
+  into an unverified location.
+- **Rejected: thread the cold factory's already-resolved id down into
+  reprovision.** The factory resolves lazily inside the runner's query
+  construction, AFTER `dispatchSoleurGo` fires reprovision at `:2899` — the id is
+  not in scope at the call site. Resolving once inside reprovision mirrors how the
+  factory resolves locally.
+- **Rejected: make the install/repo resolvers membership-verify by default.** Broad
+  blast radius (many callers pass an explicit id or rely on the claim resolver);
+  threading the id at the one divergent site is the minimal, targeted fix.
+
+The autonomous-toggle trio (`resolveBashAutonomous`/`resolveAutonomousAck`/
+`resolveIsWorkspaceOwner`) is **deliberately not threaded** here either (each backs
+onto an `is_workspace_member`-gated RPC → fail-closed on a non-member reset), the
+same scoping PR-1 chose for the factory.
+
+### C4 edge note
+
+No `.c4` model edit. The Member is already covered by the multi-Owner ADR-038
+`founder` actor; the install RPC read and clone edge are already modeled; this is
+an internal wiring fix below the C4 component grain (which resolver an existing
+internal dispatch consumer uses). Grep of `knowledge-base/**/*.c4` for the
+relevant identifiers confirms **no C4 impact**.
+
+### Observability
+
+New op `reprovision-non-member-claim-reset` on the existing
+`repo_resolver_divergence` breadcrumb (`server/repo-resolver-divergence.ts`),
+fingerprint-deduped by `op:userId:activeClaimWorkspaceId`, carrying ONLY the two
+workspace ids (no `repoUrl`/`installationId`). The Sentry issue-alert is
+feature-scoped (not op-scoped), so the new op routes through the existing rule with
+no `infra/sentry/*.tf` change. Routing-rule fan-out remains the soak-gated #5437
+follow-up.
+
+### Sequencing
+
+Single atomic PR (wiring + new breadcrumb op + tests + this amendment). No schema
+change, no migration, no soak gate on the code change; the breadcrumb's
+prod-soak observation is a post-merge verification only.

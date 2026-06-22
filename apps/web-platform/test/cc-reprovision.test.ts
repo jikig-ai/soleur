@@ -20,6 +20,8 @@ const {
   mockResolveEffectiveInstallationId,
   mockEnsureWorkspaceRepoCloned,
   mockReportSilentFallback,
+  mockGetFreshTenantClient,
+  mockResolveActiveWorkspace,
 } = vi.hoisted(() => ({
   mockFetchUserWorkspacePath: vi.fn(),
   mockResolveInstallationId: vi.fn(),
@@ -27,6 +29,8 @@ const {
   mockResolveEffectiveInstallationId: vi.fn(),
   mockEnsureWorkspaceRepoCloned: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockGetFreshTenantClient: vi.fn(),
+  mockResolveActiveWorkspace: vi.fn(),
 }));
 
 vi.mock("@/server/kb-document-resolver", () => ({
@@ -47,16 +51,37 @@ vi.mock("@/server/ensure-workspace-repo", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
 }));
+// ADR-044 PR-3: the membership-verified single-resolve seam. `getFreshTenantClient`
+// is the tenant client `resolveActiveWorkspace` reads through; both are mocked at
+// the module boundary so the reprovision path's resolve-once-and-thread is testable
+// without a live DB.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: mockGetFreshTenantClient,
+}));
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspace: mockResolveActiveWorkspace,
+}));
 
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
+// The breadcrumb module is NOT mocked — it runs for real and emits through the
+// mocked `reportSilentFallback`, so AC4 asserts the breadcrumb's security-safe
+// shape end-to-end. Its module-level dedupe set must be reset between cases.
+import { _resetResolverDivergenceDedupeForTests } from "@/server/repo-resolver-divergence";
 
 const USER = "user-1";
+const ACTIVE = "ws-active-id"; // membership-verified active workspace id (solo owner: === USER)
+const TEAM = "team-ws-id"; // a team-workspace claim id
 const WS = "/workspaces/ws-uuid";
 const REPO = "https://github.com/acme/widget";
 const INSTALL = 4242;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetResolverDivergenceDedupeForTests();
+  mockGetFreshTenantClient.mockResolvedValue({});
+  // Default: solo owner — the membership-verified resolve returns the caller's
+  // own workspace, no reset.
+  mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: ACTIVE });
   mockFetchUserWorkspacePath.mockResolvedValue(WS);
   mockResolveInstallationId.mockResolvedValue(INSTALL);
   mockGetCurrentRepoUrl.mockResolvedValue(REPO);
@@ -70,9 +95,14 @@ beforeEach(() => {
 describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () => {
   it("resolves the membership-scoped inputs and calls the recovery once", async () => {
     await reprovisionWorkspaceOnDispatch(USER);
-    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER);
-    expect(mockResolveInstallationId).toHaveBeenCalledWith(USER);
-    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER);
+    // ADR-044 PR-3: the active workspace is resolved ONCE (membership-verified)
+    // and the single id is threaded into all three consumers — no bare-userId
+    // (raw-claim) re-derivation.
+    expect(mockResolveActiveWorkspace).toHaveBeenCalledTimes(1);
+    expect(mockGetFreshTenantClient).toHaveBeenCalledTimes(1);
+    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, ACTIVE);
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, ACTIVE);
     expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledTimes(1);
     expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith({
       userId: USER,
@@ -119,5 +149,84 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
       feature: "cc-dispatcher",
       op: "reprovision-on-dispatch",
     });
+  });
+});
+
+describe("reprovisionWorkspaceOnDispatch — membership-verified single resolve (ADR-044 PR-3)", () => {
+  it("(a) solo owner: claim === userId → path/install/repo all key to userId, no breadcrumb", async () => {
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: USER });
+
+    await reprovisionWorkspaceOnDispatch(USER);
+
+    expect(mockResolveActiveWorkspace).toHaveBeenCalledTimes(1);
+    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, USER);
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, USER);
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, USER);
+    // No reset → no divergence breadcrumb (the only reportSilentFallback consumer
+    // here would be the breadcrumb; the success path mirrors nothing).
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("(b) member of team: confirmed team claim → path/install/repo all key to the TEAM id (no solo/team split)", async () => {
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM });
+    // Make the resolved path team-derived so the clone-target assertion below
+    // genuinely distinguishes team-vs-solo (not just the threading args).
+    const TEAM_WS = `/workspaces/${TEAM}`;
+    mockFetchUserWorkspacePath.mockResolvedValue(TEAM_WS);
+
+    await reprovisionWorkspaceOnDispatch(USER);
+
+    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, TEAM);
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, TEAM);
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, TEAM);
+    // The clone targets the membership-verified team workspace path, not solo.
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER, workspacePath: TEAM_WS }),
+    );
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("(c) non-member/stale claim reset: probe resets to solo → all consumers key userId, AND the divergence breadcrumb fires (op=reprovision-non-member-claim-reset)", async () => {
+    mockResolveActiveWorkspace.mockResolvedValue({
+      ok: true,
+      workspaceId: USER,
+      resetFromClaim: TEAM,
+    });
+
+    await reprovisionWorkspaceOnDispatch(USER);
+
+    // Reset → all three consumers key the caller's OWN solo workspace, never the team.
+    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, USER);
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, USER);
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, USER);
+
+    // AC4 — the breadcrumb fires through reportSilentFallback with the new op and
+    // the security-safe two-workspace-id extra shape (no repoUrl/installationId).
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, ctx] = mockReportSilentFallback.mock.calls[0];
+    expect((err as Error).message).toBe("repo_resolver_divergence");
+    expect(ctx.feature).toBe("repo-resolver-divergence");
+    expect(ctx.op).toBe("reprovision-non-member-claim-reset");
+    expect(ctx.extra).toMatchObject({
+      activeClaimWorkspaceId: TEAM,
+      resolvedWorkspaceId: USER,
+    });
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("(d) membership-probe db-error: resolve {ok:false} → reprovision SKIPPED (returns 'ok', no clone into an unverified location), no breadcrumb", async () => {
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: false, reason: "db-error" });
+
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+
+    // Skip is fail-closed: never resolve consumers / clone into an unverified
+    // location, never throw, never emit a false divergence breadcrumb. (The
+    // db-error itself is mirrored inside resolveActiveWorkspace, mocked here.)
+    expect(mockFetchUserWorkspacePath).not.toHaveBeenCalled();
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 });
