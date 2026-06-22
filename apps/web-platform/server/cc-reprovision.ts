@@ -7,6 +7,9 @@ import {
   type ReprovisionOutcome,
 } from "./ensure-workspace-repo";
 import { reportSilentFallback } from "./observability";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { resolveActiveWorkspace } from "./workspace-resolver";
+import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
 
 /**
  * Per-dispatch workspace re-provision for the Concierge (cc-soleur-go) path
@@ -31,15 +34,48 @@ import { reportSilentFallback } from "./observability";
  * honest message. A genuine clone failure returns `"failed"` (the honest-message
  * signal). Inputs are server-resolved + membership-scoped (ADR-044), never
  * request input.
+ *
+ * ADR-044 PR-3 (member-stranding closure): the active workspace is resolved ONCE
+ * via the membership-verified `resolveActiveWorkspace` and the single id is
+ * threaded into all three consumers — mirroring the cold factory's
+ * resolve-once-and-thread (`cc-dispatcher.ts realSdkQueryFactory:1536`). Before
+ * this, the path consumer (membership-verified) diverged from install/repo
+ * (raw-claim), so a non-member/stale-claim member grafted the TEAM repo into the
+ * SOLO `/workspaces/<userId>` (no `.git`) and the routine-authoring agent
+ * stranded on a missing work tree. The ONE deliberate divergence from the
+ * factory: on a transient membership-probe `db-error` this fire-and-forget
+ * recovery SKIPS (returns `"ok"`) rather than throwing `WorkspaceNotReadyError`
+ * (the factory is the dispatch readiness boundary; this is not).
  */
 export async function reprovisionWorkspaceOnDispatch(
   userId: string,
 ): Promise<ReprovisionOutcome> {
   try {
+    // Resolve the active workspace ONCE (membership-verified). One tenant client,
+    // one resolve, before the otherwise-parallel consumer block.
+    const tenant = await getFreshTenantClient(userId);
+    const resolved = await resolveActiveWorkspace(userId, tenant);
+    // Fail-closed on a transient membership-probe db-error: SKIP the reprovision
+    // (never clone into an unverified location, never throw). The db-error is
+    // already mirrored inside `resolveActiveWorkspace`; returning `"ok"` preserves
+    // the existing fail-soft contract (no false reclaim message).
+    if (!resolved.ok) return "ok";
+    const activeWorkspaceId = resolved.workspaceId;
+    // Divergence breadcrumb on the non-member/stale-claim reset (formerly
+    // zero-Sentry on the reprovision path). Deduped by (op, userId, claim) so a
+    // removed member does not storm Sentry on every dispatch.
+    if (resolved.resetFromClaim) {
+      reportRepoResolverDivergence({
+        userId,
+        op: "reprovision-non-member-claim-reset",
+        activeClaimWorkspaceId: resolved.resetFromClaim,
+        resolvedWorkspaceId: activeWorkspaceId,
+      });
+    }
     const [workspacePath, storedInstallationId, repoUrl] = await Promise.all([
-      fetchUserWorkspacePath(userId),
-      resolveInstallationId(userId),
-      getCurrentRepoUrl(userId),
+      fetchUserWorkspacePath(userId, activeWorkspaceId),
+      resolveInstallationId(userId, activeWorkspaceId),
+      getCurrentRepoUrl(userId, activeWorkspaceId),
     ]);
     // Promote to the entitled repo-owner install (same selection the cold
     // factory makes) so a cross-account org repo re-clones with the right

@@ -97,6 +97,40 @@ describe("reportRepoResolverDivergence — fingerprint-deduped breadcrumb (ADR-0
     expect(ctx.extra).not.toHaveProperty("installationId");
   });
 
+  // ADR-044 PR-3 — the per-dispatch reprovision-path op (warm+cold) emits with the
+  // same security-safe extra shape and is deduped independently by op.
+  it("reprovision-non-member-claim-reset is a distinct op with the two-workspace-id extra shape (no repoUrl/install leak)", () => {
+    reportRepoResolverDivergence({
+      userId: "user-1",
+      op: "reprovision-non-member-claim-reset",
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "user-1",
+    });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.op).toBe("reprovision-non-member-claim-reset");
+    expect(ctx.feature).toBe("repo-resolver-divergence");
+    expect(ctx.extra).toMatchObject({
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "user-1",
+    });
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("reprovision-non-member-claim-reset dedupes by (op, userId, claim) fingerprint", () => {
+    const args = {
+      userId: "user-1",
+      op: "reprovision-non-member-claim-reset" as const,
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "user-1",
+    };
+    reportRepoResolverDivergence(args);
+    reportRepoResolverDivergence(args);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
   it("a DIFFERENT claim for the same user fires a new breadcrumb (not over-deduped on op alone)", () => {
     reportRepoResolverDivergence({
       userId: "user-1",

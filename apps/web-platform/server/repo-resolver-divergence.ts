@@ -35,7 +35,17 @@ export type RepoResolverDivergenceOp =
   // fails honestly and emits THIS op so the previously-dark dispatch path is
   // queryable + paging. Distinct from the catch-block `self-heal-failed` op
   // (an orchestration-infra crash) — see cc-dispatcher.ts emit-site notes.
-  | "connected-null-install-at-dispatch";
+  | "connected-null-install-at-dispatch"
+  // Per-dispatch reprovision-path divergence (ADR-044 PR-3): the warm+cold
+  // `reprovisionWorkspaceOnDispatch` (cc-dispatcher.ts:2899) used to re-derive the
+  // workspace id via three divergent resolvers — the membership-verified path
+  // diverged from the raw-claim install/repo, so a non-member/stale-claim member
+  // grafted the team repo into the solo `/workspaces/<userId>` (no `.git`). The fix
+  // resolves ONCE via the membership-verified resolver and threads the single id;
+  // this op fires when that resolve RESETS a non-member claim to solo (formerly
+  // zero-Sentry on the reprovision path). Distinct from the cold-factory
+  // `non-member-claim-reset` so the two sites are queryable independently.
+  | "reprovision-non-member-claim-reset";
 
 /**
  * Emit a fingerprint-deduped `repo_resolver_divergence` breadcrumb. `userId` is
