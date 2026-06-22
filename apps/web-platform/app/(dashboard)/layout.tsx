@@ -17,6 +17,7 @@ import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
+import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -91,16 +92,16 @@ export function PaymentWarningBanner({
   );
 }
 
-const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: GridIcon },
-  { href: "/dashboard/inbox", label: "Inbox", icon: InboxIcon },
-  { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
-  { href: "/dashboard/routines", label: "Routines", icon: RepeatIcon },
-];
-
-const ADMIN_NAV_ITEMS = [
-  { href: "/dashboard/admin/analytics", label: "Analytics", icon: ChartIcon },
-];
+// Icons live here (local SVGs), keyed by href, so the nav DATA can live in the
+// shared `command-palette/nav-items.ts` module (imported by the rail AND the
+// ⌘K palette registry) without dragging this "use client" tree into the palette.
+const NAV_ICONS: Record<string, (props: { className?: string }) => React.JSX.Element> = {
+  "/dashboard": GridIcon,
+  "/dashboard/inbox": InboxIcon,
+  "/dashboard/kb": BookIcon,
+  "/dashboard/routines": RepeatIcon,
+  "/dashboard/admin/analytics": ChartIcon,
+};
 
 export default function DashboardLayout({
   children,
@@ -391,6 +392,7 @@ export default function DashboardLayout({
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
                     : pathname.startsWith(item.href);
+                const Icon = NAV_ICONS[item.href] ?? GridIcon;
 
                 return (
                   <Link
@@ -414,7 +416,7 @@ export default function DashboardLayout({
                         className={`absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill ${collapsed ? "md:hidden" : ""}`}
                       />
                     )}
-                    <item.icon className="h-4 w-4 shrink-0" />
+                    <Icon className="h-4 w-4 shrink-0" />
                     <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
                       {item.label}
                     </span>
