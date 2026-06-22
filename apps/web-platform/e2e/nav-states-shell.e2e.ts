@@ -370,16 +370,9 @@ const resizeHandle = (page: Page) => page.getByTestId("kb-rail-resize-handle");
 const asideWidth = (page: Page) =>
   page.locator("aside").first().evaluate((el) => el.clientWidth);
 
-// (The dedicated ▢ collapse toggle was removed — the resize slider now owns
-// collapse/expand — so the `collapseToggle` / `dashboardNavLink` /
-// `expectVerticallyCentered` helpers and the toggle-position tests that used them
-// were removed with it.)
-type Rect = { x: number; y: number; width: number; height: number };
-const intersects = (a: Rect, b: Rect): boolean =>
-  a.x < b.x + b.width &&
-  a.x + a.width > b.x &&
-  a.y < b.y + b.height &&
-  a.y + a.height > b.y;
+// The « collapse/expand toggle button (its aria-label flips Collapse↔Expand).
+const collapseToggle = (page: Page) =>
+  page.getByRole("button", { name: /^(Collapse|Expand) sidebar$/ });
 
 test.describe("nav-states visual gate — desktop", () => {
   test.use({ viewport: DESKTOP });
@@ -803,11 +796,38 @@ test.describe("widenable KB rail — desktop", () => {
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 7_000 });
 
-    // The dedicated ▢ collapse button is gone — the grip is the sole
-    // collapse/expand affordance, so it STAYS mounted when collapsed and a
-    // second double-click re-expands the rail.
+    // The grip STAYS mounted when collapsed (one of two expand affordances) and
+    // a second double-click re-expands the rail.
     await expect(resizeHandle(page)).toBeVisible({ timeout: 7_000 });
     await resizeHandle(page).dblclick();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 7_000 });
+  });
+
+  test("the « toggle button collapses/expands the rail and rotates its glyph", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard");
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
+
+    // Expanded: the toggle reads "Collapse sidebar" and the glyph is unrotated.
+    const toggle = collapseToggle(page);
+    await expect(toggle).toBeVisible({ timeout: 15_000 });
+    await expect(toggle).toHaveAccessibleName("Collapse sidebar");
+    await expect(toggle.locator("svg")).not.toHaveClass(/rotate-180/);
+
+    await toggle.click();
+
+    // Collapsed: rail is the 56px icon rail, the toggle now reads "Expand
+    // sidebar", and the glyph is rotated 180° (« → ») to read as "expand".
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 7_000 });
+    await expect(collapseToggle(page)).toHaveAccessibleName("Expand sidebar");
+    await expect(collapseToggle(page).locator("svg")).toHaveClass(/rotate-180/);
+
+    // Full-hide is gone — there is no 0px state and no reveal hamburger.
+    await expect(page.getByTestId("sidebar-reveal-button")).toHaveCount(0);
+    await expect(aside).not.toHaveClass(/md:w-0/);
+
+    await collapseToggle(page).click();
     await expect(aside).toHaveClass(/md:w-56/, { timeout: 7_000 });
   });
 });
@@ -902,177 +922,12 @@ test.describe("nav-states visual gate — mobile", () => {
   });
 });
 
-// Full-hide ("0px") gate. The unified rail collapses to a 56px icon rail; HIDE
-// goes all the way to md:w-0 so <main> reclaims the entire row. jsdom cannot
-// see width:0 / overflow clipping / the fixed reveal button anchoring outside
-// the aside, so the pixel proof lives here: rail truly reaches 0, the floating
-// reveal hamburger is present + clickable OUTSIDE the zeroed aside, content
-// reclaims the freed width, and the in-rail Hide affordance does not collide
-// with the collapse toggle. Screenshots are emitted to test-results/ for review.
-const hideButton = (page: Page) =>
-  page.getByRole("button", { name: "Hide sidebar" });
-// The floating hamburger reveal (distinct from the left-edge gold reveal strip,
-// which shares the "Show sidebar" name) — target by testid to disambiguate.
-const revealButton = (page: Page) =>
-  page.getByTestId("sidebar-reveal-button");
-const revealEdge = (page: Page) => page.getByTestId("sidebar-reveal-edge");
-const mainWidth = (page: Page) =>
-  page.locator("main").first().evaluate((el) => el.clientWidth);
-
-/** Seed the rail fully hidden (0px) before any page script runs. */
-async function seedHidden(page: Page): Promise<void> {
-  await page.addInitScript((key) => {
-    localStorage.setItem(key, "1");
-  }, "soleur:sidebar.main.hidden");
-}
-
-test.describe("full-hide (0px) gate — desktop", () => {
+// Rail gold-confinement gate. The full-hide (0px) state was removed — the rail
+// minimizes only to the 56px icon rail. The one remaining pixel-proof here is
+// that gold press feedback is confined to the resize slider's own zone and never
+// washes the whole bar. Screenshot emitted to test-results/ for review.
+test.describe("rail gold-confinement gate — desktop", () => {
   test.use({ viewport: DESKTOP });
-
-  test("expanded: Hide affordance sits in the top-right corner, inside the rail, no overlap", async ({ page }) => {
-    await setupNavMocks(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-    await expect(hideButton(page)).toBeVisible({ timeout: 15_000 });
-    // Reveal hamburger is absent while the rail is visible.
-    await expect(revealButton(page)).toHaveCount(0);
-
-    const hideBox = (await hideButton(page).boundingBox())!;
-    const asideBox = (await aside.boundingBox())!;
-    // Hide is the sole floated rail-header button now (the ▢ collapse toggle was
-    // removed) — it sits in the top-right corner, fully inside the rail.
-    expect(hideBox.x).toBeGreaterThanOrEqual(asideBox.x - 1);
-    expect(hideBox.x + hideBox.width).toBeLessThanOrEqual(asideBox.x + asideBox.width + 1);
-    // Right-anchored: within ~16px of the aside right edge.
-    const asideRight = asideBox.x + asideBox.width;
-    expect(asideRight - (hideBox.x + hideBox.width)).toBeLessThanOrEqual(16);
-    // The widened band clearance keeps it off the workspace identity / switcher.
-    await expect(orgIdentity(page)).toBeVisible({ timeout: 15_000 });
-    const identityBox = (await orgIdentity(page).boundingBox())!;
-    expect(intersects(hideBox, identityBox), "Hide overlaps the workspace identity").toBe(false);
-
-    await page.screenshot({ path: "test-results/hide-1-visible-expanded.png" });
-  });
-
-  test("clicking Hide drives the rail to 0px, reveals the floating hamburger, and reclaims the row", async ({ page }) => {
-    await setupNavMocks(page);
-    await gotoOrSkip(page, "/dashboard/kb");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-    // Wait for hydration before clicking — the async identity only renders after
-    // the client tree hydrates, which is also when the Hide onClick is wired (a
-    // click on the SSR markup before hydration would no-op).
-    await expect(orgIdentity(page)).toBeVisible({ timeout: 15_000 });
-    const mainBefore = await mainWidth(page);
-
-    await hideButton(page).click();
-
-    // The rail truly reaches zero width and drops its border (no sliver).
-    await expect(aside).toHaveClass(/md:w-0/, { timeout: 15_000 });
-    await expect
-      .poll(() => asideWidth(page), { timeout: 15_000 })
-      .toBeLessThanOrEqual(1);
-    // The reveal control lives OUTSIDE the zeroed aside and is clickable.
-    await expect(revealButton(page)).toBeVisible();
-    await expect(hideButton(page)).toHaveCount(0);
-    // <main> reclaims the freed horizontal space.
-    expect(await mainWidth(page)).toBeGreaterThan(mainBefore);
-
-    await page.screenshot({ path: "test-results/hide-2-hidden.png" });
-  });
-
-  test("the reveal hamburger restores the rail to its prior width", async ({ page }) => {
-    await setupNavMocks(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    // Wait for hydration (see note in the hide-click test) before clicking.
-    await expect(orgIdentity(page)).toBeVisible({ timeout: 15_000 });
-    await hideButton(page).click();
-    await expect(revealButton(page)).toBeVisible({ timeout: 15_000 });
-
-    await revealButton(page).click();
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-    await expect
-      .poll(() => asideWidth(page), { timeout: 15_000 })
-      .toBeGreaterThan(200);
-    await expect(hideButton(page)).toBeVisible();
-    await expect(revealButton(page)).toHaveCount(0);
-
-    await page.screenshot({ path: "test-results/hide-3-revealed.png" });
-  });
-
-  test("a persisted hidden state loads at 0px with the reveal hamburger", async ({ page }) => {
-    await setupNavMocks(page);
-    await seedHidden(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-0/, { timeout: 15_000 });
-    await expect
-      .poll(() => asideWidth(page), { timeout: 15_000 })
-      .toBeLessThanOrEqual(1);
-    await expect(revealButton(page)).toBeVisible();
-  });
-
-  test("collapsed icon rail still exposes a Hide affordance, centered in the rail", async ({ page }) => {
-    await setupNavMocks(page);
-    await seedCollapsed(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
-    await expect(hideButton(page)).toBeVisible({ timeout: 15_000 });
-
-    const hideBox = (await hideButton(page).boundingBox())!;
-    const asideBox = (await aside.boundingBox())!;
-    // Centered on the collapsed icon column (left-1/2 -translate-x-1/2) and fully
-    // inside the 56px rail.
-    const hideCx = hideBox.x + hideBox.width / 2;
-    const asideCx = asideBox.x + asideBox.width / 2;
-    expect(Math.abs(hideCx - asideCx)).toBeLessThanOrEqual(2);
-    expect(hideBox.x).toBeGreaterThanOrEqual(asideBox.x - 1);
-    expect(hideBox.x + hideBox.width).toBeLessThanOrEqual(asideBox.x + asideBox.width + 1);
-
-    await page.screenshot({ path: "test-results/hide-4-collapsed.png" });
-  });
-
-  test("double-clicking the bar body hides the rail (desktop)", async ({ page }) => {
-    await setupNavMocks(page);
-    await gotoOrSkip(page, "/dashboard");
-    await expect(orgIdentity(page)).toBeVisible({ timeout: 15_000 });
-
-    const aside = page.locator("aside").first();
-    // The empty centre of the flex-1 primary nav (below the link list) is a
-    // non-interactive bar-body spot — the guard hides only on such a target.
-    await aside.locator("nav").first().dblclick();
-
-    await expect(aside).toHaveClass(/md:w-0/, { timeout: 15_000 });
-    await expect(revealButton(page)).toBeVisible();
-  });
-
-  test("the left-edge gold strip reveals the hidden rail", async ({ page }) => {
-    await setupNavMocks(page);
-    await seedHidden(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    // toHaveClass(md:w-0) / edge visibility both wait for the hidden hydration,
-    // which is also when the edge's onClick is wired.
-    await expect(aside).toHaveClass(/md:w-0/, { timeout: 15_000 });
-    await expect(revealEdge(page)).toBeVisible();
-    const edgeBox = (await revealEdge(page).boundingBox())!;
-    // Pinned to the very left screen edge, full height.
-    expect(edgeBox.x).toBeLessThanOrEqual(1);
-    expect(edgeBox.height).toBeGreaterThan(500);
-
-    await revealEdge(page).click();
-    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-  });
 
   test("pressing the bar body paints NO gold; gold is confined to the slider zone (screenshot)", async ({ page }) => {
     await setupNavMocks(page);
