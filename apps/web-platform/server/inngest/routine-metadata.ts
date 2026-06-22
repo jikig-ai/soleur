@@ -44,6 +44,7 @@ export interface RoutineMeta {
 
 export const ROUTINE_METADATA: Record<string, RoutineMeta> = {
   "cron-agent-native-audit": { description: "Audits the codebase for agent-native architecture violations and files scored findings as GitHub issues.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Monthly · 15th 09:00 UTC", manualTrigger: "allowed" },
+  "cron-architecture-diagram-sync": { description: "Weekly review of C4 architecture diagrams against the codebase; updates stale diagrams and files a drift report as a GitHub issue.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Weekly · Sun 02:00 UTC", manualTrigger: "allowed" },
   "cron-bug-fixer": { description: "Autonomously fixes low-priority bugs each morning; auto-merges safe single-file fixes when CI passes.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Daily 06:00 UTC", manualTrigger: "confirm" },
   "cron-campaign-calendar": { description: "Refreshes the marketing campaign calendar and flags overdue distribution content for publishing.", domain: "Marketing", ownerRole: "CMO", scheduleLabel: "Weekly · Mon 16:00 UTC", manualTrigger: "allowed" },
   "cron-cloud-task-heartbeat": { description: "Daily liveness check for all scheduled cloud tasks; warns when one goes silent or a bot PR goes stale.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Daily 09:30 UTC", manualTrigger: "allowed" },
