@@ -13,6 +13,19 @@ spec: knowledge-base/project/specs/feat-web-app-shortcuts/spec.md
 
 # ✨ feat: Linear-style Command Palette (⌘K) + Help Overlay (?)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-22 | **Agents:** framework-docs (cmdk/React19), best-practices (WCAG/UX), architecture-strategist, agent-native-reviewer, test-design-reviewer, verify-the-negative grep pass.
+
+**Key improvements folded in:**
+1. **Commands return a serializable `CommandEffect`** (`{kind:'navigate'|'runRoutine'|'openChat', …}`) instead of an opaque side-effecting closure — so #5638 (agent wiring) *exposes* effects rather than rewriting every `run()`. (agent-native P1)
+2. **Esc/keydown precedence** must account for `selection-toolbar.tsx`'s **capture-phase** document Esc listener (fires before any bubble-phase listener regardless of mount order). (architecture P1-1)
+3. **cmdk `Command.Dialog` (Radix) handles focus trap + restoration + background `inert` for the base case** — drop manual `document.activeElement` capture except for the nested 409-confirm modal. (framework-docs; simplification)
+4. **`shortcutsEnabled=false` disables the entire listener** (all of ⌘K/⌘/`/`?`/⌘B), not just `?`. (WCAG/UX)
+5. **Mocking contract is mandatory**: `test/setup-dom.ts` is a fail-loud fetch blockade — every `.test.tsx` must `vi.stubGlobal("fetch", …)` per `routines-surface.test.tsx`; assert DOM affordances, not `res.status`. (test-design)
+
+**New considerations:** WCAG SC 2.1.4 handling confirmed compliant (GitHub-pattern turn-off toggle). KB doc *search* is an agent-native parity orphan (agents have no `kb_search`/`kb_read_content` tool) — pre-existing, **filed as #5641**, not subsumed by #5638. The `run()` duplication with `routines-surface.tsx:265` is acceptable for v1 (extract a shared `runRoutine` client helper only if a 3rd caller appears).
+
 ## Overview
 
 Add a keyboard-first command layer to the Soleur web app (`apps/web-platform`), inspired by
@@ -58,13 +71,16 @@ on a surface the operator drives constantly (navigation, KB search, workflow tri
 ### Phase 1 — Registry + global listener (foundation)
 1.1 In `apps/web-platform`: `bun install` (cold worktree — deps not pre-installed), then `bun add cmdk`, then `bun install --frozen-lockfile` to validate.
 1.2 Extract `NAV_ITEMS`/`ADMIN_NAV_ITEMS` from `layout.tsx:95,102` into a shared `components/command-palette/nav-items.ts`; re-import into both layout and the registry (P0-1).
-1.3 Create `use-shortcuts.tsx` (`"use client"`) — the provider that OWNS the command registry (flat array; `Command = { id, label, group, keys?, when?(ctx), run() }`) AND the single global `keydown` listener. (Registry + provider are one module in v1 — one consumer; #5638 can split it when it adds a second.) Static commands: Navigation (from `nav-items.ts`), Ask-an-agent, help, sidebar-toggle. Suppression contract via **one shared `isEditable(target)` predicate** (used by both the global listener and the `?` alias): skip when `target` is input/textarea/contenteditable **including the palette's own search input** (FR1/G3). Honor `shortcutsEnabled` (FR9). Never read `navigator.platform` during render (SSR/hydration).
+1.3 Create `use-shortcuts.tsx` (`"use client"`) — the provider that OWNS the command registry (flat array; `Command = { id, label, group, keys?, when?(ctx), run(): CommandEffect }`, where `CommandEffect` is a **serializable** `{kind:'navigate', href}` / `{kind:'runRoutine', fnId}` / `{kind:'openChat', query?}` that the UI interprets — NOT an opaque closure; makes #5638 *expose* effects, not rewrite `run()`) AND the single global `keydown` listener. (Registry + provider are one module in v1 — one consumer; #5638 can split it when it adds a second.) **Mount the provider wrapping `{children}` in `layout.tsx` with a `useMemo`'d context value, and keep palette `open` state INSIDE the provider — not lifted into the layout's `useState` cluster (drawerOpen/isAdmin/railWidth/…), or every context consumer re-renders on unrelated layout state changes** (arch P1-3). Static commands: Navigation (from `nav-items.ts`), Ask-an-agent, help, sidebar-toggle. Suppression contract via **one shared `isEditable(target)` predicate** (used by the global listener and the `?` alias; use `onKeyDownCapture`+`stopPropagation` for the in-input `?` case): skip when `target` is input/textarea/contenteditable **including the palette's own search input** (FR1/G3). Honor `shortcutsEnabled` (FR9). Never read `navigator.platform` during render (SSR/hydration).
 1.4 Migrate the `⌘B` handler (layout.tsx:204–221) and fold the drawer `Escape` (192–201) into the registry/listener so there is no double-fire (FR5).
 
 ### Phase 2 — Command palette (⌘K)
-2.1 `command-palette.tsx` (`"use client"`) using `cmdk` `Command.Dialog`. `role="dialog"`,
-    `aria-modal`, `aria-labelledby`, focus trap, `inert={open || undefined}` on background,
-    Esc-close + **focus restoration** to `document.activeElement` captured on open (FR7/G6).
+2.1 `command-palette.tsx` (`"use client"`) using `cmdk` `Command.Dialog`. **`Command.Dialog`
+    composes Radix Dialog, which provides `role="dialog"`, `aria-modal`, the focus trap, background
+    `inert`, AND focus restoration to the invoking element on close — so the base case (FR7/G6) is
+    free; do NOT hand-roll `document.activeElement` capture for it.** Add `aria-label` (no visible
+    title). Explicit nested-focus handling is needed ONLY for the 409-confirm modal layered above the
+    palette (Phase 3). Note: `useCommandState()` is NOT in cmdk 1.1.1 — use `shouldFilter`/`filter`/`loop`.
 2.2 Static groups render immediately; async groups (KB docs via `/api/kb/tree`, routines via
     `/api/dashboard/routines`) fetched **lazily on first palette open** (not prefetched), with a
     `mountedRef` guard (strict-mode double-mount) and a single "Searching…" affordance while
@@ -77,6 +93,12 @@ on a surface the operator drives constantly (navigation, KB search, workflow tri
 2.5 Selection: arrow keys + Enter. Navigate/open-chat → `router.push` (`next/navigation`) and close.
 2.6 Stacking/Esc policy (FR8/G7): suppress `⌘K` while a blocking/confirm modal is open; allow over
     the mobile drawer (close drawer first); top-most layer consumes Esc (stop propagation).
+    **Enumerate the existing document `keydown` listeners before wiring precedence** (arch P1-1):
+    `selection-toolbar.tsx:144` registers a **capture-phase** Esc listener that `stopPropagation()`s
+    (fires BEFORE any bubble-phase listener regardless of mount order) + a `⌘⇧L` handler at :170;
+    plus `org-switcher.tsx`, `sheet.tsx`, and the modal focus-traps. The new listener coexists with
+    these — define its phase/precedence against the capture-phase Esc explicitly (do not assume mount
+    order governs).
 
 ### Phase 3 — Trigger-routine row (brand-critical) — FR3
 3.1 Workflow rows show disambiguating context (`domain` + `scheduleLabel` + `lastRun`) + explicit
@@ -90,21 +112,38 @@ on a surface the operator drives constantly (navigation, KB search, workflow tri
     + confirm); optimistic "Dispatching…" / "view run" deep-link are deferred polish.
 
 ### Phase 4 — Help overlay (?) — FR4 + FR9
-4.1 `help-overlay.tsx` (`"use client"`) — searchable cheat-sheet modal (same a11y contract as 2.1).
-    Lists ONLY working v1 shortcuts: `⌘K` (palette), `⌘/` (this help), `⌘B` (sidebar), `?` (help),
-    `Esc` (close). NO `G`-sequence rows until #5636.
+4.1 `help-overlay.tsx` (`"use client"`) — searchable cheat-sheet sharing the palette's Radix-backed
+    dialog/focus-trap primitive (not a parallel a11y impl). Lists ONLY working v1 shortcuts: `⌘K`
+    (palette), `⌘/` (this help), `⌘B` (sidebar), `?` (help), `Esc` (close). NO `G`-sequence rows until #5636.
 4.2 Help opens via `⌘/` (canonical, WCAG-exempt) and `?` (alias, only when no text input focused).
 4.3 WCAG SC 2.1.4 (FR9): global listener honors a `shortcutsEnabled` preference (localStorage,
-    default `true`) — the "turn off" mechanism — surfaced as a single Settings toggle.
+    default `true`) — the "turn off" mechanism (GitHub-pattern, confirmed compliant) — surfaced as a
+    single Settings toggle. When OFF, the **entire listener is disabled** (all of `⌘K`/`⌘/`/`?`/`⌘B`),
+    not just `?`.
 
 ### Phase 5 — Flag + tests
 5.1 Gate both surfaces behind a Flagsmith runtime flag `command-palette` (default OFF, dev-cohort)
     via `useFeatureFlag()` — create with `soleur:flag-create command-palette` (dev+prd OFF). (TR5;
     confirm with operator — recommended for staged rollout.)
-5.2 Component tests in `apps/web-platform/test/` (`.test.tsx`, happy-dom): open/close + suppression,
-    grouped contents, empty/loading/error states, routine 202/409/error handling, focus restore,
-    `?`-in-input types literal, help-overlay shortcut list.
-5.3 Registry unit tests in `apps/web-platform/test/` (`.test.ts`).
+5.2 Component tests in `apps/web-platform/test/` (`.test.tsx`, happy-dom). **Mocking is mandatory:
+    `test/setup-dom.ts` is a fail-loud fetch blockade — every test `vi.stubGlobal("fetch", …)` per
+    the `test/components/routines/routines-surface.test.tsx` pattern (re-stub mid-test for 409→202);
+    mock `/api/kb/tree` → `{tree,lastSync,needsReconnect}`, `/api/dashboard/routines` → `{routines}`,
+    `/api/dashboard/routines/run` → status-keyed (202/409/400/502).** Assert the **DOM affordance**
+    (success row / confirm modal / error row), NOT `res.status` internals. Split into named tests:
+    open/close + suppression; `?`-in-palette-input types literal (asserts the palette's own input);
+    grouped contents (+ admin-gating via `isAdmin`); empty-state fallback; KB `needsReconnect`/`503`
+    (assert reconnect row PRESENT, not just "Navigation survives" — avoids vacuous pass); routine
+    **202**, **409→confirm→202**, and **502/400 → inline error + `Sentry.captureException` w/ fnId**
+    (3 separate tests); focus restore (assert `document.activeElement === <specific trigger>`); `⌘B`
+    no-double-fire (spy call-count === 1); `shortcutsEnabled=false` disables `⌘B` too + default-true;
+    nested focus-trap for the 409 modal above the palette.
+5.3 Unit tests in `apps/web-platform/test/shortcuts-registry.test.ts` (`.test.ts`, node): `isEditable`
+    (input/textarea/contenteditable/palette-input/null/SVG) and the `when?(ctx)` guards as pure
+    functions, plus `run()` returning the correct `CommandEffect` per command.
+
+> **TDD note:** per `cq-write-failing-tests-before`, author each phase's tests alongside (not after)
+> its implementation — Phase 5 is the test *inventory*, not a trailing test-after stage.
 
 ## Files to Create
 - `apps/web-platform/components/command-palette/nav-items.ts` — shared `NAV_ITEMS`/`ADMIN_NAV_ITEMS` (extracted from layout)
@@ -132,9 +171,10 @@ region. #2193 remains open; this plan touches only the keydown-handler + provide
 
 ### Engineering
 **Status:** reviewed (carry-forward). Central registry as single source of truth; `cmdk` palette;
-client-only (SSR/hydration safe); migrate scattered bindings; registry doubles as the future agent
-action surface (do not bypass the action layer). v1 = registry + palette + overlay; defer
-rebinding/scoped-maps/mobile.
+client-only (SSR/hydration safe); migrate scattered bindings; commands return a serializable
+`CommandEffect` so #5638 can expose them to agents without a rewrite (the "registry is the canonical
+action surface" invariant is NOT asserted/enforced in v1 — it lands with the ADR in #5638). v1 =
+registry + palette + overlay; defer rebinding/scoped-maps/mobile.
 
 ### Legal
 **Status:** reviewed (carry-forward). WCAG SC 2.1.4 is the one compliance item — `?` is in scope;
@@ -146,7 +186,7 @@ Linear's binding scheme negligible; do not copy Linear help-text/branding.
 **Decision:** reviewed
 **Agents invoked:** spec-flow-analyzer (this plan), cpo (brainstorm carry-forward), ux-design-lead (brainstorm Phase 3.55 — `.pen` committed)
 **Skipped specialists:** none
-**Pencil available:** yes (wireframes `01`+`02` committed at `knowledge-base/product/design/command-palette/`)
+**Pencil available:** yes. Committed wireframe: `knowledge-base/product/design/command-palette/command-shortcuts-wireframes.pen` (screenshots `01-command-palette-cmdk.png` + `02-help-overlay-shortcuts.png`). FR1/FR3 reference `01`; FR4 references `02` (build to FR4's working-shortcuts list, not the wireframe's NG2 `G`-sequence rows).
 
 #### Findings
 spec-flow-analyzer surfaced 11 gaps; G1–G8 folded into FRs above (routine feedback/409 confirm,
@@ -230,7 +270,7 @@ a controller boundary. (If `/work` adds any new server route, re-run `/soleur:gd
 - [ ] AC4: Palette renders all four groups; Navigation includes admin-gated items only when `isAdmin`.
 - [ ] AC5: Empty query shows "Ask an agent about '<q>'" fallback → `/dashboard/chat/new`.
 - [ ] AC6: KB `needsReconnect`/`503`/`500` renders an inline KB-group message without breaking other groups; loading skeleton shown during fetch.
-- [ ] AC7: "Run routine" does a same-origin POST to `/api/dashboard/routines/run` (no CSRF token); branches on `res.status` — `202` success, `409` → confirm modal then re-POST `confirmed:true`, `400`/`502` → inline error + Sentry.
+- [ ] AC7: "Run routine" does a same-origin POST to `/api/dashboard/routines/run` (no CSRF token); branches on `res.status` — `202` success row, `409` → confirm modal (nested focus-trap above palette verified) then re-POST `confirmed:true`, `400`/`502` → inline error row + `Sentry.captureException` (fnId tag). Tests assert the DOM affordance, not `res.status`.
 - [ ] AC8: Existing `⌘B` toggle works via the registry with no double-fire (grep layout.tsx shows the old standalone `handleToggleShortcut` removed/migrated); `NAV_ITEMS` imported from the shared `nav-items.ts`.
 - [ ] AC9: Help overlay opens via `⌘/` and guarded `?`; lists ONLY `⌘K`/`⌘/`/`⌘B`/`?`/`Esc` (no `G`-sequence rows).
 - [ ] AC10: A "Enable keyboard shortcuts" toggle (default on) disables the global listener when off (WCAG SC 2.1.4 turn-off).
@@ -247,14 +287,19 @@ a controller boundary. (If `/work` adds any new server route, re-run `/soleur:gd
 3. Palette open → type "?" in search → literal `?` entered, help does NOT open.
 4. KB tree returns `needsReconnect` → KB group shows reconnect row; Navigation still works.
 5. "Run routine" on a protected routine → 409 → confirm modal above palette → confirm → 202 success.
-6. Toggle "Enable keyboard shortcuts" OFF → ⌘K and ? no longer fire.
-7. ⌘B still toggles the sidebar (migrated), no double-fire.
+6. Toggle "Enable keyboard shortcuts" OFF → ⌘K, ?, ⌘/, AND ⌘B all no longer fire (whole listener off); default (no localStorage key) = ON.
+7. ⌘B still toggles the sidebar (migrated), no double-fire (handler spy call-count === 1).
+8. "Run routine" → 502 → inline error row shown AND `Sentry.captureException` called with fnId tag.
 
 ## Sharp Edges
 - A plan whose `## User-Brand Impact` section is empty/placeholder fails `deepen-plan` Phase 4.6 — this one is filled (carry-forward).
-- `cmdk`'s `Command.Dialog` provides most of the modal a11y contract, but verify focus-trap +
-  `inert={open||undefined}` (React 19 boolean inert) against the existing custom-modal patterns;
-  do NOT assume cmdk restores focus — capture/restore `document.activeElement` explicitly.
+- `cmdk`'s `Command.Dialog` composes **Radix Dialog**, which DOES trap focus, restore focus to the
+  invoking element on close, and apply background `inert` — so the base case needs NO manual
+  `document.activeElement` capture. The one place to verify explicitly is the **nested** 409-confirm
+  modal stacked above the open palette: ensure the modal's focus trap nests correctly and cmdk does
+  not steal focus back (assert in the AC7 409 test). `useCommandState()` is NOT in cmdk 1.1.1.
+- Adopting `cmdk` pulls **Radix Dialog** into the app (the app otherwise uses custom portal modals) —
+  acceptable, but note the new transitive dependency.
 - Component tests MUST be `apps/web-platform/test/**/*.test.tsx` — a co-located test is silently
   skipped by the vitest happy-dom project glob.
 - The help-overlay wireframe `02` shows NG2-deferred `G`-sequences; build to FR4 (working shortcuts
