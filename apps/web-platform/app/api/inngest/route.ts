@@ -20,6 +20,7 @@ import { inngest } from "@/server/inngest/client";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
+import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
 import { cronCampaignCalendar } from "@/server/inngest/functions/cron-campaign-calendar";
 import { cronCloudTaskHeartbeat } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
@@ -117,6 +118,7 @@ export const { GET, POST, PUT } = serve({
     agentOnSpawnRequested,
     cfoOnPaymentFailed,
     cronAgentNativeAudit,
+    cronArchitectureDiagramSync,
     cronBugFixer,
     cronCampaignCalendar,
     cronCloudTaskHeartbeat,
