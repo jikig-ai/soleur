@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 
 let mockPathname = "/dashboard";
 
@@ -80,6 +79,18 @@ function Wrap({ children }: { children: React.ReactNode }) {
   return <ThemeProvider>{children}</ThemeProvider>;
 }
 
+// Collapse-state signal. The dedicated ▢ collapse button was removed as a
+// duplicate (the resize slider now owns collapse/expand), so the button's
+// aria-label is no longer a usable probe. The route-independent signal is the
+// <aside> width class: md:w-56 expanded, md:w-14 collapsed, md:w-0 hidden.
+function asideOf(container: HTMLElement): HTMLElement {
+  const aside = container.querySelector("aside");
+  if (!aside) throw new Error("sidebar <aside> not found");
+  return aside as HTMLElement;
+}
+const isCollapsed = (aside: HTMLElement) => aside.className.includes("md:w-14");
+const isExpanded = (aside: HTMLElement) => aside.className.includes("md:w-56");
+
 describe("Dashboard sidebar collapse", () => {
   beforeEach(() => {
     mockPathname = "/dashboard";
@@ -92,66 +103,29 @@ describe("Dashboard sidebar collapse", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders a collapse toggle button", () => {
+  // The dedicated collapse button is GONE; the resize slider is the sole
+  // collapse/expand + resize affordance and must be present on the main rail.
+  it("renders the resize slider, not a dedicated collapse button", () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(screen.getByLabelText("Resize sidebar")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Collapse sidebar")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Expand sidebar")).not.toBeInTheDocument();
   });
 
-  // Reclaimed-space restructure: the dedicated desktop toggle row was removed so
-  // the workspace context band rises to the sidebar top (~45px reclaimed). The
-  // collapse toggle is now FLOATED (`absolute right-3 top-10`, `md:flex`) instead of
-  // living in an in-flow row. jsdom has no layout engine, so this pins the
-  // className tokens against a silent revert to the old in-flow row; the pixel
-  // proof (reclaimed space + no chevron/tile overlap) lives in the e2e VRT gate
-  // (e2e/nav-states-shell.e2e.ts).
-  it("floats the collapse toggle out of flow (absolute, top-right, md:flex) so the band owns the sidebar top", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    const toggle = screen.getByLabelText("Collapse sidebar");
-    expect(toggle.className).toContain("absolute");
-    expect(toggle.className).toContain("md:flex");
-    // top-10 (40px) vertically centers the h-6 toggle on the workspace pill, whose
-    // center sits ~52px below the aside top (the band is offset ~12px below the aside
-    // top + pt-2 + pill half-height); not the old top-3 corner offset that read ~28px
-    // high. jsdom has no layout engine, so this is a className drift tripwire; the
-    // pixel proof (≤2px rect-center alignment) lives in e2e/nav-states-shell.e2e.ts (AC1).
-    expect(toggle.className).toContain("top-10");
-    expect(toggle.className).not.toContain("top-3");
-    expect(toggle.className).toContain("right-3");
+  // Double-clicking the slider toggles collapse (it replaced the button).
+  it("toggles collapse when the resize slider is double-clicked", () => {
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
+    expect(isExpanded(aside)).toBe(true);
+    fireEvent.doubleClick(screen.getByLabelText("Resize sidebar"));
+    expect(isCollapsed(aside)).toBe(true);
+    fireEvent.doubleClick(screen.getByLabelText("Resize sidebar"));
+    expect(isExpanded(aside)).toBe(true);
   });
 
-  // When the rail is collapsed the floated toggle no longer pins to the right
-  // edge (`right-3`) — it centers on the same vertical axis as the monogram
-  // tile + the icon-only nav column below it, so the collapsed rail reads as
-  // one clean centered column instead of a top-right-corner control sitting
-  // off-axis above the logo. Expanded keeps `right-3` (the workspace pill
-  // corner). jsdom has no layout engine: this is a className drift tripwire;
-  // the pixel proof (inside-rail + no monogram overlap) lives in
-  // e2e/nav-states-shell.e2e.ts (AC4).
-  it("centers the collapse toggle on the icon column when the rail is collapsed (not pinned right-3)", async () => {
+  it("adds title attributes to nav links when collapsed", () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    await userEvent.click(screen.getByLabelText("Collapse sidebar"));
-    const toggle = screen.getByLabelText("Expand sidebar");
-    expect(toggle.className).toContain("left-1/2");
-    expect(toggle.className).toContain("-translate-x-1/2");
-    expect(toggle.className).not.toContain("right-3");
-    // Collapsed has no workspace pill to center on, so the toggle pins HIGH
-    // (top-3) near the rail top instead of top-10 — top-10 left its bottom edge
-    // flush with the monogram tile and read as "too close to the logo".
-    expect(toggle.className).toContain("top-3");
-    expect(toggle.className).not.toContain("top-10");
-  });
-
-  it("toggles aria-label when collapse toggle is clicked", async () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    const toggle = screen.getByLabelText("Collapse sidebar");
-    await userEvent.click(toggle);
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
-  });
-
-  it("adds title attributes to nav links when collapsed", async () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    const toggle = screen.getByLabelText("Collapse sidebar");
-    await userEvent.click(toggle);
+    fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(screen.getByTitle("Dashboard")).toBeInTheDocument();
     expect(screen.getByTitle("Knowledge Base")).toBeInTheDocument();
     expect(screen.getByTitle("Settings")).toBeInTheDocument();
@@ -162,24 +136,25 @@ describe("Dashboard sidebar collapse", () => {
     expect(screen.queryByTitle("Dashboard")).not.toBeInTheDocument();
   });
 
-  it("persists collapse state to localStorage", async () => {
+  it("persists collapse state to localStorage", () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    const toggle = screen.getByLabelText("Collapse sidebar");
-    await userEvent.click(toggle);
+    fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(localStorage.getItem("soleur:sidebar.main.collapsed")).toBe("1");
   });
 
   it("toggles sidebar on Cmd+B when on /dashboard", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
+    expect(isExpanded(aside)).toBe(true);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+    expect(isCollapsed(aside)).toBe(true);
   });
 
   it("toggles sidebar on Ctrl+B when on /dashboard", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", ctrlKey: true });
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+    expect(isCollapsed(aside)).toBe(true);
   });
 
   // AC5: ⌘B is now the SINGLE rail owner — it toggles the one rail on EVERY
@@ -187,48 +162,53 @@ describe("Dashboard sidebar collapse", () => {
   // previously suppressed it there are gone).
   it("DOES toggle the single rail on Cmd+B when on /dashboard/kb route", () => {
     mockPathname = "/dashboard/kb/some-file";
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+    expect(isCollapsed(aside)).toBe(true);
   });
 
   it("DOES toggle the single rail on Cmd+B when on /dashboard/settings route", () => {
     mockPathname = "/dashboard/settings/team";
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+    expect(isCollapsed(aside)).toBe(true);
   });
 
   it("DOES toggle the single rail on Cmd+B when on /dashboard/chat route", () => {
     mockPathname = "/dashboard/chat/abc-123";
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+    expect(isCollapsed(aside)).toBe(true);
   });
 
   it("ignores Cmd+B when focus is in an input element", () => {
-    render(
+    const { container } = render(
       <Wrap>
         <DashboardLayout>
           <input data-testid="test-input" />
         </DashboardLayout>
       </Wrap>,
     );
+    const aside = asideOf(container);
     const input = screen.getByTestId("test-input");
     fireEvent.keyDown(input, { key: "b", metaKey: true, bubbles: true });
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(isExpanded(aside)).toBe(true);
   });
 
   it("ignores Cmd+B when focus is in a textarea", () => {
-    render(
+    const { container } = render(
       <Wrap>
         <DashboardLayout>
           <textarea data-testid="test-textarea" />
         </DashboardLayout>
       </Wrap>,
     );
+    const aside = asideOf(container);
     const textarea = screen.getByTestId("test-textarea");
     fireEvent.keyDown(textarea, { key: "b", metaKey: true, bubbles: true });
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(isExpanded(aside)).toBe(true);
   });
 });

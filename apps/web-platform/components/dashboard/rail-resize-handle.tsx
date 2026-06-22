@@ -19,12 +19,13 @@ import { useRef } from "react";
 // (and on each keyboard nudge) via `onCommit` — avoids thrashing localStorage.
 // A no-op pointerup (no actual movement) skips `onCommit` entirely.
 //
-// Double-click accelerator: double-clicking the handle calls `onCollapse` to
-// collapse the rail (an additive shortcut beside the kept collapse button —
-// FR3-Alternative). No drag-vs-click guard is needed: a real resize drag moves
-// the pointer past the browser's click threshold, so it never emits the two
+// Double-click toggle: double-clicking the handle calls `onCollapse` to toggle
+// the rail's collapse state (expand when collapsed, collapse when expanded). The
+// slider is the SOLE collapse/expand affordance — the dedicated button was
+// removed as a duplicate. No drag-vs-click guard is needed: a real resize drag
+// moves the pointer past the browser's click threshold, so it never emits the two
 // `click` events a `dblclick` requires — dragging therefore cannot fire
-// `onDoubleClick`, and a genuine double-click (negligible movement) collapses.
+// `onDoubleClick`, and a genuine double-click (negligible movement) toggles.
 
 export interface RailResizeHandleProps {
   width: number;
@@ -34,8 +35,14 @@ export interface RailResizeHandleProps {
   onWidthChange: (px: number) => void;
   /** Persisted commit (pointerup / keyboard nudge). */
   onCommit: (px: number) => void;
-  /** Double-click accelerator: collapse the rail. Optional — the floated
-   * collapse button remains the primary affordance. */
+  /** Fired ONCE per drag, on the first genuine pointer movement (not on a bare
+   * pointerdown — so it does not fire for a double-click, which has negligible
+   * movement). Lets a collapsed rail un-collapse the moment a real resize drag
+   * begins, so the width override engages. Optional. */
+  onResizeStart?: () => void;
+  /** Double-click accelerator: toggle rail collapse (expand when collapsed,
+   * collapse when expanded). The resize slider is the sole collapse/expand
+   * affordance. Optional. */
   onCollapse?: () => void;
   /** Accessible name for the handle. Defaults to the KB rail's literal; pass a
    * generic label (e.g. "Resize sidebar") when the grip drives a non-KB rail. */
@@ -48,6 +55,7 @@ export function RailResizeHandle({
   max,
   onWidthChange,
   onCommit,
+  onResizeStart,
   onCollapse,
   ariaLabel = "Resize knowledge base sidebar",
 }: RailResizeHandleProps) {
@@ -55,6 +63,8 @@ export function RailResizeHandle({
   const startX = useRef(0);
   const startWidth = useRef(width);
   const latest = useRef(width);
+  // Latches `onResizeStart` to fire once per drag, on the first real move only.
+  const startedResize = useRef(false);
 
   function clamp(px: number): number {
     return Math.min(max, Math.max(min, Math.round(px)));
@@ -63,6 +73,7 @@ export function RailResizeHandle({
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault();
     dragging.current = true;
+    startedResize.current = false;
     startX.current = e.clientX;
     startWidth.current = width;
     latest.current = width;
@@ -76,6 +87,13 @@ export function RailResizeHandle({
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!dragging.current) return;
+    // First genuine move of this drag — let the caller react (e.g. un-collapse a
+    // collapsed rail). Gated on actual displacement so a click/double-click
+    // (negligible movement) never trips it.
+    if (!startedResize.current && e.clientX !== startX.current) {
+      startedResize.current = true;
+      onResizeStart?.();
+    }
     const next = clamp(startWidth.current + (e.clientX - startX.current));
     latest.current = next;
     onWidthChange(next);

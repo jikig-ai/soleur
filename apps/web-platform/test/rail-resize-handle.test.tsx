@@ -12,6 +12,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>>
   const onWidthChange = vi.fn();
   const onCommit = vi.fn();
   const onCollapse = vi.fn();
+  const onResizeStart = vi.fn();
   render(
     <RailResizeHandle
       width={224}
@@ -20,6 +21,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>>
       onWidthChange={onWidthChange}
       onCommit={onCommit}
       onCollapse={onCollapse}
+      onResizeStart={onResizeStart}
       {...overrides}
     />,
   );
@@ -27,6 +29,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>>
     onWidthChange,
     onCommit,
     onCollapse,
+    onResizeStart,
     handle: screen.getByTestId("kb-rail-resize-handle"),
   };
 }
@@ -98,10 +101,32 @@ describe("RailResizeHandle", () => {
     expect(onCommit).toHaveBeenLastCalledWith(224);
   });
 
-  // FR3-Alternative: double-click the rail resizer collapses the sidebar (an
-  // additive accelerator beside the kept collapse button).
+  // onResizeStart fires once per drag, on the first genuine move only — this is
+  // what lets a collapsed rail un-collapse the instant a real resize begins.
 
-  it("collapses on double-click (AC5)", () => {
+  it("fires onResizeStart once on the first genuine pointer move", () => {
+    const { handle, onResizeStart } = setup();
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    // Not fired on bare pointerdown (so a double-click never trips it).
+    expect(onResizeStart).not.toHaveBeenCalled();
+    fireEvent.pointerMove(handle, { clientX: 140, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 180, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 180, pointerId: 1 });
+    expect(onResizeStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire onResizeStart for a no-movement click (double-click path)", () => {
+    const { handle, onResizeStart } = setup();
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 100, pointerId: 1 }); // no movement
+    fireEvent.doubleClick(handle);
+    expect(onResizeStart).not.toHaveBeenCalled();
+  });
+
+  // Double-click the rail resizer toggles collapse — it is the SOLE collapse/
+  // expand affordance now that the dedicated ▢ button was removed.
+
+  it("toggles collapse on double-click (AC5)", () => {
     const { handle, onCollapse } = setup();
     fireEvent.doubleClick(handle);
     expect(onCollapse).toHaveBeenCalledTimes(1);

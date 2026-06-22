@@ -191,7 +191,7 @@ describe("DashboardLayout — resizable rail mounts in all expanded drill states
     expect(slot.contains(grip)).toBe(false);
   });
 
-  it("does NOT mount the grip when the rail is collapsed (AC9)", async () => {
+  it("DOES mount the grip when the rail is collapsed (sole expand affordance)", async () => {
     // useSidebarCollapse persists the collapsed state as the literal "1".
     try {
       localStorage.setItem("soleur:sidebar.main.collapsed", "1");
@@ -200,9 +200,27 @@ describe("DashboardLayout — resizable rail mounts in all expanded drill states
     }
     setPathname("/dashboard");
     await renderDashboard();
-    expect(screen.queryByTestId("kb-rail-resize-handle")).toBeNull();
+    // The dedicated ▢ collapse button was removed; the slider must stay mounted
+    // even when collapsed so the user can drag/double-click to expand again.
+    expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
     try {
       localStorage.removeItem("soleur:sidebar.main.collapsed");
+    } catch {
+      // no-op
+    }
+  });
+
+  it("does NOT mount the grip when the rail is fully hidden (0px)", async () => {
+    try {
+      localStorage.setItem("soleur:sidebar.main.hidden", "1");
+    } catch {
+      // no-op
+    }
+    setPathname("/dashboard");
+    await renderDashboard();
+    expect(screen.queryByTestId("kb-rail-resize-handle")).toBeNull();
+    try {
+      localStorage.removeItem("soleur:sidebar.main.hidden");
     } catch {
       // no-op
     }

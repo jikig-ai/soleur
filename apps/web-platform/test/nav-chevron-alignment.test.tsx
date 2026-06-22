@@ -14,13 +14,10 @@ import { render, screen, within } from "@testing-library/react";
 //   - the org-switcher button + solo identity chip carry the width-clamp classes
 //     that stop the bordered box painting past the rail edge.
 
-// The layout collapse-toggle glyph (app/(dashboard)/layout.tsx PanelToggleIcon).
-// Sidebar-UX follow-up Issue 2: the old left/right chevron read like a "back"
-// arrow on drilled secondary menus, so it was swapped for a non-directional
-// sidebar-panel glyph (this is its outer-rectangle path). The band's back
-// affordance MUST NOT reuse this exact path or the two controls read as a
-// broken duplicate — and a non-directional panel glyph is even more distinct
-// from the back arrow than the old chevron was.
+// The FORMER layout collapse-toggle glyph (the panel-rectangle PanelToggleIcon,
+// removed when the resize slider took over collapse/expand). Retained here as a
+// regression guard: the band's "Back to menu" affordance MUST NOT reuse this
+// exact rectangle path — it must stay a clearly distinct back-arrow glyph.
 const COLLAPSE_CHEVRON_PATH =
   "M3.75 6.75A2.25 2.25 0 0 1 6 4.5h12a2.25 2.25 0 0 1 2.25 2.25v10.5A2.25 2.25 0 0 1 18 19.5H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z";
 
