@@ -165,7 +165,7 @@ describe("Dashboard sidebar full-hide (0px)", () => {
     fireEvent.keyDown(document, { key: "B", metaKey: true, shiftKey: true });
     expect(screen.getByTestId("sidebar-reveal-button")).toBeInTheDocument();
     // Collapse state is independent — the rail did not collapse.
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(localStorage.getItem("soleur:sidebar.main.collapsed")).not.toBe("1");
   });
 
   it("toggles hide on Ctrl+Shift+B", () => {
@@ -177,18 +177,18 @@ describe("Dashboard sidebar full-hide (0px)", () => {
   // Disjoint shortcuts: bare ⌘B collapses (does NOT hide); ⌘⇧B hides (does NOT
   // collapse). A single keystroke must never trigger both handlers.
   it("does not hide the rail on bare Cmd+B (collapse only)", () => {
-    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(screen.queryByTestId("sidebar-reveal-button")).not.toBeInTheDocument();
-    // The rail collapsed instead.
-    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+    // The rail collapsed instead (md:w-14), not hidden (md:w-0).
+    expect(getAside(container).className).toContain("md:w-14");
   });
 
   it("does not collapse the rail on Cmd+Shift+B (hide only)", () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "B", metaKey: true, shiftKey: true });
-    // Still expanded (collapse label unchanged), just hidden.
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    // Collapse state untouched (not persisted), just hidden.
+    expect(localStorage.getItem("soleur:sidebar.main.collapsed")).not.toBe("1");
     expect(screen.getByTestId("sidebar-reveal-button")).toBeInTheDocument();
   });
 
@@ -296,27 +296,35 @@ describe("Dashboard sidebar full-hide (0px)", () => {
     expect(screen.getByLabelText("Hide sidebar")).toBeInTheDocument();
   });
 
-  it("washes the whole bar brand-gold while pressed, not grey", () => {
+  // The whole-bar gold wash (rail-gold-active-overlay) was removed: gold press
+  // feedback now belongs ONLY to the resize slider's own zone (its `active:` /
+  // `focus-visible:` brand-gold class), never the entire sidebar. Pressing the
+  // bar body must NOT paint any gold.
+  it("does not render a whole-bar gold wash, and confines gold to the slider zone", () => {
     const { container } = render(
       <Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>,
     );
     const aside = getAside(container);
-    const overlay = container.querySelector(
-      '[data-testid="rail-gold-active-overlay"]',
-    ) as HTMLElement;
-    expect(overlay).not.toBeNull();
-    expect(overlay.className).toContain("pointer-events-none");
-    // Idle: brand gold at 0 alpha (invisible).
-    expect(overlay.className).toContain("bg-soleur-accent-gold-fill/0");
-    expect(overlay.className).not.toContain("bg-soleur-accent-gold-fill/40");
 
-    // Press the bar → the whole-bar gold wash fades in.
+    // The rail-wide overlay is gone entirely.
+    expect(
+      container.querySelector('[data-testid="rail-gold-active-overlay"]'),
+    ).toBeNull();
+
+    // Pressing the bar body paints no gold anywhere in the rail.
     fireEvent.pointerDown(aside);
-    expect(overlay.className).toContain("bg-soleur-accent-gold-fill/40");
+    expect(aside.className).not.toContain("bg-soleur-accent-gold-fill");
+    expect(
+      aside.querySelector('[class*="bg-soleur-accent-gold-fill/40"]'),
+    ).toBeNull();
 
-    // Release → back to transparent.
-    fireEvent.pointerUp(aside);
-    expect(overlay.className).toContain("bg-soleur-accent-gold-fill/0");
-    expect(overlay.className).not.toContain("bg-soleur-accent-gold-fill/40");
+    // The slider owns gold within its own zone: it turns gold on active/focus,
+    // grey on hover.
+    const slider = screen.getByLabelText("Resize sidebar");
+    expect(slider.className).toContain("active:bg-soleur-accent-gold-fill/70");
+    expect(slider.className).toContain(
+      "focus-visible:bg-soleur-accent-gold-fill/70",
+    );
+    expect(slider.className).toContain("hover:bg-soleur-text-secondary/50");
   });
 });
