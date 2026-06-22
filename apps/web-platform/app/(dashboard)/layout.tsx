@@ -10,7 +10,6 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
-import { useActiveWorkspace } from "@/hooks/use-active-workspace";
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -127,14 +126,6 @@ export default function DashboardLayout({
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
-  // Active workspace name for the COLLAPSED rail band's monogram tooltip — the
-  // collapsed band does not mount OrgSwitcherContainer, so the name is threaded
-  // in here (P0-3, #4915). Gated on `collapsed`: the expanded rail + mobile band
-  // already surface the name via OrgSwitcherContainer, so the fetch only fires
-  // for the one state that lacks it (avoids a redundant cold-mount GET + a
-  // net-new focus poll in the common expanded case).
-  const activeWorkspace = useActiveWorkspace(collapsed);
-  const activeWorkspaceName = activeWorkspace.name;
 
   // Check admin status on mount
   useEffect(() => {
@@ -384,13 +375,7 @@ export default function DashboardLayout({
             CSS-exclusive placements never show identity twice (AC4b: the band
             is still the single importer of OrgSwitcherContainer/LiveRepoBadge). */}
         <div className="hidden md:block">
-          <WorkspaceContextBand
-            pathname={pathname}
-            collapsed={collapsed}
-            activeWorkspaceName={activeWorkspaceName ?? undefined}
-            activeWorkspaceId={activeWorkspace.workspaceId ?? undefined}
-            activeWorkspaceHasLogo={activeWorkspace.hasLogo}
-          />
+          <WorkspaceContextBand pathname={pathname} collapsed={collapsed} />
         </div>
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES

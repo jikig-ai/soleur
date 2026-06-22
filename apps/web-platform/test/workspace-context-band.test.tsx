@@ -214,53 +214,82 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 });
 
-// Phase 1 (#4915): the collapsed rail band renders the monogram identity tile
-// (not the nameless gold swatch). The collapsed band does NOT mount
-// OrgSwitcherContainer, so the active workspace name is threaded in as a prop
-// (P0-3): the FULL name becomes the tooltip — the authoritative disambiguator
-// for two workspaces that share an initial.
-describe("WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)", () => {
-  it("renders the monogram tile (non-gold) with the FULL workspace name as the tooltip when collapsed", () => {
-    render(
-      <WorkspaceContextBand
-        pathname="/dashboard/kb"
-        collapsed
-        activeWorkspaceName="Soleur Workspace"
-      />,
-    );
-    const icon = screen.getByTestId("workspace-identity-icon");
-    // full name replaces the static "Active workspace" tooltip (P0-3)
+// Collapsed rail identity (post-remount-fix, 2026-06-22): the collapsed band no
+// longer early-returns a structurally-divergent tree with a threaded
+// activeWorkspaceName prop. It keeps the SAME OrgSwitcherContainer mounted and
+// renders its icon-only mode (OrgSwitcher `collapsed`) — so the monogram tile +
+// full-name tooltip come from the container's OWN membership data (no prop).
+describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRpc.mockResolvedValue({ error: null });
+    stubFetch([SOLO, TEAMMATE], "jikig-ai/soleur");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the monogram tile (non-gold) with the FULL workspace name as the tooltip when collapsed", async () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    // icon comes from the still-mounted container (resolves after the fetch)
+    const icon = await screen.findByTestId("workspace-identity-icon");
     expect(icon).toHaveAttribute("title", "Soleur Workspace");
     const tile = within(icon).getByTestId("workspace-identity-tile");
     expect(tile).toHaveTextContent("S"); // monogram of "Soleur Workspace"
     expect(tile.className).not.toMatch(/accent-gold/); // FR6: non-gold
   });
 
-  it("falls back to the static 'Active workspace' tooltip before a name is threaded", () => {
+  it("strips the switch chrome when collapsed — no `Switch workspace` button even with multiple memberships", async () => {
     render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
-    expect(screen.getByTestId("workspace-identity-icon")).toHaveAttribute(
-      "title",
-      "Active workspace",
+    await screen.findByTestId("workspace-identity-icon");
+    expect(
+      screen.queryByRole("button", { name: /switch workspace/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Declutter: the collapsed rail keeps only the identity anchor (ADR-047) — the
+  // decorative gold repo dot and the section title are absent when collapsed.
+  it("does NOT render the decorative gold repo dot or the section title when collapsed", async () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    expect(await screen.findByTestId("workspace-identity-icon")).toBeInTheDocument();
+    expect(screen.queryByTestId("live-repo-dot")).toBeNull();
+    expect(screen.queryByTestId("nav-section-title")).toBeNull();
+  });
+
+  // Composition-boundary invariant: the MOBILE band never adopts the collapsed
+  // icon mode even if `collapsed` is passed (the mobile top bar never collapses).
+  // isRailCollapsed = variant === "rail" && collapsed gates this; the layout
+  // never passes the combination, so this is the only guard that the mobile band
+  // can't silently start rendering the rail's icon/data-collapsed.
+  it("ignores `collapsed` for the mobile variant — full pill, no icon, no data-collapsed", async () => {
+    render(
+      <WorkspaceContextBand pathname="/dashboard" variant="mobile" collapsed />,
+    );
+    // mobile renders the full interactive pill (multi-org), not the icon tile
+    expect(
+      await screen.findByRole("button", { name: /switch workspace/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-identity-icon")).toBeNull();
+    expect(screen.getByTestId("workspace-context-band")).not.toHaveAttribute(
+      "data-collapsed",
     );
   });
 
-  // Declutter (sidebar-declutter-kiss): the collapsed rail drops the decorative
-  // gold repo dot and the single-letter section monogram — both carried no
-  // information the rail's icons + identity tile do not already carry. The
-  // identity tile (orientation anchor, ADR-047) is the only retained glyph.
-  it("does NOT render the decorative gold repo dot or the single-letter section monogram when collapsed", () => {
-    render(
-      <WorkspaceContextBand
-        pathname="/dashboard/kb"
-        collapsed
-        activeWorkspaceName="Soleur Workspace"
-      />,
+  // The band carries data-collapsed="true" only for the collapsed RAIL — e2e
+  // selectors (nav-states-shell.e2e.ts) depend on it.
+  it("sets data-collapsed=\"true\" on the rail band only when collapsed", async () => {
+    const { rerender } = render(
+      <WorkspaceContextBand pathname="/dashboard/kb" collapsed />,
     );
-    // orientation anchor stays...
-    expect(screen.getByTestId("workspace-identity-icon")).toBeInTheDocument();
-    // ...the two decorative glyphs are gone.
-    expect(screen.queryByTestId("live-repo-dot")).toBeNull();
-    expect(screen.queryByTestId("nav-section-title")).toBeNull();
+    await screen.findByTestId("workspace-identity-icon");
+    expect(screen.getByTestId("workspace-context-band")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    rerender(<WorkspaceContextBand pathname="/dashboard/kb" />);
+    expect(screen.getByTestId("workspace-context-band")).not.toHaveAttribute(
+      "data-collapsed",
+    );
   });
 });
 

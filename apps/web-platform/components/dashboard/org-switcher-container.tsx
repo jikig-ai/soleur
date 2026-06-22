@@ -47,7 +47,16 @@ type SwitchStatus =
 // only the terminal converge-forward affordance (Continue) remains.
 const MAX_POST_RPC_RETRIES = 2;
 
-export function OrgSwitcherContainer() {
+export function OrgSwitcherContainer({
+  collapsed = false,
+}: {
+  /** Collapsed rail (md:w-14): render the icon-only identity via OrgSwitcher and
+   *  suppress the switch-confirm dialog (no room at 56px). The container STAYS
+   *  mounted across the collapse toggle, so `memberships` + the confirm
+   *  (`pending`/`status`) state persist and the dialog reappears on expand —
+   *  this is the fix for the band's former remount-on-collapse bug (ADR-047). */
+  collapsed?: boolean;
+} = {}) {
   const [memberships, setMemberships] = useState<OrgMembershipSummary[] | null>(null);
   const [pending, setPending] = useState<OrgMembershipSummary | null>(null);
   const [status, setStatus] = useState<SwitchStatus>("idle");
@@ -224,14 +233,19 @@ export function OrgSwitcherContainer() {
     // Bug 1: the bordered switch box painted past the rail's right edge).
     // Phase 2 (#4915): D4 borderless — the outer wrapper sheds its border-b;
     // grouping is conveyed by spacing/elevation, not a hard divider.
-    <div className="py-3">
+    <div className={collapsed ? "flex justify-center py-3" : "py-3"}>
       <OrgSwitcher
         memberships={memberships}
         onSwitch={handleSelect}
         repoName={repo?.repoName ?? null}
+        collapsed={collapsed}
       />
 
-      {pending && (
+      {/* Confirm dialog: suppressed in the cramped 56px collapsed rail, but the
+          container is NOT unmounted — `pending`/`status` persist and the dialog
+          re-renders on expand (the switch can only be armed from the expanded
+          dropdown anyway, so nothing is stranded). */}
+      {pending && !collapsed && (
         <div
           data-testid="workspace-switch-confirm"
           role="dialog"
