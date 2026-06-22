@@ -284,26 +284,6 @@ async function setupNavMocks(page: Page): Promise<void> {
   );
 }
 
-/**
- * Hold /api/workspace/list-memberships PENDING for the test's duration so
- * OrgSwitcherContainer never leaves its `memberships === null` state
- * (org-switcher-container.tsx:214 → returns null). This reproduces the
- * "page isn't fully loaded" height-collapse the overlap bug depends on: the
- * top-level band has no other content, so without a reserved min-height it
- * shrinks under the floated toggle. Registered AFTER setupNavMocks so
- * Playwright (most-recently-added wins) matches this in-flight handler first.
- *
- * A never-resolving promise (NOT route.abort()) is deliberate: aborting/erroring
- * would drive the .catch() branch which sets memberships to [] (a RESOLVED empty
- * state), collapsing the repro. Pending = genuinely in-flight. Playwright drops
- * the held request at context teardown.
- */
-async function mockMembershipsInFlight(page: Page): Promise<void> {
-  await page.route("**/api/workspace/list-memberships", async () => {
-    await new Promise(() => {});
-  });
-}
-
 /** Seed the rail into the collapsed state before any page script runs. */
 async function seedCollapsed(page: Page): Promise<void> {
   await page.addInitScript((key) => {
@@ -390,33 +370,16 @@ const resizeHandle = (page: Page) => page.getByTestId("kb-rail-resize-handle");
 const asideWidth = (page: Page) =>
   page.locator("aside").first().evaluate((el) => el.clientWidth);
 
-// The collapse toggle is FLOATED (`absolute right-3 top-10`) on desktop after the
-// reclaimed-space restructure — it is no longer in the rail-header flow. Its
-// accessible name flips with state (`Collapse sidebar` expanded / `Expand
-// sidebar` collapsed), so match either label — it is the only `… sidebar` button.
-const collapseToggle = (page: Page) =>
-  page.getByRole("button", { name: /^(Collapse|Expand) sidebar$/ });
-// The first PRIMARY nav item ("Dashboard", href="/dashboard"). On the top-level
-// route (drill === null) there is no "Back to menu" chevron (also href
-// "/dashboard"), so this exact-href locator inside the aside resolves uniquely to
-// the nav link the floated toggle was reported to overlap.
-const dashboardNavLink = (page: Page) =>
-  page.locator("aside").first().locator('a[href="/dashboard"]');
+// (The dedicated ▢ collapse toggle was removed — the resize slider now owns
+// collapse/expand — so the `collapseToggle` / `dashboardNavLink` /
+// `expectVerticallyCentered` helpers and the toggle-position tests that used them
+// were removed with it.)
 type Rect = { x: number; y: number; width: number; height: number };
 const intersects = (a: Rect, b: Rect): boolean =>
   a.x < b.x + b.width &&
   a.x + a.width > b.x &&
   a.y < b.y + b.height &&
   a.y + a.height > b.y;
-// AC1 helper: assert two rects share a vertical center within `tol` px. The
-// positive alignment gate (vs the looser non-overlap `intersects` check) that
-// catches a misaligned-but-disjoint toggle — exactly how PR #4997's top-3
-// corner offset shipped ~28px above the card center.
-const expectVerticallyCentered = (toggle: Rect, card: Rect, label: string, tol = 2): void => {
-  const toggleCenterY = toggle.y + toggle.height / 2;
-  const cardCenterY = card.y + card.height / 2;
-  expect(Math.abs(toggleCenterY - cardCenterY), label).toBeLessThanOrEqual(tol);
-};
 
 test.describe("nav-states visual gate — desktop", () => {
   test.use({ viewport: DESKTOP });
@@ -455,7 +418,7 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(primaryNav(page)).toHaveCount(0);
   });
 
-  test("drilled (expanded): no horizontal overflow + collapse toggle floats top-right (reclaimed-space restructure)", async ({ page }) => {
+  test("drilled (expanded): no horizontal overflow (reclaimed-space restructure)", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard/kb");
 
@@ -475,40 +438,16 @@ test.describe("nav-states visual gate — desktop", () => {
       overflow,
       "expanded drilled rail (md:w-56) overflows horizontally — Bug 1 regression",
     ).toBeLessThanOrEqual(1);
-
-    // Reclaimed-space restructure: the collapse toggle no longer lives in a
-    // rail-header row aligned to the back-affordance gutter — it is FLOATED in the
-    // aside's top-RIGHT region (`absolute right-3 top-10`). Assert it is visible,
-    // anchored to the top-right of the aside box, and fully inside the rail.
-    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
-    const asideBox = await aside.boundingBox();
-    const toggleBox = await collapseToggle(page).boundingBox();
-    expect(asideBox).not.toBeNull();
-    expect(toggleBox).not.toBeNull();
-    // Top-region anchored: the toggle is centered on the workspace pill row
-    // (top-10 = 40px), so its top edge sits ~40px below the aside top — still in
-    // the rail's top region, never buried in the middle. (Was ≤16 when the toggle
-    // sat at the top-3 corner; loosened to ≤44 for the centered top-10 offset.)
-    expect(
-      toggleBox!.y - asideBox!.y,
-      "floated collapse toggle drifted from the aside top region",
-    ).toBeLessThanOrEqual(44);
-    // Right-anchored + inside the rail: toggle right edge within ~16px of the
-    // aside right edge and never spilling past it.
-    const asideRight = asideBox!.x + asideBox!.width;
-    const toggleRight = toggleBox!.x + toggleBox!.width;
-    expect(toggleRight).toBeLessThanOrEqual(asideRight + 1);
-    expect(
-      asideRight - toggleRight,
-      "floated collapse toggle is not anchored to the aside right edge",
-    ).toBeLessThanOrEqual(16);
+    // The dedicated ▢ collapse button (and its float-position assertions) were
+    // removed: the resize slider now owns collapse/expand. Its presence in every
+    // drill state is covered by the "widenable KB rail — desktop" describe block.
   });
 
-  test("expanded multi-workspace: band reclaims the top (~45px) + floated toggle clears the switcher card & chevron (AC1/AC3)", async ({ page }) => {
+  test("expanded multi-workspace: band reclaims the top (~45px) (AC1)", async ({ page }) => {
     await setupNavMocks(page);
     // ≥2 memberships → OrgSwitcher renders the INTERACTIVE switch button with the
-    // `▾` chevron at the card's right edge (the collision risk for a top-right
-    // floated toggle). Registered AFTER setupNavMocks so Playwright matches first.
+    // `▾` chevron at the card's right edge. Registered AFTER setupNavMocks so
+    // Playwright matches first.
     await page.route("**/api/workspace/list-memberships", (route) =>
       route.fulfill({
         status: 200,
@@ -534,10 +473,10 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
     const switcher = page.getByRole("button", { name: "Switch workspace" });
     await expect(switcher).toBeVisible({ timeout: 15_000 });
-    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
 
     // AC1 — reclaimed space: the band's top edge is at/near the aside top (the
     // dedicated ~44px toggle row is gone). RED on the old markup (~44px gap).
+    // The floated-toggle overlap/alignment ACs were removed with the ▢ button.
     const asideBox = await aside.boundingBox();
     const bandBox = await railBand(page).boundingBox();
     expect(asideBox).not.toBeNull();
@@ -546,124 +485,6 @@ test.describe("nav-states visual gate — desktop", () => {
       bandBox!.y - asideBox!.y,
       "workspace band did not rise to the sidebar top — ~45px not reclaimed",
     ).toBeLessThanOrEqual(12);
-
-    // AC3 — no overlap: the floated toggle's box does not intersect the workspace
-    // switcher card (which contains the right-edge `▾` chevron). Rect ∩ = 0.
-    const toggleBox = await collapseToggle(page).boundingBox();
-    const switcherBox = await switcher.boundingBox();
-    expect(toggleBox).not.toBeNull();
-    expect(switcherBox).not.toBeNull();
-    expect(
-      intersects(toggleBox!, switcherBox!),
-      "floated collapse toggle overlaps the workspace switcher card/chevron",
-    ).toBe(false);
-
-    // AC1 — vertical alignment: the floated toggle's center must sit on the
-    // switcher card's vertical center (≤2px). The pre-existing non-overlap
-    // assertion above is satisfied by a misaligned-but-disjoint toggle — exactly
-    // how PR #4997's `top-3` corner offset shipped ~28px above the card center.
-    expectVerticallyCentered(
-      toggleBox!,
-      switcherBox!,
-      "floated collapse toggle is not vertically centered on the workspace switcher card",
-    );
-  });
-
-  test("expanded single-workspace: floated toggle is vertically centered on the identity chip (AC1)", async ({ page }) => {
-    // Default 1-membership render (the static identity chip, no `▾` chevron) — the
-    // surface in the reported screenshot. Same `px-3 py-2.5` + lg-tile geometry as
-    // the multi-workspace switch button, so the toggle-center alignment must hold.
-    await setupNavMocks(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-    await expect(orgIdentity(page)).toContainText("Soleur Workspace", {
-      timeout: 15_000,
-    });
-    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
-
-    const toggleBox = await collapseToggle(page).boundingBox();
-    const chipBox = await orgIdentity(page).boundingBox();
-    expect(toggleBox).not.toBeNull();
-    expect(chipBox).not.toBeNull();
-    // No overlap with the identity chip (no chevron in this branch).
-    expect(
-      intersects(toggleBox!, chipBox!),
-      "floated collapse toggle overlaps the single-workspace identity chip",
-    ).toBe(false);
-    // AC1 — vertical center alignment (≤2px).
-    expectVerticallyCentered(
-      toggleBox!,
-      chipBox!,
-      "floated collapse toggle is not vertically centered on the identity chip",
-    );
-  });
-
-  test("expanded, list-memberships IN-FLIGHT: floated toggle does NOT overlap the Dashboard nav link (height-collapse overlap bug)", async ({ page }) => {
-    // THE reported bug: while the membership fetch is in flight, the band's pill
-    // (its only top-level content) renders null, the band height-collapses, and
-    // the floated toggle (`absolute right-3 top-10`) paints over the "Dashboard"
-    // nav link below it. RED on main (no reserved band height); GREEN after the
-    // md:min-h-[64px] reserve holds the band open through the in-flight state.
-    await setupNavMocks(page);
-    await mockMembershipsInFlight(page); // registered after setup → matched first
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-    // The toggle + the nav both render synchronously (layout is not gated on the
-    // membership fetch); only the band's PILL is async. So both are present even
-    // though the identity chip never resolves in this test.
-    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
-    await expect(dashboardNavLink(page)).toBeVisible({ timeout: 15_000 });
-
-    // Poll the rect-intersection so the two boundingBox reads settle on the same
-    // layout frame (min-h has no transition, but a late font/metrics shift could
-    // otherwise sample the toggle and nav rects one frame apart).
-    await expect
-      .poll(
-        async () => {
-          const toggleBox = await collapseToggle(page).boundingBox();
-          const navBox = await dashboardNavLink(page).boundingBox();
-          if (!toggleBox || !navBox) return true; // not-ready → keep polling (treat as "overlapping")
-          return intersects(toggleBox, navBox);
-        },
-        {
-          timeout: 7_000,
-          message:
-            "floated collapse toggle overlaps the Dashboard nav link while the band is height-collapsed (in-flight membership fetch)",
-        },
-      )
-      .toBe(false);
-  });
-
-  test("collapsed, list-memberships IN-FLIGHT: collapsed toggle does NOT overlap the Dashboard nav (both-toggle-states companion)", async ({ page }) => {
-    // Both-toggle-states rule (2026-04-17-alignment-fixes-must-verify-both-toggle
-    // -states): a fix for the expanded state does not carry to collapsed. The
-    // collapsed band already reserves pt-16 top clearance, so this is expected
-    // GREEN on main too — it locks the collapsed contract against future drift.
-    // NON-GATING by design: it does not go RED for this fix (it guards a
-    // different, pre-existing code path); the expanded test above is the
-    // gating proof.
-    await setupNavMocks(page);
-    await mockMembershipsInFlight(page);
-    await seedCollapsed(page);
-    await gotoOrSkip(page, "/dashboard");
-
-    const aside = page.locator("aside").first();
-    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
-    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
-    await expect(dashboardNavLink(page)).toBeVisible({ timeout: 15_000 });
-
-    const toggleBox = await collapseToggle(page).boundingBox();
-    const navBox = await dashboardNavLink(page).boundingBox();
-    expect(toggleBox).not.toBeNull();
-    expect(navBox).not.toBeNull();
-    expect(
-      intersects(toggleBox!, navBox!),
-      "collapsed toggle overlaps the Dashboard nav while the band is in-flight",
-    ).toBe(false);
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {
@@ -698,28 +519,9 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(monogram).toHaveText("S"); // "Soleur Workspace" → "S"
     expect(await monogram.getAttribute("class")).not.toMatch(/accent-gold/);
 
-    // AC4 (reclaimed-space restructure): the floated collapse toggle stays fully
-    // inside the 56px collapsed rail and does NOT overlap the centered monogram
-    // tile. When collapsed the toggle centers on the tile's vertical axis
-    // (left-1/2 -translate-x-1/2), so the collapsed band reserves pt-16 top
-    // clearance to keep the two disjoint.
-    await expect(collapseToggle(page)).toBeVisible();
-    const asideBox = await aside.boundingBox();
-    const toggleBox = await collapseToggle(page).boundingBox();
-    const tileBox = await idIcon.boundingBox();
-    expect(asideBox).not.toBeNull();
-    expect(toggleBox).not.toBeNull();
-    expect(tileBox).not.toBeNull();
-    // Inside the rail: never spills past the 56px edges.
-    expect(toggleBox!.x + toggleBox!.width).toBeLessThanOrEqual(
-      asideBox!.x + asideBox!.width + 1,
-    );
-    expect(toggleBox!.x).toBeGreaterThanOrEqual(asideBox!.x - 1);
-    // No overlap with the monogram tile.
-    expect(
-      intersects(toggleBox!, tileBox!),
-      "floated collapse toggle overlaps the collapsed monogram tile",
-    ).toBe(false);
+    // (The floated ▢ collapse-toggle overlap assertions were removed with the
+    // button; the resize slider — now the sole collapse/expand control — is
+    // covered in the "widenable KB rail — desktop" block.)
 
     // Bug 2 invariant: the rail must NOT overflow horizontally, and the verbose
     // "Working on:" repo label must be ABSENT from the rail (icon-only form). Use
@@ -871,8 +673,10 @@ test.describe("widenable KB rail — desktop", () => {
 
   test("collapse takes precedence over a widened width (AC12)", async ({ page }) => {
     await setupNavMocks(page);
-    // Pre-seed a widened width, then collapse — the rail must still be 56px and
-    // the handle gone; the stored width is preserved for re-expand.
+    // Pre-seed a widened width, then collapse — the rail must still be 56px. The
+    // handle now STAYS mounted when collapsed (it is the sole expand affordance,
+    // post ▢-button removal), but the stored 400px width must NOT apply while
+    // collapsed; it is preserved for re-expand.
     await page.addInitScript((key) => {
       localStorage.setItem(key, "400");
     }, RAIL_WIDTH_KEY);
@@ -881,7 +685,9 @@ test.describe("widenable KB rail — desktop", () => {
 
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
-    await expect(resizeHandle(page)).toHaveCount(0);
+    // The grip stays mounted when collapsed (so the user can drag/double-click
+    // to expand) — collapse precedence is about WIDTH, not handle presence.
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 7_000 });
     // The rail hydrates expanded (224px) → collapsed (56px) over a 200ms
     // `md:transition-[width]`. Poll until the width settles, matching the
     // sibling widenable-rail tests — a single synchronous read races the
@@ -938,15 +744,71 @@ test.describe("widenable KB rail — desktop", () => {
       .toBeGreaterThan(340);
   });
 
-  test("resize handle is KB-only — absent on Settings and Chat (AC13)", async ({ page }) => {
+  // INVERTED from the former gate (grip previously rendered only on the KB rail):
+  // the rail is now resizable in EVERY expanded drill state, so the grip MUST be
+  // present on Settings AND Chat. Runs with the rail EXPANDED (no seedCollapsed)
+  // — collapsed would unmount the grip and false-fail the presence assertion.
+  test("resize handle is present on Settings AND Chat (expanded), gold-active wired + generic a11y label (AC-E2E-1, AC-E2E-4)", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard/settings");
     await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
-    await expect(resizeHandle(page)).toHaveCount(0);
+    const settingsHandle = resizeHandle(page);
+    await expect(settingsHandle).toBeVisible({ timeout: 15_000 });
+    // Gold-on-active wash is wired (inherited from the merged KB grip).
+    await expect(settingsHandle).toHaveClass(/soleur-accent-gold-fill/);
+    // De-KB-ified accessible name on the non-KB rail.
+    await expect(settingsHandle).toHaveAttribute("aria-label", "Resize sidebar");
 
     await gotoOrSkip(page, "/dashboard/chat");
     await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
-    await expect(resizeHandle(page)).toHaveCount(0);
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("drag widens the NON-KB (Settings) rail and the width persists across reload via the shared key (AC-E2E-2)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/settings");
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    const before = await asideWidth(page);
+
+    await dragHandleBy(page, 140);
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(before + 50);
+    const widened = await asideWidth(page);
+
+    // Persisted to the SHARED key (D1: soleur:sidebar.kb.width) and re-applied
+    // to the main rail on reload.
+    const stored = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      RAIL_WIDTH_KEY,
+    );
+    expect(Number(stored)).toBeGreaterThan(before + 50);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(widened - 8);
+  });
+
+  test("double-click the Settings grip collapses the rail; the grip stays and re-expands (AC-E2E-3)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/settings");
+    const handle = resizeHandle(page);
+    await expect(handle).toBeVisible({ timeout: 15_000 });
+    // The grip's onDoubleClick handler attaches at hydration; settle first.
+    await page.waitForTimeout(1500);
+    await handle.dblclick();
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 7_000 });
+
+    // The dedicated ▢ collapse button is gone — the grip is the sole
+    // collapse/expand affordance, so it STAYS mounted when collapsed and a
+    // second double-click re-expands the rail.
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 7_000 });
+    await resizeHandle(page).dblclick();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 7_000 });
   });
 });
 
@@ -1067,32 +929,29 @@ async function seedHidden(page: Page): Promise<void> {
 test.describe("full-hide (0px) gate — desktop", () => {
   test.use({ viewport: DESKTOP });
 
-  test("expanded: Hide affordance sits beside the collapse toggle, inside the rail, no overlap", async ({ page }) => {
+  test("expanded: Hide affordance sits in the top-right corner, inside the rail, no overlap", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard");
 
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
-    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
     await expect(hideButton(page)).toBeVisible({ timeout: 15_000 });
     // Reveal hamburger is absent while the rail is visible.
     await expect(revealButton(page)).toHaveCount(0);
 
     const hideBox = (await hideButton(page).boundingBox())!;
-    const collapseBox = (await collapseToggle(page).boundingBox())!;
     const asideBox = (await aside.boundingBox())!;
-    // The two top controls are distinct, non-overlapping, and both within the rail.
-    expect(intersects(hideBox, collapseBox), "Hide overlaps the collapse toggle").toBe(false);
+    // Hide is the sole floated rail-header button now (the ▢ collapse toggle was
+    // removed) — it sits in the top-right corner, fully inside the rail.
     expect(hideBox.x).toBeGreaterThanOrEqual(asideBox.x - 1);
     expect(hideBox.x + hideBox.width).toBeLessThanOrEqual(asideBox.x + asideBox.width + 1);
-    // Hide sits just LEFT of the collapse toggle (right-10 vs right-3).
-    expect(hideBox.x).toBeLessThan(collapseBox.x);
-    // The widened band clearance (md:pr-20) keeps BOTH controls off the
-    // workspace identity / switcher chevron.
+    // Right-anchored: within ~16px of the aside right edge.
+    const asideRight = asideBox.x + asideBox.width;
+    expect(asideRight - (hideBox.x + hideBox.width)).toBeLessThanOrEqual(16);
+    // The widened band clearance keeps it off the workspace identity / switcher.
     await expect(orgIdentity(page)).toBeVisible({ timeout: 15_000 });
     const identityBox = (await orgIdentity(page).boundingBox())!;
     expect(intersects(hideBox, identityBox), "Hide overlaps the workspace identity").toBe(false);
-    expect(intersects(collapseBox, identityBox), "collapse toggle overlaps the workspace identity").toBe(false);
 
     await page.screenshot({ path: "test-results/hide-1-visible-expanded.png" });
   });
@@ -1160,7 +1019,7 @@ test.describe("full-hide (0px) gate — desktop", () => {
     await expect(revealButton(page)).toBeVisible();
   });
 
-  test("collapsed icon rail still exposes a Hide affordance with no toggle overlap", async ({ page }) => {
+  test("collapsed icon rail still exposes a Hide affordance, centered in the rail", async ({ page }) => {
     await setupNavMocks(page);
     await seedCollapsed(page);
     await gotoOrSkip(page, "/dashboard");
@@ -1170,12 +1029,14 @@ test.describe("full-hide (0px) gate — desktop", () => {
     await expect(hideButton(page)).toBeVisible({ timeout: 15_000 });
 
     const hideBox = (await hideButton(page).boundingBox())!;
-    const collapseBox = (await collapseToggle(page).boundingBox())!;
-    expect(intersects(hideBox, collapseBox), "collapsed Hide overlaps the toggle").toBe(false);
-    // Both centered on the same icon column.
+    const asideBox = (await aside.boundingBox())!;
+    // Centered on the collapsed icon column (left-1/2 -translate-x-1/2) and fully
+    // inside the 56px rail.
     const hideCx = hideBox.x + hideBox.width / 2;
-    const collapseCx = collapseBox.x + collapseBox.width / 2;
-    expect(Math.abs(hideCx - collapseCx)).toBeLessThanOrEqual(2);
+    const asideCx = asideBox.x + asideBox.width / 2;
+    expect(Math.abs(hideCx - asideCx)).toBeLessThanOrEqual(2);
+    expect(hideBox.x).toBeGreaterThanOrEqual(asideBox.x - 1);
+    expect(hideBox.x + hideBox.width).toBeLessThanOrEqual(asideBox.x + asideBox.width + 1);
 
     await page.screenshot({ path: "test-results/hide-4-collapsed.png" });
   });
@@ -1213,33 +1074,49 @@ test.describe("full-hide (0px) gate — desktop", () => {
     await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
   });
 
-  test("pressing the bar washes it brand-gold, not grey (screenshot)", async ({ page }) => {
+  test("pressing the bar body paints NO gold; gold is confined to the slider zone (screenshot)", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard");
     await expect(orgIdentity(page)).toBeVisible({ timeout: 15_000 });
 
     const aside = page.locator("aside").first();
     const box = (await aside.boundingBox())!;
-    const overlay = page.getByTestId("rail-gold-active-overlay");
-    const idleClass = (await overlay.getAttribute("class")) ?? "";
 
-    // Press and hold on the rail → the whole-bar gold wash fades in.
+    // The whole-bar gold wash overlay was removed entirely.
+    await expect(page.getByTestId("rail-gold-active-overlay")).toHaveCount(0);
+
+    // Press and hold on the BAR BODY (left side, away from the right-edge grip).
+    // No part of the rail should turn gold.
     await page.mouse.move(box.x + 16, box.y + box.height / 2);
     await page.mouse.down();
     await page.waitForTimeout(200);
-    const pressedClass = (await overlay.getAttribute("class")) ?? "";
-    const pressedBg = await overlay.evaluate((el) => getComputedStyle(el).backgroundColor);
-    await page.screenshot({ path: "test-results/hide-5-gold-active.png" });
-    await page.mouse.up();
-    await page.waitForTimeout(100);
-    const releasedClass = (await overlay.getAttribute("class")) ?? "";
-
-    // Idle/released: brand gold at 0 alpha (invisible). Pressed: the visible gold
-    // wash (token-class assert is colour-space independent vs Tailwind v4 oklch).
-    expect(idleClass).toContain("bg-soleur-accent-gold-fill/0");
-    expect(pressedClass, `pressed bg was ${pressedBg}`).toContain(
-      "bg-soleur-accent-gold-fill/40",
+    const bodyPressBg = await aside.evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
     );
-    expect(releasedClass).toContain("bg-soleur-accent-gold-fill/0");
+    await page.screenshot({ path: "test-results/hide-5-no-bar-gold.png" });
+    await page.mouse.up();
+
+    // The grip turns gold only within its OWN zone on active/drag. Press it and
+    // screenshot for the visual record.
+    const handle = resizeHandle(page);
+    await expect(handle).toBeVisible({ timeout: 7_000 });
+    const hbox = (await handle.boundingBox())!;
+    await page.mouse.move(hbox.x + hbox.width / 2, hbox.y + hbox.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(150);
+    const gripActiveBg = await handle.evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
+    );
+    await page.screenshot({ path: "test-results/hide-5-grip-gold.png" });
+    await page.mouse.up();
+
+    // The bar body never adopts the grip's active gold; the two backgrounds differ.
+    expect(gripActiveBg, `grip active bg was ${gripActiveBg}`).not.toBe(
+      bodyPressBg,
+    );
+    // The grip carries the active-gold class; the bar body does not.
+    await expect(handle).toHaveClass(/active:bg-soleur-accent-gold-fill\/70/);
+    const asideClass = (await aside.getAttribute("class")) ?? "";
+    expect(asideClass).not.toContain("bg-soleur-accent-gold-fill");
   });
 });

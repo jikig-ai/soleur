@@ -298,9 +298,12 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
   });
 });
 
-// Widenable KB rail (amendment): the resize handle renders ONLY in the
-// `drill === "kb" && !collapsed` branch (AC13 KB-only, AC12 collapse-precedence).
-describe("KB rail resize handle gating (AC12/AC13)", () => {
+// Widenable rail: the resize handle now renders in EVERY visible state — every
+// drill (KB / Settings / Chat / Dashboard) AND when collapsed (it is the sole
+// collapse/expand affordance). It is suppressed ONLY when the rail is fully
+// hidden (0px — nothing to grab). On non-KB rails the grip carries the generic
+// "Resize sidebar" accessible name.
+describe("rail resize handle gating (all visible states; suppressed only when hidden)", () => {
   beforeEach(() => {
     mockPathname = "/dashboard";
     localStorage.clear();
@@ -323,7 +326,7 @@ describe("KB rail resize handle gating (AC12/AC13)", () => {
     expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
   });
 
-  it("does NOT render the handle on Settings or Chat drills (KB-only, AC13)", () => {
+  it("DOES render the handle on Settings and Chat drills, labeled generically", () => {
     for (const path of ["/dashboard/settings", "/dashboard/chat/x"]) {
       mockPathname = path;
       const { unmount } = render(
@@ -333,14 +336,14 @@ describe("KB rail resize handle gating (AC12/AC13)", () => {
           </DashboardLayout>
         </Wrap>,
       );
-      expect(
-        screen.queryByTestId("kb-rail-resize-handle"),
-      ).not.toBeInTheDocument();
+      const handle = screen.getByTestId("kb-rail-resize-handle");
+      expect(handle).toBeInTheDocument();
+      expect(handle).toHaveAttribute("aria-label", "Resize sidebar");
       unmount();
     }
   });
 
-  it("does NOT render the handle when the rail is collapsed, even on KB (collapse precedence, AC12)", async () => {
+  it("DOES render the handle when the rail is collapsed (it is the sole expand affordance)", () => {
     localStorage.setItem("soleur:sidebar.main.collapsed", "1");
     mockPathname = "/dashboard/kb";
     render(
@@ -350,8 +353,23 @@ describe("KB rail resize handle gating (AC12/AC13)", () => {
         </DashboardLayout>
       </Wrap>,
     );
-    // useSidebarCollapse hydrates collapse in a post-mount effect; wait for the
-    // handle to disappear once collapsed=true settles.
+    // Even collapsed, the slider mounts so the user can drag/double-click to
+    // expand again (the dedicated ▢ collapse button was removed as a duplicate).
+    expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
+  });
+
+  it("does NOT render the handle when the rail is fully hidden (0px — nothing to grab)", async () => {
+    localStorage.setItem("soleur:sidebar.main.hidden", "1");
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    // useSidebarHidden hydrates in a post-mount effect; wait for the handle to
+    // disappear once hidden=true settles.
     await waitFor(() =>
       expect(
         screen.queryByTestId("kb-rail-resize-handle"),
