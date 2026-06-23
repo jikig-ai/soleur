@@ -61,6 +61,7 @@ export const swrKeys = {
   dashboardToday: () => ["/api/dashboard/today"] as const,
   workspaceActiveRepo: () => ["/api/workspace/active-repo"] as const,
   dashboardOrphanCount: () => ["/api/kb/orphan-count"] as const,
+  routinesList: () => ["/api/dashboard/routines"] as const,
   conversations: (filters: {
     statusFilter?: string;
     domainFilter?: string;
