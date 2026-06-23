@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
+import { SWRConfig } from "swr";
+import { swrConfig } from "@/lib/swr-config";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 
 const { mockReportSilentFallback } = vi.hoisted(() => ({
@@ -346,5 +348,81 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
     // Every offline Try-again re-runs ONLY the refresh phase (attemptRefresh),
     // never re-issuing set_current_workspace_id.
     expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
+});
+
+// AC4 (ADR-067 GAP B): the workspace switch evicts the in-memory SWR cache at
+// the RPC-commit boundary so workspace-A content cannot survive into the
+// workspace-B render, and `revalidateOnReconnect` is OFF for content keys so the
+// offline post-RPC park window cannot write stale keys back.
+describe("OrgSwitcherContainer — SWR cache eviction on switch (AC4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRpc.mockResolvedValue({ error: null });
+    mockRefreshSession.mockResolvedValue({
+      data: {
+        session: {
+          user: { app_metadata: { current_workspace_id: ACME.workspaceId } },
+        },
+      },
+      error: null,
+    });
+    Object.defineProperty(window.location, "assign", {
+      configurable: true,
+      value: assignMock,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("active-repo")) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                workspaceId: JIKIGAI.workspaceId,
+                repoUrl: "https://github.com/jikig-ai/soleur",
+                repoName: "jikig-ai/soleur",
+                repoStatus: "connected",
+                fellBackToSolo: false,
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ memberships: [JIKIGAI, ACME] }),
+        });
+      }),
+    );
+  });
+
+  it("clears workspace-A cached content when the switch RPC commits", async () => {
+    // A cache pre-seeded with workspace-A content, shaped as an SWR state entry.
+    const cache = new Map<string, { data?: unknown }>([
+      ["wsA-inbox", { data: { subject: "wsA-private-email" } }],
+    ]);
+    render(
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0 }}>
+        <OrgSwitcherContainer />
+      </SWRConfig>,
+    );
+    await openAndSelectAcme();
+    fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
+
+    await vi.waitFor(() => {
+      expect(mockRpc).toHaveBeenCalledWith("set_current_workspace_id", {
+        p_workspace_id: ACME.workspaceId,
+      });
+    });
+    // After the commit, no workspace-A content survives in the cache.
+    await vi.waitFor(() => {
+      const surviving = [...cache.values()]
+        .map((v) => v?.data)
+        .filter((d) => d !== undefined);
+      expect(JSON.stringify(surviving)).not.toContain("wsA-private-email");
+    });
+  });
+
+  it("ships revalidateOnReconnect OFF for content keys (offline-park safeguard)", () => {
+    expect(swrConfig.revalidateOnReconnect).toBe(false);
   });
 });

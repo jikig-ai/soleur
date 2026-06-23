@@ -21,6 +21,17 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { InboxSurface } from "@/components/inbox/inbox-surface";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
+
+// Each render gets an isolated SWR cache (fresh Map) so cached items never leak
+// across test cases; rerender preserves the same provider instance.
+function Wrapped() {
+  return (
+    <SwrTestProvider>
+      <InboxSurface />
+    </SwrTestProvider>
+  );
+}
 
 function item(over: Partial<EmailTriageItem> = {}): EmailTriageItem {
   return {
@@ -64,7 +75,7 @@ describe("InboxSurface", () => {
     const b = item({ subject: "Second from API" });
     global.fetch = mockFetchOnce([a, b]) as unknown as typeof fetch;
 
-    render(<InboxSurface />);
+    render(<Wrapped />);
 
     await waitFor(() => expect(screen.getByText("First from API")).toBeTruthy());
     // Default (Active) view fetches the plain endpoint, no ?status=archived.
@@ -80,7 +91,7 @@ describe("InboxSurface", () => {
     mockStatus = "archived";
     global.fetch = mockFetchOnce([item({ status: "archived", subject: "Done item" })]) as unknown as typeof fetch;
 
-    render(<InboxSurface />);
+    render(<Wrapped />);
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
@@ -93,7 +104,7 @@ describe("InboxSurface", () => {
 
   it("shows distinct empty-state copy for Active vs Archived", async () => {
     global.fetch = mockFetchOnce([]) as unknown as typeof fetch;
-    render(<InboxSurface />);
+    render(<Wrapped />);
     await waitFor(() =>
       expect(screen.getByText("No items needing attention")).toBeTruthy(),
     );
@@ -101,7 +112,7 @@ describe("InboxSurface", () => {
     cleanup();
     mockStatus = "archived";
     global.fetch = mockFetchOnce([]) as unknown as typeof fetch;
-    render(<InboxSurface />);
+    render(<Wrapped />);
     await waitFor(() =>
       expect(screen.getByText("Nothing archived yet")).toBeTruthy(),
     );
@@ -117,7 +128,7 @@ describe("InboxSurface", () => {
         }),
       ) as unknown as typeof fetch;
 
-    render(<InboxSurface />);
+    render(<Wrapped />);
     expect(screen.getByText(/loading/i)).toBeTruthy();
 
     resolve({ ok: true, json: async () => ({ items: [] }) });
@@ -130,7 +141,7 @@ describe("InboxSurface", () => {
     const failing = vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) });
     global.fetch = failing as unknown as typeof fetch;
 
-    render(<InboxSurface />);
+    render(<Wrapped />);
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     // Tabs must stay reachable in the error state (no strand).
     expect(screen.getByRole("tab", { name: /active/i })).toBeTruthy();
@@ -144,7 +155,7 @@ describe("InboxSurface", () => {
 
   it("switching tabs pushes the status query param", async () => {
     global.fetch = mockFetchOnce([]) as unknown as typeof fetch;
-    render(<InboxSurface />);
+    render(<Wrapped />);
     await waitFor(() =>
       expect(screen.getByText("No items needing attention")).toBeTruthy(),
     );
@@ -158,7 +169,7 @@ describe("InboxSurface", () => {
 
   it("refetches the archived endpoint when the status param changes (tab switch)", async () => {
     global.fetch = mockFetchOnce([item({ subject: "Active row" })]) as unknown as typeof fetch;
-    const { rerender } = render(<InboxSurface />);
+    const { rerender } = render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("Active row")).toBeTruthy());
     expect(global.fetch).toHaveBeenLastCalledWith("/api/inbox/emails");
 
@@ -166,7 +177,7 @@ describe("InboxSurface", () => {
     // then re-render — the surface must refetch the archived endpoint.
     mockStatus = "archived";
     global.fetch = mockFetchOnce([item({ status: "archived", subject: "Archived row" })]) as unknown as typeof fetch;
-    rerender(<InboxSurface />);
+    rerender(<Wrapped />);
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith("/api/inbox/emails?status=archived"),
     );
@@ -183,9 +194,9 @@ describe("InboxSurface", () => {
         () => new Promise((r) => resolvers.push(r)),
       ) as unknown as typeof fetch;
 
-    const { rerender } = render(<InboxSurface />); // fetch #1 (Active) in flight
+    const { rerender } = render(<Wrapped />); // fetch #1 (Active) in flight
     mockStatus = "archived";
-    rerender(<InboxSurface />); // fetch #2 (Archived) in flight
+    rerender(<Wrapped />); // fetch #2 (Archived) in flight
     await waitFor(() => expect(resolvers.length).toBe(2));
 
     // Resolve the NEWER request first, then the older stale one.

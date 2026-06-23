@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
 
@@ -143,7 +144,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(
@@ -163,7 +164,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
@@ -192,7 +193,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     // All foundations complete → show as chips, operational tasks appear
     await waitFor(() => {
@@ -226,7 +227,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(
@@ -251,7 +252,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
@@ -277,7 +278,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(
@@ -316,7 +317,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     // Foundation cards should be visible
     await waitFor(() => {
@@ -346,7 +347,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       // Vision exists but is stub — should show foundation cards
@@ -378,7 +379,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       // Vision is a stub so not all foundations complete — shows foundations view
@@ -395,7 +396,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     // Should fall through to empty state (no foundations visible since KB state unknown)
     await waitFor(() => {
@@ -414,7 +415,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     // Should show skeleton, not the Command Center or first-run view
     expect(screen.queryByText(/your organization is ready/i)).not.toBeInTheDocument();
@@ -432,7 +433,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(
@@ -459,7 +460,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText("Brand Identity")).toBeInTheDocument();
@@ -488,7 +489,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();

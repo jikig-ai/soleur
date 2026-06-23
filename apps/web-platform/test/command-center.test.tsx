@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
 
@@ -185,7 +186,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     // All 4 foundations complete → show as chips, operational tasks in grid
     await waitFor(() => {
@@ -234,7 +235,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText(/your organization is ready/i)).toBeInTheDocument();
@@ -246,7 +247,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     // Conversations render both mobile + desktop layouts, so use getAllByText
     await waitFor(() => {
@@ -261,7 +262,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getAllByText("Needs your decision").length).toBeGreaterThanOrEqual(1);
@@ -292,7 +293,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       // Title appears in both mobile and desktop layouts
@@ -330,7 +331,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getAllByText("Needs your decision").length).toBeGreaterThanOrEqual(1);
@@ -344,7 +345,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Active" })).toBeInTheDocument();
@@ -356,7 +357,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Archived" })).toBeInTheDocument();
@@ -398,7 +399,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
@@ -416,7 +417,7 @@ describe("Command Center", () => {
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
     );
-    render(<DashboardPage />);
+    render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
     await waitFor(() => {
       expect(screen.getByText(/New conversation/)).toBeInTheDocument();
@@ -460,7 +461,7 @@ describe("Command Center", () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
       );
-      render(<DashboardPage />);
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
@@ -480,7 +481,7 @@ describe("Command Center", () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
       );
-      render(<DashboardPage />);
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
       await waitFor(() => {
         expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
@@ -491,7 +492,7 @@ describe("Command Center", () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
       );
-      render(<DashboardPage />);
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
       await waitFor(() => {
         expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
@@ -513,7 +514,7 @@ describe("Command Center", () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
       );
-      render(<DashboardPage />);
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
       await waitFor(() => {
         expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
@@ -532,7 +533,7 @@ describe("Command Center", () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
       );
-      render(<DashboardPage />);
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
       await waitFor(() => {
         expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
@@ -557,7 +558,7 @@ describe("Command Center", () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
       );
-      render(<DashboardPage />);
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
