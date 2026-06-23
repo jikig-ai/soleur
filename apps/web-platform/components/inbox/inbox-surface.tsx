@@ -9,58 +9,55 @@
 // state. Items render in the order the API returns them (statutory pinned
 // first) — never re-sorted.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import useSWR from "swr";
 import {
   EmailTriageRow,
   type EmailTriageItem,
 } from "@/components/inbox/email-triage-row";
 import { ErrorCard } from "@/components/ui/error-card";
+import { RefreshShimmer } from "@/components/ui/refresh-shimmer";
+import { StaleRefreshBar } from "@/components/ui/stale-refresh-bar";
+import { swrKeys } from "@/lib/swr-config";
+
+async function fetchInboxItems([, status]: readonly [
+  string,
+  string,
+]): Promise<EmailTriageItem[]> {
+  const res = await fetch(
+    `/api/inbox/emails${status === "archived" ? "?status=archived" : ""}`,
+  );
+  if (!res.ok) throw new Error(`inbox emails ${res.status}`);
+  const body = (await res.json()) as { items: EmailTriageItem[] };
+  // Render in API order — the route pins unacknowledged statutory rows first
+  // (uncapped); never re-sort or a running statutory clock could fall out of
+  // view.
+  return body.items ?? [];
+}
 
 export function InboxSurface() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const archived = searchParams.get("status") === "archived";
+  const status = archived ? "archived" : "active";
 
-  // `null` = loading (not yet resolved). [] = resolved-empty.
-  const [items, setItems] = useState<EmailTriageItem[] | null>(null);
-  const [error, setError] = useState(false);
+  // ADR-067: per-filter cache key (FR5) — Active and Archived cache under
+  // distinct keys, so switching tabs renders cached-instant if previously
+  // loaded. SWR's stale-while-revalidate gives an instant render on remount;
+  // background revalidation never re-shows the first-load skeleton because the
+  // loading gate is `!data` (GAP F), not `isValidating`.
+  const {
+    data: items,
+    error,
+    isValidating,
+    mutate,
+  } = useSWR(swrKeys.inboxEmails(status), fetchInboxItems);
 
-  // Request-sequence guard: a fast tab switch (or an onChanged refetch that
-  // overlaps one) can leave an earlier fetch in flight that resolves AFTER the
-  // newer one and clobbers state with stale items. Only the latest request is
-  // allowed to write — superseded responses are dropped.
-  const requestId = useRef(0);
-
-  const fetchItems = useCallback(async () => {
-    const id = ++requestId.current;
-    setError(false);
-    setItems(null);
-    try {
-      const res = await fetch(
-        `/api/inbox/emails${archived ? "?status=archived" : ""}`,
-      );
-      if (id !== requestId.current) return; // superseded by a newer fetch
-      if (!res.ok) {
-        setError(true);
-        return;
-      }
-      const body = (await res.json()) as { items: EmailTriageItem[] };
-      if (id !== requestId.current) return; // superseded during json()
-      // Render in API order — the route pins unacknowledged statutory rows
-      // first (uncapped); never re-sort or a running statutory clock could
-      // fall out of view.
-      setItems(body.items ?? []);
-    } catch {
-      if (id !== requestId.current) return;
-      setError(true);
-    }
-  }, [archived]);
-
-  useEffect(() => {
-    void fetchItems();
-  }, [fetchItems]);
+  const refetch = useCallback(() => {
+    void mutate();
+  }, [mutate]);
 
   const selectTab = (toArchived: boolean) => {
     router.push(toArchived ? `${pathname}?status=archived` : pathname);
@@ -68,6 +65,8 @@ export function InboxSurface() {
 
   return (
     <div>
+      {/* Ambient gold shimmer while revalidating a warm cache hit (Option A). */}
+      <RefreshShimmer active={isValidating && items !== undefined} />
       {/* Tabs render in every state (including error) so the user is never
           stranded on a failed Archived view. */}
       <div
@@ -82,14 +81,18 @@ export function InboxSurface() {
         </TabButton>
       </div>
 
+      {/* Stale-failure affordance: revalidation failed while stale data is
+          still shown — keep the content, offer a retry (GAP #4 / AC8). */}
+      {error && items !== undefined && <StaleRefreshBar onRetry={refetch} />}
+
       <div role="tabpanel" aria-label={archived ? "Archived items" : "Active items"}>
-        {error ? (
+        {error && items === undefined ? (
           <ErrorCard
             title="Failed to load inbox"
             message="Something went wrong loading your inbox. Please try again."
-            onRetry={fetchItems}
+            onRetry={refetch}
           />
-        ) : items === null ? (
+        ) : items === undefined ? (
           <p className="py-8 text-sm text-soleur-text-secondary">Loading…</p>
         ) : items.length === 0 ? (
           <p className="py-8 text-sm text-soleur-text-secondary">
@@ -101,7 +104,7 @@ export function InboxSurface() {
               <EmailTriageRow
                 key={item.id}
                 item={item}
-                onChanged={fetchItems}
+                onChanged={refetch}
               />
             ))}
           </div>

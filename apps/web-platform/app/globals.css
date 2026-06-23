@@ -191,6 +191,30 @@
 }
 
 /*
+ * ADR-067 refresh shimmer. A ~2px gold sliver sweeps left→right across the top
+ * edge while a warm SWR cache hit revalidates in the background (RefreshShimmer,
+ * gated on `isValidating && data`). Ambient and decorative — no layout shift, no
+ * input block, no "from cache" text. `prefers-reduced-motion` callers get a
+ * static dim sliver instead of the sweep (handled below).
+ */
+@keyframes refresh-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="refresh-shimmer"] > * {
+    animation: none !important;
+    width: 100% !important;
+    opacity: 0.5;
+  }
+}
+
+/*
  * Widenable nav rail. The dashboard rail (`aside`) carries a persisted width set
  * inline by (dashboard)/layout.tsx whenever the rail is expanded — as `--kb-rail-w`
  * when drilled into KB, or `--main-rail-w` in every other drill state (Dashboard /

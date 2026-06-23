@@ -25,6 +25,10 @@ export function SwrTestProvider({
         provider: () => new Map(),
         dedupingInterval: 0,
         revalidateOnReconnect: false,
+        // Deterministic tests: SWR's built-in error backoff would otherwise
+        // re-fire the (test-controlled) fetcher on its own schedule and race
+        // explicit Retry assertions. Production keeps the default auto-retry.
+        shouldRetryOnError: false,
         ...value,
       }}
     >
