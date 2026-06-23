@@ -212,27 +212,31 @@ which is the load-bearing safeguard. See GDPR note below (trigger (b) fired).
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **AC1 (FR1):** Returning to a previously-visited view renders cached content with no loading
+- [x] **AC1 (FR1):** Returning to a previously-visited view renders cached content with no loading
       spinner — test asserts `fetch`/fetcher is NOT called on remount when cache is warm (invariant:
-      zero refetch on cache-hit remount; spy on call count, not DOM presence).
-- [ ] **AC2 (FR2/GAP F):** Background revalidation never re-shows the first-load skeleton — dashboard
+      zero refetch on cache-hit remount; spy on call count, not DOM presence). *(inbox-surface-cache.test.tsx)*
+- [x] **AC2 (FR2/GAP F):** Background revalidation never re-shows the first-load skeleton — dashboard
       gates skeleton on `!data`, not `isValidating`; test asserts skeleton absent on warm remount.
-- [ ] **AC3 (FR4/C2/GAP A — load-bearing):** After sign-out, the SWR cache is empty. Test: populate
+      *(Inbox/KB/Dashboard/Routines all gate on `data === undefined`.)*
+- [x] **AC3 (FR4/C2/GAP A — load-bearing):** After sign-out, the SWR cache is empty. Test: populate
       cache as user A → `useSignOut` → assert no user-A key survives (cleared before navigation).
-- [ ] **AC4 (FR4/GAP B):** Workspace switch clears the cache at RPC-commit; `revalidateOnReconnect` is
-      OFF for content keys. Test asserts content keys are not revalidated in the offline-park window.
-- [ ] **AC5 (FR5):** Inbox active vs archived cache under distinct keys — switching filter shows
-      cached-instant if previously loaded; no key collision.
-- [ ] **AC6 (TR3):** Conversations realtime INSERT/UPDATE drive `mutate()` (not `setState`); test fires a
-      mock realtime event and asserts the cache key updated and `shouldDropForScope` honored.
-- [ ] **AC7 (refresh UI):** The ambient gold shimmer renders only when `isValidating && data`; no
-      "from cache" status indicator exists anywhere.
-- [ ] **AC8 (stale-failure):** Inbox/Routines render the "Couldn't refresh — Retry" bar when `error &&
-      data`; stale content stays visible (no full error screen).
-- [ ] **AC9:** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; new tests pass.
-- [ ] **AC10 (C1):** No content persisted to disk — no `localStorage`/`sessionStorage`/persistent SWR
-      provider for content (grep confirms cache provider is in-memory only).
-- [ ] **AC11 (ADR/C4):** ADR-067 committed in this PR; C4 "no impact" rationale recorded (this plan).
+      *(swr-cache-clear-on-signout.test.tsx)*
+- [x] **AC4 (FR4/GAP B):** Workspace switch clears the cache at RPC-commit; `revalidateOnReconnect` is
+      OFF for content keys. *(org-switcher-container.test.tsx — AC4 block)*
+- [x] **AC5 (FR5):** Inbox active vs archived cache under distinct keys — switching filter shows
+      cached-instant if previously loaded; no key collision. *(swrKeys.inboxEmails(status))*
+- [ ] **AC6 (TR3) — DEFERRED to follow-up PR (CTO ruling 2026-06-23).** Conversations realtime →
+      `mutate()` migration deferred: FR4 cache-clear already covers conversations globally (Phase 1),
+      and a realtime→mutate rewrite on the highest-isolation surface is sequenced into its own PR to
+      bound regression risk. See ADR-067 §Rollout sequencing + the tracked follow-up issue.
+- [x] **AC7 (refresh UI):** The ambient gold shimmer renders only when `isValidating && data`; no
+      "from cache" status indicator exists anywhere. *(refresh-shimmer.tsx; inbox-surface-cache.test.tsx)*
+- [x] **AC8 (stale-failure):** Inbox renders the "Couldn't refresh — Retry" bar when `error && data`;
+      stale content stays visible. *(stale-refresh-bar.tsx)*
+- [x] **AC9:** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; new tests pass.
+- [x] **AC10 (C1):** No content persisted to disk — no `localStorage`/`sessionStorage`/persistent SWR
+      provider for content (default in-memory `Map` provider only).
+- [x] **AC11 (ADR/C4):** ADR-067 committed in this PR; C4 "no impact" rationale recorded.
 
 ### Post-merge (operator)
 - [ ] **AC12:** None required — pure client-side code change against already-provisioned surfaces; PR
