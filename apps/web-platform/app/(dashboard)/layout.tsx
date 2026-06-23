@@ -3,7 +3,9 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
+import { swrConfig } from "@/lib/swr-config";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -251,6 +253,11 @@ export default function DashboardLayout({
   }, []);
 
   return (
+    // ADR-067: the dashboard client-data cache. Mounted at a structurally
+    // stable position (cf. #5632 provider-tree stability) so a view's cached
+    // content survives navigation between sibling routes. In-memory only (no
+    // persistent provider — CPO C1); cleared on sign-out + workspace switch.
+    <SWRConfig value={swrConfig}>
     <TeamNamesProvider>
     <RailSlotProvider value={railSlotEl}>
     <RailCollapsedProvider value={collapsed}>
@@ -568,6 +575,7 @@ export default function DashboardLayout({
     </RailCollapsedProvider>
     </RailSlotProvider>
     </TeamNamesProvider>
+    </SWRConfig>
   );
 }
 
