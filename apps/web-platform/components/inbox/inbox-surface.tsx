@@ -21,7 +21,7 @@ import { RefreshShimmer } from "@/components/ui/refresh-shimmer";
 import { StaleRefreshBar } from "@/components/ui/stale-refresh-bar";
 import { swrKeys } from "@/lib/swr-config";
 
-async function fetchInboxItems([, status]: readonly [
+export async function fetchInboxItems([, status]: readonly [
   string,
   string,
 ]): Promise<EmailTriageItem[]> {

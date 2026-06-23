@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
+import { swrKeys, jsonFetcher } from "@/lib/swr-config";
+import { fetchInboxItems } from "@/components/inbox/inbox-surface";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
@@ -74,6 +77,23 @@ function flattenTree(
   return files;
 }
 
+// ADR-067: the dashboard reads the KB tree only to derive foundation-card
+// completion, so it caches under its OWN key (NOT the KB tab's swrKeys.kbTree(),
+// whose richer {tree,lastSync,needsReconnect} payload + distinct error-kind
+// mapping would cross-contaminate this tree-only consumer). Per-route instant
+// render still holds; the two routes are never mounted together.
+const DASHBOARD_KB_TREE_KEY = ["/api/kb/tree", "dashboard"] as const;
+
+// Carries the dashboard's KB-tree error states through SWR's single error
+// channel (503 → "provisioning", everything else → "error"; a 401 has already
+// redirected and a 404 returns an empty tree → no error).
+class DashKbTreeError extends Error {
+  constructor(public kind: "provisioning" | "error") {
+    super(kind);
+    this.name = "DashKbTreeError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Operational tasks (shown progressively as foundations complete)
 // ---------------------------------------------------------------------------
@@ -136,57 +156,46 @@ export default function DashboardPage() {
   // KB state derivation (inline — extract if this grows)
   // ---------------------------------------------------------------------------
 
-  const [kbLoading, setKbLoading] = useState(true);
-  const [kbFiles, setKbFiles] = useState<Map<string, FileInfo>>(new Map());
-  const [kbError, setKbError] = useState<"provisioning" | "error" | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    fetch("/api/kb/tree")
-      .then((res) => {
-        if (res.status === 401) {
-          router.push("/login");
-          return null;
-        }
-        if (res.status === 503) {
-          if (!cancelled) setKbError("provisioning");
-          return null;
-        }
-        if (res.status === 404) {
-          // No workspace / not connected — fall through to Command Center
-          return null;
-        }
-        if (!res.ok) throw new Error(`KB tree: ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (cancelled) return;
-        if (data?.tree) {
-          setKbFiles(flattenTree(data.tree));
-        }
-        setKbLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setKbError("error");
-          setKbLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
+  // ADR-067: cache the KB tree so returning to the dashboard renders instantly.
+  // The skeleton gates on `kbData === undefined && !kbErr` (GAP F) — a warm
+  // remount keeps kbData defined, so the first-load skeleton never re-shows.
+  const fetchDashboardKbTree = useCallback(async (): Promise<{
+    tree: TreeNode | null;
+  }> => {
+    const res = await fetch("/api/kb/tree");
+    if (res.status === 401) {
+      router.push("/login");
+      throw new DashKbTreeError("error"); // navigating away
+    }
+    if (res.status === 503) throw new DashKbTreeError("provisioning");
+    // 404 = no workspace / not connected — fall through to Command Center.
+    if (res.status === 404) return { tree: null };
+    if (!res.ok) throw new DashKbTreeError("error");
+    const data = await res.json();
+    return { tree: (data?.tree as TreeNode | null) ?? null };
   }, [router]);
+
+  const { data: kbData, error: kbErr } = useSWR(
+    DASHBOARD_KB_TREE_KEY,
+    fetchDashboardKbTree,
+  );
+  const kbLoading = kbData === undefined && kbErr === undefined;
+  const kbError: "provisioning" | "error" | null =
+    kbErr instanceof DashKbTreeError
+      ? kbErr.kind
+      : kbErr
+        ? "error"
+        : null;
+  const kbFiles = useMemo<Map<string, FileInfo>>(
+    () => (kbData?.tree ? flattenTree(kbData.tree) : new Map()),
+    [kbData],
+  );
 
   // Disconnected-with-orphans hint: when a user has disconnected their repo
   // but has pre-existing conversations tied to another repo_url, surface a
   // one-line hint so the empty Command Center doesn't read as data loss.
   // See plan 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md
   // Product/UX Gate findings.
-  const [orphanedCount, setOrphanedCount] = useState<number>(0);
-  const [repoDisconnected, setRepoDisconnected] = useState<boolean>(false);
-
   // PR-F (#3244, #3940) Phase 5 — Today section: drafts from
   // /api/dashboard/today. Fetched on mount; mounted ABOVE the foundation
   // + inbox sections per plan §Phase 5. Empty array means "no drafts yet".
@@ -198,90 +207,69 @@ export default function DashboardPage() {
     draftPreview: string;
     urgency: string;
   }
-  const [todayItems, setTodayItems] = useState<TodayItem[]>([]);
+  // ADR-067: cached so the Today section renders instantly on dashboard return.
+  // Silent on error (the banner still mounts); defaults to [] until resolved.
+  const { data: todayItems = [] } = useSWR(
+    swrKeys.dashboardToday(),
+    async (): Promise<TodayItem[]> => {
+      const res = await fetch("/api/dashboard/today");
+      if (!res.ok) return [];
+      const body = (await res.json()) as { items: TodayItem[] };
+      return body.items ?? [];
+    },
+  );
 
   // feat-operator-inbox-delegation Phase 5b — email-triage inbox items.
   // GET /api/inbox/emails already returns unacknowledged statutory rows
   // pinned first (server-side ordering contract); render in given order.
-  const [emailItems, setEmailItems] = useState<EmailTriageItem[]>([]);
+  // ADR-067: shares the SAME cache key as InboxSurface's Active view
+  // (swrKeys.inboxEmails("active")) + the same fetcher → free dedup and a
+  // consistent view across Dashboard ↔ Inbox. Errors stay silent here (the
+  // rest of the page renders); `emailItems` defaults to [] until resolved.
+  const { data: emailItems = [], mutate: mutateEmailItems } = useSWR(
+    swrKeys.inboxEmails("active"),
+    fetchInboxItems,
+  );
+  const fetchEmailItems = useCallback(() => {
+    void mutateEmailItems();
+  }, [mutateEmailItems]);
 
-  const fetchEmailItems = useCallback(async () => {
-    try {
-      const res = await fetch("/api/inbox/emails");
-      if (!res.ok) return; // 401/500 → silent; the rest of the page renders.
-      const body = (await res.json()) as { items: EmailTriageItem[] };
-      setEmailItems(body.items ?? []);
-    } catch {
-      // Network drop: leave empty.
-    }
-  }, []);
+  // ADR-044 (#4543): the repo-disconnected hint reflects the ACTIVE workspace's
+  // repo (never the caller's own users.repo_url), so an invited member viewing a
+  // connected workspace doesn't see a spurious hint. ADR-067: cached under
+  // swrKeys.workspaceActiveRepo so the nudge renders instantly on return.
+  const { data: activeRepo } = useSWR(
+    swrKeys.workspaceActiveRepo(),
+    jsonFetcher<{ repoUrl?: string | null }>,
+  );
+  // The hint fires ONLY once the active-repo fetch has resolved with NO repo
+  // connected (a network/transient failure leaves activeRepo undefined → no
+  // false hint).
+  const noActiveRepo = activeRepo !== undefined && !activeRepo?.repoUrl;
 
-  useEffect(() => {
-    void fetchEmailItems();
-  }, [fetchEmailItems]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/dashboard/today");
-        if (!res.ok) return; // 401/500 → silent; the banner still mounts.
-        const body = (await res.json()) as { items: TodayItem[] };
-        if (!cancelled) setTodayItems(body.items ?? []);
-      } catch {
-        // Network drop: leave empty; the banner still mounts.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const supabase = createClient();
-    (async () => {
-      // ADR-044 (#4543): the repo-disconnected hint must reflect the ACTIVE
-      // workspace's repo, not the caller's own `users.repo_url`. For an invited
-      // member, their own row is the empty solo row, so reading it would render
-      // a spurious "your repository is disconnected" hint while they view a
-      // workspace whose repo IS connected. /api/workspace/active-repo is already
-      // active-workspace-aware (claim → solo fallback, never a sibling).
-      let repoUrl: string | null = null;
-      try {
-        const res = await fetch("/api/workspace/active-repo");
-        if (res.ok) {
-          const data = (await res.json()) as { repoUrl?: string | null };
-          repoUrl = data.repoUrl ?? null;
-        }
-      } catch {
-        return; // Network drop — suppress the hint rather than show a false one.
-      }
-      if (cancelled || repoUrl) return; // Active workspace connected — no hint.
+  // Orphan count: a coarse "you have conversations from a repo connected in
+  // ANOTHER of your workspaces — reconnect" nudge. Gated on noActiveRepo (null
+  // key skips the query otherwise). INTENTIONALLY cross-workspace (scoping
+  // audit, 2026-06-02): scoping to the active workspace would make it ~0 and
+  // useless; it is the user's OWN non-sensitive row count (no content, no
+  // cross-tenant data). Do not add a workspace_id filter without re-deriving
+  // the nudge's purpose.
+  const { data: orphanCount } = useSWR(
+    noActiveRepo ? swrKeys.dashboardOrphanCount() : null,
+    async (): Promise<number> => {
+      const supabase = createClient();
       const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) return;
-      // `count=exact head=true` — row-less query, just the total.
-      // INTENTIONALLY cross-workspace (workspace-scoping audit, 2026-06-02):
-      // this hint fires ONLY when the ACTIVE workspace has no connected repo
-      // (guarded by the `repoUrl` check above). The count is a coarse "you have
-      // conversations from a repo connected in ANOTHER of your workspaces —
-      // reconnect" nudge, so scoping it to the active workspace would make it
-      // ~0 and useless. It is the user's OWN non-sensitive row count (no
-      // content, no cross-tenant data) — not a leak. Do not add a workspace_id
-      // filter here without re-deriving the nudge's purpose.
+      if (!auth.user) return 0;
       const { count } = await supabase
         .from("conversations")
         .select("id", { count: "exact", head: true })
         .eq("user_id", auth.user.id)
         .not("repo_url", "is", null);
-      if (cancelled) return;
-      setRepoDisconnected(true);
-      setOrphanedCount(count ?? 0);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      return count ?? 0;
+    },
+  );
+  const repoDisconnected = noActiveRepo;
+  const orphanedCount = orphanCount ?? 0;
 
   const visionExists = kbFiles.has("overview/vision.md");
   const foundationCards: FoundationCard[] = FOUNDATION_PATHS.map((f) => ({
