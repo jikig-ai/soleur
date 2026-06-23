@@ -264,19 +264,19 @@ a controller boundary. (If `/work` adds any new server route, re-run `/soleur:gd
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] AC1: `cmdk` in `apps/web-platform/package.json`; `bun install --frozen-lockfile` clean.
-- [ ] AC2: `⌘K`/`Ctrl+K` opens the palette from a dashboard route; `Esc` closes; focus restores to the prior element.
-- [ ] AC3: Shortcuts are suppressed while focus is in input/textarea/contenteditable INCLUDING the palette's own search input (`?` types a literal `?` there).
-- [ ] AC4: Palette renders all four groups; Navigation includes admin-gated items only when `isAdmin`.
-- [ ] AC5: Empty query shows "Ask an agent about '<q>'" fallback → `/dashboard/chat/new`.
-- [ ] AC6: KB `needsReconnect`/`503`/`500` renders an inline KB-group message without breaking other groups; loading skeleton shown during fetch.
-- [ ] AC7: "Run routine" does a same-origin POST to `/api/dashboard/routines/run` (no CSRF token); branches on `res.status` — `202` success row, `409` → confirm modal (nested focus-trap above palette verified) then re-POST `confirmed:true`, `400`/`502` → inline error row + `Sentry.captureException` (fnId tag). Tests assert the DOM affordance, not `res.status`.
-- [ ] AC8: Existing `⌘B` toggle works via the registry with no double-fire (grep layout.tsx shows the old standalone `handleToggleShortcut` removed/migrated); `NAV_ITEMS` imported from the shared `nav-items.ts`.
-- [ ] AC9: Help overlay opens via `⌘/` and guarded `?`; lists ONLY `⌘K`/`⌘/`/`⌘B`/`?`/`Esc` (no `G`-sequence rows).
-- [ ] AC10: A "Enable keyboard shortcuts" toggle (default on) disables the global listener when off (WCAG SC 2.1.4 turn-off).
-- [ ] AC11: `command-palette` is in `RUNTIME_FLAGS` (`lib/feature-flags/server.ts`); both surfaces are flag-gated.
-- [ ] AC12: Component/registry tests live under `apps/web-platform/test/` (`.test.tsx`/`.test.ts`) and pass via the package's vitest runner.
-- [ ] AC13: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] AC1: `cmdk` in `apps/web-platform/package.json`; `bun install --frozen-lockfile` clean.
+- [x] AC2: `⌘K`/`Ctrl+K` opens the palette from a dashboard route; `Esc` closes; focus restores to the prior element.
+- [x] AC3: Shortcuts are suppressed while focus is in input/textarea/contenteditable INCLUDING the palette's own search input (`?` types a literal `?` there).
+- [x] AC4: Palette renders all four groups; Navigation includes admin-gated items only when `isAdmin`.
+- [x] AC5: Empty query shows "Ask an agent about '<q>'" fallback → `/dashboard/chat/new`.
+- [x] AC6: KB `needsReconnect`/`503`/`500` renders an inline KB-group message without breaking other groups; loading skeleton shown during fetch.
+- [x] AC7: "Run routine" does a same-origin POST to `/api/dashboard/routines/run` (no CSRF token); branches on `res.status` — `202` success row, `409` → confirm modal (nested focus-trap above palette verified) then re-POST `confirmed:true`, `400`/`502` → inline error row + `Sentry.captureException` (fnId tag). Tests assert the DOM affordance, not `res.status`.
+- [x] AC8: Existing `⌘B` toggle works via the registry with no double-fire (grep layout.tsx shows the old standalone `handleToggleShortcut` removed/migrated); `NAV_ITEMS` imported from the shared `nav-items.ts`.
+- [x] AC9: Help overlay opens via `⌘/` and guarded `?`; lists ONLY `⌘K`/`⌘/`/`⌘B`/`?`/`Esc` (no `G`-sequence rows).
+- [x] AC10: A "Enable keyboard shortcuts" toggle (default on) disables the global listener when off (WCAG SC 2.1.4 turn-off).
+- [x] AC11: `command-palette` is in `RUNTIME_FLAGS` (`lib/feature-flags/server.ts`); both surfaces are flag-gated.
+- [x] AC12: Component/registry tests live under `apps/web-platform/test/` (`.test.tsx`/`.test.ts`) and pass via the package's vitest runner.
+- [x] AC13: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
 
 ### Post-merge (operator)
 - [ ] AC14: `soleur:flag-create command-palette` (dev+prd OFF) if not created pre-merge; flip dev cohort ON to validate. (`Automation: feasible` via flag-create skill.)
