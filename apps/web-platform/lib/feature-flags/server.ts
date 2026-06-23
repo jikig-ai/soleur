@@ -54,6 +54,10 @@ const RUNTIME_FLAGS = {
   // flipping the Flagsmith flag. Does NOT gate view (c4-visualizer) or the
   // Concierge edit tool (also c4-visualizer). Fail-closed: FLAG_C4_EDIT=0 mirror.
   "c4-edit": "FLAG_C4_EDIT",
+  // feat-web-app-shortcuts — gates the ⌘K command palette + ? help overlay
+  // command layer (apps/web-platform/components/command-palette). Default OFF
+  // for all roles; dev-cohort rollout via Flagsmith. Fail-closed: FLAG_COMMAND_PALETTE=0 mirror.
+  "command-palette": "FLAG_COMMAND_PALETTE",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;

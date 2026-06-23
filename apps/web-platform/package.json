@@ -38,6 +38,7 @@
     "@supabase/supabase-js": "^2.49.0",
     "@uiw/react-codemirror": "^4.25.10",
     "archiver": "^8.0.0",
+    "cmdk": "^1.1.1",
     "codemirror": "^6",
     "flagsmith-nodejs": "^8.1.0",
     "gray-matter": "^4.0.3",
