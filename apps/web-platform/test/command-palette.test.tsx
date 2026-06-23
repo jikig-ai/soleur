@@ -198,33 +198,81 @@ describe("CommandPalette — empty state", () => {
   });
 });
 
+// Render, open the palette, and drill into a nested sub-page via its parent
+// entry. (Callers stub a custom fetch BEFORE calling this; the drill triggers
+// the lazy fetch, so the stub must already be in place.)
+async function openAndDrill(parentTestId: "cmd-page-kb" | "cmd-page-workflows") {
+  renderPalette();
+  pressKey("k", { meta: true });
+  await screen.findByLabelText("Command palette search");
+  fireEvent.click(screen.getByTestId(parentTestId));
+}
+
+describe("CommandPalette — nested pages (submenus)", () => {
+  it("shows Knowledge Base + Workflows as single entries on the root (not flat lists)", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    // Parent entries present…
+    expect(screen.getByTestId("cmd-page-kb")).toBeInTheDocument();
+    expect(screen.getByTestId("cmd-page-workflows")).toBeInTheDocument();
+    // …and the individual docs / routine rows are NOT flat on the root.
+    expect(screen.queryByText("README.md")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("cmd-run-cron-daily-triage"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("drills into Knowledge Base on Enter/click and lists the docs", async () => {
+    await openAndDrill("cmd-page-kb");
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
+    expect(screen.getByText("onboarding.md")).toBeInTheDocument();
+    // A back affordance is present.
+    expect(screen.getByTestId("cmd-back")).toBeInTheDocument();
+  });
+
+  it("drills into Workflows on Enter/click and lists the routines", async () => {
+    await openAndDrill("cmd-page-workflows");
+    expect(
+      await screen.findByTestId("cmd-run-cron-daily-triage"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("cmd-run-cron-content-publisher"),
+    ).toBeInTheDocument();
+  });
+
+  it("returns to the root menu via the Back row", async () => {
+    await openAndDrill("cmd-page-kb");
+    await screen.findByText("README.md");
+    fireEvent.click(screen.getByTestId("cmd-back"));
+    // Back on root: parent entries visible again, docs gone.
+    expect(screen.getByTestId("cmd-page-workflows")).toBeInTheDocument();
+    expect(screen.queryByText("README.md")).not.toBeInTheDocument();
+  });
+});
+
 describe("CommandPalette — KB error states", () => {
-  it("renders a reconnect row on needsReconnect without breaking Navigation", async () => {
+  it("renders a reconnect row on needsReconnect inside the KB page", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({ kb: { tree: { children: [] }, needsReconnect: true } }),
     );
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-kb");
     expect(await screen.findByTestId("cmd-kb-reconnect")).toBeInTheDocument();
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
+    // The Back row keeps the rest of the palette reachable.
+    expect(screen.getByTestId("cmd-back")).toBeInTheDocument();
   });
 
   it("renders an unavailable row on a 503 KB error", async () => {
     vi.stubGlobal("fetch", mockFetch({ kbStatus: 503 }));
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-kb");
     expect(await screen.findByTestId("cmd-kb-error")).toBeInTheDocument();
   });
 });
 
 describe("CommandPalette — run routine", () => {
   it("runs an allowed routine (202) with no error affordance", async () => {
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-workflows");
     const row = await screen.findByTestId("cmd-run-cron-daily-triage");
     fireEvent.click(row);
     await waitFor(() =>
@@ -261,9 +309,7 @@ describe("CommandPalette — run routine", () => {
         return { ok: true, status: 200, json: async () => KB_TREE } as Response;
       }),
     );
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-workflows");
     const row = await screen.findByTestId("cmd-run-cron-content-publisher");
     fireEvent.click(row);
     const confirm = await screen.findByTestId("cmd-confirm-run");
@@ -284,9 +330,7 @@ describe("CommandPalette — run routine", () => {
         runError: "dispatch_failed",
       }),
     );
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-workflows");
     const row = await screen.findByTestId("cmd-run-cron-daily-triage");
     fireEvent.click(row);
     expect(

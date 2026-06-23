@@ -1,13 +1,16 @@
 "use client";
 
 // feat-web-app-shortcuts — the ⌘K command palette (FR1–FR3, FR6). Renders from
-// the central registry (buildCommands) for static groups and lazily fetches the
-// dense async groups (KB doc search + routines) on first open. cmdk's
+// the central registry (buildCommands) for the static root groups. The dense
+// async groups (KB doc search + routines) are NESTED sub-pages: the root shows a
+// single "Knowledge Base" / "Workflows" entry, and selecting it (Enter/click)
+// drills into a sub-page that lazily fetches + lists the files/routines. Back is
+// a visible row + Backspace-on-empty-query (cmdk "pages" pattern). cmdk's
 // Command.Dialog composes Radix Dialog, so focus trap / restoration / background
-// inert are free for the base case (no hand-rolled activeElement capture). The
-// one explicit nested-focus case is the 409 confirm modal layered above the
-// palette (Phase 3). Routine "Run" is intentionally STRICTER than
-// routines-surface.tsx: it surfaces non-409 failures inline + to Sentry.
+// inert are free for the base case. The one explicit nested-focus case is the
+// 409 confirm modal layered above the palette (Phase 3). Routine "Run" is
+// intentionally STRICTER than routines-surface.tsx: it surfaces non-409 failures
+// inline + to Sentry.
 
 import { Command } from "cmdk";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -43,6 +46,9 @@ interface KbDoc {
   name: string;
 }
 
+// Which nested page is open. `null` = root menu.
+type Page = null | "kb" | "workflows";
+
 function humanizeFnId(fnId: string): string {
   const s = fnId.replace(/^cron-/, "").replace(/-/g, " ");
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -70,6 +76,7 @@ export function CommandPalette() {
     useShortcuts();
 
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState<Page>(null);
   const [docs, setDocs] = useState<KbDoc[]>([]);
   const [kbState, setKbState] = useState<AsyncState>({ phase: "idle" });
   const [routines, setRoutines] = useState<RoutineItem[]>([]);
@@ -91,54 +98,61 @@ export function CommandPalette() {
     };
   }, []);
 
-  // Lazy fetch on first open (not prefetched). Static groups render immediately
-  // regardless; a KB/routines failure never breaks Navigation/Ask-an-agent.
+  const loadKb = useCallback(async () => {
+    setKbState({ phase: "loading" });
+    try {
+      const res = await fetch("/api/kb/tree");
+      if (!res.ok) {
+        if (mountedRef.current) setKbState({ phase: "error" });
+        return;
+      }
+      const json = (await res.json()) as {
+        tree?: TreeNode;
+        needsReconnect?: boolean;
+      };
+      if (!mountedRef.current) return;
+      if (json.needsReconnect) {
+        setKbState({ phase: "needsReconnect" });
+        return;
+      }
+      setDocs(flattenDocs(json.tree?.children));
+      setKbState({ phase: "ready" });
+    } catch {
+      if (mountedRef.current) setKbState({ phase: "error" });
+    }
+  }, []);
+
+  const loadRoutines = useCallback(async () => {
+    setRoutinesState({ phase: "loading" });
+    try {
+      const res = await fetch("/api/dashboard/routines");
+      if (!res.ok) {
+        if (mountedRef.current) setRoutinesState({ phase: "error" });
+        return;
+      }
+      const json = (await res.json()) as { routines: RoutineItem[] };
+      if (!mountedRef.current) return;
+      setRoutines(json.routines ?? []);
+      setRoutinesState({ phase: "ready" });
+    } catch {
+      if (mountedRef.current) setRoutinesState({ phase: "error" });
+    }
+  }, []);
+
+  // Lazy fetch ON DRILL-IN (not on open): the data loads only when the operator
+  // actually enters that sub-page. "Searching…" shows while in-flight.
   useEffect(() => {
-    if (!paletteOpen) return;
-    if (kbState.phase === "idle") {
-      setKbState({ phase: "loading" });
-      void (async () => {
-        try {
-          const res = await fetch("/api/kb/tree");
-          if (!res.ok) {
-            if (mountedRef.current) setKbState({ phase: "error" });
-            return;
-          }
-          const json = (await res.json()) as {
-            tree?: TreeNode;
-            needsReconnect?: boolean;
-          };
-          if (!mountedRef.current) return;
-          if (json.needsReconnect) {
-            setKbState({ phase: "needsReconnect" });
-            return;
-          }
-          setDocs(flattenDocs(json.tree?.children));
-          setKbState({ phase: "ready" });
-        } catch {
-          if (mountedRef.current) setKbState({ phase: "error" });
-        }
-      })();
-    }
-    if (routinesState.phase === "idle") {
-      setRoutinesState({ phase: "loading" });
-      void (async () => {
-        try {
-          const res = await fetch("/api/dashboard/routines");
-          if (!res.ok) {
-            if (mountedRef.current) setRoutinesState({ phase: "error" });
-            return;
-          }
-          const json = (await res.json()) as { routines: RoutineItem[] };
-          if (!mountedRef.current) return;
-          setRoutines(json.routines ?? []);
-          setRoutinesState({ phase: "ready" });
-        } catch {
-          if (mountedRef.current) setRoutinesState({ phase: "error" });
-        }
-      })();
-    }
-  }, [paletteOpen, kbState.phase, routinesState.phase]);
+    if (page === "kb" && kbState.phase === "idle") void loadKb();
+    if (page === "workflows" && routinesState.phase === "idle")
+      void loadRoutines();
+  }, [page, kbState.phase, routinesState.phase, loadKb, loadRoutines]);
+
+  // Entering / leaving a sub-page clears the query so the sub-page shows all
+  // items (and the root isn't pre-filtered by the sub-page's leftover text).
+  const goToPage = useCallback((p: Page) => {
+    setPage(p);
+    setQuery("");
+  }, []);
 
   const runRoutine = useCallback(
     async (item: RoutineItem, confirmed: boolean) => {
@@ -202,6 +216,13 @@ export function CommandPalette() {
     runEffect(cmd.run());
   }
 
+  const placeholder =
+    page === "kb"
+      ? "Search knowledge base…"
+      : page === "workflows"
+        ? "Search workflows…"
+        : "Search commands… (Knowledge Base · Workflows)";
+
   return (
     <>
       <Command.Dialog
@@ -210,6 +231,7 @@ export function CommandPalette() {
           if (!open) {
             closePalette();
             setQuery("");
+            setPage(null);
             setRunError(null);
             // Let a transient KB/routines failure retry on the next open while
             // keeping a successful fetch cached (don't re-hit the API needlessly).
@@ -224,141 +246,208 @@ export function CommandPalette() {
           }
         }}
         label="Command palette"
-        // cmdk's built-in fuzzy filter across every item's value (FR2).
+        // cmdk's built-in fuzzy filter across every (mounted) item's value (FR2).
         loop
       >
         <Command.Input
-          placeholder="Search commands, docs, routines…"
+          placeholder={placeholder}
           value={query}
           onValueChange={setQuery}
           aria-label="Command palette search"
+          onKeyDown={(e) => {
+            // Backspace on an empty query pops back to the root menu (the cmdk
+            // "pages" idiom). Esc still closes the whole palette via Radix.
+            if (e.key === "Backspace" && query === "" && page !== null) {
+              e.preventDefault();
+              goToPage(null);
+            }
+          }}
         />
         <Command.List>
           <Command.Empty>
-            <div className="cmdk-empty">
-              No results for “{trimmed}”
-            </div>
+            <div className="cmdk-empty">No results for “{trimmed}”</div>
           </Command.Empty>
 
-          {/* Ask an agent — the hero verb. Always present as a fallback so a
-              dead-end query becomes the differentiating action (FR6/AC5). */}
-          {askCmd && (
-            <Command.Group heading="Ask an agent">
-              <Command.Item
-                value={trimmed ? `ask agent ${trimmed}` : "ask an agent"}
-                onSelect={() =>
-                  runEffect({
-                    kind: "openChat",
-                    query: trimmed || undefined,
-                  })
-                }
-                data-testid="cmd-ask-agent"
-              >
-                {trimmed ? `Ask an agent about “${trimmed}”` : askCmd.label}
-              </Command.Item>
+          {/* ---- ROOT MENU ------------------------------------------------ */}
+          {page === null && (
+            <>
+              {/* Ask an agent — the hero verb + dead-end-query fallback (FR6/AC5). */}
+              {askCmd && (
+                <Command.Group heading="Ask an agent">
+                  <Command.Item
+                    value={trimmed ? `ask agent ${trimmed}` : "ask an agent"}
+                    onSelect={() =>
+                      runEffect({ kind: "openChat", query: trimmed || undefined })
+                    }
+                    data-testid="cmd-ask-agent"
+                  >
+                    {trimmed ? `Ask an agent about “${trimmed}”` : askCmd.label}
+                  </Command.Item>
+                </Command.Group>
+              )}
+
+              <Command.Group heading="Navigation">
+                {navCmds.map((cmd) => (
+                  <Command.Item
+                    key={cmd.id}
+                    value={cmd.label}
+                    onSelect={() => onSelectCommand(cmd)}
+                  >
+                    {cmd.label}
+                  </Command.Item>
+                ))}
+              </Command.Group>
+
+              {/* Browse groups — single entries that drill into a sub-page. */}
+              <Command.Group heading="Browse">
+                <Command.Item
+                  value="knowledge base docs files browse"
+                  onSelect={() => goToPage("kb")}
+                  data-testid="cmd-page-kb"
+                >
+                  <span>Knowledge Base</span>
+                  <span className="cmdk-keys">Search docs ›</span>
+                </Command.Item>
+                <Command.Item
+                  value="workflows routines run browse"
+                  onSelect={() => goToPage("workflows")}
+                  data-testid="cmd-page-workflows"
+                >
+                  <span>Workflows</span>
+                  <span className="cmdk-keys">Run a routine ›</span>
+                </Command.Item>
+              </Command.Group>
+
+              <Command.Group heading="General">
+                {generalCmds.map((cmd) => (
+                  <Command.Item
+                    key={cmd.id}
+                    value={`${cmd.label} ${cmd.keys ?? ""}`}
+                    onSelect={() => onSelectCommand(cmd)}
+                  >
+                    {cmd.label}
+                    {cmd.keys && <span className="cmdk-keys"> {cmd.keys}</span>}
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            </>
+          )}
+
+          {/* ---- KNOWLEDGE BASE SUB-PAGE ---------------------------------- */}
+          {page === "kb" && (
+            <Command.Group heading="Knowledge Base">
+              <BackRow onBack={() => goToPage(null)} />
+              {kbState.phase === "loading" && (
+                <Command.Loading>Searching…</Command.Loading>
+              )}
+              {kbState.phase === "needsReconnect" && (
+                <Command.Item
+                  value="reconnect knowledge base"
+                  onSelect={() =>
+                    runEffect({
+                      kind: "navigate",
+                      href: "/dashboard/settings/services",
+                    })
+                  }
+                  data-testid="cmd-kb-reconnect"
+                >
+                  Reconnect KB to search docs
+                </Command.Item>
+              )}
+              {kbState.phase === "error" && (
+                <Command.Item
+                  value="kb unavailable"
+                  disabled
+                  data-testid="cmd-kb-error"
+                >
+                  KB search temporarily unavailable
+                </Command.Item>
+              )}
+              {kbState.phase === "ready" && docs.length === 0 && (
+                <Command.Item value="no docs" disabled data-testid="cmd-kb-empty">
+                  No documents in this knowledge base yet
+                </Command.Item>
+              )}
+              {kbState.phase === "ready" &&
+                docs.map((doc) => (
+                  <Command.Item
+                    key={doc.path}
+                    value={`${doc.name} ${doc.path}`}
+                    onSelect={() =>
+                      runEffect({
+                        kind: "navigate",
+                        href: `/dashboard/kb/${doc.path}`,
+                      })
+                    }
+                  >
+                    {doc.name}
+                  </Command.Item>
+                ))}
             </Command.Group>
           )}
 
-          <Command.Group heading="Navigation">
-            {navCmds.map((cmd) => (
-              <Command.Item
-                key={cmd.id}
-                value={cmd.label}
-                onSelect={() => onSelectCommand(cmd)}
-              >
-                {cmd.label}
-              </Command.Item>
-            ))}
-          </Command.Group>
-
-          <Command.Group heading="Knowledge Base">
-            {kbState.phase === "loading" && (
-              <Command.Loading>Searching…</Command.Loading>
-            )}
-            {kbState.phase === "needsReconnect" && (
-              <Command.Item
-                value="reconnect knowledge base"
-                onSelect={() => runEffect({ kind: "navigate", href: "/dashboard/settings/services" })}
-                data-testid="cmd-kb-reconnect"
-              >
-                Reconnect KB to search docs
-              </Command.Item>
-            )}
-            {kbState.phase === "error" && (
-              <Command.Item value="kb unavailable" disabled data-testid="cmd-kb-error">
-                KB search temporarily unavailable
-              </Command.Item>
-            )}
-            {kbState.phase === "ready" &&
-              docs.map((doc) => (
+          {/* ---- WORKFLOWS SUB-PAGE --------------------------------------- */}
+          {page === "workflows" && (
+            <Command.Group heading="Workflows">
+              <BackRow onBack={() => goToPage(null)} />
+              {routinesState.phase === "loading" && (
+                <Command.Loading>Searching…</Command.Loading>
+              )}
+              {routinesState.phase === "error" && (
                 <Command.Item
-                  key={doc.path}
-                  value={`${doc.name} ${doc.path}`}
-                  onSelect={() =>
-                    runEffect({ kind: "navigate", href: `/dashboard/kb/${doc.path}` })
-                  }
+                  value="routines unavailable"
+                  disabled
+                  data-testid="cmd-routines-error"
                 >
-                  {doc.name}
+                  Workflows temporarily unavailable
                 </Command.Item>
-              ))}
-          </Command.Group>
-
-          <Command.Group heading="Workflows">
-            {routinesState.phase === "loading" && (
-              <Command.Loading>Searching…</Command.Loading>
-            )}
-            {routinesState.phase === "error" && (
-              <Command.Item value="routines unavailable" disabled data-testid="cmd-routines-error">
-                Workflows temporarily unavailable
-              </Command.Item>
-            )}
-            {routinesState.phase === "ready" &&
-              routines.map((item) => (
+              )}
+              {routinesState.phase === "ready" && routines.length === 0 && (
                 <Command.Item
-                  key={item.fnId}
-                  // Disambiguating context lives in the value so cmdk filters on
-                  // it AND it reads in the row (FR3 misfire-resistance).
-                  value={`run routine ${humanizeFnId(item.fnId)} ${item.domain} ${item.scheduleLabel}`}
-                  onSelect={() => void runRoutine(item, false)}
-                  data-testid={`cmd-run-${item.fnId}`}
+                  value="no routines"
+                  disabled
+                  data-testid="cmd-routines-empty"
                 >
-                  <span className="cmdk-routine-row">
-                    <span>Run routine: {humanizeFnId(item.fnId)}</span>
-                    <span className="cmdk-routine-meta">
-                      {item.domain} · {item.scheduleLabel}
-                      {item.lastRun ? ` · last ${item.lastRun.status}` : " · never run"}
-                      {item.manualTrigger === "confirm" ? " · ⚠ protected" : ""}
-                    </span>
-                  </span>
-                  {busyFnId === item.fnId && (
-                    <span className="cmdk-routine-busy"> running…</span>
-                  )}
-                  {runError?.fnId === item.fnId && (
-                    <span
-                      className="cmdk-routine-error"
-                      role="alert"
-                      data-testid={`cmd-run-error-${item.fnId}`}
-                    >
-                      {" "}
-                      {runError.msg}
-                    </span>
-                  )}
+                  No routines available
                 </Command.Item>
-              ))}
-          </Command.Group>
-
-          <Command.Group heading="General">
-            {generalCmds.map((cmd) => (
-              <Command.Item
-                key={cmd.id}
-                value={`${cmd.label} ${cmd.keys ?? ""}`}
-                onSelect={() => onSelectCommand(cmd)}
-              >
-                {cmd.label}
-                {cmd.keys && <span className="cmdk-keys"> {cmd.keys}</span>}
-              </Command.Item>
-            ))}
-          </Command.Group>
+              )}
+              {routinesState.phase === "ready" &&
+                routines.map((item) => (
+                  <Command.Item
+                    key={item.fnId}
+                    // Disambiguating context lives in the value so cmdk filters on
+                    // it AND it reads in the row (FR3 misfire-resistance).
+                    value={`run routine ${humanizeFnId(item.fnId)} ${item.domain} ${item.scheduleLabel}`}
+                    onSelect={() => void runRoutine(item, false)}
+                    data-testid={`cmd-run-${item.fnId}`}
+                  >
+                    <span className="cmdk-routine-row">
+                      <span>Run routine: {humanizeFnId(item.fnId)}</span>
+                      <span className="cmdk-routine-meta">
+                        {item.domain} · {item.scheduleLabel}
+                        {item.lastRun
+                          ? ` · last ${item.lastRun.status}`
+                          : " · never run"}
+                        {item.manualTrigger === "confirm" ? " · ⚠ protected" : ""}
+                      </span>
+                    </span>
+                    {busyFnId === item.fnId && (
+                      <span className="cmdk-routine-busy"> running…</span>
+                    )}
+                    {runError?.fnId === item.fnId && (
+                      <span
+                        className="cmdk-routine-error"
+                        role="alert"
+                        data-testid={`cmd-run-error-${item.fnId}`}
+                      >
+                        {" "}
+                        {runError.msg}
+                      </span>
+                    )}
+                  </Command.Item>
+                ))}
+            </Command.Group>
+          )}
         </Command.List>
       </Command.Dialog>
 
@@ -374,6 +463,14 @@ export function CommandPalette() {
         />
       )}
     </>
+  );
+}
+
+function BackRow({ onBack }: { onBack: () => void }) {
+  return (
+    <Command.Item value="← back" onSelect={onBack} data-testid="cmd-back">
+      <span className="cmdk-keys">‹ Back</span>
+    </Command.Item>
   );
 }
 
