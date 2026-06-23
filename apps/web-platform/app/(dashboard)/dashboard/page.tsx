@@ -85,10 +85,11 @@ function flattenTree(
 const DASHBOARD_KB_TREE_KEY = ["/api/kb/tree", "dashboard"] as const;
 
 // Carries the dashboard's KB-tree error states through SWR's single error
-// channel (503 → "provisioning", everything else → "error"; a 401 has already
-// redirected and a 404 returns an empty tree → no error).
+// channel (503 → "provisioning", everything else → "error"; 401 → "redirect"
+// which holds the skeleton through the /login navigation rather than flashing
+// an error/empty state; a 404 returns an empty tree → no error).
 class DashKbTreeError extends Error {
-  constructor(public kind: "provisioning" | "error") {
+  constructor(public kind: "provisioning" | "error" | "redirect") {
     super(kind);
     this.name = "DashKbTreeError";
   }
@@ -165,7 +166,7 @@ export default function DashboardPage() {
     const res = await fetch("/api/kb/tree");
     if (res.status === 401) {
       router.push("/login");
-      throw new DashKbTreeError("error"); // navigating away
+      throw new DashKbTreeError("redirect"); // navigating away — hold skeleton
     }
     if (res.status === 503) throw new DashKbTreeError("provisioning");
     // 404 = no workspace / not connected — fall through to Command Center.
@@ -179,10 +180,16 @@ export default function DashboardPage() {
     DASHBOARD_KB_TREE_KEY,
     fetchDashboardKbTree,
   );
-  const kbLoading = kbData === undefined && kbErr === undefined;
+  // 401 (kind "redirect") holds the skeleton through the /login navigation.
+  const isRedirecting401 =
+    kbErr instanceof DashKbTreeError && kbErr.kind === "redirect";
+  const kbLoading =
+    kbData === undefined && (kbErr === undefined || isRedirecting401);
   const kbError: "provisioning" | "error" | null =
     kbErr instanceof DashKbTreeError
-      ? kbErr.kind
+      ? kbErr.kind === "redirect"
+        ? null
+        : kbErr.kind
       : kbErr
         ? "error"
         : null;

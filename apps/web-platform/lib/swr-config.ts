@@ -60,7 +60,9 @@ export const swrKeys = {
     contextPath ? (["/api/chat/thread-info", contextPath] as const) : null,
   dashboardToday: () => ["/api/dashboard/today"] as const,
   workspaceActiveRepo: () => ["/api/workspace/active-repo"] as const,
-  dashboardOrphanCount: () => ["/api/kb/orphan-count"] as const,
+  // Not an HTTP endpoint — the fetcher runs a Supabase count query. Key is a
+  // plain sentinel (no URL shape) so it can't be mistaken for a route.
+  dashboardOrphanCount: () => ["dashboard:orphan-conversation-count"] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
   conversations: (filters: {
     statusFilter?: string;

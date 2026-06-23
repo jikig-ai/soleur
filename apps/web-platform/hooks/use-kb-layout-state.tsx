@@ -124,8 +124,13 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const needsReconnect = treeData?.needsReconnect ?? false;
   // First-load skeleton gates on absence of BOTH data and error (GAP F) — a
   // background revalidation of a warm cache keeps treeData defined, so the
-  // skeleton never re-shows.
-  const loading = treeData === undefined && treeError === undefined;
+  // skeleton never re-shows. The 401 case (KbTreeError kind===null) keeps
+  // loading=true so the skeleton holds through the /login redirect rather than
+  // flashing the empty/"no documents" state on the way out.
+  const isRedirecting401 =
+    treeError instanceof KbTreeError && treeError.kind === null;
+  const loading =
+    treeData === undefined && (treeError === undefined || isRedirecting401);
   const error: KbContextValue["error"] =
     treeError instanceof KbTreeError
       ? treeError.kind
