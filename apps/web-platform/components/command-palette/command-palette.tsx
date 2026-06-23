@@ -211,6 +211,16 @@ export function CommandPalette() {
             closePalette();
             setQuery("");
             setRunError(null);
+            // Let a transient KB/routines failure retry on the next open while
+            // keeping a successful fetch cached (don't re-hit the API needlessly).
+            setKbState((s) =>
+              s.phase === "error" || s.phase === "needsReconnect"
+                ? { phase: "idle" }
+                : s,
+            );
+            setRoutinesState((s) =>
+              s.phase === "error" ? { phase: "idle" } : s,
+            );
           }
         }}
         label="Command palette"
