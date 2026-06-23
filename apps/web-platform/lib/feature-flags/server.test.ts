@@ -169,6 +169,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "c4-visualizer": false,
       "debug-mode": false,
       "c4-edit": false,
+      "command-palette": false,
     });
   });
 
@@ -188,6 +189,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "c4-visualizer": false,
       "debug-mode": false,
       "c4-edit": false,
+      "command-palette": false,
     });
   });
 
@@ -207,6 +209,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "c4-visualizer": false,
       "debug-mode": false,
       "c4-edit": false,
+      "command-palette": false,
     });
   });
 
@@ -393,6 +396,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "c4-visualizer": false,
       "debug-mode": false,
       "c4-edit": false,
+      "command-palette": false,
     });
   });
 
