@@ -140,7 +140,7 @@ export function CommandPalette() {
   }, []);
 
   // Lazy fetch ON DRILL-IN (not on open): the data loads only when the operator
-  // actually enters that sub-page. "Searching…" shows while in-flight.
+  // actually enters that sub-page. The CommandLoading row shows while in-flight.
   useEffect(() => {
     if (page === "kb" && kbState.phase === "idle") void loadKb();
     if (page === "workflows" && routinesState.phase === "idle")
@@ -338,7 +338,10 @@ export function CommandPalette() {
             <Command.Group heading="Knowledge Base">
               <BackRow onBack={() => goToPage(null)} />
               {kbState.phase === "loading" && (
-                <Command.Loading>Searching…</Command.Loading>
+                <CommandLoading
+                  label="Loading your knowledge base…"
+                  testId="cmd-kb-loading"
+                />
               )}
               {kbState.phase === "needsReconnect" && (
                 <Command.Item
@@ -391,7 +394,10 @@ export function CommandPalette() {
             <Command.Group heading="Workflows">
               <BackRow onBack={() => goToPage(null)} />
               {routinesState.phase === "loading" && (
-                <Command.Loading>Searching…</Command.Loading>
+                <CommandLoading
+                  label="Loading your workflows…"
+                  testId="cmd-routines-loading"
+                />
               )}
               {routinesState.phase === "error" && (
                 <Command.Item
@@ -471,6 +477,28 @@ function BackRow({ onBack }: { onBack: () => void }) {
     <Command.Item value="← back" onSelect={onBack} data-testid="cmd-back">
       <span className="cmdk-keys">‹ Back</span>
     </Command.Item>
+  );
+}
+
+// A branded, accessible loading row shown while a sub-page's list is being
+// fetched. Replaces the bare, unstyled "Searching…" (which rendered as
+// oversized white text, out of place against the muted rows): a gold ring
+// spinner + contextual copy, styled to match the cmdk row rhythm. The fetch is
+// a one-time list load on drill-in (cmdk then filters client-side as you type),
+// so the copy says "Loading …", not "Searching …".
+function CommandLoading({ label, testId }: { label: string; testId: string }) {
+  return (
+    <Command.Loading>
+      <div
+        className="cmdk-loading"
+        role="status"
+        aria-live="polite"
+        data-testid={testId}
+      >
+        <span className="cmdk-loading-spinner" aria-hidden="true" />
+        <span>{label}</span>
+      </div>
+    </Command.Loading>
   );
 }
 

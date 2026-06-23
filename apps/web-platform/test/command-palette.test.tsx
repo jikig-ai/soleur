@@ -251,6 +251,37 @@ describe("CommandPalette — nested pages (submenus)", () => {
   });
 });
 
+describe("CommandPalette — loading state", () => {
+  it("shows a branded, contextual loading row while the KB tree is in flight", async () => {
+    // A fetch that never resolves so the loading phase stays observable.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    renderPalette();
+    pressKey("k", { meta: true });
+    fireEvent.click(await screen.findByTestId("cmd-page-kb"));
+
+    const loading = await screen.findByTestId("cmd-kb-loading");
+    expect(loading).toHaveTextContent(/loading your knowledge base/i);
+    // The bare, unstyled "Searching…" is gone.
+    expect(screen.queryByText("Searching…")).toBeNull();
+  });
+
+  it("shows a contextual loading row while workflows are in flight", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    renderPalette();
+    pressKey("k", { meta: true });
+    fireEvent.click(await screen.findByTestId("cmd-page-workflows"));
+
+    const loading = await screen.findByTestId("cmd-routines-loading");
+    expect(loading).toHaveTextContent(/loading your workflows/i);
+  });
+});
+
 describe("CommandPalette — KB error states", () => {
   it("renders a reconnect row on needsReconnect inside the KB page", async () => {
     vi.stubGlobal(
