@@ -201,7 +201,9 @@ describe("CommandPalette — empty state", () => {
 // Render, open the palette, and drill into a nested sub-page via its parent
 // entry. (Callers stub a custom fetch BEFORE calling this; the drill triggers
 // the lazy fetch, so the stub must already be in place.)
-async function openAndDrill(parentTestId: "cmd-page-kb" | "cmd-page-workflows") {
+async function openAndDrill(
+  parentTestId: "cmd-page-kb" | "cmd-page-workflows" | "cmd-page-settings",
+) {
   renderPalette();
   pressKey("k", { meta: true });
   await screen.findByLabelText("Command palette search");
@@ -239,6 +241,36 @@ describe("CommandPalette — nested pages (submenus)", () => {
     expect(
       screen.getByTestId("cmd-run-cron-content-publisher"),
     ).toBeInTheDocument();
+  });
+
+  it("shows Settings as a single drill-in entry, with the settings items NOT flat on the root", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    // The Settings drill trigger is present on the root…
+    expect(screen.getByTestId("cmd-page-settings")).toBeInTheDocument();
+    // …but the individual settings destinations are NOT flat on the root.
+    expect(screen.queryByText("All settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Billing")).not.toBeInTheDocument();
+    expect(screen.queryByText("Audit log")).not.toBeInTheDocument();
+  });
+
+  it("drills into Settings on Enter/click and lists the settings items", async () => {
+    await openAndDrill("cmd-page-settings");
+    expect(
+      await screen.findByTestId("cmd-settings-settings:/dashboard/settings"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("All settings")).toBeInTheDocument();
+    expect(screen.getByText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Billing")).toBeInTheDocument();
+    expect(screen.getByText("Audit log")).toBeInTheDocument();
+    expect(screen.getByTestId("cmd-back")).toBeInTheDocument();
+  });
+
+  it("navigates to a settings destination on select", async () => {
+    await openAndDrill("cmd-page-settings");
+    fireEvent.click(await screen.findByText("Team"));
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/settings/team");
   });
 
   it("returns to the root menu via the Back row", async () => {
