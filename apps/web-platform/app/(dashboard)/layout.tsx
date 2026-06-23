@@ -18,6 +18,10 @@ import { MembershipRevokedScreen } from "@/components/dashboard/membership-revok
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
+import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
+import { CommandPalette } from "@/components/command-palette/command-palette";
+import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -124,6 +128,9 @@ export default function DashboardLayout({
   const [railWidth, setRailWidth] = useRailWidth();
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const { handleSignOut, isSigningOut } = useSignOut();
+  // feat-web-app-shortcuts — gates the ⌘K palette + ? overlay command layer.
+  // Optional (non-throwing) so a provider-less render degrades to "off".
+  const commandPaletteEnabled = useOptionalFeatureFlag("command-palette");
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
@@ -183,34 +190,10 @@ export default function DashboardLayout({
     setDrawerOpen(false);
   }, [pathname]);
 
-  // Close drawer on ESC key (register once — setDrawerOpen(false) is a no-op when already closed)
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setDrawerOpen(false);
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  // Cmd/Ctrl+B toggles THE single nav rail (AC5). This is now the sole ⌘B
-  // owner across every section — the per-route handlers that previously lived
-  // in SettingsShell, useKbLayoutState, and ConversationsRail are removed, so
-  // there is exactly one keydown handler and exactly one rail it toggles.
-  useEffect(() => {
-    function handleToggleShortcut(e: KeyboardEvent) {
-      // ⌘B / Ctrl+B toggles collapse (224px ↔ 56px icon rail). Shift is rejected
-      // so the shortcut stays single-purpose.
-      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.key !== "b") return;
-      // Skip when typing in form elements
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      e.preventDefault();
-      toggleCollapsed();
-    }
-    document.addEventListener("keydown", handleToggleShortcut);
-    return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [toggleCollapsed]);
+  // ⌘B (sidebar toggle), the drawer Escape, and ⌘K/⌘//? are ALL served by the
+  // single global keydown listener inside ShortcutsProvider (FR5/TR2) — there is
+  // no standalone document keydown handler here anymore. The provider dispatches
+  // ⌘B to `toggleCollapsed` and Esc-with-no-overlay-open to `setDrawerOpen(false)`.
 
   // Sidebar-UX follow-up Issue 6: a collapsed-rail child (the KB shell's
   // "Browse files" affordance) cannot reach the collapse state directly (it only
@@ -255,6 +238,12 @@ export default function DashboardLayout({
     <TeamNamesProvider>
     <RailSlotProvider value={railSlotEl}>
     <RailCollapsedProvider value={collapsed}>
+    <ShortcutsProvider
+      enabled={commandPaletteEnabled}
+      isAdmin={isAdmin}
+      onToggleSidebar={toggleCollapsed}
+      onEscape={() => setDrawerOpen(false)}
+    >
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint. RQ1: the context
           band replaces the bare "Soleur" label so workspace identity is shown
@@ -567,6 +556,12 @@ export default function DashboardLayout({
           once at the dashboard root so it survives across route changes. */}
       <MembershipRevokedScreen />
     </div>
+    {/* Command layer (feat-web-app-shortcuts) — portal-rendered (Radix), so
+        placement inside the provider is positional only. Both no-op when the
+        command-palette flag is off (enabled=false). */}
+    <CommandPalette />
+    <HelpOverlay />
+    </ShortcutsProvider>
     </RailCollapsedProvider>
     </RailSlotProvider>
     </TeamNamesProvider>

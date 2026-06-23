@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   isEditable,
   buildCommands,
+  resolveShortcut,
   readShortcutsEnabled,
   writeShortcutsEnabled,
   SHORTCUTS_STORAGE_KEY,
@@ -11,6 +12,45 @@ import {
 function byId(cmds: Command[], id: string): Command | undefined {
   return cmds.find((c) => c.id === id);
 }
+
+// A minimal KeyboardEvent-like shape resolveShortcut reads (pure, DOM-free).
+function key(
+  k: string,
+  opts: { meta?: boolean; ctrl?: boolean; shift?: boolean; target?: unknown } = {},
+) {
+  return {
+    key: k,
+    metaKey: opts.meta ?? false,
+    ctrlKey: opts.ctrl ?? false,
+    shiftKey: opts.shift ?? false,
+    target: opts.target ?? { tagName: "BODY" },
+  };
+}
+
+describe("resolveShortcut", () => {
+  it("maps ⌘K / Ctrl+K (any case) to openPalette", () => {
+    expect(resolveShortcut(key("k", { meta: true }))).toBe("openPalette");
+    expect(resolveShortcut(key("K", { ctrl: true }))).toBe("openPalette");
+  });
+  it("maps ⌘/ (canonical, WCAG-exempt) and bare ? (alias) to openHelp", () => {
+    expect(resolveShortcut(key("/", { meta: true }))).toBe("openHelp");
+    expect(resolveShortcut(key("?"))).toBe("openHelp");
+  });
+  it("maps ⌘B / Ctrl+B to toggleSidebar but rejects the shift variant", () => {
+    expect(resolveShortcut(key("b", { meta: true }))).toBe("toggleSidebar");
+    expect(resolveShortcut(key("b", { meta: true, shift: true }))).toBeNull();
+  });
+  it("is suppressed entirely while focus is in an editable element", () => {
+    const target = { tagName: "INPUT" };
+    expect(resolveShortcut(key("k", { meta: true, target }))).toBeNull();
+    expect(resolveShortcut(key("?", { target }))).toBeNull();
+    expect(resolveShortcut(key("b", { meta: true, target }))).toBeNull();
+  });
+  it("returns null for unrelated keys", () => {
+    expect(resolveShortcut(key("a", { meta: true }))).toBeNull();
+    expect(resolveShortcut(key("Escape"))).toBeNull();
+  });
+});
 
 describe("isEditable", () => {
   it("returns true for INPUT / TEXTAREA / SELECT (case-insensitive)", () => {
