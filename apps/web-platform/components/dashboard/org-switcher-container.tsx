@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
+import { clearSwrCache } from "@/lib/swr-config";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { useActiveRepo } from "@/hooks/use-active-repo";
 import { getCurrentWorkspaceId } from "@/lib/session-claims";
@@ -68,6 +70,9 @@ export function OrgSwitcherContainer({
   // callers into one in-flight request, so the pill + interstitial share a
   // single active-repo fetch surface (no doubled poll despite two consumers).
   const { data: repo } = useActiveRepo();
+  // Bound, cache-scoped mutator used to evict the in-memory SWR cache at the
+  // workspace-switch commit boundary (ADR-067 GAP B) — see executeSwitch.
+  const { mutate } = useSWRConfig();
 
   // Liveness latch so a refetch resolving after unmount never sets state.
   const mountedRef = useRef(true);
@@ -196,9 +201,22 @@ export function OrgSwitcherContainer({
         setStatus("failed_pre_rpc");
         return;
       }
+      // ADR-067 GAP B: the durable workspace pointer is now committed to
+      // workspace B. Evict the in-memory SWR cache (which still holds workspace
+      // A's content) immediately — BEFORE the JWT re-mint / hard reload — so the
+      // offline post-RPC park window cannot revalidate stale workspace-A keys
+      // into the cache the next render reads. `revalidateOnReconnect: false`
+      // (swrConfig) is the paired safeguard. Best-effort: a clear failure must
+      // not block the converge-forward path, and the hard navigation in
+      // forceComplete drops the cache anyway as defense-in-depth.
+      try {
+        await clearSwrCache(mutate);
+      } catch (clearErr) {
+        console.warn("[workspace-switch] SWR cache clear failed:", clearErr);
+      }
       await attemptRefresh(target);
     },
-    [attemptRefresh],
+    [attemptRefresh, mutate],
   );
 
   const handleConfirm = useCallback(() => {
