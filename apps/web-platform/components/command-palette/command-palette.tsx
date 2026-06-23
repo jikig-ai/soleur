@@ -47,7 +47,7 @@ interface KbDoc {
 }
 
 // Which nested page is open. `null` = root menu.
-type Page = null | "kb" | "workflows";
+type Page = null | "kb" | "workflows" | "settings";
 
 function humanizeFnId(fnId: string): string {
   const s = fnId.replace(/^cron-/, "").replace(/-/g, " ");
@@ -208,6 +208,7 @@ export function CommandPalette() {
 
   const statics = buildCommands({ isAdmin });
   const navCmds = statics.filter((c) => c.group === "Navigation");
+  const settingsCmds = statics.filter((c) => c.group === "Settings");
   const askCmd = statics.find((c) => c.id === "ask-agent");
   const generalCmds = statics.filter((c) => c.group === "General");
   const trimmed = query.trim();
@@ -221,7 +222,9 @@ export function CommandPalette() {
       ? "Search knowledge base…"
       : page === "workflows"
         ? "Search workflows…"
-        : "Search commands… (Knowledge Base · Workflows)";
+        : page === "settings"
+          ? "Search settings…"
+          : "Search commands… (Knowledge Base · Workflows · Settings)";
 
   return (
     <>
@@ -315,6 +318,14 @@ export function CommandPalette() {
                 >
                   <span>Workflows</span>
                   <span className="cmdk-keys">Run a routine ›</span>
+                </Command.Item>
+                <Command.Item
+                  value="settings account team billing audit preferences browse"
+                  onSelect={() => goToPage("settings")}
+                  data-testid="cmd-page-settings"
+                >
+                  <span>Settings</span>
+                  <span className="cmdk-keys">Account & team ›</span>
                 </Command.Item>
               </Command.Group>
 
@@ -452,6 +463,23 @@ export function CommandPalette() {
                     )}
                   </Command.Item>
                 ))}
+            </Command.Group>
+          )}
+
+          {/* ---- SETTINGS SUB-PAGE ---------------------------------------- */}
+          {page === "settings" && (
+            <Command.Group heading="Settings">
+              <BackRow onBack={() => goToPage(null)} />
+              {settingsCmds.map((cmd) => (
+                <Command.Item
+                  key={cmd.id}
+                  value={cmd.label}
+                  onSelect={() => onSelectCommand(cmd)}
+                  data-testid={`cmd-settings-${cmd.id}`}
+                >
+                  {cmd.label}
+                </Command.Item>
+              ))}
             </Command.Group>
           )}
         </Command.List>

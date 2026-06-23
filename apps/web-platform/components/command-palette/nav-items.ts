@@ -21,12 +21,12 @@ export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
   { href: "/dashboard/admin/analytics", label: "Analytics" },
 ] as const;
 
-// Destinations reachable from the palette that are NOT in the rail's primary
-// nav (footer/secondary surfaces). Kept here so the palette's navigation group
-// is dense without duplicating literals across components.
-export const SECONDARY_NAV_ITEMS: readonly NavItem[] = [
-  { href: "/dashboard/settings", label: "Settings" },
-  { href: "/dashboard/settings/team", label: "Team Settings" },
+// Settings destinations — surfaced under the palette's "Settings" drill-in
+// sub-page (NOT flat in the root command list), so the root stays scannable and
+// Settings reads like Knowledge Base / Workflows: click in to see the items.
+export const SETTINGS_NAV_ITEMS: readonly NavItem[] = [
+  { href: "/dashboard/settings", label: "All settings" },
+  { href: "/dashboard/settings/team", label: "Team" },
   { href: "/dashboard/billing", label: "Billing" },
-  { href: "/dashboard/audit", label: "Audit Log" },
+  { href: "/dashboard/audit", label: "Audit log" },
 ] as const;
