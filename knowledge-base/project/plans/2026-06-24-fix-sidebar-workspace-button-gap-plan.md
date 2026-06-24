@@ -6,15 +6,52 @@ branch: feat-one-shot-sidebar-workspace-button-gap
 lane: single-domain
 brand_survival_threshold: none
 related_adrs: [ADR-047, ADR-049]
-related_prs: [5075, 4915, 4810]
+related_prs: [5075, 4810]
+related_issues: [4915]  # CLOSED issue — D4 nav redesign that authored the band's current chrome
 related_files:
   - apps/web-platform/components/dashboard/workspace-context-band.tsx
   - apps/web-platform/app/(dashboard)/layout.tsx
   - apps/web-platform/test/workspace-context-band.test.tsx
   - apps/web-platform/e2e/nav-states-shell.e2e.ts
+wireframe: knowledge-base/product/design/dashboard-nav/sidebar-float-collapse-toggle.pen
 ---
 
 # fix: Tighten the sidebar workspace-button → collapse-toggle gap 🐛
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-24
+**Sections enhanced:** Overview, Implementation Phases, Test Strategy, Domain Review, Sharp Edges
+**Research agents used:** verify-the-negative + geometry pass (sonnet), code-simplicity-reviewer.
+
+### Key Improvements
+1. **All 7 factual/negative claims verified against the codebase** (file:line CONFIRMS):
+   `md:pr-20` is the sole functional hit (`workspace-context-band.tsx:105`, comment `:95`);
+   toggle is `right-3 top-10 h-6 w-6` (`layout.tsx:356`) = 36px right footprint; the card
+   is `w-full min-w-0` (`org-switcher.tsx:118,152`) inside a `min-w-0 flex-1` wrapper
+   (`:110`) so it auto-grows; the `▾` chevron is the right-most child `ml-1 shrink-0`
+   (`:174`); collapsed rail has no card and centers the toggle (`top-3`); no test pins
+   `pr-20`.
+2. **`pr-12` (48px) confirmed as the correct value** — 12px clearance over the 36px
+   footprint. The toggle's only decoration is a `hover:bg-*` fill (no `ring-`/`outline-`
+   that would extend the box), so no extra clearance is needed. `pr-10` (40px, ~4px) is
+   too tight; `pr-14` (56px) over-conservative.
+3. **e2e gap resolved decisively:** the expanded-rail horizontal-overflow assertion
+   exists (`nav-states-shell.e2e.ts:429-433`); NO `«`↔`▾` rect non-intersection
+   assertion exists today — so the plan's conditional "add only if absent" resolves to
+   **ADD it** (Phase 2.2 is now unconditional). It is the load-bearing geometric proof.
+
+### New Considerations Discovered
+- **Wireframe gate (deepen-plan Phase 4.9):** this fix edits a `components/**/*.tsx` file,
+  which the UI-surface glob superset matches. It is, however, a **pure style tweak with
+  no structural/layout-tree change** — explicitly in the `ui-surface-terms.md` "Excluded
+  (no wireframe required)" list. The floated-toggle↔pill surface is already designed in
+  the committed wireframe `knowledge-base/product/design/dashboard-nav/sidebar-float-collapse-toggle.pen`,
+  which this fix tightens a dimension within (no new visual-design decision). Referenced
+  to satisfy Phase 4.9; no new `.pen` is produced for a 32px padding reduction.
+- The unit tripwire (Phase 2.1) is borderline-redundant given the e2e proof, but the
+  existing band test file uses token tripwires as house-style (`md:min-h-[64px]`, `pt-2`)
+  — kept as an optional house-style smoke check, NOT the binding proof.
 
 ## Overview
 
@@ -101,23 +138,30 @@ reclaimed width automatically. No change to `layout.tsx` toggle position.
 
 ### Phase 2 — Tests
 
-1. **Update the band unit test** (`apps/web-platform/test/workspace-context-band.test.tsx`):
-   add/extend a tripwire on the expanded `drill === null` (and a drilled route) pill
-   wrapper asserting `className` **contains `md:pr-12`** and **does NOT contain `md:pr-20`**
-   — a literal-token tripwire mirroring the existing `md:min-h-[64px]` / `pt-2` /
-   `pt-3` tripwire style (jsdom has no layout engine; the binding geometric proof is the
-   e2e below). Note in the test comment that the e2e rect gate is the source of truth.
-2. **Confirm the existing e2e gate stays green** (no edit expected; run to verify):
-   `apps/web-platform/e2e/nav-states-shell.e2e.ts` already asserts (a) the expanded
-   drilled rail does not overflow horizontally (`scrollWidth - clientWidth ≤ 1`,
-   ~line 428) and (b) the band rises to the aside top. Tightening the padding only
-   *reduces* used width, so the no-overflow gate cannot regress. If a `«`-toggle ↔ `▾`-chevron
-   rect-non-intersection assertion does not already exist in this file, ADD one in the
-   `expanded multi-workspace` test: locate the `«` toggle (`getByRole("button",
+1. **Update the band unit test** (`apps/web-platform/test/workspace-context-band.test.tsx`)
+   — *optional house-style smoke check, NOT the binding proof:* add/extend a tripwire on
+   the expanded `drill === null` pill wrapper asserting `className` **contains `md:pr-12`**
+   and **does NOT contain `md:pr-20`**, mirroring the existing `md:min-h-[64px]` / `pt-2`
+   tripwire style this file already uses. jsdom has no layout engine, so this only
+   detects an accidental class revert — the binding geometric proof is the e2e in 2.2.
+   The test comment MUST state the e2e rect gate is the source of truth. (The
+   simplicity reviewer flagged this as borderline-redundant ceremony; it is kept only
+   because the band test file's established convention is per-class token tripwires.)
+2. **e2e gate (the binding geometric proof).** `apps/web-platform/e2e/nav-states-shell.e2e.ts`
+   already asserts the expanded drilled rail does not overflow horizontally
+   (`scrollWidth - clientWidth ≤ 1`, **lines 429-433**) and that the band rises to the
+   aside top (≤12px, line ~478). Tightening the padding only *reduces* used width, so the
+   no-overflow gate cannot regress — run it to confirm. **ADD (verified absent — no such
+   assertion exists today)** a `«`-toggle ↔ `▾`-chevron rect-non-intersection assertion in
+   the `expanded multi-workspace` test: locate the `«` toggle (`getByRole("button",
    { name: /collapse sidebar/i })`) and the `▾` chevron (last child of the
    `Switch workspace` button), `boundingBox()` both, and assert
-   `chevronBox.x + chevronBox.width <= toggleBox.x` (no horizontal overlap). This is the
-   load-bearing proof that `pr-12` still clears the toggle.
+   `chevronBox.x + chevronBox.width <= toggleBox.x` (no horizontal overlap). This is THE
+   load-bearing proof that `pr-12` still clears the toggle (jsdom unit tripwire cannot
+   prove geometry). Note: `right-3` is `absolute` within the `aside` (the positioned
+   ancestor) so it is rail-edge-relative; the row's `pr-12` is also rail-edge-relative
+   (full-width row) — the two coordinate systems align, which the boundingBox assertion
+   confirms empirically.
 
 ### Phase 3 — Verify
 
@@ -165,9 +209,14 @@ adding any new interactive surface, page, or component file (no `components/**/*
 *creation*, no `app/**/page.tsx`). Mechanical UI-surface override fires (edits
 `components/dashboard/workspace-context-band.tsx`) → Product relevant; mechanical
 escalation to BLOCKING does NOT fire (no new component *file* created), so tier is
-ADVISORY. No wireframe is required for a single padding-token adjustment to existing,
-already-designed chrome.
-**Pencil available:** N/A (no new UI surface; existing-component spacing change)
+ADVISORY. Per `ui-surface-terms.md` "Excluded (no wireframe required)", a **pure style
+tweak with no structural/layout-tree change** needs no new wireframe.
+**Wireframe (existing, committed):** `knowledge-base/product/design/dashboard-nav/sidebar-float-collapse-toggle.pen`
+governs the floated `«` toggle ↔ workspace-pill relationship this fix tightens a
+dimension within. Referenced (not regenerated) — satisfies `wg-ui-feature-requires-pen-wireframe`
+/ deepen-plan Phase 4.9 without producing a redundant `.pen` for a 32px padding change.
+**Pencil available:** N/A (no new UI surface; existing-component spacing change against
+an already-designed surface)
 
 #### Findings
 

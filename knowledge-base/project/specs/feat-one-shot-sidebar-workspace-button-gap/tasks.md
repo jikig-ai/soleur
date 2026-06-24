@@ -28,13 +28,16 @@ lane: single-domain
 
 ## Phase 2 — Testing
 
-- [ ] 2.1 `test/workspace-context-band.test.tsx`: add tripwire — expanded pill wrapper
-      `className` contains `md:pr-12`, not `md:pr-20`. Mirror the `md:min-h-[64px]`
-      tripwire comment style (note e2e is source of truth).
+- [ ] 2.1 (optional house-style smoke check) `test/workspace-context-band.test.tsx`: add
+      tripwire — expanded pill wrapper `className` contains `md:pr-12`, not `md:pr-20`.
+      Mirror the `md:min-h-[64px]` tripwire comment style; comment MUST note the e2e
+      (2.2) is the binding geometric proof (jsdom has no layout engine).
 - [ ] 2.2 `e2e/nav-states-shell.e2e.ts`: verify the expanded-rail no-overflow gate stays
-      green; ADD a `«`-toggle ↔ `▾`-chevron horizontal non-intersection assertion in the
-      `expanded multi-workspace` test IF one does not already exist
-      (`chevronBox.x + chevronBox.width <= toggleBox.x`).
+      green (assertion at lines 429-433). ADD (verified ABSENT during deepen-plan — no such
+      assertion exists today) a `«`-toggle ↔ `▾`-chevron horizontal non-intersection
+      assertion in the `expanded multi-workspace` test:
+      `chevronBox.x + chevronBox.width <= toggleBox.x`. This is the binding geometric proof
+      that `pr-12` clears the toggle.
 
 ## Phase 3 — Verification
 
