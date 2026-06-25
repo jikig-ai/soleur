@@ -415,10 +415,34 @@ export default function DashboardPage() {
   const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
 
   // ---------------------------------------------------------------------------
-  // Loading skeleton (shown while KB tree loads)
+  // Initial loading skeleton
   // ---------------------------------------------------------------------------
 
-  if (kbLoading) {
+  // Cold-start perf (#5654): the dashboard is gated on the CONVERSATION-LIST
+  // load (the primary content), NOT on /api/kb/tree. The KB tree only drives
+  // foundation-card completion checkmarks, yet it is the slow path on a cold
+  // start — uncached (the service worker skips /api/*) and behind the
+  // per-request middleware auth waterfall + a disk tree-walk. It now resolves
+  // ASYNC while the rest of the page renders. The skeleton shows only when:
+  //   (a) the conversation list is still doing its FIRST load (no rows yet) —
+  //       a later filter-triggered refetch keeps prior rows, so the inbox
+  //       view's own row-level skeleton handles it (no full-page blank); or
+  //   (b) a kb-tree 401 is navigating to /login (isRedirecting401) — hold the
+  //       skeleton through the redirect rather than flash dashboard chrome
+  //       (TR2); or
+  //   (c) the user has NO content yet (no conversations, no email items, no
+  //       active filter) AND the KB tree is still loading — only THIS case
+  //       needs the tree, to choose first-run vs. empty without flashing the
+  //       wrong state (FR2). Users WITH conversations never wait on the tree.
+  const showInitialSkeleton =
+    (loading && conversations.length === 0) ||
+    isRedirecting401 ||
+    (conversations.length === 0 &&
+      emailItems.length === 0 &&
+      !hasActiveFilter &&
+      kbLoading);
+
+  if (showInitialSkeleton) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <div className="mb-6 h-12 w-12 animate-pulse rounded-lg bg-amber-600/50" />
