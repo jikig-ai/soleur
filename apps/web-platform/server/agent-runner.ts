@@ -60,6 +60,7 @@ import { buildEmailTriageTools } from "./email-triage-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
+import { buildWorkstreamTools } from "./workstream/workstream-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
 import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
@@ -1703,6 +1704,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const routineTools = buildRoutineTools({ userId });
     platformTools.push(...routineTools.tools);
     platformToolNames.push(...routineTools.toolNames);
+
+    // Workstream board tools (feat-workstream-kanban-tab): agent-user READ
+    // parity for the kanban board — registered unconditionally.
+    // workstream_issues_list is read-only (auto-approve) and calls the shared
+    // getWorkstreamIssues() accessor (the same seed the dashboard route serves).
+    const workstreamTools = buildWorkstreamTools({ userId });
+    platformTools.push(...workstreamTools.tools);
+    platformToolNames.push(...workstreamTools.toolNames);
 
     // Auth revocation status tool (#4440 follow-up to #4418): registered
     // unconditionally — agents need self-diagnosis on every authenticated
