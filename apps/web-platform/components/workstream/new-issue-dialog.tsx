@@ -10,8 +10,12 @@ import { useEffect, useRef, useState } from "react";
 import { GoldButton } from "@/components/ui/gold-button";
 import type { WorkstreamIssue } from "@/lib/workstream";
 
+// Monotonic per-session counter so two creates in the same millisecond can't
+// collide on the React key (local Preview ids only; never persisted).
+let issueSeq = 0;
 function newIssueId(): string {
-  return `SOLAA-${Date.now().toString().slice(-4)}`;
+  issueSeq += 1;
+  return `SOLAA-N${issueSeq}`;
 }
 
 export function NewIssueDialog({

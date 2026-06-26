@@ -159,6 +159,7 @@ export function WorkstreamBoard() {
       <IssueDetailSheet
         open={issueParam != null}
         issue={selected}
+        loading={issueParam != null && issues == null && !error}
         notFound={issueParam != null && issues != null && selected == null}
         onClose={closeIssue}
         onChangeStatus={changeStatus}

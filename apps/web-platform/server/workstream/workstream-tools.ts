@@ -38,8 +38,8 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
     tools: [
       tool(
         "workstream_issues_list",
-        "List all Workstream board issues (the kanban the user sees). Returns a " +
-          "flat array; each entry carries: id (e.g. 'SOLAA-198'), title, " +
+        "List all Workstream board issues (the kanban the user sees). Returns " +
+          "{ issues: [...] }; each entry carries: id (e.g. 'SOLAA-198'), title, " +
           "description, status (backlog|todo|in_progress|in_review|blocked|done|" +
           "cancelled), priority (urgent|high|medium|low|none), assigneeRole (a " +
           "leader role id like 'cto'/'coo', or null), an optional `user` (a " +

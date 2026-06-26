@@ -128,4 +128,15 @@ describe("getWorkstreamIssues accessor seam", () => {
     a[0].title = "MUTATED";
     expect(getWorkstreamIssues()[0].title).not.toBe("MUTATED");
   });
+
+  it("deep-copies the nested user object (agent tool serializes this payload)", () => {
+    const a = getWorkstreamIssues();
+    const withUser = a.find((i) => i.user);
+    expect(withUser).toBeTruthy();
+    withUser!.user!.name = "MUTATED_USER";
+    const b = getWorkstreamIssues();
+    expect(b.find((i) => i.id === withUser!.id)!.user!.name).not.toBe(
+      "MUTATED_USER",
+    );
+  });
 });

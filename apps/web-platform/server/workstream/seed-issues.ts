@@ -175,9 +175,13 @@ const SEED_ISSUES: readonly WorkstreamIssue[] = [
 
 /**
  * The single accessor seam for the Workstream board. Pure (no IO) in v1 —
- * returns the in-repo seed. Returns a fresh array each call so callers cannot
- * mutate the module-level seed.
+ * returns the in-repo seed. Deep-enough copy each call (the nested `user`
+ * object is cloned too) so callers cannot mutate the module-level seed —
+ * including the agent read tool, which serializes this same payload.
  */
 export function getWorkstreamIssues(): WorkstreamIssue[] {
-  return SEED_ISSUES.map((i) => ({ ...i }));
+  return SEED_ISSUES.map((i) => ({
+    ...i,
+    ...(i.user ? { user: { ...i.user } } : {}),
+  }));
 }

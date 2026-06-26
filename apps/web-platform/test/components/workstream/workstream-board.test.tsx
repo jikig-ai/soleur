@@ -108,7 +108,18 @@ describe("WorkstreamBoard", () => {
       expect(screen.getByText(/No issues on the board yet/i)).toBeTruthy(),
     );
     // Two New Issue buttons (top bar + empty CTA).
-    expect(screen.getAllByRole("button", { name: /new issue/i }).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("button", { name: /new issue/i }),
+    ).toHaveLength(2);
+  });
+
+  it("shows the loading skeleton before the feed resolves", () => {
+    // A fetch that never resolves keeps SWR in the loading state.
+    global.fetch = vi.fn(
+      () => new Promise(() => {}),
+    ) as unknown as typeof fetch;
+    render(<Wrapped />);
+    expect(screen.getByLabelText("Loading")).toBeTruthy();
   });
 
   it("on fetch failure shows an error with a working Try again retry", async () => {

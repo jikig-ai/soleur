@@ -5,14 +5,9 @@
 // (Addendum item 5), and a quiet "Live" marker (Addendum item 4 — green dot +
 // green text, NO fill) for active seeded cards.
 
-import {
-  isLive,
-  priorityBarClass,
-  priorityLabel,
-  priorityPillClass,
-  type WorkstreamIssue,
-} from "@/lib/workstream";
+import { isLive, type WorkstreamIssue } from "@/lib/workstream";
 import { AssigneeChip, UserAvatar } from "./assignee-chip";
+import { PriorityPill } from "./priority-pill";
 
 export function IssueCard({
   issue,
@@ -46,21 +41,7 @@ export function IssueCard({
               Live
             </span>
           )}
-          <span className="inline-flex items-center gap-1 rounded bg-soleur-bg-surface-2/60 px-1.5 py-0.5">
-            <span
-              aria-hidden="true"
-              className={`h-2 w-[3px] rounded-full ${priorityBarClass(
-                issue.priority,
-              )}`}
-            />
-            <span
-              className={`text-[11px] font-medium ${priorityPillClass(
-                issue.priority,
-              )}`}
-            >
-              {priorityLabel(issue.priority)}
-            </span>
-          </span>
+          <PriorityPill priority={issue.priority} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <AssigneeChip role={issue.assigneeRole} />
