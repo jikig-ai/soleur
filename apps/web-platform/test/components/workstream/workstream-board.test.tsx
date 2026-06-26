@@ -8,12 +8,11 @@ import {
 } from "@testing-library/react";
 import type { WorkstreamIssue } from "@/lib/workstream";
 
-// next/navigation mocked: `mockIssue` drives the ?issue= param, `mockPush`
-// captures Sheet open/close nav.
+// next/navigation mocked: `mockIssue` drives the ?issue= param (deep-link
+// hydration). The drawer is now driven by LOCAL state — open/close uses
+// window.history.replaceState (spied), NOT router navigation.
 let mockIssue: string | null = null;
-const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mockPush, refresh: vi.fn(), prefetch: vi.fn() }),
   usePathname: () => "/dashboard/workstream",
   useSearchParams: () =>
     new URLSearchParams(mockIssue ? `issue=${mockIssue}` : ""),
@@ -50,7 +49,11 @@ function mockFetchOnce(issues: WorkstreamIssue[], ok = true) {
 
 beforeEach(() => {
   mockIssue = null;
-  mockPush.mockClear();
+  try {
+    window.localStorage.clear();
+  } catch {
+    /* no-op */
+  }
 });
 afterEach(() => {
   cleanup();
@@ -137,7 +140,8 @@ describe("WorkstreamBoard", () => {
     await waitFor(() => expect(screen.getByText("Recovered")).toBeTruthy());
   });
 
-  it("opening a card pushes ?issue=<id>", async () => {
+  it("opening a card opens the drawer instantly via local state + syncs ?issue= (no navigation)", async () => {
+    const replaceSpy = vi.spyOn(window.history, "replaceState");
     global.fetch = mockFetchOnce([
       issue({ id: "SOLAA-77", title: "Clickable" }),
     ]) as unknown as typeof fetch;
@@ -146,7 +150,55 @@ describe("WorkstreamBoard", () => {
     await waitFor(() => expect(screen.getByText("Clickable")).toBeTruthy());
 
     fireEvent.click(screen.getByText("Clickable"));
-    expect(mockPush).toHaveBeenCalledWith("/dashboard/workstream?issue=SOLAA-77");
+    // Drawer appears immediately (local state) — the detail dialog for the issue.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: "Issue SOLAA-77" }),
+      ).toBeTruthy(),
+    );
+    // URL is synced non-blockingly via replaceState (deep-link/reload support).
+    expect(replaceSpy).toHaveBeenCalledWith(
+      null,
+      "",
+      "/dashboard/workstream?issue=SOLAA-77",
+    );
+  });
+
+  it("hydrates the drawer from ?issue= on mount (deep-link)", async () => {
+    mockIssue = "SOLAA-55";
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-55", title: "Deep linked" }),
+    ]) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: "Issue SOLAA-55" }),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("collapses a column to a strip and persists the choice in localStorage", async () => {
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-1", title: "Card one" }),
+    ]) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse Backlog" }),
+    );
+    // Now an Expand control is present (collapsed strip state).
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Expand Backlog" }),
+      ).toBeTruthy(),
+    );
+    const stored = JSON.parse(
+      window.localStorage.getItem("workstream:collapsed-columns") ?? "[]",
+    ) as string[];
+    expect(stored).toContain("backlog");
   });
 
   it("an unknown ?issue= renders the Issue-not-found Sheet state", async () => {
