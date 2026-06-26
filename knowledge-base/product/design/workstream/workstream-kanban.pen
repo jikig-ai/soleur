@@ -192,7 +192,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col1",
+              "fill": "#16171B",
               "descendants": {
+                "cDot1": {
+                  "fill": "#9AA3B2"
+                },
                 "oQxxh": {
                   "content": "Backlog"
                 },
@@ -214,7 +218,14 @@
                           "content": "Define issue schema & status enum"
                         },
                         "Ej9K0": {
-                          "fill": "#6A6A6A"
+                          "fill": "#5A5A5A"
+                        },
+                        "pTxt0": {
+                          "content": "None",
+                          "fill": "#5A5A5A"
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -234,7 +245,14 @@
                           "content": "Spec assignee role mapping (CTO/COO/CMO)"
                         },
                         "Ej9K0": {
-                          "fill": "#C9A962"
+                          "fill": "#D9B23B"
+                        },
+                        "pTxt0": {
+                          "content": "Medium",
+                          "fill": "#D9B23B"
+                        },
+                        "uIni0": {
+                          "content": "MR"
                         },
                         "kLoLX": {
                           "content": "COO"
@@ -254,7 +272,14 @@
                           "content": "Draft empty-state copy for board columns"
                         },
                         "Ej9K0": {
-                          "fill": "#6A6A6A"
+                          "fill": "#6E8BB5"
+                        },
+                        "pTxt0": {
+                          "content": "Low",
+                          "fill": "#6E8BB5"
+                        },
+                        "uIni0": {
+                          "content": "JP"
                         },
                         "kLoLX": {
                           "content": "CMO"
@@ -270,7 +295,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col2",
+              "fill": "#101620",
               "descendants": {
+                "cDot1": {
+                  "fill": "#5E84C4"
+                },
                 "oQxxh": {
                   "content": "Todo"
                 },
@@ -292,7 +321,14 @@
                           "content": "Build column header with count badge"
                         },
                         "Ej9K0": {
-                          "fill": "#C9A962"
+                          "fill": "#D9B23B"
+                        },
+                        "pTxt0": {
+                          "content": "Medium",
+                          "fill": "#D9B23B"
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -312,7 +348,14 @@
                           "content": "Add priority indicator to issue card"
                         },
                         "Ej9K0": {
-                          "fill": "#D29922"
+                          "fill": "#E0823B"
+                        },
+                        "pTxt0": {
+                          "content": "High",
+                          "fill": "#E0823B"
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -332,7 +375,14 @@
                           "content": "Wire Search issues input (client filter)"
                         },
                         "Ej9K0": {
-                          "fill": "#C9A962"
+                          "fill": "#D9B23B"
+                        },
+                        "pTxt0": {
+                          "content": "Medium",
+                          "fill": "#D9B23B"
+                        },
+                        "uIni0": {
+                          "content": "MR"
                         },
                         "kLoLX": {
                           "content": "COO"
@@ -348,7 +398,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col3",
+              "fill": "#1B1509",
               "descendants": {
+                "cDot1": {
+                  "fill": "#E0A93B"
+                },
                 "oQxxh": {
                   "content": "In Progress"
                 },
@@ -370,10 +424,17 @@
                           "content": "Wire Workstream board to live issue store"
                         },
                         "Ej9K0": {
-                          "fill": "#D29922"
+                          "fill": "#E0823B"
+                        },
+                        "pTxt0": {
+                          "content": "High",
+                          "fill": "#E0823B"
                         },
                         "O2z10": {
                           "enabled": true
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -393,10 +454,17 @@
                           "content": "Concierge decision thread (read-only v1)"
                         },
                         "Ej9K0": {
-                          "fill": "#D29922"
+                          "fill": "#E0823B"
+                        },
+                        "pTxt0": {
+                          "content": "High",
+                          "fill": "#E0823B"
                         },
                         "O2z10": {
                           "enabled": true
+                        },
+                        "uIni0": {
+                          "content": "MR"
                         },
                         "kLoLX": {
                           "content": "COO"
@@ -416,10 +484,17 @@
                           "content": "New Issue modal + optimistic insert"
                         },
                         "Ej9K0": {
-                          "fill": "#C9A962"
+                          "fill": "#D9B23B"
+                        },
+                        "pTxt0": {
+                          "content": "Medium",
+                          "fill": "#D9B23B"
                         },
                         "O2z10": {
                           "enabled": true
+                        },
+                        "uIni0": {
+                          "content": "JP"
                         },
                         "kLoLX": {
                           "content": "CMO"
@@ -435,7 +510,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col4",
+              "fill": "#17111F",
               "descendants": {
+                "cDot1": {
+                  "fill": "#A87BE0"
+                },
                 "oQxxh": {
                   "content": "In Review"
                 },
@@ -457,7 +536,14 @@
                           "content": "Kanban drag-and-drop reorder"
                         },
                         "Ej9K0": {
-                          "fill": "#C9A962"
+                          "fill": "#D9B23B"
+                        },
+                        "pTxt0": {
+                          "content": "Medium",
+                          "fill": "#D9B23B"
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -477,7 +563,14 @@
                           "content": "Preview banner + non-persistence note"
                         },
                         "Ej9K0": {
-                          "fill": "#6A6A6A"
+                          "fill": "#6E8BB5"
+                        },
+                        "pTxt0": {
+                          "content": "Low",
+                          "fill": "#6E8BB5"
+                        },
+                        "uIni0": {
+                          "content": "MR"
                         },
                         "kLoLX": {
                           "content": "CMO"
@@ -493,7 +586,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col5",
+              "fill": "#1E1210",
               "descendants": {
+                "cDot1": {
+                  "fill": "#E5534B"
+                },
                 "oQxxh": {
                   "content": "Blocked"
                 },
@@ -515,7 +612,14 @@
                           "content": "Realtime sync (blocked on store API)"
                         },
                         "Ej9K0": {
-                          "fill": "#D29922"
+                          "fill": "#E5534B"
+                        },
+                        "pTxt0": {
+                          "content": "Urgent",
+                          "fill": "#E5534B"
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -531,7 +635,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col6",
+              "fill": "#0E1A12",
               "descendants": {
+                "cDot1": {
+                  "fill": "#3FB950"
+                },
                 "oQxxh": {
                   "content": "Done"
                 },
@@ -553,7 +661,14 @@
                           "content": "Add Workstream tab to dashboard nav"
                         },
                         "Ej9K0": {
-                          "fill": "#C9A962"
+                          "fill": "#D9B23B"
+                        },
+                        "pTxt0": {
+                          "content": "Medium",
+                          "fill": "#D9B23B"
+                        },
+                        "uIni0": {
+                          "content": "MR"
                         },
                         "kLoLX": {
                           "content": "COO"
@@ -573,7 +688,14 @@
                           "content": "Status pill component"
                         },
                         "Ej9K0": {
-                          "fill": "#6A6A6A"
+                          "fill": "#6E8BB5"
+                        },
+                        "pTxt0": {
+                          "content": "Low",
+                          "fill": "#6E8BB5"
+                        },
+                        "uIni0": {
+                          "content": "JP"
                         },
                         "kLoLX": {
                           "content": "CTO"
@@ -593,7 +715,14 @@
                           "content": "Role-chip avatar component"
                         },
                         "Ej9K0": {
-                          "fill": "#6A6A6A"
+                          "fill": "#5A5A5A"
+                        },
+                        "pTxt0": {
+                          "content": "None",
+                          "fill": "#5A5A5A"
+                        },
+                        "uIni0": {
+                          "content": "HC"
                         },
                         "kLoLX": {
                           "content": "CMO"
@@ -609,7 +738,11 @@
               "type": "ref",
               "ref": "IfY1y",
               "name": "col7",
+              "fill": "#141414",
               "descendants": {
+                "cDot1": {
+                  "fill": "#595959"
+                },
                 "oQxxh": {
                   "content": "Cancelled"
                 },
@@ -740,10 +873,10 @@
                   "type": "frame",
                   "id": "sxsAx",
                   "name": "statuspill",
-                  "fill": "#15281C",
+                  "fill": "#1B1509",
                   "stroke": {
                     "thickness": 1,
-                    "fill": "$green"
+                    "fill": "#E0A93B"
                   },
                   "gap": 6,
                   "padding": [
@@ -756,7 +889,7 @@
                       "type": "ellipse",
                       "id": "bVc0j",
                       "name": "pillDot",
-                      "fill": "$green",
+                      "fill": "#E0A93B",
                       "width": 6,
                       "height": 6
                     },
@@ -764,7 +897,7 @@
                       "type": "text",
                       "id": "CsuGR",
                       "name": "pillTxt",
-                      "fill": "$green",
+                      "fill": "#E0A93B",
                       "content": "In Progress",
                       "fontFamily": "Inter",
                       "fontSize": 11,
@@ -847,7 +980,7 @@
                       "fill": "$text2",
                       "textGrowth": "fixed-width",
                       "width": 110,
-                      "content": "Assignee",
+                      "content": "Assignee (role)",
                       "fontFamily": "Inter",
                       "fontSize": 13,
                       "fontWeight": "normal"
@@ -892,6 +1025,70 @@
                           "name": "r2name",
                           "fill": "$text",
                           "content": "Chief Technology (role lead)",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rUser",
+                  "name": "rUser",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "rUserL",
+                      "name": "rUserL",
+                      "fill": "$text2",
+                      "textGrowth": "fixed-width",
+                      "width": 110,
+                      "content": "User",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "rUserV",
+                      "name": "rUserV",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "rUserAv",
+                          "name": "rUserAv",
+                          "width": 24,
+                          "height": 24,
+                          "fill": "#2A2A2A",
+                          "cornerRadius": 12,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "rUserIni",
+                              "name": "rUserIni",
+                              "fill": "$text",
+                              "content": "HC",
+                              "fontFamily": "Inter",
+                              "fontSize": 9,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "rUserName",
+                          "name": "rUserName",
+                          "fill": "$text",
+                          "content": "Harry Cole",
                           "fontFamily": "Inter",
                           "fontSize": 13,
                           "fontWeight": "normal"
@@ -1356,12 +1553,38 @@
           "alignItems": "center",
           "children": [
             {
-              "type": "ellipse",
-              "id": "Ej9K0",
+              "type": "frame",
+              "id": "pPILL",
               "name": "cPrio",
-              "fill": "$gold",
-              "width": 8,
-              "height": 8
+              "fill": "#1A1A1A",
+              "cornerRadius": 5,
+              "gap": 4,
+              "padding": [
+                6,
+                3
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 1,
+                  "id": "Ej9K0",
+                  "name": "cPrioBar",
+                  "fill": "#D9B23B",
+                  "width": 3,
+                  "height": 9
+                },
+                {
+                  "type": "text",
+                  "id": "pTxt0",
+                  "name": "cPrioTxt",
+                  "fill": "#D9B23B",
+                  "content": "Medium",
+                  "fontFamily": "Inter",
+                  "fontSize": 9,
+                  "fontWeight": "600"
+                }
+              ]
             },
             {
               "type": "frame",
@@ -1377,12 +1600,7 @@
               "y": 0,
               "name": "cLive",
               "enabled": false,
-              "fill": "#13311F",
-              "gap": 4,
-              "padding": [
-                6,
-                2
-              ],
+              "gap": 5,
               "alignItems": "center",
               "children": [
                 {
@@ -1402,6 +1620,29 @@
                   "fontFamily": "Inter",
                   "fontSize": 10,
                   "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "uAv00",
+              "name": "cUser",
+              "width": 18,
+              "height": 18,
+              "fill": "#2A2A2A",
+              "cornerRadius": 9,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "uIni0",
+                  "name": "cUserIni",
+                  "fill": "$text2",
+                  "content": "HC",
+                  "fontFamily": "Inter",
+                  "fontSize": 8,
+                  "fontWeight": "600"
                 }
               ]
             },
@@ -1444,8 +1685,11 @@
       "name": "component/Column",
       "reusable": true,
       "width": 232,
+      "fill": "#141414",
+      "cornerRadius": 10,
       "layout": "vertical",
       "gap": 12,
+      "padding": 10,
       "children": [
         {
           "type": "frame",
@@ -1455,6 +1699,14 @@
           "gap": 8,
           "alignItems": "center",
           "children": [
+            {
+              "type": "ellipse",
+              "id": "cDot1",
+              "name": "colDot",
+              "fill": "#9AA3B2",
+              "width": 7,
+              "height": 7
+            },
             {
               "type": "text",
               "id": "oQxxh",
@@ -1467,23 +1719,31 @@
             },
             {
               "type": "frame",
+              "id": "cHsp1",
+              "name": "colHdrSpacer",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "frame",
               "id": "bXYzr",
               "name": "colBadge",
-              "fill": "#1F1F1F",
+              "fill": "#1C1C1C",
+              "cornerRadius": 7,
               "padding": [
                 7,
-                2
+                3
               ],
               "children": [
                 {
                   "type": "text",
                   "id": "Kfza5",
                   "name": "colCount",
-                  "fill": "$text2",
+                  "fill": "$text3",
                   "content": "3",
                   "fontFamily": "Inter",
                   "fontSize": 11,
-                  "fontWeight": "normal"
+                  "fontWeight": "500"
                 }
               ]
             }
