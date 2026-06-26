@@ -13,15 +13,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  deriveFilterOptions,
   priorityLabel,
+  type FilterOptions,
   type WorkstreamFilters,
   type WorkstreamPriority,
   type WorkstreamRole,
 } from "@/lib/workstream";
 import { ChevronDownIcon } from "@/components/icons";
-
-type FilterOptions = ReturnType<typeof deriveFilterOptions>;
 
 /** Toggle a value in an immutable Set, returning a new Set. */
 function toggleInSet<T>(set: Set<T>, value: T): Set<T> {

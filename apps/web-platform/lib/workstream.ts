@@ -456,16 +456,41 @@ export function matchesSearch(i: WorkstreamIssue, query: string): boolean {
   );
 }
 
-/** Faceted filter options derived from the FULL loaded set (D3) — de-duplicated
- *  and order-stable. "Hide empty options" ⇒ "present in the loaded set". Status
- *  is a fixed tri-state control, so it has no derived options. */
-export function deriveFilterOptions(issues: WorkstreamIssue[]): {
+/** Canonical menu orders so the faceted options render deterministically
+ *  (insertion order would vary with which issue loads first). */
+const PRIORITY_ORDER: readonly WorkstreamPriority[] = [
+  "urgent",
+  "high",
+  "medium",
+  "low",
+  "none",
+];
+const ROLE_ORDER: readonly WorkstreamRole[] = [
+  "ceo",
+  "cto",
+  "cpo",
+  "cmo",
+  "coo",
+  "cfo",
+  "cro",
+  "clo",
+  "cco",
+];
+
+/** Shape of the faceted filter options the board derives + the FilterBar reads. */
+export interface FilterOptions {
   priorities: WorkstreamPriority[];
   roles: WorkstreamRole[];
   users: string[];
   hasUnassigned: boolean;
   domains: string[];
-} {
+}
+
+/** Faceted filter options derived from the FULL loaded set (D3) — de-duplicated.
+ *  "Hide empty options" ⇒ "present in the loaded set". Priorities/roles render in
+ *  canonical order, users/domains alphabetically — deterministic across loads.
+ *  Status is a fixed tri-state control, so it has no derived options. */
+export function deriveFilterOptions(issues: WorkstreamIssue[]): FilterOptions {
   const priorities = new Set<WorkstreamPriority>();
   const roles = new Set<WorkstreamRole>();
   const users = new Set<string>();
@@ -479,11 +504,11 @@ export function deriveFilterOptions(issues: WorkstreamIssue[]): {
     for (const d of i.domains ?? []) domains.add(d);
   }
   return {
-    priorities: [...priorities],
-    roles: [...roles],
-    users: [...users],
+    priorities: PRIORITY_ORDER.filter((p) => priorities.has(p)),
+    roles: ROLE_ORDER.filter((r) => roles.has(r)),
+    users: [...users].sort(),
     hasUnassigned,
-    domains: [...domains],
+    domains: [...domains].sort(),
   };
 }
 

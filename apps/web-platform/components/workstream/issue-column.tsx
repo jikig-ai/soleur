@@ -18,7 +18,8 @@
 //
 // Render cap: at most COLUMN_RENDER_CAP cards render; beyond that the exact
 // COLUMN_CAP_NOTICE shows at the column bottom. The count pill always shows the
-// TRUE total.
+// true (uncapped) count of THIS column's post-filter issues — i.e. the cap
+// limits rendered cards, never the displayed total.
 
 import { useEffect, useState } from "react";
 import {

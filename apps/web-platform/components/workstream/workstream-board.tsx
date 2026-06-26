@@ -62,7 +62,6 @@ export function WorkstreamBoard() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<WorkstreamFilters>(emptyFilters);
   const [newOpen, setNewOpen] = useState(false);
-  const [refreshFailed, setRefreshFailed] = useState(false);
 
   // Drawer is driven by LOCAL state (instant open/close). Hydrate from the
   // ?issue= param on mount (deep-link/reload support).
@@ -95,17 +94,19 @@ export function WorkstreamBoard() {
   );
   const issues = data?.issues;
 
+  // Revalidate from the server (the ErrorCard retry AND the Refresh button).
+  // Filters + search live in React state untouched by mutate(), so they survive
+  // the refetch automatically (D6). When a revalidation fails while we still
+  // hold data, SWR keeps `data` and sets `error` — that `error && data` pair is
+  // the "couldn't refresh, showing last loaded" signal below, and SWR clears
+  // `error` on the next success so the notice can never outlive the failure.
   const refetch = useCallback(() => {
     void mutate();
   }, [mutate]);
 
-  // Explicit Refresh: revalidate from the server. Filters + search live in React
-  // state untouched by mutate(), so they survive the refetch automatically (D6).
-  // A failure with existing data surfaces an inline notice (data retained).
-  const refresh = useCallback(() => {
-    setRefreshFailed(false);
-    mutate().catch(() => setRefreshFailed(true));
-  }, [mutate]);
+  // A failed REFRESH (vs a failed first load) is "error present BUT stale data
+  // retained" — surface an honest inline notice without discarding the board.
+  const refreshFailed = error != null && data != null;
 
   const resetFilters = useCallback(() => {
     setFilters(emptyFilters());
@@ -257,7 +258,7 @@ export function WorkstreamBoard() {
           </button>
           <button
             type="button"
-            onClick={refresh}
+            onClick={refetch}
             disabled={isValidating}
             aria-label="Refresh"
             className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-transparent px-3 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-60"

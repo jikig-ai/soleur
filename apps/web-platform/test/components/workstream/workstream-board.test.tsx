@@ -164,6 +164,62 @@ describe("WorkstreamBoard", () => {
     expect(screen.queryByText("Draft copy")).toBeNull();
   });
 
+  it("a failed Refresh (with existing data) shows the inline notice, then clears it on a later success", async () => {
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-1", title: "Wire the store" }),
+    ]) as unknown as typeof fetch;
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("Wire the store")).toBeTruthy());
+
+    // Next revalidation rejects → inline "couldn't refresh" notice, data retained.
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: false, json: async () => ({}) }) as unknown as typeof fetch;
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t refresh/i)).toBeTruthy(),
+    );
+    expect(screen.getByText("Wire the store")).toBeTruthy(); // data retained
+
+    // A subsequent successful refresh clears the stale notice.
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-1", title: "Wire the store" }),
+    ]) as unknown as typeof fetch;
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await waitFor(() =>
+      expect(screen.queryByText(/couldn.?t refresh/i)).toBeNull(),
+    );
+  });
+
+  it("a selected filter DIMENSION (not just search) survives a Refresh", async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        issues: [
+          issue({ id: "SOLAA-1", title: "Urgent one", priority: "urgent" }),
+          issue({ id: "SOLAA-2", title: "Low one", priority: "low" }),
+        ],
+      }),
+    });
+    global.fetch = fetcher as unknown as typeof fetch;
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("Urgent one")).toBeTruthy());
+
+    // Apply the Priority=Urgent filter.
+    fireEvent.click(screen.getByRole("button", { name: /priority/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /urgent/i }));
+    await waitFor(() => expect(screen.queryByText("Low one")).toBeNull());
+
+    const callsBefore = fetcher.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await waitFor(() =>
+      expect(fetcher.mock.calls.length).toBeGreaterThan(callsBefore),
+    );
+    // Filter dimension survived: the low-priority card stays filtered out.
+    await waitFor(() => expect(screen.getByText("Urgent one")).toBeTruthy());
+    expect(screen.queryByText("Low one")).toBeNull();
+  });
+
   it("shows the empty first-run state with a New Issue CTA", async () => {
     global.fetch = mockFetchOnce([]) as unknown as typeof fetch;
     render(<Wrapped />);
