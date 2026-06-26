@@ -1,0 +1,210 @@
+"use client";
+
+// Right slide-in detail Sheet for a Workstream issue. URL-driven open-state is
+// owned by the board (?issue=<id>); this component just renders the resolved
+// issue (or an "Issue not found" state) + a status select that moves the card
+// optimistically. Addendum: TWO distinct assignee rows — "Assignee (role)" (the
+// role chip) and a new "User" row (the specific person), the latter omitted
+// cleanly when absent.
+
+import { Sheet } from "@/components/ui/sheet";
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import {
+  COLUMNS,
+  priorityBarClass,
+  priorityLabel,
+  priorityPillClass,
+  roleTitle,
+  statusLabel,
+  statusPillClass,
+  type WorkstreamIssue,
+  type WorkstreamStatus,
+} from "@/lib/workstream";
+import { AssigneeChip, UserAvatar } from "./assignee-chip";
+import { IssueConciergePanel } from "./issue-concierge-panel";
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+export function IssueDetailSheet({
+  open,
+  issue,
+  notFound,
+  onClose,
+  onChangeStatus,
+}: {
+  open: boolean;
+  issue: WorkstreamIssue | null;
+  notFound: boolean;
+  onClose: () => void;
+  onChangeStatus: (id: string, status: WorkstreamStatus) => void;
+}) {
+  const ariaLabel = issue ? `Issue ${issue.id}` : "Issue detail";
+
+  return (
+    <Sheet open={open} onClose={onClose} aria-label={ariaLabel}>
+      {notFound || !issue ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+          <p className="text-sm text-soleur-text-secondary">Issue not found</p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+          >
+            Back to board
+          </button>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3 border-b border-soleur-border-default p-4">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-soleur-text-tertiary">
+                {issue.id}
+              </p>
+              <h2 className="mt-1 text-base font-medium text-soleur-text-primary">
+                {issue.title}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="shrink-0 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {/* Detail rows */}
+            <dl className="space-y-3 text-sm">
+              <Row label="Status">
+                <div className="flex items-center gap-2">
+                  <span className={statusPillClass(issue.status)}>
+                    {statusLabel(issue.status)}
+                  </span>
+                  <select
+                    aria-label="Change status"
+                    value={issue.status}
+                    onChange={(e) =>
+                      onChangeStatus(
+                        issue.id,
+                        e.target.value as WorkstreamStatus,
+                      )
+                    }
+                    className="rounded border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1 text-xs text-soleur-text-primary focus:outline-none"
+                  >
+                    {COLUMNS.map((c) => (
+                      <option key={c.status} value={c.status}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </Row>
+
+              <Row label="Assignee (role)">
+                <span className="flex items-center gap-2">
+                  <AssigneeChip role={issue.assigneeRole} />
+                  <span className="text-soleur-text-secondary">
+                    {roleTitle(issue.assigneeRole)}
+                  </span>
+                </span>
+              </Row>
+
+              {issue.user && (
+                <Row label="User">
+                  <span className="flex items-center gap-2">
+                    <UserAvatar user={issue.user} />
+                    <span className="text-soleur-text-secondary">
+                      {issue.user.name}
+                    </span>
+                  </span>
+                </Row>
+              )}
+
+              <Row label="Priority">
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className={`h-2 w-[3px] rounded-full ${priorityBarClass(
+                      issue.priority,
+                    )}`}
+                  />
+                  <span className={priorityPillClass(issue.priority)}>
+                    {priorityLabel(issue.priority)}
+                  </span>
+                </span>
+              </Row>
+
+              <Row label="Created">
+                <span className="text-soleur-text-secondary">
+                  {formatDate(issue.createdAt)}
+                </span>
+              </Row>
+              <Row label="Updated">
+                <span className="text-soleur-text-secondary">
+                  {formatDate(issue.updatedAt)}
+                </span>
+              </Row>
+            </dl>
+
+            {/* Non-persistence note at the moment of action. */}
+            <p className="mt-3 text-xs text-soleur-text-tertiary">
+              Preview — status changes aren&apos;t saved yet.
+            </p>
+
+            {/* Description */}
+            <section className="mt-6">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-soleur-text-tertiary">
+                Description
+              </h3>
+              <div className="text-sm text-soleur-text-secondary">
+                <MarkdownRenderer content={issue.description} />
+              </div>
+            </section>
+
+            {/* Decision Making (Concierge) */}
+            <IssueConciergePanel />
+          </div>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function Row({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-soleur-text-tertiary">{label}</dt>
+      <dd className="text-right">{children}</dd>
+    </div>
+  );
+}
