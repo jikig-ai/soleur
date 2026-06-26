@@ -56,6 +56,11 @@ export interface WorkstreamIssue {
   /** "Live" flag — set when an open issue carries the `in-progress` label.
    *  User-created optimistic cards never set this (spec-flow #14). */
   live?: boolean;
+  /** All `domain/*` labels on the issue (filter dimension 1d). OPTIONAL +
+   *  additive — absent for every pre-existing construction site, so existing
+   *  constructors stay valid (arch review D1). Distinct from `assigneeRole`,
+   *  which collapses only the FIRST domain label into a role. */
+  domains?: string[];
   createdAt: string; // ISO-8601
   updatedAt: string; // ISO-8601
 }
@@ -332,6 +337,7 @@ export function githubIssueToWorkstreamIssue(
   input: BoardIssueInput,
 ): WorkstreamIssue {
   const user = deriveUser(input.assignees);
+  const domains = input.labels.filter((l) => l.startsWith("domain/"));
   return {
     id: String(input.number),
     title: input.title,
@@ -341,7 +347,175 @@ export function githubIssueToWorkstreamIssue(
     assigneeRole: deriveRole(input.labels),
     ...(user ? { user } : {}),
     ...(deriveLive(input) ? { live: true } : {}),
+    ...(domains.length ? { domains } : {}),
     createdAt: input.created_at,
     updatedAt: input.updated_at,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Filtering, search, faceted options + render-cap constants (client-side, pure).
+// All operate over the already-fetched issue set — no IO, node-unit-testable.
+// ---------------------------------------------------------------------------
+
+/** Statuses that read as "closed" — the single source of truth shared by
+ *  `isClosed` and the Status filter (arch review D4; mirrors `deriveColumn`'s
+ *  closed branch which maps closed GitHub issues to `done`/`cancelled`). */
+export const CLOSED_STATUSES: ReadonlySet<WorkstreamStatus> = new Set([
+  "done",
+  "cancelled",
+]);
+
+/** An issue reads as closed iff its column is `done` or `cancelled`. Sound +
+ *  complete for GitHub-sourced issues (`deriveColumn` only sends closed issues
+ *  to those two columns); an optimistic local move to done/cancelled also reads
+ *  closed, which is semantically correct. */
+export function isClosed(i: WorkstreamIssue): boolean {
+  return CLOSED_STATUSES.has(i.status);
+}
+
+/** Board filter state. AND across dimensions, OR within. Empty set / `"all"`
+ *  ⇒ that dimension is inactive (passes everything). In-memory only (not
+ *  persisted), matching the existing `search` precedent (D5). */
+export interface WorkstreamFilters {
+  priorities: Set<WorkstreamPriority>;
+  /** Tri-state radio (D4); default `"all"`. */
+  status: "all" | "open" | "closed";
+  roles: Set<WorkstreamRole>;
+  /** `user.name` values. */
+  users: Set<string>;
+  /** Assignee dimension: include unassigned issues (role null && no user). */
+  unassigned: boolean;
+  /** `domain/*` label values. */
+  domains: Set<string>;
+}
+
+/** The neutral, show-everything filter state. */
+export function emptyFilters(): WorkstreamFilters {
+  return {
+    priorities: new Set(),
+    status: "all",
+    roles: new Set(),
+    users: new Set(),
+    unassigned: false,
+    domains: new Set(),
+  };
+}
+
+/** AND across dimensions, OR within each. */
+export function matchesFilters(
+  i: WorkstreamIssue,
+  f: WorkstreamFilters,
+): boolean {
+  // Priority
+  if (f.priorities.size > 0 && !f.priorities.has(i.priority)) return false;
+  // Status (tri-state)
+  if (f.status !== "all" && isClosed(i) !== (f.status === "closed")) {
+    return false;
+  }
+  // Assignee (role OR person OR unassigned)
+  if (f.roles.size > 0 || f.users.size > 0 || f.unassigned) {
+    const roleMatch = i.assigneeRole !== null && f.roles.has(i.assigneeRole);
+    const userMatch = i.user !== undefined && f.users.has(i.user.name);
+    const unassignedMatch =
+      f.unassigned && i.assigneeRole === null && i.user === undefined;
+    if (!roleMatch && !userMatch && !unassignedMatch) return false;
+  }
+  // Domain
+  if (f.domains.size > 0) {
+    const hit = (i.domains ?? []).some((d) => f.domains.has(d));
+    if (!hit) return false;
+  }
+  return true;
+}
+
+/** True when ANY filter dimension or the search box is active. Drives the
+ *  Reset button's disabled state. */
+export function hasActiveFilters(
+  f: WorkstreamFilters,
+  search: string,
+): boolean {
+  return (
+    search.trim() !== "" ||
+    f.priorities.size > 0 ||
+    f.status !== "all" ||
+    f.roles.size > 0 ||
+    f.users.size > 0 ||
+    f.unassigned ||
+    f.domains.size > 0
+  );
+}
+
+/** Case-insensitive id/title substring search; empty query passes. Mirrors the
+ *  board's prior inline search so search composes with `matchesFilters`. */
+export function matchesSearch(i: WorkstreamIssue, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    i.id.toLowerCase().includes(q) || i.title.toLowerCase().includes(q)
+  );
+}
+
+/** Canonical menu orders so the faceted options render deterministically
+ *  (insertion order would vary with which issue loads first). */
+const PRIORITY_ORDER: readonly WorkstreamPriority[] = [
+  "urgent",
+  "high",
+  "medium",
+  "low",
+  "none",
+];
+const ROLE_ORDER: readonly WorkstreamRole[] = [
+  "ceo",
+  "cto",
+  "cpo",
+  "cmo",
+  "coo",
+  "cfo",
+  "cro",
+  "clo",
+  "cco",
+];
+
+/** Shape of the faceted filter options the board derives + the FilterBar reads. */
+export interface FilterOptions {
+  priorities: WorkstreamPriority[];
+  roles: WorkstreamRole[];
+  users: string[];
+  hasUnassigned: boolean;
+  domains: string[];
+}
+
+/** Faceted filter options derived from the FULL loaded set (D3) — de-duplicated.
+ *  "Hide empty options" ⇒ "present in the loaded set". Priorities/roles render in
+ *  canonical order, users/domains alphabetically — deterministic across loads.
+ *  Status is a fixed tri-state control, so it has no derived options. */
+export function deriveFilterOptions(issues: WorkstreamIssue[]): FilterOptions {
+  const priorities = new Set<WorkstreamPriority>();
+  const roles = new Set<WorkstreamRole>();
+  const users = new Set<string>();
+  const domains = new Set<string>();
+  let hasUnassigned = false;
+  for (const i of issues) {
+    priorities.add(i.priority);
+    if (i.assigneeRole !== null) roles.add(i.assigneeRole);
+    if (i.user !== undefined) users.add(i.user.name);
+    if (i.assigneeRole === null && i.user === undefined) hasUnassigned = true;
+    for (const d of i.domains ?? []) domains.add(d);
+  }
+  return {
+    priorities: PRIORITY_ORDER.filter((p) => priorities.has(p)),
+    roles: ROLE_ORDER.filter((r) => roles.has(r)),
+    users: [...users].sort(),
+    hasUnassigned,
+    domains: [...domains].sort(),
+  };
+}
+
+/** Per-column client render cap (separate from the 500-issue fetch cap). */
+export const COLUMN_RENDER_CAP = 200;
+
+/** EXACT mandated copy shown when a column exceeds the render cap (single
+ *  source of truth — asserted by tests; the plural "columns" is intentional). */
+export const COLUMN_CAP_NOTICE =
+  "Some board columns are showing up to 200 issues. Refine filters or search to reveal the rest.";
