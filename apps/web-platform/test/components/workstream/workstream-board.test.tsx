@@ -9,8 +9,9 @@ import {
 import type { WorkstreamIssue } from "@/lib/workstream";
 
 // next/navigation mocked: `mockIssue` drives the ?issue= param (deep-link
-// hydration). The drawer is now driven by LOCAL state — open/close uses
-// window.history.replaceState (spied), NOT router navigation.
+// hydration). The drawer is now driven by LOCAL state — open uses
+// window.history.pushState (so Back can pop it), close uses replaceState
+// (spied), NOT router navigation.
 let mockIssue: string | null = null;
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/workstream",
@@ -108,8 +109,11 @@ describe("WorkstreamBoard", () => {
     global.fetch = mockFetchOnce([]) as unknown as typeof fetch;
     render(<Wrapped />);
     await waitFor(() =>
-      expect(screen.getByText(/No issues on the board yet/i)).toBeTruthy(),
+      expect(screen.getByText(/No issues to display/i)).toBeTruthy(),
     );
+    expect(
+      screen.getByText(/Issues sync from your connected GitHub repo/i),
+    ).toBeTruthy();
     // Two New Issue buttons (top bar + empty CTA).
     expect(
       screen.getAllByRole("button", { name: /new issue/i }),
@@ -140,7 +144,8 @@ describe("WorkstreamBoard", () => {
     await waitFor(() => expect(screen.getByText("Recovered")).toBeTruthy());
   });
 
-  it("opening a card opens the drawer instantly via local state + syncs ?issue= (no navigation)", async () => {
+  it("opening a card opens the drawer instantly via local state + pushes ?issue= (so Back can pop it, no navigation)", async () => {
+    const pushSpy = vi.spyOn(window.history, "pushState");
     const replaceSpy = vi.spyOn(window.history, "replaceState");
     global.fetch = mockFetchOnce([
       issue({ id: "SOLAA-77", title: "Clickable" }),
@@ -156,11 +161,43 @@ describe("WorkstreamBoard", () => {
         screen.getByRole("dialog", { name: "Issue SOLAA-77" }),
       ).toBeTruthy(),
     );
-    // URL is synced non-blockingly via replaceState (deep-link/reload support).
-    expect(replaceSpy).toHaveBeenCalledWith(
-      null,
+    // Open pushes a history entry (NOT replaceState) so Back has something to pop.
+    expect(pushSpy).toHaveBeenCalledWith(
+      {},
       "",
       "/dashboard/workstream?issue=SOLAA-77",
+    );
+    expect(replaceSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "",
+      "/dashboard/workstream?issue=SOLAA-77",
+    );
+  });
+
+  it("Back (popstate with no ?issue) closes the drawer — activeId clears, dialog gone", async () => {
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-77", title: "Clickable" }),
+    ]) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("Clickable")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Clickable"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: "Issue SOLAA-77" }),
+      ).toBeTruthy(),
+    );
+
+    // Simulate Back: the pushed ?issue= entry is popped, so location no longer
+    // carries the param. The popstate listener re-reads window.location.search.
+    window.history.replaceState({}, "", "/dashboard/workstream");
+    fireEvent.popState(window);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Issue SOLAA-77" }),
+      ).toBeNull(),
     );
   });
 

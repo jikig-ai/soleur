@@ -349,11 +349,29 @@ export async function listRepoIssues(
         updated_at: item.updated_at,
       });
     }
-    if (raw.length < BOARD_PER_PAGE) break; // short page → last page
+    if (raw.length < BOARD_PER_PAGE) break; // short page → last page, no tail
     if (page === MAX_ISSUE_PAGES) {
+      // We reached the page cap AND the final allowed page came back FULL
+      // (raw.length === BOARD_PER_PAGE — a short page would have broken above),
+      // so a tail beyond the cap is LIKELY and we may have dropped issues. (An
+      // exactly-full repo is indistinguishable from a real tail without a +1
+      // fetch, so we err toward signalling.) SOLEUR-DEBT: if a repo legitimately
+      // exceeds the cap we silently drop the tail; switch to a "show open only"
+      // or windowed read when a >500-issue repo connects.
       log.warn(
-        { owner, repo, cap: MAX_ISSUE_PAGES * BOARD_PER_PAGE },
-        "Workstream issue read hit the page cap — tail issues not loaded (SOLEUR-DEBT)",
+        { owner, repo, loaded: out.length, cap: MAX_ISSUE_PAGES * BOARD_PER_PAGE },
+        "Workstream issue read hit the page cap — tail issues may not be loaded (SOLEUR-DEBT)",
+      );
+      // Mirror to Sentry for parity with the no-installation reportSilentFallback
+      // path (get-workstream-issues.ts) so on-call sees the truncated read
+      // without SSH (cq-silent-fallback-must-mirror-to-sentry).
+      reportSilentFallback(
+        new Error("workstream issue read hit the page cap"),
+        {
+          feature: "github-read-tools",
+          op: "list-repo-issues-cap",
+          extra: { owner, repo, loaded: out.length },
+        },
       );
     }
   }

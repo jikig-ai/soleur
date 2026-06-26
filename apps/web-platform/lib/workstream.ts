@@ -289,9 +289,12 @@ export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
   return "backlog";
 }
 
-/** Live only when open AND carrying the `in-progress` label. */
+/** Live only when the derived column is in_progress — mirrors deriveColumn so
+ *  `live` is never set on a card that lands in another column (e.g. an open
+ *  issue labelled BOTH `blocked` + `in-progress` resolves to `blocked`, where
+ *  `blocked` wins, so it must not also read as live). */
 export function deriveLive(input: BoardIssueInput): boolean {
-  return input.state === "open" && input.labels.includes("in-progress");
+  return deriveColumn(input) === "in_progress";
 }
 
 /** First assignee login → a board user; none → undefined. */

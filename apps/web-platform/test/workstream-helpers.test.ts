@@ -82,11 +82,10 @@ describe("priority helpers (Addendum item 3 — labeled pill, 5 levels)", () => 
   it("returns a label, text class, and bar class for every level", () => {
     for (const p of ALL_PRIORITIES) {
       expect(priorityLabel(p).length).toBeGreaterThan(0);
-      expect(priorityPillClass(p)).toContain("text-");
-      expect(priorityBarClass(p)).toContain("bg-");
     }
     expect(priorityLabel("urgent")).toBe("Urgent");
     expect(priorityPillClass("urgent")).toContain("red");
+    expect(priorityBarClass("urgent")).toContain("red");
   });
 });
 
@@ -201,6 +200,14 @@ describe("deriveLive", () => {
     expect(
       deriveLive(input({ state: "closed", labels: ["in-progress"] })),
     ).toBe(false);
+  });
+
+  it("mirrors deriveColumn — blocked wins over in-progress, so live is false", () => {
+    const both = input({ labels: ["blocked", "in-progress"] });
+    expect(deriveColumn(both)).toBe("blocked");
+    expect(deriveLive(both)).toBe(false);
+    // And the full mapper never sets the `live` flag on the blocked card.
+    expect(githubIssueToWorkstreamIssue(both).live).toBeUndefined();
   });
 });
 

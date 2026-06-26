@@ -3,11 +3,17 @@
 // The Workstream kanban board (client). SWR-fetches the read-only issue feed,
 // renders 7 columns, a search field + New Issue trigger, and a detail Sheet
 // driven by LOCAL STATE so open/close is INSTANT (no router.push navigation).
-// The ?issue=<id> param is kept in sync non-blockingly via
-// window.history.replaceState for deep-link/reload/Back; a popstate listener
-// reconciles the drawer. Mutations (New Issue, status change) are optimistic +
-// LOCAL ONLY (not persisted across reload) — surfaced honestly via the "Preview"
-// banner + a note at the moment of each action.
+// URL ↔ drawer sync, three moving parts:
+//   - OPEN (openIssue): pushState `?issue=<id>` — a real history entry so Back
+//     can pop it. Local state still drives the drawer, so open stays instant.
+//   - CLOSE (closeIssue): replaceState back to the bare path — strips the param
+//     WITHOUT adding an entry (closing isn't a navigation you'd want to "undo").
+//   - SYNC (popstate): re-reads ?issue from window.location.search on Back/
+//     Forward, so popping the pushed entry (→ no ?issue) closes the drawer, and
+//     deep-link/reload hydrates activeId from the same param on mount.
+// Net effect: open/close are instant AND Back closes the drawer. Mutations
+// (New Issue, status change) are optimistic + LOCAL ONLY (not persisted across
+// reload) — surfaced honestly via the "Preview" banner + a note at each action.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -112,14 +118,15 @@ export function WorkstreamBoard() {
     [mutate],
   );
 
-  // Open/close are INSTANT (local state); the URL is synced non-blockingly so
-  // the panel never waits on a Next.js navigation.
+  // Open is INSTANT (local state); we pushState a `?issue=` entry so Back pops
+  // it and the popstate listener clears the drawer (vs replaceState, which left
+  // no entry to pop — Back then navigated off the board).
   const openIssue = useCallback(
     (id: string) => {
       setActiveId(id);
       try {
-        window.history.replaceState(
-          null,
+        window.history.pushState(
+          {},
           "",
           `${pathname}?issue=${encodeURIComponent(id)}`,
         );
@@ -129,10 +136,12 @@ export function WorkstreamBoard() {
     },
     [pathname],
   );
+  // Close strips the param WITHOUT adding a history entry (replaceState) — an
+  // explicit close isn't a navigation you'd want to "undo" via Forward.
   const closeIssue = useCallback(() => {
     setActiveId(null);
     try {
-      window.history.replaceState(null, "", pathname);
+      window.history.replaceState({}, "", pathname);
     } catch {
       /* history unavailable — local state still drives the drawer */
     }
@@ -266,7 +275,10 @@ function EmptyState({ onNew }: { onNew: () => void }) {
   return (
     <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 py-16 text-center">
       <p className="text-sm text-soleur-text-secondary">
-        No issues on the board yet.
+        No issues to display
+      </p>
+      <p className="mt-1 text-xs text-soleur-text-tertiary">
+        Issues sync from your connected GitHub repo.
       </p>
       <div className="mt-4 flex justify-center">
         <GoldButton onClick={onNew}>+ New Issue</GoldButton>

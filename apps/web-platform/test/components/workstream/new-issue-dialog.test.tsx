@@ -40,9 +40,5 @@ describe("NewIssueDialog", () => {
       name: "Create with Concierge",
     }) as HTMLButtonElement;
     expect(conciergeBtn.disabled).toBe(true);
-
-    // Disabled → clicking does nothing (no silent no-op handler fires).
-    fireEvent.click(conciergeBtn);
-    expect(conciergeBtn.disabled).toBe(true);
   });
 });

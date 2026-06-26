@@ -9,10 +9,15 @@
 // shown that the user's own repo didn't produce.
 //
 // Empty-vs-throw (load-bearing — CPO / observability):
-//   - return [] (honest empty board) ONLY when no repo is connected OR no
-//     installation id resolves (lost grant — mirrored to Sentry).
-//   - LET GitHub API errors THROW so the route → 502 and the tool → isError.
-//     A failure must NEVER masquerade as "no issues."
+//   - The throw-guarantee is scoped to the GitHub LIST call only: once we have a
+//     repo + installation, a listRepoIssues failure (404/403/5xx) THROWS so the
+//     route → 502 and the tool → isError. A list failure must NEVER masquerade
+//     as "no issues."
+//   - return [] (honest empty board) when no repo is connected OR no installation
+//     id resolves (lost grant — mirrored to Sentry here). NOTE: the upstream
+//     resolvers (getCurrentRepoUrl, resolveInstallationId) FAIL-OPEN to null on
+//     transient DB/auth errors too — those also collapse to [] here, but they
+//     mirror to Sentry UPSTREAM, so a degraded resolve is still observable.
 
 import {
   githubIssueToWorkstreamIssue,
