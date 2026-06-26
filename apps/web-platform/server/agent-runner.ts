@@ -1708,7 +1708,8 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     // Workstream board tools (feat-workstream-kanban-tab): agent-user READ
     // parity for the kanban board — registered unconditionally.
     // workstream_issues_list is read-only (auto-approve) and calls the shared
-    // getWorkstreamIssues() accessor (the same seed the dashboard route serves).
+    // getWorkstreamIssues() accessor (the active workspace's real connected-repo
+    // issues — the same feed the dashboard route serves).
     const workstreamTools = buildWorkstreamTools({ userId });
     platformTools.push(...workstreamTools.tools);
     platformToolNames.push(...workstreamTools.toolNames);

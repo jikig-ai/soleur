@@ -4,6 +4,12 @@ import {
   STATUS_ORDER,
   assigneeInitials,
   columnAccent,
+  deriveColumn,
+  deriveLive,
+  derivePriority,
+  deriveRole,
+  deriveUser,
+  githubIssueToWorkstreamIssue,
   isLive,
   priorityBarClass,
   priorityLabel,
@@ -12,11 +18,26 @@ import {
   roleTitle,
   statusLabel,
   statusPillClass,
+  type BoardIssueInput,
   type WorkstreamIssue,
   type WorkstreamPriority,
   type WorkstreamStatus,
 } from "@/lib/workstream";
-import { getWorkstreamIssues } from "@/server/workstream/seed-issues";
+
+function input(over: Partial<BoardIssueInput> = {}): BoardIssueInput {
+  return {
+    number: 42,
+    title: "An issue",
+    body: "body text",
+    assignees: [],
+    labels: [],
+    state: "open",
+    state_reason: null,
+    created_at: "2026-06-20T09:00:00.000Z",
+    updated_at: "2026-06-21T09:00:00.000Z",
+    ...over,
+  };
+}
 
 const ALL_STATUSES: WorkstreamStatus[] = [
   "backlog",
@@ -103,40 +124,197 @@ describe("isLive", () => {
   });
 });
 
-describe("getWorkstreamIssues accessor seam", () => {
-  const issues = getWorkstreamIssues();
-
-  it("returns a non-empty seed of valid issues", () => {
-    expect(issues.length).toBeGreaterThanOrEqual(10);
-    for (const i of issues) {
-      expect(i.id.startsWith("SOLAA-")).toBe(true);
-      expect(ALL_STATUSES).toContain(i.status);
-      expect(ALL_PRIORITIES).toContain(i.priority);
-      expect(typeof i.title).toBe("string");
-      expect(typeof i.createdAt).toBe("string");
-      expect(typeof i.updatedAt).toBe("string");
-    }
+describe("deriveColumn (state + state_reason + labels)", () => {
+  it("closed + completed → done", () => {
+    expect(
+      deriveColumn(input({ state: "closed", state_reason: "completed" })),
+    ).toBe("done");
   });
 
-  it("seeds at least one Live card and at least one with a distinct user (Addendum item 5)", () => {
-    expect(issues.some((i) => isLive(i))).toBe(true);
-    expect(issues.some((i) => i.user && i.user.initials.length > 0)).toBe(true);
-  });
-
-  it("returns a fresh copy each call (callers cannot mutate the seed)", () => {
-    const a = getWorkstreamIssues();
-    a[0].title = "MUTATED";
-    expect(getWorkstreamIssues()[0].title).not.toBe("MUTATED");
-  });
-
-  it("deep-copies the nested user object (agent tool serializes this payload)", () => {
-    const a = getWorkstreamIssues();
-    const withUser = a.find((i) => i.user);
-    expect(withUser).toBeTruthy();
-    withUser!.user!.name = "MUTATED_USER";
-    const b = getWorkstreamIssues();
-    expect(b.find((i) => i.id === withUser!.id)!.user!.name).not.toBe(
-      "MUTATED_USER",
+  it("closed with no state_reason → done", () => {
+    expect(deriveColumn(input({ state: "closed", state_reason: null }))).toBe(
+      "done",
     );
+  });
+
+  it("closed + not_planned → cancelled", () => {
+    expect(
+      deriveColumn(input({ state: "closed", state_reason: "not_planned" })),
+    ).toBe("cancelled");
+  });
+
+  it("closed + duplicate state_reason → cancelled", () => {
+    expect(
+      deriveColumn(input({ state: "closed", state_reason: "duplicate" })),
+    ).toBe("cancelled");
+  });
+
+  it("closed + duplicate LABEL → cancelled (even when state_reason is completed)", () => {
+    expect(
+      deriveColumn(
+        input({
+          state: "closed",
+          state_reason: "completed",
+          labels: ["duplicate"],
+        }),
+      ),
+    ).toBe("cancelled");
+  });
+
+  it("open + blocked label → blocked", () => {
+    expect(deriveColumn(input({ labels: ["blocked"] }))).toBe("blocked");
+  });
+
+  it("open + in-progress label → in_progress", () => {
+    expect(deriveColumn(input({ labels: ["in-progress"] }))).toBe(
+      "in_progress",
+    );
+  });
+
+  it("open + review / needs-review label → in_review", () => {
+    expect(deriveColumn(input({ labels: ["review"] }))).toBe("in_review");
+    expect(deriveColumn(input({ labels: ["needs-review"] }))).toBe("in_review");
+  });
+
+  it("open + todo / ready label → todo", () => {
+    expect(deriveColumn(input({ labels: ["todo"] }))).toBe("todo");
+    expect(deriveColumn(input({ labels: ["ready"] }))).toBe("todo");
+  });
+
+  it("open + no recognized label → backlog", () => {
+    expect(deriveColumn(input({ labels: ["whatever", "wontfix"] }))).toBe(
+      "backlog",
+    );
+  });
+
+  it("blocked takes precedence over in-progress", () => {
+    expect(
+      deriveColumn(input({ labels: ["in-progress", "blocked"] })),
+    ).toBe("blocked");
+  });
+});
+
+describe("deriveLive", () => {
+  it("is true only when open AND carrying in-progress", () => {
+    expect(deriveLive(input({ labels: ["in-progress"] }))).toBe(true);
+    expect(deriveLive(input({ labels: [] }))).toBe(false);
+    expect(
+      deriveLive(input({ state: "closed", labels: ["in-progress"] })),
+    ).toBe(false);
+  });
+});
+
+describe("derivePriority (priority/* label)", () => {
+  it("maps p0–p3 to urgent/high/medium/low", () => {
+    expect(derivePriority(["priority/p0-critical"])).toBe("urgent");
+    expect(derivePriority(["priority/p1-high"])).toBe("high");
+    expect(derivePriority(["priority/p2-medium"])).toBe("medium");
+    expect(derivePriority(["priority/p3-low"])).toBe("low");
+  });
+
+  it("returns none when no priority label is present", () => {
+    expect(derivePriority(["domain/engineering"])).toBe("none");
+    expect(derivePriority([])).toBe("none");
+  });
+
+  it("takes the first matching priority label in issue order", () => {
+    expect(derivePriority(["priority/p2-medium", "priority/p0-critical"])).toBe(
+      "medium",
+    );
+  });
+});
+
+describe("deriveRole (domain/* label)", () => {
+  it("maps each domain label to its role chip", () => {
+    expect(deriveRole(["domain/engineering"])).toBe("cto");
+    expect(deriveRole(["domain/product"])).toBe("cpo");
+    expect(deriveRole(["domain/marketing"])).toBe("cmo");
+    expect(deriveRole(["domain/operations"])).toBe("coo");
+    expect(deriveRole(["domain/finance"])).toBe("cfo");
+    expect(deriveRole(["domain/legal"])).toBe("clo");
+    expect(deriveRole(["domain/sales"])).toBe("cro");
+    expect(deriveRole(["domain/support"])).toBe("cco");
+  });
+
+  it("returns null for an unmapped / absent domain label", () => {
+    expect(deriveRole(["domain/unknown"])).toBeNull();
+    expect(deriveRole([])).toBeNull();
+  });
+
+  it("first domain/* label (in issue order) wins — deterministic", () => {
+    expect(deriveRole(["domain/product", "domain/engineering"])).toBe("cpo");
+  });
+});
+
+describe("deriveUser (first assignee)", () => {
+  it("maps the first assignee login to { name, initials }", () => {
+    expect(deriveUser(["octocat", "second"])).toEqual({
+      name: "octocat",
+      initials: "OC",
+    });
+  });
+
+  it("is undefined when there are no assignees", () => {
+    expect(deriveUser([])).toBeUndefined();
+  });
+});
+
+describe("githubIssueToWorkstreamIssue (full mapper)", () => {
+  it("maps number→id (String), title, body→description, timestamps", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ number: 5652, title: "Tighten gap", body: "the body" }),
+    );
+    expect(out.id).toBe("5652");
+    expect(out.title).toBe("Tighten gap");
+    expect(out.description).toBe("the body");
+    expect(out.createdAt).toBe("2026-06-20T09:00:00.000Z");
+    expect(out.updatedAt).toBe("2026-06-21T09:00:00.000Z");
+    expect(ALL_STATUSES).toContain(out.status);
+    expect(ALL_PRIORITIES).toContain(out.priority);
+  });
+
+  it("null body → empty-string description", () => {
+    expect(githubIssueToWorkstreamIssue(input({ body: null })).description).toBe(
+      "",
+    );
+  });
+
+  it("composes role + priority + user + live + column from labels/assignees", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({
+        number: 7,
+        labels: [
+          "domain/engineering",
+          "priority/p1-high",
+          "in-progress",
+        ],
+        assignees: ["harry"],
+      }),
+    );
+    expect(out.status).toBe("in_progress");
+    expect(out.priority).toBe("high");
+    expect(out.assigneeRole).toBe("cto");
+    expect(out.user).toEqual({ name: "harry", initials: "HA" });
+    expect(out.live).toBe(true);
+    expect(isLive(out)).toBe(true);
+  });
+
+  it("degrades to null/none/backlog with no user when unmapped and never throws", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ labels: ["bug", "wontfix"], assignees: [] }),
+    );
+    expect(out.assigneeRole).toBeNull();
+    expect(out.priority).toBe("none");
+    expect(out.status).toBe("backlog");
+    expect(out.user).toBeUndefined();
+    expect(out.live).toBeUndefined();
+  });
+
+  it("closed + not_planned → cancelled column", () => {
+    expect(
+      githubIssueToWorkstreamIssue(
+        input({ state: "closed", state_reason: "not_planned" }),
+      ).status,
+    ).toBe("cancelled");
   });
 });
