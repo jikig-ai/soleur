@@ -11,9 +11,7 @@
 // composer onSubmit to the conversation backend (tracked follow-up).
 
 import Link from "next/link";
-
-// Single switch for the per-issue Concierge conversation backend. False in v1.
-const CONCIERGE_ONLINE = false;
+import { CONCIERGE_ONLINE } from "./concierge-flag";
 
 const INTRO_MESSAGE =
   "I'm the Concierge. This is where we'll talk through decisions on this issue — " +

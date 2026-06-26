@@ -42,7 +42,8 @@ export interface WorkstreamUser {
 }
 
 export interface WorkstreamIssue {
-  /** Linear-style id, e.g. "SOLAA-198". */
+  /** The GitHub repo issue number as a string, e.g. "5652" (also the React key
+   *  and the `?issue=` deep-link param). Optimistic-local cards use "SOLAA-N*". */
   id: string;
   title: string;
   description: string;
@@ -52,7 +53,8 @@ export interface WorkstreamIssue {
   assigneeRole: WorkstreamRole | null;
   /** A specific person (distinct from the role assignee). Optional. */
   user?: WorkstreamUser;
-  /** Seed-only "Live" flag — user-created cards never set this (spec-flow #14). */
+  /** "Live" flag — set when an open issue carries the `in-progress` label.
+   *  User-created optimistic cards never set this (spec-flow #14). */
   live?: boolean;
   createdAt: string; // ISO-8601
   updatedAt: string; // ISO-8601
@@ -213,4 +215,133 @@ export function roleTitle(role: WorkstreamRole | null): string {
 // ---------------------------------------------------------------------------
 export function isLive(issue: WorkstreamIssue): boolean {
   return issue.status === "in_progress" && issue.live === true;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub-issue → WorkstreamIssue PURE mapping (no IO — the IO accessor lives in
+// server/workstream/get-workstream-issues.ts). Keeps this module a node-unit-
+// testable leaf. The reader (server/github-read-tools.ts:listRepoIssues) narrows
+// the raw REST payload to `BoardIssueInput`; this maps it to the board model.
+//
+// Mapping is DEFENSIVE: an unmapped / missing label degrades to null/none/backlog
+// and NEVER throws (real repos won't carry the soleur label taxonomy verbatim).
+// ---------------------------------------------------------------------------
+
+/** The narrowed GitHub-issue shape the pure mapper consumes (no IO). */
+export interface BoardIssueInput {
+  number: number;
+  title: string;
+  body: string | null;
+  /** Assignee login handles (first one becomes the `user`). */
+  assignees: string[];
+  /** Label names (e.g. "domain/engineering", "priority/p0-critical", "blocked"). */
+  labels: string[];
+  state: "open" | "closed";
+  /** GitHub `state_reason`: completed | reopened | not_planned | duplicate | null. */
+  state_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `domain/*` label → role chip. First matching label (in issue order) wins. */
+export const DOMAIN_LABEL_TO_ROLE: Record<string, WorkstreamRole> = {
+  "domain/engineering": "cto",
+  "domain/product": "cpo",
+  "domain/marketing": "cmo",
+  "domain/operations": "coo",
+  "domain/finance": "cfo",
+  "domain/legal": "clo",
+  "domain/sales": "cro",
+  "domain/support": "cco",
+};
+
+/** `priority/*` label → priority. Absent → `none`. */
+export const PRIORITY_LABEL_TO_PRIORITY: Record<string, WorkstreamPriority> = {
+  "priority/p0-critical": "urgent",
+  "priority/p1-high": "high",
+  "priority/p2-medium": "medium",
+  "priority/p3-low": "low",
+};
+
+/**
+ * Derive the kanban column from state + state_reason + labels.
+ * Precedence (per plan):
+ *   - closed → state_reason ∈ {not_planned, duplicate} OR has `duplicate` label → cancelled; else done.
+ *   - open  → `blocked` → blocked; else `in-progress` → in_progress;
+ *             else `review`/`needs-review` → in_review; else `todo`/`ready` → todo; else backlog.
+ */
+export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
+  const labels = input.labels;
+  if (input.state === "closed") {
+    const cancelledReason =
+      input.state_reason === "not_planned" ||
+      input.state_reason === "duplicate";
+    if (cancelledReason || labels.includes("duplicate")) return "cancelled";
+    return "done";
+  }
+  // open
+  if (labels.includes("blocked")) return "blocked";
+  if (labels.includes("in-progress")) return "in_progress";
+  if (labels.includes("review") || labels.includes("needs-review")) {
+    return "in_review";
+  }
+  if (labels.includes("todo") || labels.includes("ready")) return "todo";
+  return "backlog";
+}
+
+/** Live only when the derived column is in_progress — mirrors deriveColumn so
+ *  `live` is never set on a card that lands in another column (e.g. an open
+ *  issue labelled BOTH `blocked` + `in-progress` resolves to `blocked`, where
+ *  `blocked` wins, so it must not also read as live). */
+export function deriveLive(input: BoardIssueInput): boolean {
+  return deriveColumn(input) === "in_progress";
+}
+
+/** First assignee login → a board user; none → undefined. */
+export function deriveUser(assignees: string[]): WorkstreamUser | undefined {
+  const login = assignees[0];
+  if (!login) return undefined;
+  return { name: login, initials: login.slice(0, 2).toUpperCase() };
+}
+
+/** First `priority/*` label (in issue order) → priority; absent → `none`. */
+export function derivePriority(labels: string[]): WorkstreamPriority {
+  for (const label of labels) {
+    const mapped = PRIORITY_LABEL_TO_PRIORITY[label];
+    if (mapped) return mapped;
+  }
+  return "none";
+}
+
+/** First `domain/*` label (in issue order) → role; none → null. */
+export function deriveRole(labels: string[]): WorkstreamRole | null {
+  for (const label of labels) {
+    const mapped = DOMAIN_LABEL_TO_ROLE[label];
+    if (mapped) return mapped;
+  }
+  return null;
+}
+
+/**
+ * Map one narrowed GitHub issue to a `WorkstreamIssue`. Never throws on
+ * missing/unmapped labels (degrades to null/none/backlog). `id` is
+ * `String(number)` — repo-scoped, collision-free, also the React key + the
+ * `?issue=` deep-link param.
+ */
+export function githubIssueToWorkstreamIssue(
+  input: BoardIssueInput,
+): WorkstreamIssue {
+  const user = deriveUser(input.assignees);
+  return {
+    id: String(input.number),
+    title: input.title,
+    description: input.body ?? "",
+    status: deriveColumn(input),
+    priority: derivePriority(input.labels),
+    assigneeRole: deriveRole(input.labels),
+    ...(user ? { user } : {}),
+    ...(deriveLive(input) ? { live: true } : {}),
+    createdAt: input.created_at,
+    updatedAt: input.updated_at,
+  };
 }

@@ -1,14 +1,22 @@
 "use client";
 
-// The Workstream kanban board (client). SWR-fetches the read-only seed feed,
-// renders 7 columns, a search field + New Issue trigger, and a URL-driven
-// detail Sheet (?issue=<id>, set/cleared via router.push so the browser Back
-// button closes it — inbox precedent). Mutations (New Issue, status change) are
-// optimistic + LOCAL ONLY (not persisted across reload) — surfaced honestly via
-// the "Preview" banner + a note at the moment of each action.
+// The Workstream kanban board (client). SWR-fetches the read-only issue feed,
+// renders 7 columns, a search field + New Issue trigger, and a detail Sheet
+// driven by LOCAL STATE so open/close is INSTANT (no router.push navigation).
+// URL ↔ drawer sync, three moving parts:
+//   - OPEN (openIssue): pushState `?issue=<id>` — a real history entry so Back
+//     can pop it. Local state still drives the drawer, so open stays instant.
+//   - CLOSE (closeIssue): replaceState back to the bare path — strips the param
+//     WITHOUT adding an entry (closing isn't a navigation you'd want to "undo").
+//   - SYNC (popstate): re-reads ?issue from window.location.search on Back/
+//     Forward, so popping the pushed entry (→ no ?issue) closes the drawer, and
+//     deep-link/reload hydrates activeId from the same param on mount.
+// Net effect: open/close are instant AND Back closes the drawer. Mutations
+// (New Issue, status change) are optimistic + LOCAL ONLY (not persisted across
+// reload) — surfaced honestly via the "Preview" banner + a note at each action.
 
-import { useCallback, useMemo, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { COLUMNS, type WorkstreamIssue, type WorkstreamStatus } from "@/lib/workstream";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
@@ -21,14 +29,52 @@ import { NewIssueDialog } from "./new-issue-dialog";
 
 type IssuesResponse = { issues: WorkstreamIssue[] };
 
+const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns";
+
+function readCollapsedColumns(): Set<WorkstreamStatus> {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed as WorkstreamStatus[]);
+  } catch {
+    // private mode / quota / malformed — degrade to "nothing collapsed".
+    return new Set();
+  }
+}
+
 export function WorkstreamBoard() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const issueParam = searchParams.get("issue");
 
   const [search, setSearch] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+
+  // Drawer is driven by LOCAL state (instant open/close). Hydrate from the
+  // ?issue= param on mount (deep-link/reload support).
+  const [activeId, setActiveId] = useState<string | null>(() =>
+    searchParams.get("issue"),
+  );
+
+  // Collapsed columns (persisted in localStorage). SSR-safe: read in an effect,
+  // never during render.
+  const [collapsed, setCollapsed] = useState<Set<WorkstreamStatus>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    setCollapsed(readCollapsedColumns());
+  }, []);
+
+  // Reconcile the drawer with the URL on Back/Forward (and deep-link history).
+  useEffect(() => {
+    function onPopState() {
+      const param = new URLSearchParams(window.location.search).get("issue");
+      setActiveId(param);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const { data, error, mutate } = useSWR<IssuesResponse>(
     swrKeys.workstreamIssues(),
@@ -72,15 +118,51 @@ export function WorkstreamBoard() {
     [mutate],
   );
 
+  // Open is INSTANT (local state); we pushState a `?issue=` entry so Back pops
+  // it and the popstate listener clears the drawer (vs replaceState, which left
+  // no entry to pop — Back then navigated off the board).
   const openIssue = useCallback(
     (id: string) => {
-      router.push(`${pathname}?issue=${encodeURIComponent(id)}`);
+      setActiveId(id);
+      try {
+        window.history.pushState(
+          {},
+          "",
+          `${pathname}?issue=${encodeURIComponent(id)}`,
+        );
+      } catch {
+        /* history unavailable — local state still drives the drawer */
+      }
     },
-    [router, pathname],
+    [pathname],
   );
+  // Close strips the param WITHOUT adding a history entry (replaceState) — an
+  // explicit close isn't a navigation you'd want to "undo" via Forward.
   const closeIssue = useCallback(() => {
-    router.push(pathname);
-  }, [router, pathname]);
+    setActiveId(null);
+    try {
+      window.history.replaceState({}, "", pathname);
+    } catch {
+      /* history unavailable — local state still drives the drawer */
+    }
+  }, [pathname]);
+
+  const toggleCollapse = useCallback((status: WorkstreamStatus) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      try {
+        window.localStorage.setItem(
+          COLLAPSED_STORAGE_KEY,
+          JSON.stringify([...next]),
+        );
+      } catch {
+        /* localStorage unavailable — in-memory toggle still works this session */
+      }
+      return next;
+    });
+  }, []);
 
   const q = search.trim().toLowerCase();
   const filtered = useMemo(
@@ -95,8 +177,8 @@ export function WorkstreamBoard() {
   );
 
   const selected =
-    issueParam && issues
-      ? (issues.find((i) => i.id === issueParam) ?? null)
+    activeId && issues
+      ? (issues.find((i) => i.id === activeId) ?? null)
       : null;
 
   return (
@@ -151,16 +233,18 @@ export function WorkstreamBoard() {
               column={column}
               issues={filtered.filter((i) => i.status === column.status)}
               onOpen={openIssue}
+              collapsed={collapsed.has(column.status)}
+              onToggleCollapse={toggleCollapse}
             />
           ))}
         </div>
       )}
 
       <IssueDetailSheet
-        open={issueParam != null}
+        open={activeId != null}
         issue={selected}
-        loading={issueParam != null && issues == null && !error}
-        notFound={issueParam != null && issues != null && selected == null}
+        loading={activeId != null && issues == null && !error}
+        notFound={activeId != null && issues != null && selected == null}
         onClose={closeIssue}
         onChangeStatus={changeStatus}
       />
@@ -191,7 +275,10 @@ function EmptyState({ onNew }: { onNew: () => void }) {
   return (
     <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 py-16 text-center">
       <p className="text-sm text-soleur-text-secondary">
-        No issues on the board yet.
+        No issues to display
+      </p>
+      <p className="mt-1 text-xs text-soleur-text-tertiary">
+        Issues sync from your connected GitHub repo.
       </p>
       <div className="mt-4 flex justify-center">
         <GoldButton onClick={onNew}>+ New Issue</GoldButton>
