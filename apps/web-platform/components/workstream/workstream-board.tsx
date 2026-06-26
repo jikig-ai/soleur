@@ -18,11 +18,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { COLUMNS, type WorkstreamIssue, type WorkstreamStatus } from "@/lib/workstream";
+import {
+  COLUMNS,
+  deriveFilterOptions,
+  emptyFilters,
+  hasActiveFilters,
+  matchesFilters,
+  matchesSearch,
+  type WorkstreamFilters,
+  type WorkstreamIssue,
+  type WorkstreamStatus,
+} from "@/lib/workstream";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
 import { GoldButton } from "@/components/ui/gold-button";
-import { SearchIcon } from "@/components/icons";
+import { RefreshIcon, SearchIcon, SpinnerIcon } from "@/components/icons";
+import { FilterBar } from "./filter-bar";
 import { IssueColumn } from "./issue-column";
 import { IssueDetailSheet } from "./issue-detail-sheet";
 import { NewIssueDialog } from "./new-issue-dialog";
@@ -49,7 +60,9 @@ export function WorkstreamBoard() {
   const searchParams = useSearchParams();
 
   const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<WorkstreamFilters>(emptyFilters);
   const [newOpen, setNewOpen] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
 
   // Drawer is driven by LOCAL state (instant open/close). Hydrate from the
   // ?issue= param on mount (deep-link/reload support).
@@ -76,7 +89,7 @@ export function WorkstreamBoard() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const { data, error, mutate } = useSWR<IssuesResponse>(
+  const { data, error, mutate, isValidating } = useSWR<IssuesResponse>(
     swrKeys.workstreamIssues(),
     jsonFetcher,
   );
@@ -85,6 +98,19 @@ export function WorkstreamBoard() {
   const refetch = useCallback(() => {
     void mutate();
   }, [mutate]);
+
+  // Explicit Refresh: revalidate from the server. Filters + search live in React
+  // state untouched by mutate(), so they survive the refetch automatically (D6).
+  // A failure with existing data surfaces an inline notice (data retained).
+  const refresh = useCallback(() => {
+    setRefreshFailed(false);
+    mutate().catch(() => setRefreshFailed(true));
+  }, [mutate]);
+
+  const resetFilters = useCallback(() => {
+    setFilters(emptyFilters());
+    setSearch("");
+  }, []);
 
   // Optimistic, LOCAL-ONLY insert atop Backlog (never persisted; revalidate
   // off so a background focus-revalidate doesn't drop it mid-session).
@@ -164,17 +190,22 @@ export function WorkstreamBoard() {
     });
   }, []);
 
-  const q = search.trim().toLowerCase();
+  // Faceted filter options derive from the FULL loaded set (stable, no thrash).
+  const filterOptions = useMemo(
+    () => deriveFilterOptions(issues ?? []),
+    [issues],
+  );
+
+  // Compose: text search AND the four filter dimensions, over the loaded set.
   const filtered = useMemo(
     () =>
       (issues ?? []).filter(
-        (i) =>
-          !q ||
-          i.id.toLowerCase().includes(q) ||
-          i.title.toLowerCase().includes(q),
+        (i) => matchesSearch(i, search) && matchesFilters(i, filters),
       ),
-    [issues, q],
+    [issues, search, filters],
   );
+
+  const anyActive = hasActiveFilters(filters, search);
 
   const selected =
     activeId && issues
@@ -196,10 +227,10 @@ export function WorkstreamBoard() {
         Preview — changes aren&apos;t saved yet.
       </p>
 
-      {/* Top bar: search + New Issue (rendered in every non-error state so the
-          surface is never stranded). */}
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <label className="relative flex flex-1 items-center">
+      {/* Top bar: search + filters + Reset/Refresh + New Issue (rendered in
+          every non-error state so the surface is never stranded). */}
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <label className="relative flex items-center">
           <SearchIcon className="pointer-events-none absolute left-3 h-4 w-4 text-soleur-text-tertiary" />
           <input
             type="text"
@@ -207,11 +238,45 @@ export function WorkstreamBoard() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search issues…"
             aria-label="Search issues"
-            className="w-full max-w-sm rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 py-2 pl-9 pr-3 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:border-soleur-text-muted focus:outline-none"
+            className="w-56 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 py-2 pl-9 pr-3 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:border-soleur-text-muted focus:outline-none"
           />
         </label>
-        <GoldButton onClick={() => setNewOpen(true)}>+ New Issue</GoldButton>
+        <FilterBar
+          options={filterOptions}
+          filters={filters}
+          onChange={setFilters}
+        />
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetFilters}
+            disabled={!anyActive}
+            className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-transparent px-3 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Reset filters
+          </button>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={isValidating}
+            aria-label="Refresh"
+            className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-transparent px-3 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isValidating ? (
+              <SpinnerIcon className="h-4 w-4" />
+            ) : (
+              <RefreshIcon className="h-4 w-4" />
+            )}
+            {isValidating ? "Refreshing…" : "Refresh"}
+          </button>
+          <GoldButton onClick={() => setNewOpen(true)}>+ New Issue</GoldButton>
+        </div>
       </div>
+      {refreshFailed ? (
+        <p className="mb-3 text-xs text-amber-500/90" role="status">
+          Couldn&apos;t refresh — showing the last loaded issues.
+        </p>
+      ) : null}
 
       {error && !data ? (
         <ErrorCard
@@ -224,7 +289,7 @@ export function WorkstreamBoard() {
       ) : issues && issues.length === 0 ? (
         <EmptyState onNew={() => setNewOpen(true)} />
       ) : filtered.length === 0 ? (
-        <NoResults query={search} onClear={() => setSearch("")} />
+        <NoResults onReset={resetFilters} />
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-4">
           {COLUMNS.map((column) => (
@@ -287,24 +352,18 @@ function EmptyState({ onNew }: { onNew: () => void }) {
   );
 }
 
-function NoResults({
-  query,
-  onClear,
-}: {
-  query: string;
-  onClear: () => void;
-}) {
+function NoResults({ onReset }: { onReset: () => void }) {
   return (
     <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 py-16 text-center">
       <p className="text-sm text-soleur-text-secondary">
-        No issues match “{query.trim()}”.
+        No issues match your filters or search.
       </p>
       <button
         type="button"
-        onClick={onClear}
+        onClick={onReset}
         className="mt-3 rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
       >
-        Clear search
+        Reset filters
       </button>
     </div>
   );
