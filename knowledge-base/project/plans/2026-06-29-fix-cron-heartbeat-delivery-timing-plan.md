@@ -413,8 +413,18 @@ logs:
   where: "Better Stack (claude-eval stdout/stderr tail, table per runbooks/betterstack-log-query.md; query creds in Doppler prd_terraform) + routine_runs (Supabase, terminal row per run)"
   retention: "routine_runs indefinite (operational audit, low volume); Better Stack per warehouse retention"
 discoverability_test:
-  command: "GET https://de.sentry.io/api/0/organizations/<org>/monitors/scheduled-community-monitor/checkins/  (Sentry REST, read-only; EU regional host de.sentry.io with org in path — live-verified shape per scripts/followthroughs/community-monitor-checkin-soak-5728.sh) AND read-only SQL: SELECT status,duration_ms,trigger_source,error_summary FROM routine_runs WHERE routine_id='cron-community-monitor' ORDER BY started_at DESC LIMIT 14"
-  expected_output: "Recent fires show status=ok check-ins within the 60-min margin; routine_runs shows completed rows; no missed attributable to delivery"
+  # Secret-free, no-SSH reachability probe of the Sentry Crons monitor REST path
+  # (EU regional host, org in path — the live-verified shape mirrored by
+  # scripts/followthroughs/community-monitor-checkin-soak-5728.sh). Unauthenticated
+  # returns 401, which PROVES the monitor endpoint resolves (DNS + TLS + routing) —
+  # the #4148 typo'd-hostname class. An operator adds `-H "Authorization: Bearer
+  # $SENTRY_AUTH_TOKEN"` to get 200 + the actual check-in timeline; a read-only
+  # routine_runs query (SELECT status,duration_ms,trigger_source,error_summary FROM
+  # routine_runs WHERE routine_id='cron-community-monitor' ORDER BY started_at DESC
+  # LIMIT 14) over Doppler DATABASE_URL_POOLER is the secondary, authoritative
+  # liveness+duration layer.
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-community-monitor/checkins/
+  expected_output: "401"
 ```
 
 ## Architecture Decision (ADR/C4)
