@@ -50,7 +50,7 @@ views {
       platform.plugin.review, platform.plugin.compound, platform.plugin.ship,
       platform.plugin.oneshot, platform.plugin.architecture,
       platform.plugin.cto, platform.plugin.cmo, platform.plugin.cpo,
-      platform.plugin.archstrat,
+      platform.plugin.archstrat, platform.plugin.evalharness,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb
 
     autoLayout LeftRight
