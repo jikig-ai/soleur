@@ -14,7 +14,7 @@
 
 import { describe, test, expect, beforeAll } from "bun:test";
 import { resolve } from "path";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, statSync } from "fs";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -23,6 +23,15 @@ const CONVENTION = resolve(
   REPO_ROOT,
   "knowledge-base/engineering/operations/runbooks/followthrough-convention.md",
 );
+const HOOK = resolve(REPO_ROOT, ".claude/hooks/ship-soak-followthrough-gate.sh");
+const SETTINGS = resolve(REPO_ROOT, ".claude/settings.json");
+const PLAN_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/plan/SKILL.md");
+
+// Extract the single-quoted SOAK_RE assignment value from a shell/markdown file.
+function soakRe(text: string): string | null {
+  const m = text.match(/SOAK_RE='([^']*)'/);
+  return m ? m[1] : null;
+}
 
 const GATE_HEADING = "### Soak-Gated Follow-Through Enrollment Gate";
 const NEXT_HEADING = "## Phase 6.4";
@@ -93,5 +102,51 @@ describe("referenced artifacts exist on disk", () => {
     expect(
       existsSync(resolve(REPO_ROOT, "plugins/soleur/skills/ship/references/followthrough-stub-template.sh")),
     ).toBe(true);
+  });
+});
+
+describe("PreToolUse hook — ship-soak-followthrough-gate.sh (mechanical twin)", () => {
+  test("the hook exists and is executable", () => {
+    expect(existsSync(HOOK)).toBe(true);
+    // owner-executable bit set (0o100)
+    expect(statSync(HOOK).mode & 0o100).toBeTruthy();
+  });
+
+  test("is registered as a PreToolUse Bash hook in settings.json", () => {
+    const settings = readFileSync(SETTINGS, "utf8");
+    expect(settings).toContain("ship-soak-followthrough-gate.sh");
+    // valid JSON
+    expect(() => JSON.parse(settings)).not.toThrow();
+  });
+
+  test("matches gh pr ready / gh pr merge --auto", () => {
+    const hook = readFileSync(HOOK, "utf8");
+    expect(hook).toMatch(/gh\\s\+pr\\s\+\(ready\|merge/);
+  });
+
+  test("SOAK_RE is byte-identical between the SKILL gate and the hook (drift guard)", () => {
+    const skillRe = soakRe(readFileSync(SHIP_SKILL, "utf8"));
+    const hookRe = soakRe(readFileSync(HOOK, "utf8"));
+    expect(skillRe).not.toBeNull();
+    expect(hookRe).not.toBeNull();
+    expect(hookRe).toBe(skillRe);
+  });
+
+  test("fails closed on the condition, fails open on infra errors + override", () => {
+    const hook = readFileSync(HOOK, "utf8");
+    expect(hook).toContain("UNENROLLED");
+    expect(hook).toContain("gate-override: soak-followthrough-enrollment");
+    expect(hook).toContain("SOLEUR_SKIP_SOAK_FOLLOWTHROUGH_GATE");
+    // closed trackers exempt
+    expect(hook).toMatch(/state.*OPEN.*\|\| continue|OPEN.*\]\] \|\| continue/);
+  });
+});
+
+describe("plan Phase 2.9.1 — proactive soak-enrollment scaffold", () => {
+  test("plan/SKILL.md prescribes Follow-Through Enrollment for soak-gated ACs", () => {
+    const plan = readFileSync(PLAN_SKILL, "utf8");
+    expect(plan).toContain("Soak Follow-Through Enrollment");
+    expect(plan).toContain("scripts/followthroughs/");
+    expect(plan).toContain("soleur:followthrough");
   });
 });
