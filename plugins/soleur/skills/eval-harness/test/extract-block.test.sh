@@ -12,21 +12,25 @@ SKILL_DIR="$(cd "$HERE/.." && pwd)"
 REPO_ROOT="$(cd "$SKILL_DIR/../../../.." && pwd)"
 EXTRACT="$SKILL_DIR/scripts/extract-block.cjs"
 GEN="$SKILL_DIR/scripts/gen-skill-prompt.cjs"
+REGISTRY="$SKILL_DIR/gated-skills.json"
 fails=0
 
 pass() { echo "ok   [$1]"; }
 fail() { echo "FAIL [$1]: $2"; fails=$((fails + 1)); }
 
-# --- AC4 round-trip: generated projection == committed projection (per target) ---
-for target in go-routing ticket-triage; do
-  committed="$SKILL_DIR/prompts/$([ "$target" = "go-routing" ] && echo go-skill.txt || echo triage-skill.txt)"
+# --- AC4 round-trip: generated projection == committed projection (per registry target) ---
+# Target loop is derived from gated-skills.json (target + projected_prompt_path) rather than
+# a hardcoded list, so a newly-registered gated classifier is round-trip-covered automatically.
+# projected_prompt_path is repo-root-relative (e.g. plugins/soleur/skills/eval-harness/prompts/go-skill.txt).
+while IFS=$'\t' read -r target projected; do
+  committed="$REPO_ROOT/$projected"
   if diff -u <(node "$GEN" "$target" --stdout) "$committed" >/tmp/eval-gate-roundtrip.diff 2>&1; then
     pass "round-trip $target == committed projection"
   else
     fail "round-trip $target" "generated projection differs from committed $committed (run: node scripts/gen-skill-prompt.cjs $target)"
     cat /tmp/eval-gate-roundtrip.diff
   fi
-done
+done < <(node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).forEach(e=>process.stdout.write(e.target+"\t"+e.projected_prompt_path+"\n"))' "$REGISTRY")
 
 # --- extractBlock returns trimmed text between markers ---
 got=$(node -e '
