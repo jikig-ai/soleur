@@ -45,9 +45,14 @@ import { reportSilentFallback } from "@/server/observability";
 //
 // Injected service-role client (NO `.service-role-allowlist` entry — mirrors
 // `resolve-installation-id-for-workspace.ts`): the credential read is keyed on
-// a SERVER-DERIVED installation id (from the signature-verified webhook body),
-// never request-supplied, and supabase-js has no membership self-join sugar so
-// the join is expressed via the `workspace_members!inner` embed.
+// a SERVER-DERIVED installation id, never request-supplied, and supabase-js has
+// no membership self-join sugar so the join is expressed via the
+// `workspace_members!inner` embed. TWO callers, both server-derived: (1) the
+// non-push webhook route, where the install id comes from the signature-verified
+// webhook body; (2) repo/setup/route.ts via repo-connect-guard.ts, where the
+// install id is resolved from the caller's own reachable set
+// (`resolveOwningInstallationForRepo`) — still never request-supplied, so the
+// "server-derived, never request-supplied" security invariant holds for both.
 
 interface ServiceClient {
   from: (table: string) => unknown;
@@ -128,6 +133,14 @@ export async function resolveSoloFounderForInstallation(
   });
 
   if (soloRows.length === 0) return { kind: "none" };
+  // `>1` backstop. Originally the webhook fail-closed branch; as of
+  // feat-repo-connect-block-offer-join it is also the POST-BLOCK safety net for
+  // the connect-time guard (repo-connect-guard.ts). The guard prevents a second
+  // solo workspace from binding an already-owned (install, repo) at connect time,
+  // so this branch should normally be unreachable; it remains load-bearing for
+  // the rare concurrent double-connect race the application-level check cannot
+  // serialize (degrades to today's WEB-PLATFORM-3M behavior: drop + page, never
+  // a silent cross-tenant misattribution). Do NOT collapse into `none`.
   if (soloRows.length > 1) return { kind: "ambiguous", count: soloRows.length };
   return { kind: "found", founderId: soloRows[0].id };
 }
