@@ -14,6 +14,35 @@ created: 2026-06-29
 
 > Spec lacks valid `lane:` (no `spec.md` for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-29
+**Grounding:** direct reads of `_cron-shared.ts`, `cron-community-monitor.ts`, `cron-monitors.tf`,
+`cron-stale-deferred-scope-outs.ts`, `107_routine_runs.sql`, ADR-033 I8 + runbook H10; 3 research
+agents (repo-research, learnings, spec-flow-analyzer); live `gh`/`grep` citation verification.
+
+### Key Improvements (vs. first draft)
+1. **Premise-validation save (Phase 0.6):** the obvious `in_progress` two-phase fix is
+   **ADR-033-I8-rejected** (and learning-discouraged) — re-scoped to the delivery-guarantee gap I8
+   left (#5087-class trap caught at plan time, not /work).
+2. **H4 added (SpecFlow):** the shared `account` `limit:1` concurrency makes **dispatch/queue
+   delay** a fourth hypothesis the issue didn't name; Phase 0 now pulls dispatch-vs-start latency.
+3. **Latent bug surfaced (SpecFlow Q3):** `postSentryHeartbeat` **never inspects `resp.ok`** today —
+   a 5xx silently reads as success, so H3 is currently invisible; Phase 1 fixes this first.
+4. **Phase 2 corrected to the flag pattern** (not a second post site) + carry `heartbeatOk` (a
+   trailing persistence throw must not false-red an output-present run) + **`DeployInProgressError`
+   exclusion** (G1, fixes the existing first catch too).
+5. **Phase 3 reframed:** margin sizing is **mandatory iff H1/H4** and must cover the retry-chain +
+   shared-slot wall-clock (G3); the late-retry-`ok`-can't-clear-`missed` residual (G2) is recorded
+   in the ADR amendment as the accepted cost of the in_progress rejection.
+
+### New Considerations Discovered
+- The deploy-kill (H2) remedy **already shipped** as ADR-068/#5686 (2026-06-29, after the window) —
+  so PR scope **branches on the Phase 0 verdict**; Phase 1/2 fix the throw/POST classes, not kills.
+- A SIGKILL has **no in-process fix** (no catch runs) — `missed` is honest for a killed run.
+- Precedent-diff (Phase 4.4): the `cron-stale-deferred-scope-outs.ts` flag/skip-on-non-final
+  heartbeat is the canonical retry-aware shape to mirror — cited side-by-side, no novel pattern.
+
 ## Overview
 
 The Inngest cron `cron-community-monitor` records a **single terminal** Sentry check-in
