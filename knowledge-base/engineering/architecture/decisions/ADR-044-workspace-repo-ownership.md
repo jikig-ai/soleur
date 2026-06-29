@@ -1123,7 +1123,8 @@ loudness. Item 1 (producer investigation above) remains soak-gated.
 The push-reconcile readiness gate was "filesystem existence of the workspace dir." That made a
 dir-exists-but-`.git`-broken (or `.git`-absent) workspace a permanent trap: reconcile fired on
 every push but `syncWorkspace` only pulls/resets — it never re-clones. Readiness now gates on
-`isValidGitWorkTree` (PR #5584). A VALID `.git` keeps the existing pull/reset path; an INVALID or
+`isValidGitWorkTree` (the validity primitive landed in PR #5584; this amendment wires it into the
+reconcile readiness gate). A VALID `.git` keeps the existing pull/reset path; an INVALID or
 ABSENT `.git` is re-cloned via `ensureWorkspaceRepoCloned` (clones if absent; removes a
 positively-fingerprinted empty-corrupt `.git`; honest-blocks populated-broken/EACCES/gitdir-FILE,
 never destroying commits). Recovery is push-triggered. This supersedes the
