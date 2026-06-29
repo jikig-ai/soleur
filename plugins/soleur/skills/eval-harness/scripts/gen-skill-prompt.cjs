@@ -63,6 +63,41 @@ const TARGET_CONFIG = {
       ].join("\n");
     },
   },
+  "lane-inference": {
+    enumPath: "enums/lane.json",
+    render(block, tokens) {
+      return [
+        "You are the Soleur brainstorm lane classifier. Classify the feature description into EXACTLY ONE lane using this rule.",
+        "",
+        "Lane inference rule:",
+        block,
+        "",
+        `Respond with ONLY the single lane token (one of: ${tokens.join(", ")}). No explanation, no punctuation, no extra words.`,
+        "",
+        "Feature description: {{input}}",
+        "Lane:",
+        "",
+      ].join("\n");
+    },
+  },
+  "incident-threshold": {
+    enumPath: "enums/incident-threshold.json",
+    render(block, tokens) {
+      return [
+        "You are the Soleur incident brand-survival classifier. Assign a threshold to the incident description using this rubric.",
+        "",
+        "Classification rubric:",
+        block,
+        "",
+        `Respond with ONLY the single threshold value (exactly one of: ${tokens.join(", ")}). No explanation, no extra words.`,
+        "",
+        "Incident:",
+        "{{input}}",
+        "Threshold:",
+        "",
+      ].join("\n");
+    },
+  },
 };
 
 // renderSkillPrompt(target, block, tokens): PURE projection of a block into the
