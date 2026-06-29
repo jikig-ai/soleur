@@ -88,7 +88,7 @@ export async function reprovisionWorkspaceOnDispatch(
     if (!workspacePath) {
       reportSilentFallback(new Error("workspace_path_unresolved"), {
         feature: "cc-dispatcher",
-        op: "reprovision-on-dispatch-await",
+        op: "reprovision-on-dispatch-path-unresolved",
         extra: {
           userId,
           activeWorkspaceId,

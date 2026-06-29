@@ -18,7 +18,7 @@
 // `__setCcRunnerForTests({ hasActiveQuery: () => true, ... })` and module-mock
 // the awaited `reprovisionWorkspaceOnDispatch` (NOT its internal
 // `ensureWorkspaceRepoCloned`). The genuine unmocked `existsSync` `.git`
-// short-circuit (Part A) is covered in `cc-reprovision.test.ts`.
+// short-circuit (Part A) is covered in `cc-reprovision-git-discriminator.test.ts`.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
@@ -229,7 +229,8 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
   // S2 (AC2/AC4 at the dispatch level): warm + reclone returns "ok" fast (the
   // `.git`-present self-short-circuit) → dispatch proceeds. The genuine unmocked
-  // existsSync short-circuit + no-reclone-on-present-.git is in cc-reprovision.test.ts.
+  // existsSync short-circuit + no-reclone-on-present-.git is in
+  // cc-reprovision-git-discriminator.test.ts.
   it("S2: warm + reclone resolves 'ok' (git present short-circuit) → dispatch proceeds", async () => {
     const present = gitPresentDir();
     const stubRunner = makeStubRunner({ hasActiveQuery: true });

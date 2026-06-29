@@ -150,26 +150,6 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("failed");
   });
 
-  // #5715 AC2/AC4 — `.git` PRESENT short-circuit. The hoisted stat runs on the
-  // SAME membership-verified path the clone would target (probe == clone), so a
-  // present `.git` skips the install/repo resolution AND the clone entirely.
-  it("AC2/AC4: `.git` present → early-return 'ok', NO install/repo resolve, NO clone (safety invariant)", async () => {
-    mockExistsSync.mockReturnValue(true);
-
-    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
-
-    // The cheap discriminator ran on the resolved path…
-    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
-    expect(mockExistsSync).toHaveBeenCalledTimes(1);
-    expect((mockExistsSync.mock.calls[0][0] as string)).toContain(WS);
-    // …and short-circuited BEFORE the heavier resolves + the 120s clone. A
-    // present `.git` is NEVER re-cloned/overwritten.
-    expect(mockResolveInstallationId).not.toHaveBeenCalled();
-    expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
-    expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
-    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
-  });
-
   // #5715 AC11 — forced-slow-path observability: a resolver outage that yields
   // no path cannot stat `.git`, so it fails soft to "ok" (no false reclaim
   // message) BUT emits a distinct breadcrumb so the slow-path forcing is
@@ -184,7 +164,7 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
       feature: "cc-dispatcher",
-      op: "reprovision-on-dispatch-await",
+      op: "reprovision-on-dispatch-path-unresolved",
       extra: { reason: "workspace-path-unresolved" },
     });
   });
@@ -205,22 +185,6 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
     expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
     expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
-  });
-
-  // #5715 AC11 — forced-slow-path observability. A resolver outage yielding no
-  // path cannot stat `.git`; fail soft to "ok" BUT emit a distinct breadcrumb so
-  // the slow-path forcing is queryable in Sentry, not silent.
-  it("AC11: unresolved workspace path → distinct breadcrumb (reason=workspace-path-unresolved), 'ok', no clone", async () => {
-    mockFetchUserWorkspacePath.mockResolvedValue("");
-    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
-    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
-    expect(mockExistsSync).not.toHaveBeenCalled();
-    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
-      feature: "cc-dispatcher",
-      op: "reprovision-on-dispatch-await",
-      extra: { reason: "workspace-path-unresolved" },
-    });
   });
 
   it("fail-soft: a resolver error returns 'ok' (NOT 'failed') and mirrors to Sentry", async () => {
