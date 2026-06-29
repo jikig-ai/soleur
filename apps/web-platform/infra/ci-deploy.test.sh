@@ -2377,6 +2377,23 @@ else
   echo "  FAIL: T9 drain default ${T9_DRAIN_DEFAULT}s < max ceiling ${T9_MAX_MIN}min (raise CRON_DRAIN_TIMEOUT)"
 fi
 
+# T-PARITY (#5669 cross-language drift guard): the lease basename is replicated in
+# bash (ci-deploy.sh CRON_DEPLOY_LEASE_FILE default path) AND TypeScript
+# (_cron-shared.ts DEPLOY_LEASE_BASENAME). The host writes the file and the
+# container substrate reads it; a silent divergence reopens the start-race while
+# both sides' own tests stay green. Assert they agree.
+TOTAL=$((TOTAL + 1))
+PARITY_SHARED="$(dirname "$DEPLOY_SCRIPT")/../server/inngest/functions/_cron-shared.ts"
+BASH_LEASE_BASENAME=$(grep -oE 'CRON_DEPLOY_LEASE_FILE:-[^}]+' "$DEPLOY_SCRIPT" | sed -E 's#.*/##')
+TS_LEASE_BASENAME=$(grep -oE 'DEPLOY_LEASE_BASENAME = "[^"]+"' "$PARITY_SHARED" | sed -E 's/.*"([^"]+)"/\1/')
+if [[ -n "$BASH_LEASE_BASENAME" && "$BASH_LEASE_BASENAME" == "$TS_LEASE_BASENAME" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T-PARITY lease basename agrees across bash + TS ('$BASH_LEASE_BASENAME')"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T-PARITY lease basename drift (ci-deploy.sh='$BASH_LEASE_BASENAME' vs _cron-shared.ts='$TS_LEASE_BASENAME')"
+fi
+
 # T1 (AC1): with a cron in flight for N polls then gone, the drain loops until the
 # probe goes false (counter drains to 0), does NOT time out, and clears the lease
 # on success.
