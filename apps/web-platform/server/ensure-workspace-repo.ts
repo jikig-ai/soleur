@@ -38,12 +38,17 @@ export function __setGraftForTests(fn: GraftFn): void {
 
 /**
  * Result of a session-start re-provision attempt (#5340 / #5240 design item #2).
- * Deliberately 2-variant: the only consumer (the cc reconnect honest-message
- * branch) branches solely on `"failed"`. `"ok"` folds every benign exit
- * (not-connected, `.git`-present no-op, skipped-bad-url, cloned) — four success
- * shades nobody reads were cut at plan-review. `"failed"` is ONLY the genuine
- * clone-catch, i.e. the post-recovery-failure signal that gates the honest
- * "workspace reclaimed" message.
+ * Deliberately 2-variant. There are now TWO consumers:
+ *   1. the cc reconnect honest-message branch, which keys SOLELY on `"failed"`
+ *      (its only question is "did recovery fail?"); and
+ *   2. the push-reconcile surface (workspace-reconcile-on-push.ts), which ALSO
+ *      reads the `"ok"` variant — but NOT as a heal proxy: `"ok"` folds every
+ *      benign exit (not-connected, `.git`-present no-op, skipped-bad-url, cloned),
+ *      so the reconcile caller pairs it with a validity RE-PROBE
+ *      (`outcome === "ok" && isValidGitWorkTree(...)`) to distinguish an actual
+ *      re-clone from a benign skip that healed nothing.
+ * `"failed"` is ONLY the genuine clone-catch / honest-block signal. Callers may
+ * key on `"ok"` (with a validity re-probe), not only on `"failed"`.
  */
 export type ReprovisionOutcome = "failed" | "ok";
 

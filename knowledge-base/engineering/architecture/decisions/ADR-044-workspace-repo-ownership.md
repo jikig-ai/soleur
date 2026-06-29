@@ -1117,3 +1117,15 @@ catch up. It emits no Inngest event (ADR-033 I6 preserved) and needs no migratio
 (`trigger` is free-form JSONB). On sync failure the row is not re-synced by arm-1
 (it has left the scan predicate); push + arm-2 `stale-sync-failed` own the failure
 loudness. Item 1 (producer investigation above) remains soak-gated.
+
+## Amendment 2026-06-29 — reconcile readiness gates on worktree VALIDITY + re-clone
+
+The push-reconcile readiness gate was "filesystem existence of the workspace dir." That made a
+dir-exists-but-`.git`-broken (or `.git`-absent) workspace a permanent trap: reconcile fired on
+every push but `syncWorkspace` only pulls/resets — it never re-clones. Readiness now gates on
+`isValidGitWorkTree` (PR #5584). A VALID `.git` keeps the existing pull/reset path; an INVALID or
+ABSENT `.git` is re-cloned via `ensureWorkspaceRepoCloned` (clones if absent; removes a
+positively-fingerprinted empty-corrupt `.git`; honest-blocks populated-broken/EACCES/gitdir-FILE,
+never destroying commits). Recovery is push-triggered. This supersedes the
+"readiness is a filesystem-existence check" note (Amendment 2026-06-17b context). The owner-less /
+duplicate-workspace anomaly that produced the corrupt state is tracked separately in #5591.
