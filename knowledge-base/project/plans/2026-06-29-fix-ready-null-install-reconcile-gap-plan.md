@@ -255,7 +255,7 @@ the owner cannot reach is never resolved, so it can never be bound.
 - AC10: ADR-044 amendment authored (exception-carve + reconciliation); PR body uses `Ref #5675`, records the monitor mis-attribution.
 
 ### Post-merge (operator)
-- AC11: After the next `23 6 * * *` fire, confirm via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --query 'feature:workspace-sync-health'` that reconciled solo workspaces drop out of the scan (the standing `op:ready-null-installation` issue stops gaining occurrences). Read-only API, SSH-free (`hr-no-dashboard-eyeball-pull-data-yourself`).
+- AC11: After the next `23 6 * * *` fire, confirm reconciled solo workspaces drop out of the scan — read the standing `op:ready-null-installation` Sentry issue by its short-id (`doppler run -p soleur -c prd -- scripts/sentry-issue.sh <issue-id>`; the id is surfaced by `/soleur:postmerge` Phase 3.8's Sentry-warning step) and confirm its occurrence count stops climbing. Read-only API, SSH-free (`hr-no-dashboard-eyeball-pull-data-yourself`). (`sentry-issue.sh` reads one issue by positional id — it has no `--query` flag.)
 - AC12: Confirm `reconciled` workspaces now carry a non-NULL `github_installation_id` (read-only prod query, `DATABASE_URL_POOLER`). Close #5675 only after the signal plateaus.
 - AC13: If `needs-reauth`/`transient` count is non-zero after the soak, open/keep the producer-investigation issue (required-on-signal).
 
@@ -287,8 +287,16 @@ logs:
   where: pino -> Better Stack (step-return {reconciled,skipped,transient} at info)
   retention: per existing Better Stack retention
 discoverability_test:
-  command: "doppler run -p soleur -c prd -- scripts/sentry-issue.sh --query 'feature:workspace-sync-health'"
-  expected_output: "the standing ready-null-installation issue stops gaining occurrences as solo workspaces are reconciled; genuinely-unresolvable/team workspaces remain as one visible folded issue"
+  # Point-in-time, no-SSH, no-cred: 401 is the Inngest serve HMAC challenge, which
+  # proves the cron-workspace-sync-health function is registered + serving (its
+  # error path reports to Sentry via the wired observability middleware). The
+  # standing-signal *plateau* is inherently a multi-fire soak, so it lives in the
+  # AC11/AC12 post-deploy observation (follow-through), not a single-shot probe.
+  # (The prior `sentry-issue.sh --query …` command never ran: that script takes a
+  # positional <issue-id> and rejects `--query` with exit 64 — caught by preflight
+  # Check 10, which executes the command instead of only checking field presence.)
+  command: 'curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest'
+  expected_output: "401"
 ```
 
 ## Architecture Decision (ADR/C4)
