@@ -2,8 +2,9 @@
 feature: skill-eval-gate
 date: 2026-06-29
 lane: single-domain
-brand_survival_threshold: single-user incident
+brand_survival_threshold: none
 status: spec
+revised: 2026-06-29 plan-review re-scope — block-keyed proposer-agnostic trigger; threshold downgraded to none. See plan Plan-Review Reconciliation.
 brainstorm: knowledge-base/project/brainstorms/2026-06-29-skill-eval-gate-brainstorm.md
 ---
 
@@ -34,8 +35,10 @@ halves of a verification gate; they are not wired together.
 
 ## Functional Requirements
 
-- FR1: Detect when a `compound` route-learning edit targets a gated skill (config-listed: `soleur:go`
-  routing, `ticket-triage`).
+- FR1: [re-scoped at plan-review] Detect when ANY proposer's edit (heal-skill primary in-session,
+  compound Step 8, or manual/one-shot via the #5703 CI backstop) changes a gated skill's **delimited
+  classifier block** (config-listed: `soleur:go` routing, `ticket-triage`). The skill-arm eval prompt
+  is a mechanical projection of that block (replaces the prior hand-copy fixture-sync model).
 - FR2: Run the relevant `eval-harness` arm against the current skill (baseline) and the proposed
   edit (candidate), using existing promptfoo configs.
 - FR3: Accept iff held-out corpus score does not regress AND the targeted miss now passes; otherwise
