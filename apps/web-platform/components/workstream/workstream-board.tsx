@@ -29,8 +29,6 @@ import {
   type WorkstreamIssue,
   type WorkstreamStatus,
 } from "@/lib/workstream";
-// Column open/closed is driven SOLELY by emptiness in IssueColumn (content ⇒
-// open, empty ⇒ collapsed). The board owns no collapse state and no persistence.
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
 import { GoldButton } from "@/components/ui/gold-button";
@@ -41,6 +39,26 @@ import { IssueDetailSheet } from "./issue-detail-sheet";
 import { NewIssueDialog } from "./new-issue-dialog";
 
 type IssuesResponse = { issues: WorkstreamIssue[] };
+
+// v2 key: the v1 key ("workstream:collapsed-columns") stored a now-defunct
+// semantics where columns could be force-collapsed irrespective of the
+// content-open-by-default rule; starting fresh avoids resurrecting any stale
+// per-column collapse from that era. Empty columns are never written here — only
+// the user's explicit collapse of a CONTENT column is persisted.
+const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns-v2";
+
+function readCollapsedColumns(): Set<WorkstreamStatus> {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed as WorkstreamStatus[]);
+  } catch {
+    // private mode / quota / malformed — degrade to "nothing collapsed".
+    return new Set();
+  }
+}
 
 export function WorkstreamBoard() {
   const pathname = usePathname();
@@ -55,6 +73,16 @@ export function WorkstreamBoard() {
   const [activeId, setActiveId] = useState<string | null>(() =>
     searchParams.get("issue"),
   );
+
+  // Per-column collapse choice (content columns only), persisted in localStorage.
+  // Content is OPEN by default — a status is in this set ONLY if the user
+  // explicitly collapsed it. SSR-safe: read in an effect, never during render.
+  const [collapsed, setCollapsed] = useState<Set<WorkstreamStatus>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    setCollapsed(readCollapsedColumns());
+  }, []);
 
   // Reconcile the drawer with the URL on Back/Forward (and deep-link history).
   useEffect(() => {
@@ -151,6 +179,27 @@ export function WorkstreamBoard() {
       /* history unavailable — local state still drives the drawer */
     }
   }, [pathname]);
+
+  // Toggle a content column's collapse choice and persist it. Empty columns are
+  // collapsed by IssueColumn regardless and never reach this handler (they render
+  // no toggle), so the persisted set only ever holds user-collapsed CONTENT
+  // columns.
+  const toggleCollapse = useCallback((status: WorkstreamStatus) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      try {
+        window.localStorage.setItem(
+          COLLAPSED_STORAGE_KEY,
+          JSON.stringify([...next]),
+        );
+      } catch {
+        /* localStorage unavailable — in-memory toggle still works this session */
+      }
+      return next;
+    });
+  }, []);
 
   // Faceted filter options derive from the FULL loaded set (stable, no thrash).
   const filterOptions = useMemo(
@@ -260,6 +309,8 @@ export function WorkstreamBoard() {
               column={column}
               issues={filtered.filter((i) => i.status === column.status)}
               onOpen={openIssue}
+              collapsed={collapsed.has(column.status)}
+              onToggleCollapse={toggleCollapse}
             />
           ))}
         </div>
