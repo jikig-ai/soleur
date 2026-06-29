@@ -997,7 +997,7 @@ done
 
 ### Soak-Gated Follow-Through Enrollment Gate (mandatory)
 
-Blocks PR-ready when the PR (or its linked plan/spec) declares a **post-deploy soak / time-gated close criterion** for a tracker issue, but that tracker is NOT enrolled in the follow-through sweeper (`follow-through` label + a valid `<!-- soleur:followthrough script=... earliest=... -->` directive whose `script=` exists under `scripts/followthroughs/`). Without enrollment the soak relies on human memory to revisit — the exact rot the sweeper exists to prevent (`knowledge-base/engineering/operations/runbooks/followthrough-convention.md`).
+Blocks PR-ready when the PR (or its linked plan/spec) declares a **post-deploy soak / time-gated close criterion** for a tracker issue, but that tracker is NOT enrolled in the follow-through sweeper (`follow-through` label + a valid `<!-- soleur:followthrough script=... earliest=... -->` directive whose `script=` exists under [scripts/followthroughs/](../../../../scripts/followthroughs/)). Without enrollment the soak relies on human memory to revisit — the exact rot the sweeper exists to prevent (see [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md)).
 
 This is the soak-class counterpart to Phase 7 Step 3.5's `⏳`-marked test-plan scan: Step 3.5 fires only on explicit `⏳` items, so a soak declared in PR/plan **prose** ("stays at 0 for 7 days post-deploy", "adopting → accepted after the AC8 soak") slips past it. This gate detects the prose form and requires enrollment BEFORE merge.
 
@@ -1052,7 +1052,7 @@ done
 
 **If triggered:** Halt and present the structured 3-option prompt. The operator chooses one per unenrolled tracker:
 
-1. **Enroll now.** Scaffold a verification script from [`references/followthrough-stub-template.sh`](references/followthrough-stub-template.sh) into `scripts/followthroughs/<short-name>-<issue>.sh` (fill the soak probe — for a Sentry-rate soak, mirror `scripts/followthroughs/reconcile-ff-only-sentry-4977.sh`: exit 0 when the rate is 0, exit 2 on API failure), add the `follow-through` label + the `<!-- soleur:followthrough script=... earliest=<deploy+Nd> secrets=... -->` directive to the tracker body, land the script in this PR (or a sibling chore PR), then re-run detection. Wire any new secret into `.github/workflows/scheduled-followthrough-sweeper.yml`.
+1. **Enroll now.** Scaffold a verification script from [followthrough-stub-template.sh](references/followthrough-stub-template.sh) into scripts/followthroughs/&lt;short-name&gt;-&lt;issue&gt;.sh (fill the soak probe — for a Sentry-rate soak, mirror [reconcile-ff-only-sentry-4977.sh](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh): exit 0 when the rate is 0, exit 2 on API failure), add the `follow-through` label + the `<!-- soleur:followthrough script=... earliest=<deploy+Nd> secrets=... -->` directive to the tracker body, land the script in this PR (or a sibling chore PR), then re-run detection. Wire any new secret into `.github/workflows/scheduled-followthrough-sweeper.yml`.
 2. **Cite existing enrollment.** If the tracker is already enrolled via a sibling PR/issue, point at it; re-run detection.
 3. **Override with operator-attestation** (rare — the close criterion is genuinely not mechanically verifiable, e.g. a qualitative judgment). Append `<!-- gate-override: soak-followthrough-enrollment -->` + a one-sentence justification to the PR body, then proceed.
 
