@@ -18,15 +18,23 @@ pass() { echo "ok   [$1]"; }
 fail() { echo "FAIL [$1]: $2"; fails=$((fails + 1)); }
 
 # --- AC4 round-trip: generated projection == committed projection (per target) ---
-for target in go-routing ticket-triage; do
-  committed="$SKILL_DIR/prompts/$([ "$target" = "go-routing" ] && echo go-skill.txt || echo triage-skill.txt)"
+# Data-driven from gated-skills.json — every gated target (current AND future) gets
+# round-trip coverage with no per-target edit here. `projected_prompt_path` is the
+# single source of truth for the committed filename (so the prompt-name convention is
+# irrelevant to this test).
+while IFS=$'\t' read -r target rel; do
+  [ -z "$target" ] && continue
+  committed="$REPO_ROOT/$rel"
   if diff -u <(node "$GEN" "$target" --stdout) "$committed" >/tmp/eval-gate-roundtrip.diff 2>&1; then
     pass "round-trip $target == committed projection"
   else
     fail "round-trip $target" "generated projection differs from committed $committed (run: node scripts/gen-skill-prompt.cjs $target)"
     cat /tmp/eval-gate-roundtrip.diff
   fi
-done
+done < <(node -e '
+  const reg = require(process.argv[1]);
+  for (const e of reg) process.stdout.write(e.target + "\t" + e.projected_prompt_path + "\n");
+' "$SKILL_DIR/gated-skills.json")
 
 # --- extractBlock returns trimmed text between markers ---
 got=$(node -e '

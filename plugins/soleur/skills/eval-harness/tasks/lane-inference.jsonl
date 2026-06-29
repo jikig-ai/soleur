@@ -1,0 +1,7 @@
+{"vars": {"input": "Bump the lockfile and run a format-only pass across the repo; no logic changes.", "golden_label": "procedural"}}
+{"vars": {"input": "Scaffold a new empty docs page directory and do a rename-only cleanup of one file.", "golden_label": "procedural"}}
+{"vars": {"input": "Adjust the pricing tier labels shown on the public marketing site.", "golden_label": "single-domain"}}
+{"vars": {"input": "Refine the subscription cancellation email copy for clarity.", "golden_label": "single-domain"}}
+{"vars": {"input": "Add an audit log capturing every auth event that touches regulated user data.", "golden_label": "cross-domain"}}
+{"vars": {"input": "Migrate billing records to a new payment processor via a schema migration.", "golden_label": "cross-domain"}}
+{"vars": {"input": "Run a security audit, then a lint-fix formatting pass across the infra configs.", "golden_label": "cross-domain"}}

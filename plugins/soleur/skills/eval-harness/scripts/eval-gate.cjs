@@ -38,6 +38,8 @@ const MODELS_FILE = path.join(SKILL_DIR, "models.generated.json");
 const TARGET_RESOURCES = {
   "go-routing": { tasks: "tasks/go-routing.jsonl", enumPath: "enums/go-routes.json" },
   "ticket-triage": { tasks: "tasks/ticket-triage.jsonl", enumPath: "enums/triage-levels.json" },
+  "lane-inference": { tasks: "tasks/lane-inference.jsonl", enumPath: "enums/lane.json" },
+  "incident-threshold": { tasks: "tasks/incident-threshold.jsonl", enumPath: "enums/incident-threshold.json" },
 };
 
 function die(message, payload) {
@@ -299,10 +301,18 @@ function main() {
   process.stdout.write(JSON.stringify(verdict) + "\n");
 }
 
+// Export the per-target resource map so the registry-coverage consistency test can
+// assert every gated target is wired here (a missing entry ships the gate DORMANT —
+// --check reports gated:true but --target/--dry-run die fail-closed). Requiring this
+// module must NOT run the CLI, hence the require.main guard below.
+module.exports = { TARGET_RESOURCES };
+
 // Fix 1: any uncaught throw (registry parse, missing corpus file, mkdtemp, render)
 // must still emit the {accept:false} stdout contract via die(), not just exit non-zero.
-try {
-  main();
-} catch (e) {
-  die(e && e.message ? e.message : String(e));
+if (require.main === module) {
+  try {
+    main();
+  } catch (e) {
+    die(e && e.message ? e.message : String(e));
+  }
 }
