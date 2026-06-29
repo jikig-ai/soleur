@@ -22,7 +22,7 @@ const {
   mockReportSilentFallback,
   mockGetFreshTenantClient,
   mockResolveActiveWorkspace,
-  mockExistsSync,
+  mockIsValidGitWorkTree,
 } = vi.hoisted(() => ({
   mockFetchUserWorkspacePath: vi.fn(),
   mockResolveInstallationId: vi.fn(),
@@ -32,7 +32,7 @@ const {
   mockReportSilentFallback: vi.fn(),
   mockGetFreshTenantClient: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
-  mockExistsSync: vi.fn(),
+  mockIsValidGitWorkTree: vi.fn(),
 }));
 
 vi.mock("@/server/kb-document-resolver", () => ({
@@ -63,14 +63,14 @@ vi.mock("@/lib/supabase/tenant", () => ({
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: mockResolveActiveWorkspace,
 }));
-// #5715 — the `.git` short-circuit hoisted INTO reprovisionWorkspaceOnDispatch
-// stats the resolved workspace path before the install/repo resolves + clone.
-// Mock `existsSync` so the early-return discriminator is deterministic (default
-// false → `.git` ABSENT → proceed to clone, preserving the pre-#5715 tests).
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, existsSync: mockExistsSync };
-});
+// #5715 / ADR-044 2026-06-19 — the `.git` VALIDITY short-circuit hoisted INTO
+// reprovisionWorkspaceOnDispatch probes the resolved workspace path before the
+// install/repo resolves + clone. Mock `isValidGitWorkTree` so the early-return
+// discriminator is deterministic (default false → `.git` ABSENT-or-CORRUPT →
+// proceed to the validity-aware clone, preserving the pre-#5715 tests).
+vi.mock("@/server/git-worktree-validity", () => ({
+  isValidGitWorkTree: mockIsValidGitWorkTree,
+}));
 
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
 // The breadcrumb module is NOT mocked — it runs for real and emits through the
@@ -100,9 +100,9 @@ beforeEach(() => {
     async ({ installationId }: { installationId: number | null }) => installationId,
   );
   mockEnsureWorkspaceRepoCloned.mockResolvedValue("ok");
-  // Default: `.git` ABSENT (reclaimed workspace) so the recovery proceeds to the
-  // clone — the pre-#5715 behavior these suites assert.
-  mockExistsSync.mockReturnValue(false);
+  // Default: `.git` ABSENT-or-INVALID (reclaimed/corrupt workspace) so the
+  // recovery proceeds to the clone — the pre-#5715 behavior these suites assert.
+  mockIsValidGitWorkTree.mockReturnValue(false);
 });
 
 describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () => {
@@ -151,15 +151,15 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
   });
 
   // #5715 AC11 — forced-slow-path observability: a resolver outage that yields
-  // no path cannot stat `.git`, so it fails soft to "ok" (no false reclaim
-  // message) BUT emits a distinct breadcrumb so the slow-path forcing is
+  // no path cannot probe `.git` validity, so it fails soft to "ok" (no false
+  // reclaim message) BUT emits a distinct breadcrumb so the slow-path forcing is
   // queryable in Sentry, not silent.
   it("AC11: workspace path unresolved → fail-soft 'ok' + distinct 'workspace-path-unresolved' breadcrumb, NO clone", async () => {
     mockFetchUserWorkspacePath.mockResolvedValue("");
 
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
 
-    expect(mockExistsSync).not.toHaveBeenCalled();
+    expect(mockIsValidGitWorkTree).not.toHaveBeenCalled();
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
@@ -169,22 +169,41 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
     });
   });
 
-  // #5715 AC2/AC4 — `.git` PRESENT short-circuit hoisted before the heavy
-  // install/repo resolves + clone. One membership-verified resolve feeds the
-  // stat; a present `.git` is NEVER re-cloned (safety invariant).
-  it("AC2/AC4: `.git` present → early-return 'ok', NO install/repo resolve, NO clone", async () => {
-    mockExistsSync.mockReturnValue(true);
+  // #5715 / ADR-044 AC2/AC4 — a VALID `.git` work tree short-circuits before the
+  // heavy install/repo resolves + clone. One membership-verified resolve feeds the
+  // validity probe; a VALID `.git` is NEVER re-cloned (safety invariant).
+  it("AC2/AC4: `.git` VALID → early-return 'ok', NO install/repo resolve, NO clone", async () => {
+    mockIsValidGitWorkTree.mockReturnValue(true);
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
-    // The workspace path WAS resolved (it is what we stat) ...
+    // The workspace path WAS resolved (it is what we probe) ...
     expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
-    expect(mockExistsSync).toHaveBeenCalledTimes(1);
-    expect(mockExistsSync.mock.calls[0][0]).toContain(WS);
-    expect(mockExistsSync.mock.calls[0][0]).toContain(".git");
+    expect(mockIsValidGitWorkTree).toHaveBeenCalledTimes(1);
+    expect(mockIsValidGitWorkTree).toHaveBeenCalledWith(WS);
     // ... but the heavier resolves + the clone are skipped entirely.
     expect(mockResolveInstallationId).not.toHaveBeenCalled();
     expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
     expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // ADR-044 2026-06-19 — validity-not-presence: a CORRUPT `.git` (present on disk
+  // but not a valid work tree) must NOT short-circuit "ok"; it falls through to
+  // the validity-aware clone instead of stranding the agent in a corrupt repo.
+  it("corrupt `.git` (present but invalid) → does NOT short-circuit → install/repo resolve + clone attempted", async () => {
+    mockIsValidGitWorkTree.mockReturnValue(false);
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+    expect(mockIsValidGitWorkTree).toHaveBeenCalledTimes(1);
+    expect(mockIsValidGitWorkTree).toHaveBeenCalledWith(WS);
+    // Invalid → the recovery proceeds to resolve inputs and clone.
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, ACTIVE);
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, ACTIVE);
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledTimes(1);
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith({
+      userId: USER,
+      workspacePath: WS,
+      installationId: INSTALL,
+      repoUrl: REPO,
+    });
   });
 
   it("fail-soft: a resolver error returns 'ok' (NOT 'failed') and mirrors to Sentry", async () => {

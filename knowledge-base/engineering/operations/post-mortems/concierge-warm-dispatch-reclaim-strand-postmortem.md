@@ -25,6 +25,10 @@ art_33_deadline: "n/a"
 
 The operator's Concierge `/soleur:go` flow repeatedly failed: the agent's bubblewrap sandbox `chdir`'d into a `/workspaces/<id>` with no git checkout, `git status` returned `fatal: not a git repository`, and `go.md` Step 0.0 honest-stopped with "your workspace isn't ready." Multiple prior ADR-044 self-heal/resolver PRs (#5409, #5435, #5546, #5580) targeted the same symptom and it persisted — because they hardened the COLD dispatch path, while the operator's failures rode the WARM path.
 
+## Correction (2026-06-29, added in PR #5584)
+
+The root cause stated below (warm-dispatch fire-and-forget re-clone of an **absent** `.git`) is a real, fixed latent bug — but it was **not** the operator's specific recurring failure. Live evidence (dispatch **proceeded** into the workspace with `repo_status='ready'` and NO reclaim message) shows `existsSync('.git')` was **true**: a **present-but-invalid** `.git`. That is the presence-not-validity gap fixed by PR #5584, whose PIR (`concierge-corrupt-worktree-validity-strand-postmortem.md`) is the accurate root-cause record for the operator's incident. This PR (#5716) and #5584 are two fixes for the same operator-strand class via two distinct mechanisms (absent-`.git` race vs corrupt-`.git` presence-check).
+
 ## Status
 
 resolved

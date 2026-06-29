@@ -6,6 +6,11 @@ import { randomUUID } from "node:crypto";
 import { gitWithInstallationAuth } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
 import { createChildLogger } from "@/server/logger";
+import {
+  isValidGitWorkTree,
+  isEmptyCorruptGitDir,
+} from "@/server/git-worktree-validity";
+import { withWorkspacePermissionLock } from "@/server/workspace-permission-lock";
 
 const log = createChildLogger("ensure-workspace-repo");
 
@@ -137,9 +142,54 @@ export async function ensureWorkspaceRepoCloned(
   const { userId, workspacePath, installationId, repoUrl } = args;
   if (installationId === null || !repoUrl) return "ok"; // not connected → nothing to ensure
 
-  // NEVER touch an existing repo (Start-Fresh, already-cloned, or a different
-  // origin the user is intentionally using). Only heal the no-`.git` symptom.
-  if (existsSync(join(workspacePath, ".git"))) return "ok";
+  // NEVER touch a VALID repo (Start-Fresh, already-cloned, a `.git`-FILE linked
+  // worktree, or a different origin the user is intentionally using). Validity —
+  // not mere presence — is the no-op gate (2026-06-19): a `.git` that exists but
+  // is corrupt must NOT mask the heal the way bare `existsSync` did.
+  if (isValidGitWorkTree(workspacePath)) return "ok";
+
+  // `.git` EXISTS but is INVALID. The destructive removal is authorized ONLY by
+  // the POSITIVE empty-corrupt fingerprint (`.git` dir + HEAD ENOENT + objects
+  // ENOENT — no objects = no commits to lose). A populated-but-broken `.git`, an
+  // EACCES/EIO blip, or a `.git` FILE does NOT match → honest-block ("failed"),
+  // NEVER rm (deepen-plan F2: never destroy on the negation of validity).
+  if (existsSync(join(workspacePath, ".git"))) {
+    if (!isEmptyCorruptGitDir(workspacePath)) {
+      reportSilentFallback(
+        new Error("corrupt .git not safely removable"),
+        {
+          feature: "ensure-workspace-repo",
+          op: "corrupt-worktree-block",
+          extra: { userId, hasInstallation: true },
+          message:
+            "workspace .git exists but is invalid and does NOT match the empty-corrupt fingerprint (populated-broken / EACCES / gitdir-file); honest-blocking, NOT removing",
+        },
+      );
+      return "failed";
+    }
+    // Empty-corrupt fingerprint matched → remove `.git` UNDER THE WORKSPACE LOCK
+    // (F3: the rm is a second `.git` writer the graft sentinel never guarded; a
+    // racer must not delete a winner's freshly-valid `.git`). Re-check validity
+    // inside the lock so the loser no-ops on the winner's result.
+    try {
+      await withWorkspacePermissionLock(workspacePath, async () => {
+        if (isValidGitWorkTree(workspacePath)) return; // racer already grafted
+        if (isEmptyCorruptGitDir(workspacePath)) {
+          await rm(join(workspacePath, ".git"), { recursive: true, force: true });
+        }
+      });
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "ensure-workspace-repo",
+        op: "corrupt-worktree-rm",
+        extra: { userId, hasInstallation: true },
+        message: "failed to remove empty-corrupt .git under lock; honest-blocking",
+      });
+      return "failed";
+    }
+    // `.git` removed (or a racer already landed a valid one) → fall through to
+    // the clone below, which re-checks the (now-absent / now-valid) sentinel.
+  }
 
   if (!GITHUB_HTTPS_REPO_RE.test(repoUrl)) {
     reportSilentFallback(new Error("repo_url failed github-https allowlist"), {
@@ -232,11 +282,13 @@ export async function realGraftRepoClone(
     }
     // Re-check the sentinel immediately before the move. A concurrent attempt
     // (another cold dispatch that also saw no `.git`) may have grafted first
-    // while this one was cloning. `.git` is the all-or-nothing success sentinel,
-    // so if it now exists we lost the race — leave the winner's clone intact and
-    // skip, rather than `rename`-ing onto a populated `.git` (which throws
-    // ENOTEMPTY and would mirror a spurious failure to Sentry).
-    if (existsSync(join(workspacePath, ".git"))) return;
+    // while this one was cloning. A VALID `.git` (2026-06-19 — not mere
+    // presence) is the all-or-nothing success sentinel, so if a valid one now
+    // exists we lost the race — leave the winner's clone intact and skip, rather
+    // than `rename`-ing onto a populated `.git` (which throws ENOTEMPTY and would
+    // mirror a spurious failure to Sentry). A stale empty-corrupt `.git` does NOT
+    // satisfy this, so the winner still grafts over it.
+    if (isValidGitWorkTree(workspacePath)) return;
     // .git LAST — the success sentinel. A failure before this leaves the
     // workspace `.git`-less so the next cold dispatch retries cleanly.
     await rename(join(tmp, ".git"), join(workspacePath, ".git")); // same fs

@@ -11,14 +11,37 @@ const {
   mockGraftRepoClone,
   mockReportSilentFallback,
   mockLogInfo,
+  mockIsValid,
+  mockIsEmptyCorrupt,
+  mockRm,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
   mockGraftRepoClone: vi.fn(),
   mockReportSilentFallback: vi.fn(),
   mockLogInfo: vi.fn(),
+  mockIsValid: vi.fn(),
+  mockIsEmptyCorrupt: vi.fn(),
+  mockRm: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({ existsSync: mockExistsSync }));
+// `rm` (corrupt-`.git` removal) is mocked so the validity-aware early-return is
+// driven without touching disk; the real fingerprint/rm safety is covered by
+// test/server/git-worktree-validity.test.ts.
+vi.mock("node:fs/promises", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return { ...actual, rm: mockRm };
+});
+// 2026-06-19 — validity probes mocked so the orchestration decision (valid →
+// no-op, empty-corrupt → rm+clone, populated-broken → honest-block) is tested
+// independently of the fs-level fingerprint logic.
+vi.mock("@/server/git-worktree-validity", () => ({
+  isValidGitWorkTree: mockIsValid,
+  isEmptyCorruptGitDir: mockIsEmptyCorrupt,
+}));
+vi.mock("@/server/workspace-permission-lock", () => ({
+  withWorkspacePermissionLock: (_p: string, fn: () => unknown) => fn(),
+}));
 vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: vi.fn() }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
@@ -39,6 +62,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   __setGraftForTests(mockGraftRepoClone);
   mockGraftRepoClone.mockResolvedValue(undefined);
+  // Default: a `.git` (when existsSync says present) is neither valid nor the
+  // empty-corrupt fingerprint; absent-`.git` tests set existsSync=false so these
+  // are not consulted. Per-test overrides set the validity shape under test.
+  mockIsValid.mockReturnValue(false);
+  mockIsEmptyCorrupt.mockReturnValue(false);
+  mockRm.mockResolvedValue(undefined);
 });
 
 describe("ensureWorkspaceRepoCloned", () => {
@@ -59,10 +88,37 @@ describe("ensureWorkspaceRepoCloned", () => {
     expect(out).toBe("ok");
   });
 
-  it("ANY existing .git → returns 'ok' (benign no-op)", async () => {
+  it("VALID existing .git → returns 'ok' (benign no-op; never touched)", async () => {
     mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(true);
     const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
     expect(out).toBe("ok");
+    expect(mockGraftRepoClone).not.toHaveBeenCalled();
+    expect(mockRm).not.toHaveBeenCalled();
+  });
+
+  it("empty-corrupt .git (fingerprint match) → rm under lock + re-clone → 'ok'", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(false); // invalid
+    mockIsEmptyCorrupt.mockReturnValue(true); // the ONLY rm-authorized shape
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(mockRm).toHaveBeenCalledTimes(1); // corrupt .git removed
+    expect(mockGraftRepoClone).toHaveBeenCalledTimes(1); // then re-cloned
+    expect(out).toBe("ok");
+  });
+
+  it("populated-but-broken .git (invalid, NOT empty-corrupt) → honest-block 'failed', NEVER rm/clone (F2)", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(false); // invalid
+    mockIsEmptyCorrupt.mockReturnValue(false); // does NOT match the rm fingerprint
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(out).toBe("failed");
+    expect(mockRm).not.toHaveBeenCalled(); // never destroy a populated/EACCES/gitdir-file .git
+    expect(mockGraftRepoClone).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "ensure-workspace-repo", op: "corrupt-worktree-block" }),
+    );
   });
 
   it("malformed repo_url → returns 'ok' (benign skip, not a recovery failure)", async () => {
@@ -113,10 +169,12 @@ describe("ensureWorkspaceRepoCloned", () => {
     expect(firstArg).not.toHaveProperty("userId");
   });
 
-  it("ANY existing .git → no-op (never destroys an existing repo: Start-Fresh, already-cloned, or mismatched origin)", async () => {
+  it("VALID existing .git → no-op (never destroys a real repo: Start-Fresh, already-cloned, gitdir-file, or mismatched origin)", async () => {
     mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(true);
     await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
     expect(mockGraftRepoClone).not.toHaveBeenCalled();
+    expect(mockRm).not.toHaveBeenCalled();
   });
 
   it("non-github / malformed repo_url → skip + Sentry, no clone (argv/format guard)", async () => {

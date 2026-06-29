@@ -45,7 +45,16 @@ export type RepoResolverDivergenceOp =
   // this op fires when that resolve RESETS a non-member claim to solo (formerly
   // zero-Sentry on the reprovision path). Distinct from the cold-factory
   // `non-member-claim-reset` so the two sites are queryable independently.
-  | "reprovision-non-member-claim-reset";
+  | "reprovision-non-member-claim-reset"
+  // On-disk corruption divergence (2026-06-19): a cold dispatch into a
+  // genuinely-connected workspace (install NON-null, distinct from the op above)
+  // whose `<ws>/.git` EXISTS but is not a valid work tree (partial/interrupted
+  // clone, failed atomic-rename). The presence-only readiness gate used to
+  // fast-path this into a repo-less spawn (silent). The corrupt-worktree graft
+  // now removes a positively-fingerprinted empty-corrupt `.git`, re-clones, and
+  // emits THIS op. `extra.recovered` distinguishes a self-healed re-clone
+  // (true) from an unrecovered honest-block (false).
+  | "corrupt-worktree-at-dispatch";
 
 /**
  * Emit a fingerprint-deduped `repo_resolver_divergence` breadcrumb. `userId` is
@@ -58,8 +67,18 @@ export function reportRepoResolverDivergence(args: {
   op: RepoResolverDivergenceOp;
   activeClaimWorkspaceId: string;
   resolvedWorkspaceId: string;
+  /**
+   * Corrupt-worktree op only: true when the corrupt `.git` was removed and
+   * re-cloned successfully (self-healed), false when the re-clone failed and the
+   * dispatch honest-blocks. Omitted for the other ops. Non-credential, safe in
+   * `extra`. Folded into the dedupe fingerprint so a recovered breadcrumb and a
+   * later unrecovered page on the same workspace are not collapsed.
+   */
+  recovered?: boolean;
 }): void {
-  const fingerprint = `${args.op}:${args.userId}:${args.activeClaimWorkspaceId}`;
+  const recoveredKey =
+    args.recovered === undefined ? "" : `:${args.recovered ? "r" : "u"}`;
+  const fingerprint = `${args.op}:${args.userId}:${args.activeClaimWorkspaceId}${recoveredKey}`;
   if (seenFingerprints.has(fingerprint)) return;
   seenFingerprints.add(fingerprint);
 
@@ -70,6 +89,7 @@ export function reportRepoResolverDivergence(args: {
       userId: args.userId, // → userIdHash at the emit boundary (never raw)
       activeClaimWorkspaceId: args.activeClaimWorkspaceId,
       resolvedWorkspaceId: args.resolvedWorkspaceId,
+      ...(args.recovered === undefined ? {} : { recovered: args.recovered }),
     },
   });
 }

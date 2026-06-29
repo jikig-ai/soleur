@@ -1,22 +1,27 @@
-// #5715 — GENUINE unmocked `existsSync` `.git` discriminator (honors plan
-// AC2/AC4 intent).
+// #5715 / ADR-044 2026-06-19 — GENUINE unmocked `.git` VALIDITY discriminator
+// (honors plan AC2/AC4 intent).
 //
 // The sibling `cc-reprovision.test.ts` mocks `node:fs` wholesale (vitest hoists
-// `vi.mock("node:fs", …)` to file top), so its `mockExistsSync` is a stand-in —
-// nothing in that file exercises the REAL
-// `existsSync(join(workspacePath, ".git"))` short-circuit. This file mocks ONLY
-// the resolver inputs that feed `reprovisionWorkspaceOnDispatch` and points them
-// at a REAL tmpdir, leaving `node:fs` REAL so the production `existsSync` stat
-// is the actual discriminator under test:
-//   (a) tmpdir WITH `<dir>/.git/`  → real `existsSync` true  → early-return "ok",
-//                                     `ensureWorkspaceRepoCloned` NOT called.
-//   (b) tmpdir WITHOUT `.git`      → real `existsSync` false → fall through to
+// `vi.mock("node:fs", …)` to file top), so its mock is a stand-in — nothing in
+// that file exercises the REAL `isValidGitWorkTree(workspacePath)` short-circuit.
+// This file mocks ONLY the resolver inputs that feed
+// `reprovisionWorkspaceOnDispatch` and points them at a REAL tmpdir, leaving
+// `node:fs` REAL so the production validity probe is the actual discriminator
+// under test (validity-not-presence):
+//   (a) tmpdir WITH a VALID `<dir>/.git/` (HEAD + objects/) → valid → early-return
+//                                     "ok", `ensureWorkspaceRepoCloned` NOT called.
+//   (b) tmpdir WITHOUT `.git`      → not valid → fall through to
 //                                     `ensureWorkspaceRepoCloned`.
+//   (c) tmpdir WITH a CORRUPT `.git/` (bare dir, no HEAD/objects) → not valid →
+//                                     fall through to `ensureWorkspaceRepoCloned`
+//                                     (the warm-path fix: a corrupt `.git` no
+//                                     longer short-circuits "ok").
 // Non-vacuity: if the short-circuit were removed, case (a) would call
-// `ensureWorkspaceRepoCloned` and the assertion would fail.
+// `ensureWorkspaceRepoCloned` and the assertion would fail; if validity collapsed
+// back to mere presence, case (c) would short-circuit and ITS assertion fails.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -76,11 +81,24 @@ const INSTALL = 4242;
 
 const createdDirs: string[] = [];
 
-/** A real tmpdir under os.tmpdir(); optionally with a real `.git/` subdir. */
-function realWorkspace({ withGit }: { withGit: boolean }): string {
+/**
+ * A real tmpdir under os.tmpdir(); `git` controls the on-disk `.git` shape:
+ *   - "valid"   → `.git/` dir with BOTH `HEAD` and `objects/` (isValidGitWorkTree
+ *                 returns true — an ordinary repo / Start-Fresh `git init`).
+ *   - "corrupt" → bare `mkdir .git` (no HEAD/objects → isValidGitWorkTree false).
+ *   - "none"    → no `.git` at all.
+ */
+function realWorkspace({ git }: { git: "valid" | "corrupt" | "none" }): string {
   const dir = mkdtempSync(join(tmpdir(), "cc-reprovision-discriminator-"));
   createdDirs.push(dir);
-  if (withGit) mkdirSync(join(dir, ".git"));
+  if (git !== "none") {
+    const gitDir = join(dir, ".git");
+    mkdirSync(gitDir);
+    if (git === "valid") {
+      writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+      mkdirSync(join(gitDir, "objects"));
+    }
+  }
   return dir;
 }
 
@@ -102,14 +120,14 @@ afterEach(() => {
   }
 });
 
-describe("reprovisionWorkspaceOnDispatch — genuine unmocked `.git` discriminator (#5715)", () => {
-  it("(a) real tmpdir WITH `.git/` → real existsSync short-circuits to 'ok', NO clone", async () => {
-    const ws = realWorkspace({ withGit: true });
+describe("reprovisionWorkspaceOnDispatch — genuine unmocked `.git` validity discriminator (#5715 / ADR-044)", () => {
+  it("(a) real tmpdir WITH a VALID `.git/` (HEAD+objects) → isValidGitWorkTree short-circuits to 'ok', NO clone", async () => {
+    const ws = realWorkspace({ git: "valid" });
     mockFetchUserWorkspacePath.mockResolvedValue(ws);
 
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
 
-    // The REAL `existsSync(join(ws, ".git"))` fired and short-circuited the heavy
+    // The REAL `isValidGitWorkTree(ws)` fired and short-circuited the heavy
     // resolves + the clone. Non-vacuous: removing the short-circuit would call
     // ensureWorkspaceRepoCloned here.
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
@@ -118,14 +136,32 @@ describe("reprovisionWorkspaceOnDispatch — genuine unmocked `.git` discriminat
     expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
   });
 
-  it("(b) real tmpdir WITHOUT `.git` → real existsSync false → falls through to clone", async () => {
-    const ws = realWorkspace({ withGit: false });
+  it("(b) real tmpdir WITHOUT `.git` → not valid → falls through to clone", async () => {
+    const ws = realWorkspace({ git: "none" });
     mockFetchUserWorkspacePath.mockResolvedValue(ws);
 
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
 
-    // No `.git` on disk → the real stat returns false → the recovery proceeds to
-    // the clone with the resolved/promoted inputs.
+    // No `.git` on disk → the real validity probe returns false → the recovery
+    // proceeds to the clone with the resolved/promoted inputs.
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledTimes(1);
+    expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith({
+      userId: USER,
+      workspacePath: ws,
+      installationId: INSTALL,
+      repoUrl: REPO,
+    });
+  });
+
+  it("(c) real tmpdir WITH a CORRUPT `.git/` (no HEAD/objects) → not valid → falls through to clone (warm-path fix)", async () => {
+    const ws = realWorkspace({ git: "corrupt" });
+    mockFetchUserWorkspacePath.mockResolvedValue(ws);
+
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+
+    // A corrupt `.git` is PRESENT but NOT a valid work tree. The old presence
+    // short-circuit would have returned "ok" and stranded the agent in a corrupt
+    // repo; validity-not-presence routes it to the (validity-aware) clone instead.
     expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledTimes(1);
     expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith({
       userId: USER,
