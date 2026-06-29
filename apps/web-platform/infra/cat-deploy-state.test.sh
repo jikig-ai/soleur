@@ -119,6 +119,16 @@ assert "cron_drain_wait_secs read from drain state file (3000)" \
 assert "cron_drain_timed_out read from drain state file (true)" \
   "[[ \$(printf '%s' '$CD_PRESENT' | jq -r .cron_drain_timed_out) == 'true' ]]"
 
+# Malformed drain-state content → cron_drain_json's regex guards reject the bad
+# values and fall back to the safe sentinels (never emit a non-numeric wait or a
+# non-boolean timed_out into the webhook payload).
+echo '{"cron_drain_wait_secs":"not-a-number","cron_drain_timed_out":"maybe"}' > "$TMP/bad-drain.json"
+CD_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" CRON_DRAIN_STATE_FILE="$TMP/bad-drain.json" bash "$TARGET")
+assert "malformed cron_drain_wait_secs falls back to sentinel -1" \
+  "[[ \$(printf '%s' '$CD_BAD' | jq -r .cron_drain_wait_secs) == '-1' ]]"
+assert "malformed cron_drain_timed_out falls back to sentinel false" \
+  "[[ \$(printf '%s' '$CD_BAD' | jq -r .cron_drain_timed_out) == 'false' ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

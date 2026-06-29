@@ -69,8 +69,13 @@ describe("deploy-lease drain coordination (#5669)", () => {
     // the failure is NOT DeployInProgressError, proving the gate does not block
     // normal operation.
     vi.stubEnv("CRON_WORKSPACE_ROOT", join(root, "does-not-exist"));
-    await expect(
-      setupEphemeralWorkspace({ installationToken: "x", cronName: "cron-test" }),
-    ).rejects.not.toBeInstanceOf(DeployInProgressError);
+    const err = await setupEphemeralWorkspace({
+      installationToken: "x",
+      cronName: "cron-test",
+    }).catch((e) => e);
+    // Pin to the specific mkdtemp ENOENT past the gate — not just "any non-lease
+    // error" — so the test can't pass on an incidental unrelated rejection.
+    expect(err).not.toBeInstanceOf(DeployInProgressError);
+    expect(err).toHaveProperty("code", "ENOENT");
   });
 });

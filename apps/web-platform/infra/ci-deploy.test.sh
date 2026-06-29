@@ -2394,6 +2394,41 @@ else
   echo "  FAIL: T-PARITY lease basename drift (ci-deploy.sh='$BASH_LEASE_BASENAME' vs _cron-shared.ts='$TS_LEASE_BASENAME')"
 fi
 
+# T-WALLCLOCK (pattern review): the wrapper / IN_FLIGHT_CEILING_S wall-clock must
+# stay >= CRON_DRAIN_TIMEOUT + overhead, else the wrapper SIGKILLs ci-deploy.sh
+# mid-drain (killing the very cron the drain protects). T9 ties CRON_DRAIN_TIMEOUT
+# UP to the cron ceiling; this ties it UNDER the wall-clock — so a future ceiling
+# raise that lifts the drain default can't silently exceed the wrapper budget while
+# T6/T9/wrapper-Test-6 all stay green.
+TOTAL=$((TOTAL + 1))
+WC_YML="$(dirname "$DEPLOY_SCRIPT")/../../../.github/workflows/web-platform-release.yml"
+WC_CEILING=$(grep -oE 'IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WC_YML" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+WC_DRAIN=$(grep -oE 'CRON_DRAIN_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | grep -oE '[0-9]+$')
+WC_MARGIN=300
+if [[ -n "$WC_CEILING" && -n "$WC_DRAIN" && $(( WC_CEILING - WC_DRAIN )) -ge "$WC_MARGIN" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T-WALLCLOCK IN_FLIGHT_CEILING_S ${WC_CEILING}s − CRON_DRAIN_TIMEOUT ${WC_DRAIN}s ≥ ${WC_MARGIN}s overhead"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T-WALLCLOCK wall-clock ${WC_CEILING}s − drain ${WC_DRAIN}s < ${WC_MARGIN}s margin (wrapper would SIGKILL mid-drain)"
+fi
+
+# T-LEASE-ORDER (test-design review): the lease MUST be written BEFORE the drain
+# loop and the prod stop — that ordering is what closes the start-race (a new run
+# launching claude into the about-to-die container while the loop drains). Source
+# order: lease write < `while cron_in_flight` < `docker stop --time=12`.
+TOTAL=$((TOTAL + 1))
+LO_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
+LO_LEASE=$(printf '%s\n' "$LO_BLOCK" | grep -nE ': > "\$CRON_DEPLOY_LEASE_FILE"' | head -1 | cut -d: -f1)
+LO_DRAIN=$(printf '%s\n' "$LO_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+if [[ -n "$LO_LEASE" && -n "$LO_DRAIN" && "$LO_LEASE" -lt "$LO_DRAIN" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T-LEASE-ORDER lease written (L$LO_LEASE) before drain loop (L$LO_DRAIN) — start-race closed"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T-LEASE-ORDER lease-write/drain ordering (lease=$LO_LEASE drain=$LO_DRAIN)"
+fi
+
 # T1 (AC1): with a cron in flight for N polls then gone, the drain loops until the
 # probe goes false (counter drains to 0), does NOT time out, and clears the lease
 # on success.
@@ -2425,7 +2460,11 @@ T3_OUT=$(run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-plat
 unset CRON_DEPLOY_LEASE_FILE CRON_DRAIN_STATE_FILE CRON_DRAIN_POLL
 T3_TIMED=$(jq -r '.cron_drain_timed_out' "$DTMP/state.json" 2>/dev/null || echo "MISSING")
 T3_WAIT=$(jq -r '.cron_drain_wait_secs' "$DTMP/state.json" 2>/dev/null || echo "MISSING")
-if [[ "$T3_RC" -eq 0 && "$T3_TIMED" == "false" && "$T3_WAIT" =~ ^[0-9]+$ ]]; then
+# `^[0-9]+$` already excludes the never-reached -1 sentinel (no minus sign); the
+# `-le 2` upper bound pins the no-cron FAST path (a single false probe, 0–1s of
+# wall-clock tick) and excludes any real multi-second drain — without asserting a
+# brittle exact 0 (the single docker-exec probe can cross a 1s boundary).
+if [[ "$T3_RC" -eq 0 && "$T3_TIMED" == "false" && "$T3_WAIT" =~ ^[0-9]+$ && "$T3_WAIT" -le 2 ]]; then
   PASS=$((PASS + 1))
   echo "  PASS: T3 no-cron deploy: zero-wait drain (${T3_WAIT}s), no timeout"
 else

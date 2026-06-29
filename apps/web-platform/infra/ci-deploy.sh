@@ -811,6 +811,13 @@ case "$COMPONENT" in
       # start-race where a fresh claude launches into the about-to-die container
       # while the loop drains the current one.
       mkdir -p "$(dirname "$CRON_DEPLOY_LEASE_FILE")" 2>/dev/null || true
+      # Symlink guard (#5669 review): the lease lives in the 1001-owned,
+      # container-writable /mnt/data/workspaces (claude runs arbitrary model-driven
+      # code as uid 1001 there). A compromised cron child could plant a symlink at
+      # the lease path; `: >` runs as root and would FOLLOW it, truncating an
+      # arbitrary root-owned file. Unlink any symlink first — `rm -f` unlinks the
+      # link itself without following.
+      [[ -L "$CRON_DEPLOY_LEASE_FILE" ]] && rm -f "$CRON_DEPLOY_LEASE_FILE"
       : > "$CRON_DEPLOY_LEASE_FILE" 2>/dev/null \
         || logger -t "$LOG_TAG" "CRON_DRAIN: could not write lease $CRON_DEPLOY_LEASE_FILE"
 
