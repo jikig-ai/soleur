@@ -129,3 +129,30 @@ describe("#5199 — restored containment (token narrow + pinned mcp + live dry-r
     expect(offered).toEqual(permitted);
   });
 });
+
+describe("#5676 — npx registry-probe silenced at source (intended-drop, ADR-052 amendment)", () => {
+  // #5199 deliberately keeps registry.npmjs.org OFF the egress allowlist so
+  // @playwright/mcp resolves to the image-baked dep, not a runtime fetch. But
+  // bare `npx` still performs a registry-metadata dial on spawn, which the
+  // firewall correctly drops — generating steady, by-design `egress-blocked`
+  // noise (#5676, the dominant 104.16.x.34 Cloudflare-anycast pool = npmjs.org).
+  // Source-silence: pass npm_config_prefer_offline so npx uses the baked cache
+  // and skips the registry dial when cache-warm. prefer-offline (NOT offline) so
+  // a cache miss degrades to today's behavior rather than hard-failing the cron.
+  it("the Playwright MCP npx entry sets npm_config_prefer_offline so no registry-metadata dial fires when cache-warm", () => {
+    expect(SUT_SOURCE).toContain("npm_config_prefer_offline");
+    // prefer-offline degrades gracefully; `offline` would hard-fail on a cold
+    // _cacache (Docker layer pruning can drop it) — must NOT use the hard form.
+    expect(SUT_SOURCE).not.toMatch(/npm_config_offline\s*:/);
+  });
+
+  it("wires the env as an exact literal on the (sole) mcpServers.playwright npx config", () => {
+    // The env must ride the MCP-server config the cron writes to .mcp.json so
+    // the spawned npx inherits it. There is exactly one mcpServers block (sweep
+    // confirmed), so the exact env literal next to the npx command is the
+    // co-location proof; assert the literal value is "true" (string, as npm reads
+    // npm_config_* env vars), not a bare boolean.
+    expect(SUT_SOURCE).toContain('env: { npm_config_prefer_offline: "true" }');
+    expect(SUT_SOURCE).toContain('command: "npx"');
+  });
+});
