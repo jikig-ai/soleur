@@ -353,6 +353,28 @@ describe("WorkstreamBoard", () => {
     expect(stored).toContain("backlog");
   });
 
+  it("renders a sibling empty column as a collapsed strip with no toggle", async () => {
+    // Only Backlog has an issue; the other 6 columns are empty.
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-1", title: "Card one", status: "backlog" }),
+    ]) as unknown as typeof fetch;
+
+    const { container } = render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
+
+    // Backlog (non-empty) stays expanded with a working Collapse toggle.
+    expect(screen.getByRole("button", { name: "Collapse Backlog" })).toBeTruthy();
+
+    // Todo (empty) renders as a w-10 collapsed strip and has no toggle.
+    const todo = container.querySelector('section[aria-label="Todo"]');
+    expect(todo).toBeTruthy();
+    const cls = todo?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-10");
+    expect(cls).not.toContain("w-72");
+    expect(screen.queryByRole("button", { name: "Collapse Todo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Todo" })).toBeNull();
+  });
+
   it("an unknown ?issue= renders the Issue-not-found Sheet state", async () => {
     mockIssue = "SOLAA-DOESNOTEXIST";
     global.fetch = mockFetchOnce([

@@ -105,15 +105,22 @@ describe("IssueColumn — visible column tint", () => {
   });
 });
 
-describe("IssueColumn — empty column has no toggle", () => {
-  it("an empty column shows neither a Collapse nor an Expand button", () => {
-    render(<IssueColumn column={column} issues={[]} onOpen={() => {}} />);
+describe("IssueColumn — empty column collapses by default", () => {
+  it("an empty column (collapsed flag unset) renders the collapsed strip with no toggle", () => {
+    const { container } = render(
+      <IssueColumn column={column} issues={[]} onOpen={() => {}} />,
+    );
+    // No toggle in either direction.
     expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
+    // It collapsed: the section is the w-10 strip, not the w-72 card list.
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-10");
+    expect(cls).not.toContain("w-72");
   });
 
-  it("an empty column is force-expanded even when collapsed=true (no Expand toggle)", () => {
-    render(
+  it("an empty column ignores collapsed=true the same way — still a collapsed strip, no toggle", () => {
+    const { container } = render(
       <IssueColumn
         column={column}
         issues={[]}
@@ -124,6 +131,20 @@ describe("IssueColumn — empty column has no toggle", () => {
     );
     expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-10");
+    expect(cls).not.toContain("w-72");
+  });
+
+  it("the empty collapsed strip shows the 0 count pill and the column label", () => {
+    render(<IssueColumn column={column} issues={[]} onOpen={() => {}} />);
+    expect(screen.getByText("0")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Backlog" })).toBeTruthy();
+  });
+
+  it("the empty collapsed strip announces 'No issues' for screen readers", () => {
+    render(<IssueColumn column={column} issues={[]} onOpen={() => {}} />);
+    expect(screen.getByText("No issues")).toBeTruthy();
   });
 });
 
