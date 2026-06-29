@@ -70,6 +70,12 @@ export default function ConnectRepoPage() {
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>(SETUP_STEPS_TEMPLATE);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupErrorCode, setSetupErrorCode] = useState<string | null>(null);
+  // feat-repo-connect-block-offer-join: the caller's OWN workspace id, surfaced
+  // only on the switch outcome (409 workspace_switch_required) so FailedState's
+  // switch CTA can call set_current_workspace_id.
+  const [existingWorkspaceId, setExistingWorkspaceId] = useState<string | null>(
+    null,
+  );
   const [healthSnapshot, setHealthSnapshot] = useState<ProjectHealthSnapshot | null>(null);
   const [syncConversationId, setSyncConversationId] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
@@ -340,6 +346,10 @@ export default function ConnectRepoPage() {
           if (stepTimerRef.current) clearInterval(stepTimerRef.current);
           const data = await res.json().catch(() => null);
           setSetupError(data?.error ?? "Failed to start project setup");
+          // Connect-time block (409): `code` selects the switch/decline copy in
+          // FailedState; `existingWorkspaceId` (switch only) drives its CTA.
+          setSetupErrorCode(data?.code ?? null);
+          setExistingWorkspaceId(data?.existingWorkspaceId ?? null);
           setState("failed");
           return;
         }
@@ -579,6 +589,7 @@ export default function ConnectRepoPage() {
   function handleRetry() {
     setSetupError(null);
     setSetupErrorCode(null);
+    setExistingWorkspaceId(null);
     setState("choose");
   }
 
@@ -676,6 +687,7 @@ export default function ConnectRepoPage() {
             onRetry={handleRetry}
             errorMessage={setupError}
             errorCode={setupErrorCode}
+            existingWorkspaceId={existingWorkspaceId}
           />
         )}
         {state === "interrupted" && (

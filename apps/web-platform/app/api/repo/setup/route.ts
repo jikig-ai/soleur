@@ -17,6 +17,7 @@ import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { triggerHeadlessSync } from "@/server/auto-sync-trigger";
+import { evaluateRepoConnect } from "@/server/repo-connect-guard";
 
 /**
  * POST /api/repo/setup
@@ -181,6 +182,53 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  // ADR-044 amendment — application-enforced scoped solo-uniqueness. BEFORE the
+  // cloning flip, decide whether this connect proceeds, is redirected to a
+  // SWITCH (the owning solo is the caller's OWN + ready), or is DECLINED (a
+  // different user's solo already owns this (install, repo) — the condition that
+  // makes the non-push webhook founder resolver fail-closed: WEB-PLATFORM-3M).
+  // Running before the `:202` lock means a declined/switched connect leaves zero
+  // partial provisioning to roll back. `installationId` is server-derived and
+  // non-null here; `repoUrl` is normalized at :106; `serviceClient` is held above.
+  const connectOutcome = await evaluateRepoConnect({
+    installationId,
+    repoUrl,
+    userId: user.id,
+    activeWorkspaceId,
+    serviceClient,
+  });
+  if (connectOutcome.outcome === "switch") {
+    // The caller already has their OWN (ready) workspace for this repo. Surface
+    // the caller's-own id so the UI can offer "switch to that workspace". 409 is
+    // overloaded with "Setup already in progress" below — callers branch on
+    // `outcome`/`code`, never the bare status.
+    return NextResponse.json(
+      {
+        outcome: "switch",
+        code: connectOutcome.code,
+        existingWorkspaceId: connectOutcome.existingWorkspaceId,
+        canRequestJoin: connectOutcome.canRequestJoin,
+        error: "You already have a workspace connected to this repository.",
+      },
+      { status: 409 },
+    );
+  }
+  if (connectOutcome.outcome === "decline") {
+    // Fixed, non-disclosing baseline — byte-identical across every decline
+    // sub-case (different-user owner / ambiguous / db-error). NEVER carries a
+    // workspace/user reference (no information disclosure / IDOR).
+    return NextResponse.json(
+      {
+        outcome: "decline",
+        code: connectOutcome.code,
+        canRequestJoin: connectOutcome.canRequestJoin,
+        error: "This repository can't be connected.",
+      },
+      { status: 409 },
+    );
+  }
+  // outcome === "ok" → fall through to the existing cloning flip.
 
   // Optimistic lock: only transition to "cloning" if not already cloning.
   // Prevents race condition from double-click or concurrent requests.

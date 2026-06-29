@@ -799,3 +799,118 @@ follow-up.
 Single atomic PR (wiring + new breadcrumb op + tests + this amendment). No schema
 change, no migration, no soak gate on the code change; the breadcrumb's
 prod-soak observation is a post-merge verification only.
+
+## Amendment 2026-06-29 — application-enforced scoped solo-uniqueness at the connect boundary (#5673)
+
+**Status: adopting** → accepted after the AC8 soak holds `op:founder-ambiguous` at
+~0 for 7 days post-deploy.
+
+This **closes the "connect path" half of the gap R7 (Amendment 2026-06-17b) named**:
+R7 recorded that the "one solo workspace per `(installation_id, repo_url)`"
+invariant became "enforced **nowhere structurally** — only by the connect path +
+this PR's runtime `>1` fail-closed," but the **connect path itself had no guard** —
+a second solo workspace could still bind an already-owned `(install, repo)`, after
+which every non-push webhook for that install 404-dropped + paged (WEB-PLATFORM-3M).
+This amendment implements that connect-path check.
+
+### Decision
+
+A **second solo workspace** is prevented from binding `(github_installation_id,
+normalizeRepoUrl(repo_url))` already owned by a *different* solo workspace, via an
+**application-level TypeScript check at the `repo/setup` connect boundary**
+(`server/repo-connect-guard.ts`, invoked from `app/api/repo/setup/route.ts` before
+the `:202-215` cloning-flip write). The guard **reuses the existing
+`resolveSoloFounderForInstallation`** (one source of truth for the solo invariant —
+not a second, drift-prone SQL copy) and branches:
+
+- resolver `none` → **proceed** (happy path).
+- `found`, founder == caller's active workspace → **proceed** (re-connect/no-op).
+- `found`, founder == caller's OWN solo (≠ active) AND that workspace `ready` →
+  **switch** redirect (reuse `set_current_workspace_id`; the surfaced
+  `existingWorkspaceId` is the caller's OWN id only).
+- `found`, founder == caller's own solo but NOT `ready` → **decline**.
+- `found`, founder == a DIFFERENT user's solo → **generic decline** (fixed 409,
+  no workspace/user reference — no information disclosure / IDOR).
+- `ambiguous` / `db-error` → **decline** + `reportSilentFallback` (fail-closed).
+
+The owning solo workspace is always solo (id == owner user id, ADR-038 N2), so
+"the caller is the owner" reduces to `founderId == user.id` — no membership query.
+The `repo_status == 'ready'` switch gate needs an **explicit** `workspaces`
+read keyed on `founderId` (the resolver returns only `{kind, founderId}`).
+
+### Considered Options (amendment)
+
+- **Option A (chosen): application-enforced scoped solo-uniqueness in TS, reusing
+  the resolver.** No new migration/RPC/advisory-lock. The WEB-PLATFORM-3M incident
+  is **sequential** (one operator, two sessions); the double-click race is already
+  covered by the optimistic `.neq("repo_status","cloning")` lock (`setup:213`); the
+  rare true concurrent double-connect degrades to **today's** behavior via the
+  retained resolver `>1` backstop. One source of truth for the solo invariant.
+- **Rejected: a SECURITY-DEFINER RPC + advisory lock for hard atomicity.** The
+  advisory lock releases at the RPC tx end, but the route's cloning-flip write is a
+  separate PostgREST tx — the lock would NOT span read→write, so it adds a second
+  drift-prone SQL copy of the solo invariant for **no** atomicity the optimistic
+  lock + `>1` backstop don't already provide for the realistic (sequential) threat.
+- **NOT a reversal of Option C** (the original ADR-044 rejected global
+  `UNIQUE(repo_url)`). This invariant is scoped to `(install, repo)` **and** further
+  narrowed to **solo-only**; cross-install fan-out (two users + same public repo
+  under DIFFERENT installs) is preserved exactly (resolver returns `none` → proceed).
+  Option C's global uniqueness threw `23505` on that legitimate case; this does not.
+- **NOT case-normalized** (dropped TR2/AC2): the resolver matches `repo_url`
+  case-sensitively and GitHub sends one canonical casing, so `Foo/Bar` vs `foo/bar`
+  never yields `>1`. Mis-cased-row-gets-no-webhooks is a separate hardening issue.
+
+### Dropped-atomicity tradeoff (accepted)
+
+The retained `resolve-founder-for-installation.ts:131` `>1` branch is now the
+**primary** race safety net (commented as such), not merely webhook defense-in-depth.
+A sub-ms concurrent double-connect by two *different* users on the same
+`(install, repo)` (never observed; same install ≈ same org/account) would create two
+well-formed rows on distinct keys — never a torn/dirty row — and the next non-push
+webhook fail-closes (drop + page) until an operator re-points: **today's** behavior,
+not worse. Escape hatch if it ever materializes: fold the write into the
+`claim_repo_clone_lock` (mig-108) advisory-lock shape.
+
+### Existence-oracle residual (accepted, v1)
+
+The decline **body** is uniform across decline sub-cases, but the proceed-vs-decline
+**outcome** (200 cloning vs 409) reveals to the caller whether `(install, repo)` is
+already connected. This is inherent to any duplicate block and **bounded to
+same-installation members**: a true stranger never reaches the decline — they bounce
+at the `400 "GitHub App not installed"` gate first, because `installationId` is
+resolved only from the caller's own reachable set. Same-install members already hold
+GitHub read access to the repo. The genuine fix (collaborator-gate) is the
+**deferred** request-to-join path; v1 accepts this residual.
+
+### C4 edge note
+
+**No `.c4` model edit.** Verified against all three model files
+(`model.c4`/`views.c4`/`spec.c4`): (a) the connecting user is the existing `founder`
+Owner actor (description already models multiple Owners, ADR-038) — no new actor;
+(b) GitHub is modeled but v1 makes **no** collaborator-API call (that `api -> github`
+edge belongs to the deferred request-to-join path); (c) `api` + `supabase` are
+modeled and the new guard logic is TS inside `api`, reached via the existing
+`api -> supabase` edge; (d) the switch reuses the existing
+`api/dashboard -> supabase set_current_workspace_id` path. No access-relationship
+edge is added or falsified. Grep of `knowledge-base/**/*.c4` for the relevant
+identifiers is empty. **No C4 impact.**
+
+### Observability
+
+The connect-time guard mirrors `ambiguous` (a pre-existing duplicate-solo pair hit
+at the connect boundary) and `db-error` (fail-closed) to Sentry via
+`reportSilentFallback` with `feature=repo-setup`, op `connect-guard-ambiguous` /
+`connect-guard-db-error` — distinct from the webhook-time
+`op:founder-ambiguous` page so on-call can tell a connect-time block from a
+webhook-time drop. The existing `github_webhook_founder_ambiguous` paging rule
+(R8) is unchanged. A **detection-only** query surfaces any remaining
+duplicate-solo `(install, lower(repo_url))` groups at deploy for the operator's
+keep-which intent decision (no automated remediation — wrong-keep risk).
+
+### Sequencing
+
+Single atomic PR (guard + route wiring + UI switch/decline states + resolver
+comments + this amendment + tests). No schema change, no migration, no soak gate on
+the **code**; the AC8 `op:founder-ambiguous`-stays-at-0 soak is a post-merge
+verification that flips this amendment's status `adopting` → accepted and closes
+#5673 (the PR uses `Ref #5673`, not `Closes`).

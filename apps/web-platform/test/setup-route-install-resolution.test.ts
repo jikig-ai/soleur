@@ -103,6 +103,15 @@ vi.mock("@/server/reachable-installations", () => ({
   resolveOwningInstallationForRepo: (...a: unknown[]) => mockResolveOwning(...a),
 }));
 
+// The connect-time block guard is exercised by its own unit suite
+// (test/repo-connect-guard.test.ts) and a route-level mapping suite
+// (test/setup-route-connect-block.test.ts). Here it defaults to "ok" so the
+// install-resolution path under test is reached unchanged.
+const mockEvaluateRepoConnect = vi.fn();
+vi.mock("@/server/repo-connect-guard", () => ({
+  evaluateRepoConnect: (...a: unknown[]) => mockEvaluateRepoConnect(...a),
+}));
+
 import { POST } from "../app/api/repo/setup/route";
 
 // ---------------------------------------------------------------------------
@@ -219,6 +228,7 @@ describe("POST /api/repo/setup — install resolution", () => {
       ok: true,
       workspaceId: "user-1",
     });
+    mockEvaluateRepoConnect.mockResolvedValue({ outcome: "ok" });
     setupServiceClient();
   });
 
