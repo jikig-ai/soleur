@@ -21,6 +21,7 @@
 // its own Sentry monitor is the backstop if it stops).
 export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-agent-native-audit",
+  "cron-anthropic-credit-probe",
   "cron-bug-fixer",
   "cron-campaign-calendar",
   "cron-cloud-task-heartbeat",

@@ -113,10 +113,14 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // Best-effort, NOT a producer: must NOT adopt the output-aware resolver
       // (that would false-RED a healthy run that legitimately files nothing).
       expect(src).not.toContain("resolveOutputAwareOk");
-      // The success-path heartbeat is pure liveness (pipeline ran end-to-end
-      // without an INFRA fault) → ok:true regardless of claude's exit.
-      expect(src).toContain("postSentryHeartbeat({ ok: true");
-      // The non-zero exit IS surfaced — as a queryable, non-paging WARNING
+      // #5674 classify-fatal: the heartbeat is gated on decision.ok from
+      // resolveBestEffortEvalOk — GREEN on a clean/benign run, RED on a FATAL
+      // class (credit/auth/spawn/timeout). NOT an unconditional `ok: true`.
+      expect(src).toContain("resolveBestEffortEvalOk(spawnResult)");
+      expect(src).toContain("postSentryHeartbeat({ ok: decision.ok");
+      // A FATAL class reports + flips the monitor red.
+      expect(src).toContain('op: "claude-eval-fatal"');
+      // A BENIGN non-zero exit IS surfaced — as a queryable, non-paging WARNING
       // Sentry event (off-host-visible), not a bare logger.warn.
       expect(src).toContain("warnSilentFallback");
       expect(src).toContain('op: "claude-eval-nonzero-noop"');
