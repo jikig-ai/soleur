@@ -153,6 +153,7 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     expect(heartbeatUrls()[0]).toContain("?status=error");
     expect(step.executed).toContain("ensure-audit-issue");
     expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(true);
   });
 
   it("non-final throw runs NO heartbeat step and rethrows (Inngest retries; no memoized stale signal)", async () => {
@@ -172,7 +173,8 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     expect(res).toEqual({ ok: true });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatUrls()[0]).toContain("?status=ok"); // NOT error — digest exists
-    expect(reportSilentFallbackSpy).toHaveBeenCalled(); // the throw self-reports
+    // the trailing persistence throw self-reports via the body catch
+    expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(true);
   });
 
   it("DeployInProgressError from the inner body is rethrown bare with NO heartbeat", async () => {

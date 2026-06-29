@@ -314,8 +314,11 @@ export async function postSentryHeartbeat(args: {
   let lastHttpStatus: number | null = null;
 
   for (let attempt = 0; attempt < SENTRY_HEARTBEAT_MAX_ATTEMPTS; attempt++) {
-    const backoff = SENTRY_HEARTBEAT_BACKOFF_MS[attempt] ?? 750;
     if (attempt > 0) {
+      // Index 0 is never slept on (guarded here), so the backoff lookup lives
+      // inside the retry branch — the "attempt 0 is immediate" invariant reads
+      // straight off the control flow.
+      const backoff = SENTRY_HEARTBEAT_BACKOFF_MS[attempt] ?? 750;
       const remainingBeforeBackoff = SENTRY_HEARTBEAT_TOTAL_BUDGET_MS - (Date.now() - start);
       if (remainingBeforeBackoff <= backoff) break; // no budget left to retry
       await sleep(backoff);

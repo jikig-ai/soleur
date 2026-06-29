@@ -72,6 +72,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -397,14 +398,7 @@ export async function cronCompetitiveAnalysisHandler({
                   titlePrefix: "[Scheduled] Competitive Analysis -",
                   cronName: "cron-competitive-analysis",
                   runStartedAt,
-                  spawnResult: spawnResult ?? {
-                    exitCode: -1,
-                    signal: null,
-                    abortedByTimeout: false,
-                    durationMs: 0,
-                    stdoutTail: "",
-                    stderrTail: "cron-competitive-analysis threw before claude-eval completed",
-                  },
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-competitive-analysis"),
                   installationToken,
                 });
               } catch (err) {

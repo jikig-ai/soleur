@@ -65,6 +65,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -379,14 +380,7 @@ export async function cronGrowthExecutionHandler({
                   titlePrefix: "[Scheduled] Growth Execution -",
                   cronName: "cron-growth-execution",
                   runStartedAt,
-                  spawnResult: spawnResult ?? {
-                    exitCode: -1,
-                    signal: null,
-                    abortedByTimeout: false,
-                    durationMs: 0,
-                    stdoutTail: "",
-                    stderrTail: "cron-growth-execution threw before claude-eval completed",
-                  },
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-growth-execution"),
                   installationToken,
                 });
               } catch (err) {

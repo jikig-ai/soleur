@@ -89,6 +89,16 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
   H11a–d discrimination recipe. (For #5728 the verdict was kill-dominant with H1/H4
   only plausible on routine_runs-blind days, so the margin was left at 60 — no TF
   diff.)
+  **Inngest-run-status vs. Sentry divergence (deliberate).** On a final-attempt
+  genuine failure the output-aware cohort posts `?status=error` and **returns
+  `{ok:false}` rather than throwing** (unlike the `cron-stale-deferred-scope-outs`
+  precedent which rethrows). So the Inngest run is marked *succeeded* while the
+  Sentry monitor is RED. This is intentional and preserves the pre-#5728 producer
+  behavior: paging is driven by the Sentry check-in, and the failure is also
+  recorded as a `routine_runs.failed` row (the I8 widened-contract: a returned
+  `data.ok === false` is recorded `failed`) — so the failure is observable via two
+  layers without relying on Inngest's native run status. If Inngest-level failure
+  alerting is ever introduced, revisit this choice.
 
 ## Consequences
 

@@ -32,6 +32,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -342,14 +343,7 @@ export async function cronCampaignCalendarHandler({
                   titlePrefix: "[Scheduled] Campaign Calendar -",
                   cronName: "cron-campaign-calendar",
                   runStartedAt,
-                  spawnResult: spawnResult ?? {
-                    exitCode: -1,
-                    signal: null,
-                    abortedByTimeout: false,
-                    durationMs: 0,
-                    stdoutTail: "",
-                    stderrTail: "cron-campaign-calendar threw before claude-eval completed",
-                  },
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-campaign-calendar"),
                   installationToken,
                 });
               } catch (err) {

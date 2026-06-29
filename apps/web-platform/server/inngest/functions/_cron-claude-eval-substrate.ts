@@ -38,6 +38,28 @@ export interface SpawnResult {
   stdoutTail?: string;
 }
 
+// #5728 — synthetic SpawnResult for the silence-hole audit issue (#4960) when an
+// output-aware handler's body THREW before claude-eval produced a real result.
+// Shared by the cohort so the 6-field literal isn't copy-pasted 8× (the only
+// field the type system can't pin against drift is the exitCode/durationMs
+// values). Carries the cron name in stderrTail so the FAILED issue is
+// self-diagnosing. Returns the exact Pick that ensureScheduledAuditIssue reads.
+export function makeThrewSpawnResult(
+  cronName: string,
+): Pick<
+  SpawnResult,
+  "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+> {
+  return {
+    exitCode: -1,
+    signal: null,
+    abortedByTimeout: false,
+    durationMs: 0,
+    stdoutTail: "",
+    stderrTail: `${cronName} threw before claude-eval completed`,
+  };
+}
+
 export const KILL_ESCALATION_MS = 5_000;
 
 // Hard ceiling on captured child stderr — a pathological process must not OOM

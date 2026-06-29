@@ -32,6 +32,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -378,14 +379,7 @@ export async function cronContentGeneratorHandler({
                   titlePrefix: "[Scheduled] Content Generator -",
                   cronName: "cron-content-generator",
                   runStartedAt,
-                  spawnResult: spawnResult ?? {
-                    exitCode: -1,
-                    signal: null,
-                    abortedByTimeout: false,
-                    durationMs: 0,
-                    stdoutTail: "",
-                    stderrTail: "cron-content-generator threw before claude-eval completed",
-                  },
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-content-generator"),
                   installationToken,
                 });
               } catch (err) {

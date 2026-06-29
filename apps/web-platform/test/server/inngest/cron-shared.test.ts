@@ -1111,6 +1111,10 @@ describe("postSentryHeartbeat — delivery robustness (#5728)", () => {
       Object.assign(new Error("The operation timed out."), { name: "TimeoutError" }),
     );
     await call(false);
+    // Lower bound is load-bearing: a regression that STOPPED retrying timeouts
+    // (post once → straight to fallback) yields exactly 1 call, which is <= 3 and
+    // would pass without it. Assert the retry actually fired, bounded by the cap.
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(3);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
   });

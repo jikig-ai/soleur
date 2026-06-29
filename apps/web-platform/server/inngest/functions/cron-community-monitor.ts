@@ -83,6 +83,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -499,14 +500,7 @@ export async function cronCommunityMonitorHandler({
                   titlePrefix: "[Scheduled] Community Monitor -",
                   cronName: "cron-community-monitor",
                   runStartedAt,
-                  spawnResult: spawnResult ?? {
-                    exitCode: -1,
-                    signal: null,
-                    abortedByTimeout: false,
-                    durationMs: 0,
-                    stdoutTail: "",
-                    stderrTail: "cron-community-monitor threw before claude-eval completed",
-                  },
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-community-monitor"),
                   installationToken,
                 });
               } catch (err) {

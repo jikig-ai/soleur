@@ -63,6 +63,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
@@ -371,14 +372,7 @@ export async function cronRoadmapReviewHandler({
                   titlePrefix: "[Scheduled] Weekly Roadmap Review -",
                   cronName: "cron-roadmap-review",
                   runStartedAt,
-                  spawnResult: spawnResult ?? {
-                    exitCode: -1,
-                    signal: null,
-                    abortedByTimeout: false,
-                    durationMs: 0,
-                    stdoutTail: "",
-                    stderrTail: "cron-roadmap-review threw before claude-eval completed",
-                  },
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-roadmap-review"),
                   installationToken,
                 });
               } catch (err) {

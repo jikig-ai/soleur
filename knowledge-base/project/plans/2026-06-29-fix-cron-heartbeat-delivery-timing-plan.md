@@ -4,7 +4,7 @@ issue: 5728
 type: bug
 lane: cross-domain
 brand_survival_threshold: aggregate pattern
-status: draft
+status: complete
 created: 2026-06-29
 ---
 
@@ -413,7 +413,7 @@ logs:
   where: "Better Stack (claude-eval stdout/stderr tail, table per runbooks/betterstack-log-query.md; query creds in Doppler prd_terraform) + routine_runs (Supabase, terminal row per run)"
   retention: "routine_runs indefinite (operational audit, low volume); Better Stack per warehouse retention"
 discoverability_test:
-  command: "GET https://<org>.sentry.io/api/0/monitors/scheduled-community-monitor/checkins/  (Sentry REST, read-only) AND read-only SQL: SELECT status,duration_ms,trigger_source,error_summary FROM routine_runs WHERE routine_id='cron-community-monitor' ORDER BY started_at DESC LIMIT 14"
+  command: "GET https://de.sentry.io/api/0/organizations/<org>/monitors/scheduled-community-monitor/checkins/  (Sentry REST, read-only; EU regional host de.sentry.io with org in path — live-verified shape per scripts/followthroughs/community-monitor-checkin-soak-5728.sh) AND read-only SQL: SELECT status,duration_ms,trigger_source,error_summary FROM routine_runs WHERE routine_id='cron-community-monitor' ORDER BY started_at DESC LIMIT 14"
   expected_output: "Recent fires show status=ok check-ins within the 60-min margin; routine_runs shows completed rows; no missed attributable to delivery"
 ```
 

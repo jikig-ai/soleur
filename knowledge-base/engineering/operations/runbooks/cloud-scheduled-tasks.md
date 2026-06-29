@@ -647,8 +647,9 @@ first is the one most likely lying — see learning
    `betterstack-log-query.md`). SIGKILL/container-swap markers, the swallowed-POST
    warning, last `sentry-heartbeat` log line per run. CAVEAT: hot-window retention
    is short (~1h) — the incident window is often already aged out.
-3. **Sentry check-in timeline** — `GET …/organizations/<org>/monitors/<slug>/checkins/`
-   (read-only, EU org host `https://<org>.sentry.io`; ADR-031). Confirms last-ok +
+3. **Sentry check-in timeline** — `GET https://de.sentry.io/api/0/organizations/<org>/monitors/<slug>/checkins/`
+   (read-only; EU **regional** host `de.sentry.io` with the org in the path — the
+   live-verified shape, mirrored by `scripts/followthroughs/community-monitor-checkin-soak-5728.sh`; ADR-031). Confirms last-ok +
    the `missed`/`error` boundary. The issues/events endpoint needs `event:read`
    scope the monitor-read token lacks — `routine_runs` independently discriminates
    H11c without it.
