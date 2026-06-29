@@ -361,6 +361,79 @@ export async function postSentryHeartbeat(args: {
 }
 
 // ---------------------------------------------------------------------------
+// #5728 — memoization-safe final-attempt heartbeat for the output-aware cohort.
+// ---------------------------------------------------------------------------
+// A throw inside a catch-less inner try (claude-eval → verify-output →
+// safe-commit-pr → sentry-heartbeat) previously propagated out of the function,
+// so the single end-of-run `sentry-heartbeat` step never ran → Sentry saw NO
+// check-in → `missed` (NOT `error`). This shared helper makes a throw produce a
+// loud terminal `?status=error` ("the cron RAN and failed"), distinct from
+// "never fired", while preserving retry-memoization correctness. It is the
+// vetted shape the output-aware producer cohort adopts (mirrors the inline
+// precedent in cron-stale-deferred-scope-outs.ts:358,397-433).
+//
+// Contract:
+//   - `heartbeatOk` is the output-aware verdict (issue present ⇒ green). An
+//     output-PRESENT run stays GREEN even if a trailing persistence step threw —
+//     the digest exists; the persistence failure self-reports separately. So the
+//     posted status is simply `heartbeatOk`.
+//   - `threw` is whether the guarded body threw. A genuine failure is
+//     `threw && !heartbeatOk`.
+//   - On a genuine failure on a NON-final attempt: SKIP the whole heartbeat
+//     step (a completed step.run is memoized across the Inngest retry, so an
+//     executed-but-silent step would replay and never emit the recovered `ok`)
+//     and return { retry: true } — the caller MUST rethrow to trigger the retry.
+//   - Otherwise post exactly ONE authoritative heartbeat as the genuine last
+//     step. `onBeforeHeartbeat` (optional) runs ONLY on this post path — used by
+//     producers that file a silence-hole fallback issue when red, ordered before
+//     the heartbeat so the heartbeat stays last and is never double-signalled.
+//
+// DeployInProgressError MUST be excluded by the caller BEFORE invoking this
+// helper (rethrow bare, no heartbeat — the ADR-068 fail-safe deploy defer).
+export async function finalizeOutputAwareHeartbeat(args: {
+  step: HandlerArgs["step"];
+  heartbeatOk: boolean;
+  threw: boolean;
+  attempt?: number;
+  maxAttempts?: number;
+  sentryMonitorSlug: string;
+  cronName: string;
+  logger: HandlerArgs["logger"];
+  onBeforeHeartbeat?: () => Promise<void>;
+}): Promise<{ retry: boolean }> {
+  const {
+    step,
+    heartbeatOk,
+    threw,
+    attempt,
+    maxAttempts,
+    sentryMonitorSlug,
+    cronName,
+    logger,
+    onBeforeHeartbeat,
+  } = args;
+  // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1. Callers
+  // passing neither read attempt=0/maxAttempts=1 → isFinalAttempt=true (legacy
+  // behavior). maxAttempts is OPTIONAL on Inngest's BaseContext, so a missing
+  // value collapses to always-final → every failed attempt posts error: degrades
+  // to OVER-paging (the original bug), never to masking a failure with false ok.
+  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
+  const failed = threw && !heartbeatOk;
+  if (failed && !isFinalAttempt) {
+    logger.warn(
+      { fn: cronName, attempt: attempt ?? 0, isFinalAttempt },
+      `${cronName} failed on a non-final attempt — skipping the heartbeat step (memoization-safe) and retrying`,
+    );
+    return { retry: true };
+  }
+  if (onBeforeHeartbeat) await onBeforeHeartbeat();
+  await step.run("sentry-heartbeat", async () => {
+    await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug, cronName, logger });
+  });
+  return { retry: false };
+}
+
+// ---------------------------------------------------------------------------
 // Discord webhook write boundary (#5080 — hr-write-boundary-sentinel-sweep)
 // ---------------------------------------------------------------------------
 // Shared helper for Discord write sites: mentions are suppressed at the

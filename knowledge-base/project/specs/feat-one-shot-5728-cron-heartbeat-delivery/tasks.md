@@ -26,7 +26,7 @@ load-bearing vs. defense-in-depth. **Do NOT introduce an `in_progress` two-phase
   missed/timed-out state machine, repeated-POST idempotency. Pin `<!-- verified: 2026-06-29 source: … -->`.
   VERIFIED: URL `/api/<project>/cron/<slug>/<key>/?status=<ok|error|in_progress>`; missed/timeout are
   Sentry-server-generated (not client-reported) ⇒ `missed` proves no POST arrived. `<!-- verified: 2026-06-29 source: https://docs.sentry.io/product/crons/getting-started/http/ -->`
-- [ ] 0.5 Write the per-day H1/H2/H3/H4 verdict to the PR body + a learning; set which later phase
+- [x] 0.5 Write the per-day H1/H2/H3/H4 verdict to the PR body + a learning; set which later phase
   is load-bearing.
 
 ## Phase 1 — Heartbeat POST robustness (`_cron-shared.ts`)
@@ -38,17 +38,17 @@ load-bearing vs. defense-in-depth. **Do NOT introduce an `in_progress` two-phase
 - [x] 1.3 (GREEN) tests pass.
 
 ## Phase 2 — Guaranteed terminal heartbeat on the THROW path (flag pattern)
-- [ ] 2.1 (RED) cron-community-monitor.test.ts: final-attempt no-output throw → one `?status=error`;
+- [x] 2.1 (RED) cron-community-monitor.test.ts: final-attempt no-output throw → one `?status=error`;
   non-final throw → no heartbeat step + rethrow; happy path → one `ok`; no double-signal under
   replay; trailing `safe-commit-pr` throw on output-present run stays GREEN;
   `DeployInProgressError` → no heartbeat + rethrow (both catches).
-- [ ] 2.2 Extract a shared flag/skip-on-non-final heartbeat wrapper in `_cron-shared.ts` (mirror
+- [x] 2.2 Extract a shared flag/skip-on-non-final heartbeat wrapper in `_cron-shared.ts` (mirror
   `cron-stale-deferred-scope-outs.ts:358,397-433`). Thread `attempt`/`maxAttempts`.
-- [ ] 2.3 Adopt in `cron-community-monitor.ts`: catch→`heartbeatOk=false` flag, one last heartbeat
+- [x] 2.3 Adopt in `cron-community-monitor.ts`: catch→`heartbeatOk=false` flag, one last heartbeat
   step; carry computed `heartbeatOk` so a trailing persistence throw on an output-present run stays
   green; exclude `DeployInProgressError`; **fix the existing first catch (`:332-347`)** to rethrow
   `DeployInProgressError` with no heartbeat.
-- [ ] 2.4 (GREEN) tests pass.
+- [x] 2.4 (GREEN) tests pass.
 - [ ] 2.5 Cohort rollout — grep each output-aware producer's step order; adopt the shared wrapper
   only where the single-last-heartbeat invariant holds; preserve `resolveBestEffortEvalOk` carve-out.
 
