@@ -154,7 +154,7 @@ model {
       }
       inngestPostgres = database "Supabase PostgreSQL (Inngest)" {
         technology "PostgreSQL — dedicated EU project, Supavisor session pooler :5432"
-        description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450)"
+        description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
       }
       inngestRedis = container "Inngest Redis" {
         technology "Self-hosted Redis — AOF on /mnt/data"
