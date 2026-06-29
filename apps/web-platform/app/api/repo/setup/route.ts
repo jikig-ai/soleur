@@ -188,9 +188,9 @@ export async function POST(request: Request) {
   // SWITCH (the owning solo is the caller's OWN + ready), or is DECLINED (a
   // different user's solo already owns this (install, repo) — the condition that
   // makes the non-push webhook founder resolver fail-closed: WEB-PLATFORM-3M).
-  // Running before the `:202` lock means a declined/switched connect leaves zero
-  // partial provisioning to roll back. `installationId` is server-derived and
-  // non-null here; `repoUrl` is normalized at :106; `serviceClient` is held above.
+  // Running before the cloning-flip lock below means a declined/switched connect
+  // leaves zero partial provisioning to roll back. `installationId` is server-
+  // derived and non-null here; `repoUrl` is normalized above; `serviceClient` is held above.
   const connectOutcome = await evaluateRepoConnect({
     installationId,
     repoUrl,
@@ -228,7 +228,11 @@ export async function POST(request: Request) {
       { status: 409 },
     );
   }
-  // outcome === "ok" → fall through to the existing cloning flip.
+  // outcome === "ok" → fall through to the existing cloning flip. The
+  // RepoConnectOutcome union is closed (ok|switch|decline), so TS guarantees only
+  // "ok" reaches here today. FAIL-CLOSED CONTRACT: any future outcome variant MUST
+  // be handled in an explicit branch ABOVE this line — never let a new variant
+  // fall through to provisioning by default.
 
   // Optimistic lock: only transition to "cloning" if not already cloning.
   // Prevents race condition from double-click or concurrent requests.

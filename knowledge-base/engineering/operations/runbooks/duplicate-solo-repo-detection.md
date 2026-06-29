@@ -4,7 +4,7 @@
 **When to run:** post-deploy of feat-repo-connect-block-offer-join (#5673), and ad-hoc
 whenever `op:founder-ambiguous` pages.
 **Related:** ADR-044 (Amendment 2026-06-29), `server/repo-connect-guard.ts`,
-`server/resolve-founder-for-installation.ts:131`.
+`server/resolve-founder-for-installation.ts` (the `soloRows.length > 1` ambiguous branch).
 
 ## What this detects
 
@@ -28,9 +28,9 @@ wrong-keep null-out would disconnect the wrong workspace.
 SELECT w.github_installation_id,
        lower(w.repo_url) AS repo,
        count(*),
-       array_agg(w.id ORDER BY w.created_at)        AS workspace_ids,
-       array_agg(w.repo_url ORDER BY w.created_at)   AS exact_repo_urls,  -- expose case variants
-       array_agg(w.created_at ORDER BY w.created_at) AS created_ats
+       array_agg(w.id ORDER BY w.created_at, w.id)        AS workspace_ids,
+       array_agg(w.repo_url ORDER BY w.created_at, w.id)   AS exact_repo_urls,  -- expose case variants
+       array_agg(w.created_at ORDER BY w.created_at, w.id) AS created_ats
 FROM workspaces w
 JOIN workspace_members m
   ON m.workspace_id = w.id          -- embed FK join

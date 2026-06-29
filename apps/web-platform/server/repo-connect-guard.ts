@@ -3,6 +3,10 @@ import {
   type SoloFounderResolution,
 } from "@/server/resolve-founder-for-installation";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  REPO_CONNECT_BLOCKED_CODE,
+  WORKSPACE_SWITCH_REQUIRED_CODE,
+} from "@/lib/repo-connect-codes";
 
 // feat-repo-connect-block-offer-join — application-enforced scoped solo-uniqueness
 // at the repo-connect boundary (ADR-044 amendment). Completes the "connect path"
@@ -15,9 +19,10 @@ import { reportSilentFallback } from "@/server/observability";
 //
 // No new migration / RPC / advisory lock: the WEB-PLATFORM-3M incident is
 // sequential (one operator, two sessions); the double-click race is covered by
-// the optimistic `.neq("repo_status","cloning")` lock at setup/route.ts:213, and
-// the rare true concurrent race degrades to today's behavior via the retained
-// resolver `>1` backstop (resolve-founder-for-installation.ts:131).
+// the optimistic `.neq("repo_status","cloning")` lock on the cloning-flip write
+// in repo/setup/route.ts, and the rare true concurrent race degrades to today's
+// behavior via the retained resolver `>1` backstop (the `soloRows.length > 1`
+// ambiguous branch in resolve-founder-for-installation.ts).
 //
 // Pure + injected service client (NO `.service-role-allowlist` entry — the route
 // owns `createServiceClient()` and passes it in, mirroring the resolver), so the
@@ -49,15 +54,19 @@ export type RepoConnectOutcome =
   | { outcome: "ok" }
   | {
       outcome: "switch";
-      code: "workspace_switch_required";
+      code: typeof WORKSPACE_SWITCH_REQUIRED_CODE;
       existingWorkspaceId: string;
       canRequestJoin: false;
     }
-  | { outcome: "decline"; code: "repo_connect_blocked"; canRequestJoin: false };
+  | {
+      outcome: "decline";
+      code: typeof REPO_CONNECT_BLOCKED_CODE;
+      canRequestJoin: false;
+    };
 
 const DECLINE: RepoConnectOutcome = {
   outcome: "decline",
-  code: "repo_connect_blocked",
+  code: REPO_CONNECT_BLOCKED_CODE,
   canRequestJoin: false,
 };
 
@@ -70,10 +79,24 @@ async function isWorkspaceReady(
   workspaceId: string,
 ): Promise<boolean> {
   const chain = service.from("workspaces") as RepoStatusChain;
-  const { data } = await chain
+  const { data, error } = await chain
     .select("repo_status")
     .eq("id", workspaceId)
     .maybeSingle();
+  if (error) {
+    // Fail-safe: a transient read error here degrades a would-be SWITCH into a
+    // generic DECLINE (the caller's own workspace silently looks not-ready). That
+    // is recoverable (retry), but it must not be invisible — mirror it so an
+    // aggregate pattern is observable (cq-silent-fallback-must-mirror-to-sentry).
+    reportSilentFallback(error, {
+      feature: "repo-setup",
+      op: "connect-guard-readiness-error",
+      extra: { workspaceId },
+      message:
+        "Connect-guard repo_status read failed — switch degraded to decline",
+    });
+    return false;
+  }
   return (data?.repo_status ?? null) === "ready";
 }
 
@@ -121,7 +144,7 @@ export async function evaluateRepoConnect(params: {
         if (ready) {
           return {
             outcome: "switch",
-            code: "workspace_switch_required",
+            code: WORKSPACE_SWITCH_REQUIRED_CODE,
             existingWorkspaceId: founderId, // caller's own id — safe to surface
             canRequestJoin: false,
           };

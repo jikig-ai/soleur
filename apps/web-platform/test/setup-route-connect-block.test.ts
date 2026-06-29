@@ -202,24 +202,12 @@ describe("POST /api/repo/setup — connect-time block mapping", () => {
     expect(serialized).not.toContain("founderId");
   });
 
-  // AC4: the decline body is byte-identical regardless of which decline sub-case
-  // the guard returned (different-user owner vs ambiguous vs db-error all map to
-  // the SAME { outcome: "decline", code: "repo_connect_blocked", ... } guard
-  // result, so the route response is identical). Asserts no sub-case widens it.
-  test("AC4 decline body byte-identical across decline sub-cases", async () => {
-    const declineResult = {
-      outcome: "decline",
-      code: "repo_connect_blocked",
-      canRequestJoin: false,
-    };
-    const bodies: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      mockEvaluateRepoConnect.mockResolvedValue(declineResult);
-      const res = await POST(
-        makeRequest({ repoUrl: "https://github.com/octo/repo" }),
-      );
-      bodies.push(await res.text());
-    }
-    expect(new Set(bodies).size).toBe(1);
-  });
+  // AC4 cross-sub-case byte-identity is proven where it actually varies: at the
+  // GUARD level (test/repo-connect-guard.test.ts asserts every decline sub-case —
+  // different-user / own-not-ready / ambiguous / db-error — `toEqual` the single
+  // shared DECLINE shape). The route only ever receives one `{ outcome: "decline" }`
+  // shape and maps it to the fixed body asserted by the "AC1/AC4 decline" test
+  // above (exact `toEqual`), so the route structurally cannot introduce sub-case
+  // variance. A route-level replay of one mocked result 3× would be tautological,
+  // so it is intentionally omitted rather than asserted vacuously.
 });

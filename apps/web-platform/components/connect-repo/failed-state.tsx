@@ -5,6 +5,11 @@ import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/client";
+import { reportSilentFallback } from "@/lib/client-observability";
+import {
+  REPO_CONNECT_BLOCKED_CODE,
+  WORKSPACE_SWITCH_REQUIRED_CODE,
+} from "@/lib/repo-connect-codes";
 import type { GitErrorCode } from "@/server/git-auth";
 
 interface FailedStateProps {
@@ -29,10 +34,10 @@ type ErrorCopy = {
 
 // feat-repo-connect-block-offer-join — connect-time block error codes returned
 // by POST /api/repo/setup (NOT GitErrorCode clone failures). The page maps the
-// 409 `code` into errorCode so these copy entries render.
-export const REPO_CONNECT_BLOCKED_CODE = "repo_connect_blocked" as const;
-export const WORKSPACE_SWITCH_REQUIRED_CODE =
-  "workspace_switch_required" as const;
+// 409 `code` into errorCode so these copy entries render. The literals are the
+// single-source-of-truth in @/lib/repo-connect-codes (shared with the guard
+// producer); re-exported here for existing ERROR_COPY-key consumers.
+export { REPO_CONNECT_BLOCKED_CODE, WORKSPACE_SWITCH_REQUIRED_CODE };
 
 // Sentinel for create-flow failures (string-keyed, not in GitErrorCode enum).
 // Surfaces the "connect an existing repo instead" escape hatch when repo
@@ -59,7 +64,7 @@ const ERROR_COPY: Record<string, ErrorCopy> = {
   // connected by someone", no workspace/user reference. The forward CTA is true
   // for everyone (collaborator-gate is the deferred path).
   [REPO_CONNECT_BLOCKED_CODE]: {
-    headline: "This repository can't be connected.",
+    headline: "This repository can't be connected",
     body: "We can't connect this repository to your workspace right now.",
     steps: [
       "If you should have access, ask the repository's workspace owner to invite you.",
@@ -132,9 +137,7 @@ export function FailedState({
   existingWorkspaceId,
 }: FailedStateProps) {
   const copy =
-    errorCode && errorCode in ERROR_COPY
-      ? ERROR_COPY[errorCode as GitErrorCode]
-      : undefined;
+    errorCode && errorCode in ERROR_COPY ? ERROR_COPY[errorCode] : undefined;
 
   // Switch into the caller's OWN existing workspace for this repo. Mirrors the
   // canonical two-phase commit in org-switcher-container.tsx (#4917): the RPC
@@ -165,9 +168,18 @@ export function FailedState({
     }
     try {
       await supabase.auth.refreshSession();
-    } catch {
+    } catch (err) {
       // The durable pointer is already committed; converge forward — the server
-      // re-reads user_session_state on the hard navigation regardless.
+      // re-reads user_session_state on the hard navigation regardless. But the
+      // post-commit refresh failing is the same brand-critical DB/JWT divergence
+      // org-switcher-container.tsx mirrors (op:refresh-session-post-rpc) so an
+      // aggregate pattern stays visible (cq-silent-fallback-must-mirror-to-sentry).
+      reportSilentFallback(err, {
+        feature: "repo-connect-switch",
+        op: "refresh-session-post-rpc",
+        message:
+          "refreshSession failed after set_current_workspace_id committed — converging forward via hard nav",
+      });
     }
     window.location.assign("/dashboard");
   };

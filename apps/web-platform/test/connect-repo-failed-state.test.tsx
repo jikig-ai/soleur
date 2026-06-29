@@ -5,16 +5,23 @@ vi.mock("next/font/google", () => ({
   Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
-const { mockRpc, mockRefreshSession } = vi.hoisted(() => ({
-  mockRpc: vi.fn(),
-  mockRefreshSession: vi.fn(),
-}));
+const { mockRpc, mockRefreshSession, mockReportSilentFallback } = vi.hoisted(
+  () => ({
+    mockRpc: vi.fn(),
+    mockRefreshSession: vi.fn(),
+    mockReportSilentFallback: vi.fn(),
+  }),
+);
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     rpc: mockRpc,
     auth: { refreshSession: mockRefreshSession },
   }),
+}));
+
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: (...a: unknown[]) => mockReportSilentFallback(...a),
 }));
 
 import { FailedState } from "@/components/connect-repo/failed-state";
@@ -170,6 +177,36 @@ describe("<FailedState> connect-time block states", () => {
     });
     await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/dashboard"));
     expect(mockRefreshSession).toHaveBeenCalled();
+    // Load-bearing ORDER (ADR-044 Decision.3 + org-switcher two-phase commit):
+    // RPC (durable write) → refreshSession (JWT re-mint) → hard nav. Asserting the
+    // calls happened is not enough — assign-before-refresh would land on the stale
+    // prior-workspace claim and still pass a count-only check.
+    expect(mockRpc.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRefreshSession.mock.invocationCallOrder[0],
+    );
+    expect(mockRefreshSession.mock.invocationCallOrder[0]).toBeLessThan(
+      assignMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  test("STATE 1 switch: refreshSession throw converges forward (still navigates) AND mirrors to Sentry", async () => {
+    // The RPC has committed the durable pointer; a refresh failure must not strand
+    // the user, so we converge forward via hard nav — but the post-commit divergence
+    // must be observable (cq-silent-fallback-must-mirror-to-sentry).
+    mockRefreshSession.mockRejectedValue(new Error("network blip"));
+    render(
+      <FailedState
+        onRetry={() => {}}
+        errorCode="workspace_switch_required"
+        existingWorkspaceId={OWN_WS}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/dashboard"));
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
+      op: "refresh-session-post-rpc",
+    });
   });
 
   test("STATE 1 switch: RPC failure (revoked/deleted) falls back to onRetry, no nav", async () => {

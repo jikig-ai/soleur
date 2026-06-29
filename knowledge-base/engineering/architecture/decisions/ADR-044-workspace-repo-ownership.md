@@ -843,7 +843,8 @@ read keyed on `founderId` (the resolver returns only `{kind, founderId}`).
 - **Option A (chosen): application-enforced scoped solo-uniqueness in TS, reusing
   the resolver.** No new migration/RPC/advisory-lock. The WEB-PLATFORM-3M incident
   is **sequential** (one operator, two sessions); the double-click race is already
-  covered by the optimistic `.neq("repo_status","cloning")` lock (`setup:213`); the
+  covered by the optimistic `.neq("repo_status","cloning")` lock on the cloning-flip
+  write in `repo/setup/route.ts`; the
   rare true concurrent double-connect degrades to **today's** behavior via the
   retained resolver `>1` backstop. One source of truth for the solo invariant.
 - **Rejected: a SECURITY-DEFINER RPC + advisory lock for hard atomicity.** The
@@ -862,7 +863,8 @@ read keyed on `founderId` (the resolver returns only `{kind, founderId}`).
 
 ### Dropped-atomicity tradeoff (accepted)
 
-The retained `resolve-founder-for-installation.ts:131` `>1` branch is now the
+The retained `soloRows.length > 1` ambiguous branch in
+`resolve-founder-for-installation.ts` is now the
 **primary** race safety net (commented as such), not merely webhook defense-in-depth.
 A sub-ms concurrent double-connect by two *different* users on the same
 `(install, repo)` (never observed; same install ≈ same org/account) would create two
