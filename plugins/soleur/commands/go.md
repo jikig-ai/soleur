@@ -58,6 +58,7 @@ If the user wants to continue the current feature, delegate to `soleur:work` via
 
 Analyze the user input and classify intent using semantic assessment:
 
+<!-- eval-gate:block:go-routing:start -->
 | Intent | Trigger Signals | Routes To |
 |--------|----------------|-----------|
 | fix | The user describes broken behavior, errors, regressions, or something that needs fixing | `soleur:one-shot` |
@@ -67,6 +68,7 @@ Analyze the user input and classify intent using semantic assessment:
 | legal-threshold | The user input mentions an inbound vendor MSA, DSAR (data subject access request) / right-to-be-forgotten / data deletion request / account deletion request / data export request / "what data do you have on me", AI vendor terms / vendor AI review, OSS license question (GPL/AGPL/SSPL/copyleft), OR a personal-data exposure / unauthorized access / PII leak that crosses a statutory clock (GDPR Art. 33 72h) — events that exceed founder-grade compliance helping and warrant a downstream specialist | `clo` agent (Task spawn; the Assess phase emits the threshold catalog from `knowledge-base/legal/recommended-tools.md`) |
 | incident | The user describes a live or recent production incident (outage, customer-impact, Sentry alert) needing classification + PIR. NOTE: pure data breaches without an operational outage route to `legal-threshold` above (statutory clock takes precedence); use `incident` for ops-postmortem scope (uptime, latency, error-rate). | `soleur:incident` |
 | default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
+<!-- eval-gate:block:go-routing:end -->
 
 If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step. **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill use the **Task tool** to spawn the agent — the agent's prompt receives the original user input as the task description. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 

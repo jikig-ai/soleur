@@ -115,6 +115,17 @@ Choose (1-4):
 <step_6 name="apply_changes">
 Only after approval (option 1 or 2):
 
+**6.0 — Validation gate for gated classifier-skill edits (primary in-session hook).**
+Before applying ANY correction, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>` for each file being edited. If `gated` is `false`, apply normally (step 1 below). If `gated` is `true`, the edit may change a verifiable classifier block (the `/go` routing table, the ticket-triage rubric) — gate it:
+
+  a. **Buffer pre-check (the rejected-edit reader).** Read `.claude/.skill-edit-rejections.jsonl` (if present); if a prior entry matches this `source_file` + the same targeted miss (`target_task` id), surface it and do NOT re-propose the same dead-end edit — a previously-rejected edit is recognized, not re-run (avoids re-spending ~230 API calls on a known failure).
+  b. **Run the gate.** Write the proposed-edited file to a temp path, then run `eval-gate.cjs --candidate-file <tmp> --target <target> --target-task <synthesized row encoding the miss being fixed>` (synthesized fixtures only, per `cq-test-fixtures-synthesized-only`). The verdict is computed deterministically in `verdict.cjs` (the LLM is out of the assertion path).
+  c. **Accept (`accept:true`):** apply the Edit (step 1). Optionally `--append-on-accept` so the fixed case becomes a permanent corpus regression guard.
+  d. **Reject (`accept:false`) or any gate error (fail-closed):** do NOT apply; append `{source_file, target_task_id, reason, verdict, timestamp}` to `.claude/.skill-edit-rejections.jsonl`; surface the verdict. Do NOT stamp any sync marker — the fix is not abandoned, it can be re-attempted with a different edit.
+  e. **Headless (`HEADLESS_MODE=true`):** skip-gate-and-defer — record a deferred-verification note and apply; the #5703 CI backstop re-asserts at PR time (do not spend the gate's API budget unattended).
+
+  This gate fires only on edits that change a gated block; a correction to prose *outside* the block (the common case) extracts an identical block and short-circuits to `accept` (no API). It never displaces a deterministic hook fix — it only validates a prose-rule change to a classifier surface.
+
 1. Use Edit tool for each correction across all files
 2. Read back modified sections to verify
 3. If option 1, commit with structured message showing what was healed

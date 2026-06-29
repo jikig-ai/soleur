@@ -1,0 +1,18 @@
+[
+  {
+    "source_file": "plugins/soleur/commands/go.md",
+    "block_id": "go-routing",
+    "block_start_marker": "<!-- eval-gate:block:go-routing:start -->",
+    "block_end_marker": "<!-- eval-gate:block:go-routing:end -->",
+    "target": "go-routing",
+    "projected_prompt_path": "plugins/soleur/skills/eval-harness/prompts/go-skill.txt"
+  },
+  {
+    "source_file": "plugins/soleur/agents/support/ticket-triage.md",
+    "block_id": "ticket-triage",
+    "block_start_marker": "<!-- eval-gate:block:ticket-triage:start -->",
+    "block_end_marker": "<!-- eval-gate:block:ticket-triage:end -->",
+    "target": "ticket-triage",
+    "projected_prompt_path": "plugins/soleur/skills/eval-harness/prompts/triage-skill.txt"
+  }
+]

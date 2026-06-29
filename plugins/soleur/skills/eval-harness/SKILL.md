@@ -54,12 +54,48 @@ Both asserts share one parser, [parse-label.cjs](./scripts/parse-label.cjs). Gol
 synthesized fixtures only (no real user data): [go-routing.jsonl](./tasks/go-routing.jsonl),
 [ticket-triage.jsonl](./tasks/ticket-triage.jsonl).
 
-> **Fixture-sync caveat.** The skill-arm prompts hand-copy the production classifier prose — the
-> `/go` routing table (`plugins/soleur/commands/go.md`) and the ticket-triage priority rubric
-> (`plugins/soleur/agents/support/ticket-triage.md`). There is no mechanical link, so when either
-> production surface changes, re-sync the matching `prompts/<target>-skill.txt` (and the enum SSOT
-> if routes/levels change) or the harness silently measures a stale classifier. Re-syncing on a
-> production-classifier edit is the maintenance contract for this skill.
+**Skill-arm prompts are generated projections (no hand-copy).** The skill-arm prompts
+(`prompts/go-skill.txt`, `prompts/triage-skill.txt`) are a **mechanical projection** of the
+production classifier block, not a hand-distilled paraphrase. Each gated source wraps its rules in
+HTML-comment sentinels — the `/go` routing table in `plugins/soleur/commands/go.md`
+(`<!-- eval-gate:block:go-routing:start -->` … `:end`) and the ticket-triage priority rubric in
+`plugins/soleur/agents/support/ticket-triage.md` (`eval-gate:block:ticket-triage`). The block is the
+single source of truth; [scripts/extract-block.cjs](./scripts/extract-block.cjs) projects it and
+[scripts/gen-skill-prompt.cjs](./scripts/gen-skill-prompt.cjs) wraps it into the skill-arm prompt.
+**Regenerate on any source-block edit** (`node scripts/gen-skill-prompt.cjs --all`); the AC4
+round-trip test ([test/extract-block.test.sh](./test/extract-block.test.sh)) asserts the committed
+projection equals the freshly generated one byte-for-byte, so a stale projection fails CI rather than
+silently measuring an out-of-date classifier.
+
+## Gate mode — validation-gated classifier-skill edits
+
+Beyond measuring a delta, the harness gates *edits* to a classifier block: an edit must not regress
+the corpus AND must make its targeted case pass before it is applied
+([scripts/eval-gate.cjs](./scripts/eval-gate.cjs), proposer-agnostic — heal-skill, compound, or a
+manual edit). The registry [gated-skills.json](./gated-skills.json) lists each gated block:
+`{ source_file, block_id, block_start_marker, block_end_marker, target, projected_prompt_path }`.
+
+- **`--check <file>`** — print `{gated, target, block_id}` for whether a file is a gated source
+  (lookup-only, no API). A proposer runs this first; a non-gated edit proceeds unchanged.
+- **`--dry-run --target <id>`** — print the **skill-arm-only** API-call estimate
+  (`2 (current+candidate) × models × (corpus+1) × repeat`; the baseline control arm is skipped) and
+  exit without spending.
+- **Real run** (`--target <id> --candidate-file <edited-source> --target-task <json|path>
+  [--repeat N] [--append-on-accept]`) — extract the current block (source on disk) and candidate
+  block (edited file); if they are identical it prints `{accept:true, reason:"no gated-block
+  change"}` (the ungateable no-op). Otherwise it projects both into skill-arm prompts, runs promptfoo
+  skill-arm-only for each with `--output`, normalizes the JSON, and calls the **pure**
+  [computeVerdict()](./scripts/verdict.cjs). On accept with `--append-on-accept`, the synthesized
+  target task is appended to `tasks/<target>.jsonl` (real-data-shaped input is rejected per
+  `cq-test-fixtures-synthesized-only`).
+
+The verdict math is pure and unit-tested with zero API
+([test/verdict.test.sh](./test/verdict.test.sh)): `corpus_regressed = candidate_rate < current_rate
+− epsilon` (ε = one-task-equivalent; boundary equality is NOT a regression), `target_task_passes =
+pooled candidate target rate ≥ 0.5`, `accept = !corpus_regressed && target_task_passes`. **Fail-closed:**
+any gate error (missing key, promptfoo non-zero, malformed task) exits non-zero and defaults to NOT
+accept. The gate is only honest while the skill-arm prompt is a mechanical projection of the block
+(see ADR-068) — if the projection link is broken the gate silently no-ops on out-of-block edits.
 
 ## Run it
 
@@ -82,8 +118,11 @@ hardcoded in any config-class file.
 
 ## Tests
 
-Deterministic, no live LLM (stubbed model outputs):
+Deterministic, no live LLM / no API (stubbed model outputs, recorded result fixtures):
 [gen-models.test.sh](./test/gen-models.test.sh),
 [measure-classification.test.sh](./test/measure-classification.test.sh),
-[gate-classification.test.sh](./test/gate-classification.test.sh). They run under the standard
-`bash scripts/test-all.sh` discovery.
+[gate-classification.test.sh](./test/gate-classification.test.sh),
+[extract-block.test.sh](./test/extract-block.test.sh) (block extraction + AC4 round-trip),
+[verdict.test.sh](./test/verdict.test.sh) (pure `computeVerdict` — accept / corpus-regress /
+target-fail / ε-boundary), and [eval-gate.test.sh](./test/eval-gate.test.sh) (`--check`, `--dry-run`,
+no-op — no API). They run under the standard `bash scripts/test-all.sh` discovery.
