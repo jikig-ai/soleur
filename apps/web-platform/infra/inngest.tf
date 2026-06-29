@@ -182,6 +182,15 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # password in the Supabase dashboard → re-set INNGEST_POSTGRES_URI in Doppler prd
 # (stdin, never argv). Live-verified: inngest v1.19.4 connects + migrates on :5432
 # (runbook § Durable backend, verdict 0.5).
+#
+# SECURITY POSTURE — RLS lockdown (2026-06-29, ADR-030 I8). This project's public
+# tables (Inngest's own schema) have RLS enabled + anon/authenticated grants revoked,
+# remediating the rls_disabled_in_public advisor finding. Inngest is unaffected: it
+# connects as the `postgres` owner over this pooler (owner bypasses non-forced RLS).
+# The lockdown is a versioned SQL artifact auto-applied via the Management API, NOT a
+# TF resource (same out-of-band rationale as this URI):
+#   apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql
+#   .github/workflows/apply-inngest-rls.yml  (merge-apply + daily self-heal)
 
 # ---------------- Pooler config drift (#5558 → #5562) ----------------
 # During the #5558 EMAXCONNSESSION recovery, the dedicated inngest project's
