@@ -494,6 +494,18 @@ discoverability_test:  # command (NO ssh) / expected_output
 
 **Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours. The plan that introduced it (PR-F #3940) passed every other plan-time gate but had no observability declaration; the operator-blind-zone aggregated across the substrate cascade (#4017 → #4111) until issue #4116 surfaced the gap. Codifying the gate at plan-time prevents the next feature from shipping a dark observability surface.
 
+#### 2.9.1. Soak Follow-Through Enrollment (conditional)
+
+If any Acceptance Criterion or the `liveness_signal` declares a **post-deploy soak / time-gated close criterion** — a signal that must hold for N days/hours before an issue closes or an ADR/amendment status flips (`adopting → accepted`), e.g. *"`op:founder-ambiguous` stays at ~0 for 7 days post-deploy"* — the plan MUST add a **Follow-Through Enrollment** deliverable so the closure is automated, not left to human memory (the recurring rot the daily follow-through sweeper exists to prevent — see [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md), §Soak trigger shape).
+
+The deliverable names:
+
+- the verification **script path** under scripts/followthroughs/ (named `<short-name>-<issue>.sh`) — exit 0 when the soak holds; for Sentry-rate soaks, mirror [reconcile-ff-only-sentry-4977.sh](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh) with `start=` pinned strictly after deploy;
+- the tracker's `<!-- soleur:followthrough script=… earliest=<deploy+Nd> secrets=… -->` directive + the `follow-through` label;
+- any new `secrets=` to wire into `.github/workflows/scheduled-followthrough-sweeper.yml`.
+
+This is enforced at ship time (fail-closed) by `/ship` Phase 5.5's **Soak-Gated Follow-Through Enrollment Gate** + the `ship-soak-followthrough-gate.sh` PreToolUse hook; declaring it here means the work phase builds the probe instead of /ship blocking PR-ready on a missing one. **Why:** 2026-06-29 — PR #5671 (#5673) and PR #5675 (#5689) both shipped soak-gated closures in prose with no enrollment; both trackers were left to rot until caught manually.
+
 ### 2.10. Architecture Decision (ADR / C4) Gate
 
 [skill-enforced: plan Phase 2.10 — `wg-architecture-decision-is-a-plan-deliverable`]

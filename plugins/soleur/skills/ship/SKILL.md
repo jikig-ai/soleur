@@ -995,6 +995,71 @@ done
 
 **Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late); this gate moved enforcement from honor-system to mechanical. The `playwright-attempt:` precondition (2026-06-10) closes a second bypass: PR #5082's CF-token-widen was classified "operator-only, MFA-gated" and filed as `deferred-automation` WITHOUT any browser attempt — a real attempt later reached the editable token form (the gate was the one-time login, not MFA), proving the assertion-without-attempt was the actual defect. See `knowledge-base/project/learnings/workflow-patterns/2026-06-10-playwright-attempt-evidence-before-operator-only.md`.
 
+### Soak-Gated Follow-Through Enrollment Gate (mandatory)
+
+Blocks PR-ready when the PR (or its linked plan/spec) declares a **post-deploy soak / time-gated close criterion** for a tracker issue, but that tracker is NOT enrolled in the follow-through sweeper (`follow-through` label + a valid `<!-- soleur:followthrough script=... earliest=... -->` directive whose `script=` exists under [scripts/followthroughs/](../../../../scripts/followthroughs/)). Without enrollment the soak relies on human memory to revisit — the exact rot the sweeper exists to prevent (see [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md)).
+
+This is the soak-class counterpart to Phase 7 Step 3.5's `⏳`-marked test-plan scan: Step 3.5 fires only on explicit `⏳` items, so a soak declared in PR/plan **prose** ("stays at 0 for 7 days post-deploy", "adopting → accepted after the AC8 soak") slips past it. This gate detects the prose form and requires enrollment BEFORE merge.
+
+Emit rule-application telemetry (records the gate fired):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-pm-class-followthrough-for-operator-dogfood applied \
+  '`/ship` Phase 5.5 blocks PR-ready on an unenrolled soak-gated follow-up'
+```
+
+**Detection.** Capture the PR body (strip fenced code blocks, fail-closed on an unbalanced fence — reuse the Undeferred Operator-Step Gate's awk), concatenate the linked plan/spec (Shared Plan-File Resolution shape from preflight), then scan the combined text for a soak signal. Bash ERE has no `(?i)` — use `grep -iE`.
+
+```bash
+COMBINED=$(mktemp); trap 'rm -f "$COMBINED"' EXIT INT TERM
+gh pr view --json body --jq .body | awk '
+  /^```/ { in_fence = !in_fence; next } !in_fence { print }
+  END { if (in_fence) exit 2 }' > "$COMBINED" \
+  || gh pr view --json body --jq .body > "$COMBINED"   # fail-closed: unstripped
+PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$COMBINED" | head -1 || true)
+[[ -n "$PLAN" && -f "$PLAN" ]] && cat "$PLAN" >> "$COMBINED"
+
+# Soak signal: post-deploy time-gated close criteria expressed in prose.
+SOAK_RE='soak|stays? (at )?(~?0|zero)|[0-9]+[- ]day[s]?( post-deploy| soak)|post-deploy (soak|verif|observ)|adopting[[:space:]]*(→|->|to)[[:space:]]*accepted|status[[:space:]]+flip'
+SOAK_HIT=$(grep -niE "$SOAK_RE" "$COMBINED" | head -5 || true)
+```
+
+If `$SOAK_HIT` is empty → **SKIP** silently (no soak-gated close criterion). If a soak signal fires, extract every tracker ref and verify enrollment:
+
+```bash
+REFS=$(grep -oiE '(Ref|Tracks|Closes|Fixes) #[0-9]+' "$COMBINED" | grep -oE '[0-9]+' | sort -u)
+UNENROLLED=()
+for n in $REFS; do
+  state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
+  [ "$state" = "OPEN" ] || continue   # closed/absent trackers need no soak enrollment
+  labels=$(gh issue view "$n" --json labels --jq '[.labels[].name]|join(",")' 2>/dev/null || echo "")
+  body=$(gh issue view "$n" --json body --jq .body 2>/dev/null || echo "")
+  enrolled=0
+  if [[ ",$labels," == *",follow-through,"* ]] \
+     && printf '%s' "$body" | grep -q '<!-- soleur:followthrough' \
+     && printf '%s' "$body" | grep -qE 'earliest='; then
+    spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+    [[ -n "$spath" && -f "$spath" ]] && enrolled=1
+  fi
+  [ "$enrolled" = 1 ] || UNENROLLED+=("$n")
+done
+```
+
+**Rule.** A soak signal fired AND `${#UNENROLLED[@]} > 0` → gate triggers. (Closed trackers, and OPEN trackers already enrolled with an on-disk verification script, pass silently.)
+
+**If not triggered:** Skip silently.
+
+**If triggered:** Halt and present the structured 3-option prompt. The operator chooses one per unenrolled tracker:
+
+1. **Enroll now.** Scaffold a verification script from [followthrough-stub-template.sh](references/followthrough-stub-template.sh) into scripts/followthroughs/&lt;short-name&gt;-&lt;issue&gt;.sh (fill the soak probe — for a Sentry-rate soak, mirror [reconcile-ff-only-sentry-4977.sh](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh): exit 0 when the rate is 0, exit 2 on API failure), add the `follow-through` label + the `<!-- soleur:followthrough script=... earliest=<deploy+Nd> secrets=... -->` directive to the tracker body, land the script in this PR (or a sibling chore PR), then re-run detection. Wire any new secret into `.github/workflows/scheduled-followthrough-sweeper.yml`.
+2. **Cite existing enrollment.** If the tracker is already enrolled via a sibling PR/issue, point at it; re-run detection.
+3. **Override with operator-attestation** (rare — the close criterion is genuinely not mechanically verifiable, e.g. a qualitative judgment). Append `<!-- gate-override: soak-followthrough-enrollment -->` + a one-sentence justification to the PR body, then proceed.
+
+**Headless mode.** Abort with the structured error. No auto-scaffold / auto-override in headless — the probe authorship + verifiable-vs-qualitative judgment require an interactive run.
+
+**Why:** On 2026-06-29 two PRs shipped soak-gated closures in prose with no sweeper enrollment — PR #5675 (#5689 soak) and PR #5671 (#5673 AC8 `op:founder-ambiguous` soak, enrolled retroactively via PR #5724). Both declared the soak in prose, so Phase 7 Step 3.5's `⏳`-only scan never fired and the trackers were left to rot open on human memory. This gate moves soak-class follow-through enrollment from honor-system to a mechanical block-before-ready, reusing the existing follow-through substrate. See `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
 ## Phase 6.4: Unpushed-Commits Gate
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]

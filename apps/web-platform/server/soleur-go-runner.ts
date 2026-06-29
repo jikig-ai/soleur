@@ -538,7 +538,7 @@ export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 90 * 1000;
 export const DEFAULT_MAX_TURN_DURATION_MS = 10 * 60 * 1000;
 // #5313 (deferred #5240 FR-half) — consecutive mismatched `cd <path> && pwd`
 // CWD-verification commands before the runner emits `worktree_enter_failed`.
-// The observed 4826-session loop ran 4+ identical iterations before the turn
+// The observed no-git-checkout loop ran 4+ identical iterations before the turn
 // died; 3 is below that and well above any single transient-fs jitter. A
 // bounded counter (modeled on LEADER_MAX_TURNS), not a duration — it fires in
 // seconds, where the `runner_runaway` duration breaker would take 10 min.
@@ -2230,7 +2230,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // turn is terminated (emitWorkflowEnded sets state.closed) — stop
           // processing further results this message. NOTE: this whole block is
           // gated on `onToolResult` being wired, which today only the cc-soleur-go
-          // (Concierge) path does — exactly the surface that hit the 4826 loop.
+          // (Concierge) path does — exactly the surface that hit the missing-repo loop.
           // A future runner consumer that streams tool-results must wire
           // onToolResult to inherit this guard; the legacy agent-runner path
           // relies on its own runaway breaker.
