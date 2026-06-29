@@ -8,7 +8,7 @@
 // spawned into a corrupt repo, and `/soleur:go` Step 0.0's
 // `git rev-parse --is-inside-work-tree` reported "no git repository" — silently.
 //
-// This module supplies THREE distinct probes (deepen-plan F1/F2/F6), each with a
+// This module supplies TWO distinct probes (deepen-plan F1/F2), each with a
 // deliberately narrow role:
 //
 //   1. `isValidGitWorkTree`  — SYNC structural fast-path gate. Replaces the
@@ -24,21 +24,12 @@
 //      `.git` has no objects = no commits to lose, so removing it is provably
 //      safe.
 //
-//   3. `revParseInsideWorkTree` — ASYNC subprocess recovery discriminator (OFF
-//      the hot path). The authoritative check (same as go.md Step 0.0). Used only
-//      to classify a structurally-suspect-but-NOT-empty `.git` (populated-but-
-//      broken): such a tree is honest-blocked, NEVER blindly rm'd.
-//
 // No installation token is needed — every probe is a local read-only filesystem
-// / `git rev-parse` operation.
+// operation.
 // ---------------------------------------------------------------------------
 
 import { lstatSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 /**
  * SYNC structural validity of `<workspacePath>/.git` — the hot-path gate.
@@ -113,28 +104,4 @@ export function isEmptyCorruptGitDir(workspacePath: string): boolean {
     }
   };
   return markerIsEnoent("HEAD") && markerIsEnoent("objects");
-}
-
-/**
- * ASYNC authoritative recovery discriminator (OFF the hot path, F6). Runs the
- * SAME probe `/soleur:go` Step 0.0 runs: `git -C <workspacePath> rev-parse
- * --is-inside-work-tree`. Returns true only when git confirms a usable work
- * tree. Used to classify a structurally-suspect-but-not-empty `.git`
- * (populated-but-broken) so it can be honest-blocked rather than blindly
- * removed. Never call this on the valid-`.git` fast path. Local read-only — no
- * installation token, no network.
- */
-export async function revParseInsideWorkTree(
-  workspacePath: string,
-): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", workspacePath, "rev-parse", "--is-inside-work-tree"],
-      { timeout: 10_000 },
-    );
-    return stdout.trim() === "true";
-  } catch {
-    return false; // exit 128 / not a work tree / git missing → invalid
-  }
 }

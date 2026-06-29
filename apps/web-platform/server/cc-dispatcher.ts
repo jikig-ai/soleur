@@ -2921,9 +2921,9 @@ export async function dispatchSoleurGo(
   // NOT re-invoked) used to fire-and-forget, so after a mid-session reclaim the
   // next warm turn chdir'd into a `.git`-less workspace before the clone
   // finished → `fatal: not a git repository`. `reprovisionWorkspaceOnDispatch`
-  // self-short-circuits on a present `.git` (one membership-verified resolve
-  // feeds both the stat and the clone), so a `.git`-present warm turn pays only
-  // the resolve the LEADER already pays — never the 120s clone.
+  // self-short-circuits on a VALID `.git` (one membership-verified resolve
+  // feeds both the validity probe and the clone), so a valid-`.git` warm turn
+  // pays only the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
   if (runner.hasActiveQuery(conversationId)) {
     // WARM: the factory did NOT run this turn — gate the agent start on the
@@ -2944,9 +2944,10 @@ export async function dispatchSoleurGo(
       }
     } catch (err) {
       // Fail-safe: reprovisionWorkspaceOnDispatch is already fail-soft (returns
-      // "ok" on a resolver error); this catches an unexpected throw (e.g.
-      // existsSync EACCES/ELOOP) — mirror it and fall through to dispatch rather
-      // than stranding a recoverable turn.
+      // "ok" on a resolver error) and `isValidGitWorkTree` swallows fs errors
+      // internally (never throws on EACCES/ELOOP); this catches an unexpected
+      // reprovision/resolver throw — mirror it and fall through to dispatch
+      // rather than stranding a recoverable turn.
       reportSilentFallback(err, {
         feature: "cc-dispatcher",
         op: "reprovision-on-dispatch-await",

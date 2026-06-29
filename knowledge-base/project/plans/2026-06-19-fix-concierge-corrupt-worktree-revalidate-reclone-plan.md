@@ -676,8 +676,8 @@ logs:
   where: Sentry (breadcrumbs/issues); pino structured logs at the reportSilentFallback boundary
   retention: Sentry project default (jikigai-eu / web-platform)
 discoverability_test:
-  command: 'doppler run -p soleur -c prd -- scripts/sentry-issue.sh --search "feature:repo-resolver-divergence op:corrupt-worktree-at-dispatch"'
-  expected_output: 'a warn-level breadcrumb (extra.recovered=true) when the corrupt .git self-healed, or a paging event (extra.recovered=false) when the re-clone failed; the op-contract test additionally asserts the op is alert-covered'
+  command: 'doppler run -p soleur -c prd -- scripts/sentry-issue.sh --search "(feature:repo-resolver-divergence op:corrupt-worktree-at-dispatch) OR (feature:ensure-workspace-repo op:corrupt-worktree-block)"'
+  expected_output: 'cold-path: a warn-level breadcrumb (extra.recovered=true) when the corrupt .git self-healed, or a paging event (extra.recovered=false) when the re-clone failed; warm-path: an ensure-workspace-repo op:corrupt-worktree-block event when the warm reprovision falls through to ensureWorkspaceRepoCloned and honest-blocks a populated-but-broken .git; the op-contract test additionally asserts the cold op is alert-covered'
 ```
 
 > **F9 caveat:** confirm `scripts/sentry-issue.sh` exists / accepts `--search`

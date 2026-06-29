@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, mkdir, writeFile, symlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  rm,
+  mkdir,
+  writeFile,
+  symlink,
+  chmod,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,6 +69,23 @@ describe("git-worktree-validity", () => {
     expect(isEmptyCorruptGitDir(p)).toBe(false); // objects present → not the empty fingerprint
   });
 
+  it("populated `.git`, HEAD/objects UNREADABLE (EACCES≠ENOENT) → NOT empty-corrupt (never rm'd)", async () => {
+    if (process.getuid?.() === 0) return; // root bypasses mode bits
+    const p = await ws("eacces");
+    await mkdir(join(p, ".git", "objects"), { recursive: true });
+    await writeFile(join(p, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await chmod(join(p, ".git"), 0o000); // lstat(HEAD) → EACCES, not ENOENT
+    try {
+      // Non-vacuity: lstatSync(HEAD/objects) throws EACCES (not ENOENT), so the
+      // ENOENT-positive fingerprint is NOT matched → false. An `existsSync`-based
+      // check would collapse EACCES→false→"absent" and WRONGLY classify this
+      // populated repo as empty-corrupt, authorizing an `rm`.
+      expect(isEmptyCorruptGitDir(p)).toBe(false);
+    } finally {
+      await chmod(join(p, ".git"), 0o755); // restore for afterEach cleanup
+    }
+  });
+
   it("`.git` FILE (gitdir pointer / linked worktree) → VALID, NOT empty-corrupt (never removable)", async () => {
     const p = await ws("gitdir-file");
     await writeFile(join(p, ".git"), "gitdir: /some/other/path/.git/worktrees/x\n");
@@ -84,5 +108,6 @@ describe("git-worktree-validity", () => {
     await writeFile(join(real, "HEAD"), "ref: refs/heads/main\n");
     await symlink(real, join(p, ".git"));
     expect(isEmptyCorruptGitDir(p)).toBe(false); // a symlink is never the rm fingerprint
+    expect(isValidGitWorkTree(p)).toBe(false); // a symlink is neither file nor dir → not valid
   });
 });

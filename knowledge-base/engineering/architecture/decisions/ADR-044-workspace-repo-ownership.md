@@ -777,10 +777,11 @@ never re-cloned. `/soleur:go` Step 0.0 still runs the authoritative `rev-parse`.
   fingerprint.
 - *Run `git rev-parse` on the hot path for full validity* — **REJECTED**: adds a
   subprocess to the common valid-`.git` dispatch (AC7 regression). The structural
-  proxy is the hot-path gate; `rev-parse` is reserved as an off-hot-path recovery
-  discriminator. Residual: a fully-populated-but-internally-broken `.git` that
-  passes the structural proxy is not auto-recovered (rare; honest Step-0.0 error
-  + operator reconnect).
+  proxy is the hot-path gate; no off-hot-path `rev-parse` recovery probe ships. A
+  fully-populated-but-internally-broken `.git` that passes the structural proxy is
+  honest-blocked STRUCTURALLY — it is never auto-recovered (it has objects, so the
+  empty-corrupt fingerprint never authorizes an `rm`) and never silently destroyed
+  (rare; honest Step-0.0 error + operator reconnect).
 
 ### C4 edge note
 

@@ -107,6 +107,14 @@ export async function reprovisionWorkspaceOnDispatch(
     // validity check + empty-corrupt removal + re-clone. The path the probe used
     // is exactly the path `ensureWorkspaceRepoCloned` clones into — probe == clone
     // by construction.
+    //
+    // Observability: a present-but-INVALID `.git` (corrupt / partial clone) falls
+    // through to `ensureWorkspaceRepoCloned`, whose corrupt-recovery surfaces in
+    // Sentry under `feature=ensure-workspace-repo op=corrupt-worktree-block`
+    // (populated-but-broken `.git` honest-blocked, never rm'd) or `op=clone` (a
+    // genuine re-clone failure). These are DISTINCT from the cold dispatch path's
+    // `feature=repo-resolver-divergence op=corrupt-worktree-at-dispatch` breadcrumb
+    // — a warm-path corruption is NOT visible under the cold divergence op.
     if (isValidGitWorkTree(workspacePath)) {
       return "ok";
     }
