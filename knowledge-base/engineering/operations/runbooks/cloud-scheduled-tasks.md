@@ -550,6 +550,39 @@ canary alerts AT exhaustion (within one hourly interval), not before. True
 pre-exhaustion spend-vs-budget alerting is a tracked follow-up (`Ref #5674`,
 needs a new `sk-ant-admin` secret + an operator `ANTHROPIC_MONTHLY_BUDGET_USD`).
 
+**After a PROLONGED (multi-day) outage, re-enable the monitor — credit-restore
+alone is not enough.** Per Sentry's documented cron-monitor behavior, a monitor
+left unhealthy for several days is auto-muted, then disabled (the "we'll
+automatically mute or disable them in a few days" warning email). A **disabled**
+monitor ignores even a recovery `?status=ok` check-in until it is re-enabled, so
+restoring credit does NOT by itself clear the alert. This is NOT a Terraform
+change — the `jianyuan/sentry` provider (0.15.0-beta2) exposes no mute/status
+attribute — so check and un-mute/re-enable via the Sentry REST API. This flow
+needs a WRITE-capable token: use the IaC token `SENTRY_IAC_AUTH_TOKEN`
+(`project:admin` / `alerts:write`) in Doppler `soleur/prd_terraform` — NOT the
+read-scoped token in the read-only examples above:
+
+```bash
+# Read current state (status: active|disabled, isMuted: true|false).
+# ADR-031: for the EU org, prefer the regional host
+#   https://${SENTRY_ORG}.sentry.io/api/0/...  — the bare sentry.io host can
+#   silently 401 via the slug-rewrite / activeorg-cookie bug.
+doppler run -p soleur -c prd_terraform -- bash -c \
+  'curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+    "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/scheduled-community-monitor/" \
+    | jq "{status, isMuted}"'
+```
+
+If `status` is `disabled` or `isMuted` is `true`, re-enable with a `PUT` to the
+same monitor URL (`{"status":"active","isMuted":false}`) using the same token;
+fall back to the Sentry dashboard ONLY on a confirmed API-write failure (record a
+`playwright-attempt:` evidence line). (The GET above is live-verified; the
+PUT/un-mute form is unverified as of writing — it should succeed under
+`project:admin`, but treat a 403 as the dashboard-fallback trigger.) Sibling
+claude-eval monitors (roadmap-review, content-generator, …) may be in the same
+state after a fleet-wide outage — check each. Then follow the **Restore
+Procedure** below to confirm the next check-in goes green.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
