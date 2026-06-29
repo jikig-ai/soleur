@@ -279,6 +279,11 @@ export async function cronUxAuditHandler({
             // stops being generated. prefer-offline (NOT offline): a cold cache
             // degrades to today's drop+baked-dep fallback rather than hard-failing
             // the cron. Do NOT allowlist registry.npmjs.org — that reverses #5199.
+            // The MCP stdio launcher MERGES this `env` over a base that retains
+            // PATH/HOME (so npx still spawns); the #5199 live dry-run on each apply
+            // is the spawn-success check. Worst case if it were NOT inherited: the
+            // drop persists and the baked-dep fallback holds — i.e. today's behavior,
+            // never a hard cron break.
             env: { npm_config_prefer_offline: "true" },
             args: [
               // #5199 — pinned (was @latest). registry.npmjs.org is NOT in the

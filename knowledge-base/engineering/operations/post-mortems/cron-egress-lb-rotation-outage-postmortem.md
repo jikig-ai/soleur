@@ -3,7 +3,7 @@ title: "Claude-eval cron cohort outage — egress firewall over-blocked LB-rotat
 date: 2026-06-16
 incident_pr: 5413
 incident_window: "~2026-06-08 to 2026-06-16 (per-cron; community-monitor down since 06-12, follow-through since ~06-08, bug-fixer since 06-14)"
-recovery_at: "2026-06-29 — #5413's allowlisted-host LB-rotation class verified recovered (no linkedin/x/discord/resend/bsky/buttondown/hn.algolia IPs in the live egress-blocked DST set over 06-27→06-29). The residual egress-blocked volume is a SEPARATE class (intended npx→registry drops + sporadic un-enumerated telemetry/MCP hosts), tracked #5676 — NOT a #5413 regression."
+recovery_at: "2026-06-29 (#5413 LB-rotation class verified recovered; residual egress-blocked volume is a separate class — see ## Status. NOT a #5413 regression.)"
 suspected_change: "ADR-052 container egress firewall rollout (~06-08 to 06-14) — default-drop allowlist with a single-A-record resolver"
 brand_survival_threshold: single-user incident
 status: resolved
@@ -58,12 +58,32 @@ in the emitter), so it conflated two unrelated phenomena. Live DST breakdown:
 | Blocked DST | Host (DoH both resolvers + TLS-SNI) | Class |
 |---|---|---|
 | `104.16.x.34` (dominant) | `registry.npmjs.org` (Cloudflare anycast) | **Intended-by-design** — bare `npx` registry-metadata probe the firewall correctly drops; `@playwright/mcp` resolves to the image-baked dep (#5199). NOT an allowlist gap. Silenced at source in #5676 (`npm_config_prefer_offline`). |
-| `34.149.66.137` | GCP global-LB (Datadog `us5` default vhost) — NOT the app's Sentry | Sporadic un-enumerated telemetry phone-home. App's own Sentry ingest (`SENTRY_INGEST_DOMAIN` → `34.160.81.0`) is **never** in the blocked set, so there is no blackholed-observability hole. Stays blocked; tracked in the #5676 follow-up. |
-| `64.239.123.129` / `104.18.25.159` / `198.x` | `mcp.vercel.com` / `mcp.cloudflare.com` / `mcp.stripe.com` | Sporadic remote-MCP dials (1–3 hits). Stays blocked; tracked in the #5676 follow-up. |
+| `34.149.66.137` | GCP global-LB (Datadog `us5` default vhost) — NOT the app's Sentry | Sporadic un-enumerated telemetry phone-home. App's own Sentry ingest (`SENTRY_INGEST_DOMAIN` → `34.160.81.0`) is **never** in the blocked set, so there is no blackholed-observability hole. Stays blocked; tracked in the #5691 follow-up. |
+| `64.239.123.129` / `104.18.25.159` / `198.x` | `mcp.vercel.com` / `mcp.cloudflare.com` / `mcp.stripe.com` | Sporadic remote-MCP dials (1–3 hits). Stays blocked; tracked in the #5691 follow-up. |
 
 Neither residual class is a #5413 regression. The dominant noise is the intended
 npm probe; the rest are low-volume un-enumerated hosts whose correct posture is
 **blocked** pending per-host evidence (follow-up issue).
+
+**Attribution is exact-IP-verified, NOT default-cert-inferred (the load-bearing
+evidence for `resolved`).** Several residual IPs sit on LB ranges shared with
+allowlisted #5413 hosts, so IP→host was disambiguated by resolving each allowlisted
+host (DoH, both `8.8.8.8` + `1.1.1.1`) and confirming **none** rotates through any
+residual blocked IP: `api.stripe.com` → `198.{137.150,202.176}.{21,101,221}` (never
+the blocked `.161`/`.231` — those are `mcp.stripe.com`); `api.linkedin.com` →
+`104.18.41.41` (never `104.18.25.159` — that is `mcp.cloudflare.com`);
+`hn.algolia.com` → `34.160.168.181` only (never `34.149.x`); `discord.com`/`api.x.com`
+on `162.159.x`. `34.149.66.137` serves only the Datadog `us5` cert across **every**
+tested SNI (including allowlisted-host SNIs), confirming it fronts no allowlisted
+host. So the #5413-class recovery rests on exact-IP disjointness, not on the
+unreliable shared-anycast default-cert (the same caution this doc applies to the
+Cloudflare `104.16.0.0/13` npm pool).
+
+**Recovery-window caveat.** The 100-event sample spans ~2 days (06-27→06-29), shorter
+than this incident's original 4–8-day per-cron manifestation latency. A low-frequency
+cron could still surface a missed rotation IP later; the per-host recovery criterion
+below keeps that observable, and any recurrence on an **allowlisted** host re-opens
+this post-mortem.
 
 ## Symptom
 

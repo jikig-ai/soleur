@@ -95,8 +95,10 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
         (`npm_config_prefer_offline` on the cron-spawned npx, #5676), so npx uses
         the baked `_cacache` and skips the dial when cache-warm — without
         widening the allowlist.
-     2. **Emitter-level DST-IP/range suppression of intended drops is REJECTED.**
-        `registry.npmjs.org` rides Cloudflare's shared anycast `104.16.0.0/13`;
+     2. **Emitter-level DST-IP/range suppression of intended drops is REJECTED**
+        (this constrains the §5 fail-loud emitter, not the §4 resolver under which
+        this amendment is nested — recorded here to keep the intended-drop decision
+        in one block). `registry.npmjs.org` rides Cloudflare's shared anycast `104.16.0.0/13`;
         any IP/range exclusion that muted the npm drop would simultaneously mask a
         genuine future allowlist gap to ANOTHER Cloudflare-fronted host — i.e. it
         would self-blind exactly the Branch-A gap class this firewall exists to

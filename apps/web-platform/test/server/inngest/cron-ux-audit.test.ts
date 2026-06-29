@@ -143,16 +143,22 @@ describe("#5676 — npx registry-probe silenced at source (intended-drop, ADR-05
     expect(SUT_SOURCE).toContain("npm_config_prefer_offline");
     // prefer-offline degrades gracefully; `offline` would hard-fail on a cold
     // _cacache (Docker layer pruning can drop it) — must NOT use the hard form.
-    expect(SUT_SOURCE).not.toMatch(/npm_config_offline\s*:/);
+    // `\b` (not `\s*:`) also catches a JSON-quoted `"npm_config_offline":` form;
+    // it can't match the prefer-offline token (no `npm_config_offline` substring
+    // exists in `npm_config_prefer_offline`).
+    expect(SUT_SOURCE).not.toMatch(/npm_config_offline\b/);
   });
 
-  it("wires the env as an exact literal on the (sole) mcpServers.playwright npx config", () => {
-    // The env must ride the MCP-server config the cron writes to .mcp.json so
-    // the spawned npx inherits it. There is exactly one mcpServers block (sweep
-    // confirmed), so the exact env literal next to the npx command is the
-    // co-location proof; assert the literal value is "true" (string, as npm reads
-    // npm_config_* env vars), not a bare boolean.
-    expect(SUT_SOURCE).toContain('env: { npm_config_prefer_offline: "true" }');
+  it("wires the prefer-offline env on the (sole) mcpServers.playwright npx config", () => {
+    // The env must ride the MCP-server config the cron writes to .mcp.json so the
+    // spawned npx inherits it. Whitespace-tolerant so a prettier reflow (multi-line
+    // / brace spacing) doesn't false-RED a behavior-intact config; pins the key +
+    // the "true" string value (npm reads npm_config_* env vars as strings).
+    expect(SUT_SOURCE).toMatch(
+      /env:\s*\{\s*npm_config_prefer_offline:\s*["']true["']\s*\}/,
+    );
+    // Exactly one mcpServers block (sweep confirmed), so asserting the npx command
+    // is also present establishes both ride the same playwright config.
     expect(SUT_SOURCE).toContain('command: "npx"');
   });
 });
