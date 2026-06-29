@@ -74,14 +74,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const userB = ws1.members[1];
       const userC = ws2.members[0];
 
-      // Set repo_url for all users
-      for (const user of [userA, userB, userC]) {
-        const { error } = await service
-          .from("users")
-          .update({ repo_url: REPO_URL })
-          .eq("id", user.userId);
-        expect(error, `set repo_url for ${user.email}`).toBeNull();
-      }
+      // NOTE: `users.repo_url` was dropped by mig 112 (ADR-044 PR-2b). This
+      // suite asserts conversation-visibility RLS, and each conversation row
+      // below carries its own `conversations.repo_url` (mig 029, a distinct
+      // surviving column) — no `users` seed is required.
 
       // Create User A's private conversation (via service role)
       privateConvId = randomUUID();

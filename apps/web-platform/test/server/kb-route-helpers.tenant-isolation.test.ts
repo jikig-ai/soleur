@@ -10,11 +10,18 @@
  * via a tenant client any more.
  *
  * These cases survive as a standalone RLS regression guard on the `users`
- * row + extras columns (`auth.uid() = id`): the columns remain RLS-protected
- * and other code paths still read them, so a policy regression must stay
- * caught even though the KB write routes no longer depend on this read.
+ * row (`auth.uid() = id`): the row stays RLS-protected and other code paths
+ * still read it, so a policy regression must stay caught even though the KB
+ * write routes no longer depend on this read.
  *
- * Asserts: A's tenant JWT cannot read B's `users` row / extras columns.
+ * NOTE: the legacy `users.{workspace_path,workspace_status,repo_url,
+ * github_installation_id}` columns this suite once probed were dropped by
+ * mig 112 (ADR-044 PR-2b; repo/workspace state moved to the `workspaces`
+ * table). The `users` `auth.uid() = id` RLS policy is unchanged, so we now
+ * probe it against surviving `users` columns (`email`, `role`) — the column
+ * choice is incidental, the row-level deny is the property under test.
+ *
+ * Asserts: A's tenant JWT cannot read B's `users` row.
  * Tested at the data-layer. The KB route handlers' 404/503/400 behavior is
  * covered by route-level tests (kb-rename / kb-delete / kb-route-helpers).
  *
@@ -85,18 +92,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(user.id).toBeTruthy();
       }
 
-      for (const user of [userA, userB]) {
-        const { error } = await service
-          .from("users")
-          .update({
-            workspace_path: `/tmp/synthetic/${user.id.slice(0, 8)}`,
-            workspace_status: "ready",
-            repo_url: `https://github.com/test/${user.id.slice(0, 8)}.git`,
-            github_installation_id: parseInt(user.id.slice(0, 8), 16),
-          })
-          .eq("id", user.id);
-        expect(error).toBeNull();
-      }
+      // No seed needed: the legacy `users` workspace/repo columns were
+      // dropped by mig 112 (ADR-044 PR-2b). `email`/`role` are populated by
+      // createUser + the mig-053 trigger and survive, so the `auth.uid() = id`
+      // deny can be probed against them without a seed.
 
       _resetTenantCache();
       const aMint = await mintFounderJwt(userA.id);
@@ -120,39 +119,29 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("baseline: A reads own users row", async () => {
       const { data, error } = await aClient
         .from("users")
-        .select(
-          "workspace_path, workspace_status, repo_url, github_installation_id",
-        )
+        .select("email")
         .eq("id", userA.id)
         .single();
       expect(error).toBeNull();
-      expect(data?.workspace_path).toContain("/tmp/synthetic/");
+      expect(data?.email).toBe(userA.email);
     });
 
-    test("users-RLS — A cannot read B's workspace tuple (former KB-helper read shape)", async () => {
+    test("users-RLS — A cannot read B's users row (former KB-helper read shape)", async () => {
       const { data, error } = await aClient
         .from("users")
-        .select(
-          "workspace_path, workspace_status, repo_url, github_installation_id",
-        )
+        .select("email")
         .eq("id", userB.id)
         .single();
       expect(data).toBeNull();
       expect(error?.code).toBe("PGRST116");
     });
 
-    test("users-extras RLS guard — A cannot read B's extras (repo_url, installation_id)", async () => {
+    test("users-RLS guard — A cannot read B's users row via a second column probe (role)", async () => {
       const { data, error } = await aClient
         .from("users")
-        .select(
-          "workspace_path, workspace_status, repo_url, github_installation_id",
-        )
+        .select("role")
         .eq("id", userB.id)
-        .single<{
-          workspace_path: string;
-          repo_url: string;
-          github_installation_id: number;
-        }>();
+        .single<{ role: string }>();
       expect(data).toBeNull();
       expect(error?.code).toBe("PGRST116");
     });
