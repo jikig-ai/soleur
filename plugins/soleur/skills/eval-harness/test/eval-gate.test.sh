@@ -76,6 +76,55 @@ else
   fail "candidate-file == live source is refused" "got: $out"
 fi
 
+# --- --check: the two added gated sources resolve to their targets ---
+out=$(node "$GATE" --check plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md)
+if [[ "$(echo "$out" | jqget gated)" == "true" && "$(echo "$out" | jqget target)" == "lane-inference" && "$(echo "$out" | jqget block_id)" == "lane-inference" ]]; then
+  pass "--check gated source (brainstorm-domain-config.md -> lane-inference)"
+else
+  fail "--check gated source (lane-inference)" "got: $out"
+fi
+
+out=$(node "$GATE" --check plugins/soleur/skills/incident/SKILL.md)
+if [[ "$(echo "$out" | jqget gated)" == "true" && "$(echo "$out" | jqget target)" == "incident-threshold" ]]; then
+  pass "--check gated source (incident/SKILL.md -> incident-threshold)"
+else
+  fail "--check gated source (incident-threshold)" "got: $out"
+fi
+
+# --- gate path: --dry-run resolves TARGET_RESOURCES for the new targets (no API). ---
+# A missing TARGET_RESOURCES entry would die() here — so this is the load-bearing proof
+# that the GATE (not just the measurement config) is actually wired for the new surfaces.
+for t in lane-inference incident-threshold; do
+  out=$(node "$GATE" --dry-run --target "$t" --repeat 5)
+  calls=$(echo "$out" | jqget estimated_api_calls)
+  # 2 (current+candidate) x 3 models x (7 corpus + 1 target) x 5 repeat = 240
+  if [[ "$(echo "$out" | jqget dry_run)" == "true" && "$calls" == "240" ]]; then
+    pass "--dry-run estimate ($t, repeat 5) = $calls"
+  else
+    fail "--dry-run ($t)" "got: $out"
+  fi
+done
+
+# --- registry-coverage: every gated target is wired in BOTH per-target maps ---
+# A target present in gated-skills.json but missing from TARGET_RESOURCES ships the gate
+# DORMANT (--check says gated:true while --target/--dry-run die fail-closed). This guard
+# makes that drift fail CI for any future target, not just these two.
+if node -e '
+  const reg = require(process.argv[1]);
+  const { TARGET_CONFIG } = require(process.argv[2]);
+  const { TARGET_RESOURCES } = require(process.argv[3]);
+  const missing = [];
+  for (const e of reg) {
+    if (!TARGET_CONFIG[e.target]) missing.push(e.target + " (gen-skill-prompt TARGET_CONFIG)");
+    if (!TARGET_RESOURCES[e.target]) missing.push(e.target + " (eval-gate TARGET_RESOURCES)");
+  }
+  if (missing.length) { process.stderr.write("uncovered targets: " + missing.join(", ") + "\n"); process.exit(1); }
+' "$SKILL_DIR/gated-skills.json" "$SKILL_DIR/scripts/gen-skill-prompt.cjs" "$SKILL_DIR/scripts/eval-gate.cjs" 2>/tmp/eval-gate-coverage.err; then
+  pass "registry-coverage: every target in TARGET_CONFIG and TARGET_RESOURCES"
+else
+  fail "registry-coverage" "$(cat /tmp/eval-gate-coverage.err)"
+fi
+
 if [[ "$fails" -gt 0 ]]; then
   echo "eval-gate: $fails assertion(s) failed"
   exit 1

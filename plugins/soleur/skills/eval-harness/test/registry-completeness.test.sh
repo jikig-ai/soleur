@@ -52,7 +52,9 @@ src_set="$(scan_ids | sort -u)"
 reg_set="$(registry_ids | sort -u)"
 
 # Characterize the live scan (Kieran: don't just exit-0; pin the production command's output).
-expected_set=$'go-routing\nticket-triage'
+# Sorted set; update when a gated classifier surface is added/removed (PARITY below is the
+# robust invariant — this literal is the belt-and-suspenders scanner-output pin).
+expected_set=$'go-routing\nincident-threshold\nlane-inference\nticket-triage'
 if [[ "$src_set" == "$expected_set" ]]; then
   pass "live scan characterized as exactly {go-routing, ticket-triage}"
 else
