@@ -30,10 +30,14 @@ subjective/open-ended surfaces are out of scope by construction (parent Decision
 ## Goals
 
 - Bring **brainstorm lane-inference** (`procedural | single-domain | cross-domain`) under the gate.
-- Bring **skill-security-scan verdict** (`LOW-RISK | REVIEW | HIGH-RISK`) under the gate.
-- Each surface uses the existing additive recipe with **no new assert script** (both are
-  single-token).
-- Deliver as **one PR per surface**, lane-inference first.
+- Bring **incident brand_survival_threshold** (`none | single-user incident | aggregate pattern`)
+  under the gate. (Originally skill-security-scan; replaced at plan-review — that scanner is
+  deterministic `jq` aggregation over YAML rule files, not an LLM-applied prose rubric, so projecting
+  its prose is a dishonest gate target. incident Phase 1 criteria IS the LLM-applied rule.)
+- Each surface uses the existing additive recipe with **no new assert script**, but DOES edit three
+  hardcoded per-target maps (`gen-skill-prompt.cjs TARGET_CONFIG`, `eval-gate.cjs TARGET_RESOURCES`,
+  and the `extract-block.test.sh` round-trip loop) — see the plan's Research Reconciliation.
+- Deliver as **one PR, two commits** (lane-inference, then incident-threshold).
 
 ## Non-Goals
 
@@ -42,8 +46,7 @@ subjective/open-ended surfaces are out of scope by construction (parent Decision
   Tracked in a separate issue.
 - **Wiring any new surface into per-PR CI.** The opt-in validation run stays manual, as for the
   v1 surfaces (the CI-backstop decision is a separate deferred item from the parent brainstorm).
-- **incident `brand_survival_threshold`** and any other surface beyond the two named (noted as a
-  future candidate, not built here).
+- Any classifier surface beyond the two named (skill-security-scan, gdpr-gate, ux-design-lead, etc.).
 - Any change to the shared asserts, `verdict.cjs`, `parse-label.cjs`, or `models.generated.json`.
 
 ## Functional Requirements
@@ -63,32 +66,42 @@ subjective/open-ended surfaces are out of scope by construction (parent Decision
 - **FR5 — lane-inference config + registry.** Add `promptfooconfig.lane-inference.yaml`
   mirroring the existing configs, and a `gated-skills.json` row
   (`source_file`, `block_id`, markers, `target`, `projected_prompt_path`).
-- **FR6 — skill-security-scan enum.** Add `enums/skill-security-scan.json` with
-  `["LOW-RISK", "REVIEW", "HIGH-RISK"]`.
-- **FR7 — skill-security-scan golden set.** Add `tasks/skill-security-scan.jsonl`, ~6-8
-  synthesized tasks: at least one clean LOW-RISK skill, one borderline REVIEW, one
-  unambiguous HIGH-RISK (e.g. embeds a curl|bash, exfiltrates env), **plus a
-  max-severity-aggregation case** (multiple low signals that must still aggregate to the
-  documented verdict). Synthesized fixtures only.
-- **FR8 — skill-security-scan arm prompts.** Add baseline + generated skill projection of the
-  verdict-rubric block.
-- **FR9 — skill-security-scan source sentinels.** Wrap the verdict/aggregation rubric block in
-  `skill-security-scan/SKILL.md` with `eval-gate:block:skill-security-scan` markers; projection
-  round-trips byte-for-byte.
-- **FR10 — skill-security-scan config + registry.** Add
-  `promptfooconfig.skill-security-scan.yaml` and a `gated-skills.json` row.
-- **FR11 — opt-in validation run per surface.** For each surface, run the harness manually
-  (`npx promptfoo eval -c promptfooconfig.<target>.yaml --repeat 3`) and record the
-  baseline-vs-skill delta in the PR body as the opt-in evidence. Disclose the API spend
-  (`hr-autonomous-loop-skill-api-budget-disclosure`).
+- **FR6 — incident-threshold enum.** Add `enums/incident-threshold.json` with
+  `["none", "single-user incident", "aggregate pattern"]`. (Multi-word labels are
+  `parse-label.cjs`-safe — verified.)
+- **FR7 — incident-threshold golden set.** Add `tasks/incident-threshold.jsonl`, ~6-8
+  synthesized tasks: a no-user-surface internal incident (→ `none`), a single credential/data
+  exposure (→ `single-user incident`), a systemic multi-tenant breach (→ `aggregate pattern`),
+  **plus a borderline single-vs-aggregate case**. Synthesized fixtures only.
+- **FR8 — incident-threshold arm prompts.** Add baseline + generated skill projection of the
+  Phase 1 criteria block.
+- **FR9 — incident-threshold source sentinels.** Wrap the §Phase 1 — Classification criteria
+  block (the 3-tier bullets + intro; exclude the advisory-output example and confirm prompt) in
+  `incident/SKILL.md` with `eval-gate:block:incident-threshold` markers; projection round-trips
+  byte-for-byte.
+- **FR10 — incident-threshold config + registry.** Add
+  `promptfooconfig.incident-threshold.yaml` and a `gated-skills.json` row.
+- **FR-MAPS — three hardcoded maps per surface.** For BOTH surfaces, add the target to
+  `gen-skill-prompt.cjs TARGET_CONFIG` (render + enumPath), `eval-gate.cjs TARGET_RESOURCES`
+  (tasks + enumPath — without this the gate path dies fail-closed), and data-drive the
+  `extract-block.test.sh` round-trip loop from the registry. Add a registry-coverage consistency
+  test asserting every target ∈ both maps.
+- **FR11 — opt-in validation run per surface.** Run the harness manually per surface
+  (`npx promptfoo eval -c promptfooconfig.<target>.yaml --repeat 3`); record both
+  baseline-vs-skill deltas in the single PR body. Disclose the API spend
+  (`hr-autonomous-loop-skill-api-budget-disclosure`). Also run the gate path
+  (`node scripts/eval-gate.cjs --dry-run --target <t>`, no API) to prove the gate is wired.
 
 ## Technical Requirements
 
-- **TR1 — additive only.** Reuse `measure-classification.cjs`, `gate-classification.cjs`,
-  `parse-label.cjs`, `verdict.cjs`, and `models.generated.json` unchanged. No new script.
-- **TR2 — projection round-trip under existing tests.** The AC4 round-trip test
-  (`test/extract-block.test.sh`) must pass for each new sentinel-wrapped block; regenerate
-  projections with `node scripts/gen-skill-prompt.cjs --all` on any source-block edit.
+- **TR1 — no new assert script, but three per-target maps.** Reuse `measure-classification.cjs`,
+  `gate-classification.cjs`, `parse-label.cjs`, `verdict.cjs`, `models.generated.json` unchanged.
+  Edit `gen-skill-prompt.cjs TARGET_CONFIG`, `eval-gate.cjs TARGET_RESOURCES`, and the
+  `extract-block.test.sh` round-trip loop (data-drive the last from the registry).
+- **TR2 — projection round-trip + registry-coverage.** The round-trip test
+  (`test/extract-block.test.sh`, data-driven from the registry) must pass for each new
+  sentinel-wrapped block; regenerate with `node scripts/gen-skill-prompt.cjs --all` on any
+  source-block edit. A consistency test asserts every registry target ∈ both per-target maps.
 - **TR3 — sentinel placement must not break the source file's own consumers.** For
   lane-inference, the §Lane Inference block is referenced by downstream skills "by heading" —
   the HTML-comment sentinels must sit inside the section without altering the heading or the
@@ -105,15 +118,19 @@ subjective/open-ended surfaces are out of scope by construction (parent Decision
 ## Acceptance Criteria
 
 - AC1: `gated-skills.json` has 4 rows (go-routing, ticket-triage, lane-inference,
-  skill-security-scan), each pointing at a real source file with present sentinel markers.
+  incident-threshold), each pointing at a real source file with present sentinel markers.
 - AC2: `node scripts/eval-gate.cjs --check <source-file>` reports `{gated:true}` for both new
   source files.
-- AC3: `bash scripts/test-all.sh` passes (AC4 round-trip green for both new projections).
-- AC4: Each PR body records the manual opt-in run's baseline-vs-skill delta + API spend.
-- AC5: A deferred GitHub issue exists for the pdr-* multi-label set-membership gate.
+- AC3 (gate path): `node scripts/eval-gate.cjs --dry-run --target <t>` prints a valid estimate
+  (no API) for both — proves `TARGET_RESOURCES` is wired (else the gate ships dormant).
+- AC4: registry-coverage consistency test green (every target ∈ TARGET_CONFIG ∩ TARGET_RESOURCES).
+- AC5: `bash scripts/test-all.sh` passes (data-driven round-trip green for both new projections).
+- AC6: the single PR body records both opt-in deltas + API spend; uses `Ref #5704` (not `Closes`).
+- AC7: `gh issue close 5704` runs automatically after merge (both commits landed); #5722 stays open.
 
 ## Sequencing
 
-1. **PR 1 — lane-inference** (FR1-FR5, proves the additive template). References #5704.
-2. **PR 2 — skill-security-scan** (FR6-FR10). References #5704.
-3. Close #5704 when both land; file the deferred pdr issue at brainstorm-end (AC5).
+One PR, two commits, `Ref #5704`:
+1. **Commit 1 — lane-inference** (FR1-FR5 + FR-MAPS).
+2. **Commit 2 — incident-threshold** (FR6-FR10 + FR-MAPS).
+3. Auto-close #5704 after merge (both commits landed); #5722 (deferred pdr) stays open.
