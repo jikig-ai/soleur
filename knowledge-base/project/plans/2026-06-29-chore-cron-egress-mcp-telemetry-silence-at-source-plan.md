@@ -13,6 +13,18 @@ related: [5676, 5685, 5199, "ADR-052"]
 
 🔧 **Type:** chore / investigation + at-source fix · **Priority:** P3-low · **Domain:** engineering
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-29 · **Reviewers:** architecture-strategist, code-simplicity-reviewer, observability-coverage-reviewer (all code-verified; zero P0 blockers).
+
+Corrections folded in from review:
+1. **Pre-merge proof is primary, not the post-merge absence sweep.** Spike A's `--debug` zero-connect trace + the argv unit test *prove* the dial is gone at source; "DST absent over 3 days" is statistically unsound for vol-1..3 sporadic drops (absence ≡ no-fix). AC7 demoted to corroboration.
+2. **ux-audit losing Playwright would be a SILENT exit-0 green degradation** — the Sentry Crons monitor is liveness-only (fatal classes: credit/auth/spawn/timeout, `cron-ux-audit.ts:375-440`). The real guard is pre-merge (Spike B + the `cron-ux-audit.ts` parity test), NOT a runtime FAILED check-in. failure_mode-1 corrected.
+3. **The 2 inline-spawn crons do NOT pass `--plugin-dir`** (`cron-daily-triage.ts:140`, `cron-follow-through-monitor.ts:237`) → they never dial the MCP hosts; for them ONLY the telemetry env is load-bearing (strict-mcp-config is defensive belt-and-suspenders). AC3 rationale corrected.
+4. **Drift guard hardened**: replace the weak git-grep parity with a structural invariant — `resolveClaudeBin()` may be referenced ONLY in the substrate + the 2 known inline crons; a new inline spawner trips the test. Follow-up filed to migrate the 2 inline crons onto the `spawnClaudeEval` chokepoint (deletes ~150 LoC of duplicated abort logic — arch P1-1).
+5. Simplicity trims: Spikes B/C folded into Spike A; idempotency guard dropped (no caller sets the flag); separate parity-test file folded into the substrate test.
+6. ux-audit's `.mcp.json` is a **per-fire overlay** ux-audit already writes into `spawnCwd` at setup (`cron-ux-audit.ts:302-307`: pinned `@playwright/mcp@0.0.75`, container profile, `npm_config_prefer_offline`); `--mcp-config .mcp.json` (relative to spawnCwd) resolves to that overlay, not the repo-root dev file.
+
 ## Overview
 
 Follow-up to #5676 (which silenced the dominant intended drop — the `npx`
@@ -68,7 +80,8 @@ cert is the *default* vhost on a shared GCP global-LB — per
 `2026-06-29-egress-residual-is-intended-drop-...md` it does NOT prove the customer.
 Claude Code's exact telemetry hosts are not publicly documented, so this cannot
 be proven statically; the disposition (below) eliminates every plausible dialer
-at source and confirms via post-deploy Sentry absence.
+at source (`--strict-mcp-config` drops context7; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+kills CC telemetry), with post-deploy Sentry rate-comparison as corroboration (AC7).
 
 ## Decision (AC2) — keep-blocked + silence-at-source per host
 
@@ -92,8 +105,10 @@ allowlisted.
 
 **If this lands broken, the user experiences:** a cron silently loses a tool it
 needs (e.g. `cron-ux-audit` loses Playwright if `--strict-mcp-config` drops the
-project `.mcp.json` server) → a missed/failed cron check-in (fail-loud via the
-existing Sentry Crons monitor), no user-facing surface.
+`.mcp.json` server) → a zero-screenshot run that exits 0 and posts a GREEN liveness
+check-in (the runtime monitor is liveness-only — it does NOT catch this, obs P1-c).
+The guard is therefore entirely PRE-MERGE (Spike B + the `cron-ux-audit.ts`
+`--mcp-config` parity test); no user-facing surface either way.
 **If this leaks, the user's data is exposed via:** N/A — the change *removes*
 outbound connections; it introduces no new exposure vector and stores no data.
 **Brand-survival threshold:** none — internal cron-substrate egress tightening;
@@ -130,59 +145,88 @@ emitted.
 
 - **0.1 — CWD verify** + read each claude-eval cron's `CLAUDE_CODE_FLAGS`
   (confirm flag-array shape and any trailing `--` separator before editing).
-- **0.2 — Spike A (LOAD-BEARING): does `--strict-mcp-config` stop plugin MCP
-  servers AND leave skills/agents intact?** Run from the repo root:
+- **0.2 — Spike A (LOAD-BEARING — the PRIMARY acceptance proof): does
+  `--strict-mcp-config` stop plugin MCP servers AND leave skills/agents intact?**
+  This deterministic `--debug` trace is the evidence that the dial is gone at
+  source; it is strictly stronger than any post-merge production-absence inference
+  (obs P1-b). Run from the repo root:
   ```bash
   claude --print --plugin-dir plugins/soleur --strict-mcp-config --debug \
-    --allowedTools Skill "Run /soleur:help and stop" 2>&1 | tee /tmp/spikeA.log
+    --allowedTools Skill "Run /soleur:ux-audit --help (or load the skill) and stop" 2>&1 | tee /tmp/spikeA.log
   grep -iE 'mcp\.(cloudflare|vercel|stripe|context7)|connect' /tmp/spikeA.log   # expect: NO connect attempts to the 4 remote MCP hosts
-  grep -iE 'skill|soleur:' /tmp/spikeA.log                                       # expect: skills still resolve
+  grep -iE 'ux-audit|ux-design-lead|skill|agent' /tmp/spikeA.log                 # expect: the ux-audit skill + its ux-design-lead sub-agent still resolve (arch P2-3)
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude --print "stop"; echo "exit=$?"  # telemetry var accepted (folded-in ex-Spike-C)
   ```
-  - **PASS** (no plugin-MCP connection + skills load) → implement the
-    `--strict-mcp-config` injection (Phase 2).
-  - **FAIL** (plugin MCP still connects) → MCP at-source silencing is not
-    achievable via this flag. Fall back to **documentation-only keep-blocked**
-    for the MCP hosts (skip the `--strict-mcp-config` edits); STILL ship the
-    telemetry env (Phase 3) and all docs. Record the spike result in the PR body.
-- **0.3 — Spike B: does `cron-ux-audit` keep Playwright under strict mode?** Confirm
-  `--strict-mcp-config --mcp-config .mcp.json` loads ONLY the project Playwright
-  server (not the plugin's 4):
+  - **PASS** (no plugin-MCP connection + the `ux-audit` skill/`ux-design-lead`
+    agent resolve) → implement the `--strict-mcp-config` injection (Phase 2).
+  - **FAIL** (plugin MCP still connects, OR skill/agent resolution regresses) →
+    MCP at-source silencing is not achievable via this flag. Fall back to
+    **documentation-only keep-blocked** for the MCP hosts (skip the
+    `--strict-mcp-config` edits); STILL ship the telemetry env (Phase 3) and all
+    docs. Record the spike result in the PR body.
+- **0.3 — Spike B (folded into A's transcript): does `cron-ux-audit` keep
+  Playwright under strict mode?** Confirm `--strict-mcp-config --mcp-config .mcp.json`
+  loads ONLY the Playwright server (not the plugin's 4):
   ```bash
   claude --print --plugin-dir plugins/soleur --strict-mcp-config --mcp-config .mcp.json --debug \
     --allowedTools mcp__playwright__browser_navigate "stop" 2>&1 | grep -iE 'playwright|mcp\.(cloudflare|vercel|stripe)'
   # expect: playwright present; cloudflare/vercel/stripe absent
   ```
-- **0.4 — Spike C (telemetry):** confirm `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
-  is accepted (no error) on the installed CLI version (documented var; value `1`).
+  **Semantics-proxy note (arch P2-2):** this spike runs against the repo-root dev
+  `.mcp.json` (dev `user-data-dir`, `@latest`). Prod loads the **per-fire overlay**
+  ux-audit writes into `spawnCwd` (`cron-ux-audit.ts:302-307`: pinned `0.0.75`,
+  container profile, prefer-offline). The spike validates the load-bearing
+  *semantics* (strict + explicit mcp-config = only the named server, plugin's 4
+  suppressed); prod correctness additionally rests on the verified overlay-write +
+  the relative `--mcp-config .mcp.json` resolving against `spawnCwd`. Note this in
+  the PR body.
 
 ### Phase 1 — Tests first (RED) — `cq-write-failing-tests-before`
 
 - **1.1** Extend `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts`:
   - assert `spawnClaudeEval` prepends `--strict-mcp-config` to the argv it passes
-    to `spawn` (capture `spawn` args via a mock/spy), idempotent when already present;
+    to `spawn` (capture `spawn` args via a mock/spy), **positioned before `--print`
+    so it can never land after a trailing `--` prompt separator** (obs P2-b — assert
+    position, not mere presence);
   - assert the spawn env carries `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"`.
-- **1.2** New parity test (or extend the substrate test) asserting the **2 inline
-  spawners** (`cron-daily-triage.ts`, `cron-follow-through-monitor.ts`) also carry
-  `--strict-mcp-config` in their inline flag arrays and the telemetry env var —
-  enumerate via `git grep` on the inline spawn pattern, do not hardcode a count.
+- **1.2 (structural drift invariant — replaces the weak git-grep parity, arch P1-2).**
+  In the same substrate test, assert `resolveClaudeBin()` is referenced **ONLY** in
+  the known spawn sites: `_cron-claude-eval-substrate.ts` + the 2 inline crons
+  (`cron-daily-triage.ts`, `cron-follow-through-monitor.ts`). Implementation:
+  `git grep -l 'resolveClaudeBin' apps/web-platform/server/inngest/functions/` must
+  equal that exact 3-file set. A NEW inline claude-spawner trips this test, forcing
+  the author to either route through `spawnClaudeEval` (auto-inherits the flag+env)
+  OR add the flag+env and update the allowed-set. Also assert the 2 inline crons'
+  flag arrays carry `--strict-mcp-config` and their spawn env carries the telemetry
+  var. (No separate test file — folded here per simplicity review.)
 - **1.3** Extend `apps/web-platform/test/server/inngest/cron-ux-audit.test.ts`:
   assert `CLAUDE_CODE_FLAGS` contains `--mcp-config` + `.mcp.json` (so Playwright
   survives strict mode), kept in lockstep with the existing `mcp__playwright__*`
-  ↔ `CRON_MCP_ALLOWLISTS["cron-ux-audit"]` parity assertion.
+  ↔ `CRON_MCP_ALLOWLISTS["cron-ux-audit"]` parity assertion. This test is the
+  PRIMARY pre-merge guard against the silent "ux-audit loses Playwright" mode (the
+  runtime monitor cannot catch it — obs P1-c).
 
 ### Phase 2 — `--strict-mcp-config` injection (GREEN; only if Spike A PASS)
 
 - **2.1** `_cron-claude-eval-substrate.ts` `spawnClaudeEval`: prepend
-  `--strict-mcp-config` to `flags` (idempotent — skip if already present) at the
-  front of the array (a global option, position-safe before `--print` and before
-  any trailing `--` prompt separator). Single edit; covers all 15 `spawnClaudeEval`
-  callers.
+  `--strict-mcp-config` at index 0 of `flags` (a global option, position-safe
+  before `--print` and before any trailing `--` prompt separator). No idempotency
+  guard — no caller sets the flag (verified; dropped per simplicity review). Single
+  edit; covers all 15 `spawnClaudeEval` callers.
 - **2.2** `cron-ux-audit.ts` `CLAUDE_CODE_FLAGS`: add `--mcp-config`, `.mcp.json`
-  (before the trailing `--`) so the project Playwright server is re-supplied under
-  strict mode. Update the exported-flags comment.
+  (before the trailing `--`) so the Playwright server is re-supplied under strict
+  mode. The relative `.mcp.json` resolves against `spawnCwd` → the **per-fire
+  overlay** ux-audit already writes at setup (`cron-ux-audit.ts:302-307`, pinned
+  `0.0.75` + container profile + prefer-offline), NOT the repo-root dev file.
+  Update the exported-flags comment.
 - **2.3** `cron-daily-triage.ts` + `cron-follow-through-monitor.ts`: add
-  `--strict-mcp-config` to their inline flag arrays (these crons need no MCP server
-  → no `--mcp-config`).
+  `--strict-mcp-config` to their inline flag arrays. **Rationale (arch P2-1):** these
+  crons do NOT pass `--plugin-dir` (`cron-daily-triage.ts:140`,
+  `cron-follow-through-monitor.ts:237`), so they never load the plugin's 4 remote
+  MCP servers and make no MCP dial — for them the load-bearing fix is the telemetry
+  env (Phase 3.2); `--strict-mcp-config` is defensive belt-and-suspenders (guards a
+  future `--plugin-dir` addition / project `.mcp.json` auto-discovery). Do NOT
+  assert a "stops a dial" invariant for these two.
 
 ### Phase 3 — Telemetry env (GREEN; ships regardless of Spike A)
 
@@ -216,6 +260,18 @@ emitted.
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, NOT an allowlist edit; spike-gated
   because plugin-MCP suppression by `--strict-mcp-config` is undocumented.
 
+### Phase 5 — Follow-up (file, do not implement here)
+
+- **5.1** File a tracking issue (label `domain/engineering`, `chore`,
+  `priority/p3-low`): **migrate `cron-daily-triage` + `cron-follow-through-monitor`
+  onto the `spawnClaudeEval` chokepoint** — they currently re-implement ~150 LoC of
+  the substrate's spawn + AbortController + SIGTERM/SIGKILL-escalation block
+  (`cron-daily-triage.ts:225-237`, `cron-follow-through-monitor.ts:481-493`). Routing
+  them through `spawnClaudeEval` auto-inherits the flag+env permanently and dissolves
+  the drift class the Phase 1.2 structural invariant currently polices (arch P1-1).
+  Out of scope for this P3-low chore (larger refactor); the structural invariant is
+  the pragmatic interim guard.
+
 ## Files to Edit
 
 - `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts` — strict-mcp-config prepend + telemetry env merge in `spawnClaudeEval`
@@ -230,8 +286,11 @@ emitted.
 
 ## Files to Create
 
-- `apps/web-platform/test/server/inngest/cron-inline-spawn-strict-mcp-parity.test.ts` — (if not folded into the substrate test) assert the 2 inline spawners carry the flag + env
 - `knowledge-base/project/learnings/bug-fixes/<date>-cron-mcp-telemetry-egress-silence-at-source.md`
+
+(No separate parity-test file — the inline-spawner assertions + the
+`resolveClaudeBin()` structural invariant fold into the existing
+`cron-claude-eval-substrate.test.ts` per simplicity + arch review.)
 
 ## Acceptance Criteria
 
@@ -244,11 +303,17 @@ emitted.
 - [ ] **AC2 (decision recorded):** keep-blocked for all five hosts; no edit to
   `cron-egress-allowlist.txt` or `cron-egress-firewall.test.sh`
   (`git diff --name-only origin/main` shows neither file).
-- [ ] **AC3 (silence-at-source, Spike-A-gated):** if Spike A PASSED, `spawnClaudeEval`
-  argv contains `--strict-mcp-config` (asserted by substrate test) and the 2 inline
-  crons carry it; `cron-ux-audit` re-supplies `.mcp.json` via `--mcp-config`. If
-  Spike A FAILED, the PR body records the failure and ships documentation-only for
-  MCP hosts.
+- [ ] **AC3 (silence-at-source — PRIMARY proof, Spike-A-gated):** Spike A's
+  `--debug` transcript (pasted in PR body) shows ZERO connect attempts to
+  mcp.cloudflare/vercel/stripe/context7 under `--strict-mcp-config`, AND the
+  `ux-audit` skill + `ux-design-lead` sub-agent still resolve. The substrate test
+  asserts `spawnClaudeEval` argv carries `--strict-mcp-config` positioned before
+  `--print`; `cron-ux-audit` re-supplies `.mcp.json` via `--mcp-config`. The 2 inline
+  crons carry the flag as defense (they make no MCP dial — telemetry env is their
+  load-bearing fix). If Spike A FAILED, the PR body records it and ships
+  documentation-only for MCP hosts.
+- [ ] **AC3b (structural drift invariant):** substrate test asserts
+  `resolveClaudeBin()` is referenced only in the substrate + the 2 known inline crons.
 - [ ] **AC4 (telemetry env):** `spawnClaudeEval` env + the 2 inline crons set
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"` (asserted by test).
 - [ ] **AC5 (no regression):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
@@ -259,14 +324,18 @@ emitted.
 
 ### Post-merge (operator/automated)
 
-- [ ] **AC7 (live confirmation, automated):** after `web-platform-release.yml`
-  redeploys the container, query the `op=egress_blocked` Sentry issue
-  (`126858085`) over ≥3 days (incident-skill `SENTRY_ISSUE_RW_TOKEN`, no SSH):
-  the `mcp.vercel/cloudflare/stripe` DSTs (`64.239.123.129`, `104.18.25.159`,
-  `198.202.176.231`, `198.137.150.161`) and the Datadog `34.149.66.137` DST no
-  longer appear. Persisting `34.x` → a dependency phone-home requiring a deeper
-  trace; file a follow-up. (`Ref #5691` in PR body; `gh issue close 5691` after
-  AC7 confirms — ops-remediation post-merge closure.)
+- [ ] **AC7 (live CORROBORATION only — NOT the acceptance gate; obs P1-a/b):** the
+  acceptance proof is pre-merge (AC3 Spike A + the argv unit test). Post-merge, the
+  per-DST absence sweep is corroboration with known limits: the only no-SSH reader
+  `scripts/sentry-issue.sh` exposes issue-summary + latest-event (NOT a 3-day
+  per-DST enumeration), and the drops are sporadic (vol 1–3), so an absence window
+  shorter than the natural inter-arrival gap cannot *confirm* removal for the low-vol
+  MCP hosts — only the source-level proof does. The `34.149.66.137` host (vol 21) is
+  the one DST where a rate-vs-baseline comparison carries signal; if it persists
+  after both at-source levers it is a dependency phone-home needing a `--debug`/
+  strace trace → file a follow-up; do NOT allowlist it. (`Ref #5691` in PR body;
+  `gh issue close 5691` after AC3 passes + a best-effort AC7 check — ops-remediation
+  post-merge closure.)
 
 ## Infrastructure (IaC)
 
@@ -287,21 +356,21 @@ error_reporting:
   destination: Sentry (cq-silent-fallback-must-mirror-to-sentry — reportSilentFallback already wraps spawn errors)
   fail_loud: true
 failure_modes:
-  - mode: cron loses a needed MCP tool (e.g. ux-audit Playwright dropped by strict mode)
-    detection: cron self-reports FAILED / missed Sentry Crons check-in
-    alert_route: existing per-cron Sentry monitor
-  - mode: strict-mcp-config also drops project .mcp.json for ux-audit (Spike B regression)
-    detection: cron-ux-audit.test.ts parity assertion (pre-merge) + ux-audit FAILED check-in (post-merge)
-    alert_route: CI + Sentry Crons
-  - mode: Datadog 34.x DST persists post-deploy (dialer not CC telemetry)
-    detection: AC7 Sentry egress-blocked DST sweep over 3 days
+  - mode: ux-audit loses Playwright under strict mode (SILENT — exits 0, green liveness check-in; the monitor's fatal classes are only credit/auth/spawn/timeout, cron-ux-audit.ts:375-440, so a zero-screenshot run is NOT caught at runtime)
+    detection: PRE-MERGE ONLY — Spike B + cron-ux-audit.ts --mcp-config parity assertion (the static flag/config cannot drift at runtime once asserted)
+    alert_route: CI (vitest); NOT the runtime Sentry Crons monitor
+  - mode: --strict-mcp-config regresses headless skill/agent resolution across the 15 substrate crons (SILENT — same exit-0 green class)
+    detection: PRE-MERGE ONLY — Spike A --debug asserts the ux-audit skill + ux-design-lead sub-agent resolve under strict mode
+    alert_route: CI / spike transcript in PR body
+  - mode: Datadog 34.x DST persists post-deploy (dialer not CC telemetry / not context7)
+    detection: AC7 rate-vs-baseline comparison (vol 21 carries signal; the low-vol MCP hosts do not)
     alert_route: manual Sentry query → follow-up issue
 logs:
   where: Sentry events (kernel drop lines do NOT ship to Better Stack per ADR-052 §5); CC --debug only in spikes
   retention: Sentry default
 discoverability_test:
-  command: "incident-skill SENTRY_ISSUE_RW_TOKEN query of issue 126858085 events; assert the 5 DSTs absent (no ssh)"
-  expected_output: "zero egress-blocked events for mcp.vercel/cloudflare/stripe + 34.149.66.137 over 3 days"
+  command: "claude --print --plugin-dir plugins/soleur --strict-mcp-config --debug --allowedTools Skill 'load /soleur:ux-audit and stop' 2>&1 | grep -iE 'mcp\\.(cloudflare|vercel|stripe|context7)|connect'"
+  expected_output: "no output (zero connect attempts to the 4 remote plugin MCP hosts) — runnable, no SSH; this deterministic --debug trace is the PRIMARY proof the dial is gone at source (post-merge Sentry absence is corroboration only)"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -339,23 +408,34 @@ routed the ADR-052 boundary call to CTO)
 **Assessment:** The change strictly *tightens* container egress (removes
 non-essential plugin-MCP + telemetry dials), fully aligned with ADR-052's
 default-drop philosophy; it widens nothing (no allowlist/CIDR edit). The only risk
-is functional (a cron losing a needed MCP server), bounded by the Spike-A/B gates
-and the ux-audit parity test. CTO-class concern: confirm `--strict-mcp-config`
-does not regress headless skill/agent resolution — covered by Spike A.
+is functional (a cron losing a needed MCP server) and SILENT at runtime, bounded
+by the PRE-MERGE Spike-A/B gates + the ux-audit parity test. CTO-class concern:
+confirm `--strict-mcp-config` does not regress headless skill/agent resolution —
+covered by Spike A. **Advisory (arch P2-5):** this is the 3rd change reasoning
+against ADR-052's boundary with no named egress principle in
+`principles-register.md`; consider registering an "egress default-drop / no
+allowlist-widening for non-essential dials" AP that cites ADR-052 (not a blocker).
 
 ### Product/UX Gate
 NONE — no file matches a UI-surface glob (`components/**`, `app/**/page.tsx`,
 `app/**/layout.tsx`); orchestration/infra/docs only.
 
+**Advisory (arch P2-5):** this is the 3rd change reasoning against ADR-052's
+boundary; the principles-register has no egress/default-drop AP. Consider
+registering an "egress default-drop / no allowlist widening for non-essential
+dials" principle citing ADR-052 so future PRs get a named guardrail. Not a blocker.
+
 ## Test Scenarios
 
-1. `spawnClaudeEval` prepends `--strict-mcp-config` (idempotent) + sets the
+1. `spawnClaudeEval` prepends `--strict-mcp-config` before `--print` + sets the
    telemetry env — substrate unit test with a `spawn` spy.
-2. The 2 inline crons carry the flag + env — parity test (git-grep-enumerated).
+2. `resolveClaudeBin()` referenced only in {substrate, daily-triage,
+   follow-through-monitor}; those 2 inline crons carry the flag + env — substrate test.
 3. `cron-ux-audit` carries `--mcp-config .mcp.json` in lockstep with its
    `mcp__playwright__*` allowedTools.
 4. Allowlist + firewall test unchanged — `cron-egress-firewall.test.sh` green.
-5. Spike A/B/C transcripts captured in PR body (verification evidence).
+5. Spike A transcript (incl. folded Spike B + telemetry-var check) captured in PR
+   body as the PRIMARY at-source proof.
 
 ## Open Code-Review Overlap
 
@@ -377,10 +457,19 @@ body references the cron substrate / ADR-052 / plugin.json files this plan edits
   separator.** Several crons (`cron-ux-audit`) end `CLAUDE_CODE_FLAGS` with `--`;
   appending after it would feed the flag to the CLI as a positional prompt arg.
   Prepending at index 0 (before `--print`) is position-safe.
-- **The 2 inline spawners are easy to miss.** `cron-daily-triage` and
-  `cron-follow-through-monitor` do NOT route through `spawnClaudeEval` — the
-  substrate injection does not reach them; they need explicit edits + their own
-  parity assertion.
+- **The 2 inline spawners are easy to miss — and do NOT make an MCP dial.**
+  `cron-daily-triage` + `cron-follow-through-monitor` do NOT route through
+  `spawnClaudeEval` (the substrate injection misses them) AND do NOT pass
+  `--plugin-dir` (so they never dial the plugin MCP hosts). For them the telemetry
+  env is the load-bearing fix; `--strict-mcp-config` is defensive. The Phase 1.2
+  `resolveClaudeBin()` structural invariant is the durable drift guard — a NEW
+  inline spawner trips it. (Migrating both onto `spawnClaudeEval` is the real fix —
+  filed as Phase 5.1 follow-up.)
+- **The headline failure mode is SILENT, not fail-loud.** ux-audit losing Playwright
+  (or any cron losing skill/agent resolution) under strict mode exits 0 → green
+  liveness check-in; the runtime Sentry Crons monitor cannot catch it. The safety
+  net is entirely pre-merge (Spike A/B + the parity test) — do NOT rely on a runtime
+  monitor or the post-merge absence sweep to catch a strict-mode regression.
 - **`34.149.66.137` may not be CC telemetry.** Its host is unproven (default
   GCP-LB cert). If AC7 shows it persisting after both at-source levers, it is a
   dependency phone-home needing a `--debug`/strace trace — file a follow-up; do

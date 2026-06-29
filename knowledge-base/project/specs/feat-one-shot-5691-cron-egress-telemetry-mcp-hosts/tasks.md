@@ -9,26 +9,24 @@ lane: cross-domain
 ## Phase 0 — Spikes (gate the code change)
 
 - [ ] 0.1 CWD verify; read each claude-eval cron's `CLAUDE_CODE_FLAGS` shape (trailing `--`?)
-- [ ] 0.2 Spike A (LOAD-BEARING): `claude --print --plugin-dir plugins/soleur --strict-mcp-config --debug …` — confirm NO connect to mcp.cloudflare/vercel/stripe/context7 AND skills still resolve. PASS→Phase 2; FAIL→docs-only for MCP hosts
-- [ ] 0.3 Spike B: confirm `--strict-mcp-config --mcp-config .mcp.json` keeps Playwright, drops the 4 plugin MCP servers
-- [ ] 0.4 Spike C: confirm `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` accepted by the installed CLI
+- [ ] 0.2 Spike A (LOAD-BEARING, PRIMARY proof): `claude --print --plugin-dir plugins/soleur --strict-mcp-config --debug …` — confirm NO connect to mcp.cloudflare/vercel/stripe/context7 AND the `ux-audit` skill + `ux-design-lead` sub-agent resolve. Fold in Spike B (`--mcp-config .mcp.json` keeps Playwright, drops the 4) + telemetry-var-accepted check (ex-Spike C). PASS→Phase 2; FAIL→docs-only for MCP hosts. Paste transcript in PR body (note Spike B is a semantics proxy vs the per-fire overlay).
 
 ## Phase 1 — Tests first (RED)
 
-- [ ] 1.1 Extend `cron-claude-eval-substrate.test.ts`: assert `spawnClaudeEval` prepends `--strict-mcp-config` (idempotent) + sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"` (spawn spy)
-- [ ] 1.2 Parity test: the 2 inline spawners (`cron-daily-triage`, `cron-follow-through-monitor`) carry the flag + env (git-grep-enumerated, no hardcoded count)
-- [ ] 1.3 Extend `cron-ux-audit.test.ts`: assert `CLAUDE_CODE_FLAGS` has `--mcp-config` + `.mcp.json`, in lockstep with the `mcp__playwright__*` allowedTools parity
+- [ ] 1.1 Extend `cron-claude-eval-substrate.test.ts`: assert `spawnClaudeEval` prepends `--strict-mcp-config` BEFORE `--print` (position, not mere presence) + sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"` (spawn spy). No idempotency guard.
+- [ ] 1.2 Structural drift invariant (replaces weak grep parity): assert `resolveClaudeBin()` referenced ONLY in {substrate, cron-daily-triage, cron-follow-through-monitor}; assert those 2 inline crons carry the flag + telemetry env. Folded into the substrate test (no separate file).
+- [ ] 1.3 Extend `cron-ux-audit.test.ts`: assert `CLAUDE_CODE_FLAGS` has `--mcp-config` + `.mcp.json`, in lockstep with the `mcp__playwright__*` allowedTools parity (PRIMARY guard against silent Playwright loss — runtime monitor can't catch it)
 
 ## Phase 2 — strict-mcp-config injection (GREEN; only if Spike A PASS)
 
-- [ ] 2.1 `_cron-claude-eval-substrate.ts` `spawnClaudeEval`: prepend `--strict-mcp-config` to `flags` (idempotent, index 0)
-- [ ] 2.2 `cron-ux-audit.ts`: add `--mcp-config`, `.mcp.json` before the trailing `--`; update flags comment
-- [ ] 2.3 `cron-daily-triage.ts` + `cron-follow-through-monitor.ts`: add `--strict-mcp-config` to inline flag arrays (no `--mcp-config` — they need no MCP server)
+- [ ] 2.1 `_cron-claude-eval-substrate.ts` `spawnClaudeEval`: prepend `--strict-mcp-config` at index 0 of `flags` (no idempotency guard — no caller sets it)
+- [ ] 2.2 `cron-ux-audit.ts`: add `--mcp-config`, `.mcp.json` before the trailing `--`; update flags comment (relative path resolves to the per-fire overlay at spawnCwd)
+- [ ] 2.3 `cron-daily-triage.ts` + `cron-follow-through-monitor.ts`: add `--strict-mcp-config` as DEFENSE (they pass no `--plugin-dir` → make no MCP dial; do not assert "stops a dial")
 
 ## Phase 3 — Telemetry env (GREEN; ships regardless)
 
 - [ ] 3.1 `spawnClaudeEval`: merge `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"` into spawn env (line ~732)
-- [ ] 3.2 `cron-daily-triage.ts` + `cron-follow-through-monitor.ts`: same env var in inline spawn env
+- [ ] 3.2 `cron-daily-triage.ts` + `cron-follow-through-monitor.ts`: same env var in inline spawn env (THIS is their load-bearing fix)
 
 ## Phase 4 — Documentation (ships regardless)
 
@@ -44,8 +42,9 @@ lane: cross-domain
 - [ ] 5.3 `bash apps/web-platform/infra/cron-egress-firewall.test.sh` (allowlist unchanged → still green)
 - [ ] 5.4 `git diff --name-only origin/main` shows neither `cron-egress-allowlist.txt` nor `cron-egress-firewall.test.sh`
 - [ ] 5.5 KB citation check: `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} test -f {}`
-- [ ] 5.6 PR body: `Ref #5691` (not Closes); record Spike A/B/C transcripts
+- [ ] 5.6 PR body: `Ref #5691` (not Closes); paste Spike A transcript (incl. folded Spike B + telemetry-var) as the PRIMARY at-source proof
 
-## Phase 6 — Post-merge (automated)
+## Phase 6 — Follow-up + post-merge
 
-- [ ] 6.1 After redeploy, Sentry sweep of issue 126858085 over ≥3 days (no SSH): confirm the 5 DSTs absent; `gh issue close 5691`. Datadog 34.x persisting → follow-up issue.
+- [ ] 6.1 File tracking issue (`domain/engineering`, `chore`, `priority/p3-low`): migrate the 2 inline crons onto `spawnClaudeEval` (deletes ~150 LoC dup abort logic; dissolves the drift class)
+- [ ] 6.2 (corroboration, NOT the gate) After redeploy: best-effort Sentry rate-comparison on issue 126858085 (no SSH) — 34.x (vol 21) carries signal; low-vol MCP hosts confirmed by Spike A, not absence. `gh issue close 5691` after AC3 passes. 34.x persisting → follow-up issue.
