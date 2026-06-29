@@ -46,5 +46,5 @@ lane: cross-domain
 
 ## Phase 6 — Follow-up + post-merge
 
-- [ ] 6.1 File tracking issue (`domain/engineering`, `chore`, `priority/p3-low`): migrate the 2 inline crons onto `spawnClaudeEval` (deletes ~150 LoC dup abort logic; dissolves the drift class)
+- [x] 6.1 File tracking issue (`domain/engineering`, `chore`, `priority/p3-low`): migrate the 2 inline crons onto `spawnClaudeEval` (deletes ~150 LoC dup abort logic; dissolves the drift class) — filed #5711 (consolidated with the review-surfaced ux-audit zero-screenshot runtime backstop)
 - [ ] 6.2 (corroboration, NOT the gate) After redeploy: best-effort Sentry rate-comparison on issue 126858085 (no SSH) — 34.x (vol 21) carries signal; low-vol MCP hosts confirmed by Spike A, not absence. `gh issue close 5691` after AC3 passes. 34.x persisting → follow-up issue.
