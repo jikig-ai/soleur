@@ -12,9 +12,10 @@
 // collapsed). Inner content fades in via a rAF mount-reveal. Collapsed state is
 // owned by the board (persisted in localStorage).
 //
-// Empty rule: a column with 0 issues is force-expanded and shows NO toggle (you
-// cannot collapse/open an empty column) — the persisted collapsed flag is left
-// untouched so it re-applies once the column repopulates.
+// Empty rule (v4): a column with 0 issues renders COLLAPSED by default — a thin
+// strip with the dot, a 0 count, and the vertical label, and NO toggle (you
+// cannot expand an empty column). The persisted collapsed flag is left untouched
+// while empty, so a populated column's prior choice re-applies on repopulate.
 //
 // Render cap: at most COLUMN_RENDER_CAP cards render; beyond that the exact
 // COLUMN_CAP_NOTICE shows at the column bottom. The count pill always shows the
@@ -74,9 +75,12 @@ export function IssueColumn({
   onToggleCollapse?: (status: WorkstreamStatus) => void;
 }) {
   const isEmpty = issues.length === 0;
-  // Empty columns are force-expanded with no toggle; the persisted collapsed
-  // flag is ignored (not mutated) while empty.
-  const isCollapsed = collapsed && !isEmpty;
+  // Empty columns render COLLAPSED by default (a thin strip), regardless of the
+  // persisted flag; a populated column honors the user's persisted choice.
+  // INVARIANT: isEmpty ⇒ isCollapsed, so the expanded branch never sees an empty
+  // column (relied on below — do not add empty-handling to that branch without
+  // re-checking this line).
+  const isCollapsed = isEmpty || collapsed;
   const tint = { backgroundColor: `${column.accent}${COLUMN_TINT_ALPHA}` };
   const overCap = issues.length > COLUMN_RENDER_CAP;
 
@@ -91,16 +95,23 @@ export function IssueColumn({
       {isCollapsed ? (
         <MountReveal key="collapsed">
           <div className="flex flex-col items-center">
-            <button
-              type="button"
-              aria-label={`Expand ${column.label}`}
-              aria-expanded={false}
-              onClick={() => onToggleCollapse?.(column.status)}
-              className={TOGGLE_BTN_CLASS}
-            >
-              {/* Down chevron rotated −90° points right = "expand". */}
-              <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
-            </button>
+            {/* Empty columns have NO toggle — you cannot expand an empty column.
+                Only a user-collapsed NON-empty strip gets the Expand chevron. */}
+            {!isEmpty ? (
+              <button
+                type="button"
+                aria-label={`Expand ${column.label}`}
+                aria-expanded={false}
+                onClick={() => onToggleCollapse?.(column.status)}
+                className={TOGGLE_BTN_CLASS}
+              >
+                {/* Down chevron rotated −90° points right = "expand". */}
+                <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
+              </button>
+            ) : null}
+            {/* Keep the empty state announced after the visible "No issues" text
+                is gone — a bare "0" count alone is ambiguous to a screen reader. */}
+            {isEmpty ? <span className="sr-only">No issues</span> : null}
             <span
               aria-hidden="true"
               className="mt-2 h-2 w-2 rounded-full"
@@ -120,19 +131,19 @@ export function IssueColumn({
       ) : (
         <MountReveal key="expanded">
           <header className="flex items-center gap-2 px-1 py-2">
-            {/* Empty columns have NO toggle — cannot be collapsed/opened. */}
-            {!isEmpty ? (
-              <button
-                type="button"
-                aria-label={`Collapse ${column.label}`}
-                aria-expanded={true}
-                onClick={() => onToggleCollapse?.(column.status)}
-                className={TOGGLE_BTN_CLASS}
-              >
-                {/* Down chevron = "collapse". */}
-                <ChevronDownIcon className="h-3.5 w-3.5" />
-              </button>
-            ) : null}
+            {/* The expanded branch only renders for NON-empty columns
+                (INVARIANT: isEmpty ⇒ isCollapsed), so the Collapse toggle is
+                always present here. */}
+            <button
+              type="button"
+              aria-label={`Collapse ${column.label}`}
+              aria-expanded={true}
+              onClick={() => onToggleCollapse?.(column.status)}
+              className={TOGGLE_BTN_CLASS}
+            >
+              {/* Down chevron = "collapse". */}
+              <ChevronDownIcon className="h-3.5 w-3.5" />
+            </button>
             <span
               aria-hidden="true"
               className="h-2 w-2 rounded-full"
@@ -146,22 +157,15 @@ export function IssueColumn({
             </span>
           </header>
           <div className="flex flex-col gap-2 px-1 pb-1">
-            {isEmpty ? (
+            {/* Always non-empty here (INVARIANT above) — render the cards. */}
+            {issues.slice(0, COLUMN_RENDER_CAP).map((issue) => (
+              <IssueCard key={issue.id} issue={issue} onOpen={onOpen} />
+            ))}
+            {overCap ? (
               <p className="px-1 py-2 text-xs text-soleur-text-tertiary">
-                No issues
+                {COLUMN_CAP_NOTICE}
               </p>
-            ) : (
-              <>
-                {issues.slice(0, COLUMN_RENDER_CAP).map((issue) => (
-                  <IssueCard key={issue.id} issue={issue} onOpen={onOpen} />
-                ))}
-                {overCap ? (
-                  <p className="px-1 py-2 text-xs text-soleur-text-tertiary">
-                    {COLUMN_CAP_NOTICE}
-                  </p>
-                ) : null}
-              </>
-            )}
+            ) : null}
           </div>
         </MountReveal>
       )}

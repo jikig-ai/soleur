@@ -237,37 +237,37 @@ Rewrite the `issue-column.tsx` "Empty rule" comment block (lines 16-17) to:
 
 ### Pre-merge (PR)
 
-- [ ] `issue-column.tsx` derives `const isCollapsed = isEmpty || collapsed;`
+- [x] `issue-column.tsx` derives `const isCollapsed = isEmpty || collapsed;`
   (grep: `grep -n 'isEmpty || collapsed' issue-column.tsx` returns 1; the old
   `collapsed && !isEmpty` no longer appears: `grep -c 'collapsed && !isEmpty'` → 0).
-- [ ] An empty column renders the **collapsed** strip: the `<section>` carries
+- [x] An empty column renders the **collapsed** strip: the `<section>` carries
   `w-10` (not `w-72`) when `issues=[]`, for both `collapsed` unset and
   `collapsed=true`.
-- [ ] An empty column shows **no** toggle: neither `Collapse <label>` nor
+- [x] An empty column shows **no** toggle: neither `Collapse <label>` nor
   `Expand <label>` button is present when `issues=[]`.
-- [ ] The collapsed empty strip still shows the colored dot, the `0` count pill,
+- [x] The collapsed empty strip still shows the colored dot, the `0` count pill,
   and the vertical column label.
-- [ ] The collapsed empty strip carries an accessible empty-state announcement:
+- [x] The collapsed empty strip carries an accessible empty-state announcement:
   a `sr-only` (visually-hidden) "No issues" is rendered when `issues=[]` so a
   screen reader does not announce a bare "0" (deepen P2 a11y fold-in).
-- [ ] A **non-empty** column is unchanged: expanded by default with a working
+- [x] A **non-empty** column is unchanged: expanded by default with a working
   `Collapse <label>` toggle; collapsing/expanding it still persists to
   `localStorage` (`workstream-board.tsx` untouched — no edits to that file:
   `git diff --name-only` does not list `workstream-board.tsx`).
-- [ ] The existing `workstream-board.test.tsx` suite stays green with no edits —
+- [x] The existing `workstream-board.test.tsx` suite stays green with no edits —
   grep-confirmed safe: it references only the whole-board `EmptyState`/`NoResults`
   copy ("No issues to display" :227 / "No issues match…" :103), never the
   column-level "No issues" nor `w-72`/`w-10`, so empty columns becoming collapsed
   strips does not break any assertion.
-- [ ] The expanded branch contains no empty special-casing after Phase 2
+- [x] The expanded branch contains no empty special-casing after Phase 2
   (no `No issues` literal reachable in the expanded render), OR — if the
   conservative fallback was taken — the Phase-1 invariant comment is present
   explaining why the expanded-empty path is dead.
-- [ ] Board-level: on a board with ≥1 issue, a sibling empty column renders as a
+- [x] Board-level: on a board with ≥1 issue, a sibling empty column renders as a
   `w-10` collapsed strip (new `workstream-board.test.tsx` assertion passes).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/components/workstream/`
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/components/workstream/`
   is green (issue-column + workstream-board suites).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
 
 ## Observability
 
