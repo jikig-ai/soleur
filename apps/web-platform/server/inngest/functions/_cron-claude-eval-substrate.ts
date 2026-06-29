@@ -6,6 +6,8 @@ import { createInterface } from "node:readline";
 import { reportSilentFallback } from "@/server/observability";
 import {
   buildAuthenticatedCloneUrl,
+  DeployInProgressError,
+  deployLeaseAgeMsIfFresh,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
@@ -558,6 +560,27 @@ export async function setupEphemeralWorkspace(args: {
   cronName: string;
 }): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
   const { installationToken, cronName } = args;
+
+  // Deploy-lease drain gate (#5669 / ADR-068). If ci-deploy.sh is mid-swap it
+  // has written a fresh ${CRON_WORKSPACE_ROOT}/.deploy-lease; defer BEFORE the
+  // mkdtemp+clone so the imminent `docker stop` cannot kill this claude child
+  // (the :706 spawn-cwd symptom). Single pre-spawn choke point — every heavy
+  // claude-eval cron funnels through here. Stale leases are fail-open ignored
+  // (deployLeaseAgeMsIfFresh TTL), so a crashed deploy never darks crons.
+  const leaseAgeMs = await deployLeaseAgeMsIfFresh();
+  if (leaseAgeMs !== null) {
+    // Structured + queryable in Sentry/Better Stack (CTO guardrail 3): the
+    // reportSilentFallback mirror makes "why did cron X skip during the 14:03
+    // deploy?" answerable with no SSH. Distinct reason so it is never read as a
+    // real setup failure.
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "deploy-lease-fresh",
+      message: `[${cronName}] deferring cron start: deploy in progress (lease age ${leaseAgeMs}ms)`,
+    });
+    throw new DeployInProgressError(cronName, leaseAgeMs);
+  }
+
   const ephemeralRoot = await mkdtemp(
     join(resolveCronWorkspaceRoot(), `soleur-${cronName}-`),
   );
