@@ -83,7 +83,13 @@ describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", ()
     // decoupled from claude's exit. Mirrors cron-bug-fixer.ts (PR #4727). The
     // pre-fix line was the forbidden `ok: spawnResult.ok`.
     expect(SUT_SOURCE).not.toContain("ok: spawnResult.ok");
-    expect(SUT_SOURCE).toContain("postSentryHeartbeat({ ok: true");
+    // #5674 classify-fatal: the final heartbeat is gated on decision.ok from
+    // resolveBestEffortEvalOk (green on clean/benign, red on a fatal class),
+    // NOT an unconditional `ok: true`.
+    expect(SUT_SOURCE).toContain("resolveBestEffortEvalOk(spawnResult)");
+    expect(SUT_SOURCE).toContain("postSentryHeartbeat({ ok: decision.ok");
+    // A FATAL class (credit/auth/spawn/timeout) reports + flips the monitor red.
+    expect(SUT_SOURCE).toContain('op: "claude-eval-fatal"');
   });
 
   it("surfaces the non-zero exit as a non-paging WARNING Sentry event (off-host visible)", () => {
