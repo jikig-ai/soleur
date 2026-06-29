@@ -163,3 +163,4 @@ assert, deferred out of v1).
 | [prompts/](./prompts/go-skill.txt) | skill + baseline arm templates per target |
 | [tasks/go-routing.jsonl](./tasks/go-routing.jsonl) · [tasks/ticket-triage.jsonl](./tasks/ticket-triage.jsonl) | synthesized golden tasks |
 | [test/](./test/gen-models.test.sh) | deterministic `.test.sh` unit tests (no live LLM) |
+| [test/registry-completeness.test.sh](./test/registry-completeness.test.sh) | parity gate: `eval-gate:block` source markers ↔ `gated-skills.json` `block_id`s (DEDUP + set-equality + charset) |

@@ -122,7 +122,11 @@ Deterministic, no live LLM / no API (stubbed model outputs, recorded result fixt
 [gen-models.test.sh](./test/gen-models.test.sh),
 [measure-classification.test.sh](./test/measure-classification.test.sh),
 [gate-classification.test.sh](./test/gate-classification.test.sh),
-[extract-block.test.sh](./test/extract-block.test.sh) (block extraction + AC4 round-trip),
+[extract-block.test.sh](./test/extract-block.test.sh) (block extraction + AC4 round-trip,
+registry-driven target loop),
 [verdict.test.sh](./test/verdict.test.sh) (pure `computeVerdict` — accept / corpus-regress /
-target-fail / ε-boundary), and [eval-gate.test.sh](./test/eval-gate.test.sh) (`--check`, `--dry-run`,
-no-op — no API). They run under the standard `bash scripts/test-all.sh` discovery.
+target-fail / ε-boundary), [eval-gate.test.sh](./test/eval-gate.test.sh) (`--check`, `--dry-run`,
+no-op — no API), and
+[registry-completeness.test.sh](./test/registry-completeness.test.sh) (bidirectional parity
+between `eval-gate:block` source markers and `gated-skills.json` `block_id`s — DEDUP +
+set-equality + charset guard). They run under the standard `bash scripts/test-all.sh` discovery.
