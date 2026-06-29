@@ -583,6 +583,85 @@ claude-eval monitors (roadmap-review, content-generator, …) may be in the same
 state after a fleet-wide outage — check each. Then follow the **Restore
 Procedure** below to confirm the next check-in goes green.
 
+### H11 — `missed` (not `error`) on a claude-eval cron whose digest WAS produced (delivery/timing, #5728)
+
+A monitor shows daily `missed` check-ins while the cron's GitHub digest issue WAS
+filed each of those days (real digests, not the FAILED self-report fallback). The
+check-in layer and the GitHub-digest layer **disagree**, and Sentry's alert keys
+off the check-in layer. This is a **delivery/timing** defect, NOT a work failure —
+and it is **distinct from H10** (H10 is `?status=error`, a delivered check-in that
+reports failure; H11 is `missed`, where **no check-in arrived at all**).
+
+**Why `missed` ≠ `error` is the load-bearing distinction.** Sentry generates
+`missed` (job didn't check in by the deadline) and `timeout` (exceeded
+`max_runtime`) **server-side** — they are NOT client-reported statuses. The cron
+only ever POSTs `?status=ok` or `?status=error`. So `missed` means the
+`sentry-heartbeat` step **literally never executed** (the single terminal POST was
+never sent). `resolveOutputAwareOk` *returns* false (never throws) on
+no-output/non-zero-exit and the heartbeat then posts `?status=error` — so a
+`missed` is never "the eval failed"; it is "the run never reached its heartbeat."
+
+**Four causes (discriminate per-day AND per-attempt — a single day can be more than one):**
+
+- **H11a — mid-run SIGKILL** (container swap / deploy / OOM) during the long
+  (~50-min) `claude-eval`, before the terminal heartbeat. Signature: **zero
+  `routine_runs` terminal rows** for that day (the run-log middleware's terminal
+  write is skipped too) while sibling crons logged normally + `missed`. **This is
+  the dominant 2026-06-13→06-21 cause (#5728 Phase 0).** No in-process fix exists
+  (no catch runs on a SIGKILL); the remedy is the **graceful cron drain before
+  container swap (ADR-068 / #5686)**, which reduces the kill frequency. `missed`
+  is an honest signal for a genuinely killed run.
+- **H11b — a throw before the heartbeat step.** A throw inside the handler body
+  used to propagate out → the heartbeat step never ran → silent `missed`. **Fixed
+  in #5728:** the output-aware cohort now routes the terminal heartbeat through
+  `finalizeOutputAwareHeartbeat` (`_cron-shared.ts`) — a throw with no output posts
+  a loud `?status=error` on the final attempt (or skips + retries on a non-final
+  attempt), so a throw is now `error`, never silent `missed`.
+- **H11c — swallowed/transient-failed OK POST** (5xx / network / timeout).
+  Signature: a `completed` `routine_runs` row co-timed with a
+  `feature:cron-sentry-heartbeat op:fetch` Sentry event. **Fixed in #5728:**
+  `postSentryHeartbeat` now inspects `resp.ok` and bounded-retries 5xx/network/
+  timeout (never a 4xx), bounded well under the 60-min margin, before falling back
+  to `reportSilentFallback`.
+- **H11d — dispatch/queue delay.** The output-aware crons share one
+  `{ scope: "account", key: "cron-platform", limit: 1 }` slot, so an 08:00 fire can
+  queue behind another long cron and *start* 30–50 min late, posting `ok` past the
+  margin. Signature: `routine_runs.started_at ≫ 08:00` with no kill/throw. (Refuted
+  for the #5728 window — siblings dispatched fine, start_lag <65s.)
+
+**Phase-0 three-layer pull recipe (rank by authority; the green layer you read
+first is the one most likely lying — see learning
+`2026-06-29-cron-health-run-log-green-masks-claude-eval-failure.md`):**
+
+1. **`routine_runs` (Supabase, authoritative liveness+duration).** Read-only SQL
+   via Doppler `DATABASE_URL_POOLER` (`:6543`→`:5432` for session-mode multi-stmt;
+   the pooler presents a self-signed chain → `ssl:{rejectUnauthorized:false}` for a
+   transient verify script). Per day/attempt: `start_lag` (vs 08:00, H11d),
+   `duration_ms` (vs 60-min margin, H11a-slow), `status`, **absent rows** (the
+   realizable SIGKILL signature — `ended_at` is `NOT NULL` and the middleware writes
+   terminal rows only, so the literal "NULL ended_at orphan" cannot exist),
+   `error_summary`, `trigger_source`. NOTE: the middleware predates 2026-06-16, so
+   earlier days are routine_runs-blind.
+2. **Better Stack stdout tail** (`scripts/betterstack-query.sh` under `doppler run
+   -p soleur -c prd_terraform` — query creds are in `prd_terraform`, NOT `prd`; see
+   `betterstack-log-query.md`). SIGKILL/container-swap markers, the swallowed-POST
+   warning, last `sentry-heartbeat` log line per run. CAVEAT: hot-window retention
+   is short (~1h) — the incident window is often already aged out.
+3. **Sentry check-in timeline** — `GET …/organizations/<org>/monitors/<slug>/checkins/`
+   (read-only, EU org host `https://<org>.sentry.io`; ADR-031). Confirms last-ok +
+   the `missed`/`error` boundary. The issues/events endpoint needs `event:read`
+   scope the monitor-read token lacks — `routine_runs` independently discriminates
+   H11c without it.
+
+**Disambiguation summary:** absent `routine_runs` rows + `missed` ⇒ **H11a (kill)**
+→ ADR-068's job, not a code fix. `completed` row + POST-fetch Sentry event ⇒
+**H11c** → #5728 Phase 1 retry. `duration_ms` > 60 min OR `start_lag` past margin ⇒
+**H11a-slow / H11d** → re-evaluate `checkin_margin_minutes` against the worst-case
+retry-chain + shared-slot queue wall-clock (never an `in_progress` two-phase
+check-in — ADR-033 I8 rejects it). For #5728 the verdict was H11a-dominant, so the
+margin was left at 60 (no TF change). Cross-link: H10 (credit/error regime + the
+prolonged-mute re-enable via Sentry REST API).
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:

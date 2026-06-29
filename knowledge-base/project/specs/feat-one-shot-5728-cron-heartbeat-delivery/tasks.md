@@ -53,13 +53,14 @@ load-bearing vs. defense-in-depth. **Do NOT introduce an `in_progress` two-phase
   only where the single-last-heartbeat invariant holds; preserve `resolveBestEffortEvalOk` carve-out.
 
 ## Phase 3 — IaC + runbook
-- [ ] 3.1 (iff H1/H4 confirmed) re-size `scheduled_community_monitor.checkin_margin_minutes` in
+- [x] 3.1 (NO margin change — Phase 0 verdict H2-dominant; H1/H4 only plausible on blind days)
+  -- 3.1-orig (iff H1/H4 confirmed) re-size `scheduled_community_monitor.checkin_margin_minutes` in
   `cron-monitors.tf` against retry-chain + shared-slot wall-clock (NOT single-run; NEVER in_progress).
-- [ ] 3.2 Add runbook H11 (missed-vs-error on a digest-producing claude-eval cron; Phase-0 recipe;
+- [x] 3.2 Add runbook H11 (missed-vs-error on a digest-producing claude-eval cron; Phase-0 recipe;
   cross-link H10).
 
 ## Phase 4 — ADR
-- [ ] 4.1 Amend ADR-033 I8 (`/soleur:architecture`): gap-closure note, reaffirm in_progress
+- [x] 4.1 Amend ADR-033 I8 (`/soleur:architecture`): gap-closure note, reaffirm in_progress
   rejection, record the rejection-cost (late/retry finish cannot reconcile → margin is the only lever).
 
 ## Verify
