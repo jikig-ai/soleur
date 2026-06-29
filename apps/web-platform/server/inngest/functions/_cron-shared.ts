@@ -1,5 +1,6 @@
-import { statfs } from "node:fs/promises";
+import { stat, statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -23,6 +24,88 @@ export const REPO_NAME = "soleur";
  */
 export function resolveCronWorkspaceRoot(): string {
   return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
+}
+
+// --- Deploy-lease drain coordination (#5669 / ADR-068) ----------------------
+//
+// Every merge that redeploys soleur-web-platform stops + swaps the container
+// (ci-deploy.sh `docker stop --time=12 soleur-web-platform`), which kills any
+// in-flight cron `claude` child — the `:706` "spawn cwd … no longer exists"
+// symptom. ci-deploy.sh now drains: it pauses *new* cron starts and waits for
+// the in-flight child before swapping. The pause is a lease FILE written at
+// `${CRON_WORKSPACE_ROOT}/.deploy-lease` (host /mnt/data/workspaces/.deploy-lease
+// == container /workspaces/.deploy-lease — the same host-mounted volume both the
+// old and new container see). A FRESH lease means a deploy is mid-swap; the cron
+// substrate defers (see setupEphemeralWorkspace) so the imminent stop cannot
+// kill it. The host-side `cron_in_flight` drain loop does the actual *waiting*;
+// this lease only closes the START-race (a new run launching claude into the
+// about-to-die container while the loop drains the current one).
+//
+// CTO ruling (ADR-068): lease over native `inngest pause`/`resume` — the lease
+// is verifiable from code (a unit test), gates ONLY the cron substrate (not all
+// server-global event-driven functions), and its failure mode is fail-SAFE (a
+// cron skips one fire) rather than fail-DANGEROUS (pause killing the in-flight
+// child is the very incident this fixes).
+export const DEPLOY_LEASE_BASENAME = ".deploy-lease";
+
+// TTL fail-open. A lease older than this is treated as ABSENT so a deploy that
+// was SIGKILLed mid-drain (untrappable; host OOM/reboot) cannot dark every cron
+// indefinitely — the worst case degrades to "ignore a stale lease", never
+// "silent total cron outage". Must exceed the host drain wall-clock
+// (CRON_DRAIN_TIMEOUT = 4200s, the MAX per-function maxTurnDurationMs) plus
+// swap overhead; default 90 min. Env-overridable (no Doppler secret — pure
+// timing knob, mirrors CRON_WORKSPACE_ROOT).
+export const DEPLOY_LEASE_MAX_AGE_MS: number = (() => {
+  const raw = process.env.DEPLOY_LEASE_MAX_AGE_MS;
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(n) && n > 0 ? n : 90 * 60 * 1000;
+})();
+
+export function resolveDeployLeasePath(): string {
+  return join(resolveCronWorkspaceRoot(), DEPLOY_LEASE_BASENAME);
+}
+
+/**
+ * Returns the lease age in ms when a FRESH deploy lease exists (a deploy is
+ * mid-swap → the caller should defer), else `null` (no lease, or a stale lease
+ * past the TTL that is fail-open ignored). Pure read; never throws — any stat
+ * error (absent file, permissions) collapses to `null` so a probe failure can
+ * never block a cron.
+ */
+export async function deployLeaseAgeMsIfFresh(
+  nowMs: number = Date.now(),
+  leasePath: string = resolveDeployLeasePath(),
+  maxAgeMs: number = DEPLOY_LEASE_MAX_AGE_MS,
+): Promise<number | null> {
+  try {
+    const st = await stat(leasePath);
+    const ageMs = nowMs - st.mtimeMs;
+    if (ageMs < 0) return 0; // clock skew between host writer and container → treat as fresh
+    if (ageMs > maxAgeMs) return null; // stale → fail-open (ignore a crashed deploy's lease)
+    return ageMs;
+  } catch {
+    return null; // absent / unreadable → proceed normally
+  }
+}
+
+/**
+ * Thrown by setupEphemeralWorkspace when a fresh deploy lease is present. A
+ * distinct class (not a bare Error) so the deferral is queryable in
+ * Sentry/Better Stack and is never confused with a real setup failure. Inngest
+ * `retries: 1` re-dispatches the run; the retry normally lands after the bounded
+ * deploy completes (worst case: the cron skips this one fire — fail-safe).
+ */
+export class DeployInProgressError extends Error {
+  readonly cronName: string;
+  readonly leaseAgeMs: number;
+  constructor(cronName: string, leaseAgeMs: number) {
+    super(
+      `[${cronName}] deploy in progress (lease age ${leaseAgeMs}ms) — deferring cron start so the container swap cannot kill claude (#5669)`,
+    );
+    this.name = "DeployInProgressError";
+    this.cronName = cronName;
+    this.leaseAgeMs = leaseAgeMs;
+  }
 }
 
 // Free MB available to an UNPRIVILEGED caller — `bavail`, not `bfree`, matches
