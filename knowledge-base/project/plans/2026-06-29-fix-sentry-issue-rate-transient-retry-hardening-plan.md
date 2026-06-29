@@ -457,8 +457,10 @@ logs:
   where: Sentry (Inngest function runtime, captureException level=warning/error) + pino logger.warn mirror + GitHub report_to_issue comment thread
   retention: Sentry project default
 discoverability_test:
-  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/event-scheduled-reminder.test.ts
-  expected_output: retry suite passes — transient-then-success → real verdict; 4xx no-retry; bounded to 3 attempts; every fail-closed warns op=sentry-issue-rate-fail-closed
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: 401
+  rationale: anonymous GET to the Inngest serve endpoint returns 401 (signature required), proving the function host that runs this named-check is deployed and reachable without SSH
+  unit_test: cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/event-scheduled-reminder.test.ts (retry suite — transient-then-success → real verdict; 4xx no-retry; bounded to 3 attempts; every fail-closed warns op=sentry-issue-rate-fail-closed)
   live_probe: Sentry search `op:sentry-issue-rate-fail-closed feature:event-scheduled-reminder` shows the next live fail-close (no SSH)
 ```
 
