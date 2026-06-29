@@ -330,30 +330,7 @@ describe("WorkstreamBoard", () => {
     );
   });
 
-  it("collapses a column to a strip and persists the choice in localStorage", async () => {
-    global.fetch = mockFetchOnce([
-      issue({ id: "SOLAA-1", title: "Card one" }),
-    ]) as unknown as typeof fetch;
-
-    render(<Wrapped />);
-    await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse Backlog" }),
-    );
-    // Now an Expand control is present (collapsed strip state).
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Expand Backlog" }),
-      ).toBeTruthy(),
-    );
-    const stored = JSON.parse(
-      window.localStorage.getItem("workstream:collapsed-columns") ?? "[]",
-    ) as string[];
-    expect(stored).toContain("backlog");
-  });
-
-  it("renders a sibling empty column as a collapsed strip with no toggle", async () => {
+  it("content columns are expanded with no toggle; empty siblings collapse to a strip", async () => {
     // Only Backlog has an issue; the other 6 columns are empty.
     global.fetch = mockFetchOnce([
       issue({ id: "SOLAA-1", title: "Card one", status: "backlog" }),
@@ -362,8 +339,11 @@ describe("WorkstreamBoard", () => {
     const { container } = render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
 
-    // Backlog (non-empty) stays expanded with a working Collapse toggle.
-    expect(screen.getByRole("button", { name: "Collapse Backlog" })).toBeTruthy();
+    // Backlog (content) is expanded (w-72) and carries NO collapse toggle.
+    const backlog = container.querySelector('section[aria-label="Backlog"]');
+    expect(backlog?.getAttribute("class") ?? "").toContain("w-72");
+    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
 
     // Todo (empty) renders as a w-10 collapsed strip and has no toggle.
     const todo = container.querySelector('section[aria-label="Todo"]');
