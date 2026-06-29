@@ -43,7 +43,7 @@ related_issues: [5580, 4543, 4717, 4712, 5470, 5437]
    observability.
 5. **Simplicity:** collapse the outcome union 4→3 (`reconciled | skip | transient`), inline the
    decision helper (no sibling file), drop the redundant reconciled breadcrumb, treat malformed
-   `repo_url` as arm-3 already does (silent count-skip).
+   `repo_url` as a `skip(malformed-repo-url)` outcome (review-corrected from the initial "arm-3 silent count-skip" to KEEP the visible `op:ready-null-installation` signal — a stuck workspace stays visible).
 6. **P2 (data-integrity):** per-workspace `step.run(\`backfill-${id}\`)` boundary for Inngest-replay
    determinism (the write now has side effects).
 
@@ -162,10 +162,20 @@ the owner cannot reach is never resolved, so it can never be bound.
 **Single-user freeze/visibility vectors (user-impact review) and their disposition:**
 - *Wrong install bound* → prevented by entitlement-scoping + solo-only (see above).
 - *Install NOT backfilled when resolvable (page-cap/degraded false-negative)* → fail-safe (no wrong
-  write); the workspace keeps the **visible** folded `reportSilentFallback` signal, never silently dark.
-- *Genuinely-broken workspace darkened* → does NOT happen: the unresolvable case keeps the existing
-  feature-tagged Sentry issue (the alert is feature-only, so it stays notification-covered). The v1
-  "demote to non-paging" idea — which WOULD have darkened it — is dropped.
+  write). On an **all-degraded** sweep the outcome is `transient`: no write AND no per-fire Sentry
+  occurrence — the fire is captured only in the `{reconciled,skipped,transient}` Better Stack
+  step-return count (`alert_route: none`, per the Observability table). It is **not** silently dark in
+  the freeze sense: a `transient` fire does **not** clear the pre-existing standing folded
+  `op:ready-null-installation` issue, and a permanent darkening would require a *permanent* GitHub 5xx
+  for that repo's probe (not a steady state — it self-recovers to `reconciled`/`needs-reauth` on the
+  next fire once the probe is healthy).
+- *Genuinely-broken workspace darkened* → does NOT happen: **every** unresolvable skip reason
+  (`needs-reauth`, `team-workspace-never-auto-detect`, AND `malformed-repo-url`) keeps the existing
+  feature-tagged `op:ready-null-installation` Sentry issue (the alert is feature-only, so it stays
+  notification-covered). The v1 "demote to non-paging" idea — which WOULD have darkened it — is
+  dropped, and the malformed-repo-url subset is **not** silenced (a ready+NULL-install workspace is
+  stuck regardless of why it is unresolvable; review-driven correction of the earlier "mirror arm-3
+  silent-skip" note).
 - *Next-push latency after backfill (low-activity repo)* → see the immediate-resync scope-out
   (rewritten below to not assume high activity).
 
@@ -187,7 +197,7 @@ the owner cannot reach is never resolved, so it can never be bound.
 - Add an inline top-level helper (mirroring the in-file `scanReadyWorkspaces` pattern — **no sibling file**), injected-deps shaped, returning a **3-outcome** union: `{ kind: "reconciled", installId } | { kind: "skip", reason } | { kind: "transient" }`.
 - Decision table per finding:
   1. **Not solo (team / id not a users.id)** → `skip` (reason `team-workspace-never-auto-detect`). No write.
-  2. Derive `owner/repo` from `repo_url` (reuse arm-3's slug parser). Falsy owner|repo → silent count-skip exactly as arm-3 does (`skip`, reason `malformed-repo-url`; no bespoke signal).
+  2. Derive `owner/repo` from `repo_url` (reuse arm-3's slug parser, extracted to a shared `parseOwnerRepo` helper). Falsy owner|repo → `skip`, reason `malformed-repo-url`. **Review-driven correction:** unlike arm-3's silent went-quiet `continue`, arm-1 KEEPS the visible `op:ready-null-installation` signal for the malformed case — a ready+NULL-install workspace is genuinely stuck regardless of why it is unresolvable, so silencing it would re-introduce the freeze blind spot (data-integrity + user-impact review L2/Finding-1).
   3. `reachable = resolveReachableInstallationIds(service, ownerUserId, ownerGithubLogin)`.
      - empty → `skip` (reason `needs-reauth`; owner has no reachable install for the app).
   4. `install = resolveOwningInstallationForRepo(reachable, owner, repo)`.
@@ -198,7 +208,7 @@ the owner cannot reach is never resolved, so it can never be bound.
 ### Phase 2 — Wire the decision into arm-1, per-workspace step boundary
 - Replace the `report-unreachable-workspaces` step. For each finding, run the helper inside its **own** `step.run(\`reconcile-${workspaceId}\`, …)` so each backfill memoizes independently and a mid-loop throw does not re-probe/re-write others (ADR-033 I5; the step now has side effects).
 - On `reconciled`: call `writeRepoColsToWorkspace(service, workspaceId, { github_installation_id: installId })` (inherits 0-row detection + Sentry mirror; this also satisfies the backfill-failure observability path — the helper mirrors DB errors). Optional CAS hardening: a concurrent connect-flow write is benign because the resolver is value-idempotent (it resolves the owner's same owning install); if desired, add an `onlyIfNull` guard to the helper, but it is not load-bearing at solo/internal scale.
-- On `skip`: keep the existing `reportSilentFallback(op:"ready-null-installation", extra:{ workspaceId, repoUrl })` (folds to one standing issue; carry the `reason` in `extra` for discriminability). **Do not** demote the level and **do not** edit `infra/sentry/issue-alerts.tf`.
+- On `skip` (EVERY reason — `team-workspace-never-auto-detect`, `needs-reauth`, AND `malformed-repo-url`): keep the existing `reportSilentFallback(op:"ready-null-installation", extra:{ workspaceId, repoUrl, reason })` (folds to one standing issue; carry the `reason` in `extra` for discriminability). **Do not** demote the level and **do not** edit `infra/sentry/issue-alerts.tf`.
 - On `transient`: no write, no signal; counted in the deterministic step return.
 - Aggregate into the deterministic return `{ reconciled, skipped, transient }` (ADR-033 I5); arms 2 & 3 unchanged in code.
 - Update the file header: arm-1 now performs an entitlement-scoped, solo-only credential backfill via `writeRepoColsToWorkspace` (still never flips `repo_status`).
@@ -236,7 +246,7 @@ the owner cannot reach is never resolved, so it can never be bound.
 - AC1: a ready+NULL-install **solo** workspace whose owner's reachable installs include the repo's owning install → `reconciled`; `writeRepoColsToWorkspace` is called with `{ github_installation_id: <that install> }` keyed on the finding id (unit test asserts the writer spy args).
 - AC2 (**negative, load-bearing**): an org-owned repo whose owner is **not** in `resolveReachableInstallationIds` → `skip(needs-reauth)`, writer spy **not** called. This is the cross-tenant-over-grant guard.
 - AC3: a **team** workspace finding (id not a `users.id`) → `skip(team-workspace-never-auto-detect)`, no write.
-- AC4: empty reachable → `skip(needs-reauth)`; all-degraded owning probe → `transient`, no write, no signal. Malformed `repo_url` → silent count-skip (no bespoke signal), mirroring arm-3.
+- AC4: empty reachable → `skip(needs-reauth)`; all-degraded owning probe → `transient`, no write, no signal. Malformed `repo_url` → `skip(malformed-repo-url)` that KEEPS the visible `op:ready-null-installation` signal (no write, no resolver call, but the stuck workspace stays visible — review-corrected from silent-skip).
 - AC5: the backfill routes through `writeRepoColsToWorkspace` (single write boundary; sentinel sweep shows zero net-new write sites) and runs inside a per-workspace `step.run`.
 - AC6: arm-1 step returns deterministic `{ reconciled, skipped, transient }`; arms 2 & 3 unchanged in code; a workspace backfilled by arm-1 does **not** spuriously fire arm-2/arm-3 in the same invocation (regression test for the intra-fire mutation).
 - AC7: the `skip` path keeps `reportSilentFallback(op:"ready-null-installation")` (no level demotion, no `issue-alerts.tf` edit) — the signal stays visible.
@@ -377,7 +387,7 @@ None. No open `code-review`-labeled scope-out touches `cron-workspace-sync-healt
 1. solo, owner-entitled, owning install resolves → `reconciled`, `writeRepoColsToWorkspace` called with the resolved install id keyed on the finding id.
 2. **solo, org-owned repo, owner NOT in reachable installs → `skip(needs-reauth)`, no write** (the cross-tenant over-grant guard — load-bearing).
 3. team workspace finding (id not a users.id) → `skip(team-workspace-never-auto-detect)`, no write.
-4. empty reachable → `skip(needs-reauth)`; all-degraded owning probe → `transient`, no write/signal; malformed repo_url → silent count-skip.
+4. empty reachable → `skip(needs-reauth)`; all-degraded owning probe → `transient`, no write/signal; malformed repo_url → `skip(malformed-repo-url)` keeping the visible signal (no write, no resolver call).
 5. backfill write 0-row / DB error → mirrored by `writeRepoColsToWorkspace`, row left NULL, not counted `reconciled`.
 6. scan-query DB error → pages via `reportSilentFallback` op=scan (unchanged); arms 2/3 still run; heartbeat fires.
 7. a workspace backfilled by arm-1 does not spuriously fire arm-2 (stale-sync) or arm-3 (went-quiet) in the same invocation.

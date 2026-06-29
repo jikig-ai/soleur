@@ -892,15 +892,28 @@ describe("cron-workspace-sync-health — arm-1 reconcile (#5675)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("AC4: malformed repo_url (null) → silent count-skip, NO signal, NO resolver call (mirrors arm-3)", async () => {
+  it("AC4: malformed repo_url (null) on a solo finding → skip(malformed-repo-url), NO write, NO resolver call, but KEEPS the visible signal (still a stuck workspace)", async () => {
     WORKSPACE_ROWS = [{ id: "solo-mal", repo_url: null }];
     USERS_ROWS = [{ id: "solo-mal", github_username: "alice" }];
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
+    // No repo to parse → no entitlement resolution, no write …
     expect(resolveReachableSpy).not.toHaveBeenCalled();
     expect(writeRepoColsSpy).not.toHaveBeenCalled();
-    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    // … but a ready+NULL-install solo workspace is still stuck, so the standing
+    // signal stays visible (this would have been silently dropped if malformed
+    // suppressed the signal — the data-integrity review's L2 regression guard).
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        op: "ready-null-installation",
+        extra: expect.objectContaining({
+          workspaceId: "solo-mal",
+          reason: "malformed-repo-url",
+        }),
+      }),
+    );
   });
 
   it("AC6: arm-1 top-level return is unchanged ScanResult; logs deterministic {reconciled,skipped,transient}", async () => {
@@ -935,17 +948,25 @@ describe("cron-workspace-sync-health — arm-1 reconcile (#5675)", () => {
   });
 
   it("AC6: a workspace backfilled by arm-1 does not spuriously fire arm-2 (stale) or arm-3 (went-quiet) in the same invocation", async () => {
-    // arm-1 reconciles solo-1; arms 2/3 scan their own ready set (none here) so
-    // they emit nothing — only the arm-1 backfill ran, no stale/went-quiet ops.
+    // Exercise the actual intra-fire overlap (L3 hardening): solo-1 is BOTH an
+    // arm-1 finding (ready+NULL-install) AND present in arms-2/3's ready scan
+    // with an EMPTY kb_sync_history (a freshly-reconciled workspace has never
+    // synced). arm-1 backfills it; arms 2/3 re-scan and must skip it because the
+    // empty-history gate fires before any stale/went-quiet report — even though
+    // the install now resolves non-null. Proves non-coupling at the row level,
+    // not merely "arms 2/3 scanned an empty set".
     WORKSPACE_ROWS = [{ id: "solo-1", repo_url: "https://github.com/alice/repo" }];
-    USERS_ROWS = [{ id: "solo-1", github_username: "alice" }];
-    READY_WORKSPACE_ROWS = [];
+    READY_WORKSPACE_ROWS = [{ id: "solo-1", repo_url: "https://github.com/alice/repo" }];
+    USERS_ROWS = [{ id: "solo-1", github_username: "alice", kb_sync_history: [] }];
     resolveReachableSpy.mockResolvedValue([501]);
     resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now());
     const handler = await importHandler();
     await handler({ step: makeStep(), logger });
 
     expect(writeRepoColsSpy).toHaveBeenCalledTimes(1);
+    // arms 2/3 skip on empty history before any probe → no spurious fire.
+    expect(getDefaultBranchHeadCommitAtSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "stale-sync-failed" }),

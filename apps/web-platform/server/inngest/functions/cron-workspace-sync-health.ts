@@ -111,20 +111,39 @@ async function scanReadyWorkspaces(service: {
   return { rows: data ?? [], error };
 }
 
+// Parse `owner/repo` from a canonical `https://host/owner/repo(.git)` URL.
+// Returns null on a falsy owner|repo (malformed/legacy row). Shared by arm-1's
+// reconcile decision and arm-3's went-quiet probe so the two cannot drift.
+function parseOwnerRepo(repoUrl: string): [string, string] | null {
+  const slug = repoUrl
+    .replace(/^https?:\/\/[^/]+\//i, "")
+    .replace(/\.git$/i, "");
+  const [owner, repo] = slug.split("/");
+  if (!owner || !repo) return null;
+  return [owner, repo];
+}
+
 // Arm-1 reconcile decision (#5675). A 3-outcome union (simplicity review):
 //   reconciled → backfill the resolved install via writeRepoColsToWorkspace.
-//   skip       → keep the visible folded reportSilentFallback signal, EXCEPT
-//                reason="malformed-repo-url" which is a silent count-skip
-//                (mirrors arm-3's malformed-slug `continue`).
+//   skip       → keep the visible folded reportSilentFallback signal (ALL skip
+//                reasons stay visible — a ready+NULL-install workspace is stuck
+//                regardless of why it is unresolvable, including a malformed
+//                repo_url; the caller emits op:ready-null-installation carrying
+//                the reason).
 //   transient  → degraded GitHub probe; no write, no signal, self-recovers.
+type Arm1SkipReason =
+  | "team-workspace-never-auto-detect"
+  | "malformed-repo-url"
+  | "needs-reauth";
 type Arm1Outcome =
   | { kind: "reconciled"; installId: number }
-  | { kind: "skip"; reason: string }
+  | { kind: "skip"; reason: Arm1SkipReason }
   | { kind: "transient" };
 
-// Minimal service shape the resolvers + writer need (the PostgREST chain). Both
-// resolveReachableInstallationIds and writeRepoColsToWorkspace accept a
-// structurally-typed client; this avoids a full SupabaseClient dependency here.
+// Minimal service shape `decideArm1Reconcile` needs to call
+// resolveReachableInstallationIds (the PostgREST `.from(...)` chain) — avoids a
+// full SupabaseClient dependency here. The caller passes the same client to
+// writeRepoColsToWorkspace separately (its own structural ServiceClientLike).
 type Arm1Service = { from: (table: string) => unknown };
 
 // Decide arm-1's action for ONE finding. Entitlement-scoped + solo-only:
@@ -143,14 +162,13 @@ async function decideArm1Reconcile(
   if (!isSolo) {
     return { kind: "skip", reason: "team-workspace-never-auto-detect" };
   }
-  // 2. owner/repo from repo_url (reuse arm-3's slug parse). Malformed → silent
-  //    count-skip exactly as arm-3 does (no bespoke signal).
+  // 2. owner/repo from repo_url. A malformed/legacy row is still a stuck
+  //    ready+NULL-install workspace, so it keeps the visible signal (the caller
+  //    emits op:ready-null-installation for every skip reason).
   if (!finding.repoUrl) return { kind: "skip", reason: "malformed-repo-url" };
-  const slug = finding.repoUrl
-    .replace(/^https?:\/\/[^/]+\//i, "")
-    .replace(/\.git$/i, "");
-  const [owner, repo] = slug.split("/");
-  if (!owner || !repo) return { kind: "skip", reason: "malformed-repo-url" };
+  const parsed = parseOwnerRepo(finding.repoUrl);
+  if (!parsed) return { kind: "skip", reason: "malformed-repo-url" };
+  const [owner, repo] = parsed;
   // 3. Entitlement-scoped reachable installs (owner user_id == solo workspace id).
   const reachable = await resolveReachableInstallationIds(
     service,
@@ -275,12 +293,11 @@ export async function cronWorkspaceSyncHealthHandler({
             await writeRepoColsToWorkspace(service, f.workspaceId, {
               github_installation_id: decision.installId,
             });
-          } else if (
-            decision.kind === "skip" &&
-            decision.reason !== "malformed-repo-url"
-          ) {
-            // Keep the existing folded signal (op unchanged) — it stays visible
-            // as one standing issue; carry the reason for discriminability.
+          } else if (decision.kind === "skip") {
+            // Keep the existing folded signal (op unchanged) for EVERY skip
+            // reason — a ready+NULL-install workspace is stuck regardless of why
+            // it is unresolvable (team / needs-reauth / malformed). It stays
+            // visible as one standing issue; carry the reason for discriminability.
             reportSilentFallback(
               new Error(
                 "ready workspace has NULL github_installation_id — unreachable by reconcile",
@@ -526,11 +543,9 @@ export async function cronWorkspaceSyncHealthHandler({
         // at write time (normalizeRepoUrl), so a falsy owner/repo here is a
         // near-impossible legacy/malformed row — skipping it silently is benign
         // (the helper encodeURIComponent-guards the segments regardless).
-        const slug = repoUrl
-          .replace(/^https?:\/\/[^/]+\//i, "")
-          .replace(/\.git$/i, "");
-        const [owner, repo] = slug.split("/");
-        if (!owner || !repo) continue;
+        const parsed = parseOwnerRepo(repoUrl);
+        if (!parsed) continue;
+        const [owner, repo] = parsed;
 
         // Resolve the install from the user's solo workspace (replaces the
         // dropped `users` install select+predicate, #5470). Null → not
