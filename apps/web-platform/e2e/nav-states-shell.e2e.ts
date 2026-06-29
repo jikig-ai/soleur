@@ -836,30 +836,23 @@ test.describe("widenable KB rail — desktop", () => {
 
     // The collapse toggle's onClick attaches at hydration; settle before the
     // first click so it is not a no-op (mirrors the sibling double-click and
-    // mobile-drawer tests). See learning 2026-06-03 trap #2.
+    // mobile-drawer tests). See e2e trap #2 (hydration-before-interaction) in
+    // knowledge-base/project/learnings/ui-bugs/2026-06-03-dynamic-width-needs-css-var-not-tailwind-arbitrary-or-usemediaquery.md
     await page.waitForTimeout(1500);
     await toggle.click();
 
     // Collapsed: rail is the 56px icon rail, the toggle now reads "Expand
     // sidebar", and the glyph is rotated 180° (« → ») to read as "expand".
-    await expect
-      .poll(() => aside.getAttribute("class"), { timeout: 7_000 })
-      .toContain("md:w-14");
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 7_000 });
     await expect(collapseToggle(page)).toHaveAccessibleName("Expand sidebar");
-    await expect
-      .poll(() => collapseToggle(page).locator("svg").getAttribute("class"), {
-        timeout: 7_000,
-      })
-      .toContain("rotate-180");
+    await expect(collapseToggle(page).locator("svg")).toHaveClass(/rotate-180/);
 
     // Full-hide is gone — there is no 0px state and no reveal hamburger.
     await expect(page.getByTestId("sidebar-reveal-button")).toHaveCount(0);
     await expect(aside).not.toHaveClass(/md:w-0/);
 
     await collapseToggle(page).click();
-    await expect
-      .poll(() => aside.getAttribute("class"), { timeout: 7_000 })
-      .toContain("md:w-56");
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 7_000 });
   });
 });
 
