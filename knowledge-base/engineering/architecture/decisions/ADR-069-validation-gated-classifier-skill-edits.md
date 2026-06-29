@@ -1,4 +1,4 @@
-# ADR-068: Validation-gated classifier-skill edits via a delimited-block projection
+# ADR-069: Validation-gated classifier-skill edits via a delimited-block projection
 
 - **Status:** Accepted
 - **Date:** 2026-06-29

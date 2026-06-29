@@ -95,7 +95,7 @@ The verdict math is pure and unit-tested with zero API
 pooled candidate target rate ≥ 0.5`, `accept = !corpus_regressed && target_task_passes`. **Fail-closed:**
 any gate error (missing key, promptfoo non-zero, malformed task) exits non-zero and defaults to NOT
 accept. The gate is only honest while the skill-arm prompt is a mechanical projection of the block
-(see ADR-068) — if the projection link is broken the gate silently no-ops on out-of-block edits.
+(see ADR-069) — if the projection link is broken the gate silently no-ops on out-of-block edits.
 
 ## Run it
 

@@ -53,7 +53,7 @@ decided the re-scope. Recorded here so /work doesn't re-litigate:
 - `plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs` — thin orchestrator: `--target`, `--candidate-file <edited-source>`, `--target-task <json|path>`, `--repeat`, `--append-on-accept`, `--check <file>` (lookup-only). Extracts current+candidate blocks → runs promptfoo **skill-arm only** with `--output` → calls `computeVerdict` → prints verdict JSON. Discloses API estimate before spending (TR3). Fail-closed (TR4).
 - `plugins/soleur/skills/eval-harness/gated-skills.json` — registry: `{ source_file, block_start_marker, block_end_marker, target, projected_prompt_path }` per gated skill.
 - `plugins/soleur/skills/eval-harness/test/verdict.test.cjs` — recorded-promptfoo-JSON fixtures + `computeVerdict` assertions (accept / corpus-regress / target-fail / ε-boundary cases).
-- `knowledge-base/engineering/architecture/decisions/ADR-068-validation-gated-classifier-skill-edits.md`.
+- `knowledge-base/engineering/architecture/decisions/ADR-069-validation-gated-classifier-skill-edits.md`.
 
 ## Files to Edit
 
@@ -88,7 +88,7 @@ decided the re-scope. Recorded here so /work doesn't re-litigate:
 - AC4 — `extract-block.cjs` projects the `go.md` routing block byte-for-byte into `go-skill.txt` (round-trip test: generated == committed projection).
 - AC5 — heal-skill SKILL.md apply step contains the gated-block branch (check → run → reject-don't-apply+log+buffer-read); compound-capture Step 8 has the `--check` guard + "don't stamp synced_to on reject"; both note prose-only / no displacement of the hook-first hierarchy (FR6).
 - AC6 — `.gitignore` contains `.claude/.skill-edit-rejections.jsonl`.
-- AC7 — ADR-068 exists (Decision + Alternatives-Considered: genetic/Pareto, autonomous optimizer, CI-only-deferred); `model.c4` declares `evalharness` (hyphen-free id) + the edge; `views.c4` includes it; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
+- AC7 — ADR-069 exists (Decision + Alternatives-Considered: genetic/Pareto, autonomous optimizer, CI-only-deferred); `model.c4` declares `evalharness` (hyphen-free id) + the edge; `views.c4` includes it; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - AC8 — `npx promptfoo validate config` still passes for both configs after the prompts become projections; new `.cjs` lint/`tsc` clean per repo convention.
 
 ### Post-merge (operator)
@@ -97,7 +97,7 @@ decided the re-scope. Recorded here so /work doesn't re-litigate:
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-**ADR-068** via `/soleur:architecture`. Decision: classifier-skill rules live in a delimited block
+**ADR-069** via `/soleur:architecture`. Decision: classifier-skill rules live in a delimited block
 that is the SSOT for both production and the eval projection; edits to that block are validation-gated
 (no-regression + target-passes) before applying, proposer-agnostic. **Precondition recorded in the
 Decision (per Kieran P3-4):** the gate is only honest while the skill-arm prompt is a mechanical
@@ -111,7 +111,7 @@ edges `compound -> evalharness` and `healskill -> evalharness "Gates classifier-
 `views.c4` plugin include. Component-view only (no Context/Container change). Validate via the two C4 tests.
 
 ### Sequencing
-ADR-068 accepted on merge (gate + projection ship together); no soak gate.
+ADR-069 accepted on merge (gate + projection ship together); no soak gate.
 
 ## Observability
 
@@ -164,7 +164,7 @@ production runtime surface; landing broken is no worse than the current no-gate 
 decision at plan-review, overriding the brainstorm's initial single-user-incident framing.)
 
 ## Risks & Mitigations
-- **Projection link silently breaks** → ADR-068 records it as a validity precondition; AC4 round-trip test asserts generated == committed projection; a CI check (folded into #5703) re-asserts it.
+- **Projection link silently breaks** → ADR-069 records it as a validity precondition; AC4 round-trip test asserts generated == committed projection; a CI check (folded into #5703) re-asserts it.
 - **Small-N variance** → ε tolerance + pooled aggregation + `--repeat 5` (TR5).
 - **Headless unattended spend** → skip-gate-and-defer (TR-HEADLESS).
 - **GDPR / IaC** → none touched; synthesized fixtures only. Both gates skipped.

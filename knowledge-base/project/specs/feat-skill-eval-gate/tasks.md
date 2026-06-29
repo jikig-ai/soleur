@@ -32,7 +32,7 @@ plan: knowledge-base/project/plans/2026-06-29-feat-skill-eval-gate-plan.md
 ## Phase 5 — Docs + architecture
 - [ ] 5.1 `eval-harness/SKILL.md`: document gate mode + projection; REMOVE the fixture-sync "no mechanical link" caveat.
 - [ ] 5.2 `eval-harness/README.md`: gate-mode reproduce + projection-regen command.
-- [ ] 5.3 Create ADR-068 via `/soleur:architecture` (Decision + projection-precondition + Alternatives-Considered).
+- [ ] 5.3 Create ADR-069 via `/soleur:architecture` (Decision + projection-precondition + Alternatives-Considered).
 - [ ] 5.4 `model.c4`: add `evalharness` component + `compound -> evalharness` + `healskill -> evalharness` edges. `views.c4`: include `platform.plugin.evalharness`.
 
 ## Phase 6 — Verify

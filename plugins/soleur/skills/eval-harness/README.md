@@ -64,7 +64,7 @@ node scripts/eval-gate.cjs --target go-routing \
 
 The verdict math is the pure [scripts/verdict.cjs](./scripts/verdict.cjs) (`computeVerdict`); the gate
 fails closed (non-zero exit + NOT accept on any error). See [SKILL.md](./SKILL.md) §"Gate mode" and
-ADR-068 for the decision and the projection precondition.
+ADR-069 for the decision and the projection precondition.
 
 > **Use `validate config`, never bare `validate` or `validate target`** — the latter two spend API
 > credits. `validate config` is config-only and free.
