@@ -36,8 +36,16 @@ describe("deploy-lease drain coordination (#5669)", () => {
     expect(resolveDeployLeasePath()).toBe(join(root, DEPLOY_LEASE_BASENAME));
   });
 
+  // Write the lease fixture to the mkdtemp-derived `root` path directly (proven
+  // equal to resolveDeployLeasePath() by the path-resolution test below) with
+  // exclusive-create + 0600. This keeps CodeQL's secure-temp provenance from
+  // `mkdtemp` intact — writing via the env-var resolver loses it and trips
+  // js/insecure-temporary-file (#5686 CodeQL gate).
+  const writeLeaseFixture = () =>
+    writeFile(join(root, DEPLOY_LEASE_BASENAME), "", { flag: "wx", mode: 0o600 });
+
   it("returns a non-negative age when a fresh lease exists (deploy in progress)", async () => {
-    await writeFile(resolveDeployLeasePath(), "");
+    await writeLeaseFixture();
     const age = await deployLeaseAgeMsIfFresh();
     expect(age).not.toBeNull();
     expect(age as number).toBeGreaterThanOrEqual(0);
@@ -48,8 +56,8 @@ describe("deploy-lease drain coordination (#5669)", () => {
   });
 
   it("returns null for a stale lease older than the TTL (fail-open)", async () => {
-    const leasePath = resolveDeployLeasePath();
-    await writeFile(leasePath, "");
+    const leasePath = join(root, DEPLOY_LEASE_BASENAME);
+    await writeFile(leasePath, "", { flag: "wx", mode: 0o600 });
     // Age the lease well past the TTL so a crashed-deploy lease cannot dark crons.
     const old = Date.now() / 1000 - DEPLOY_LEASE_MAX_AGE_MS / 1000 - 600;
     await utimes(leasePath, old, old);
@@ -57,7 +65,7 @@ describe("deploy-lease drain coordination (#5669)", () => {
   });
 
   it("setupEphemeralWorkspace throws DeployInProgressError on a fresh lease, before any clone", async () => {
-    await writeFile(resolveDeployLeasePath(), "");
+    await writeLeaseFixture();
     await expect(
       setupEphemeralWorkspace({ installationToken: "x", cronName: "cron-test" }),
     ).rejects.toBeInstanceOf(DeployInProgressError);
