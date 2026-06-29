@@ -80,10 +80,21 @@ jobs:
             echo "::error::git diff against origin/${BASE_REF} failed; failing detect-changes closed." >&2
             exit 1
           fi
-          # Anchors = the former on.paths list PLUS the workflow file itself
-          # (#5585: anti-bypass — a PR weakening this gate's logic must run the
-          # suite, mirroring ci.yml's (ci|deploy-docs).yml self-trigger anchor).
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/server/|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$)'; then
+          # Anchors must cover the ISOLATION SURFACE the suite verifies, not just
+          # the former on.paths (#5585 review, user-impact P1): the suite imports
+          # @/lib/supabase/tenant and exercises the RLS-bypassing service-role
+          # client (lib/supabase/service.ts), so lib/supabase/ + middleware.ts
+          # (per-request tenant scoping) + test/helpers/ (shared isolation
+          # fixtures) are part of the surface — a regression there must run the
+          # suite, not skip to an authoritative GREEN. Anti-bypass: the workflow
+          # file AND the extracted verdict script are anchored (gate logic now
+          # lives in both), mirroring ci.yml's (ci|deploy-docs).yml self-trigger.
+          # SCOPE BOUNDARY: app/api/**/route.ts is deliberately NOT anchored —
+          # anchoring all routes would run the heavy dev-Supabase suite on most
+          # PRs, defeating the rate-budget purpose that is the reason for #5585.
+          # Route-level isolation relies on the anchored lib/supabase/ clients +
+          # DB RLS policies (migrations, anchored). See ADR-032 amendment.
+          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$)'; then
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'tenant=false\n' >> "$GITHUB_OUTPUT"

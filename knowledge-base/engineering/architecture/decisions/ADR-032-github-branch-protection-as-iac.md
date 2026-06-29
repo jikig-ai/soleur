@@ -329,3 +329,27 @@ Bot/cron PRs (GITHUB_TOKEN, no CI trigger) satisfy it via the synthetic
 check-run in `.github/actions/bot-pr-with-synthetic-checks/action.yml`
 (`CHECK_NAMES`) and the `scripts/required-checks.txt` SSOT, identical to the
 other integration_id-15368 checks.
+
+**Anchor-surface coverage (the sharp edge of a path-filtered REQUIRED check).**
+Once a path-filtered check is REQUIRED, a GREEN result is an *authoritative
+certification* — "isolation verified" — not a silent skip. Its `detect-changes`
+anchors must therefore cover the **surface the suite actually verifies**, not
+merely the cheap-trigger `on.paths` it inherited. #5585 review (user-impact P1)
+caught that the suite imports `@/lib/supabase/tenant` and exercises the
+RLS-bypassing service-role client, yet `lib/supabase/`, `middleware.ts`, and the
+shared `test/helpers/` fixtures were unanchored — a regression there would have
+skipped to an authoritative GREEN. The anchors were widened to the isolation
+surface (plus the extracted verdict script, anti-bypass) before merge.
+
+Two boundaries are **deliberately left unanchored** and accepted:
+- `app/api/**/route.ts` — anchoring all routes would run the heavy dev-Supabase
+  suite on the majority of PRs, defeating the rate-budget purpose that is the
+  entire reason for the shim. Route-level isolation relies on the now-anchored
+  `lib/supabase/` clients + DB RLS policies (migrations, anchored).
+- Bot/GITHUB_TOKEN PRs satisfy the check via a blind synthetic GREEN (suite never
+  runs) — the standard repo-wide posture for all 16 checks. Accepted because the
+  synthetic-posting bot workflows touch docs/metrics, not the isolation surface.
+
+General rule for future path-filtered required checks: **the anchor set is part
+of the security contract, not just a cost optimization** — audit it against the
+verified surface, and document every accepted gap.
