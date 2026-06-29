@@ -296,14 +296,14 @@ emitted.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (dialer identified):** plan + ADR amendment + learning state that the
+- [x] **AC1 (dialer identified):** plan + ADR amendment + learning state that the
   MCP dials originate from `plugin.json` remote MCP servers auto-connected by
   `--plugin-dir` at CLI startup, and the `34.x` Datadog-vhost dial from CC
   non-essential traffic / context7 backend (default-cert, unproven host).
-- [ ] **AC2 (decision recorded):** keep-blocked for all five hosts; no edit to
+- [x] **AC2 (decision recorded):** keep-blocked for all five hosts; no edit to
   `cron-egress-allowlist.txt` or `cron-egress-firewall.test.sh`
   (`git diff --name-only origin/main` shows neither file).
-- [ ] **AC3 (silence-at-source — PRIMARY proof, Spike-A-gated):** Spike A's
+- [x] **AC3 (silence-at-source — PRIMARY proof, Spike-A-gated):** Spike A's
   `--debug` transcript (pasted in PR body) shows ZERO connect attempts to
   mcp.cloudflare/vercel/stripe/context7 under `--strict-mcp-config`, AND the
   `ux-audit` skill + `ux-design-lead` sub-agent still resolve. The substrate test
@@ -312,13 +312,13 @@ emitted.
   crons carry the flag as defense (they make no MCP dial — telemetry env is their
   load-bearing fix). If Spike A FAILED, the PR body records it and ships
   documentation-only for MCP hosts.
-- [ ] **AC3b (structural drift invariant):** substrate test asserts
+- [x] **AC3b (structural drift invariant):** substrate test asserts
   `resolveClaudeBin()` is referenced only in the substrate + the 2 known inline crons.
-- [ ] **AC4 (telemetry env):** `spawnClaudeEval` env + the 2 inline crons set
+- [x] **AC4 (telemetry env):** `spawnClaudeEval` env + the 2 inline crons set
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"` (asserted by test).
-- [ ] **AC5 (no regression):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
+- [x] **AC5 (no regression):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
   clean; `./node_modules/.bin/vitest run test/server/inngest/cron-claude-eval-substrate.test.ts test/server/inngest/cron-ux-audit.test.ts` green; `bash apps/web-platform/infra/cron-egress-firewall.test.sh` still green (allowlist unchanged).
-- [ ] **AC6 (docs):** runbook §intended-drops sub-section + ADR-052 amendment +
+- [x] **AC6 (docs):** runbook §intended-drops sub-section + ADR-052 amendment +
   postmortem rows flipped to resolved + learning file present; every cited
   `knowledge-base/` path resolves (`grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} test -f {}`).
 

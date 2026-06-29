@@ -138,6 +138,13 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 // substrate audit (bug 8/8). The `--` MUST be the last flag-array entry;
 // the spawn argv is `[...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT]`.
 const CLAUDE_CODE_FLAGS = [
+  // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
+  // the plugin-bundled remote MCP servers and makes no MCP dial; the
+  // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`
+  // is belt-and-suspenders (guards a future `--plugin-dir` addition / project
+  // `.mcp.json` auto-discovery). Prepended before `--print` (position-safe vs
+  // the trailing `--`). Mirrors spawnClaudeEval; this cron does not route through it.
+  "--strict-mcp-config",
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "80",
@@ -191,6 +198,12 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     // the prod container CWD /app (no .git); without GH_REPO it falls back to
     // git-remote detection and fails `fatal: not a git repository`.
     GH_REPO: `${REPO_OWNER}/${REPO_NAME}`,
+    // #5691 — kill Claude Code's own non-essential outbound traffic (telemetry/
+    // error-reporting/auto-update) so the egress firewall stops dropping it and
+    // polluting the security-critical egress-blocked alert. This is the
+    // load-bearing at-source fix for this inline-spawn cron (it makes no MCP
+    // dial). Keep-blocked, not allowlisted (ADR-052 2026-06-29 amendment).
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   };
 }
 

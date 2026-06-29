@@ -106,6 +106,35 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
         by filtering the detector. Do NOT allowlist `registry.npmjs.org` (reverses
         #5199) and do NOT add a provider CIDR (reverses the 2026-06-16 amendment's
         no-wholesale-CIDR boundary).
+   - **Amendment (2026-06-29, non-essential cron MCP/telemetry dials silenced at
+     source, not allowlisted — #5691).** The sporadic, low-volume drops the #5676
+     follow-up left un-dispositioned were identified and silenced at source, keeping
+     the default-drop boundary intact (this is an *extension* of the 2026-06-29 #5676
+     amendment, not a reversal):
+     1. **Dialer identification.** `mcp.vercel.com` / `mcp.cloudflare.com` /
+        `mcp.stripe.com` (and `mcp.context7.com`) are the four remote HTTP MCP
+        servers bundled in `plugins/soleur/.claude-plugin/plugin.json`; the
+        claude-eval substrate's `claude --print --plugin-dir plugins/soleur …`
+        auto-connects them at CLI startup. The `34.149.66.137` drop is a GCP
+        global-LB serving a Datadog `us5` *default* vhost (default-cert, NOT proof
+        of the dialer — the app's own Sentry ingest `34.160.81.0` is never blocked);
+        the most plausible dialer is Claude Code's own non-essential outbound
+        traffic or the `context7` backend.
+     2. **Keep-blocked decision (all five hosts).** None is a legitimate runtime
+        need: the containment hook (`buildCronEvalSettings`, relax-minimal) denies
+        every `mcp__*` tool — only `cron-ux-audit` is granted Playwright — so the
+        startup handshakes are pure overhead. The correct posture is **blocked**.
+     3. **Silence-at-source levers (NO allowlist/CIDR widened):**
+        `--strict-mcp-config` prepended on cron spawns makes the CLI ignore the
+        plugin-bundled MCP servers (`cron-ux-audit` re-supplies ONLY Playwright via
+        `--mcp-config .mcp.json`); `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in
+        the spawn env kills CC's own non-essential traffic. The two inline-spawn
+        crons (`cron-daily-triage`, `cron-follow-through-monitor`) pass no
+        `--plugin-dir` and make no MCP dial — for them the telemetry env is the
+        load-bearing fix and `--strict-mcp-config` is defensive. `cron-egress-allowlist.txt`
+        and `cron-egress-firewall.test.sh` are untouched; the change strictly
+        *reduces* container egress. At-source proof: the Spike A `--debug`
+        zero-connect trace in PR #5700 (stronger than a vol-1–3 absence inference).
 5. **Fail-loud, three channels:** kernel drops — BOTH `egress-blocked:` and
    `egress-dns-exfil:` prefixes — are counted each tick and posted as a
    Sentry error event (`feature=cron-egress-firewall`, `op=egress_blocked` →

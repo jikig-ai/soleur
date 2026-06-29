@@ -181,6 +181,31 @@ needed host is the allowlist-gap remediation above; a drop to an **un-enumerated
 sporadic** host (remote MCP servers, third-party telemetry) stays **blocked**
 pending per-host evidence — do not reflexively allowlist it.
 
+### Remote plugin-MCP + CC-telemetry dials (#5691)
+
+The sporadic, low-volume drops the #5676 follow-up enumerated were identified and
+silenced at source — **kept blocked, never allowlisted**:
+
+| Blocked DST | Host | Dialer | Disposition |
+|---|---|---|---|
+| `64.239.123.129` | `mcp.vercel.com` | claude-eval substrate `--plugin-dir plugins/soleur` auto-connects the four remote HTTP MCP servers bundled in `plugin.json` (context7/cloudflare/vercel/stripe) at CLI startup | silenced via `--strict-mcp-config` (substrate prepends it; `cron-ux-audit` re-supplies only Playwright via `--mcp-config .mcp.json`) |
+| `104.18.25.159` | `mcp.cloudflare.com` | same | same |
+| `198.202.176.231` / `198.137.150.161` | `mcp.stripe.com` | same | same |
+| `34.149.66.137` | GCP global-LB serving a Datadog `us5` *default* vhost (default-cert; **not** proof of the dialer — the app's own Sentry ingest `34.160.81.0` is never blocked) | most likely Claude Code's own non-essential outbound traffic (telemetry/error-reporting/auto-update) OR the `context7` MCP backend | silenced via `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in the cron spawn env (+ `context7` dropped by `--strict-mcp-config`) |
+
+These dials are **non-essential by construction**: the containment hook
+(`buildCronEvalSettings`, relax-minimal) denies every `mcp__*` tool — only
+`cron-ux-audit` is granted Playwright — so the cloudflare/vercel/stripe/context7
+startup handshakes are pure overhead the firewall correctly drops. The at-source
+proof is the Spike A `--debug` zero-connect trace (PR #5700 body), strictly stronger
+than any post-merge production-absence inference (the drops are vol 1–3 sporadic, so
+an absence window cannot *confirm* removal). **Do NOT** allowlist any of these hosts
+or add a provider CIDR — that reverses ADR-052's default-drop boundary for zero
+benefit (their tools are denied anyway). If `34.149.66.137` (the one vol-21 DST that
+carries rate signal) persists after both at-source levers, it is a dependency
+phone-home needing a `--debug`/strace trace → file a follow-up; still do not
+allowlist it. See ADR-052 amendment 2026-06-29 (#5691).
+
 ## Remediation (loader `die "invalid CIDR …"`)
 
 If `cron-egress-firewall.service` failed (not a drop page) and journald shows
