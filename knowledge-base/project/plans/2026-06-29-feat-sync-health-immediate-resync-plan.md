@@ -177,11 +177,11 @@ within ADR-033 I1/I6 (no event, no new edge/actor), not a new boundary.
   reuses GitHub, already exercised by reconcile-on-push.
 
 ## Acceptance Criteria (Pre-merge)
-- [ ] AC1: Reconciled solo workspace (dir present) → backfilled `github_installation_id` AND `kb_sync_history` row `{trigger:"reconcile_backfill", ok:true}`; same test asserts no Inngest event (test 3.1).
-- [ ] AC2: Reconciled workspace, missing dir → row `ERROR_CLASS_WORKSPACE_NOT_READY`, step does not throw (test 3.2).
-- [ ] AC3: Re-fire after successful backfill → no second sync (test 3.3).
-- [ ] AC4: Failed in-arm sync mirrors to Sentry and does NOT abort the cron (other findings still process).
-- [ ] AC5: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` green after the `trigger` widening.
+- [x] AC1: Reconciled solo workspace (dir present) → backfilled `github_installation_id` AND `kb_sync_history` row `{trigger:"reconcile_backfill", ok:true}`; same test asserts no Inngest event (test 3.1).
+- [x] AC2: Reconciled workspace, missing dir → row `ERROR_CLASS_WORKSPACE_NOT_READY`, step does not throw (test 3.2).
+- [x] AC3: Re-fire after successful backfill → no second sync (test 3.3).
+- [x] AC4: Failed in-arm sync mirrors to Sentry and does NOT abort the cron (other findings still process).
+- [x] AC5: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` green after the `trigger` widening.
 
 ## Open Code-Review Overlap
 None — 63 open `code-review` issues queried (2026-06-29); none reference `cron-workspace-sync-health`, `workspace-sync`, or `session-sync`.

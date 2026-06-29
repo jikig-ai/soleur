@@ -904,3 +904,12 @@ verification (AC11–AC13) is observation-only: confirm reconciled solo workspac
 carry a non-NULL install and drop out of the next scan; if a `needs-reauth` /
 `transient` residual persists after a one-week soak, the write-path that mints
 `ready`+NULL rows is investigated (the cron is a backstop, not the fix-of-record).
+
+**Follow-on (#5689 item 2, 2026-06-29).** Arm-1 now also performs an immediate
+in-arm `syncWorkspace` (live default-branch HEAD pull) right after a successful
+backfill, audited under a truthful `reconcile_backfill` `kb_sync_history` trigger,
+so a reconciled solo workspace's KB no longer waits days for the next push to
+catch up. It emits no Inngest event (ADR-033 I6 preserved) and needs no migration
+(`trigger` is free-form JSONB). On sync failure the row is not re-synced by arm-1
+(it has left the scan predicate); push + arm-2 `stale-sync-failed` own the failure
+loudness. Item 1 (producer investigation above) remains soak-gated.
