@@ -269,6 +269,22 @@ export async function cronUxAuditHandler({
         mcpServers: {
           playwright: {
             command: "npx",
+            // #5676 — silence the intended-by-design registry-metadata dial at
+            // source. #5199 deliberately keeps registry.npmjs.org OFF the cron
+            // egress allowlist, so the firewall (correctly) DROPS npx's spawn-time
+            // registry check — generating steady, by-design `egress-blocked`
+            // noise to Cloudflare's npmjs.org anycast pool (104.16.x.34). Passing
+            // npm_config_prefer_offline makes npx resolve from the image-baked
+            // _cacache and skip the registry dial when cache-warm, so the drop
+            // stops being generated. prefer-offline (NOT offline): a cold cache
+            // degrades to today's drop+baked-dep fallback rather than hard-failing
+            // the cron. Do NOT allowlist registry.npmjs.org — that reverses #5199.
+            // The MCP stdio launcher MERGES this `env` over a base that retains
+            // PATH/HOME (so npx still spawns); the #5199 live dry-run on each apply
+            // is the spawn-success check. Worst case if it were NOT inherited: the
+            // drop persists and the baked-dep fallback holds — i.e. today's behavior,
+            // never a hard cron break.
+            env: { npm_config_prefer_offline: "true" },
             args: [
               // #5199 — pinned (was @latest). registry.npmjs.org is NOT in the
               // cron egress allowlist, so this resolves to the image-baked
