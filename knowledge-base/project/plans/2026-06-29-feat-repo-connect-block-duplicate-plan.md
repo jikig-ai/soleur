@@ -163,7 +163,7 @@ logs:
   retention: Better Stack default
 discoverability_test:
   command: "doppler run -p soleur -c prd -- scripts/sentry-issue.sh WEB-PLATFORM-3M"
-  expected_output: 24h count trending to 0 post-deploy (no ssh)
+  expected_output: WEB-PLATFORM-3M  # issue is queryable = op:founder-ambiguous signal surface reachable without ssh; post-deploy the 24h event count should trend to 0
 ```
 
 ## Open Code-Review Overlap
