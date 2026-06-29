@@ -7,9 +7,9 @@ import {
 } from "@/lib/workstream";
 import { IssueColumn } from "@/components/workstream/issue-column";
 
-// Visual-polish coverage (PR follow-up to #5659): the glyph→icon swap and the
-// raised column tint. The collapse/persist behaviour itself is covered by
-// workstream-board.test.tsx (queries by aria-label, which this change preserves).
+// Default + override rule (v6): a CONTENT column is OPEN by default but CAN be
+// collapsed by the user (Collapse → strip with an Expand toggle). An EMPTY column
+// is COLLAPSED by default with NO toggle (nothing to expand to).
 
 const column: ColumnConfig = {
   status: "backlog",
@@ -33,19 +33,22 @@ function issue(over: Partial<WorkstreamIssue> = {}): WorkstreamIssue {
 
 afterEach(() => cleanup());
 
-describe("IssueColumn — collapse icon-button", () => {
-  it("expanded: renders a Collapse button with aria-expanded=true and an <svg> icon (not a bare glyph)", () => {
-    render(
+describe("IssueColumn — content open by default, collapsible", () => {
+  it("content + no collapse flag → expanded (w-72) with a Collapse toggle", () => {
+    const { container } = render(
       <IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />,
     );
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-72");
+    expect(cls).not.toContain("w-10");
     const btn = screen.getByRole("button", { name: "Collapse Backlog" });
     expect(btn.getAttribute("aria-expanded")).toBe("true");
-    expect(btn.querySelector("svg")).toBeTruthy();
-    expect(btn.textContent).not.toContain("⌄");
+    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
+    expect(screen.getByText("Seed issue")).toBeTruthy();
   });
 
-  it("collapsed: renders an Expand button with aria-expanded=false and an <svg> icon (not a bare glyph)", () => {
-    render(
+  it("content + collapsed=true → collapsed strip (w-10) with an Expand toggle", () => {
+    const { container } = render(
       <IssueColumn
         column={column}
         issues={[issue()]}
@@ -54,10 +57,12 @@ describe("IssueColumn — collapse icon-button", () => {
         onToggleCollapse={() => {}}
       />,
     );
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-10");
+    expect(cls).not.toContain("w-72");
     const btn = screen.getByRole("button", { name: "Expand Backlog" });
     expect(btn.getAttribute("aria-expanded")).toBe("false");
-    expect(btn.querySelector("svg")).toBeTruthy();
-    expect(btn.textContent).not.toContain("›");
+    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
   });
 
   it("clicking the toggle calls onToggleCollapse with the column status", () => {
@@ -76,14 +81,49 @@ describe("IssueColumn — collapse icon-button", () => {
   });
 });
 
+describe("IssueColumn — empty column collapses with no toggle", () => {
+  it("an empty column renders the w-10 strip and no toggle (collapsed flag unset)", () => {
+    const { container } = render(
+      <IssueColumn column={column} issues={[]} onOpen={() => {}} />,
+    );
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-10");
+    expect(cls).not.toContain("w-72");
+    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
+  });
+
+  it("an empty column ignores collapsed=true the same way — strip, no toggle", () => {
+    const { container } = render(
+      <IssueColumn
+        column={column}
+        issues={[]}
+        onOpen={() => {}}
+        collapsed
+        onToggleCollapse={() => {}}
+      />,
+    );
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-10");
+    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
+  });
+
+  it("the empty collapsed strip shows the 0 count, the label, and an sr-only 'No issues'", () => {
+    render(<IssueColumn column={column} issues={[]} onOpen={() => {}} />);
+    expect(screen.getByText("0")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Backlog" })).toBeTruthy();
+    expect(screen.getByText("No issues")).toBeTruthy();
+  });
+});
+
 describe("IssueColumn — visible column tint", () => {
   it("expanded: section backgroundColor carries the accent with a non-0d alpha", () => {
     const { container } = render(
       <IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />,
     );
-    const section = container.querySelector("section");
-    const bg = section?.getAttribute("style") ?? "";
-    // The accent must be present, but NOT at the old ~5% (0d) alpha.
+    const bg =
+      container.querySelector("section")?.getAttribute("style") ?? "";
     expect(bg.toLowerCase()).not.toContain("#9aa3b20d");
     expect(bg.toLowerCase()).toContain("#9aa3b2");
   });
@@ -98,74 +138,10 @@ describe("IssueColumn — visible column tint", () => {
         onToggleCollapse={() => {}}
       />,
     );
-    const section = container.querySelector("section");
-    const bg = section?.getAttribute("style") ?? "";
+    const bg =
+      container.querySelector("section")?.getAttribute("style") ?? "";
     expect(bg.toLowerCase()).not.toContain("#9aa3b20d");
     expect(bg.toLowerCase()).toContain("#9aa3b2");
-  });
-});
-
-describe("IssueColumn — empty column collapses by default", () => {
-  it("an empty column (collapsed flag unset) renders the collapsed strip with no toggle", () => {
-    const { container } = render(
-      <IssueColumn column={column} issues={[]} onOpen={() => {}} />,
-    );
-    // No toggle in either direction.
-    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
-    // It collapsed: the section is the w-10 strip, not the w-72 card list.
-    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
-    expect(cls).toContain("w-10");
-    expect(cls).not.toContain("w-72");
-  });
-
-  it("an empty column ignores collapsed=true the same way — still a collapsed strip, no toggle", () => {
-    const { container } = render(
-      <IssueColumn
-        column={column}
-        issues={[]}
-        onOpen={() => {}}
-        collapsed
-        onToggleCollapse={() => {}}
-      />,
-    );
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
-    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
-    expect(cls).toContain("w-10");
-    expect(cls).not.toContain("w-72");
-  });
-
-  it("the empty collapsed strip shows the 0 count pill and the column label", () => {
-    render(<IssueColumn column={column} issues={[]} onOpen={() => {}} />);
-    expect(screen.getByText("0")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Backlog" })).toBeTruthy();
-  });
-
-  it("the empty collapsed strip announces 'No issues' for screen readers", () => {
-    render(<IssueColumn column={column} issues={[]} onOpen={() => {}} />);
-    expect(screen.getByText("No issues")).toBeTruthy();
-  });
-});
-
-describe("IssueColumn — one control at a time (cross-fade regression lock)", () => {
-  it("expanded: the Expand button is ABSENT", () => {
-    render(<IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />);
-    expect(screen.getByRole("button", { name: "Collapse Backlog" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
-  });
-  it("collapsed: the Collapse button is ABSENT", () => {
-    render(
-      <IssueColumn
-        column={column}
-        issues={[issue()]}
-        onOpen={() => {}}
-        collapsed
-        onToggleCollapse={() => {}}
-      />,
-    );
-    expect(screen.getByRole("button", { name: "Expand Backlog" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
   });
 });
 

@@ -5,17 +5,21 @@
 // behind the cards, NOT a saturated block). Addendum item 2: the count is a
 // small rounded pill, right-aligned and typographically de-emphasized.
 //
-// Collapsible (v3): a SINGLE persistent <section> whose width class toggles
+// Collapsible (v6): a SINGLE persistent <section> whose width class toggles
 // (w-72 ↔ w-10) with a real transition-[width] animation — a conditional-render
 // swap would NOT animate (no prior committed frame; learning 2026-06-09 / SE1).
 // Only ONE control button exists at a time (Collapse when expanded / Expand when
-// collapsed). Inner content fades in via a rAF mount-reveal. Collapsed state is
-// owned by the board (persisted in localStorage).
+// collapsed). Inner content fades in via a rAF mount-reveal. The board owns the
+// persisted collapse choice.
 //
-// Empty rule (v4): a column with 0 issues renders COLLAPSED by default — a thin
-// strip with the dot, a 0 count, and the vertical label, and NO toggle (you
-// cannot expand an empty column). The persisted collapsed flag is left untouched
-// while empty, so a populated column's prior choice re-applies on repopulate.
+// Default + override rule (v6):
+//   - A column WITH content is OPEN by default and CAN be collapsed by the user
+//     (Collapse toggle → persisted strip with an Expand toggle to reopen).
+//   - A column with 0 issues is COLLAPSED by default and has NO toggle (there is
+//     nothing to expand to). The persisted flag is left untouched while empty, so
+//     a column's prior choice re-applies once it repopulates.
+//   isCollapsed = isEmpty || collapsed  — empty forces the strip; otherwise the
+//   user's persisted choice decides.
 //
 // Render cap: at most COLUMN_RENDER_CAP cards render; beyond that the exact
 // COLUMN_CAP_NOTICE shows at the column bottom. The count pill always shows the
@@ -75,11 +79,10 @@ export function IssueColumn({
   onToggleCollapse?: (status: WorkstreamStatus) => void;
 }) {
   const isEmpty = issues.length === 0;
-  // Empty columns render COLLAPSED by default (a thin strip), regardless of the
-  // persisted flag; a populated column honors the user's persisted choice.
-  // INVARIANT: isEmpty ⇒ isCollapsed, so the expanded branch never sees an empty
-  // column (relied on below — do not add empty-handling to that branch without
-  // re-checking this line).
+  // Empty forces the collapsed strip (no content to show); otherwise the user's
+  // persisted choice decides. So content is OPEN by default (collapsed defaults
+  // false) but CAN be collapsed. The persisted flag is never mutated for empty
+  // columns, so a prior choice re-applies on repopulate.
   const isCollapsed = isEmpty || collapsed;
   const tint = { backgroundColor: `${column.accent}${COLUMN_TINT_ALPHA}` };
   const overCap = issues.length > COLUMN_RENDER_CAP;
@@ -95,8 +98,8 @@ export function IssueColumn({
       {isCollapsed ? (
         <MountReveal key="collapsed">
           <div className="flex flex-col items-center">
-            {/* Empty columns have NO toggle — you cannot expand an empty column.
-                Only a user-collapsed NON-empty strip gets the Expand chevron. */}
+            {/* A user-collapsed NON-empty strip gets an Expand toggle; an empty
+                strip has none (nothing to expand to). */}
             {!isEmpty ? (
               <button
                 type="button"
@@ -109,10 +112,9 @@ export function IssueColumn({
                 <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
               </button>
             ) : null}
-            {/* Keep the empty state announced after the visible "No issues" text
-                is gone — a bare "0" count alone is ambiguous to a screen reader.
-                When empty, the sr-only text is the canonical announcement and the
-                visible "0" pill is aria-hidden so SRs don't hear "No issues, 0". */}
+            {/* Empty strip: the sr-only text is the canonical empty announcement
+                so a screen reader doesn't hear a bare, ambiguous "0"; the visible
+                "0" pill is aria-hidden when empty. */}
             {isEmpty ? <span className="sr-only">No issues</span> : null}
             <span
               aria-hidden="true"
@@ -137,8 +139,8 @@ export function IssueColumn({
         <MountReveal key="expanded">
           <header className="flex items-center gap-2 px-1 py-2">
             {/* The expanded branch only renders for NON-empty columns
-                (INVARIANT: isEmpty ⇒ isCollapsed), so the Collapse toggle is
-                always present here. */}
+                (isEmpty ⇒ isCollapsed), so the Collapse toggle is always present
+                here — every content column can be collapsed. */}
             <button
               type="button"
               aria-label={`Collapse ${column.label}`}
