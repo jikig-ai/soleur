@@ -150,6 +150,37 @@ No SSH, no dashboard-eyeball: read the `retained` count and the `egress-blocked`
 CIDR to "fix" a rotation drop — that is the wrong layer and the wrong blast
 radius.
 
+## Intended-by-design drops (NOT a gap — do not "fix" by allowlisting) — #5676
+
+The single `op=egress_blocked` Sentry issue groups **every** blocked destination
+(no per-DST grouping), so a steady, never-zeroing hit count is often **not** a
+bug — some drops are deliberate and permanent:
+
+- **`registry.npmjs.org` (Cloudflare anycast `104.16.x.34`, constant `.34`
+  host-octet).** Bare `npx` (cron-ux-audit's Playwright MCP) performs a spawn-time
+  registry-metadata dial. #5199 deliberately keeps `registry.npmjs.org` OFF the
+  allowlist so `@playwright/mcp` resolves to the **image-baked** dep, not a
+  runtime supply-chain fetch — the firewall dropping that dial is **working as
+  designed**. The cron proceeds on the baked dep. #5676 silenced the dial at
+  source (`npm_config_prefer_offline` on the npx env), so it stops being generated
+  when the image `_cacache` is warm; a cold cache degrades to drop+baked-dep
+  fallback (never a hard cron failure).
+
+**Do NOT** allowlist `registry.npmjs.org` (reverses #5199's supply-chain intent)
+and **do NOT** add a DST-IP/range exclusion at the emitter: `registry.npmjs.org`
+shares Cloudflare's `104.16.0.0/13` anycast with countless other zones, so an
+IP-mute would simultaneously blind a genuine future gap to another
+Cloudflare-fronted host (ADR-052 amendment 2026-06-29). **Recovery/health is
+judged PER-IDENTIFIED-HOST, never a raw `egress-blocked` count → zero.** Identify
+the host behind a `DST` before acting: resolve every codebase egress host via DoH
+(`8.8.8.8` + `1.1.1.1`) and match the `DST` fingerprint, and/or
+`openssl s_client -connect <DST>:443 -servername <candidate>` to read the cert CN
+(Cloudflare anycast hides the customer in the IP). A drop whose host is a known
+intended-drop (npm registry probe) is expected; a drop to a **new** legitimately-
+needed host is the allowlist-gap remediation above; a drop to an **un-enumerated,
+sporadic** host (remote MCP servers, third-party telemetry) stays **blocked**
+pending per-host evidence — do not reflexively allowlist it.
+
 ## Remediation (loader `die "invalid CIDR …"`)
 
 If `cron-egress-firewall.service` failed (not a drop page) and journald shows
