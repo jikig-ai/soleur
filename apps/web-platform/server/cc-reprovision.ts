@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { getCurrentRepoUrl } from "./current-repo-url";
@@ -72,8 +74,39 @@ export async function reprovisionWorkspaceOnDispatch(
         resolvedWorkspaceId: activeWorkspaceId,
       });
     }
-    const [workspacePath, storedInstallationId, repoUrl] = await Promise.all([
-      fetchUserWorkspacePath(userId, activeWorkspaceId),
+    // #5715 — resolve the workspace path FIRST (membership-verified id), then
+    // stat `.git` on EXACTLY that path before the heavier install/repo resolves
+    // + the 120s clone. ONE resolve feeds both the stat and the clone target
+    // (LEADER precedent `agent-runner.ts:1148`) — no second divergent resolve,
+    // so the warm-dispatch gate can AWAIT this on every warm turn and a
+    // `.git`-present turn short-circuits the slow path (instead of the old
+    // fire-and-forget that let the agent run before the clone finished).
+    const workspacePath = await fetchUserWorkspacePath(userId, activeWorkspaceId);
+    // Forced-slow-path observability (AC11): a resolver outage that yields no
+    // path cannot stat `.git`, so we fail soft to the generic route — but make
+    // it queryable in Sentry rather than a silent slow-path forcing.
+    if (!workspacePath) {
+      reportSilentFallback(new Error("workspace_path_unresolved"), {
+        feature: "cc-dispatcher",
+        op: "reprovision-on-dispatch-await",
+        extra: {
+          userId,
+          activeWorkspaceId,
+          reason: "workspace-path-unresolved",
+        },
+      });
+      return "ok";
+    }
+    // `.git` PRESENT → the safe symptom (missing repo) is absent: skip the
+    // install/repo resolution AND the clone. Safety invariant: a present `.git`
+    // is NEVER re-cloned/overwritten (never destroy Start-Fresh work / un-pushed
+    // commits — learning 2026-06-03-self-heal-on-brand-path-only-acts-on-safe-
+    // symptom.md). The path the stat used is exactly the path
+    // `ensureWorkspaceRepoCloned` would clone into — probe == clone by construction.
+    if (existsSync(join(workspacePath, ".git"))) {
+      return "ok";
+    }
+    const [storedInstallationId, repoUrl] = await Promise.all([
       resolveInstallationId(userId, activeWorkspaceId),
       getCurrentRepoUrl(userId, activeWorkspaceId),
     ]);

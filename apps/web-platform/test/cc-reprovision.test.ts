@@ -22,6 +22,7 @@ const {
   mockReportSilentFallback,
   mockGetFreshTenantClient,
   mockResolveActiveWorkspace,
+  mockExistsSync,
 } = vi.hoisted(() => ({
   mockFetchUserWorkspacePath: vi.fn(),
   mockResolveInstallationId: vi.fn(),
@@ -31,6 +32,7 @@ const {
   mockReportSilentFallback: vi.fn(),
   mockGetFreshTenantClient: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
+  mockExistsSync: vi.fn(),
 }));
 
 vi.mock("@/server/kb-document-resolver", () => ({
@@ -61,6 +63,14 @@ vi.mock("@/lib/supabase/tenant", () => ({
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: mockResolveActiveWorkspace,
 }));
+// #5715 — the `.git` short-circuit hoisted INTO reprovisionWorkspaceOnDispatch
+// stats the resolved workspace path before the install/repo resolves + clone.
+// Mock `existsSync` so the early-return discriminator is deterministic (default
+// false → `.git` ABSENT → proceed to clone, preserving the pre-#5715 tests).
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: mockExistsSync };
+});
 
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
 // The breadcrumb module is NOT mocked — it runs for real and emits through the
@@ -90,6 +100,9 @@ beforeEach(() => {
     async ({ installationId }: { installationId: number | null }) => installationId,
   );
   mockEnsureWorkspaceRepoCloned.mockResolvedValue("ok");
+  // Default: `.git` ABSENT (reclaimed workspace) so the recovery proceeds to the
+  // clone — the pre-#5715 behavior these suites assert.
+  mockExistsSync.mockReturnValue(false);
 });
 
 describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () => {
@@ -135,6 +148,79 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
   it("propagates 'failed' when the re-clone genuinely fails (the honest-message signal)", async () => {
     mockEnsureWorkspaceRepoCloned.mockResolvedValue("failed");
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("failed");
+  });
+
+  // #5715 AC2/AC4 — `.git` PRESENT short-circuit. The hoisted stat runs on the
+  // SAME membership-verified path the clone would target (probe == clone), so a
+  // present `.git` skips the install/repo resolution AND the clone entirely.
+  it("AC2/AC4: `.git` present → early-return 'ok', NO install/repo resolve, NO clone (safety invariant)", async () => {
+    mockExistsSync.mockReturnValue(true);
+
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+
+    // The cheap discriminator ran on the resolved path…
+    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
+    expect(mockExistsSync).toHaveBeenCalledTimes(1);
+    expect((mockExistsSync.mock.calls[0][0] as string)).toContain(WS);
+    // …and short-circuited BEFORE the heavier resolves + the 120s clone. A
+    // present `.git` is NEVER re-cloned/overwritten.
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
+    expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // #5715 AC11 — forced-slow-path observability: a resolver outage that yields
+  // no path cannot stat `.git`, so it fails soft to "ok" (no false reclaim
+  // message) BUT emits a distinct breadcrumb so the slow-path forcing is
+  // queryable in Sentry, not silent.
+  it("AC11: workspace path unresolved → fail-soft 'ok' + distinct 'workspace-path-unresolved' breadcrumb, NO clone", async () => {
+    mockFetchUserWorkspacePath.mockResolvedValue("");
+
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+
+    expect(mockExistsSync).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "cc-dispatcher",
+      op: "reprovision-on-dispatch-await",
+      extra: { reason: "workspace-path-unresolved" },
+    });
+  });
+
+  // #5715 AC2/AC4 — `.git` PRESENT short-circuit hoisted before the heavy
+  // install/repo resolves + clone. One membership-verified resolve feeds the
+  // stat; a present `.git` is NEVER re-cloned (safety invariant).
+  it("AC2/AC4: `.git` present → early-return 'ok', NO install/repo resolve, NO clone", async () => {
+    mockExistsSync.mockReturnValue(true);
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+    // The workspace path WAS resolved (it is what we stat) ...
+    expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
+    expect(mockExistsSync).toHaveBeenCalledTimes(1);
+    expect(mockExistsSync.mock.calls[0][0]).toContain(WS);
+    expect(mockExistsSync.mock.calls[0][0]).toContain(".git");
+    // ... but the heavier resolves + the clone are skipped entirely.
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
+    expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // #5715 AC11 — forced-slow-path observability. A resolver outage yielding no
+  // path cannot stat `.git`; fail soft to "ok" BUT emit a distinct breadcrumb so
+  // the slow-path forcing is queryable in Sentry, not silent.
+  it("AC11: unresolved workspace path → distinct breadcrumb (reason=workspace-path-unresolved), 'ok', no clone", async () => {
+    mockFetchUserWorkspacePath.mockResolvedValue("");
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+    expect(mockExistsSync).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "cc-dispatcher",
+      op: "reprovision-on-dispatch-await",
+      extra: { reason: "workspace-path-unresolved" },
+    });
   });
 
   it("fail-soft: a resolver error returns 'ok' (NOT 'failed') and mirrors to Sentry", async () => {
