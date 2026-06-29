@@ -330,8 +330,8 @@ discoverability_test:
 
 - A growth-audit cron (70-min budget) is 20 min into its run when a merge triggers a deploy → canary validates + is torn down → drain holds for ~50 min → cron completes → deploy swaps → no kill. `cron_drain_wait_secs ≈ 3000`.
 - A deploy lands with no claude child running → zero drain wait → normal swap.
-- A cron hits its own ceiling mid-drain (AbortSignal fires) → `cron_in_flight` goes false at abort → drain proceeds; the `retries:1` re-dispatch is held by `pause` and lands on the new container (G9).
-- A previous deploy was SIGKILLed mid-drain leaving Inngest paused → the next deploy's resume-if-paused-at-entry reconcile un-wedges it (G3); `inngest_paused=true` was visible in the webhook meanwhile.
+- A cron hits its own ceiling mid-drain (AbortSignal fires) → `cron_in_flight` goes false at abort → drain proceeds; a `retries:1` re-dispatch arriving inside the deploy window is deferred by the fresh lease (`DeployInProgressError`) and skips one fire, self-correcting next tick (lease, not pause).
+- A previous deploy was SIGKILLed mid-drain leaving a stale lease → the substrate's TTL fail-open (`DEPLOY_LEASE_MAX_AGE_MS`, 90 min) treats the over-age lease as absent, so crons resume automatically with no resume verb and no operator action; each pre-TTL deferral was visible via `reportSilentFallback(op=deploy-lease-fresh)` meanwhile.
 
 ## Sharp Edges
 
