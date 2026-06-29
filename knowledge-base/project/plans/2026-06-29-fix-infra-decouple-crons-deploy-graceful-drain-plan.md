@@ -23,6 +23,23 @@ branch: feat-one-shot-5669-decouple-crons-deploy-lifecycle
 
 > Fixes #5669. Follow-up to #5417 (memory-safety + crash-attribution, merged as #5420 / ADR-062). #5420 resolved every OOM/crash harm but, by scope, never targeted **deploy frequency**, so it structurally cannot reach the ≤1/day "Server startup" proxy. Residual: each app redeploy can still kill a long-running (up to ~70-min) Claude-eval cron that lands mid-flight (`spawn cwd /tmp/soleur-cron-* no longer exists`). This plan closes that residual by **graceful drain** — the deploy pauses new dispatch and waits for the in-flight cron to finish before swapping the container.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-29
+**Sections enhanced:** Overview, Research Reconciliation, Phases 0–5, Files to Edit, ADR, Observability, ACs, Sharp Edges, Domain Review
+**Review agents used:** CTO (engineering), platform-strategist (infra topology), spec-flow-analyzer (deploy state machine) — all at single-user-incident threshold; plus deepen-plan precedent-diff + verify-the-negative grep passes.
+
+### Key Improvements (from domain review + deepen passes)
+1. **Two FALSE safety premises corrected.** The original "global `cron-platform` limit:1 ⇒ exactly one cron, single 60-min ceiling ⇒ deterministic survival" proof was wrong on both terms: `MAX_TURN_DURATION_MS` is per-function (15→**70** min, `cron-growth-audit.ts:52`) so the drain default is `MAX()`=**4200s**; and claude-eval also runs in the `agent-runtime` pool (limit:50) + cc-go, so detection MUST be **pool-agnostic**.
+2. **The deploy wall-clock is a FOUR-CONSTANT fail-closed invariant**, not one knob. Grounded exact lockstep change: `STATUS_POLL_MAX_ATTEMPTS 360→960`, `HEALTH_POLL_MAX_ATTEMPTS 180→480`, `IN_FLIGHT_CEILING_S 1800→4800`, wrapper `1800→4800` (assertion at `web-platform-release.yml:355–358`). The wrapper **execs into** ci-deploy.sh → the constant must be a shared sourced value (a dynamic expr reads empty → SIGKILL at 10 min).
+3. **Trap-compose, not clobber.** `inngest_resume` composes into the existing inline `:137` EXIT + `:171` TERM/INT trap strings (no `add_exit_action` exists); a bare `trap … EXIT` would silently break `write_state`/sentinel finalization. SIGKILL is untrappable → next-deploy resume-if-paused reconcile is the PRIMARY recovery.
+4. **Memory-dwell fix:** drain runs AFTER canary teardown (not with canary resident) so the ~50–70-min sustained peak is ~5.4GB, not ~6.9GB on the 8GB host.
+5. **`inngest pause` is server-global and may "drain in-flight events"** (`inngest-bootstrap.sh:9-10`) — flagged for live Phase-0 verification (G1); its global blast radius (freezes ALL event-driven fns) is now in User-Brand Impact.
+
+### New Considerations Discovered
+- 19 spec-flow gaps (G1–G19) carried as an explicit deepen-plan/work checklist in Domain Review — the highest-value being G1 (pause semantics), G2 (trap clobber), G3 (SIGKILL wedge recovery), G16/G8 (detection proxy-vs-invariant: pgrep false-pos on cc-go/agent-runtime).
+- Precedent grounded: inngest binary `/usr/local/bin/inngest` `pause`/`resume`; host-side Sentry via `container-restart-monitor.sh:65 sentry_event()`; verify-the-negative confirmed "canary fires no crons" (`ci-deploy.sh:60`) and SIGTERM drains only HTTP/cc-go (`server/index.ts:261-267`).
+
 ## Overview
 
 The Inngest cron functions (`apps/web-platform/server/inngest/functions/cron-*.ts`) invoke `claude-code` via `child_process.spawn` **inside the `soleur-web-platform` container's Node process** (ADR-033). Every merge to `main` touching `apps/web-platform/**` runs `web-platform-release.yml` → `ci-deploy.sh`, which canary-probes the new image on port 3001 then **stops and removes the old prod container** (`docker stop --time=12 soleur-web-platform` at `apps/web-platform/infra/ci-deploy.sh:721`). That stop kills any in-flight cron `claude` child — the `_cron-claude-eval-substrate.ts:706` symptom (`spawn cwd … no longer exists`).
@@ -123,7 +140,7 @@ A "no C4 impact" conclusion is therefore supported by the actor/system/relations
 
 ### Phase 3 — Wall-clock as a FOUR-CONSTANT lockstep, then the drain gate (RED→GREEN)
 
-**3a — raise the deploy wall-clock as a four-constant lockstep (do FIRST).** `web-platform-release.yml` runtime-asserts `STATUS_WINDOW (360×5s) == HEALTH_WINDOW (180×10s) == IN_FLIGHT_CEILING_S == ci-deploy-wrapper.sh timeout (1800s)` and blocks the deploy on drift (~`web-platform-release.yml:312–357`). Raise **all four** to a **fixed literal** (≥ `CRON_DRAIN_TIMEOUT` + overhead; 4200s drain ⇒ **4800s**, worst-case deploy ~80 min). Do NOT use a dynamic `$(( … ))` wrapper value — it (i) can't satisfy the static-equality assertion against the three literals and (ii) reads `CRON_DRAIN_TIMEOUT` as empty across the `exec` boundary → 600s → SIGKILL at 10 min, worse than today (P1-wrapper). Name in ADR-068 the trade-offs the bump loosens: `IN_FLIGHT_CEILING_S`'s second consumer (pre-rerun stale-lock probe) now treats a wedged deploy as alive for ~80 min, and hung-deploy failure surfaces ~80 min slower; and the `cancel-in-progress:false` lock (`:139`) serializes queued deploys behind a max-length drain (G18).
+**3a — raise the deploy wall-clock as a four-constant lockstep (do FIRST).** `web-platform-release.yml` runtime-asserts (`:355–358`) `STATUS_WINDOW == IN_FLIGHT_CEILING_S` AND `HEALTH_WINDOW == IN_FLIGHT_CEILING_S`, and the documented invariant (`:329`, `:335-336`) ties all to the `ci-deploy-wrapper.sh` `timeout … 1800s`. **Exact lockstep change to 4800s:** `STATUS_POLL_MAX_ATTEMPTS: 360→960` (×5s=4800), `HEALTH_POLL_MAX_ATTEMPTS: 180→480` (×10s=4800), `IN_FLIGHT_CEILING_S: 1800→4800`, and `ci-deploy-wrapper.sh:15` `timeout … 1800s → 4800s` (all from the shared constant). `CRON_DRAIN_TIMEOUT` (4200) ≤ 4800 − overhead; worst-case deploy ~80 min. Do NOT use a dynamic `$(( … ))` wrapper value — it (i) can't satisfy the static-equality assertion against the literals and (ii) reads `CRON_DRAIN_TIMEOUT` as empty across the `exec` boundary → 600s → SIGKILL at 10 min, worse than today (P1-wrapper). Name in ADR-068 the trade-offs the bump loosens: `IN_FLIGHT_CEILING_S`'s second consumer (pre-rerun stale-lock probe, `:397`) now treats a wedged deploy as alive for ~80 min, and hung-deploy failure surfaces ~80 min slower; and `cancel-in-progress:false` (`:146`) serializes queued deploys behind a max-length drain (G18).
 
 **3b — drain gate, placed AFTER canary teardown, BEFORE old-prod stop (memory-dwell fix).** Do NOT drain with the canary still resident (canary 1536m + old-prod 4096m + cron + ~1.3GB ≈ 6.9GB sustained ~50–70 min on 8GB → OOM risk that kills the very cron being protected). Tear the canary down once it has validated the image, THEN drain (resident ≈ 5.4GB), THEN stop old prod + run new prod:
 
@@ -132,8 +149,10 @@ A "no C4 impact" conclusion is therefore supported by the actor/system/relations
 docker stop soleur-web-platform-canary; docker rm soleur-web-platform-canary   # free 1536m BEFORE draining
 # Cron drain gate (#5669 / ADR-068): never stop old prod while a claude child is in
 # flight. Bounded by CRON_DRAIN_TIMEOUT (= MAX per-function maxTurnDurationMs, 4200s).
-inngest_pause || true                 # stop NEW dispatch (server-global; G1/G6)
-add_exit_action inngest_resume        # COMPOSE into existing EXIT handler (:137) — NOT `trap … EXIT` (G2)
+"$INNGEST_BIN" pause || true          # $INNGEST_BIN=/usr/local/bin/inngest; stop NEW dispatch (server-global; G1/G6)
+# COMPOSE resume into the EXISTING inline trap strings (:137 EXIT, :171 TERM/INT) by editing
+# them to call inngest_resume — there is NO add_exit_action accumulator; a bare new
+# `trap … EXIT` would REPLACE the write_state/.final-sentinel handler at :137 (G2).
 drain_start=$(date +%s)
 while cron_in_flight; do               # cron_in_flight has its own probe timeout (G5)
   waited=$(( $(date +%s) - drain_start ))
@@ -170,7 +189,7 @@ CRON_DRAIN_WAIT_SECS=$(( $(date +%s) - drain_start ))
 
 - **Shared constant source** (new or existing sourced file readable by both `ci-deploy.sh` and `ci-deploy-wrapper.sh`) — `CRON_DRAIN_TIMEOUT` (4200), `CRON_DRAIN_POLL` (10), and the pinned `DEPLOY_WALL_CLOCK` literal (4800). The wrapper execs into ci-deploy.sh, so an in-script constant is invisible to it (P1-wrapper).
 - `apps/web-platform/infra/ci-deploy-wrapper.sh` — change `timeout … 1800s` → the pinned literal (4800), sourced from the shared file. **Load-bearing — a dynamic/empty value SIGKILLs at 10 min.**
-- `apps/web-platform/infra/ci-deploy.sh` — source the shared constants, `cron_in_flight()` (Phase-0 signal, own probe timeout), `inngest_pause`/`inngest_resume` helpers, `add_exit_action`/composed EXIT+TERM/INT handler (G2), resume-if-paused-at-entry reconcile (G3), `report_cron_drain_timeout`, the drain gate AFTER canary teardown / before the prod stop.
+- `apps/web-platform/infra/ci-deploy.sh` — source the shared constants; `INNGEST_BIN=/usr/local/bin/inngest`; `cron_in_flight()` (Phase-0 signal, own probe timeout); `inngest_resume` helper composed by **editing the existing inline `:137` EXIT and `:171` TERM/INT trap strings** (no `add_exit_action` exists — G2); resume-if-paused-at-entry reconcile (G3); `report_cron_drain_timeout` mirroring `container-restart-monitor.sh:65 sentry_event()`; the drain gate AFTER canary teardown / before the prod stop.
 - `apps/web-platform/infra/ci-deploy.test.sh` — T1–T9 (see Phase 5).
 - `apps/web-platform/infra/cat-deploy-state.sh` — `cron_drain_wait_secs` (int) + `cron_drain_timed_out` (bool) + `inngest_paused` (bool, derived by querying Inngest — G17) fields, safe sentinels.
 - `apps/web-platform/infra/cat-deploy-state.test.sh` — assert the new fields + types.
