@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import {
   COLUMN_CAP_NOTICE,
   type ColumnConfig,
@@ -7,9 +7,9 @@ import {
 } from "@/lib/workstream";
 import { IssueColumn } from "@/components/workstream/issue-column";
 
-// Visual-polish coverage (PR follow-up to #5659): the glyph→icon swap and the
-// raised column tint. The collapse/persist behaviour itself is covered by
-// workstream-board.test.tsx (queries by aria-label, which this change preserves).
+// Collapse is driven SOLELY by emptiness (v5): content ⇒ expanded, empty ⇒
+// collapsed strip. There is no manual collapse/expand toggle and no persisted
+// state — so a content column is ALWAYS open and an empty one ALWAYS collapsed.
 
 const column: ColumnConfig = {
   status: "backlog",
@@ -33,107 +33,30 @@ function issue(over: Partial<WorkstreamIssue> = {}): WorkstreamIssue {
 
 afterEach(() => cleanup());
 
-describe("IssueColumn — collapse icon-button", () => {
-  it("expanded: renders a Collapse button with aria-expanded=true and an <svg> icon (not a bare glyph)", () => {
-    render(
-      <IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />,
-    );
-    const btn = screen.getByRole("button", { name: "Collapse Backlog" });
-    expect(btn.getAttribute("aria-expanded")).toBe("true");
-    expect(btn.querySelector("svg")).toBeTruthy();
-    expect(btn.textContent).not.toContain("⌄");
-  });
-
-  it("collapsed: renders an Expand button with aria-expanded=false and an <svg> icon (not a bare glyph)", () => {
-    render(
-      <IssueColumn
-        column={column}
-        issues={[issue()]}
-        onOpen={() => {}}
-        collapsed
-        onToggleCollapse={() => {}}
-      />,
-    );
-    const btn = screen.getByRole("button", { name: "Expand Backlog" });
-    expect(btn.getAttribute("aria-expanded")).toBe("false");
-    expect(btn.querySelector("svg")).toBeTruthy();
-    expect(btn.textContent).not.toContain("›");
-  });
-
-  it("clicking the toggle calls onToggleCollapse with the column status", () => {
-    const onToggleCollapse = vi.fn();
-    render(
-      <IssueColumn
-        column={column}
-        issues={[issue()]}
-        onOpen={() => {}}
-        onToggleCollapse={onToggleCollapse}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Collapse Backlog" }));
-    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
-    expect(onToggleCollapse).toHaveBeenCalledWith("backlog");
-  });
-});
-
-describe("IssueColumn — visible column tint", () => {
-  it("expanded: section backgroundColor carries the accent with a non-0d alpha", () => {
+describe("IssueColumn — emptiness drives open/closed; no manual toggle", () => {
+  it("a column WITH content is always expanded (w-72) and renders no collapse/expand toggle", () => {
     const { container } = render(
       <IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />,
     );
-    const section = container.querySelector("section");
-    const bg = section?.getAttribute("style") ?? "";
-    // The accent must be present, but NOT at the old ~5% (0d) alpha.
-    expect(bg.toLowerCase()).not.toContain("#9aa3b20d");
-    expect(bg.toLowerCase()).toContain("#9aa3b2");
+    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
+    expect(cls).toContain("w-72");
+    expect(cls).not.toContain("w-10");
+    // No toggle buttons exist at all anymore.
+    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
+    // The card itself is still rendered.
+    expect(screen.getByText("Seed issue")).toBeTruthy();
   });
 
-  it("collapsed: section backgroundColor carries the same raised alpha (lockstep)", () => {
-    const { container } = render(
-      <IssueColumn
-        column={column}
-        issues={[issue()]}
-        onOpen={() => {}}
-        collapsed
-        onToggleCollapse={() => {}}
-      />,
-    );
-    const section = container.querySelector("section");
-    const bg = section?.getAttribute("style") ?? "";
-    expect(bg.toLowerCase()).not.toContain("#9aa3b20d");
-    expect(bg.toLowerCase()).toContain("#9aa3b2");
-  });
-});
-
-describe("IssueColumn — empty column collapses by default", () => {
-  it("an empty column (collapsed flag unset) renders the collapsed strip with no toggle", () => {
+  it("an empty column is always collapsed to the w-10 strip with no toggle", () => {
     const { container } = render(
       <IssueColumn column={column} issues={[]} onOpen={() => {}} />,
     );
-    // No toggle in either direction.
-    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
-    // It collapsed: the section is the w-10 strip, not the w-72 card list.
     const cls = container.querySelector("section")?.getAttribute("class") ?? "";
     expect(cls).toContain("w-10");
     expect(cls).not.toContain("w-72");
-  });
-
-  it("an empty column ignores collapsed=true the same way — still a collapsed strip, no toggle", () => {
-    const { container } = render(
-      <IssueColumn
-        column={column}
-        issues={[]}
-        onOpen={() => {}}
-        collapsed
-        onToggleCollapse={() => {}}
-      />,
-    );
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
-    const cls = container.querySelector("section")?.getAttribute("class") ?? "";
-    expect(cls).toContain("w-10");
-    expect(cls).not.toContain("w-72");
+    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
   });
 
   it("the empty collapsed strip shows the 0 count pill and the column label", () => {
@@ -148,24 +71,25 @@ describe("IssueColumn — empty column collapses by default", () => {
   });
 });
 
-describe("IssueColumn — one control at a time (cross-fade regression lock)", () => {
-  it("expanded: the Expand button is ABSENT", () => {
-    render(<IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />);
-    expect(screen.getByRole("button", { name: "Collapse Backlog" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
-  });
-  it("collapsed: the Collapse button is ABSENT", () => {
-    render(
-      <IssueColumn
-        column={column}
-        issues={[issue()]}
-        onOpen={() => {}}
-        collapsed
-        onToggleCollapse={() => {}}
-      />,
+describe("IssueColumn — visible column tint (both states)", () => {
+  it("content/expanded: section backgroundColor carries the accent with a non-0d alpha", () => {
+    const { container } = render(
+      <IssueColumn column={column} issues={[issue()]} onOpen={() => {}} />,
     );
-    expect(screen.getByRole("button", { name: "Expand Backlog" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
+    const bg =
+      container.querySelector("section")?.getAttribute("style") ?? "";
+    expect(bg.toLowerCase()).not.toContain("#9aa3b20d");
+    expect(bg.toLowerCase()).toContain("#9aa3b2");
+  });
+
+  it("empty/collapsed: section backgroundColor carries the same raised alpha (lockstep)", () => {
+    const { container } = render(
+      <IssueColumn column={column} issues={[]} onOpen={() => {}} />,
+    );
+    const bg =
+      container.querySelector("section")?.getAttribute("style") ?? "";
+    expect(bg.toLowerCase()).not.toContain("#9aa3b20d");
+    expect(bg.toLowerCase()).toContain("#9aa3b2");
   });
 });
 
@@ -176,7 +100,8 @@ describe("IssueColumn — 200 render cap", () => {
     );
   }
   function cardCount(container: HTMLElement): number {
-    // Card roots are <button> with NO aria-label; the toggle button HAS one.
+    // Card roots are <button> with NO aria-label (and there are no toggle
+    // buttons anymore), so every button is a card.
     return [...container.querySelectorAll("button")].filter(
       (b) => b.getAttribute("aria-label") === null,
     ).length;
