@@ -116,6 +116,13 @@
 /.github/workflows/apply-sentry-infra.yml               @deruelle
 /.github/workflows/apply-web-platform-infra.yml         @deruelle
 
+# Inngest RLS-lockdown (ADR-030 I8). The SQL artifact REVOKEs anon/authenticated
+# on the production Inngest project and the workflow auto-applies it via the
+# Supabase Management API — a change here can re-expose prod data or break Inngest's
+# owner access, so both carry explicit @deruelle review scope.
+/apps/web-platform/infra/inngest-rls/                   @deruelle
+/.github/workflows/apply-inngest-rls.yml                @deruelle
+
 # CF Tunnel SSH bridge composite action (#4844). The security-critical
 # root-SSH mechanism shared by apply-web-platform-infra.yml and
 # apply-deploy-pipeline-fix.yml — a change here can redirect the prod-host
