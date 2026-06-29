@@ -48,6 +48,7 @@ import {
   formatTailForSentry,
   mintInstallationToken,
   postAnthropicMessage,
+  postSentryHeartbeat,
   REPO_NAME,
   resolveBestEffortEvalOk,
   resolveOutputAwareOk,
@@ -1018,5 +1019,99 @@ describe("resolveOutputAwareOk — F1 retrofit (scheduled-output-missing extra i
     const serialized = JSON.stringify(extra);
     expect(serialized).not.toContain(SYNTH_SK_ANT);
     expect(serialized).not.toContain(SYNTH_GHS);
+  });
+});
+
+// #5728 — heartbeat POST delivery robustness. The pre-fix postSentryHeartbeat
+// POSTed ONCE and never inspected resp.ok, so (a) a transient 5xx/timeout/network
+// drop of the OK check-in left a silent `missed` (the 2026-06-13→06-21 H3 class),
+// and (b) a resolved non-2xx was treated as success. These tests pin the new
+// contract: inspect resp.ok, bounded-retry on 5xx/network/timeout ONLY (never a
+// 4xx), then fall back to reportSilentFallback once retries are exhausted. The
+// retry wall-clock is bounded by construction (SENTRY_HEARTBEAT_TOTAL_BUDGET_MS,
+// well under the 60-min check-in margin) — asserted structurally via the
+// at-most-MAX_ATTEMPTS fetch-call cap, not a flaky timing assertion.
+describe("postSentryHeartbeat — delivery robustness (#5728)", () => {
+  const VALID_DOMAIN = "o4509.ingest.sentry.io";
+  const VALID_PROJECT = "4509999";
+  const VALID_PUBLIC_KEY = "abcdef0123456789abcdef0123456789";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+  const call = (ok = true) =>
+    postSentryHeartbeat({
+      ok,
+      sentryMonitorSlug: "scheduled-community-monitor",
+      cronName: "cron-community-monitor",
+      logger,
+    });
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", VALID_DOMAIN);
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", VALID_PUBLIC_KEY);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    logger.info.mockClear();
+    logger.warn.mockClear();
+    logger.error.mockClear();
+  });
+
+  it("posts exactly once and does NOT fall back when the first POST succeeds (200)", async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 202 }));
+    await call(false); // ok:false avoids the best-effort cron-fires file write
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    // posts the error status on the documented ?status= query shape
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url).toContain(`/cron/scheduled-community-monitor/${VALID_PUBLIC_KEY}/?status=error`);
+  });
+
+  it("retries a transient 5xx and succeeds on the 200 — one effective check-in, no fallback", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response("upstream", { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await call(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient network failure and succeeds on the 200 — no fallback", async () => {
+    fetchSpy
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await call(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("treats a resolved non-2xx (all 5xx) as failure → bounded retries then ONE reportSilentFallback (today's silently-swallowed gap)", async () => {
+    fetchSpy.mockResolvedValue(new Response("upstream", { status: 500 }));
+    await call(false);
+    // bounded — never more than MAX_ATTEMPTS POSTs
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy.mock.calls[0][1].feature).toBe("cron-sentry-heartbeat");
+  });
+
+  it("does NOT retry a 4xx (permanent bad-slug/DSN) — posts once, falls back immediately", async () => {
+    fetchSpy.mockResolvedValue(new Response("bad request", { status: 400 }));
+    await call(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("exhausts retries on repeated timeouts then falls back once (bounded)", async () => {
+    fetchSpy.mockRejectedValue(
+      Object.assign(new Error("The operation timed out."), { name: "TimeoutError" }),
+    );
+    await call(false);
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
   });
 });

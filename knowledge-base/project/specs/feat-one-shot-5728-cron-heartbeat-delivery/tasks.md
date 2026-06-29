@@ -22,18 +22,20 @@ load-bearing vs. defense-in-depth. **Do NOT introduce an `in_progress` two-phase
   swallowed-POST warning, last `sentry-heartbeat` log line per run.
 - [ ] 0.3 Pull Sentry checkins timeline (`GET …/monitors/scheduled-community-monitor/checkins/`) +
   `feature:cron-sentry-heartbeat op:fetch` events (H3 signal).
-- [ ] 0.4 WebFetch the Sentry Crons HTTP check-in ingest docs; confirm `?status=` shape/enum, the
+- [x] 0.4 WebFetch the Sentry Crons HTTP check-in ingest docs; confirm `?status=` shape/enum, the
   missed/timed-out state machine, repeated-POST idempotency. Pin `<!-- verified: 2026-06-29 source: … -->`.
+  VERIFIED: URL `/api/<project>/cron/<slug>/<key>/?status=<ok|error|in_progress>`; missed/timeout are
+  Sentry-server-generated (not client-reported) ⇒ `missed` proves no POST arrived. `<!-- verified: 2026-06-29 source: https://docs.sentry.io/product/crons/getting-started/http/ -->`
 - [ ] 0.5 Write the per-day H1/H2/H3/H4 verdict to the PR body + a learning; set which later phase
   is load-bearing.
 
 ## Phase 1 — Heartbeat POST robustness (`_cron-shared.ts`)
-- [ ] 1.1 (RED) cron-shared.test.ts: stubbed 5xx → `reportSilentFallback` fires (today swallowed);
+- [x] 1.1 (RED) cron-shared.test.ts: stubbed 5xx → `reportSilentFallback` fires (today swallowed);
   5xx-then-200 → one effective check-in; all-5xx → one fallback within the wall-clock cap; 4xx → no
   retry.
-- [ ] 1.2 Add `resp.ok` inspection to `postSentryHeartbeat`; bounded retry on 5xx/network/timeout
+- [x] 1.2 Add `resp.ok` inspection to `postSentryHeartbeat`; bounded retry on 5xx/network/timeout
   only (NEVER 4xx), total ≤ ~25s; keep `reportSilentFallback` as terminal fallback.
-- [ ] 1.3 (GREEN) tests pass.
+- [x] 1.3 (GREEN) tests pass.
 
 ## Phase 2 — Guaranteed terminal heartbeat on the THROW path (flag pattern)
 - [ ] 2.1 (RED) cron-community-monitor.test.ts: final-attempt no-output throw → one `?status=error`;

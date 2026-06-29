@@ -252,6 +252,21 @@ export async function mintInstallationToken(opts: {
 }
 
 const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
+// #5728 — bounded retry on the heartbeat POST. A transient 5xx / network drop /
+// timeout of the OK check-in previously left a silent `missed` (the 2026-06-13→
+// 06-21 H3 class). Retry only the RETRYABLE classes; a 4xx is a permanent
+// bad-slug/DSN error and retrying it only burns the margin. The TOTAL wall-clock
+// is hard-bounded (each attempt's per-call timeout is clamped to the remaining
+// budget) so the heartbeat can never push the run past the 60-min Sentry check-in
+// margin (re-creating H1). After the bounded attempts exhaust, fall through to
+// the terminal reportSilentFallback (durable trace; cq-silent-fallback-must-mirror-to-sentry).
+const SENTRY_HEARTBEAT_MAX_ATTEMPTS = 3;
+const SENTRY_HEARTBEAT_TOTAL_BUDGET_MS = 25_000;
+// Backoff applied BEFORE attempt i (index 0 = first attempt, never waited).
+const SENTRY_HEARTBEAT_BACKOFF_MS = [0, 250, 750];
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function postSentryHeartbeat(args: {
   ok: boolean;
@@ -291,20 +306,58 @@ export async function postSentryHeartbeat(args: {
   }
   const status = ok ? "ok" : "error";
   const url = `https://${domain}/api/${projectId}/cron/${sentryMonitorSlug}/${publicKey}/?status=${status}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
-      feature: "cron-sentry-heartbeat",
-      op: "fetch",
-      message: "Sentry Crons heartbeat POST failed",
-      extra: { fn: cronName, status, aborted: e.name === "TimeoutError" },
-    });
+
+  // Bounded-retry delivery (#5728). Retry on 5xx / network / timeout; NEVER on a
+  // 4xx (permanent). Total wall-clock is clamped by SENTRY_HEARTBEAT_TOTAL_BUDGET_MS.
+  const start = Date.now();
+  let lastError: Error | null = null;
+  let lastHttpStatus: number | null = null;
+
+  for (let attempt = 0; attempt < SENTRY_HEARTBEAT_MAX_ATTEMPTS; attempt++) {
+    const backoff = SENTRY_HEARTBEAT_BACKOFF_MS[attempt] ?? 750;
+    if (attempt > 0) {
+      const remainingBeforeBackoff = SENTRY_HEARTBEAT_TOTAL_BUDGET_MS - (Date.now() - start);
+      if (remainingBeforeBackoff <= backoff) break; // no budget left to retry
+      await sleep(backoff);
+    }
+    const remaining = SENTRY_HEARTBEAT_TOTAL_BUDGET_MS - (Date.now() - start);
+    if (remaining <= 0) break;
+    const perAttemptTimeout = Math.min(SENTRY_HEARTBEAT_TIMEOUT_MS, remaining);
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        signal: AbortSignal.timeout(perAttemptTimeout),
+      });
+      if (resp.ok) return; // delivered
+      lastHttpStatus = resp.status;
+      lastError = null;
+      // 4xx is permanent (bad slug / DSN) — do not retry; fall through to fallback.
+      if (resp.status >= 400 && resp.status < 500) break;
+      // 5xx (and any other non-2xx) → retryable.
+    } catch (err) {
+      // Network failure / AbortSignal timeout → retryable.
+      lastError = err as Error;
+      lastHttpStatus = null;
+    }
   }
+
+  // All bounded attempts exhausted (or hit a non-retryable 4xx) — durable trace.
+  const fallbackError =
+    lastError ??
+    new Error(
+      `Sentry Crons heartbeat POST returned non-2xx (status ${lastHttpStatus ?? "unknown"})`,
+    );
+  reportSilentFallback(fallbackError, {
+    feature: "cron-sentry-heartbeat",
+    op: "fetch",
+    message: "Sentry Crons heartbeat POST failed after bounded retries",
+    extra: {
+      fn: cronName,
+      status,
+      httpStatus: lastHttpStatus,
+      aborted: lastError?.name === "TimeoutError",
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
