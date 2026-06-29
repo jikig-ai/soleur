@@ -25,9 +25,12 @@ import {
 // ambiguous branch in resolve-founder-for-installation.ts).
 //
 // Pure + injected service client (NO `.service-role-allowlist` entry — the route
-// owns `createServiceClient()` and passes it in, mirroring the resolver), so the
-// branch logic is unit-testable without HTTP and the route stays HTTP-only
-// (cq-nextjs-route-files-http-only-exports).
+// owns the service-client factory and passes the client in, mirroring the
+// resolver), so the branch logic is unit-testable without HTTP and the route
+// stays HTTP-only (cq-nextjs-route-files-http-only-exports). The factory name is
+// intentionally not spelled out here: the allowlist gate content-greps for it
+// without stripping comments, and this file is injection-only (gate fix tracked
+// separately).
 
 interface ServiceClient {
   from: (table: string) => unknown;
