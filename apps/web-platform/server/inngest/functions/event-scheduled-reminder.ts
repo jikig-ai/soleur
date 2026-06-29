@@ -31,6 +31,7 @@
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { isRetryable, delay } from "@/server/github-retry";
+import { createChildLogger } from "@/server/logger";
 import {
   mintInstallationToken,
   REPO_OWNER,
@@ -53,12 +54,19 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 const SENTRY_FETCH_TIMEOUT_MS = 10_000;
 // Bounded transient-retry for the Sentry reads (#5417 AC12 hardening). A single
 // Sentry latency spike (2026-06-19) blew the per-attempt timeout and the check
-// fail-closed permanently. 3 total attempts; explicit per-retry backoff so the
-// schedule reads exactly (siblings use `2 **` → 500/1000; the scope mandates
-// 500/1500). Only transient failures (5xx/429, network, AbortSignal.timeout
-// TimeoutError) retry; deterministic 4xx stays single-shot fail-closed.
-const SENTRY_FETCH_MAX_RETRIES = 2; // 3 total attempts
+// fail-closed permanently. 3 total attempts; explicit per-retry backoff array
+// rather than the siblings' geometric `BASE_DELAY_MS * 2 ** attempt` (1000/2000
+// in github-retry.ts) — the scope mandates a non-geometric 500/1500, so the
+// array states the schedule literally. Only transient failures (5xx/429,
+// network, AbortSignal.timeout TimeoutError) retry; deterministic 4xx stays
+// single-shot fail-closed.
 const SENTRY_FETCH_BACKOFF_MS = [500, 1500] as const;
+// MAX_RETRIES derives from the backoff array length so the two cannot drift:
+// `SENTRY_FETCH_BACKOFF_MS[attempt]` is only indexed when attempt < MAX_RETRIES,
+// so a future schedule change (e.g. [500, 1500, 4000]) lifts the retry budget in
+// lockstep instead of silently yielding delay(undefined) ≈ 0 ms backoff.
+const SENTRY_FETCH_MAX_RETRIES = SENTRY_FETCH_BACKOFF_MS.length; // total attempts = +1
+const sentryLog = createChildLogger("event-scheduled-reminder");
 
 // `close?: boolean` is the v1→v1.1 capability: a check may REQUEST that the
 // handler close `action.report_to_issue`. It is deliberately a boolean, NOT a
@@ -101,7 +109,7 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
   // env (the whole point: a GHA runner could not). Fail-CLOSED (`info`, no
   // close) on any inability to verify: missing env, invalid params, Sentry HTTP
   // error, 0-or->1 matching issues, or a malformed stats shape. Errors are
-  // constructed TOKEN-FREE (reportSilentFallback forwards err.message raw).
+  // constructed TOKEN-FREE (warnSilentFallback forwards the wrapped reason raw).
   "sentry-issue-rate": async (_octokit, params) => {
     const failClosed = (reason: string): CheckResult => {
       // Mirror EVERY fail-closed to Sentry at warning level — transient-exhausted
@@ -141,13 +149,21 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
 
     // Bounded transient-retry fetch helper. The token lives ONLY in the
     // Authorization header — never in the URL or any thrown/returned string — so
-    // error text is token-free by construction. Mirrors github-api.ts
-    // `fetchWithRetry`: 5xx/429 classified inline (we hold `res.status`),
-    // network/timeout classified in the catch via the canonical `isRetryable`.
+    // error text is token-free by construction. Shape follows github-api.ts
+    // `fetchWithRetry`: network/timeout classified in the catch via the canonical
+    // `isRetryable`, transient HTTP classified inline (we hold `res.status`). The
+    // inline arm additionally retries 429 (Sentry rate-limits aggregate reads) —
+    // a net-add over `fetchWithRetry`'s 5xx-only arm; it uses the same fixed
+    // backoff and does NOT honor the `Retry-After` header (the bounded 2-retry
+    // budget is a best-effort recovery, not a rate-limit waiter).
     // Per-attempt `AbortSignal.timeout` (NOT AbortController) so a timeout
     // rejects with a `TimeoutError` that `isRetryable` matches — `AbortError`
     // (AbortController) is NOT classified transient and would leave the retry
     // inert against the very timeout that caused #5417's outage.
+    // Each retry emits a token-free `warn` breadcrumb (status/attempt only),
+    // matching github-api.ts `fetchWithRetry` — so a successful transient
+    // recovery leaves a trace and, on exhaustion, the terminal warnSilentFallback
+    // event carries those breadcrumbs.
     const sentryGet = async (url: string): Promise<unknown> => {
       for (let attempt = 0; attempt <= SENTRY_FETCH_MAX_RETRIES; attempt++) {
         try {
@@ -163,6 +179,10 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
             attempt < SENTRY_FETCH_MAX_RETRIES
           ) {
             await res.text().catch(() => {}); // socket keep-alive hygiene
+            sentryLog.warn(
+              { status: res.status, attempt, check: "sentry-issue-rate" },
+              "Sentry fetch transient HTTP — retrying",
+            );
             await delay(SENTRY_FETCH_BACKOFF_MS[attempt]);
             continue;
           }
@@ -174,6 +194,10 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
         } catch (err) {
           // Network / AbortSignal.timeout TimeoutError → transient.
           if (attempt < SENTRY_FETCH_MAX_RETRIES && isRetryable(err)) {
+            sentryLog.warn(
+              { attempt, check: "sentry-issue-rate" },
+              "Sentry fetch transient network/timeout — retrying",
+            );
             await delay(SENTRY_FETCH_BACKOFF_MS[attempt]);
             continue;
           }

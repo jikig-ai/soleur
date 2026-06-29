@@ -48,6 +48,9 @@ import {
   eventScheduledReminderHandler,
   CHECK_REGISTRY,
 } from "@/server/inngest/functions/event-scheduled-reminder";
+// `delay` is the partial-mocked no-op (see vi.mock above) — imported so the
+// bounded-retry test can assert the exact backoff SCHEDULE, not just the count.
+import { delay } from "@/server/github-retry";
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -279,8 +282,15 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     fetchMock.mock.calls.filter(
       (c) => !/\/issues\/[^/?]+\/(\?|$)/.test(String(c[0])),
     ).length;
+  // Count fetch invocations to the issue-DETAIL URL (the search-call inverse).
+  const detailCalls = () =>
+    fetchMock.mock.calls.filter((c) =>
+      /\/issues\/[^/?]+\/(\?|$)/.test(String(c[0])),
+    ).length;
   const timeoutError = () =>
     new DOMException("The operation timed out", "TimeoutError");
+  // The exact undici network-error shape `isRetryable` classifies transient.
+  const networkError = () => new TypeError("fetch failed");
   const passSeries = dailyStats([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   function arm(params: Record<string, unknown>, reportTo = 5417) {
@@ -297,6 +307,7 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
   beforeEach(() => {
     for (const [k, v] of Object.entries(ENV)) vi.stubEnv(k, v);
     octokitRequestSpy.mockResolvedValue({});
+    vi.mocked(delay).mockClear(); // per-test backoff-call ledger
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -469,7 +480,9 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     expect(searchCalls()).toBe(2);
   });
 
-  it("transient network/timeout on the search, then success → REAL verdict", async () => {
+  it("transient AbortSignal.timeout on the search, then success → REAL verdict", async () => {
+    // TimeoutError is what AbortSignal.timeout throws and what isRetryable
+    // classifies transient — an AbortError (old AbortController) would NOT retry.
     stubFetchSequence({
       search: [timeoutError(), { body: [{ id: "1" }] }],
       detail: [{ body: { stats: { "30d": passSeries } } }],
@@ -477,6 +490,27 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     const { result } = arm({ ...okParams });
     expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
     expect(lastComment()!.body).toContain("**pass**");
+    expect(searchCalls()).toBe(2);
+  });
+
+  it("transient network error (undici 'fetch failed') on the search, then success → REAL verdict", async () => {
+    // Exercises the isRetryable network arm (distinct from the TimeoutError arm).
+    stubFetchSequence({
+      search: [networkError(), { body: [{ id: "1" }] }],
+      detail: [{ body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
+    expect(searchCalls()).toBe(2);
+  });
+
+  it("transient HTTP 429 (rate-limit) on the search, then success → REAL verdict", async () => {
+    stubFetchSequence({
+      search: [{ status: 429 }, { body: [{ id: "1" }] }],
+      detail: [{ body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
     expect(searchCalls()).toBe(2);
   });
 
@@ -499,6 +533,10 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     expect(await result).toEqual({ ok: true, reason: "named-check-info" });
     expect(lastComment()!.body).toContain("fail-closed");
     expect(searchCalls()).toBe(3);
+    // Pin the exact backoff SCHEDULE (not just the count) — the impl deliberately
+    // uses 500/1500, NOT the siblings' geometric 500/1000; a silent drift to
+    // `2 ** attempt` would pass a count-only assertion.
+    expect(vi.mocked(delay).mock.calls).toEqual([[500], [1500]]);
     expect(
       warnSilentFallbackSpy.mock.calls.some(
         (c) => c[1].op === "sentry-issue-rate-fail-closed",
@@ -514,6 +552,8 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     const { result } = arm({ ...okParams });
     expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
     expect(lastComment()!.body).toContain("**pass**");
+    expect(searchCalls()).toBe(1); // search succeeded first try
+    expect(detailCalls()).toBe(2); // detail retried once — localizes a search-vs-detail regression
   });
 
   it("env-unset fail-close is Sentry-visible (warn op), no fetch", async () => {
