@@ -42,6 +42,11 @@ skill-security-scan PR gate
 # #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
 # path filter post-#4384) — synthetic needed for bot PRs only.
 enforce
+# #5585 — tenant-integration.yml jobs.tenant-integration-required. Always-run
+# aggregator gate job (the heavy suite is path-gated behind it). Bot PRs never
+# trigger CI, so they need the synthetic; on relevant human PRs the real gate
+# job posts the context.
+tenant-integration-required
 
 # CLA Required ruleset
 cla-check
