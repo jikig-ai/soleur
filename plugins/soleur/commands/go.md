@@ -28,7 +28,7 @@ If **neither** command prints `true` (no bare repo to make a worktree from AND n
 
 > Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening: if your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
 
-This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge `#4826` session hit.)
+This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge no-repo session hit.)
 
 ## Step 0: Session-Start Preamble
 
