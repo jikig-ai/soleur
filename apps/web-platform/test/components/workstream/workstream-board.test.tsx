@@ -330,7 +330,35 @@ describe("WorkstreamBoard", () => {
     );
   });
 
-  it("content columns are expanded with no toggle; empty siblings collapse to a strip", async () => {
+  it("content columns open by default; a content column can be collapsed and the choice persists (v2 key)", async () => {
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-1", title: "Card one", status: "backlog" }),
+    ]) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
+
+    // Backlog (content) is OPEN by default and offers a Collapse toggle.
+    const collapseBtn = screen.getByRole("button", { name: "Collapse Backlog" });
+    fireEvent.click(collapseBtn);
+
+    // After collapsing it becomes a strip with an Expand toggle...
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Expand Backlog" }),
+      ).toBeTruthy(),
+    );
+    // ...and the choice persists under the v2 key (NOT the legacy v1 key).
+    const stored = JSON.parse(
+      window.localStorage.getItem("workstream:collapsed-columns-v2") ?? "[]",
+    ) as string[];
+    expect(stored).toContain("backlog");
+    expect(
+      window.localStorage.getItem("workstream:collapsed-columns"),
+    ).toBeNull();
+  });
+
+  it("a sibling empty column collapses to a strip with no toggle", async () => {
     // Only Backlog has an issue; the other 6 columns are empty.
     global.fetch = mockFetchOnce([
       issue({ id: "SOLAA-1", title: "Card one", status: "backlog" }),
@@ -339,11 +367,8 @@ describe("WorkstreamBoard", () => {
     const { container } = render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
 
-    // Backlog (content) is expanded (w-72) and carries NO collapse toggle.
-    const backlog = container.querySelector('section[aria-label="Backlog"]');
-    expect(backlog?.getAttribute("class") ?? "").toContain("w-72");
-    expect(screen.queryByRole("button", { name: "Collapse Backlog" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand Backlog" })).toBeNull();
+    // Backlog (content) is expanded by default with a working Collapse toggle.
+    expect(screen.getByRole("button", { name: "Collapse Backlog" })).toBeTruthy();
 
     // Todo (empty) renders as a w-10 collapsed strip and has no toggle.
     const todo = container.querySelector('section[aria-label="Todo"]');
