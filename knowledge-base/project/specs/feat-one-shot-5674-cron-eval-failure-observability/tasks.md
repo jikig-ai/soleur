@@ -57,7 +57,7 @@ Lane: cross-domain · Threshold: single-user incident · requires_cpo_signoff: t
 - [x] 5.3 Pre-merge AC 1–11 checked; CPO sign-off + R1 evidence recorded in PR body.
 
 ## Follow-up (tracked, NOT this PR)
-- [ ] F.1 File `Ref #5674` follow-up: pre-exhaustion spend-vs-budget alert via Admin `cost_report` (needs new `sk-ant-admin` secret + operator `ANTHROPIC_MONTHLY_BUDGET_USD`); records no-balance-endpoint constraint, CFO review, `x-api-key`+`anthropic-version` header, Playwright-first admin-key mint (automation-status UNVERIFIED). File before PR-ready (defer-only-after-inline-triage).
+- [x] F.1 (filed #5692) File `Ref #5674` follow-up: pre-exhaustion spend-vs-budget alert via Admin `cost_report` (needs new `sk-ant-admin` secret + operator `ANTHROPIC_MONTHLY_BUDGET_USD`); records no-balance-endpoint constraint, CFO review, `x-api-key`+`anthropic-version` header, Playwright-first admin-key mint (automation-status UNVERIFIED). File before PR-ready (defer-only-after-inline-triage).
 
 ## Post-merge (automated, no operator step)
 - [ ] P.1 `/soleur:ship` post-merge: verify `scheduled-anthropic-credit-probe` monitor exists via Sentry API (read-only, Doppler-sourced token; no SSH, no dashboard eyeball). No new secret to provision — canary reuses `ANTHROPIC_API_KEY`.
