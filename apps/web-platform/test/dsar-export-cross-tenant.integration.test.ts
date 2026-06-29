@@ -95,10 +95,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
         // Ensure public.users row exists (the auth trigger usually
         // creates it; some local stacks lag — upsert defensively).
+        // ADR-044 (mig 112) dropped users.workspace_path; workspace_status
+        // survives on users.
         await service.from("users").upsert({
           id: u.id,
           email: u.email,
-          workspace_path: "",
           workspace_status: "ready",
         });
 
