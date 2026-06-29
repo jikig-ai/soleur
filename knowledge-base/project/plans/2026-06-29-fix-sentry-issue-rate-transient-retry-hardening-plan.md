@@ -368,39 +368,39 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `git diff` shows `sentryGet` retries on HTTP 5xx, HTTP 429, and
+- [x] AC1 — `git diff` shows `sentryGet` retries on HTTP 5xx, HTTP 429, and
   `isRetryable(err)` (network/`TimeoutError`) only; HTTP 4xx (≠429) throws on the
   first attempt with no `delay` call. Verify by reading the loop + the new tests.
-- [ ] AC2 — `SENTRY_FETCH_MAX_RETRIES === 2` (3 total attempts) and backoff is
+- [x] AC2 — `SENTRY_FETCH_MAX_RETRIES === 2` (3 total attempts) and backoff is
   the explicit `SENTRY_FETCH_BACKOFF_MS = [500, 1500]` schedule. Asserted by the
   bounded-retry test (exactly 3 fetch calls on persistent 5xx).
-- [ ] AC3 — Transient-then-success yields the REAL verdict
+- [x] AC3 — Transient-then-success yields the REAL verdict
   (`named-check-pass`/`named-check-fail`), not `named-check-info` fail-closed —
   for BOTH the search call and the detail call.
-- [ ] AC4 — After retries are exhausted the handler still returns the existing
+- [x] AC4 — After retries are exhausted the handler still returns the existing
   `failClosed(...)` `info` verdict with `close: false` (comment contains
   `fail-closed`, no PATCH close), and emits `warnSilentFallback` with
   `op === "sentry-issue-rate-fail-closed"`. Additionally a deterministic 4xx and
   the env-unset path BOTH emit the same warn op (the no-longer-silent
   deterministic class).
-- [ ] AC5 — Token-free invariant holds across all retry/warn paths: report
+- [x] AC5 — Token-free invariant holds across all retry/warn paths: report
   comment body and every `reportSilentFallback`/`warnSilentFallback` argument
   contain neither `Bearer` nor `SENTRY_ISSUE_RW_TOKEN`. (Run:
   `grep -n "SENTRY_ISSUE_RW_TOKEN\|Bearer" apps/web-platform/server/inngest/functions/event-scheduled-reminder.ts`
   → the token appears ONLY in the `Authorization` header line.)
-- [ ] AC6 — Per-attempt timeout preserved: each attempt uses a fresh
+- [x] AC6 — Per-attempt timeout preserved: each attempt uses a fresh
   `AbortSignal.timeout(SENTRY_FETCH_TIMEOUT_MS)` (10 s).
-- [ ] AC7 — Inngest step-timeout headroom: confirm the self-hosted Inngest
+- [x] AC7 — Inngest step-timeout headroom: confirm the self-hosted Inngest
   step/executor request timeout comfortably exceeds the new worst-case
   single-step wall-time (~55 s — two sequential `sentryGet` loops, each up to
   3×10 s + 2 s backoff; see Risks). If the configured step timeout is < ~60 s,
   the retry could newly trip an Inngest-level timeout — verify before merge (grep
   the Inngest worker/executor config or the `inngest.createFunction` timeout, if
   set) and document the headroom in the PR body.
-- [ ] AC8 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] AC9 — Both test files pass via the vitest command above (no behavioral
+- [x] AC8 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [x] AC9 — Both test files pass via the vitest command above (no behavioral
   regression in the existing 13 sentry-issue-rate cases — they now also warn).
-- [ ] AC10 — `CHECK_REGISTRY` exact-set membership test still passes
+- [x] AC10 — `CHECK_REGISTRY` exact-set membership test still passes
   (`{open-silence-issue-count, sentry-issue-rate}`) — no registry change.
 
 ### Post-merge (operator)
