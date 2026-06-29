@@ -6,6 +6,8 @@ import { createInterface } from "node:readline";
 import { reportSilentFallback } from "@/server/observability";
 import {
   buildAuthenticatedCloneUrl,
+  DeployInProgressError,
+  deployLeaseAgeMsIfFresh,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
@@ -558,6 +560,27 @@ export async function setupEphemeralWorkspace(args: {
   cronName: string;
 }): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
   const { installationToken, cronName } = args;
+
+  // Deploy-lease drain gate (#5669 / ADR-068). If ci-deploy.sh is mid-swap it
+  // has written a fresh ${CRON_WORKSPACE_ROOT}/.deploy-lease; defer BEFORE the
+  // mkdtemp+clone so the imminent `docker stop` cannot kill this claude child
+  // (the :706 spawn-cwd symptom). Single pre-spawn choke point — every heavy
+  // claude-eval cron funnels through here. Stale leases are fail-open ignored
+  // (deployLeaseAgeMsIfFresh TTL), so a crashed deploy never darks crons.
+  const leaseAgeMs = await deployLeaseAgeMsIfFresh();
+  if (leaseAgeMs !== null) {
+    // Structured + queryable in Sentry/Better Stack (CTO guardrail 3): the
+    // reportSilentFallback mirror makes "why did cron X skip during the 14:03
+    // deploy?" answerable with no SSH. Distinct reason so it is never read as a
+    // real setup failure.
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "deploy-lease-fresh",
+      message: `[${cronName}] deferring cron start: deploy in progress (lease age ${leaseAgeMs}ms)`,
+    });
+    throw new DeployInProgressError(cronName, leaseAgeMs);
+  }
+
   const ephemeralRoot = await mkdtemp(
     join(resolveCronWorkspaceRoot(), `soleur-${cronName}-`),
   );
@@ -725,11 +748,27 @@ export async function spawnClaudeEval(args: {
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
-      const child = spawn(claudeBin, [...flags, prompt], {
+      // #5691 — silence non-essential cron egress at source (keep-blocked, NOT
+      // allowlisted; ADR-052 2026-06-29 amendment):
+      //  • `--strict-mcp-config` (prepended at index 0, BEFORE `--print` and
+      //    before any trailing `--` prompt separator) makes the CLI ignore the
+      //    four remote HTTP MCP servers bundled in plugins/soleur/plugin.json
+      //    (context7/cloudflare/vercel/stripe) that `--plugin-dir` would
+      //    otherwise auto-connect at startup. The containment hook denies every
+      //    mcp__* tool anyway (only cron-ux-audit gets Playwright), so these
+      //    startup dials are pure overhead the egress firewall correctly drops.
+      //    cron-ux-audit re-supplies its Playwright server via `--mcp-config`.
+      //  • CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 kills Claude Code's own
+      //    non-essential outbound traffic (telemetry / error-reporting /
+      //    auto-update). Spike A (#5691 PR body) is the at-source proof.
+      const child = spawn(claudeBin, ["--strict-mcp-config", ...flags, prompt], {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
         cwd: spawnCwd,
-        env: buildSpawnEnv(installationToken),
+        env: {
+          ...buildSpawnEnv(installationToken),
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
       });
 
       if (child.stdout) {

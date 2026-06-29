@@ -190,6 +190,13 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }));
 
+// Connect-time block guard defaults to "ok" here; its branch logic is covered by
+// test/repo-connect-guard.test.ts + test/setup-route-connect-block.test.ts.
+const mockEvaluateRepoConnect = vi.fn();
+vi.mock("@/server/repo-connect-guard", () => ({
+  evaluateRepoConnect: (...a: unknown[]) => mockEvaluateRepoConnect(...a),
+}));
+
 vi.mock("next/server", () => ({
   NextResponse: {
     json: (body: unknown, init?: { status?: number }) =>
@@ -236,6 +243,8 @@ async function flushPromises() {
 describe("setup route — health scanner guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+
+    mockEvaluateRepoConnect.mockResolvedValue({ outcome: "ok" });
 
     // Reset the workspaces optimistic-lock chain:
     // .update().eq().neq().select().maybeSingle()

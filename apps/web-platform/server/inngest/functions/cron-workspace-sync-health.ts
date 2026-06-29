@@ -43,6 +43,30 @@ import {
 import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import { postSentryHeartbeat, type HandlerArgs } from "./_cron-shared";
+// #5689 item 2 — immediate re-sync after backfill. `moduleLogger` (the pino
+// module logger) is required by syncWorkspace's typed `Logger` param; arm-1's
+// loose HandlerArgs `logger` is not assignable (mirrors reconcile-on-push).
+import { promises as fs } from "node:fs";
+import moduleLogger from "@/server/logger";
+import { syncWorkspace } from "@/server/workspace-sync";
+import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
+import {
+  ERROR_CLASS_WORKSPACE_NOT_READY,
+  appendKbSyncRowForWorkspace,
+} from "@/server/session-sync";
+
+// Duplicated from workspace-reconcile-on-push.ts (private local there; taste:
+// duplication over coupling for a 6-line fs probe). Readiness = filesystem
+// existence (ADR-044). A reconciled `ready` row whose dir is absent skips the
+// sync without touching git.
+async function workspaceDirExists(path: string): Promise<boolean> {
+  try {
+    const st = await fs.stat(path);
+    return st.isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 const SENTRY_MONITOR_SLUG = "cron-workspace-sync-health";
 const SENTRY_FEATURE = "workspace-sync-health";
@@ -268,12 +292,13 @@ export async function cronWorkspaceSyncHealthHandler({
     let reconciled = 0;
     let skipped = 0;
     let transient = 0;
+    let synced = 0;
     for (const f of scan.findings) {
       // Per-workspace step boundary (ADR-033 I5): each backfill memoizes
       // independently so a mid-loop throw does not re-probe/re-write others.
       const outcome = await step.run(
         `reconcile-${f.workspaceId}`,
-        async (): Promise<Arm1Outcome> => {
+        async (): Promise<Arm1Outcome & { synced?: boolean }> => {
           const { createServiceClient } = await import(
             "@/lib/supabase/service"
           );
@@ -286,6 +311,7 @@ export async function cronWorkspaceSyncHealthHandler({
             ownerLogin,
             isSolo,
           );
+          let didSync: boolean | undefined;
           if (decision.kind === "reconciled") {
             // Canonical write boundary (keyed on the finding's own id; inherits
             // the 0-row/error Sentry mirror — this also satisfies the
@@ -293,6 +319,59 @@ export async function cronWorkspaceSyncHealthHandler({
             await writeRepoColsToWorkspace(service, f.workspaceId, {
               github_installation_id: decision.installId,
             });
+            // #5689 item 2 — immediate re-sync. The backfill above COMMITS FIRST
+            // (re-entrancy: the row leaves arm-1's ready+NULL-install scan, so a
+            // failed sync is never re-backfilled and arm-1 does NOT re-sync it —
+            // push + arm-2 stale-sync-failed own the failure loudness). syncWorkspace
+            // pulls the live default-branch HEAD; solo invariant f.workspaceId ===
+            // users.id (ADR-038 N2) → userId and the workspace-keyed audit writer
+            // both take f.workspaceId. Truthful `reconcile_backfill` trigger (never
+            // webhook_push); op "manual" = the system-resync convention (no op-union
+            // widening). No Inngest event — ADR-033 I6 preserved.
+            const workspacePath = workspacePathForWorkspaceId(f.workspaceId);
+            const completedAt = Date.now();
+            const auditBase = {
+              at: new Date(completedAt).toISOString(),
+              trigger: "reconcile_backfill" as const,
+              sync_completed_at: completedAt,
+              workspace_id: f.workspaceId,
+            };
+            if (!(await workspaceDirExists(workspacePath))) {
+              await appendKbSyncRowForWorkspace(service, f.workspaceId, {
+                ...auditBase,
+                ok: false,
+                error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
+              });
+              didSync = false;
+            } else {
+              const syncResult = await syncWorkspace(
+                decision.installId,
+                workspacePath,
+                moduleLogger,
+                { userId: f.workspaceId, op: "manual" },
+              );
+              if (syncResult.ok) {
+                await appendKbSyncRowForWorkspace(service, f.workspaceId, {
+                  ...auditBase,
+                  ok: true,
+                  ...(syncResult.recovered ? { recovered: true } : {}),
+                });
+                didSync = true;
+              } else {
+                reportSilentFallback(syncResult.error, {
+                  feature: SENTRY_FEATURE,
+                  op: "reconcile-backfill-sync",
+                  extra: { workspaceId: f.workspaceId },
+                  message: "Immediate re-sync after backfill failed",
+                });
+                await appendKbSyncRowForWorkspace(service, f.workspaceId, {
+                  ...auditBase,
+                  ok: false,
+                  error_class: syncResult.errorClass,
+                });
+                didSync = false;
+              }
+            }
           } else if (decision.kind === "skip") {
             // Keep the existing folded signal (op unchanged) for EVERY skip
             // reason — a ready+NULL-install workspace is stuck regardless of why
@@ -315,15 +394,17 @@ export async function cronWorkspaceSyncHealthHandler({
               },
             );
           }
-          return decision;
+          return { ...decision, synced: didSync };
         },
       );
-      if (outcome.kind === "reconciled") reconciled++;
-      else if (outcome.kind === "transient") transient++;
+      if (outcome.kind === "reconciled") {
+        reconciled++;
+        if (outcome.synced) synced++;
+      } else if (outcome.kind === "transient") transient++;
       else skipped++;
     }
     logger.info(
-      { fn: "cron-workspace-sync-health", reconciled, skipped, transient },
+      { fn: "cron-workspace-sync-health", reconciled, skipped, transient, synced },
       "Arm-1 reconcile complete",
     );
   }

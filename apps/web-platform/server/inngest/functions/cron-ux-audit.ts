@@ -84,6 +84,16 @@ export const CLAUDE_CODE_FLAGS = [
   "Bash,Read,Write,Edit,Glob,Grep,Task,Skill,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for",
   "--plugin-dir",
   "plugins/soleur",
+  // #5691 — the substrate (spawnClaudeEval) prepends `--strict-mcp-config`,
+  // which ignores ALL MCP configs except those named via `--mcp-config`. This
+  // re-supplies ONLY the Playwright server so ux-audit keeps its screenshot
+  // tools while the four plugin-bundled remote MCP servers stay suppressed. The
+  // relative `.mcp.json` resolves against spawnCwd → the per-fire overlay
+  // ux-audit writes at setup below (pinned @playwright/mcp@0.0.75, container
+  // profile, prefer-offline), NOT the repo-root dev .mcp.json. Must sit BEFORE
+  // the trailing `--` or the CLI reads it as a positional prompt arg.
+  "--mcp-config",
+  ".mcp.json",
   "--",
 ];
 
