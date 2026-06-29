@@ -144,6 +144,16 @@ The generic asserts and `models.generated.json` are reused unchanged — no new 
 unless the target's output is not a single-token label (prose-output surfaces need an LLM-judge
 assert, deferred out of v1).
 
+**Multi-label surface? Gate its single-token output slice first.** A classifier that emits a
+*set* (e.g. `pdr-*` passive-domain-routing → which leaders to spawn) is multi-label and would
+need a set-membership assert. Before building one, check whether the surface also has a
+single-token output factor — a count, tier, or breadth — that captures most of the regression
+risk. `pdr`'s breadth factor is exactly the `lane-inference` enum (`procedural`/`single-domain`/
+`cross-domain`), so gating lane-inference covers the verifiable slice with zero new code and
+defers only the irreducible set factor. Half-covering a multi-label surface with a single-label
+harness ships false confidence — defer it whole instead. See
+`knowledge-base/project/learnings/2026-06-29-multi-label-classifier-gateable-core-is-its-single-token-output-slice.md`.
+
 ## Files
 
 | Path | Role |
