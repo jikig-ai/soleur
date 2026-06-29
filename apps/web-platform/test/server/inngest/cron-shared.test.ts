@@ -40,12 +40,16 @@ vi.mock("@/server/github/probe-octokit", () => ({
 }));
 
 import {
+  AnthropicApiError,
+  classifyEvalFatal,
   deferIfTier2Cron,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   ensureScheduledAuditIssue,
+  formatTailForSentry,
   mintInstallationToken,
   postAnthropicMessage,
   REPO_NAME,
+  resolveBestEffortEvalOk,
   resolveOutputAwareOk,
   ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   TIER2_DEFERRED_CRONS,
@@ -822,5 +826,197 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     });
 
     expect(result).toEqual({ text: "", stopReason: "end_turn" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5674 — formatTailForSentry + classify-fatal resolver + AnthropicApiError.
+// ---------------------------------------------------------------------------
+
+// Runtime-constructed token shapes that MATCH the redaction-allowlist regexes
+// (sk-ant-[A-Za-z0-9_-]{20,}, ghs_[A-Za-z0-9_-]{20,}) WITHOUT a literal
+// sk-ant-<alnum> string in the source (GitHub push-protection Sharp Edge — the
+// secret only exists at runtime, assembled from non-secret fragments).
+const SYNTH_SK_ANT = "sk-ant-" + "A".repeat(40);
+const SYNTH_GHS = "ghs_" + "B".repeat(40);
+// Standalone Supabase secret-grade tokens (sbp_ management token, sb_secret_
+// key) — secret-shaped, regex-matching the allowlist, no literal token in
+// source (push-protection Sharp Edge). review #5680 hardening.
+const SYNTH_SBP = "sbp_" + "c".repeat(40);
+const SYNTH_SB_SECRET = "sb_secret_" + "D".repeat(30);
+
+describe("formatTailForSentry (multi-secret scrub + slice)", () => {
+  it("strips an sk-ant key AND an installation-token-shaped string (AC2)", () => {
+    const tail = `boot ok\nAPI Error: invalid x-api-key ${SYNTH_SK_ANT} and ${SYNTH_GHS} leaked`;
+    const out = formatTailForSentry(tail);
+    expect(out).toBeDefined();
+    expect(out).not.toContain(SYNTH_SK_ANT);
+    expect(out).not.toContain(SYNTH_GHS);
+  });
+
+  it("strips bare standalone Supabase secret tokens (sbp_ / sb_secret_) (review #5680)", () => {
+    const tail = `crash stack\nleaked ${SYNTH_SBP} and ${SYNTH_SB_SECRET} in trace`;
+    const out = formatTailForSentry(tail);
+    expect(out).toBeDefined();
+    expect(out).not.toContain(SYNTH_SBP);
+    expect(out).not.toContain(SYNTH_SB_SECRET);
+    // public-grade publishable key is NOT secret — left intact
+    const pub = "sb_publishable_" + "e".repeat(30);
+    expect(formatTailForSentry(`url uses ${pub}`)).toContain(pub);
+  });
+
+  it("returns undefined for empty/absent input (caller omits the key)", () => {
+    expect(formatTailForSentry(undefined)).toBeUndefined();
+    expect(formatTailForSentry("")).toBeUndefined();
+  });
+
+  it("preserves the human-readable cause line (reason survives scrub, AC6)", () => {
+    const tail = `Credit balance is too low. Visit billing. token ${SYNTH_SK_ANT} here`;
+    const out = formatTailForSentry(tail);
+    expect(out).toContain("Credit balance is too low");
+    expect(out).not.toContain(SYNTH_SK_ANT);
+  });
+});
+
+describe("classifyEvalFatal", () => {
+  const base = { exitCode: 1, abortedByTimeout: false, stdoutTail: "", stderrTail: "" };
+
+  it("credit-balance tail → fatal credit-exhausted", () => {
+    const c = classifyEvalFatal({ ...base, stdoutTail: "Credit balance is too low" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("credit-exhausted");
+  });
+
+  it("auth marker tail → fatal auth-failure", () => {
+    const c = classifyEvalFatal({ ...base, stderrTail: "API Error: invalid x-api-key" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("auth-failure");
+  });
+
+  it("abortedByTimeout → fatal timeout", () => {
+    const c = classifyEvalFatal({ ...base, abortedByTimeout: true });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("timeout");
+  });
+
+  it("exitCode -1 (spawn never started) → fatal spawn-fault", () => {
+    const c = classifyEvalFatal({ ...base, exitCode: -1 });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("spawn-fault");
+  });
+
+  it("plain non-zero with no marker → NOT fatal (benign)", () => {
+    const c = classifyEvalFatal({ ...base, stdoutTail: "Reached max turns; no artifact." });
+    expect(c.fatal).toBe(false);
+  });
+});
+
+describe("resolveBestEffortEvalOk (classify-fatal heartbeat)", () => {
+  const FATAL_TAIL = {
+    ok: false,
+    exitCode: 1,
+    abortedByTimeout: false,
+    durationMs: 1234,
+    stdoutTail: `Credit balance is too low. token ${SYNTH_SK_ANT}`,
+    stderrTail: "",
+  };
+
+  it("FATAL credit tail → ok:false + scrubbed reason in sentryExtra (AC1)", () => {
+    const d = resolveBestEffortEvalOk(FATAL_TAIL);
+    expect(d.ok).toBe(false);
+    expect(d.errorSummary).toMatch(/credit balance is too low/i);
+    // Scrubbed tail present, secret absent (AC1 + AC6).
+    expect(d.sentryExtra.stdoutTail).toContain("Credit balance is too low");
+    expect(JSON.stringify(d.sentryExtra)).not.toContain(SYNTH_SK_ANT);
+    expect(d.sentryExtra.fatalClass).toBe("credit-exhausted");
+  });
+
+  it("BENIGN max-turns non-zero → ok:true (monitor stays GREEN) + reason recorded (the #4730 carve-out)", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: false,
+      exitCode: 1,
+      abortedByTimeout: false,
+      durationMs: 42,
+      stdoutTail: "Reached max turns with no artifact this cycle.",
+      stderrTail: "",
+    });
+    expect(d.ok).toBe(true); // <-- flip-all would have made this false (false page)
+    expect(d.errorSummary).toMatch(/non-zero/i);
+    expect(d.sentryExtra.fatalClass).toBe("benign");
+  });
+
+  it("clean exit (ok:true) → ok:true, no reason", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: true,
+      exitCode: 0,
+      abortedByTimeout: false,
+      durationMs: 10,
+      stdoutTail: "done",
+      stderrTail: "",
+    });
+    expect(d.ok).toBe(true);
+    expect(d.errorSummary).toBeUndefined();
+  });
+});
+
+describe("AnthropicApiError (widened transport, #5674)", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("throws a typed AnthropicApiError carrying status + scrubbed bodyExcerpt on non-ok", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Credit balance is too low" } }),
+        { status: 400 },
+      ),
+    );
+    const err = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic",
+      model: "claude-sonnet-4-6",
+      maxTokens: 1,
+      messages: [{ role: "user", content: "ping" }],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnthropicApiError);
+    expect((err as AnthropicApiError).status).toBe(400);
+    expect((err as AnthropicApiError).bodyExcerpt).toMatch(/credit balance is too low/i);
+    // Backward-compatible message prefix (existing callers/tests match it).
+    expect((err as Error).message).toContain("Anthropic API 400");
+  });
+
+  it("backward-compat: `Anthropic API <status>` substring still matches (AC8)", async () => {
+    fetchSpy.mockResolvedValue(new Response("upstream error", { status: 503 }));
+    await expect(
+      postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic",
+        model: "claude-sonnet-4-6",
+        maxTokens: 1,
+        messages: [{ role: "user", content: "x" }],
+      }),
+    ).rejects.toThrow("Anthropic API 503");
+  });
+});
+
+describe("resolveOutputAwareOk — F1 retrofit (scheduled-output-missing extra is scrubbed)", () => {
+  it("routes the stdout/stderr tails through formatTailForSentry (no raw sk-ant in the extra, AC2)", async () => {
+    const octokit = octokitReturning([]); // no issue → output-missing
+    await resolveOutputAwareOk({
+      spawnOk: true,
+      label: "scheduled-roadmap-review",
+      runStartedAt: RUN_START,
+      cronName: "cron-roadmap-review",
+      octokit,
+      stdoutTail: `max-turns. leaked ${SYNTH_SK_ANT} here`,
+      stderrTail: `boom ${SYNTH_GHS}`,
+      exitCode: 0,
+    });
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    const extra = reportSilentFallbackSpy.mock.calls[0][1].extra as Record<string, unknown>;
+    const serialized = JSON.stringify(extra);
+    expect(serialized).not.toContain(SYNTH_SK_ANT);
+    expect(serialized).not.toContain(SYNTH_GHS);
   });
 });

@@ -1,10 +1,15 @@
 /**
- * Tenant isolation — current-repo-url.ts (PR-C §2.6, #3244).
+ * Tenant isolation — `users` `auth.uid() = id` RLS deny (PR-C §2.6, #3244).
  *
- * Covers the single migrated site at `:26` — SELECT users.repo_url
- * scoped to the caller's own id. RLS on `users`: `auth.uid() = id`.
+ * Originally guarded `users.repo_url`, but ADR-044 PR-2b (mig 112,
+ * `112_drop_legacy_users_repo_columns.sql`) dropped `users.repo_url`
+ * (repo state moved to the `workspaces` table). The regression property
+ * this suite protects is the `users` table's row-level `auth.uid() = id`
+ * policy itself — that one founder's tenant JWT cannot read another
+ * founder's `users` row. We assert it against a surviving `users` column
+ * (`email`); the column choice is incidental, the RLS deny is the point.
  *
- * Asserts: A's tenant JWT cannot read B's `users.repo_url`. A spoofed
+ * Asserts: A's tenant JWT cannot read B's `users` row. A spoofed
  * `.eq("id", userB.id)` MUST return null (maybeSingle on 0 rows).
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1.
@@ -74,13 +79,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(user.id).toBeTruthy();
       }
 
-      for (const user of [userA, userB]) {
-        const { error } = await service
-          .from("users")
-          .update({ repo_url: `https://github.com/test/${user.id.slice(0, 8)}.git` })
-          .eq("id", user.id);
-        expect(error).toBeNull();
-      }
+      // No seed needed: `users.repo_url` was dropped by mig 112 (ADR-044
+      // PR-2b). `email` is set by createUser above and survives, so the
+      // `auth.uid() = id` deny can be probed against it without a seed.
 
       _resetTenantCache();
       const aMint = await mintFounderJwt(userA.id);
@@ -101,20 +102,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       }
     }, 30_000);
 
-    test("baseline: A reads own repo_url", async () => {
+    test("baseline: A reads own users row", async () => {
       const { data, error } = await aClient
         .from("users")
-        .select("repo_url")
+        .select("email")
         .eq("id", userA.id)
         .maybeSingle();
       expect(error).toBeNull();
-      expect(data?.repo_url).toContain("github.com/test/");
+      expect(data?.email).toBe(userA.email);
     });
 
-    test("`:26` — A's tenant JWT cannot read B's repo_url", async () => {
+    test("`users` RLS — A's tenant JWT cannot read B's users row", async () => {
       const { data, error } = await aClient
         .from("users")
-        .select("repo_url")
+        .select("email")
         .eq("id", userB.id)
         .maybeSingle();
       expect(error).toBeNull();
