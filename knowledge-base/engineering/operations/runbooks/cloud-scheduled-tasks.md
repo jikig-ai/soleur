@@ -504,6 +504,52 @@ The manual SSH fallback below is retained as a **last resort** only
 (`hr-no-ssh-fallback-in-runbooks`); polling + the per-function monitors + the
 `restart-inngest-server.yml` workflow (above) are the primary paths.
 
+### H10 — Anthropic credit exhausted / operator key invalid (whole-fleet stall, #5674)
+
+When the operator `ANTHROPIC_API_KEY` cannot do work, EVERY claude-eval cron
+no-ops at once. Before #5674 this was silent (green monitors, `status=completed`
+rows). Now two signals surface it:
+
+**Primary — the hourly canary `cron-anthropic-credit-probe`** (Sentry monitor
+`scheduled-anthropic-credit-probe`). It sends a 1-token ping on the operator key
+each hour and pages on the CLASSIFIED failure:
+
+- `op=anthropic-credit-exhausted` + monitor RED → **operator Anthropic credit is
+  zero.** Top up the balance at `console.anthropic.com → Billing`. The fleet
+  self-recovers on the next scheduled fire once credit is restored (no restart).
+- `op=anthropic-key-invalid` + monitor RED → **the operator key is invalid /
+  revoked.** Rotate `ANTHROPIC_API_KEY` in Doppler (`prd`) and redeploy.
+- A transient (`429`/`500`/`529 overloaded`/network) does NOT page as
+  credit-exhausted — the probe re-throws so Inngest retries; the missed-checkin
+  margin (30 min) backstops a genuine outage. So a single `scheduled-anthropic
+  -credit-probe` missed check-in (not a red page) is "Anthropic was briefly
+  unreachable," not "credit gone."
+
+**Secondary — classify-fatal on the eval crons.** A claude-eval cron whose tail
+matches a FATAL class (credit/auth/spawn-fault/timeout) now flips its OWN monitor
+red (`op=claude-eval-fatal`) and writes a `routine_runs.failed` row with the
+scrubbed reason. Query `routine_runs` (Supabase) for `error_summary ILIKE
+'%credit balance%'` to confirm the window.
+
+> **Classify-fatal expectation (do NOT misread the monitors):** a claude-eval
+> non-zero exit does NOT always page. A **benign** non-zero exit (`claude --print`
+> hitting max-turns with no artifact — a healthy, frequent outcome) deliberately
+> stays GREEN (`op=claude-eval-nonzero-noop`/`-nofix`, a non-paging WARNING) and
+> records its reason in `routine_runs.error_summary` only. Only the FATAL classes
+> flip red. So "the agent-native-audit monitor is green" does NOT mean "claude
+> filed an issue this run" — it means "no fatal-class failure." This is the
+> evidence-backed reversal of a naive flip-all (the #4730/#4727 daily-false-page
+> incident). See ADR-033 I8.
+
+> **Margin-backed red flip:** `postSentryHeartbeat` swallows its own POST failure
+> (`_cron-shared.ts`), so the red flip is missed-checkin-margin-backed, not
+> POST-guaranteed — the Sentry-cron missed-checkin is the backstop signal.
+
+**No balance endpoint exists.** Anthropic exposes no remaining-credit API, so the
+canary alerts AT exhaustion (within one hourly interval), not before. True
+pre-exhaustion spend-vs-budget alerting is a tracked follow-up (`Ref #5674`,
+needs a new `sk-ant-admin` secret + an operator `ANTHROPIC_MONTHLY_BUDGET_USD`).
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
