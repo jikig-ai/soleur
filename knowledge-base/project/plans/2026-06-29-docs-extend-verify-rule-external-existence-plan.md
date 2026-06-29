@@ -13,6 +13,22 @@ status: planned
 
 Closes #5706.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-29 · **Sections enhanced:** verification record added · **Approach:** proportionate inline deepen (one-line AGENTS edit; a 40-agent fan-out would violate the repo's own minimalism rules).
+
+### Key confirmations
+1. **Byte feasibility proven, not assumed.** A measured fold-in candidate is 480 B vs the current 473 B line → +7 B, landing B_ALWAYS at 22986 ≤ 23000. No paired trim is strictly required; net ≤ 0 remains the preferred discipline.
+2. **Premise corrected.** The issue's "22,000 critical threshold" is stale; the real reject cap is 23000 (issue #4599, CLOSED). Reconciliation table records this.
+3. **All cited references verified live.** `hr-verify-repo-capability-claim-before-assert`, `cq-rule-ids-are-immutable`, `cq-agents-md-tier-gate` are ACTIVE (the retired-registry hit for the immutability rule was a comment-line false positive). #4599 and #4819 resolve as CLOSED issues whose titles match their claimed roles.
+
+### Deepen-plan gate results
+- Phase 4.6 (User-Brand Impact): PASS — section present, threshold `none`, non-sensitive path (AGENTS.core.md is not in the preflight Check 6 regex).
+- Phase 4.7 (Observability): skip — pure-docs (`.md` at repo root, outside `plugins/*/skills/` and `apps/*/`).
+- Phase 4.8 (PAT-shaped var): PASS — no PAT-shaped variable or token literal in the plan.
+- Phase 4.9 (UI wireframe): skip — no UI surface in Files to Edit.
+- Phase 4.4 (precedent-diff): precedent for byte-disciplined AGENTS-rule edits is established (#4819 introduced this rule; #4599 raised the cap). No SQL/atomic-write/lock pattern; no novel-pattern scrutiny needed.
+
 ## Overview
 
 The hard rule `hr-verify-repo-capability-claim-before-assert` (AGENTS.core.md:47) today encodes
