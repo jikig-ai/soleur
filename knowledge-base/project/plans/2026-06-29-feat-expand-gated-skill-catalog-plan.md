@@ -93,8 +93,9 @@ registry, so the registry row precedes prompt generation):
    `npx promptfoo eval -c promptfooconfig.<target>.yaml --repeat 3`; capture the baseline-vs-skill delta.
 
 **Commit 1 — lane-inference.** Source: `brainstorm-domain-config.md` §Lane Inference. Sentinel span:
-the rule (table + fail-closed default + USER_BRAND_CRITICAL composition) — **exclude** the
-"Carry-forward contract" (provenance) and "Stability" (enum-freeze) meta paragraphs. enum =
+the rule (table + fail-closed default) — **exclude** the USER_BRAND_CRITICAL×lane composition
+paragraph (input-flag orchestration, NOT inferable from a feature description → not token-classifiable),
+the "Carry-forward contract" (provenance), and "Stability" (enum-freeze) meta paragraphs. enum =
 `["procedural","single-domain","cross-domain"]`. Golden adversarial cases: a description carrying BOTH
 a cross-domain trigger (`audit`/`security`/…) and a procedural trigger (`scaffold`/`lint-fix`/…) →
 asserts documented precedence (`procedural`/`single-domain` both require "no cross-domain trigger").
@@ -171,7 +172,13 @@ external-write surface (`cq-test-fixtures-synthesized-only`).
 
 **Brand-survival threshold:** single-user incident (carried from brainstorm). Vector is second-order
 (this PR gates *future edits*); held rather than downgraded because the incident-threshold surface
-guards the GDPR-notification classification path. **CPO sign-off:** carried from brainstorm framing;
+guards the GDPR-notification classification path. **Scope-out (user-impact-reviewer FINDING 1):** the
+lane gate covers only the *breadth* decision (the keyword table). The `USER_BRAND_CRITICAL → forced
+CPO+CLO+CTO triad` composition — the mechanism that actually fires the user-impact gate on a
+brand-critical feature — is deliberately OUTSIDE the gated span, because it is driven by an input flag
+(not the feature description) and so cannot be golden-set through a single-token lane classifier. It is
+protected by the unconditional override in `brainstorm-domain-config.md` §User-Brand-Critical Tag
+Processing + brainstorm Phase 0.1, NOT by this gate. **CPO sign-off:** carried from brainstorm framing;
 `user-impact-reviewer` at PR-review is the load-bearing gate.
 
 ## Domain Review

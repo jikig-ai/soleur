@@ -17,8 +17,9 @@ Steps within each surface are in dependency order (registry row before prompt ge
 - [x] 1.1 Create `enums/lane.json` = `["procedural","single-domain","cross-domain"]`.
 - [x] 1.2 Add sentinels around the §Lane Inference **rule block** in
   `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md`
-  (`<!-- eval-gate:block:lane-inference:start/end -->`). Span = table + fail-closed default +
-  USER_BRAND_CRITICAL composition; EXCLUDE Carry-forward + Stability meta. Leave heading/table intact.
+  (`<!-- eval-gate:block:lane-inference:start/end -->`). Span = table + fail-closed default;
+  EXCLUDE USER_BRAND_CRITICAL composition (input-flag orchestration) + Carry-forward + Stability meta.
+  Leave heading/table intact.
 - [x] 1.3 Add `lane-inference` entry to `scripts/gen-skill-prompt.cjs` `TARGET_CONFIG`
   (`enumPath: "enums/lane.json"`, `render()` mirroring go-routing).
 - [x] 1.4 Add `gated-skills.json` row (`block_id`/`target: lane-inference`, markers, `source_file`,
