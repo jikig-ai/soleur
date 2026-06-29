@@ -725,11 +725,27 @@ export async function spawnClaudeEval(args: {
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
-      const child = spawn(claudeBin, [...flags, prompt], {
+      // #5691 — silence non-essential cron egress at source (keep-blocked, NOT
+      // allowlisted; ADR-052 2026-06-29 amendment):
+      //  • `--strict-mcp-config` (prepended at index 0, BEFORE `--print` and
+      //    before any trailing `--` prompt separator) makes the CLI ignore the
+      //    four remote HTTP MCP servers bundled in plugins/soleur/plugin.json
+      //    (context7/cloudflare/vercel/stripe) that `--plugin-dir` would
+      //    otherwise auto-connect at startup. The containment hook denies every
+      //    mcp__* tool anyway (only cron-ux-audit gets Playwright), so these
+      //    startup dials are pure overhead the egress firewall correctly drops.
+      //    cron-ux-audit re-supplies its Playwright server via `--mcp-config`.
+      //  • CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 kills Claude Code's own
+      //    non-essential outbound traffic (telemetry / error-reporting /
+      //    auto-update). Spike A (#5691 PR body) is the at-source proof.
+      const child = spawn(claudeBin, ["--strict-mcp-config", ...flags, prompt], {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
         cwd: spawnCwd,
-        env: buildSpawnEnv(installationToken),
+        env: {
+          ...buildSpawnEnv(installationToken),
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
       });
 
       if (child.stdout) {

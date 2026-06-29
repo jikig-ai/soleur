@@ -136,6 +136,37 @@ describe("#5199 — restored containment (token narrow + pinned mcp + live dry-r
   });
 });
 
+describe("#5691 — Playwright survives --strict-mcp-config (substrate prepends it)", () => {
+  // The substrate (spawnClaudeEval) now prepends --strict-mcp-config, which
+  // ignores ALL MCP configs except those named via --mcp-config. ux-audit is
+  // the one cron that legitimately needs an MCP server (Playwright), so it MUST
+  // re-supply it explicitly or it silently loses every mcp__playwright__* tool
+  // and posts a zero-screenshot exit-0 GREEN run (the runtime Sentry Crons
+  // monitor is liveness-only and cannot catch this — obs P1-c). This static
+  // assertion is the PRIMARY pre-merge guard against that silent-degradation.
+  it("re-supplies the Playwright MCP server via --mcp-config .mcp.json, before the trailing --", () => {
+    const mcpIdx = CLAUDE_CODE_FLAGS.indexOf("--mcp-config");
+    expect(mcpIdx).toBeGreaterThan(-1);
+    // The relative .mcp.json resolves against spawnCwd → the per-fire overlay
+    // ux-audit writes at setup (the writeFile(join(spawnCwd, ".mcp.json"), …) in
+    // the setup-workspace step), not the repo-root dev file.
+    expect(CLAUDE_CODE_FLAGS[mcpIdx + 1]).toBe(".mcp.json");
+    // Must precede the trailing `--` end-of-options marker, else the CLI reads
+    // `.mcp.json` as a positional prompt arg rather than a flag value.
+    const lastSeparatorIdx = CLAUDE_CODE_FLAGS.lastIndexOf("--");
+    expect(lastSeparatorIdx).toBeGreaterThan(-1);
+    expect(mcpIdx).toBeLessThan(lastSeparatorIdx);
+  });
+
+  it("offers mcp__playwright__* tools — so the re-supplied server is load-bearing, not dead config", () => {
+    const allowedToolsIdx = CLAUDE_CODE_FLAGS.indexOf("--allowedTools");
+    const offered = CLAUDE_CODE_FLAGS[allowedToolsIdx + 1]
+      .split(",")
+      .filter((t) => t.startsWith("mcp__playwright__"));
+    expect(offered.length).toBeGreaterThan(0);
+  });
+});
+
 describe("#5676 — npx registry-probe silenced at source (intended-drop, ADR-052 amendment)", () => {
   // #5199 deliberately keeps registry.npmjs.org OFF the egress allowlist so
   // @playwright/mcp resolves to the image-baked dep, not a runtime fetch. But
