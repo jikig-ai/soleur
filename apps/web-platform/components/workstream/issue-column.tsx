@@ -110,14 +110,19 @@ export function IssueColumn({
               </button>
             ) : null}
             {/* Keep the empty state announced after the visible "No issues" text
-                is gone — a bare "0" count alone is ambiguous to a screen reader. */}
+                is gone — a bare "0" count alone is ambiguous to a screen reader.
+                When empty, the sr-only text is the canonical announcement and the
+                visible "0" pill is aria-hidden so SRs don't hear "No issues, 0". */}
             {isEmpty ? <span className="sr-only">No issues</span> : null}
             <span
               aria-hidden="true"
               className="mt-2 h-2 w-2 rounded-full"
               style={{ backgroundColor: column.accent }}
             />
-            <span className="mt-2 rounded-md bg-soleur-bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-soleur-text-tertiary">
+            <span
+              aria-hidden={isEmpty ? true : undefined}
+              className="mt-2 rounded-md bg-soleur-bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-soleur-text-tertiary"
+            >
               {issues.length}
             </span>
             <h2
@@ -157,7 +162,6 @@ export function IssueColumn({
             </span>
           </header>
           <div className="flex flex-col gap-2 px-1 pb-1">
-            {/* Always non-empty here (INVARIANT above) — render the cards. */}
             {issues.slice(0, COLUMN_RENDER_CAP).map((issue) => (
               <IssueCard key={issue.id} issue={issue} onOpen={onOpen} />
             ))}
