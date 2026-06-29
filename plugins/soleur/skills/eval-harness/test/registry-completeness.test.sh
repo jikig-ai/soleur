@@ -25,6 +25,9 @@ cd "$REPO_ROOT"
 # eval-harness skill dir itself (its SKILL.md / registry / tests quote the literal markers in
 # prose, so including them would false-positive the parity check). `|| true` keeps a
 # legitimately-empty scan from aborting under errexit — PARITY then reports it cleanly.
+# Scope assumption (fail-open corner, unreachable today): every gated source_file lives under
+# plugins/soleur/ and outside eval-harness/. If the registry ever gains a source_file outside
+# this scan root (or inside eval-harness/), widen/adjust the pathspec or its marker is invisible.
 scan_ids() {
   git grep -hoE 'eval-gate:block:[a-z][a-z0-9-]*:start' \
     -- 'plugins/soleur/' ':(exclude)plugins/soleur/skills/eval-harness/' 2>/dev/null \
@@ -41,7 +44,7 @@ dups="$(scan_ids | sort | uniq -d)"
 if [[ -z "$dups" ]]; then
   pass "DEDUP — each gated block_id appears exactly once in source"
 else
-  fail "DEDUP — duplicate source marker(s)" "gated block '$(echo "$dups" | tr '\n' ' ')' appears N>1 times in source — each block_id maps to one registry source_file"
+  fail "DEDUP — duplicate source marker(s)" "gated block '$(echo "$dups" | tr '\n' ' ')' appears more than once in source — each block_id maps to one registry source_file"
 fi
 
 # --- PARITY (the feature): source-scanned id set == registry id set, block-id level ---
@@ -78,12 +81,15 @@ fi
 
 # --- NEGATIVE sanity (in-memory; git grep is tracked-only and cannot see a tmp fixture, so a
 #     file-based negative would test a different backend than production and false-pass) ---
-# (a) an injected unregistered id must be flagged by the PARITY set-equality comparison.
+# (a) an injected unregistered id must be flagged by the PARITY comparison — exercised through the
+#     SAME captured-string idiom the live check uses, and asserting the injected id lands on the
+#     source-only ('<') side, so this verifies the verifier rather than just that diff(A+x,A)≠∅.
 inj_src="$(printf '%s\nzz-injected-unregistered' "$src_set" | sort -u)"
-if diff <(echo "$inj_src") <(echo "$reg_set") >/dev/null 2>&1; then
-  fail "NEGATIVE parity sanity" "an injected unregistered id was NOT flagged by the parity comparison"
+inj_diff="$(diff <(echo "$inj_src") <(echo "$reg_set") || true)"
+if [[ -n "$inj_diff" && "$inj_diff" == *"< zz-injected-unregistered"* ]]; then
+  pass "NEGATIVE — injected unregistered id is flagged by PARITY (source-only side)"
 else
-  pass "NEGATIVE — injected unregistered id is flagged by PARITY"
+  fail "NEGATIVE parity sanity" "injected unregistered id was NOT flagged on the source-only side (got: $(echo "$inj_diff" | tr '\n' ' '))"
 fi
 
 # (b) an injected duplicate id must be flagged by the DEDUP guard.

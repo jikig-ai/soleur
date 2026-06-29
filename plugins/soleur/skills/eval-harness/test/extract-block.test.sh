@@ -22,7 +22,9 @@ fail() { echo "FAIL [$1]: $2"; fails=$((fails + 1)); }
 # Target loop is derived from gated-skills.json (target + projected_prompt_path) rather than
 # a hardcoded list, so a newly-registered gated classifier is round-trip-covered automatically.
 # projected_prompt_path is repo-root-relative (e.g. plugins/soleur/skills/eval-harness/prompts/go-skill.txt).
+roundtrips=0
 while IFS=$'\t' read -r target projected; do
+  [[ -z "$target" ]] && continue
   committed="$REPO_ROOT/$projected"
   if diff -u <(node "$GEN" "$target" --stdout) "$committed" >/tmp/eval-gate-roundtrip.diff 2>&1; then
     pass "round-trip $target == committed projection"
@@ -30,7 +32,14 @@ while IFS=$'\t' read -r target projected; do
     fail "round-trip $target" "generated projection differs from committed $committed (run: node scripts/gen-skill-prompt.cjs $target)"
     cat /tmp/eval-gate-roundtrip.diff
   fi
+  roundtrips=$((roundtrips + 1))
 done < <(node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).forEach(e=>process.stdout.write(e.target+"\t"+e.projected_prompt_path+"\n"))' "$REGISTRY")
+
+# Minimum-cardinality guard: a registry-derived loop silently exits 0 with ZERO coverage if the
+# registry is empty / unreadable / the node one-liner emits nothing. Fail loud instead.
+if [[ "$roundtrips" -lt 1 ]]; then
+  fail "registry round-trip coverage" "0 round-trip targets executed — empty/unreadable $REGISTRY would otherwise pass with no coverage"
+fi
 
 # --- extractBlock returns trimmed text between markers ---
 got=$(node -e '
