@@ -119,15 +119,17 @@ in unrelated contexts; none touch the `hr-verify-repo-capability-claim-before-as
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **AC1 — content extended.** `sed -n '/hr-verify-repo-capability-claim-before-assert/p' AGENTS.core.md` contains both `WebSearch` and an external-existence phrase (`external` and one of `fake|hallucinat|doesn't exist`).
-- [ ] **AC2 — id intact in both files.** `grep -l 'hr-verify-repo-capability-claim-before-assert' AGENTS.md AGENTS.core.md` returns both paths; the `[id: ...]` token is byte-identical to HEAD.
-- [ ] **AC3 — B_ALWAYS within cap.** `echo $(( $(wc -c < AGENTS.md) + $(wc -c < AGENTS.core.md) ))` ≤ 23000 (target ≤ 22979, i.e. net change ≤ 0).
-- [ ] **AC4 — per-rule cap.** The reworded body line ≤ 600 UTF-8 bytes (`sed -n '47p' AGENTS.core.md | tr -d '\n' | wc -c`).
-- [ ] **AC5 — budget linter green.** `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` exits 0.
-- [ ] **AC6 — rule-id linter green.** `python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` exits 0 (id present, not retired, not duplicated).
-- [ ] **AC7 — enforcement-tag linter green.** `python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` exits 0 (rule is a plain hard rule; no tag added).
-- [ ] **AC8 — test suite green.** `bun test plugins/soleur/test/mandatory-wireframes-hardening.test.ts` passes (id-present + "subagent"-in-window assertions).
-- [ ] **AC9 — provenance.** The rule's `**Why:**` includes `#5706` and retains `#4819`.
+- [x] **AC1 — content extended.** `sed -n '/hr-verify-repo-capability-claim-before-assert/p' AGENTS.core.md` contains both `WebSearch` and an external-existence phrase (`external` and one of `fake|hallucinat|doesn't exist`). ✅ verified.
+- [x] **AC2 — id intact in both files.** `grep -l 'hr-verify-repo-capability-claim-before-assert' AGENTS.md AGENTS.core.md` returns both paths; the `[id: ...]` token is byte-identical to HEAD. ✅ verified.
+- [x] **AC3 — B_ALWAYS within cap.** Net change −3 B → B_ALWAYS = **22976** ≤ 23000 (under HEAD's 22979). ✅ verified.
+- [x] **AC4 — per-rule cap.** Reworded body line = **470** UTF-8 bytes ≤ 600. ✅ verified.
+- [x] **AC5 — budget linter green.** `lint-agents-rule-budget.py` exits 0 (WARN only — B_ALWAYS ≥ 20000, expected). ✅ verified.
+- [x] **AC6 — rule-id linter green.** `lint-rule-ids.py` exits 0 (id present, not retired, not duplicated). ✅ verified.
+- [~] **AC7 — enforcement-tag linter.** `lint-agents-enforcement-tags.py` exits 1 due to **11 PRE-EXISTING** anchor-resolution failures on UNRELATED rules (lines 19,20,21,33,36,38,44,45 + AGENTS.docs.md). Identical error count before and after this edit; my rule (line 47) carries **no enforcement tag** → produces zero errors. This linter is **not wired into any CI workflow** (only its own `.test.sh` references it) and main CI is green. Fixing unrelated rules is out-of-scope creep on a high-collision file. Intent (no NEW tag failure introduced) holds.
+- [x] **AC8 — test suite green.** `bun test plugins/soleur/test/mandatory-wireframes-hardening.test.ts` → 13 pass / 0 fail. ✅ verified.
+- [x] **AC9 — provenance.** `**Why:** #4819, #5706.` — both present. ✅ verified.
+
+(Full-suite exit gate: `scripts/test-all.sh` → **128/128 suites passed**, exit 0.)
 
 ## Test Scenarios
 
