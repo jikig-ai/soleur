@@ -148,7 +148,8 @@ describe("#5691 — Playwright survives --strict-mcp-config (substrate prepends 
     const mcpIdx = CLAUDE_CODE_FLAGS.indexOf("--mcp-config");
     expect(mcpIdx).toBeGreaterThan(-1);
     // The relative .mcp.json resolves against spawnCwd → the per-fire overlay
-    // ux-audit writes at setup (cron-ux-audit.ts:302-307), not the repo-root dev file.
+    // ux-audit writes at setup (the writeFile(join(spawnCwd, ".mcp.json"), …) in
+    // the setup-workspace step), not the repo-root dev file.
     expect(CLAUDE_CODE_FLAGS[mcpIdx + 1]).toBe(".mcp.json");
     // Must precede the trailing `--` end-of-options marker, else the CLI reads
     // `.mcp.json` as a positional prompt arg rather than a flag value.

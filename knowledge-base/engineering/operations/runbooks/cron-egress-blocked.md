@@ -206,6 +206,13 @@ carries rate signal) persists after both at-source levers, it is a dependency
 phone-home needing a `--debug`/strace trace → file a follow-up; still do not
 allowlist it. See ADR-052 amendment 2026-06-29 (#5691).
 
+> **Re-verify on Claude Code CLI upgrades.** That `--strict-mcp-config` suppresses
+> *plugin-bundled* MCP servers (vs only project/user scope) is an observed behavior,
+> not a documented guarantee — the in-repo tests pin only the flag's *presence and
+> position*, not the runtime suppression. After bumping the pinned `claude` CLI,
+> re-run the Spike A `--debug-file` zero-connect trace from the repo root
+> (`claude --print --plugin-dir plugins/soleur --strict-mcp-config --debug-file /tmp/t.log --allowedTools Skill -- "stop"` then `grep -iE 'mcp\.(cloudflare|vercel|stripe|context7)' /tmp/t.log` → expect zero) to confirm the suppression still holds.
+
 ## Remediation (loader `die "invalid CIDR …"`)
 
 If `cron-egress-firewall.service` failed (not a drop page) and journald shows

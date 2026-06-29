@@ -234,7 +234,10 @@ predicates and SLA status.
 // The trailing `--` is load-bearing — see cron-daily-triage.ts:CLAUDE_CODE_FLAGS
 // for the explanation. claude 2.x's --allowedTools is variadic and consumes
 // the prompt as a tool name without the end-of-options marker. #4017 bug 8/8.
-const CLAUDE_CODE_FLAGS = [
+// Exported so the #5691 drift-invariant test (cron-claude-eval-mcp-flags.test.ts)
+// can assert `--strict-mcp-config` membership + position structurally, rather
+// than via brittle source-text matching.
+export const CLAUDE_CODE_FLAGS = [
   // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
   // the plugin-bundled remote MCP servers and makes no MCP dial; the
   // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`

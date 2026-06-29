@@ -137,7 +137,10 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 // --print` and exitCode=1 in ~1.5s. Surfaced 2026-05-19 via #4017
 // substrate audit (bug 8/8). The `--` MUST be the last flag-array entry;
 // the spawn argv is `[...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT]`.
-const CLAUDE_CODE_FLAGS = [
+// Exported so the #5691 drift-invariant test (cron-claude-eval-mcp-flags.test.ts)
+// can assert `--strict-mcp-config` membership + position structurally, rather
+// than via brittle source-text matching.
+export const CLAUDE_CODE_FLAGS = [
   // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
   // the plugin-bundled remote MCP servers and makes no MCP dial; the
   // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`
