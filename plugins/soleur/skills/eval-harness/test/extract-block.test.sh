@@ -22,8 +22,10 @@ fail() { echo "FAIL [$1]: $2"; fails=$((fails + 1)); }
 # round-trip coverage with no per-target edit here. `projected_prompt_path` is the
 # single source of truth for the committed filename (so the prompt-name convention is
 # irrelevant to this test).
+roundtrip_count=0
 while IFS=$'\t' read -r target rel; do
   [ -z "$target" ] && continue
+  roundtrip_count=$((roundtrip_count + 1))
   committed="$REPO_ROOT/$rel"
   if diff -u <(node "$GEN" "$target" --stdout) "$committed" >/tmp/eval-gate-roundtrip.diff 2>&1; then
     pass "round-trip $target == committed projection"
@@ -35,6 +37,11 @@ done < <(node -e '
   const reg = require(process.argv[1]);
   for (const e of reg) process.stdout.write(e.target + "\t" + e.projected_prompt_path + "\n");
 ' "$SKILL_DIR/gated-skills.json")
+# Guard against a vacuous pass: a broken/empty registry would yield zero iterations
+# (the producer runs in a process substitution, so set -e cannot abort on its failure).
+if [[ "$roundtrip_count" -lt 2 ]]; then
+  fail "round-trip coverage" "expected >=2 targets from the registry, iterated $roundtrip_count (registry unreadable?)"
+fi
 
 # --- extractBlock returns trimmed text between markers ---
 got=$(node -e '

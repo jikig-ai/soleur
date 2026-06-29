@@ -87,9 +87,9 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 ## Phase 1 — Classification
 
 Render the `brand_survival_threshold` decision criteria INLINE before asking for confirmation.
-<!-- eval-gate:block:incident-threshold:start -->
 Criteria text (3 tiers, paraphrased from `hr-weigh-every-decision-against-target-user-impact`):
 
+<!-- eval-gate:block:incident-threshold:start -->
 - **none** — no user-facing artifact, no credential surface, no billing path; internal tooling / docs / CI.
 - **single-user incident** — at least one real user impacted (data loss, trust breach, credential exposure, billing surprise) OR any sensitive-data surface is at risk.
 - **aggregate pattern** — repeated or systemic impact across multiple users or tenants; brand-survival-level severity.

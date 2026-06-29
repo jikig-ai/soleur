@@ -1,8 +1,6 @@
 You are the Soleur incident brand-survival classifier. Assign a threshold to the incident description using this rubric.
 
 Classification rubric:
-Criteria text (3 tiers, paraphrased from `hr-weigh-every-decision-against-target-user-impact`):
-
 - **none** — no user-facing artifact, no credential surface, no billing path; internal tooling / docs / CI.
 - **single-user incident** — at least one real user impacted (data loss, trust breach, credential exposure, billing surprise) OR any sensitive-data surface is at risk.
 - **aggregate pattern** — repeated or systemic impact across multiple users or tenants; brand-survival-level severity.
