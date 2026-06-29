@@ -25,8 +25,8 @@ issue: 5585
 
 ## Phase 2 — IaC registration + count sites
 
-- [ ] 2.1 Add `required_check` block for `tenant-integration-required` to `infra/github/ruleset-ci-required.tf`; update its header comment `14`→`15`.
-- [ ] 2.2 Add `tenant-integration-required` to `scripts/required-checks.txt` AND `scripts/ci-required-ruleset-canonical-required-status-checks.json`.
+- [ ] 2.1 Add `required_check` block for `tenant-integration-required` to `infra/github/ruleset-ci-required.tf` (count 15→16; live already held 15 — the "14" in comments was an off-by-one); update header comment.
+- [ ] 2.2 Add `tenant-integration-required` to `scripts/required-checks.txt`. (Canonical JSON NOT edited — stale 5-baseline, frozen-script-only consumer; verified at /work.)
 - [ ] 2.3 `terraform fmt && terraform validate` in `infra/github` (no apply/plan — needs prd creds).
 
 ## Phase 3 — Bot-synthetic
