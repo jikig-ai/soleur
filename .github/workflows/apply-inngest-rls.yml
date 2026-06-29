@@ -20,7 +20,12 @@
 # bodies flow through strip_log_injection + scrub_pat before any echo. The Management
 # API endpoint is pinned to api.supabase.com (no env override — an overridable host is
 # a PAT-exfil-via-redirect seam). curl … 2>/dev/null keeps the Authorization header out
-# of captured output. The retrieved anon key is ::add-mask::'d. All uses: are SHA-pinned.
+# of captured output. All uses: are SHA-pinned. The anon path is verified in-DB via
+# `SET LOCAL ROLE anon` (the Management API runs as postgres and bypasses RLS, so the
+# role-switch is the correct client simulation); no anon key is retrieved here. The
+# in-DB grant gate is the authoritative proxy for BOTH HTTP front doors — PostgREST
+# (/rest/v1) and pg_graphql (/graphql/v1) can expose no more than the role's table
+# privileges, which the gate asserts are zero for anon AND authenticated.
 #
 # <!-- gate-override: new-scheduled-cron-prefer-inngest -->
 # Override justification: this monitor MUST be external to Inngest — it watches the
@@ -131,14 +136,23 @@ jobs:
               --data "$(jq -nc --arg q "$1" '{query:$q}')" --max-time 30 2>/dev/null
           }
 
-          # AUTHORITATIVE gate — direct catalog/grant query over ALL public tables.
+          # AUTHORITATIVE gate — direct catalog/grant query over ALL public tables
+          # (relkind 'r' ordinary + 'p' partitioned). A table is a violation if:
+          #   - RLS is not enabled, OR
+          #   - it is not owned by postgres (enabling RLS on a non-owner table would
+          #     block Inngest's own postgres connection — owner-bypass only helps the owner), OR
+          #   - anon OR authenticated holds ANY of SELECT/INSERT/UPDATE/DELETE/TRUNCATE.
+          # Checking the destructive privileges matters: RLS does NOT gate TRUNCATE (it is
+          # privilege-gated, not policy-gated), so SELECT=false alone never proves the
+          # brand-fatal wipe vector is closed — only REVOKE ALL does, and this gate must
+          # re-verify it on every self-heal run, for BOTH client roles, in parity with the SQL.
           if [[ -z "$fail_mode" ]]; then
-            gate="$(query "select count(*) as violations from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and (c.relrowsecurity=false or has_table_privilege('anon', c.oid, 'SELECT'))")"
+            gate="$(query "select count(*) as violations from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and (c.relrowsecurity=false or pg_get_userbyid(c.relowner)<>'postgres' or has_table_privilege('anon',c.oid,'SELECT') or has_table_privilege('anon',c.oid,'INSERT') or has_table_privilege('anon',c.oid,'UPDATE') or has_table_privilege('anon',c.oid,'DELETE') or has_table_privilege('anon',c.oid,'TRUNCATE') or has_table_privilege('authenticated',c.oid,'SELECT') or has_table_privilege('authenticated',c.oid,'INSERT') or has_table_privilege('authenticated',c.oid,'UPDATE') or has_table_privilege('authenticated',c.oid,'DELETE') or has_table_privilege('authenticated',c.oid,'TRUNCATE'))")"
             violations="$(printf '%s' "$gate" | jq -r '.[0].violations // "err"' 2>/dev/null)"
             if [[ "$violations" != "0" ]]; then
-              record_failure "gate_violation" "authoritative catalog gate: violations=${violations} (expected 0). body=$(sanitize "$(printf '%s' "$gate" | head -c 300)")"
+              record_failure "gate_violation" "authoritative catalog gate: violations=${violations} (expected 0; checks RLS-on + postgres-owned + no anon/authenticated DML/TRUNCATE). body=$(sanitize "$(printf '%s' "$gate" | head -c 300)")"
             else
-              echo "Authoritative gate PASS: violations=0 (all public tables RLS-enabled AND anon has no SELECT)."
+              echo "Authoritative gate PASS: violations=0 (all public tables RLS-enabled, postgres-owned, and neither anon nor authenticated holds SELECT/INSERT/UPDATE/DELETE/TRUNCATE)."
             fi
           fi
 

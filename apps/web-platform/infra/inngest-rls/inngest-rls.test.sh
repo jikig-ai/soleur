@@ -48,6 +48,10 @@ check_has 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+public' \
 check_has 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+SEQUENCE' \
   "revokes sequence grants" "missing sequence REVOKE"
 
+# Matviews have no RLS — a grant is their only access control; the lockdown must revoke them.
+check_has 'pg_matviews' \
+  "revokes matview grants (relkind 'm' completeness)" "missing matview REVOKE loop"
+
 # Default-privilege revoke for grantor postgres on TABLES + SEQUENCES + FUNCTIONS
 # (the durable recurrence fix). All three classes must be present.
 check_has 'ALTER[[:space:]]+DEFAULT[[:space:]]+PRIVILEGES[[:space:]]+FOR[[:space:]]+ROLE[[:space:]]+postgres' \

@@ -45,6 +45,13 @@ BEGIN
   LOOP
     EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM anon, authenticated;', r.sequencename);
   END LOOP;
+  -- Materialized views: RLS does NOT apply to matviews, so a grant is their ONLY access control.
+  -- Inngest ships none today, but a future version's matview in public would be anon-reachable on
+  -- a grant alone — revoke defensively so the lockdown is complete for every relkind (data-integrity).
+  FOR r IN SELECT matviewname FROM pg_matviews WHERE schemaname = 'public'
+  LOOP
+    EXECUTE format('REVOKE ALL ON public.%I FROM anon, authenticated;', r.matviewname);
+  END LOOP;
 END $$;
 
 -- 2) Stop recurrence at the source. Supabase default privileges auto-GRANT anon/authenticated
