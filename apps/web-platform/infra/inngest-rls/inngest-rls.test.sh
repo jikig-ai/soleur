@@ -28,63 +28,68 @@ SQL_CODE="$(sed -E 's/--.*$//' "$SQL")"
 
 has_code()    { printf '%s' "$SQL_CODE" | grep -iqE "$1"; }
 absent_code() { ! printf '%s' "$SQL_CODE" | grep -iqE "$1"; }
+# if/then/else helpers (not `A && B || C`, which runs C when B fails — SC2015).
+check_has()    { if has_code "$1"; then ok "$2"; else bad "$3"; fi; }
+check_absent() { if absent_code "$1"; then ok "$2"; else bad "$3"; fi; }
 
 echo "inngest-rls.test.sh — static shape guards for $(basename "$SQL")"
 
 # --- Required constructs (idempotent lockdown) -------------------------------
-has_code 'ENABLE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
-  && ok "enables RLS" || bad "missing ENABLE ROW LEVEL SECURITY"
+check_has 'ENABLE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
+  "enables RLS" "missing ENABLE ROW LEVEL SECURITY"
 
-has_code 'DO[[:space:]]+\$\$' \
-  && ok "uses a DO-block loop (dynamic over current tables — no hard-coded 14)" \
-  || bad "missing DO \$\$ loop"
+check_has 'DO[[:space:]]+\$\$' \
+  "uses a DO-block loop (dynamic over current tables — no hard-coded 14)" \
+  "missing DO \$\$ loop"
 
-has_code 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+public' \
-  && ok "revokes table grants" || bad "missing per-table REVOKE"
+check_has 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+public' \
+  "revokes table grants" "missing per-table REVOKE"
 
-has_code 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+SEQUENCE' \
-  && ok "revokes sequence grants" || bad "missing sequence REVOKE"
+check_has 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+SEQUENCE' \
+  "revokes sequence grants" "missing sequence REVOKE"
 
 # Default-privilege revoke for grantor postgres on TABLES + SEQUENCES + FUNCTIONS
 # (the durable recurrence fix). All three classes must be present.
-has_code 'ALTER[[:space:]]+DEFAULT[[:space:]]+PRIVILEGES[[:space:]]+FOR[[:space:]]+ROLE[[:space:]]+postgres' \
-  && ok "ALTER DEFAULT PRIVILEGES FOR ROLE postgres present" \
-  || bad "missing ALTER DEFAULT PRIVILEGES FOR ROLE postgres"
+check_has 'ALTER[[:space:]]+DEFAULT[[:space:]]+PRIVILEGES[[:space:]]+FOR[[:space:]]+ROLE[[:space:]]+postgres' \
+  "ALTER DEFAULT PRIVILEGES FOR ROLE postgres present" \
+  "missing ALTER DEFAULT PRIVILEGES FOR ROLE postgres"
 for cls in TABLES SEQUENCES FUNCTIONS; do
-  has_code "REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+$cls[[:space:]]+FROM" \
-    && ok "default-priv revoke covers $cls" \
-    || bad "default-priv revoke missing class $cls"
+  check_has "REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+${cls}[[:space:]]+FROM" \
+    "default-priv revoke covers ${cls}" \
+    "default-priv revoke missing class ${cls}"
 done
 
 # Lock-acquisition + statement guards (data-integrity HIGH).
-has_code 'SET[[:space:]]+lock_timeout' \
-  && ok "SET lock_timeout present (fail-fast on contention)" \
-  || bad "missing SET lock_timeout"
-has_code 'SET[[:space:]]+statement_timeout' \
-  && ok "SET statement_timeout present" || bad "missing SET statement_timeout"
+check_has 'SET[[:space:]]+lock_timeout' \
+  "SET lock_timeout present (fail-fast on contention)" \
+  "missing SET lock_timeout"
+check_has 'SET[[:space:]]+statement_timeout' \
+  "SET statement_timeout present" "missing SET statement_timeout"
 
 # Fail-closed identity preflight: must reference the Inngest sentinel tables AND
 # RAISE EXCEPTION (refuse to run against a non-Inngest project).
-{ has_code 'to_regclass' \
-    && has_code 'goose_db_version' \
-    && has_code 'function_runs' \
-    && has_code 'RAISE[[:space:]]+EXCEPTION'; } \
-  && ok "fail-closed Inngest-sentinel identity preflight present" \
-  || bad "missing identity preflight (to_regclass sentinel + RAISE EXCEPTION)"
+if has_code 'to_regclass' \
+   && has_code 'goose_db_version' \
+   && has_code 'function_runs' \
+   && has_code 'RAISE[[:space:]]+EXCEPTION'; then
+  ok "fail-closed Inngest-sentinel identity preflight present"
+else
+  bad "missing identity preflight (to_regclass sentinel + RAISE EXCEPTION)"
+fi
 
 # --- Forbidden constructs (would break Inngest or re-expose) ------------------
-absent_code 'FORCE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
-  && ok "no FORCE ROW LEVEL SECURITY (owner bypass preserved)" \
-  || bad "FORBIDDEN: FORCE ROW LEVEL SECURITY present — would lock Inngest out"
+check_absent 'FORCE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
+  "no FORCE ROW LEVEL SECURITY (owner bypass preserved)" \
+  "FORBIDDEN: FORCE ROW LEVEL SECURITY present — would lock Inngest out"
 
-absent_code 'CREATE[[:space:]]+POLICY' \
-  && ok "no CREATE POLICY (tables stay client-unreachable)" \
-  || bad "FORBIDDEN: CREATE POLICY present — re-opens client access"
+check_absent 'CREATE[[:space:]]+POLICY' \
+  "no CREATE POLICY (tables stay client-unreachable)" \
+  "FORBIDDEN: CREATE POLICY present — re-opens client access"
 
 # No re-GRANT in the applied code (break-glass re-GRANT lives only in a comment).
-absent_code '(^|[^A-Za-z])GRANT[[:space:]]' \
-  && ok "no GRANT statement in applied code" \
-  || bad "FORBIDDEN: GRANT present in applied SQL"
+check_absent '(^|[^A-Za-z])GRANT[[:space:]]' \
+  "no GRANT statement in applied code" \
+  "FORBIDDEN: GRANT present in applied SQL"
 
 # Never revoke from postgres / service_role. Inspect every REVOKE statement's
 # role list (comments already stripped); the targets must be only anon/authenticated.
@@ -96,9 +101,11 @@ while IFS= read -r line; do
     printf '       offending REVOKE: %s\n' "$(printf '%s' "$line" | tr -s ' ')"
   fi
 done < <(printf '%s' "$SQL_CODE" | tr ';' '\n')
-[[ "$bad_revoke" -eq 0 ]] \
-  && ok "no REVOKE targets postgres/service_role" \
-  || bad "FORBIDDEN: a REVOKE targets postgres or service_role"
+if [[ "$bad_revoke" -eq 0 ]]; then
+  ok "no REVOKE targets postgres/service_role"
+else
+  bad "FORBIDDEN: a REVOKE targets postgres or service_role"
+fi
 
 echo "---"
 echo "passed=$pass failed=$fail"
