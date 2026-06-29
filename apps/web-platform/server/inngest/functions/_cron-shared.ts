@@ -274,6 +274,25 @@ export async function postDiscordWebhook(args: {
 // no "claude-…" literal lands in functions/ (model-tiers.ts RAW_MODEL_LITERAL
 // guard). timeoutMs is optional: the digest passes 60_000; compound passes none
 // (it has no request timeout today — behavior parity, do not add one).
+// Typed non-ok error for the shared Anthropic transport (#5674). Carries the
+// HTTP status AND a bounded, redaction-scrubbed body excerpt so a caller (the
+// credit-probe canary) can classify the failure (e.g. /credit balance is too
+// low/i) WITHOUT the body ever reaching a logger/Sentry payload unscrubbed.
+// `.message` keeps the legacy `Anthropic API ${status}` PREFIX so the two
+// pre-existing callers (cron-compound-promote, cron-weekly-release-digest) and
+// their tests — which only read `.message` / match that substring — stay
+// backward-compatible (hr-type-widening-cross-consumer-grep).
+export class AnthropicApiError extends Error {
+  readonly status: number;
+  readonly bodyExcerpt?: string;
+  constructor(status: number, bodyExcerpt?: string) {
+    super(`Anthropic API ${status}${bodyExcerpt ? `: ${bodyExcerpt}` : ""}`);
+    this.name = "AnthropicApiError";
+    this.status = status;
+    this.bodyExcerpt = bodyExcerpt;
+  }
+}
+
 export async function postAnthropicMessage(args: {
   apiKey: string;
   model: string;
@@ -303,12 +322,27 @@ export async function postAnthropicMessage(args: {
     // Rethrow redacted: a network/abort error from fetch could in principle
     // carry request context — never let the x-api-key reach a logger/Sentry
     // payload. Mirrors postDiscordWebhook's redact-then-throw (the URL-credential
-    // sibling above). The non-ok branch below keeps its exact
-    // `Anthropic API ${status}` shape — callers and tests depend on it.
+    // sibling above).
     const e = err as Error;
     throw new Error(`Anthropic API request failed (${e.name})`);
   }
-  if (!resp.ok) throw new Error(`Anthropic API ${resp.status}`);
+  if (!resp.ok) {
+    // #5674: surface a BOUNDED, redaction-scrubbed body excerpt on a non-ok
+    // response so the credit-probe canary can classify the failure (the body is
+    // where "Credit balance is too low" lives). `.message` keeps the legacy
+    // `Anthropic API ${status}` prefix for the two existing callers/tests.
+    let rawBody = "";
+    try {
+      rawBody = await resp.text();
+    } catch {
+      // Body unreadable (already consumed / stream error) — status alone still
+      // throws a typed error; the canary falls back to the status-only branch.
+    }
+    throw new AnthropicApiError(
+      resp.status,
+      formatTailForSentry(rawBody)?.slice(0, 600),
+    );
+  }
 
   const data = (await resp.json()) as {
     content?: Array<{ text?: string }>;
@@ -570,14 +604,183 @@ export async function resolveOutputAwareOk(args: {
         exitCode,
         // The claude-eval stderr tail is the diagnostic payload — without it the
         // non-zero-exit reason lives only in app stdout, which is not shipped.
-        stderrTail: stderrTail ? stderrTail.slice(-4000) : undefined,
+        // #5674 F1: route through the canonical MULTI-secret scrubber (was
+        // redactToken-only at the substrate → an sk-ant-… in a crash stack
+        // reached this durable Sentry extra unscrubbed). formatTailForSentry
+        // applies redactGithubSourcedText + the 4000-char bound.
+        stderrTail: formatTailForSentry(stderrTail),
         // The stdout tail carries the `claude --print` max-turns notice (written
         // to stdout, not stderr) — same diagnostic role as stderrTail. #4773.
-        stdoutTail: stdoutTail ? stdoutTail.slice(-4000) : undefined,
+        stdoutTail: formatTailForSentry(stdoutTail),
       },
     },
   );
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Eval failure-reason capture + classify-fatal heartbeat (#5674).
+//
+// Two observability bugs the 2026-06-29 credit-exhaustion incident exposed:
+//   (1) the captured stdout/stderr tail (where "Credit balance is too low"
+//       actually lives) was DROPPED at the Sentry-extra layer of the 4 masked
+//       best-effort crons — only { exitCode, durationMs } reached Sentry;
+//   (2) those 4 crons posted a GREEN check-in regardless of WHY claude exited
+//       non-zero, so a credit-exhausted run was indistinguishable from a clean
+//       no-artifact run at the monitor level.
+//
+// The fix is classify-fatal (NOT flip-all): a non-zero exit whose tail matches a
+// FATAL class (credit exhausted / auth revoked / spawn fault / timeout) flips the
+// monitor RED and records the scrubbed reason; a BENIGN non-zero exit (max-turns,
+// clean no-artifact) stays GREEN (liveness) but still surfaces the reason. This
+// reconciles the 2026-06-01 #4730/#4727 decision that decoupled the heartbeat
+// from spawnResult.ok precisely because `claude --print` exits non-zero on
+// healthy max-turns runs (flip-all would reintroduce that daily false-page).
+// ---------------------------------------------------------------------------
+
+// Sentry-extra readability bound for spawn tails. The durable Sentry event holds
+// more than the 500-char GitHub-issue body (formatTailForIssue), so a fuller tail
+// is available for triage. Single source of truth for the Sentry-tail bound.
+const SENTRY_TAIL_CHARS = 4000;
+
+/**
+ * Multi-secret scrubber + bounded slice for any spawn tail (or Anthropic error
+ * body excerpt) bound for a DURABLE Sentry extra. The eval substrate only applies
+ * `redactToken` (installation token); a crash stack can still spill `sk-ant-…` /
+ * other allowlisted-env secrets, so EVERY new Sentry tail sink MUST route through
+ * here — the single source of truth so the 8 output-aware + 4 best-effort sites
+ * cannot drift on redaction discipline (#5674 F1, hr-write-boundary-sentinel-sweep).
+ * Scrub BEFORE slice so a secret straddling the boundary is still caught; returns
+ * `undefined` for empty/absent input so callers can omit the key entirely.
+ */
+export function formatTailForSentry(tail?: string): string | undefined {
+  const scrubbed = redactGithubSourcedText(tail ?? "").slice(-SENTRY_TAIL_CHARS);
+  return scrubbed || undefined;
+}
+
+// Single source of truth for the FATAL-class claude-eval / Anthropic failure
+// markers — the classes that MUST flip a best-effort cron monitor RED. Shared by
+// resolveBestEffortEvalOk AND the cron-anthropic-credit-probe canary so the
+// credit/auth pattern cannot drift (#5674 R1). Keep this set SMALL, centralized,
+// and fixture-pinned against the real incident tail: classify-by-string-match is
+// brittle to Anthropic copy changes, so an UNMATCHED non-zero exit degrades to
+// benign-but-recorded (green + reason in Sentry), never a silent drop.
+export const ANTHROPIC_CREDIT_EXHAUSTED_RE = /credit balance is too low/i;
+export const ANTHROPIC_AUTH_FAILURE_RE =
+  /invalid x-api-key|authentication_error|\binvalid api key\b/i;
+// Spawn-fault markers in a captured tail (the child never really ran).
+const SPAWN_FAULT_RE = /\b(ENOENT|EACCES|EPERM)\b/;
+
+export type EvalFatalClass =
+  | "credit-exhausted"
+  | "auth-failure"
+  | "spawn-fault"
+  | "timeout";
+
+/**
+ * Classify a non-zero claude-eval spawn result as FATAL (must page) or benign.
+ * Pure + tail-driven so it is unit-testable against the real incident stdout.
+ */
+export function classifyEvalFatal(
+  spawnResult: Pick<
+    SpawnResult,
+    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail"
+  >,
+): { fatal: boolean; fatalClass?: EvalFatalClass; reason?: string } {
+  if (spawnResult.abortedByTimeout) {
+    return {
+      fatal: true,
+      fatalClass: "timeout",
+      reason: "claude-eval aborted by timeout (50-min budget exceeded)",
+    };
+  }
+  // exitCode === -1 is the substrate's spawn-error sentinel (child never started).
+  if (spawnResult.exitCode === -1) {
+    return {
+      fatal: true,
+      fatalClass: "spawn-fault",
+      reason: "claude-eval spawn fault (child process failed to start)",
+    };
+  }
+  const tail = `${spawnResult.stdoutTail ?? ""}\n${spawnResult.stderrTail ?? ""}`;
+  if (ANTHROPIC_CREDIT_EXHAUSTED_RE.test(tail)) {
+    return {
+      fatal: true,
+      fatalClass: "credit-exhausted",
+      reason: "Anthropic credit balance is too low (operator API credit exhausted)",
+    };
+  }
+  if (ANTHROPIC_AUTH_FAILURE_RE.test(tail)) {
+    return {
+      fatal: true,
+      fatalClass: "auth-failure",
+      reason: "Anthropic API authentication failure (invalid/revoked operator key)",
+    };
+  }
+  if (SPAWN_FAULT_RE.test(tail)) {
+    return {
+      fatal: true,
+      fatalClass: "spawn-fault",
+      reason: "claude-eval spawn fault (ENOENT/EACCES in tail)",
+    };
+  }
+  return { fatal: false };
+}
+
+// The contract BOTH eval-heartbeat resolvers emit so all eval crons get equal
+// routine_runs / Sentry fidelity through one shape. `errorSummary` (scrubbed,
+// when present) is what the run-log middleware records on a returned ok:false;
+// `sentryExtra` carries the scrubbed tails the handler folds into its Sentry event.
+export interface EvalHeartbeatDecision {
+  ok: boolean;
+  errorSummary?: string;
+  sentryExtra: Record<string, unknown>;
+}
+
+/**
+ * Best-effort claude-eval heartbeat resolver (classify-fatal). For crons where
+ * the OUTPUT is not a queryable GitHub issue (the 4 "masked" crons), this decides
+ * the monitor color from the spawn tail rather than the bare exit code:
+ *   - clean exit (ok)            → ok:true, no reason
+ *   - FATAL non-zero             → ok:false + scrubbed reason (monitor red + routine_runs.failed)
+ *   - BENIGN non-zero (default)  → ok:true + reason in sentryExtra (green liveness, queryable, no page)
+ * The scrubbed tails are always in `sentryExtra` so even a green run is self-diagnosing.
+ */
+export function resolveBestEffortEvalOk(
+  spawnResult: Pick<
+    SpawnResult,
+    "ok" | "exitCode" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+  >,
+): EvalHeartbeatDecision {
+  const sentryExtra: Record<string, unknown> = {
+    exitCode: spawnResult.exitCode,
+    durationMs: spawnResult.durationMs,
+    abortedByTimeout: spawnResult.abortedByTimeout,
+    stdoutTail: formatTailForSentry(spawnResult.stdoutTail),
+    stderrTail: formatTailForSentry(spawnResult.stderrTail),
+  };
+
+  if (spawnResult.ok) {
+    return { ok: true, sentryExtra };
+  }
+
+  const fatal = classifyEvalFatal(spawnResult);
+  if (fatal.fatal) {
+    return {
+      ok: false,
+      errorSummary: fatal.reason,
+      sentryExtra: { ...sentryExtra, fatalClass: fatal.fatalClass },
+    };
+  }
+
+  // Benign non-zero (max-turns / clean no-artifact) — the #4730 carve-out (R1):
+  // stays GREEN, but the reason rides along in sentryExtra so a chronically-broken
+  // -but-live cron is diff-able week over week without paging.
+  return {
+    ok: true,
+    errorSummary: `claude-eval exited non-zero (benign, no artifact this cycle): exit ${spawnResult.exitCode}`,
+    sentryExtra: { ...sentryExtra, fatalClass: "benign" },
+  };
 }
 
 // ---------------------------------------------------------------------------
