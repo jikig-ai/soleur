@@ -16,6 +16,22 @@ references:
 
 # feat(web): Workstream board — collapse empty columns by default ✨
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-29
+**Agents used:** code-simplicity-reviewer, pattern-recognition-specialist (UX/frontend), Explore (verify-the-negative pass).
+**Halt gates passed:** 4.6 User-Brand Impact (present, threshold `none`, non-sensitive paths), 4.7 Observability (5 fields, no-SSH), 4.8 PAT-shaped (none), 4.9 UI-wireframe (committed `workstream-kanban.pen` referenced).
+
+### Key improvements over the round-1 plan
+1. **Accessibility fold-in (P2).** Phase 2 deletes the expanded `<p>No issues</p>`; the empty state would then be conveyed only by a bare `0` count pill, which a screen reader announces as the ambiguous "Backlog, 0". Added a `sr-only` "No issues" to the empty collapsed strip so the empty state stays announced (`sr-only` is an in-use utility — `components/chat/attachment-display.tsx:122`, `components/scope-grants/scope-grant-row.tsx:166`).
+2. **Affordance-distinction note (P2).** A user-collapsed *non-empty* strip and an *empty* strip both render the `w-10` collapsed branch but differ in interactivity (only the former has an Expand chevron). Captured as a design refinement (a subtle dimming option) deferred to the binding mock / QA eyeball — not a code blocker.
+3. **Board-test safety is grep-confirmed, not assumed.** The verify-the-negative pass + a direct grep confirm `workstream-board.test.tsx` references only the whole-board `EmptyState`/`NoResults` copy ("No issues to display" / "No issues match…"), never the column-level "No issues" or `w-72`/`w-10` — so empty columns rendering as collapsed strips breaks nothing.
+
+### Verified this pass (grounded, not memory)
+- `isCollapsed = isEmpty || collapsed` is the exhaustive, minimal inversion (`collapsed` defaults to `false`, `issue-column.tsx:67`); the expanded branch is provably unreachable for empty columns, so the Phase 2 dead-code deletion is sound (code-simplicity-reviewer returned no P1/P2 on the code change).
+- The board already passes `collapsed={collapsed.has(column.status)}` + `onToggleCollapse` per column (`workstream-board.tsx:296-304`) — the change lives entirely in `issue-column.tsx`; `workstream-board.tsx` does not change.
+- The collapsed branch renders the Expand button with no `isEmpty` guard today (`issue-column.tsx:94-103`); the new `!isEmpty` guard is the only addition there.
+
 ## Overview
 
 The Workstream kanban board renders 7 fixed columns (`Backlog … Cancelled`).
@@ -120,6 +136,22 @@ In `apps/web-platform/components/workstream/issue-column.tsx`:
    ) : null}
    ```
 
+3. **Preserve the accessible empty-state announcement (deepen P2).** Phase 2
+   deletes the expanded `<p>No issues</p>`. Without a replacement, an empty
+   collapsed strip is conveyed only by the bare `0` count pill — a screen reader
+   announces "Backlog, 0" (ambiguous: 0 of what?). Add a visually-hidden label to
+   the empty strip so the empty state stays announced, reusing the app's existing
+   `sr-only` utility (`components/chat/attachment-display.tsx:122`,
+   `components/scope-grants/scope-grant-row.tsx:166`):
+
+   ```tsx
+   {isEmpty ? <span className="sr-only">No issues</span> : null}
+   ```
+
+   Place it inside the collapsed strip's flex column (alongside the dot / count /
+   label). This keeps the exact prior SR text ("No issues") while the visual stays
+   the compact strip.
+
 ### Phase 2 — Remove the now-unreachable expanded-empty code
 
 Because `isCollapsed = isEmpty || collapsed`, the **expanded branch (lines
@@ -169,6 +201,8 @@ Rewrite the `issue-column.tsx` "Empty rule" comment block (lines 16-17) to:
     toggle`: render `issues={[]} collapsed`. Same assertions.
 - **Add** `empty collapsed strip shows the 0 count and the column label`:
   `getByText("0")` and the label `Backlog` are present.
+- **Add** `empty collapsed strip announces "No issues" for screen readers`:
+  `getByText("No issues")` is present (the `sr-only` span) when `issues=[]`.
 - The tint / one-control-at-a-time / animation / 200-cap blocks use the non-empty
   `issue()` fixture and are **unaffected** — keep green, no edits.
 
@@ -213,10 +247,18 @@ Rewrite the `issue-column.tsx` "Empty rule" comment block (lines 16-17) to:
   `Expand <label>` button is present when `issues=[]`.
 - [ ] The collapsed empty strip still shows the colored dot, the `0` count pill,
   and the vertical column label.
+- [ ] The collapsed empty strip carries an accessible empty-state announcement:
+  a `sr-only` (visually-hidden) "No issues" is rendered when `issues=[]` so a
+  screen reader does not announce a bare "0" (deepen P2 a11y fold-in).
 - [ ] A **non-empty** column is unchanged: expanded by default with a working
   `Collapse <label>` toggle; collapsing/expanding it still persists to
   `localStorage` (`workstream-board.tsx` untouched — no edits to that file:
   `git diff --name-only` does not list `workstream-board.tsx`).
+- [ ] The existing `workstream-board.test.tsx` suite stays green with no edits —
+  grep-confirmed safe: it references only the whole-board `EmptyState`/`NoResults`
+  copy ("No issues to display" :227 / "No issues match…" :103), never the
+  column-level "No issues" nor `w-72`/`w-10`, so empty columns becoming collapsed
+  strips does not break any assertion.
 - [ ] The expanded branch contains no empty special-casing after Phase 2
   (no `No issues` literal reachable in the expanded render), OR — if the
   conservative fallback was taken — the Phase-1 invariant comment is present
@@ -289,9 +331,14 @@ to Edit). The only files created are tests (none created here, in fact — both
 test files already exist), so the BLOCKING "new component file" escalation does
 not apply. This modifies the default render state of an existing, already-designed
 component → ADVISORY, auto-accepted in the non-interactive pipeline, mirroring the
-sibling PR #5660 plan precedent for the same component. QA/PR-review should
-eyeball the populated board to confirm empty columns appear as thin strips and
-populated columns are unaffected.
+sibling PR #5660 plan precedent for the same component. The deepen-plan UX pass
+(pattern-recognition-specialist) surfaced two P2 refinements now folded into the
+plan: (1) an `sr-only` "No issues" to keep the empty state accessible after the
+visible text is removed (Phase 1.3 + AC + test), and (2) a noted design option to
+dim the empty strip so it reads as distinct from a user-collapsed non-empty strip
+(deferred to the binding mock + QA eyeball — see Sharp Edges). QA/PR-review should
+eyeball the populated board to confirm empty columns appear as thin strips, the
+empty/collapsed strips are distinguishable, and populated columns are unaffected.
 
 ## Architecture Decision (ADR/C4)
 
@@ -310,8 +357,9 @@ is pre-existing and unmodified). No C4 element or view is affected. Gate skips.
 
 | Scenario | Expectation |
 | --- | --- |
-| Empty column, no `collapsed` prop | Collapsed `w-10` strip; dot + `0` + vertical label; **no** toggle |
+| Empty column, no `collapsed` prop | Collapsed `w-10` strip; dot + `0` + vertical label; `sr-only` "No issues"; **no** toggle |
 | Empty column, `collapsed=true` | Same collapsed strip (default already collapsed); **no** toggle |
+| Empty column — screen reader | `sr-only` "No issues" announced (not a bare "0") |
 | Non-empty column, default | Expanded `w-72`; `Collapse <label>` button present (unchanged) |
 | Non-empty column, `collapsed=true` | Collapsed `w-10` strip with `Expand <label>` toggle (unchanged) |
 | Toggle a non-empty column (board) | Persists to `localStorage`; still green (unchanged) |
@@ -343,6 +391,33 @@ is pre-existing and unmodified). No C4 element or view is affected. Gate skips.
 - **Collapsed-strip detection in tests is class-based** (`w-10` vs `w-72`) — this
   is the existing collapsed/expanded discriminator in the component, so it is a
   stable assertion target; do not invent a new marker.
+- **A11y: do not let the empty state collapse to a bare "0" (deepen P2).** Phase 2
+  removes the visible "No issues" text; the `sr-only` "No issues" in the empty
+  strip (Phase 1.3) is the replacement. A screen reader on the empty strip must
+  announce "No issues", not just "Backlog, 0". The new test asserts the `sr-only`
+  text is present.
+- **Empty-vs-collapsed affordance look-alike (deepen P2, design).** A
+  user-collapsed *non-empty* strip (has an Expand chevron) and an *empty* strip
+  (no toggle) both render the `w-10` collapsed branch and look near-identical. A
+  user may click an empty strip expecting it to open. Minimal mitigation if QA
+  finds it confusing: subtly dim the empty strip (e.g. reduce the label/count
+  opacity) so it reads as "nothing here" rather than "collapsed — click to open".
+  Defer the exact look to the binding mock + QA eyeball; do not over-build.
+- **QA the live filter→empty transition, not just initial render (deepen P3).** The
+  width `transition-[width]` animates cleanly because all 7 `<section>`s are keyed
+  by status and always mounted (`workstream-board.tsx:295-306`), so the element
+  persists across the empty flip. But the inner `MountReveal` swap
+  (`key="expanded"`→`key="collapsed"`) is a fade-in-from-blank, not a crossfade,
+  and the row height can snap (un-animated) when filtering empties the tallest
+  column. Both are pre-existing behaviors this change now triggers automatically
+  on search keystrokes — QA the filter-to-empty transition by hand; it is not a
+  blocker.
+- **Two collapse mental models share one store (deepen P3, constraint).**
+  Post-change "collapsed" means either auto (empty, not in the persisted Set) or
+  explicit (user choice in the Set). Fine today (no board-level "expand all" /
+  collapsed-count UI exists). If such an affordance lands later, it must account
+  for auto-collapsed empties (which are not in the Set) — note for the future, no
+  action now.
 - **Empty `## User-Brand Impact` fails deepen-plan Phase 4.6** — section is filled
   above (threshold: none, no sensitive path).
 - This plan introduces no infrastructure, no migration, no ADR/C4 change, no

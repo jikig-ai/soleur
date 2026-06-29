@@ -18,6 +18,10 @@ Single client component + its two test files. No new files; no server/infra.
   (empty ⇒ collapsed; expanded branch never sees an empty column).
 - [ ] 1.2 In the collapsed branch (lines 91-119), gate the Expand `<button>` on
   `{!isEmpty ? (...) : null}` so an empty collapsed strip has no toggle.
+- [ ] 1.3 In the collapsed branch, add a `sr-only` empty-state announcement so the
+  empty strip is not conveyed by a bare `0` to screen readers (deepen P2 a11y):
+  `{isEmpty ? <span className="sr-only">No issues</span> : null}` alongside the
+  dot / count / label. (`sr-only` is in use already — `attachment-display.tsx:122`.)
 
 ## Phase 2 — Remove unreachable expanded-empty code
 
@@ -41,6 +45,8 @@ Single client component + its two test files. No new files; no server/infra.
   both `collapsed` unset and `collapsed=true`.
 - [ ] 4.2 Add an assertion that the empty collapsed strip shows the `0` count and
   the column label.
+- [ ] 4.2b Add an assertion that the empty collapsed strip renders the `sr-only`
+  "No issues" announcement (`getByText("No issues")` present when `issues=[]`).
 - [ ] 4.3 `test/components/workstream/workstream-board.test.tsx`: add a
   board-level assertion that, with one Backlog issue loaded, a sibling empty
   column (`<section aria-label="Todo">`) renders as a `w-10` collapsed strip with
