@@ -29,7 +29,8 @@
 // + no-op). This is a guard, not a gap.
 
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { isRetryable, delay } from "@/server/github-retry";
 import {
   mintInstallationToken,
   REPO_OWNER,
@@ -50,6 +51,14 @@ import {
 const FUNCTION_NAME = "event-scheduled-reminder";
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 const SENTRY_FETCH_TIMEOUT_MS = 10_000;
+// Bounded transient-retry for the Sentry reads (#5417 AC12 hardening). A single
+// Sentry latency spike (2026-06-19) blew the per-attempt timeout and the check
+// fail-closed permanently. 3 total attempts; explicit per-retry backoff so the
+// schedule reads exactly (siblings use `2 **` → 500/1000; the scope mandates
+// 500/1500). Only transient failures (5xx/429, network, AbortSignal.timeout
+// TimeoutError) retry; deterministic 4xx stays single-shot fail-closed.
+const SENTRY_FETCH_MAX_RETRIES = 2; // 3 total attempts
+const SENTRY_FETCH_BACKOFF_MS = [500, 1500] as const;
 
 // `close?: boolean` is the v1→v1.1 capability: a check may REQUEST that the
 // handler close `action.report_to_issue`. It is deliberately a boolean, NOT a
@@ -94,11 +103,26 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
   // error, 0-or->1 matching issues, or a malformed stats shape. Errors are
   // constructed TOKEN-FREE (reportSilentFallback forwards err.message raw).
   "sentry-issue-rate": async (_octokit, params) => {
-    const failClosed = (reason: string): CheckResult => ({
-      verdict: "info" as const,
-      body: `\`sentry-issue-rate\`: fail-closed — ${reason}. No action taken.`,
-      close: false,
-    });
+    const failClosed = (reason: string): CheckResult => {
+      // Mirror EVERY fail-closed to Sentry at warning level — transient-exhausted
+      // AND deterministic (token-rot 401/403, env-unset, shape/param). A GitHub
+      // comment is not an observability layer (hr-observability-layer-citation),
+      // and the 10-day #5417 silence was exactly a comment-only fail-closed. The
+      // verdict is unchanged (`info`, no close); only the warning is additive.
+      // `reason` is token-free by construction (static slug or the outer catch's
+      // already-sliced token-free message), so the wrapped Error carries no token.
+      warnSilentFallback(new Error(`sentry-issue-rate fail-closed: ${reason}`), {
+        feature: FUNCTION_NAME,
+        op: "sentry-issue-rate-fail-closed",
+        message: "sentry-issue-rate fail-closed",
+        extra: { fn: FUNCTION_NAME, check: "sentry-issue-rate", reason },
+      });
+      return {
+        verdict: "info" as const,
+        body: `\`sentry-issue-rate\`: fail-closed — ${reason}. No action taken.`,
+        close: false,
+      };
+    };
 
     const parsed = parseSentryRateParams(params);
     if (!parsed.ok) return failClosed(parsed.reason);
@@ -115,24 +139,49 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
       return failClosed("Sentry env not configured");
     }
 
-    // Single bounded fetch helper. The token lives ONLY in the Authorization
-    // header — never in the URL or any thrown/returned string — so error text
-    // is token-free by construction.
+    // Bounded transient-retry fetch helper. The token lives ONLY in the
+    // Authorization header — never in the URL or any thrown/returned string — so
+    // error text is token-free by construction. Mirrors github-api.ts
+    // `fetchWithRetry`: 5xx/429 classified inline (we hold `res.status`),
+    // network/timeout classified in the catch via the canonical `isRetryable`.
+    // Per-attempt `AbortSignal.timeout` (NOT AbortController) so a timeout
+    // rejects with a `TimeoutError` that `isRetryable` matches — `AbortError`
+    // (AbortController) is NOT classified transient and would leave the retry
+    // inert against the very timeout that caused #5417's outage.
     const sentryGet = async (url: string): Promise<unknown> => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), SENTRY_FETCH_TIMEOUT_MS);
-      try {
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: ctrl.signal,
-        });
-        if (!res.ok) {
-          throw new Error(`Sentry GET returned HTTP ${res.status}`);
+      for (let attempt = 0; attempt <= SENTRY_FETCH_MAX_RETRIES; attempt++) {
+        try {
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(SENTRY_FETCH_TIMEOUT_MS),
+          });
+          // Transient HTTP (5xx / 429): drain body + backoff + retry while
+          // attempts remain. Do NOT add a blanket `status >= 500` arm to
+          // `isRetryable` — see github-retry.ts:71 (octokit over-retry hazard).
+          if (
+            (res.status >= 500 || res.status === 429) &&
+            attempt < SENTRY_FETCH_MAX_RETRIES
+          ) {
+            await res.text().catch(() => {}); // socket keep-alive hygiene
+            await delay(SENTRY_FETCH_BACKOFF_MS[attempt]);
+            continue;
+          }
+          if (!res.ok) {
+            // Deterministic 4xx (or a transient class with retries exhausted).
+            throw new Error(`Sentry GET returned HTTP ${res.status}`);
+          }
+          return await res.json();
+        } catch (err) {
+          // Network / AbortSignal.timeout TimeoutError → transient.
+          if (attempt < SENTRY_FETCH_MAX_RETRIES && isRetryable(err)) {
+            await delay(SENTRY_FETCH_BACKOFF_MS[attempt]);
+            continue;
+          }
+          throw err;
         }
-        return await res.json();
-      } finally {
-        clearTimeout(timer);
       }
+      // Unreachable — the loop always returns or throws above.
+      throw new Error("sentryGet: unreachable");
     };
 
     try {
@@ -187,7 +236,8 @@ export const CHECK_REGISTRY: Record<string, CheckFn> = {
       };
     } catch (err) {
       // Token-free message: `err.message` is either our `HTTP <code>` string or
-      // an AbortError/network error — none contain the Authorization header.
+      // a TimeoutError/network error (retries exhausted) — none contain the
+      // Authorization header.
       const msg = err instanceof Error ? err.message : String(err);
       return failClosed(`Sentry query failed (${msg.slice(0, 80)})`);
     }
