@@ -550,6 +550,31 @@ canary alerts AT exhaustion (within one hourly interval), not before. True
 pre-exhaustion spend-vs-budget alerting is a tracked follow-up (`Ref #5674`,
 needs a new `sk-ant-admin` secret + an operator `ANTHROPIC_MONTHLY_BUDGET_USD`).
 
+**After a PROLONGED (multi-day) outage, re-enable the monitor — credit-restore
+alone is not enough.** Sentry auto-mutes, then disables, a cron monitor that has
+been unhealthy for several days (the "we'll automatically mute or disable them in
+a few days" warning email). A **disabled** monitor ignores even a recovery
+`?status=ok` check-in until it is re-enabled, so restoring credit does NOT by
+itself clear the alert. This is NOT a Terraform change — the `jianyuan/sentry`
+provider exposes no mute/status attribute — so check and un-mute/re-enable via the
+Sentry REST API (read-only token in Doppler `soleur/prd_terraform`):
+
+```bash
+# Read current state (status: active|disabled, isMuted: true|false)
+doppler run -p soleur -c prd_terraform -- bash -c \
+  'curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+    "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/scheduled-community-monitor/" \
+    | jq "{status, isMuted}"'
+```
+
+If `status` is `disabled` or `isMuted` is `true`, re-enable with a `PUT` to the
+same monitor URL (`{"status":"active","isMuted":false}`) using the same token;
+fall back to the Sentry dashboard ONLY on a confirmed API-write failure (record a
+`playwright-attempt:` evidence line). Sibling claude-eval monitors (roadmap-review,
+content-generator, …) may be in the same state after a fleet-wide outage —
+check each. Then follow the **Restore Procedure** below to confirm the next
+check-in goes green.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
