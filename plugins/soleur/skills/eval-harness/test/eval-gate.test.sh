@@ -56,12 +56,24 @@ else
   fail "--dry-run" "got: $out"
 fi
 
-# --- no-op: candidate-file == the source on disk (unchanged block) => accept, no API ---
-out=$(node "$GATE" --target go-routing --candidate-file plugins/soleur/commands/go.md)
+# --- no-op: candidate-file is a DISTINCT copy with an unchanged block => accept, no API ---
+# (must be a temp copy, not the live source — Fix 4 refuses an in-place candidate-file).
+tmpcopy="$(mktemp --suffix=.md)"
+trap 'rm -f "$tmpcopy"' EXIT
+cp "$REPO_ROOT/plugins/soleur/commands/go.md" "$tmpcopy"
+out=$(node "$GATE" --target go-routing --candidate-file "$tmpcopy")
 if [[ "$(echo "$out" | jqget accept)" == "true" && "$(echo "$out" | jqget reason)" == "no gated-block change" ]]; then
   pass "no-op (unchanged block) accepts without API"
 else
   fail "no-op (unchanged block)" "got: $out"
+fi
+
+# --- Fix 4: candidate-file == the live source file is refused (fail-closed) ---
+out=$(node "$GATE" --target go-routing --candidate-file plugins/soleur/commands/go.md || true)
+if [[ "$(echo "$out" | jqget accept)" == "false" && "$(echo "$out" | jqget error)" == *"must differ from the live source file"* ]]; then
+  pass "candidate-file == live source is refused"
+else
+  fail "candidate-file == live source is refused" "got: $out"
 fi
 
 if [[ "$fails" -gt 0 ]]; then

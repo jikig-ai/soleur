@@ -27,10 +27,18 @@
 //   corpus_regressed   = candidate_rate < current_rate - epsilon   (strict < ; boundary
 //                        equality is NOT a regression — inclusive)
 //   target_task_passes = pooled mean correctness of candidate target samples >= targetThreshold
-//   accept             = !corpus_regressed && target_task_passes
+//   corpus_untrustworthy = current_rate < MIN_TRUSTED_CORPUS_RATE  (absolute floor: below
+//                        this the baseline eval is too degraded to trust a RELATIVE
+//                        comparison — a "no regression" verdict off a broken baseline is
+//                        meaningless)
+//   accept             = !corpus_regressed && target_task_passes && !corpus_untrustworthy
 //
 // Fail-closed: malformed input throws (the orchestrator treats a throw as NOT accept).
 "use strict";
+
+// Absolute corpus trust floor: below this current_rate the baseline eval is too degraded
+// to trust a relative current-vs-candidate comparison, so accept is forced false.
+const MIN_TRUSTED_CORPUS_RATE = 0.5;
 
 function assertResults(results, name) {
   if (!Array.isArray(results)) {
@@ -94,7 +102,8 @@ function computeVerdict(currentResults, candidateResults, targetTask, opts) {
 
   const corpus_regressed = candidate_rate < current_rate - epsilon;
   const target_task_passes = target_rate >= targetThreshold;
-  const accept = !corpus_regressed && target_task_passes;
+  const corpus_untrustworthy = current_rate < MIN_TRUSTED_CORPUS_RATE;
+  const accept = !corpus_regressed && target_task_passes && !corpus_untrustworthy;
 
   // per_task breakdown over the union of corpus + target task ids.
   const allIds = [...new Set([...distinctTaskIds(currentResults), ...distinctTaskIds(candidateResults)])];
@@ -109,11 +118,13 @@ function computeVerdict(currentResults, candidateResults, targetTask, opts) {
     accept,
     corpus_regressed,
     target_task_passes,
+    corpus_untrustworthy,
     current_rate,
     candidate_rate,
     target_rate,
     epsilon,
     target_threshold: targetThreshold,
+    min_trusted_corpus_rate: MIN_TRUSTED_CORPUS_RATE,
     per_task,
   };
 }

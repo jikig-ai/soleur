@@ -68,6 +68,11 @@ function parseArgs(argv) {
         process.exit(2);
     }
   }
+  // Fix 5: a non-positive / non-integer --repeat would make the dry-run estimate
+  // dishonest and send String(NaN) to promptfoo. Fail-closed.
+  if (!(Number.isInteger(args.repeat) && args.repeat >= 1)) {
+    die("--repeat must be a positive integer");
+  }
   return args;
 }
 
@@ -215,6 +220,13 @@ function main() {
     die(err.message);
   }
 
+  // Fix 4: an in-place-edited source would make currentBlock === candidateBlock
+  // (the candidate IS the live file), masquerading as "no gated-block change". Refuse
+  // before the short-circuit — the proposed edit must live at a distinct temp path.
+  if (path.resolve(args.candidateFile) === path.resolve(REPO_ROOT, entry.source_file)) {
+    die("candidate-file must differ from the live source file (write the proposed edit to a temp path)");
+  }
+
   // Ungateable no-op: the edit did not change the gated block. Short-circuit BEFORE
   // requiring a target task or spending any API — there is nothing to gate.
   if (currentBlock === candidateBlock) {
@@ -240,6 +252,12 @@ function main() {
     die("--target-task must be {\"vars\":{\"input\":\"...\",\"golden_label\":\"...\"}}");
   }
 
+  // Fix 2: synthesized/PII guard runs on the target-task input IMMEDIATELY after parse,
+  // BEFORE the combined tasks file is built or any API call is made — a real-data-shaped
+  // target task must never reach the LLM providers (fail-closed, before any API spend).
+  const synth = synthesizedCheck(targetInput);
+  if (!synth.ok) die(`target task is not synthesized: ${synth.reason}`);
+
   // Build the combined tasks file: corpus + the target task row.
   const res = TARGET_RESOURCES[args.target];
   const corpusText = fs.readFileSync(path.join(SKILL_DIR, res.tasks), "utf8").replace(/\s*$/, "");
@@ -261,18 +279,30 @@ function main() {
   }
 
   // --append-on-accept: on accept, append the synthesized target task to the corpus.
+  // Fix 3: the input was already gated as synthesized before the run (Fix 2), so this
+  // defensive re-check should never fail. If it ever did, a skipped corpus-write is NOT
+  // a gate failure — keep the real verdict (accept reflects the GATE decision) and record
+  // append_skipped rather than flipping top-level accept to false.
   if (args.appendOnAccept && verdict.accept) {
     const guard = synthesizedCheck(targetInput);
     if (!guard.ok) {
-      die(`refusing to append non-synthesized target task: ${guard.reason}`, { verdict });
+      verdict.append_skipped = true;
+      verdict.append_skipped_reason = guard.reason;
+    } else {
+      const corpusPath = path.join(SKILL_DIR, res.tasks);
+      const existing = fs.readFileSync(corpusPath, "utf8").replace(/\s*$/, "");
+      fs.writeFileSync(corpusPath, existing + "\n" + JSON.stringify(targetTaskObj) + "\n");
+      verdict.appended_to = res.tasks;
     }
-    const corpusPath = path.join(SKILL_DIR, res.tasks);
-    const existing = fs.readFileSync(corpusPath, "utf8").replace(/\s*$/, "");
-    fs.writeFileSync(corpusPath, existing + "\n" + JSON.stringify(targetTaskObj) + "\n");
-    verdict.appended_to = res.tasks;
   }
 
   process.stdout.write(JSON.stringify(verdict) + "\n");
 }
 
-main();
+// Fix 1: any uncaught throw (registry parse, missing corpus file, mkdtemp, render)
+// must still emit the {accept:false} stdout contract via die(), not just exit non-zero.
+try {
+  main();
+} catch (e) {
+  die(e && e.message ? e.message : String(e));
+}

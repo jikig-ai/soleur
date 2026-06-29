@@ -83,6 +83,23 @@ check("epsilon-boundary inclusive == not regressed", () => {
   assert.strictEqual(v.accept, true);
 });
 
+// --- (e) reject: corpus below the absolute trust floor (both arms degraded) ---
+// current corpus rate = 0.25 (< MIN_TRUSTED_CORPUS_RATE 0.5); candidate flat at 0.25 so
+// there is no *relative* regression, and the target passes — but the baseline is too
+// degraded to trust, so accept must be forced false.
+check("reject: corpus below trust floor (both arms degraded)", () => {
+  const corpus = [...samples("t1",1,1), ...samples("t2",1,0), ...samples("t3",1,0), ...samples("t4",1,0)]; // 0.25
+  const cur = [...corpus, ...samples("T",3,3)];
+  const cand = [...corpus, ...samples("T",3,3)];
+  const v = computeVerdict(cur, cand, TARGET, {});
+  assert.strictEqual(v.current_rate, 0.25);
+  assert.strictEqual(v.corpus_regressed, false, "flat corpus is not a relative regression");
+  assert.strictEqual(v.target_task_passes, true);
+  assert.strictEqual(v.corpus_untrustworthy, true);
+  assert.strictEqual(v.min_trusted_corpus_rate, 0.5);
+  assert.strictEqual(v.accept, false, "untrustworthy baseline forces accept=false");
+});
+
 // --- malformed input throws (fail-closed) ---
 check("throws on non-array currentResults", () => {
   assert.throws(() => computeVerdict(null, [], TARGET, {}));
