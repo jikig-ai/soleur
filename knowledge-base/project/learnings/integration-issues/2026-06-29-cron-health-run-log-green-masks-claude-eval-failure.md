@@ -101,7 +101,8 @@ prolonged-outage mute/disable when the cause clears** — after a multi-day outa
 monitor can stay muted/disabled and ignore a recovery `?status=ok` until it is
 re-enabled via the Sentry REST API; per-monitor un-mute is a distinct recovery step
 (runbook `cloud-scheduled-tasks.md` H10). (Here the monitor was still `active` /
-un-muted when checked, so no un-mute was needed — but the window was closing.)
+un-muted when checked live via the Sentry monitors API GET — `status: active,
+isMuted: false` — so no un-mute was needed, but the window was closing.)
 
 ## Session Errors
 
