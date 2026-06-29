@@ -176,7 +176,7 @@ merge commit message to bypass the auto-apply for that merge.
 
 ### Negative
 
-- **Job-name fragility.** The 14 `context` strings in
+- **Job-name fragility.** The 16 `context` strings in
   `ruleset-ci-required.tf` are literal job `name:` fields. A workflow
   rename (e.g. `lint fixture content` → `lint-fixture-content`) silently
   un-requires the check until this resource is updated in the same PR.
@@ -291,3 +291,65 @@ lands within 90 days AND no further merge-through events occur, the
 dissent becomes the operative reframe and `infra/github/` can be
 collapsed back to UI management with a `status: rejected` post-script
 here.
+
+## Amendment — 2026-06-29 (#5585): 15 → 16, first path-filtered required check
+
+`required_status_checks` widened 15 → 16 by adding
+`tenant-integration-required`. Count history: PR #3886 imported 5 → 14;
+PR #4385 added `enforce` (→ 15) without updating the "14" wording in this
+ADR's body or the `.tf` header (a pre-existing off-by-one — the live ruleset
+and `.tf` both held 15 before #5585); #5585 makes it 16. The current-state grep
+(`grep -c '^      required_check {' infra/github/ruleset-ci-required.tf`)
+now returns `16`. The import-time figures recorded above (`before_count: 5,
+after_count: 14`) are the historical PR #3886 adoption diff and are left
+unchanged as that record.
+
+**New pattern — always-run aggregator gate job for a path-filtered required
+check.** The prior 14 checks all run unconditionally on every PR. The
+dev-Supabase tenant-isolation suite (`.github/workflows/tenant-integration.yml`)
+is path-filtered (it must not burn dev-Supabase rate budget on the ~95% of PRs
+that don't touch the isolation surface), so it cannot be made required directly:
+GitHub never reports a status context for a workflow filtered out by `on.paths`,
+leaving a required check "Expected — Waiting" forever and blocking unrelated PRs.
+
+The pattern that resolves this (mirrors `ci.yml`'s `detect-changes` + `test`
+aggregator): the workflow always triggers (no `on.paths`); a cheap
+`detect-changes` job decides whether the heavy suite runs; the heavy job is
+gated `if: needs.detect-changes.outputs.tenant == 'true'`; and an always-run
+`tenant-integration-required` job (`if: always()`) is the registered required
+context. Its verdict is **fail-closed** — it passes only when
+`detect-changes` succeeded AND the suite is `success` or `skipped`, so a
+`detect-changes` failure (which marks the heavy job `skipped`) does NOT green
+the gate. The verdict lives in `scripts/tenant-integration-gate-verdict.sh`
+(unit-tested, five branches). `tenant-integration-required` is thus the first
+**conditionally-skipped-but-required** check; the job-name contract (Negative
+consequence above) applies — renaming the gate job silently un-requires it.
+
+Bot/cron PRs (GITHUB_TOKEN, no CI trigger) satisfy it via the synthetic
+check-run in `.github/actions/bot-pr-with-synthetic-checks/action.yml`
+(`CHECK_NAMES`) and the `scripts/required-checks.txt` SSOT, identical to the
+other integration_id-15368 checks.
+
+**Anchor-surface coverage (the sharp edge of a path-filtered REQUIRED check).**
+Once a path-filtered check is REQUIRED, a GREEN result is an *authoritative
+certification* — "isolation verified" — not a silent skip. Its `detect-changes`
+anchors must therefore cover the **surface the suite actually verifies**, not
+merely the cheap-trigger `on.paths` it inherited. #5585 review (user-impact P1)
+caught that the suite imports `@/lib/supabase/tenant` and exercises the
+RLS-bypassing service-role client, yet `lib/supabase/`, `middleware.ts`, and the
+shared `test/helpers/` fixtures were unanchored — a regression there would have
+skipped to an authoritative GREEN. The anchors were widened to the isolation
+surface (plus the extracted verdict script, anti-bypass) before merge.
+
+Two boundaries are **deliberately left unanchored** and accepted:
+- `app/api/**/route.ts` — anchoring all routes would run the heavy dev-Supabase
+  suite on the majority of PRs, defeating the rate-budget purpose that is the
+  entire reason for the shim. Route-level isolation relies on the now-anchored
+  `lib/supabase/` clients + DB RLS policies (migrations, anchored).
+- Bot/GITHUB_TOKEN PRs satisfy the check via a blind synthetic GREEN (suite never
+  runs) — the standard repo-wide posture for all 16 checks. Accepted because the
+  synthetic-posting bot workflows touch docs/metrics, not the isolation surface.
+
+General rule for future path-filtered required checks: **the anchor set is part
+of the security contract, not just a cost optimization** — audit it against the
+verified surface, and document every accepted gap.

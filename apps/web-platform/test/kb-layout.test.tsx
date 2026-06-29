@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { RailSlotHarness } from "./helpers/rail-slot-harness";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // Stable mock references (avoid useEffect re-fires)
 const mockPush = vi.fn();
@@ -122,9 +123,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <SwrTestProvider>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </SwrTestProvider>,
     );
 
     expect(await screen.findByText(/can't sync/i)).toBeInTheDocument();
@@ -147,9 +150,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <SwrTestProvider>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </SwrTestProvider>,
     );
 
     // Let the tree resolve (EmptyState renders) before asserting absence.
@@ -177,9 +182,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <SwrTestProvider>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </SwrTestProvider>,
     );
 
     // EmptyState (a fullWidth sub-state) has rendered.
@@ -203,9 +210,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <SwrTestProvider>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </SwrTestProvider>,
     );
 
     await screen.findByText(/nothing here yet/i);

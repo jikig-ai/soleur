@@ -8,9 +8,9 @@ import { describe, it, expect } from "vitest";
 // The `repo-resolver-divergence` Sentry issue-alert filters on
 // `feature == "repo-resolver-divergence"` ONLY (no `op` filter). Every op the
 // emitter declares (non-member-claim-reset / self-heal-failed /
-// connected-null-install-at-dispatch) carries that feature tag and is
-// operator-actionable. Feature-only matching covers them ALL and future-proofs
-// against new ops.
+// connected-null-install-at-dispatch / reprovision-non-member-claim-reset)
+// carries that feature tag and is operator-actionable. Feature-only matching
+// covers them ALL and future-proofs against new ops.
 //
 // AC6 — the load-bearing invariant: because the filter is feature-only, adding a
 // new `RepoResolverDivergenceOp` member can NEVER dark the alert. This test pins
@@ -28,18 +28,27 @@ const emitter = readFileSync(
 const FEATURE_TAG = "repo-resolver-divergence";
 
 // Every op the emitter's RepoResolverDivergenceOp union declares. Feature-only
-// matching must cover all of them.
+// matching must cover all of them — keep this list in lockstep with the union in
+// server/repo-resolver-divergence.ts when adding an op (the "declared in union"
+// case below is the tripwire that forces it).
 const OPS = [
   "non-member-claim-reset",
   "self-heal-failed",
   "connected-null-install-at-dispatch",
   "corrupt-worktree-at-dispatch",
+  "reprovision-non-member-claim-reset",
 ];
 
 // F8 reverse guard: any op that is NOT expected to route through the feature-only
 // paging alert must be listed here WITH a justification. Empty by design — every
 // divergence op is operator-actionable and SHOULD page.
 const EXCLUDED: string[] = [];
+
+// Guard against the substring trap: "non-member-claim-reset" is a substring of
+// "reprovision-non-member-claim-reset", so a bare `emitter.toContain(op)` cannot
+// distinguish them. Assert the new op is present as a DISTINCT quoted union
+// member, not merely as a substring of the older one.
+const DISTINCT_OPS_GUARD = "reprovision-non-member-claim-reset";
 
 /** Extract the body of the repo_resolver_divergence resource block. */
 function divergenceAlertBlock(): string {
@@ -69,7 +78,13 @@ describe("repo-resolver-divergence alert feature contract", () => {
   });
 
   it("every RepoResolverDivergenceOp member is declared in the emitter union", () => {
-    for (const op of OPS) expect(emitter).toContain(op);
+    // Assert the QUOTED literal so a substring (e.g. "non-member-claim-reset"
+    // inside "reprovision-non-member-claim-reset") cannot satisfy a sibling op.
+    for (const op of OPS) expect(emitter).toContain(`"${op}"`);
+  });
+
+  it("the reprovision-path op (ADR-044 PR-3) is a distinct quoted union member", () => {
+    expect(emitter).toContain(`"${DISTINCT_OPS_GUARD}"`);
   });
 
   it("F8 reverse guard: every op in the emitter's union is covered by OPS ∪ EXCLUDED (a new op cannot be silently dropped)", () => {
@@ -91,7 +106,9 @@ describe("repo-resolver-divergence alert feature contract", () => {
     const block = divergenceAlertBlock();
     // The block filters on feature; it must NOT carry an `op` tagged_event
     // filter (which would silently exclude ops not in its allow-list).
-    expect(block).toContain('value = "repo-resolver-divergence"');
+    // Whitespace-tolerant so a `terraform fmt` re-alignment of the attribute
+    // does not false-fail the contract (mirrors the negative `op` check below).
+    expect(block).toMatch(/value\s*=\s*"repo-resolver-divergence"/);
     expect(block).not.toMatch(/key\s*=\s*"op"/);
   });
 });

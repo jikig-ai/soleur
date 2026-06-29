@@ -1,0 +1,7 @@
+{"vars": {"input": "A typo in an internal CI log message; no user-facing surface and no data touched.", "golden_label": "none"}}
+{"vars": {"input": "Updated a developer-only runbook page; no credential, billing, or user surface affected.", "golden_label": "none"}}
+{"vars": {"input": "One customer's API key was accidentally written to an application log for several hours.", "golden_label": "single-user incident"}}
+{"vars": {"input": "A single user's stored payment card failed to save, blocking their subscription for an hour.", "golden_label": "single-user incident"}}
+{"vars": {"input": "A misconfigured query exposed many users' email addresses across multiple tenants for a day.", "golden_label": "aggregate pattern"}}
+{"vars": {"input": "A webhook retry bug double-charged every active subscriber in one billing run.", "golden_label": "aggregate pattern"}}
+{"vars": {"input": "A bad deploy logged out all users across three enterprise tenants and lost their unsaved work.", "golden_label": "aggregate pattern"}}

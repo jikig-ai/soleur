@@ -131,6 +131,10 @@ model {
         technology "Review Agent"
         description "Architectural compliance and ADR coverage check"
       }
+      evalharness = component "eval-harness skill" {
+        technology "Validation Gate"
+        description "Validation-gates classifier-skill block edits (no-regression + target-passes)"
+      }
     }
 
     infra = system "Infrastructure" {
@@ -154,7 +158,7 @@ model {
       }
       inngestPostgres = database "Supabase PostgreSQL (Inngest)" {
         technology "PostgreSQL — dedicated EU project, Supavisor session pooler :5432"
-        description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450)"
+        description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
       }
       inngestRedis = container "Inngest Redis" {
         technology "Self-hosted Redis — AOF on /mnt/data"
@@ -247,7 +251,7 @@ model {
   hetzner -> inngest "Hosts" { technology "systemd" }
   doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }
 
-  // ---- C4 L3 (Component — Soleur Plugin) — 20 relationships --------------
+  // ---- C4 L3 (Component — Soleur Plugin) — 21 relationships --------------
   // (the L3 `hooks -> claude` edge is identical to the L2 one above and is not
   //  re-declared; it still renders in the component view, which includes both.)
   go -> brainstorm "Routes explore/generate"
@@ -270,4 +274,5 @@ model {
   work -> kb "Reads plans, writes code"
   compound -> kb "Writes learnings, promotes to constitution"
   architecture -> kb "Writes ADRs and diagrams"
+  compound -> evalharness "Validates classifier-skill edits before applying"
 }

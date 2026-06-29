@@ -2914,21 +2914,63 @@ export async function dispatchSoleurGo(
   // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
   // recovery-it-gates.md), never before. Idempotent with the cold factory call
   // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  //
+  // #5715 — WARM turns must AWAIT the re-clone before `runner.dispatch` lets the
+  // turn reach the per-tool bwrap sandbox. The COLD factory already awaits the
+  // clone before `query()` binds the sandbox cwd; the warm path (the factory is
+  // NOT re-invoked) used to fire-and-forget, so after a mid-session reclaim the
+  // next warm turn chdir'd into a `.git`-less workspace before the clone
+  // finished → `fatal: not a git repository`. `reprovisionWorkspaceOnDispatch`
+  // self-short-circuits on a present `.git` (one membership-verified resolve
+  // feeds both the stat and the clone), so a `.git`-present warm turn pays only
+  // the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
-  void reprovisionWorkspaceOnDispatch(userId)
-    .then((outcome) => {
-      reprovisionOutcome = outcome;
-    })
-    .catch((err) => {
-      // reprovisionWorkspaceOnDispatch is already fail-soft (returns "ok" on a
-      // resolver error); this catch is belt-and-suspenders for an unexpected
-      // synchronous throw and leaves the outcome unresolved (generic message).
+  if (runner.hasActiveQuery(conversationId)) {
+    // WARM: the factory did NOT run this turn — gate the agent start on the
+    // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
+    // `runner.dispatch` try below) so it can NEVER reject out of dispatch.
+    try {
+      reprovisionOutcome = await reprovisionWorkspaceOnDispatch(userId);
+      if (reprovisionOutcome === "failed") {
+        // Definitively unrecoverable: the recovery ran and lost. Surface the
+        // honest reclaim copy and do NOT spawn the agent into a known-`.git`-less
+        // workspace. Gated STRICTLY on "failed" (never "ok"/undefined), so a
+        // recoverable conversation is never skipped (learning 2026-06-14).
+        sendToClient(userId, {
+          type: "error",
+          message: resolveWorktreeEnterFailedMessage(reprovisionOutcome),
+        });
+        return;
+      }
+    } catch (err) {
+      // Fail-safe: reprovisionWorkspaceOnDispatch is already fail-soft (returns
+      // "ok" on a resolver error); this catches an unexpected throw (e.g.
+      // existsSync EACCES/ELOOP) — mirror it and fall through to dispatch rather
+      // than stranding a recoverable turn.
       reportSilentFallback(err, {
         feature: "cc-dispatcher",
-        op: "reprovision-on-dispatch-publish",
+        op: "reprovision-on-dispatch-await",
         extra: { userId, conversationId },
       });
-    });
+    }
+  } else {
+    // COLD: the factory owns the await before `query()` construction. Keep the
+    // fire-and-forget publish so the honest-message branch can still read the
+    // outcome without delaying the cold dispatch.
+    void reprovisionWorkspaceOnDispatch(userId)
+      .then((outcome) => {
+        reprovisionOutcome = outcome;
+      })
+      .catch((err) => {
+        // Belt-and-suspenders for an unexpected synchronous throw; leaves the
+        // outcome unresolved (generic message).
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "reprovision-on-dispatch-publish",
+          extra: { userId, conversationId },
+        });
+      });
+  }
 
   // #5388 — per-dispatch registered platform-tool set for the unregistered-tool
   // mirror predicate (`onToolUse` below). Seeded with the ALWAYS-registered base
