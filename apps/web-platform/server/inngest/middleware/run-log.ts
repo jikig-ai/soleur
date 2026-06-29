@@ -147,8 +147,9 @@ export const runLogMiddleware = new InngestMiddleware({
           }) {
             if (step) return; // step-level event — only the function-final result lands a row
             // #5674: a cron can FAIL two ways — it THREW (Inngest retries), or it
-            // RETURNED { ok:false } (terminal — NO retry under retries:1). Both
-            // are `failed` rows, but only the THROWN path may be gated on the
+            // RETURNED { ok:false } (terminal — a returned value never retries,
+            // regardless of the `retries` setting; only a thrown error retries).
+            // Both are `failed` rows, but only the THROWN path may be gated on the
             // final attempt: a returned ok:false lands at attempt 0 (non-final)
             // and is never retried, so gating it on isFinalAttempt would DROP the
             // exact failure we exist to record (the P0 regression the first plan

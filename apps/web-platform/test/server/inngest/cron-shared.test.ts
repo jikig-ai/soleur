@@ -839,6 +839,11 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
 // secret only exists at runtime, assembled from non-secret fragments).
 const SYNTH_SK_ANT = "sk-ant-" + "A".repeat(40);
 const SYNTH_GHS = "ghs_" + "B".repeat(40);
+// Standalone Supabase secret-grade tokens (sbp_ management token, sb_secret_
+// key) — secret-shaped, regex-matching the allowlist, no literal token in
+// source (push-protection Sharp Edge). review #5680 hardening.
+const SYNTH_SBP = "sbp_" + "c".repeat(40);
+const SYNTH_SB_SECRET = "sb_secret_" + "D".repeat(30);
 
 describe("formatTailForSentry (multi-secret scrub + slice)", () => {
   it("strips an sk-ant key AND an installation-token-shaped string (AC2)", () => {
@@ -847,6 +852,17 @@ describe("formatTailForSentry (multi-secret scrub + slice)", () => {
     expect(out).toBeDefined();
     expect(out).not.toContain(SYNTH_SK_ANT);
     expect(out).not.toContain(SYNTH_GHS);
+  });
+
+  it("strips bare standalone Supabase secret tokens (sbp_ / sb_secret_) (review #5680)", () => {
+    const tail = `crash stack\nleaked ${SYNTH_SBP} and ${SYNTH_SB_SECRET} in trace`;
+    const out = formatTailForSentry(tail);
+    expect(out).toBeDefined();
+    expect(out).not.toContain(SYNTH_SBP);
+    expect(out).not.toContain(SYNTH_SB_SECRET);
+    // public-grade publishable key is NOT secret — left intact
+    const pub = "sb_publishable_" + "e".repeat(30);
+    expect(formatTailForSentry(`url uses ${pub}`)).toContain(pub);
   });
 
   it("returns undefined for empty/absent input (caller omits the key)", () => {
