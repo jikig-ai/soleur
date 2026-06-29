@@ -799,3 +799,108 @@ follow-up.
 Single atomic PR (wiring + new breadcrumb op + tests + this amendment). No schema
 change, no migration, no soak gate on the code change; the breadcrumb's
 prod-soak observation is a post-merge verification only.
+
+## Amendment 2026-06-29 — periodic backstop reconciles ready+NULL-install (entitlement-scoped, solo-only) (#5675)
+
+**Lineage.** The 2026-06-18 *"dispatch readiness must distinguish membership-deny
+NULL install from not-connected"* amendment (above) closed the **synchronous
+dispatch** dark path and established the **zero-write rule** at that gate. This
+amendment is its **operational-reconciliation counterpart** on the **periodic
+backstop** (`cron-workspace-sync-health.ts` arm-1), and carries the zero-write
+rule forward only in its **narrow** form. The two are deliberately different:
+the dispatch gate reads a **membership-deny NULL** (it cannot tell deny from
+not-connected) and therefore must **never** bind an install; the cron reads the
+**true NULL** via service-role (no membership gate in scope) and **can** safely
+backfill within entitlement scope.
+
+**Defect.** A workspace in `repo_status='ready'` whose
+`workspaces.github_installation_id IS NULL` is unreachable by the push-driven
+reconcile (`workspace-reconcile-on-push.ts` filters `WHERE github_installation_id
+= <push.installation.id> AND repo_url = …`, so a NULL-install row never matches).
+Arm-1 **detected** this class and reported it to Sentry
+(`op:ready-null-installation`) but **never resolved** it — so a genuine
+ready+NULL-install workspace stayed frozen indefinitely (this exact state froze
+the founder's own KB for ~5 weeks; Sentry folds the recurring daily occurrences
+into one standing issue, so "33 occurrences" ≈ one workspace stuck ~33 days, not
+33 distinct alerts).
+
+**Decision (decided here).** Arm-1 backfills `workspaces.github_installation_id`
+for **SOLO workspaces only**, resolving the install via the **entitlement-scoped
+connect-path resolver** (`resolveReachableInstallationIds` keyed on the owner's
+`user_id` + `github_username` → `resolveOwningInstallationForRepoDetailed`), and
+writing through the canonical `writeRepoColsToWorkspace` boundary (keyed on the
+finding's own server-derived id). Team workspaces (never auto-detect their
+install — `detect-installation`) and genuinely-unresolvable findings (owner not
+entitled / app uninstalled / empty listing) keep the existing folded, **visible**
+`op:ready-null-installation` signal; an all-degraded GitHub probe no-ops as
+**transient** and self-recovers on the next fire. It **NEVER** flips
+`repo_status`.
+
+**The load-bearing correctness invariant** is that the backfilled id MUST equal
+the `installation.id` GitHub sends in future push webhooks for that repo. The
+entitlement-scoped resolver guarantees this — it returns the owner's *owning*
+install for the repo (which is the push-webhook install). A bare
+`findInstallationByAccountLogin(owner)` + `checkRepoAccess` would NOT: its own
+docstring notes `checkRepoAccess` cannot distinguish the owning install from a
+collaborator install, so for an org repo it would over-grant the org's full-write
+install onto a workspace whose owner is not entitled to it.
+
+**Honest exception-carve (this is NOT "zero workspaces writes").** This carries
+forward only the narrow *"never persist `repo_status=error`"* sub-rule of the
+2026-06-18 zero-write rule — it does **not** inherit "zero `workspaces` writes."
+A *populating* `github_installation_id` write is safe here (unlike the dispatch
+path) because: **(a)** the cron reads the **true** NULL via service-role, not a
+membership-deny NULL; **(b)** resolution is **entitlement-scoped** to the owner's
+reachable installs — it does **not** widen the credential RPC (the option the
+2026-06-18 amendment rejected); **(c)** it is **solo-only**, so there is no
+shared-row cross-tenant corruption surface. The dispatch gate's zero-write rule
+stands unchanged on the dispatch path.
+
+**Reconcile against the 2026-06-18 rejected option.** That amendment **rejected**
+*"widen `resolve_workspace_installation_id` to return the install on
+membership-deny."* That rejection **stands**. This amendment does the **opposite
+of widening**: it resolves the install **server-side, within the owner's
+entitlement scope**, and **never** exposes the credential to a non-member. The
+credential RPC is unmodified.
+
+**Arc status.** The column-ownership decision (`workspaces` is the source of
+truth for the repo-connection columns) remains **COMPLETE**; this amends only the
+*operational reconciliation consequence* of a NULL-install row, not the ownership
+grain.
+
+### Considered Options (amendment)
+
+- **Demote-only signal (the issue's literal "skip-with-reason so it no-ops
+  cleanly")** — **REJECTED.** Leaves the KB frozen (non-resolution is the real
+  defect, not paging fatigue); and the `workspace_sync_health` alert is
+  **feature-only / level-agnostic**, so demoting the report's level is a **no-op**
+  (a warn still trips the feature rule; the daily occurrences already fold into
+  one issue). Resolution, not demotion, is the fix.
+- **Bare `findInstallationByAccountLogin(owner)` + `checkRepoAccess`** —
+  **REJECTED.** Over-grants an org's full-write install onto a non-entitled
+  owner's workspace (cross-tenant credential escalation). This is the exact
+  pattern the connect flow already rejected for credential binding.
+- **Flip `repo_status='error'`** — **REJECTED.** A 409 on the `/api/kb/tree` read
+  would BLANK the user's tree (strictly worse than a stale-but-visible tree); and
+  on a transient install blip it converts a self-recovering state into a sticky
+  failure (the dispatch amendment's sticky-transient failure mode).
+
+### C4 edge note
+
+No `.c4` model edit. The affected user is a workspace Owner (already covered by
+the `founder` actor's multi-Owner ADR-038 description); the install resolution +
+repo probe (`api`/`engine -> github`) and the `workspaces` write (`-> supabase`)
+are already modeled; `github_installation_id` is a column, below the C4 component
+grain — consistent with every prior ADR-044 amendment ("captured in ADR prose,
+not a `.c4` edit"). Grep of `knowledge-base/**/*.c4` for
+`installation`/`reconcile`/`sync-health`/`adr-044` is empty. **No C4 impact.**
+
+### Sequencing
+
+Single atomic PR (arm-1 reconcile wiring + the `resolveOwningInstallationForRepoDetailed`
+variant + allowlist rationale + tests + this amendment). No schema change, no
+migration, no soak gate on the code (the credential RPC is unmodified). Post-merge
+verification (AC11–AC13) is observation-only: confirm reconciled solo workspaces
+carry a non-NULL install and drop out of the next scan; if a `needs-reauth` /
+`transient` residual persists after a one-week soak, the write-path that mints
+`ready`+NULL rows is investigated (the cron is a backstop, not the fix-of-record).

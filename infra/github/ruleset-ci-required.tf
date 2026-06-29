@@ -2,6 +2,12 @@
 # README.md Phase 2 runbook. WIDENED from 5 to 14 required status checks to
 # close the secret-scan-failure-merged gap surfaced by PR #3886
 # (`lint fixture content` failed and merged because it was not required).
+# #4385 then added `enforce` (15th; the "14" wording above is the #3886
+# import figure and was left stale). #5585 adds `tenant-integration-required`
+# (16th) — the first PATH-FILTERED required check: an always-run aggregator
+# gate job (see .github/workflows/tenant-integration.yml) that fails closed, so
+# the path-filtered tenant-isolation suite gates merges without leaving
+# unrelated PRs "Expected — Waiting". See ADR-032.
 #
 # Bypass actors preserved from the live ruleset:
 #   - OrganizationAdmin (actor_id = 0 per provider issue #2536)  -- pull_request mode
@@ -9,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 14 `context` strings below are public ABI for the
+# Job-name contract: the 16 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -124,6 +130,20 @@ resource "github_repository_ruleset" "ci_required" {
       # 2026-03-20-github-required-checks-skip-ci-synthetic-status.md.
       required_check {
         context        = "enforce"
+        integration_id = var.actions_integration_id
+      }
+
+      # --- Tier 4: tenant-isolation suite required-check shim (#5585). Context
+      # is the JOB name `tenant-integration-required` at
+      # .github/workflows/tenant-integration.yml — an always-run (if: always())
+      # aggregator that fails closed when the dev-Supabase tenant-isolation
+      # suite is red. Runs under GitHub Actions (integration_id 15368), so bot
+      # PRs satisfy it via the synthetic check-run posted by
+      # bot-pr-with-synthetic-checks (CHECK_NAMES) — same as the other 15368
+      # checks. Unlike them, the heavy suite is path-gated (detect-changes), so
+      # this is the first conditionally-skipped-but-required check. See ADR-032.
+      required_check {
+        context        = "tenant-integration-required"
         integration_id = var.actions_integration_id
       }
     }

@@ -79,6 +79,33 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
      tick). Cost: a rotated-away IP stays allowlisted up to one window (~1min →
      ~24h), a bounded extension of the accepted CDN shared-IP residual. Runbook:
      `cron-egress-blocked.md` §"LB-rotation IP-coverage gap".
+   - **Amendment (2026-06-29, intended drops are expected; recovery criterion is
+     per-host, not DST-IP — #5676).** Some `egress-blocked` drops are deliberate
+     and permanent: bare `npx` (cron-ux-audit's Playwright MCP) performs a
+     spawn-time registry-metadata dial to `registry.npmjs.org` that the firewall
+     CORRECTLY drops, because #5199 keeps `registry.npmjs.org` OFF the allowlist
+     so `@playwright/mcp` resolves to the image-baked dep instead of a runtime
+     supply-chain fetch. These drops are the control working as designed, NOT an
+     allowlist gap. Two consequences are pinned here:
+     1. **Recovery/health criteria exclude intended drops and are expressed
+        PER-IDENTIFIED-HOST, never as a raw `egress-blocked` DST-IP/range
+        threshold.** A "104.x hits → zero" criterion is unsatisfiable because the
+        single `op=egress_blocked` issue conflates intended npm probes with
+        genuine gaps. Intended drops are silenced **at source**
+        (`npm_config_prefer_offline` on the cron-spawned npx, #5676), so npx uses
+        the baked `_cacache` and skips the dial when cache-warm — without
+        widening the allowlist.
+     2. **Emitter-level DST-IP/range suppression of intended drops is REJECTED**
+        (this constrains the §5 fail-loud emitter, not the §4 resolver under which
+        this amendment is nested — recorded here to keep the intended-drop decision
+        in one block). `registry.npmjs.org` rides Cloudflare's shared anycast `104.16.0.0/13`;
+        any IP/range exclusion that muted the npm drop would simultaneously mask a
+        genuine future allowlist gap to ANOTHER Cloudflare-fronted host — i.e. it
+        would self-blind exactly the Branch-A gap class this firewall exists to
+        catch. Intended drops are therefore removed by silencing the dialer, never
+        by filtering the detector. Do NOT allowlist `registry.npmjs.org` (reverses
+        #5199) and do NOT add a provider CIDR (reverses the 2026-06-16 amendment's
+        no-wholesale-CIDR boundary).
 5. **Fail-loud, three channels:** kernel drops — BOTH `egress-blocked:` and
    `egress-dns-exfil:` prefixes — are counted each tick and posted as a
    Sentry error event (`feature=cron-egress-firewall`, `op=egress_blocked` →
