@@ -834,6 +834,11 @@ test.describe("widenable KB rail — desktop", () => {
     await expect(toggle).toHaveAccessibleName("Collapse sidebar");
     await expect(toggle.locator("svg")).not.toHaveClass(/rotate-180/);
 
+    // The collapse toggle's onClick attaches at hydration; settle before the
+    // first click so it is not a no-op (mirrors the sibling double-click and
+    // mobile-drawer tests). See e2e trap #2 (hydration-before-interaction) in
+    // knowledge-base/project/learnings/ui-bugs/2026-06-03-dynamic-width-needs-css-var-not-tailwind-arbitrary-or-usemediaquery.md
+    await page.waitForTimeout(1500);
     await toggle.click();
 
     // Collapsed: rail is the 56px icon rail, the toggle now reads "Expand
