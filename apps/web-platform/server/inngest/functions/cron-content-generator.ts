@@ -22,6 +22,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  finalizeOutputAwareHeartbeat,
+  DeployInProgressError,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -179,6 +181,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronContentGeneratorHandler({
   step,
   logger,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
   // this cron needs per-construct Bash-allowlist refinement or non-GitHub
@@ -224,6 +228,8 @@ export async function cronContentGeneratorHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
+    // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare, no heartbeat.
+    if (err instanceof DeployInProgressError) throw err;
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
     const redacted = new Error(redactedMsg);
@@ -241,117 +247,163 @@ export async function cronContentGeneratorHandler({
   }
 
   try {
-    // --- Step 3: claude-eval (55-min AbortController) ---
-    const spawnResult = await step.run(
-      "claude-eval",
-      async (): Promise<SpawnResult> => {
-        return spawnClaudeEval({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          flags: CLAUDE_CODE_FLAGS,
-          prompt: CONTENT_GENERATOR_PROMPT,
-          maxTurnDurationMs: MAX_TURN_DURATION_MS,
-          cronName: "cron-content-generator",
-          buildSpawnEnv,
-          logger,
-        });
-      },
-    );
-
-    if (spawnResult.abortedByTimeout) {
-      reportSilentFallback(
-        new Error(
-          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-        ),
-        {
-          feature: "cron-content-generator",
-          op: "claude-eval-timeout",
-          message: "claude-eval aborted by AbortController",
-          extra: {
-            fn: "cron-content-generator",
-            durationMs: spawnResult.durationMs,
-            maxMs: MAX_TURN_DURATION_MS,
-          },
+    // #5728 — flag pattern. The body (claude-eval → verify-output →
+    // safe-commit-pr) runs in an inner try whose throw sets `threw`; the single
+    // terminal heartbeat is posted (or skipped-for-retry) by
+    // finalizeOutputAwareHeartbeat below — NOT from a second catch-site (which,
+    // under retries:1 memoization, would replay a stale `ok` while posting a
+    // conflicting `error`). A throw before the heartbeat previously propagated
+    // out → the heartbeat step never ran → silent `missed`. spawnResult is
+    // hoisted so the silence-hole audit issue can read it even when a later step
+    // threw.
+    let heartbeatOk = false;
+    let threw = false;
+    let spawnResult: SpawnResult | null = null;
+    try {
+      // --- Step 3: claude-eval (55-min AbortController) ---
+      spawnResult = await step.run(
+        "claude-eval",
+        async (): Promise<SpawnResult> => {
+          return spawnClaudeEval({
+            spawnCwd: spawnCwd!,
+            installationToken,
+            flags: CLAUDE_CODE_FLAGS,
+            prompt: CONTENT_GENERATOR_PROMPT,
+            maxTurnDurationMs: MAX_TURN_DURATION_MS,
+            cronName: "cron-content-generator",
+            buildSpawnEnv,
+            logger,
+          });
         },
       );
-    }
 
-    // --- Step 4: output-aware heartbeat. The prompt's STEP 6 always
-    //     creates a `scheduled-content-generator` audit issue (even on the
-    //     no-topic / FAIL-citation early exits); a clean run that produced none
-    //     turns the monitor RED instead of false-green. ---
-    const heartbeatOk = await step.run("verify-output", async () =>
-      resolveOutputAwareOk({
-        spawnOk: spawnResult.ok,
-        label: SENTRY_MONITOR_SLUG,
-        runStartedAt,
-        cronName: "cron-content-generator",
-        stderrTail: spawnResult.stderrTail,
-        exitCode: spawnResult.exitCode,
-        stdoutTail: spawnResult.stdoutTail,
-      }),
-    );
-    // --- Step 4.5: deterministic persistence (#5091). Gated on the
-    //     issue-verified output (NOT the spawn exit code) and on
-    //     !abortedByTimeout — see cron-seo-aeo-audit.ts for the full
-    //     rationale. Guard aborts / persistence failures self-report inside
-    //     the helper (Sentry + issue comment).
-    if (heartbeatOk && !spawnResult.abortedByTimeout) {
-      await step.run("safe-commit-pr", async () =>
-        safeCommitAndPr({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          cronName: "cron-content-generator",
-          commitMessage: "feat(content): auto-generate article",
-          allowedPaths: CONTENT_GENERATOR_ALLOWED_PATHS,
+      if (spawnResult.abortedByTimeout) {
+        reportSilentFallback(
+          new Error(
+            `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
+          ),
+          {
+            feature: "cron-content-generator",
+            op: "claude-eval-timeout",
+            message: "claude-eval aborted by AbortController",
+            extra: {
+              fn: "cron-content-generator",
+              durationMs: spawnResult.durationMs,
+              maxMs: MAX_TURN_DURATION_MS,
+            },
+          },
+        );
+      }
+
+      // --- Step 4: output-aware heartbeat. The prompt's STEP 6 always
+      //     creates a `scheduled-content-generator` audit issue (even on the
+      //     no-topic / FAIL-citation early exits); a clean run that produced none
+      //     turns the monitor RED instead of false-green. ---
+      heartbeatOk = await step.run("verify-output", async () =>
+        resolveOutputAwareOk({
+          spawnOk: spawnResult!.ok,
+          label: SENTRY_MONITOR_SLUG,
           runStartedAt,
-          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
-          logger,
+          cronName: "cron-content-generator",
+          stderrTail: spawnResult!.stderrTail,
+          exitCode: spawnResult!.exitCode,
+          stdoutTail: spawnResult!.stdoutTail,
         }),
       );
-    }
-    await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-content-generator", logger });
-    });
-
-    // --- Step 5: silence-hole fallback (#4960). When the output-aware check
-    //     found NO scheduled-content-generator issue in the run window, the
-    //     prompt's STEP 6 never ran (mid-eval crash / API 500 / max-turns kill).
-    //     Self-report a FAILED audit issue so the run is never silent. Wrapped
-    //     so a fallback-create failure (e.g. GitHub 5xx) cannot crash the
-    //     finally/teardown — reported to Sentry instead; the watchdog still
-    //     catches the absence after threshold (defense-in-depth).
-    //
-    //     Two coupling residuals, both intentionally absorbed:
-    //     (a) resolveOutputAwareOk returns `spawnOk` when its verify-list THREW
-    //         (transient GitHub 5xx). So a verify-throw + spawn-ok run skips this
-    //         fallback even if the issue is genuinely absent — covered by the
-    //         watchdog's maxGapDays threshold, not this step.
-    //     (b) On a verify-throw + spawn-nonzero run the gate fires even though
-    //         the prompt's issue may exist; ensureScheduledAuditIssue's own
-    //         same-title dedup is what prevents a spurious second issue — so
-    //         keep that dedup robust (it is load-bearing, not belt-and-suspenders). ---
-    if (!heartbeatOk) {
-      await step.run("ensure-audit-issue", async () => {
-        try {
-          await ensureScheduledAuditIssue({
-            label: SENTRY_MONITOR_SLUG,
-            titlePrefix: "[Scheduled] Content Generator -",
-            cronName: "cron-content-generator",
-            runStartedAt,
-            spawnResult,
+      // --- Step 4.5: deterministic persistence (#5091). Gated on the
+      //     issue-verified output (NOT the spawn exit code) and on
+      //     !abortedByTimeout — see cron-seo-aeo-audit.ts for the full
+      //     rationale. Guard aborts / persistence failures self-report inside
+      //     the helper (Sentry + issue comment).
+      if (heartbeatOk && !spawnResult.abortedByTimeout) {
+        await step.run("safe-commit-pr", async () =>
+          safeCommitAndPr({
+            spawnCwd: spawnCwd!,
             installationToken,
-          });
-        } catch (err) {
-          reportSilentFallback(err, {
-            feature: "cron-content-generator",
-            op: "ensure-audit-issue-failed",
-            message:
-              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
-            extra: { fn: "cron-content-generator", runStartedAt },
-          });
-        }
+            cronName: "cron-content-generator",
+            commitMessage: "feat(content): auto-generate article",
+            allowedPaths: CONTENT_GENERATOR_ALLOWED_PATHS,
+            runStartedAt,
+            scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+            logger,
+          }),
+        );
+      }
+    } catch (err) {
+      // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare, no
+      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // finalizeOutputAwareHeartbeat decides error-vs-retry below.
+      if (err instanceof DeployInProgressError) throw err;
+      threw = true;
+      const e = err as Error;
+      const redactedMsg = redactToken(e.message ?? "", installationToken);
+      const redacted = new Error(redactedMsg);
+      redacted.name = e.name;
+      reportSilentFallback(redacted, {
+        feature: "cron-content-generator",
+        op: "handler-body-threw",
+        message:
+          "cron-content-generator body threw before the terminal heartbeat",
+        extra: {
+          fn: "cron-content-generator",
+          attempt: attempt ?? 0,
+          producedOutput: heartbeatOk,
+        },
       });
+    }
+
+    // --- Single authoritative terminal heartbeat (memoization-safe,
+    //     final-attempt gated). On a genuine non-final failure the helper skips
+    //     the whole heartbeat step and returns retry:true (we rethrow to trigger
+    //     the Inngest retry, filing NO premature FAILED issue). On the post path,
+    //     the Step-5 silence-hole fallback (#4960/#4978) files a FAILED audit
+    //     issue when red, ordered BEFORE the heartbeat so the heartbeat stays the
+    //     genuine last step. ---
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      step,
+      heartbeatOk,
+      threw,
+      attempt,
+      maxAttempts,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-content-generator",
+      logger,
+      onBeforeHeartbeat: heartbeatOk
+        ? undefined
+        : async () => {
+            await step.run("ensure-audit-issue", async () => {
+              try {
+                await ensureScheduledAuditIssue({
+                  label: SENTRY_MONITOR_SLUG,
+                  titlePrefix: "[Scheduled] Content Generator -",
+                  cronName: "cron-content-generator",
+                  runStartedAt,
+                  spawnResult: spawnResult ?? {
+                    exitCode: -1,
+                    signal: null,
+                    abortedByTimeout: false,
+                    durationMs: 0,
+                    stdoutTail: "",
+                    stderrTail: "cron-content-generator threw before claude-eval completed",
+                  },
+                  installationToken,
+                });
+              } catch (err) {
+                reportSilentFallback(err, {
+                  feature: "cron-content-generator",
+                  op: "ensure-audit-issue-failed",
+                  message:
+                    "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+                  extra: { fn: "cron-content-generator", runStartedAt },
+                });
+              }
+            });
+          },
+    });
+    if (retry) {
+      throw new Error(
+        "cron-content-generator failed on a non-final attempt; retrying",
+      );
     }
 
     return { ok: heartbeatOk };

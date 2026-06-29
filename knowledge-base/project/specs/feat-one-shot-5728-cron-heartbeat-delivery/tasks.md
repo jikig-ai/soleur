@@ -12,15 +12,15 @@ load-bearing vs. defense-in-depth. **Do NOT introduce an `in_progress` two-phase
 (ADR-033 I8 rejected; learning `2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md`).
 
 ## Phase 0 — Evidence-gather & discriminate (NO code)
-- [ ] 0.1 Query `routine_runs` for `cron-community-monitor` 2026-06-13→06-21 (read-only SQL /
+- [x] 0.1 Query (DONE — routine_runs via Doppler pooler: ZERO terminal rows 06-16→06-21 = SIGKILL signature; 06-22+ ~300ms fast-fail) `routine_runs` for `cron-community-monitor` 2026-06-13→06-21 (read-only SQL /
   Supabase MCP): per-day AND per-attempt `start_lag`, `duration_ms`, `status`, null-`ended_at`
   (SIGKILL signature), `error_summary`, `trigger_source`, `run_id`. Join dual-issue days on Inngest
   run-group/attempt index (retry-after-kill vs. manual).
-- [ ] 0.2 Pull Better Stack stdout tail (`scripts/betterstack-query.sh` under `doppler run -p soleur
+- [x] 0.2 Pull Better (DONE — retention-blocked: ~1h hot window; incident window aged out) Stack stdout tail (`scripts/betterstack-query.sh` under `doppler run -p soleur
   -c prd_terraform`; query creds in `prd_terraform`, see `runbooks/betterstack-log-query.md`) for
   `fn: 'cron-community-monitor'` — SIGKILL/container-swap markers, `cron-sentry-heartbeat/fetch`
   swallowed-POST warning, last `sentry-heartbeat` log line per run.
-- [ ] 0.3 Pull Sentry checkins timeline (`GET …/monitors/scheduled-community-monitor/checkins/`) +
+- [x] 0.3 Pull Sentry (DONE — checkins confirm last-ok 06-12, missed 06-13→06-21, error 06-22+; issues endpoint 403 no event:read but routine_runs refutes H3) checkins timeline (`GET …/monitors/scheduled-community-monitor/checkins/`) +
   `feature:cron-sentry-heartbeat op:fetch` events (H3 signal).
 - [x] 0.4 WebFetch the Sentry Crons HTTP check-in ingest docs; confirm `?status=` shape/enum, the
   missed/timed-out state machine, repeated-POST idempotency. Pin `<!-- verified: 2026-06-29 source: … -->`.
@@ -49,13 +49,13 @@ load-bearing vs. defense-in-depth. **Do NOT introduce an `in_progress` two-phase
   green; exclude `DeployInProgressError`; **fix the existing first catch (`:332-347`)** to rethrow
   `DeployInProgressError` with no heartbeat.
 - [x] 2.4 (GREEN) tests pass.
-- [ ] 2.5 Cohort rollout — grep each output-aware producer's step order; adopt the shared wrapper
+- [x] 2.5 Cohort rollout — grep each output-aware producer's step order; adopt the shared wrapper
   only where the single-last-heartbeat invariant holds; preserve `resolveBestEffortEvalOk` carve-out.
 
 ## Phase 3 — IaC + runbook
-- [x] 3.1 (NO margin change — Phase 0 verdict H2-dominant; H1/H4 only plausible on blind days)
-  -- 3.1-orig (iff H1/H4 confirmed) re-size `scheduled_community_monitor.checkin_margin_minutes` in
-  `cron-monitors.tf` against retry-chain + shared-slot wall-clock (NOT single-run; NEVER in_progress).
+- [x] 3.1 NO margin change — Phase 0 verdict H2(SIGKILL)-dominant; H1/H4 only plausible on
+  routine_runs-blind days. Per plan "H2/H3 only → leave margin at 60, no TF diff."
+  `cron-monitors.tf` untouched.
 - [x] 3.2 Add runbook H11 (missed-vs-error on a digest-producing claude-eval cron; Phase-0 recipe;
   cross-link H10).
 
