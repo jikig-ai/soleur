@@ -88,7 +88,19 @@ natural inter-arrival gap cannot *confirm* removal):
   under strict mode it would post a zero-screenshot exit-0 GREEN liveness
   check-in — the runtime Sentry Crons monitor is liveness-only and cannot catch
   it. The guard is therefore entirely **pre-merge** (Spike B + the
-  `cron-ux-audit.ts` `--mcp-config` parity test), never a runtime monitor.
+  `cron-ux-audit.ts` `--mcp-config` parity test), never a runtime monitor. A
+  runtime zero-screenshot backstop was reviewer-proposed and tracked as a
+  follow-up (#5711) — it requires restructuring the findings-upload path, so it
+  was out of scope for the egress chore.
+- **Importing an inngest-function module in a test pulls the client's load-time
+  env guard.** `@/server/inngest/client` throws at module load if
+  `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are unset (client.ts:31-37). A test
+  that imports a cron module for one exported const (e.g. `CLAUDE_CODE_FLAGS`)
+  drags that guard in. Stub the two keys via `vi.hoisted(() => { process.env.X
+  ||= "…" })` (runs before the static imports), `||=` so a real Doppler value on
+  the webplat shard is never clobbered. The prod-only `INNGEST_DEV` guard is
+  skipped under `NODE_ENV=test`. (Same class as the "extracting a helper pulls a
+  heavy static graph" trap.)
 
 ## Durable guard
 
@@ -97,4 +109,34 @@ A structural drift invariant (`cron-claude-eval-mcp-flags.test.ts`) asserts
 crons — a NEW inline claude-spawner trips it, forcing the author to route through
 `spawnClaudeEval` (auto-inherits the flag+env) or carry the flag+env explicitly.
 The real fix (migrating the 2 inline crons onto the chokepoint) is filed as a
-follow-up.
+follow-up (#5711).
+
+## Session Errors
+
+- **`--allowedTools` is variadic and consumed the positional prompt** in the
+  Spike A invocation (`claude --print --allowedTools Skill "prompt"` → `Input
+  must be provided…`). Recovery: add `--` before the prompt. **Prevention:**
+  always pass the end-of-options `--` marker before the positional prompt in
+  headless `claude` invocations (the crons' `CLAUDE_CODE_FLAGS` already do).
+- **`--debug` emits nothing in `--print` mode** — the first spike "passed" but
+  captured only the response text, no MCP-connection lines, making the
+  zero-connect claim unprovable. Recovery: switched to `--debug-file <path>`.
+  **Prevention:** use `--debug-file` (not `--debug`) whenever the assertion is
+  on the debug trace contents.
+- **Trusted a backgrounded `tsc`'s "exit 0" notification** — the bg-task
+  completion exit was the trailing `echo`'s, not tsc's, so a latent TS2741 in
+  the new test went undetected until a foreground tsc caught it. **Prevention:**
+  this is already an AGENTS rule (#5512 class) — for `<cmd> > log; echo EXIT=$?`,
+  the notification reports the echo's exit; always read/grep the log for the
+  runner's own summary before trusting a background pass. (Rule already exists; I
+  violated it — reinforce, no new rule.)
+- **Importing an inngest-function module tripped the client's load-time env
+  guard** (`INNGEST_SIGNING_KEY missing at startup`). Recovery + **Prevention:**
+  `vi.hoisted` env stub (see Gotchas above).
+- **CWD drift → `vitest` exit 127** (`no such file`); the Bash tool's CWD had
+  drifted. **Prevention:** already covered — chain `cd <abs-path> && <cmd>` in
+  one Bash call for all test/build commands from a worktree.
+- One-offs (note only, no recurrence vector): scratchpad dir absent on first
+  redirect (fixed with `mkdir -p`); a 120s spike timeout under contention
+  (re-ran at 200s); 3 review agents transiently server-rate-limited (the review
+  skill's rate-limit fallback already handles partial coverage).
