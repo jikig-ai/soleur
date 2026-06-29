@@ -336,18 +336,18 @@ Append an amendment to `knowledge-base/engineering/architecture/decisions/ADR-04
 ## ✅ Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] AC1: `workspace-reconcile-on-push.ts` readiness gate calls `isValidGitWorkTree(workspacePath)`,
+- [x] AC1: `workspace-reconcile-on-push.ts` readiness gate calls `isValidGitWorkTree(workspacePath)`,
   not `workspaceDirExists`. `git grep -n "workspaceDirExists" apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts`
   returns **zero** matches (helper removed).
-- [ ] AC2: The INVALID/ABSENT branch calls `ensureWorkspaceRepoCloned({ userId, workspacePath, installationId, repoUrl })`
+- [x] AC2: The INVALID/ABSENT branch calls `ensureWorkspaceRepoCloned({ userId, workspacePath, installationId, repoUrl })`
   with `userId = ownerId ?? ws.id`, `repoUrl = targetRepoUrl`, `installationId` from the event.
-- [ ] AC3: `recovered` is computed as `outcome === "ok" && isValidGitWorkTree(workspacePath)` (invariant
+- [x] AC3: `recovered` is computed as `outcome === "ok" && isValidGitWorkTree(workspacePath)` (invariant
   re-probe, not the `"ok"` proxy). The honest-block / clone-fail / benign-non-heal cases all yield
   `recovered:false`.
-- [ ] AC4: A VALID `.git` still takes the existing `syncWorkspace` pull/reset path — `syncWorkspace`
+- [x] AC4: A VALID `.git` still takes the existing `syncWorkspace` pull/reset path — `syncWorkspace`
   is **not** called on the reclone branch, and `ensureWorkspaceRepoCloned` is **not** called on the
   valid branch (asserted by tests 1 & 2).
-- [ ] AC5: `Sentry.addBreadcrumb` fires with `category: "workspace-reconcile-push"`, message/op
+- [x] AC5: `Sentry.addBreadcrumb` fires with `category: "workspace-reconcile-push"`, message/op
   `corrupt-worktree-reclone`, and `data.recovered` ∈ {true,false}. **NOTE (observability-review P1):** the
   breadcrumb is best-effort *transaction-trace context*, NOT a standalone queryable signal — a breadcrumb
   is only transmitted when a `captureException`/`captureMessage` fires on the same Sentry scope, and the
@@ -356,12 +356,12 @@ Append an amendment to `knowledge-base/engineering/architecture/decisions/ADR-04
   (Better Stack); failure → the inner `reportSilentFallback` events (`feature=ensure-workspace-repo`) +
   `kb_sync_history error_class=workspace_not_ready`. Keep the breadcrumb (task-mandated, attaches to any
   same-scope event) but do NOT rely on it as the primary verification path.
-- [ ] AC6: No new `reportSilentFallback`/`captureException` page is added at the reconcile call site
+- [x] AC6: No new `reportSilentFallback`/`captureException` page is added at the reconcile call site
   (the genuine-failure mirrors already live inside `ensureWorkspaceRepoCloned`); the reconcile layer
   adds only a breadcrumb — no double-report.
-- [ ] AC7: All five test cases (Phase 2) pass; the new tests fail against the pre-fix handler (RED first).
-- [ ] AC8: `tsc --noEmit` clean in `apps/web-platform`; the unused `node:fs` import is removed iff Phase 0.1 confirms it.
-- [ ] AC9: ADR-044 amendment (Phase 3) committed in this PR; the C4 read-and-confirm task (see
+- [x] AC7: All five test cases (Phase 2) pass; the new tests fail against the pre-fix handler (RED first).
+- [x] AC8: `tsc --noEmit` clean in `apps/web-platform`; the unused `node:fs` import is removed iff Phase 0.1 confirms it.
+- [x] AC9: ADR-044 amendment (Phase 3) committed in this PR; the C4 read-and-confirm task (see
   `## Architecture Decision`) is recorded.
 - [ ] AC10: PR body uses `Closes #` only if a tracking issue for THIS bug exists; reference #5591 with
   `Ref #5591` (do NOT `Closes #5591` — it is the separate, deeper investigation). Do **not** cite #4826.
