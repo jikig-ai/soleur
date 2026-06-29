@@ -56,14 +56,25 @@ There is no guard at the connect boundary — the duplicate is created, then fai
 - **FR1** In `apps/web-platform/app/api/repo/setup/route.ts`, before the `:202-215` cloning-flip
   write, call `resolveSoloFounderForInstallation(installationId, repoUrl, serviceClient)` (the route
   already holds `serviceClient`; `repoUrl` is normalized at `:106`).
-- **FR2** Branch: `none` → proceed; `found && founderId == activeWorkspaceId` → proceed (re-connect);
-  `found && founderId == user.id && that workspace ready` → **switch** (`existingWorkspaceId = founderId`);
-  `found && founderId == user.id && not ready` → **decline**; `found && founderId != user.id` →
-  **decline**; `ambiguous`/`db-error` → **decline** + `reportSilentFallback`.
+- **FR2** Branch (evaluate `founderId == activeWorkspaceId` **before** `founderId == user.id` —
+  load-bearing: a solo reconnecting from its own active solo has `activeWorkspaceId == user.id ==
+  founderId` and must proceed, not switch): `none` → proceed; `found && founderId == activeWorkspaceId`
+  → proceed (re-connect); `found && founderId == user.id && that workspace ready` → **switch**
+  (`existingWorkspaceId = founderId`); `found && founderId == user.id && not ready` → **decline**;
+  `found && founderId != user.id` → **decline**; `ambiguous`/`db-error` → **decline** +
+  `reportSilentFallback`. The two `founderId == user.id` arms require an **explicit additional read**
+  `serviceClient.from("workspaces").select("repo_status").eq("id", founderId)` — the resolver returns
+  only `{kind, founderId}`, NOT `repo_status` (reuse the `active-repo/route.ts:67` shape).
+- **FR2a** The branch logic lives in a standalone, unit-testable module
+  `apps/web-platform/server/repo-connect-guard.ts` (injected service client), keeping
+  `setup/route.ts` HTTP-only (`cq-nextjs-route-files-http-only-exports`).
 - **FR3** Switch outcome drives the "switch to that workspace" UI (STATE 1) via the existing
-  `set_current_workspace_id(existingWorkspaceId)`; after success redirect to that workspace's
-  dashboard; on failure (membership revoked / workspace deleted between read and click) fall back to
-  the generic decline + refresh.
+  `set_current_workspace_id(existingWorkspaceId)`. **The `current_workspace_id` JWT claim is minted
+  at token refresh (ADR-044 Decision.3)** — call the RPC **server-side** (mirroring
+  `accept-invite/route.ts:78` / `active-repo/route.ts:59`), or if browser-side, call
+  `supabase.auth.refreshSession()` **before** redirecting; redirecting without the refresh lands the
+  user on the old workspace. On failure (membership revoked / workspace deleted between read and
+  click) fall back to the generic decline + refresh.
 - **FR4** Decline outcome returns a **fixed** `{status:409, body:{error:"This repository can't be
   connected."}}` (named baseline) — no workspace/user reference, identical regardless of whether a
   different-user owner exists. UI STATE 2 shows it plus a non-disclosing CTA: "If you should have
@@ -71,14 +82,27 @@ There is no guard at the connect boundary — the duplicate is created, then fai
 - **FR5** Agent contract for the structured outcome: `{outcome: 'ok'|'switch'|'decline', code,
   existingWorkspaceId, canRequestJoin: false}` (`code`/`canRequestJoin` forward-compatible for the
   deferred join path); switch mirrors the existing `workspace_switch_required` shape. Never a bare 404.
+  **`existingWorkspaceId` MUST be set only in the `switch` arm** (`founderId == user.id`); it is
+  `null`/absent on every `decline` sub-case. On a `founderId != user.id` decline, `founderId` is
+  another user's solo id (== their user UUID); populating `existingWorkspaceId` from it leaks the
+  victim's id (G3 / IDOR-class). This invariant holds in **both** the HTTP body and the structured
+  payload, and is asserted by a dedicated test (separate from the AC4 body-equality test).
 - **FR6** Detection query (TR1) runs at deploy; remaining duplicate-solo groups are surfaced to the
   operator with per-row detail for the keep-which intent decision. No automated remediation.
 
 ## Technical Requirements
 
-- **TR1** Detection query:
+- **TR1** Detection query (grouping by `lower(repo_url)` is coarser than the case-sensitive runtime
+  block → no false negatives, but over-reports benign case-variant groups; annotate those in the
+  output as "not incident-causing (NG4)"; emit ordered ids + per-row detail for the operator
+  keep-which call):
   ```sql
-  SELECT w.github_installation_id, lower(w.repo_url) AS repo, count(*), array_agg(w.id)
+  SELECT w.github_installation_id,
+         lower(w.repo_url) AS repo,
+         count(*),
+         array_agg(w.id ORDER BY w.created_at) AS workspace_ids,
+         array_agg(w.repo_url ORDER BY w.created_at) AS exact_repo_urls,  -- expose case variants
+         array_agg(w.created_at ORDER BY w.created_at) AS created_ats
   FROM workspaces w
   JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = w.id AND m.role='owner'
   WHERE w.github_installation_id IS NOT NULL AND w.repo_url IS NOT NULL
@@ -92,6 +116,11 @@ There is no guard at the connect boundary — the duplicate is created, then fai
 - **TR4** The check runs before the optimistic clone lock (`:213`) → no partial provisioning to roll
   back on a declined/switched connect. Same read on every path → no decline-only latency side channel.
 - **TR5** No new migration (no RPC, lock, GRANT, or `search_path`-pinned function).
+- **TR6** The switch-ready gate reads `repo_status` via a dedicated
+  `serviceClient.from("workspaces").select("repo_status").eq("id", founderId)` (the resolver does not
+  return it); this read occurs only on the caller's-own arms, so it adds no cross-user latency signal.
+- **TR7** Widening `FailedState.primaryCta.action` with `'switch'` + the new `existingWorkspaceId`
+  prop requires a `cq-union-widening-grep-three-patterns` sweep over every action-union consumer.
 
 ## Acceptance Criteria
 
@@ -102,8 +131,12 @@ There is no guard at the connect boundary — the duplicate is created, then fai
   and is `ready` → `{outcome:'switch', existingWorkspaceId == user.id}`.
 - **AC3** Caller's own solo owns the repo but `repo_status != 'ready'` → decline (no switch into a
   not-ready workspace).
-- **AC4** Decline returns the fixed `{409, body}`; assert identical shape regardless of owner
-  existence (no information disclosure / side channel).
+- **AC4** Decline returns the fixed `{409, body}`; assert the body is **byte-identical across the
+  decline sub-cases** (`founderId != user.id`, `ambiguous`, `db-error`) — NOT framed as
+  decline-vs-proceed equivalence (a free repo proceeds → 200; the proceed-vs-decline outcome is a
+  by-design, install-bounded existence oracle, owned by the deferred collaborator-gate). Separately
+  assert no decline sub-case serializes `founderId`/`existingWorkspaceId` in body or structured
+  payload (FR5 guardrail).
 - **AC5** Cross-install same `repo_url` → resolver `none` → proceed (ADR-044 fan-out preserved).
 - **AC6** Detection query returns the seeded duplicate set (synthesized fixtures; verified read-only
   against a prod snapshot). No remediation asserted.
