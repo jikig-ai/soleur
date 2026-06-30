@@ -85,6 +85,39 @@ Higher-ambiguity multi-path turn-boundary surgery (needs care + full-suite sweep
 9. SIGTERM release in `index.ts` + test.
 10. Clone wiring in `ensure-workspace-repo.ts` (gated, inert at flag-off) + test.
 
+## Implementation status (2026-07-01 — PR B part 1)
+
+The architecture fork below was **resolved by the CTO** and recorded as the
+ADR-068 amendment (`…lease-coordinator.md`, commit `e20a8ef79`): dedicated-remote
+replication-push, additive clone, **lease GATED behind `isGitDataStoreEnabled()`**
+(not live at replicas=1), in-sandbox `GIT_PUSH_OPTION_*` injection deferred to
+Phase 3. The remaining work was re-derived against that ruling, NOT the original
+integration-table push rows.
+
+Done (this branch — the complete lease-COORDINATION layer, gated + inert at
+flag-off, full-suite green):
+
+- [x] Step 1 — `receive.advertisePushOptions true` in `git-data-bootstrap.sh` (forward-compat).
+- [x] Step 2 — `host-identity.ts` resolver + DSAR boundary guard.
+- [x] Step 3 — held-lease registry (SIGTERM drain) + tests.
+- [x] Core — `acquireAndHoldWorktreeLease` session-lifetime handle (acquire + 25s heartbeat + idempotent release) + tests.
+- [x] Step 4 — `gitWithPrivateKeyAuth` private-net SSH transport + tests.
+- [x] Steps 7-9 — lease lifecycle wired into BOTH lineages (legacy `agent-runner`, cc `cc-dispatcher`) + SIGTERM drain in `index.ts`, all gated.
+
+Split to PR B part 2 (the git-data replication TRANSPORT — NOT a call-site edit):
+
+- [ ] Step 10 — dedicated-remote replication push (session-end `git push git-data
+      --push-option=lease-gen=<N>` via `gitWithPrivateKeyAuth`) + additive clone
+      remote. **BLOCKER (architecture, route to CTO):** the bare target repo must
+      exist on the git-data host before the first push, but the transport user is
+      `git-shell`-restricted (forced-command authorized_keys permits only
+      `git-receive-pack`/`upload-pack`, never `git init --bare`). HOW the per-
+      workspace bare repo is provisioned (server-side hook on first connect, a
+      provisioning RPC, or relaxing the forced command) is an unresolved
+      engineering decision the ADR did not settle. The ADR also defers live
+      git-data exercise to Phase 3. Tracked as a follow-up; needs a CTO ruling on
+      provisioning before implementation.
+
 ## ARCHITECTURE FORK — route to CTO BEFORE implementing the push path
 
 The deep trace surfaced a structural gap the parent plan did not resolve, and it
