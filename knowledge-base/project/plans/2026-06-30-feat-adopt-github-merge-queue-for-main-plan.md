@@ -111,7 +111,7 @@ strengthened.
 
 ### Phase 0 — Preconditions (verify at /work, before any edit)
 
-- [ ] `cd infra/github && terraform init -backend=false` then confirm the
+- [x] `cd infra/github && terraform init -backend=false` then confirm the
   `merge_queue` block schema on the **locked** provider:
   `terraform providers schema -json` (clean dir without backend) →
   `rules.merge_queue` present. (Already probed at plan time on 6.12.1 — re-confirm
@@ -134,7 +134,7 @@ strengthened.
 
 ### Phase 1 (PR-2 content — written first, merged second) — Terraform `merge_queue` block
 
-- [ ] Add a `merge_queue { ... }` block inside `rules { ... }` in
+- [x] Add a `merge_queue { ... }` block inside `rules { ... }` in
   `infra/github/ruleset-ci-required.tf` (sibling to `required_status_checks`):
 
   ```hcl
@@ -170,12 +170,12 @@ strengthened.
   > the observed slowest required-check wall-clock (see the AC: `timeout >= 1.5x slowest
   > required check`). Confirm provider defaults with `terraform plan` at /work.
 
-- [ ] Run `terraform validate` against the block (config-phase schema validation
+- [x] Run `terraform validate` against the block (config-phase schema validation
   fires regardless of plan — per
   `2026-05-15-terraform-import-only-beta-provider-schema-validation.md`, validate the
   **values**, not just field presence: `merge_method`/`grouping_strategy` enums,
   numeric ranges).
-- [ ] Update the comment header in `ruleset-ci-required.tf` to note the
+- [x] Update the comment header in `ruleset-ci-required.tf` to note the
   `merge_queue` rule (the 16-required-check ABI comment block).
 
 ### Phase 2 (PR-1) — Add `merge_group:` triggers to all 7 contributing workflows
@@ -260,7 +260,7 @@ required context still posts. Files (each a `Files to Edit` entry):
   (`map(select(.type != "required_status_checks"))` re-emits the merge_queue rule). The
   canonical JSONs (`ci-required-ruleset-canonical-{required-status-checks,bypass-actors}.json`)
   assert only the status-checks array + bypass actors, neither of which changes.
-- [ ] **P1-3 (architecture review): `scripts/create-ci-required-ruleset.sh` is the ONE
+- [x] **P1-3 (architecture review): `scripts/create-ci-required-ruleset.sh` is the ONE
   remaining positional/clobber risk.** It is the documented disaster-recovery RESTORE
   path and does a full `POST` of a hardcoded skeleton containing ONLY a
   `required_status_checks` rule (`:73-92`) — if ever re-run after PR-2 applies, it
@@ -307,11 +307,11 @@ required context still posts. Files (each a `Files to Edit` entry):
 
 ### Phase 5 (PR-2) — ADR + runbook (deliverables, not follow-ups)
 
-- [ ] Amend `ADR-032-github-branch-protection-as-iac.md` with a merge-queue
+- [x] Amend `ADR-032-github-branch-protection-as-iac.md` with a merge-queue
   decision section (see Architecture Decision below). The "verify runs-on-every-PR
   before requiring a check" contract clause generalizes to "runs-on-every-
   `merge_group`"; record it.
-- [ ] Update `infra/github/README.md`: document the `merge_queue` block + chosen
+- [x] Update `infra/github/README.md`: document the `merge_queue` block + chosen
   params, the two-PR sequencing, the post-enablement canary verification, the
   kill-switch (remove the `merge_queue` block + re-apply reverts to pre-queue
   behavior), and admin-merge as queue-bypass-of-last-resort.
@@ -501,7 +501,7 @@ confirms; flip to "accepted" after the canary passes.
 
 ### Pre-merge (PR-2 — Terraform merge_queue block)
 
-- [ ] `cd infra/github && terraform validate` passes with the `merge_queue` block.
+- [x] `cd infra/github && terraform validate` passes with the `merge_queue` block.
 - [ ] `terraform plan` (via the apply workflow's doppler-tf-var invocation, or locally
   with creds) shows `Plan: 0 to add, 1 to change, 0 to destroy` and the change is an
   in-place `~ merge_queue` addition on `github_repository_ruleset.ci_required` (NOT a
@@ -512,7 +512,7 @@ confirms; flip to "accepted" after the canary passes.
 - [ ] `check_response_timeout_minutes` >= 1.5x the observed wall-clock p95 of the slowest
   required check on a `merge_group` build (architecture P2-3 — the magic-number-15 guard).
   If the slowest required check exceeds ~10 min, raise the timeout accordingly.
-- [ ] ADR-032 amended (status: adopting) and `infra/github/README.md` updated (incl. the
+- [x] ADR-032 amended (status: adopting) and `infra/github/README.md` updated (incl. the
   `create-ci-required-ruleset.sh` DR-sync note, P1-3).
 
 ### Post-merge (operator / CI canary — after PR-2 applies)
