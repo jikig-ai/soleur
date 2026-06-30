@@ -19,8 +19,14 @@ vi.mock("@/lib/supabase/service", async (importOriginal) => ({
 import {
   acquireAndHoldWorktreeLease,
   WORKTREE_LEASE_HEARTBEAT_MS,
+  MAX_CONSECUTIVE_TOUCH_MISSES,
   __test_only__,
 } from "@/server/worktree-write-lease";
+
+// Advance enough fake time for N heartbeat beats to fire + their touch promises
+// to settle.
+const beats = (n: number) =>
+  vi.advanceTimersByTimeAsync(WORKTREE_LEASE_HEARTBEAT_MS * n + 10);
 
 const rpcNames = () => rpc.mock.calls.map((c) => c[0]);
 
@@ -66,21 +72,43 @@ describe("acquireAndHoldWorktreeLease (#5274 PR B steps 7-9)", () => {
     expect(__test_only__.heldLeaseCount()).toBe(1);
   });
 
-  it("fires onLost exactly once, stops the heartbeat, and unregisters on a touch loss", async () => {
+  it(`fires onLost once after ${MAX_CONSECUTIVE_TOUCH_MISSES} consecutive misses, stops the heartbeat, and unregisters`, async () => {
     const onLost = vi.fn();
     await acquireAndHoldWorktreeLease("ws", "primary", "h1", onLost);
 
     touchResult.value = { data: 0, error: null }; // reclaimed by another host
-    await vi.advanceTimersByTimeAsync(WORKTREE_LEASE_HEARTBEAT_MS + 10);
 
+    // One miss short of the threshold: still held, no abort.
+    await beats(MAX_CONSECUTIVE_TOUCH_MISSES - 1);
+    expect(onLost).not.toHaveBeenCalled();
+    expect(__test_only__.heldLeaseCount()).toBe(1);
+
+    // The threshold-tripping miss: loss declared.
+    await beats(1);
     expect(onLost).toHaveBeenCalledTimes(1);
     expect(__test_only__.heldLeaseCount()).toBe(0);
 
-    // Heartbeat is stopped: further time advances issue no more touches.
+    // Heartbeat is stopped: further time issues no more touches.
     const touchesAfterLoss = rpcNames().filter((n) => n === "touch_worktree_lease").length;
-    await vi.advanceTimersByTimeAsync(WORKTREE_LEASE_HEARTBEAT_MS * 2);
+    await beats(2);
     expect(rpcNames().filter((n) => n === "touch_worktree_lease").length).toBe(touchesAfterLoss);
     expect(onLost).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates a transient touch miss followed by recovery (no spurious onLost)", async () => {
+    const onLost = vi.fn();
+    await acquireAndHoldWorktreeLease("ws", "primary", "h1", onLost);
+
+    // One failed beat (transient DB blip) then a good beat resets the counter.
+    touchResult.value = { data: 0, error: null };
+    await beats(1);
+    touchResult.value = { data: 1, error: null };
+    await beats(1);
+    // Even a long run of good beats afterward must not abort.
+    await beats(MAX_CONSECUTIVE_TOUCH_MISSES + 2);
+
+    expect(onLost).not.toHaveBeenCalled();
+    expect(__test_only__.heldLeaseCount()).toBe(1);
   });
 
   it("release() stops the heartbeat, unregisters, frees the row, and is idempotent", async () => {
@@ -102,7 +130,7 @@ describe("acquireAndHoldWorktreeLease (#5274 PR B steps 7-9)", () => {
     const handle = await acquireAndHoldWorktreeLease("ws", "primary", "h1", vi.fn());
 
     touchResult.value = { data: 0, error: null };
-    await vi.advanceTimersByTimeAsync(WORKTREE_LEASE_HEARTBEAT_MS + 10);
+    await beats(MAX_CONSECUTIVE_TOUCH_MISSES); // reach the loss threshold
 
     await handle!.release();
     expect(rpcNames().filter((n) => n === "release_worktree_lease").length).toBe(0);

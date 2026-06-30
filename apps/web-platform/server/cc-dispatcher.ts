@@ -2270,46 +2270,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     sessionId: null,
   };
 
-  // #5274 PR B — acquire the workspace write-lease for the Query lifetime
-  // (cc-soleur-go holds ONE Query across many turns, so the lease is held for
-  // the whole conversation). Stashed per-conversation, released in
-  // `handleCcCloseQuery` (fires from EVERY close path). GATED behind
-  // isGitDataStoreEnabled() (ADR-068 amendment): entirely inert at flag-off. A
-  // null acquire = another host holds it live → fail-closed throw (this host
-  // must not write). Heartbeat loss aborts the in-flight Query via `controller`.
-  if (isGitDataStoreEnabled()) {
-    const hostId = resolveHostId();
-    const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
-      activeWorkspaceId,
-      WORKTREE_ID_PRIMARY,
-      hostId,
-      () => {
-        reportSilentFallback(
-          new Error("worktree write-lease lost mid-session (reclaimed by another host)"),
-          {
-            feature: "worktree_lease",
-            op: "realSdkQueryFactory.heartbeat-lost",
-            extra: { userId: args.userId, workspaceId: activeWorkspaceId },
-          },
-        );
-        controller.abort(
-          new Error("Worktree write-lease lost (reclaimed by another host)"),
-        );
-      },
-    );
-    if (!worktreeLeaseHandle) {
-      reportSilentFallback(
-        new Error("worktree write-lease unavailable (held by another host)"),
-        {
-          feature: "worktree_lease",
-          op: "realSdkQueryFactory.acquire",
-          extra: { userId: args.userId, workspaceId: activeWorkspaceId },
-        },
-      );
-      throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
-    }
-    registerCcWorktreeLease(args.userId, args.conversationId, worktreeLeaseHandle);
-  }
+  // #5274 PR B — the worktree write-lease acquire is deliberately deferred to
+  // JUST BEFORE the Query is handed off (inside the `try` below, before
+  // `sdkQuery`), so a throw in the intervening setup (askpass write, ccDeps,
+  // buildAgentQueryOptions) cannot orphan a held lease whose only release path
+  // (`handleCcCloseQuery`) fires solely once the Query is registered in
+  // `activeQueries`. The catch releases it if `sdkQuery` itself throws. See the
+  // legacy lineage's same-function try/finally for the symmetric guarantee.
 
   // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` (above)
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
@@ -2466,6 +2433,49 @@ export const realSdkQueryFactory: QueryFactory = async (
     // throws on Tier 3 denylist short-names (3 Plausible tools — permanent,
     // shared service-token cross-tenant credentials). Promotion of non-denylist
     // tools is Phase 2 (#3722, blocked-by Stage 6 #2939).
+
+    // #5274 PR B — acquire the workspace write-lease for the Query lifetime
+    // (cc-soleur-go holds ONE Query across many turns). GATED behind
+    // isGitDataStoreEnabled() (ADR-068 amendment): entirely inert at flag-off. A
+    // null acquire = another host holds it live → fail-closed throw (this host
+    // must not write). Heartbeat loss aborts the in-flight Query via `controller`.
+    // Acquired LAST (after all setup) and inside this try so the catch releases
+    // it on an `sdkQuery` throw; released on every close path via
+    // `handleCcCloseQuery`.
+    if (isGitDataStoreEnabled()) {
+      const hostId = resolveHostId();
+      const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
+        activeWorkspaceId,
+        WORKTREE_ID_PRIMARY,
+        hostId,
+        () => {
+          reportSilentFallback(
+            new Error("worktree write-lease lost mid-session (reclaimed by another host)"),
+            {
+              feature: "worktree_lease",
+              op: "realSdkQueryFactory.heartbeat-lost",
+              extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+            },
+          );
+          controller.abort(
+            new Error("Worktree write-lease lost (reclaimed by another host)"),
+          );
+        },
+      );
+      if (!worktreeLeaseHandle) {
+        reportSilentFallback(
+          new Error("worktree write-lease unavailable (held by another host)"),
+          {
+            feature: "worktree_lease",
+            op: "realSdkQueryFactory.acquire",
+            extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+          },
+        );
+        throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
+      }
+      registerCcWorktreeLease(args.userId, args.conversationId, worktreeLeaseHandle);
+    }
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -2528,6 +2538,13 @@ export const realSdkQueryFactory: QueryFactory = async (
       }),
     });
   } catch (err) {
+    // #5274 PR B — release the write-lease if it was acquired just above before
+    // `sdkQuery` threw. Without this, the lease's only release path
+    // (`handleCcCloseQuery`, which fires once the Query is in `activeQueries`)
+    // never runs on a factory throw, and the 25s heartbeat would renew the lease
+    // indefinitely — wedging the workspace for every other host. No-op when the
+    // lease path is gated off or the acquire never registered.
+    await releaseCcWorktreeLease(args.userId, args.conversationId);
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).

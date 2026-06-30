@@ -252,6 +252,12 @@ export async function releaseAllHeldLeases(): Promise<void> {
  *  116). Mirrors the `touchSlot` ≤30s ping in ws-handler.ts:2946. */
 export const WORKTREE_LEASE_HEARTBEAT_MS = 25_000;
 
+/** Consecutive failed touches before declaring the lease lost. >1 so a single
+ *  transient Postgres error (which `touchWorktreeLease` maps to `false`, same as
+ *  a real reclaim) does not abort a valid session; 2 beats (~50s) stays well
+ *  inside the 120s expiry. */
+export const MAX_CONSECUTIVE_TOUCH_MISSES = 2;
+
 /** A held lease's lifetime handle: the fencing generation to present on the
  *  git-data push, and an idempotent release that stops the heartbeat + frees
  *  the row. */
@@ -265,11 +271,19 @@ export interface WorktreeLeaseHandle {
  * the SIGTERM drain and start a ≤25s heartbeat. Returns `null` when the lease is
  * held live by ANOTHER host — the caller LOST and MUST NOT write (fail-closed).
  *
- * On heartbeat loss (the row was reclaimed: host_id changed, gen bumped, or the
- * row vanished) the heartbeat stops, the registry entry is dropped, and `onLost`
- * fires exactly once — the caller aborts the in-flight write and fails loud.
- * `release()` is idempotent and is also suppressed once a loss is observed (the
- * row already belongs to the reclaimer; release_worktree_lease would no-op).
+ * On heartbeat loss the heartbeat stops, the registry entry is dropped, and
+ * `onLost` fires exactly once — the caller aborts the in-flight write and fails
+ * loud. `release()` is idempotent and is also suppressed once a loss is observed
+ * (the row already belongs to the reclaimer; release_worktree_lease would no-op).
+ *
+ * Loss requires `MAX_CONSECUTIVE_TOUCH_MISSES` CONSECUTIVE failed touches, not
+ * one: `touchWorktreeLease` maps a transient Postgres error to the same `false`
+ * as a real reclaim, and a single DB blip should not abort an otherwise-valid
+ * session. The 120s lease expiry affords ~4 missed 25s beats of slack, so two
+ * consecutive misses (~50s) still declares a genuine reclaim well inside expiry
+ * while tolerating one transient blip. A real reclaim returns `false` every
+ * beat, so it still trips; the git-data fence is the ultimate guard against a
+ * write by a host that has actually lost the row, so the slack cannot double-write.
  *
  * GATED: callers invoke this ONLY behind `isGitDataStoreEnabled()`. At
  * replicas=1 with the flag off the lease path is entirely inert (ADR-068
@@ -291,6 +305,7 @@ export async function acquireAndHoldWorktreeLease(
   // Settled on the FIRST of {release, observed-loss}; both transitions are
   // idempotent and mutually exclusive thereafter.
   let settled = false;
+  let consecutiveMisses = 0;
   const heartbeat = setInterval(() => {
     void touchWorktreeLease(
       workspaceId,
@@ -298,7 +313,12 @@ export async function acquireAndHoldWorktreeLease(
       hostId,
       leaseGeneration,
     ).then((held) => {
-      if (held || settled) return;
+      if (settled) return;
+      if (held) {
+        consecutiveMisses = 0; // a single good beat clears a transient blip
+        return;
+      }
+      if (++consecutiveMisses < MAX_CONSECUTIVE_TOUCH_MISSES) return;
       settled = true;
       clearInterval(heartbeat);
       unregisterHeldLease(workspaceId, worktreeId);
