@@ -20,6 +20,14 @@ export function useOnboarding() {
   // mirroring the pwa-banner pattern above.
   const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] =
     useState(true);
+  // feat-guided-tour (#5743): the onboarding-tour completion timestamp and the
+  // first-run-onboarding timestamp. Both null until the fetch resolves. The tour
+  // auto-starts only when tour_completed_at IS NULL AND onboarding_completed_at is
+  // set (i.e. the naming/first-run flow is done) — so the two overlays never stack.
+  const [tourCompletedAt, setTourCompletedAt] = useState<string | null>(null);
+  const [onboardingCompletedAt, setOnboardingCompletedAt] = useState<
+    string | null
+  >(null);
   const userIdRef = useRef<string | null>(null);
 
   /** Fire-and-forget update of a single field on the users table. */
@@ -51,7 +59,7 @@ export function useOnboarding() {
       supabase
         .from("users")
         .select(
-          "onboarding_completed_at, pwa_banner_dismissed_at, runtime_explainer_dismissed_at",
+          "onboarding_completed_at, pwa_banner_dismissed_at, runtime_explainer_dismissed_at, tour_completed_at",
         )
         .eq("id", user.id)
         .single()
@@ -60,10 +68,12 @@ export function useOnboarding() {
             console.error("[onboarding] fetch error:", error.message);
           } else if (data) {
             if (!data.onboarding_completed_at) setShowOnboarding(true);
+            setOnboardingCompletedAt(data.onboarding_completed_at ?? null);
             setPwaDismissed(!!data.pwa_banner_dismissed_at);
             setRuntimeExplainerDismissed(
               !!data.runtime_explainer_dismissed_at,
             );
+            setTourCompletedAt(data.tour_completed_at ?? null);
           }
           setOnboardingLoaded(true);
         });
@@ -99,6 +109,8 @@ export function useOnboarding() {
     showOnboarding,
     pwaDismissed,
     runtimeExplainerDismissed,
+    tourCompletedAt,
+    onboardingCompletedAt,
     completeOnboarding,
     dismissPwaBanner,
     dismissRuntimeExplainer,
