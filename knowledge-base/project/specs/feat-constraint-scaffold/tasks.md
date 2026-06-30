@@ -37,7 +37,7 @@ Naming gate / contract gate / pre-commit / multi-stack / transitive → deferred
 ## Phase 4 — Dogfood + ADR/C4 + catalog (Testing/Docs)
 
 - [ ] 4.1 Run the skill end-to-end on `apps/web-platform`; commit `.cjs` + baseline + runner + workflow; confirm green on HEAD via `--ignore-known` + positive control fires (M1).
-- [ ] 4.2 Author ADR-070 (short; cross-ref ADR-011; not off ADR-068); minimal C4 component + edge + view include (no count-string bump); run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
+- [ ] 4.2 Author ADR-071 (short; cross-ref ADR-011; not off ADR-068); minimal C4 component + edge + view include (no count-string bump); run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 - [ ] 4.3 `/soleur:release-docs` — plugin.json description + README skill count.
 
 ## Exit / verification

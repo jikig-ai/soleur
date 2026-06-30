@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-tests for the constraint-scaffold L1 import-boundary gate (ADR-070).
+# Self-tests for the constraint-scaffold L1 import-boundary gate (ADR-071).
 # Runs in the scripts shard (scripts/test-all.sh globs
 # plugins/soleur/skills/*/test/*.test.sh). Proves the gate is NOT vacuous:
 #

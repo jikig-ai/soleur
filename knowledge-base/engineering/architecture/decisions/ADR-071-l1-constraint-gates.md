@@ -1,11 +1,11 @@
 ---
-adr: ADR-070
+adr: ADR-071
 title: Layer 1 deterministic constraint gates for product code
 status: accepted
 date: 2026-06-30
 ---
 
-# ADR-070: Layer 1 deterministic constraint gates for product code
+# ADR-071: Layer 1 deterministic constraint gates for product code
 
 ## Context
 

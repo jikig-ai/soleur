@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generator-script coverage for constraint-scaffold.sh (ADR-070). Exercises the
+# Generator-script coverage for constraint-scaffold.sh (ADR-071). Exercises the
 # script's guard/exit-matrix paths against HERMETIC fixture repos — the real
 # apps/web-platform emitted files are never read or written. Each fixture is a
 # throwaway `git init` repo under a mktemp dir, targeted via the

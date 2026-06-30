@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Template <-> emission parity for the constraint-scaffold L1 gate (ADR-070).
+# Template <-> emission parity for the constraint-scaffold L1 gate (ADR-071).
 #
 # The dependency-cruiser config and the shared runner are emitted as
 # BYTE-IDENTICAL copies of the skill's templates; the CI workflow is a single

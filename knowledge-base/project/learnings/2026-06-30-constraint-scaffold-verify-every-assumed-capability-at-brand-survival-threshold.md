@@ -19,11 +19,11 @@ assumption is most expensive — each one was a silent-leak or founder-deadlock 
    dependency-cruiser rule `from "use client" → to server/`. dep-cruiser matches modules by
    **path** and cannot see the `"use client"` directive (it's a graph tool, not a content
    scanner); this codebase has no `.client.tsx` convention. The rule text was *un-buildable*.
-   Caught only at /work by a de-risk probe → routed to the CTO agent → **Option D** (ADR-070):
+   Caught only at /work by a de-risk probe → routed to the CTO agent → **Option D** (ADR-071):
    the `.cjs` config is executable CommonJS that computes the client `from.path` set at
    require-time (regex-escaped, **recomputed every run, never committed static** — a stale list
    is blind to a newly-added client file).
-2. **Recovery-handler assumption (P1).** ADR-070 + SKILL.md + every emitted artifact told a
+2. **Recovery-handler assumption (P1).** ADR-071 + SKILL.md + every emitted artifact told a
    stranded founder to comment `/soleur fix constraints`, calling it *"the existing /soleur
    comment-dispatch."* **No such `issue_comment` handler exists** in the repo (only
    `cla.yml`/`cla-evidence.yml`). The named brand-survival mitigation was fictional. Caught at
@@ -69,7 +69,7 @@ plan-time review.
 Mechanism corollary (reusable): to enforce a **content-determined** boundary (`"use client"`,
 directive-keyed, no naming convention) with a **path-based** graph linter, compute the content
 set inside the linter's executable config at evaluation time — recomputed every run, never
-persisted. (ADR-070, CTO Option D.)
+persisted. (ADR-071, CTO Option D.)
 
 ## Session Errors
 
@@ -86,4 +86,4 @@ persisted. (ADR-070, CTO Option D.)
 ## Tags
 category: workflow-patterns
 module: constraint-scaffold, review, plan
-related: ADR-070, hr-verify-repo-capability-claim-before-assert, #5765, #5791
+related: ADR-071, hr-verify-repo-capability-claim-before-assert, #5765, #5791

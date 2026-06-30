@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # constraint-scaffold — deterministic generator for the Layer-1 client->server-secret
-# import-boundary gate (ADR-070, Option D). Emits a dependency-cruiser config, a
+# import-boundary gate (ADR-071, Option D). Emits a dependency-cruiser config, a
 # shared runner, and a CI workflow into the target Next.js app, and captures the
 # known-violations baseline. v1 target = apps/web-platform (Next.js-only).
 #

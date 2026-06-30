@@ -10,10 +10,10 @@ codebase: a [dependency-cruiser](https://github.com/sverweij/dependency-cruiser)
 gate** that fails closed when a `"use client"` module takes a **value** (non-`type-only`) import on
 the server-only tree (`server/**`) — i.e. a server secret leaking into the browser bundle. The gate
 runs in CI and rejects the violation *before* the LLM-judged review layer (`soleur:review`). See
-ADR-070 (mechanism = Option D) and `knowledge-base/project/plans/2026-06-30-feat-constraint-scaffold-l1-gate-generator-plan.md`.
+ADR-071 (mechanism = Option D) and `knowledge-base/project/plans/2026-06-30-feat-constraint-scaffold-l1-gate-generator-plan.md`.
 
 v1 = this one gate only, CI-only, direct-edge only, Next.js-only. Naming / contract / pre-commit /
-multi-stack / transitive coverage are deferred (ADR-070 Consequences).
+multi-stack / transitive coverage are deferred (ADR-071 Consequences).
 
 ## Agent-owns-gates recovery model (load-bearing)
 
