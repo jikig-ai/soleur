@@ -220,8 +220,9 @@ logs:
   where: GitHub Actions release-workflow logs (migrate + verify steps)
   retention: GitHub Actions default
 discoverability_test:
-  command: "gh run list --workflow=web-platform-release.yml --limit 1 --json conclusion"
-  expected_output: "conclusion: success (verify-migrations green ⇒ verify/117 bad=0 across all sentinels)"
+  command: 'gh run list --workflow=web-platform-release.yml --branch main --limit 1 --json status --jq ".[0].status"'
+  expected_output: "completed"
+  note: "Pre-merge, this proves the release workflow (which carries the migrate+verify steps that run verify/117) exists and its latest run completed — a repo-state-independent signal. Post-merge, /ship Phase 7 + Step 3.6 verify THIS migration's run conclusion=success ⇒ verify/117 bad=0 across all sentinels."
 ```
 
 Docs + DB-metadata + verify-sentinel change; no new runtime app code path emits at runtime. The discoverability command uses `gh`, not a remote shell.
