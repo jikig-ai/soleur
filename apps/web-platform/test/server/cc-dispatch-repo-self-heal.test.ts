@@ -129,11 +129,13 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     expect(onDisk).toBe(true); // .git materialized
   });
 
-  it("AC6: ready + .git ABSENT + clone FAILED → setRepoStatus(error) + honest block { ok:false, code:'error' }", async () => {
-    // On the ready entry, a genuine clone failure must surface honestly (not
-    // silently fast-path {ok:true} with .git absent). The FAILURE sub-branch DOES
-    // write set_repo_status(error, reason) so the gate reads it back next dispatch
-    // (AC6c), plus the op:repo-readiness-self-heal Sentry mirror.
+  it("#5733 AC0f: ready + .git ABSENT + clone FAILED on a TEAM workspace (WS!==USER) → honest block + EMIT-ONLY, ZERO setRepoStatus (F4: a member must not flip a co-owned shared status)", async () => {
+    // baseArgs() has WS !== USER (a member dispatching into a co-owned/team
+    // workspace). The clone genuinely failed, but flipping the shared
+    // repo_status→error here would corrupt the workspace for its Owners — so the
+    // ready-but-absent sibling now matches graftCorruptWorktree's emit-only TEAM
+    // posture (the pre-existing F4 inconsistency this PR fixes). Still an honest
+    // block; the Sentry mirror fires.
     const seams = makeSeams({
       gitDirExists: vi.fn(() => false),
       ensureWorkspaceRepoCloned: vi.fn(async () => "failed" as const),
@@ -145,7 +147,41 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("error");
     expect(seams.ensureWorkspaceRepoCloned).toHaveBeenCalledTimes(1);
-    expect(seams.setRepoStatus).toHaveBeenCalledWith(WS, "error", expect.any(String));
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
+  });
+
+  it("#5733 AC0c/AC0f: ready + .git ABSENT + clone FAILED on a SOLO/OWNER workspace (WS===USER) → setRepoStatus(error) IS written + honest block", async () => {
+    // On the solo/owner path the dispatching user OWNS the workspace, so writing
+    // the honest error reason (read back by the gate next dispatch) is safe.
+    const seams = makeSeams({
+      gitDirExists: vi.fn(() => false),
+      ensureWorkspaceRepoCloned: vi.fn(async () => "failed" as const),
+    });
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), workspaceId: USER, status: "ready" },
+      seams,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("error");
+    expect(seams.setRepoStatus).toHaveBeenCalledWith(USER, "error", expect.any(String));
+  });
+
+  it("#5733 AC0d: ready + .git ABSENT at routing but PRESENT at the post-clone CAS re-check (concurrent winner) → NO setRepoStatus even on solo/owner (never clobber a fresh ready)", async () => {
+    // .git is absent when the gate routes to the ready-but-absent graft, but a
+    // concurrent winner (reconcile / another tab) lands .git before the failure's
+    // CAS re-check fires → the error write must be suppressed.
+    const gitDirExists = vi.fn();
+    gitDirExists.mockReturnValueOnce(false).mockReturnValue(true);
+    const seams = makeSeams({
+      gitDirExists,
+      ensureWorkspaceRepoCloned: vi.fn(async () => "failed" as const),
+    });
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), workspaceId: USER, status: "ready" },
+      seams,
+    );
+    expect(r.ok).toBe(false); // still honest-blocks this dispatch
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
   });
 
   // AC1/AC1b/T1 — the headline divergence case (was previously the BUG: this

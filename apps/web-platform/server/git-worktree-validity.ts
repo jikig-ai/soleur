@@ -373,6 +373,19 @@ export interface AgentReadinessContext {
   activeWorkspaceId: string;
   connected: boolean;
   dbReady: boolean;
+  /**
+   * #5733 D2 — the gate's position RELATIVE to the self-heal, which determines
+   * whether an absent/dir-invalid `.git` is a TERMINAL strand:
+   *   - `"post-heal"` (cold cc-dispatcher, warm cc-reprovision): the self-heal /
+   *     ensure-clone already ran upstream, so an absent/invalid `.git` HERE means
+   *     the heal failed → a confirmed terminal strand → emit + honest-block.
+   *   - `"pre-heal"` (reconcile-on-push): the caller re-clones this very shape one
+   *     line later via `!isReadyGitWorkTree`, so emitting/blocking here would be a
+   *     pre-heal FALSE-strand that pollutes the AC10/soak signal — return `"ready"`
+   *     for absent/dir-invalid (no emit) and let the heal own it. (The `dir-valid`
+   *     host-confirm emit is terminal on ALL surfaces and is NOT phase-gated.)
+   */
+  phase: "post-heal" | "pre-heal";
 }
 
 /**
@@ -404,9 +417,30 @@ export async function evaluateAgentReadiness(
   probe: (p: string) => Promise<GitRevParseOutcome> = hostGitRevParseOutcome,
 ): Promise<"ready" | "block"> {
   if (!ctx.connected || !ctx.dbReady) return "ready";
-  // dir-valid ONLY: the one slice lstat cannot adjudicate. The lstat verdict has
-  // already routed escaping pointers + dir-invalid to the heal before this gate.
-  if (probeGitWorktreeShape(workspacePath).kind !== "dir-valid") return "ready";
+  const kind = probeGitWorktreeShape(workspacePath).kind;
+
+  // #5733 D2 — absent / dir-invalid `.git`. The 77e77c3 host confirm only ran for
+  // `dir-valid`, so these returned "ready" → a doomed spawn (the load-bearing
+  // un-strand gap). On a TERMINAL (post-heal) surface this is a confirmed strand:
+  // emit + honest-block. On a PRE-heal (reconcile) surface the caller re-clones
+  // this shape one line later, so emitting here is a false-strand that pollutes
+  // the soak signal — return "ready" (no emit) and let the heal own it.
+  if (kind === "absent" || kind === "dir-invalid") {
+    if (ctx.phase === "pre-heal") return "ready";
+    reportAgentReadinessSelfStop({
+      userId: ctx.userId,
+      activeWorkspaceId: ctx.activeWorkspaceId,
+      gitValid: false, // absent / dir-invalid fail lstat
+      gitRevParseValid: false,
+      gitKind: kind,
+      source: "host-pre-heal",
+    });
+    return "block";
+  }
+
+  // dir-valid ONLY: the one slice lstat cannot adjudicate. file-pointer / other
+  // keep the cheap sync routing the on-main lstat verdict already owns.
+  if (kind !== "dir-valid") return "ready";
 
   let outcome = await probe(workspacePath);
   if (outcome === "inconclusive") outcome = await probe(workspacePath); // re-probe once
@@ -421,6 +455,7 @@ export async function evaluateAgentReadiness(
     return "ready";
   }
   // not-a-worktree — a dir-valid `.git` git itself cannot resolve: the strand.
+  // Terminal on ALL surfaces (post-clone) → NOT phase-gated.
   reportAgentReadinessSelfStop({
     userId: ctx.userId,
     activeWorkspaceId: ctx.activeWorkspaceId,

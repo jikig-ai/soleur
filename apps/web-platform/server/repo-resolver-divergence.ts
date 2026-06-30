@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { reportSilentFallback, hashUserId } from "@/server/observability";
+import { sanitizeGitStderr } from "@/server/git-auth";
 
 // Dedupe by (op, userId, claim) fingerprint — NOT just `op`. The non-member
 // reset is read-time and mutates nothing, so without claim-pair fingerprinting
@@ -199,6 +200,62 @@ export function reportAgentReadinessSelfStop(args: {
         : { gitdirEscapesWorkspace: args.gitdirEscapesWorkspace }),
     },
   });
+}
+
+/**
+ * #5733 D0 — un-blind the previously SWALLOWED dispatch-time clone failure. The
+ * cold path already clones in-process into the agent's own `workspacePath`
+ * (`cc-dispatcher.ts:1987`), but its `"failed"` outcome was discarded, so a
+ * genuine clone failure (token/network/entitlement) flowed silently into a false
+ * `ready`. This emits a DISTINCT, queryable + PAGING `repo_clone_failed` event so
+ * the real clone error is operator-actionable (no SSH) — wired into
+ * `ensure-workspace-repo.ts`'s clone catch so EVERY caller (cold/warm/reconcile)
+ * surfaces it.
+ *
+ * SECURITY (#5733 P1): `reason` is git stderr / an `execFile` rejection `.message`
+ * that carries the `repo_url` AND the absolute `/workspaces/<uuid>` path
+ * (PII-equivalent for a solo workspace, where `workspace_id == user_id`). The
+ * installation token NEVER rides `err` (it is GIT_ASKPASS env, never argv/URL).
+ * `sanitizeGitStderr` is applied HERE (the value reaching `captureException`),
+ * stripping every absolute path and the https repo URL — so neither the token nor
+ * any raw path/url survives. `extra` excludes `repoUrl`/`installationId`; `userId`
+ * is renamed to `userIdHash` at the boundary and the workspace id is pre-hashed
+ * (it equals the raw userId for a solo workspace, which the boundary rename would
+ * otherwise miss). DISTINCT `Error` message → its OWN Sentry issue group.
+ */
+export function reportRepoCloneFailed(args: {
+  userId: string;
+  activeWorkspaceId: string;
+  /** Raw git stderr / execFile rejection message — sanitized HERE before emit. */
+  reason: string;
+}): void {
+  const fingerprint = `repo-clone-failed:${args.userId}:${args.activeWorkspaceId}`;
+  if (seenFingerprints.has(fingerprint)) return;
+  seenFingerprints.add(fingerprint);
+
+  reportSilentFallback(new Error("repo_clone_failed"), {
+    feature: "repo-clone-failed",
+    op: "repo-clone-failed",
+    extra: {
+      userId: args.userId, // → userIdHash at the emit boundary (never raw)
+      activeWorkspaceIdHash: hashUserId(args.activeWorkspaceId),
+      // Sanitized at the write boundary — no token, no absolute path, no repo URL.
+      reason: sanitizeRepoCloneReason(args.reason),
+    },
+  });
+}
+
+// GitHub token shapes (App installation `ghs_`, PAT `ghp_`/`github_pat_`, OAuth
+// `gho_`, user-to-server `ghu_`, refresh `ghr_`). The production token NEVER rides
+// `err` (it is GIT_ASKPASS env, never argv/URL/stderr), so this is defense-in-depth
+// — but a belt-and-suspenders redaction guarantees AC0b even if a future git/exec
+// shape ever surfaces a credential in a rejection message.
+const GH_TOKEN_RE = /\b(?:gh[posru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g;
+
+/** Redact token shapes THEN strip absolute paths/URLs (`sanitizeGitStderr`), so the
+ *  value reaching `captureException` carries neither a credential nor a raw path. */
+function sanitizeRepoCloneReason(raw: string): string {
+  return sanitizeGitStderr(raw.replace(GH_TOKEN_RE, "<redacted>"));
 }
 
 /**
