@@ -1,14 +1,32 @@
 #!/usr/bin/env bash
 # Create the "CI Required" repository ruleset on jikig-ai/soleur.
 #
-# This script adds the `test`, `dependency-review`, and `e2e` status checks
-# as required checks on main, preventing auto-merge when CI fails or is skipped.
+# This is the documented DISASTER-RECOVERY restore path: it POSTs the full
+# ruleset skeleton ONLY when no "CI Required" ruleset exists (it exits early
+# if one is already present, so it never replaces a live ruleset). The
+# canonical management path is Terraform (infra/github/ruleset-ci-required.tf
+# + apply-github-infra.yml). After running this DR restore, run
+# `terraform import` + `terraform plan/apply` to reconcile the ruleset back
+# to Terraform-managed state.
+#
+# SYNC GUARD (#5780, P1-3): the skeleton below restores BOTH rules the live
+# ruleset carries — `required_status_checks` AND `merge_queue`. The
+# `merge_queue` params here MUST be kept in lockstep with the `merge_queue`
+# block in infra/github/ruleset-ci-required.tf. If they drift, a DR restore
+# would create a ruleset that the next `terraform plan` immediately wants to
+# change (and `scheduled-terraform-drift.yml`'s `infra/github` matrix would
+# flag). Two params the .tf leaves at provider default
+# (`max_entries_to_build`, `min_entries_to_merge_wait_minutes`) are set here
+# to GitHub's defaults (5/5) because the raw REST API requires every field;
+# the post-DR `terraform plan` is the authority on their final values.
+# Omitting the merge_queue rule from this skeleton would silently disable the
+# merge queue after a from-scratch DR restore until the next TF apply.
 #
 # IMPORTANT: Run this AFTER the bot workflow updates have merged to main.
 # If run before, bot PRs using [skip ci] will be permanently blocked
 # because the required checks remain in "Pending" state forever.
 #
-# Refs: #826, #820
+# Refs: #826, #820, #5780
 
 set -euo pipefail
 
@@ -78,21 +96,39 @@ cat > "$skeleton" << 'EOF'
         "do_not_enforce_on_create": false,
         "required_status_checks": []
       }
+    },
+    {
+      "type": "merge_queue",
+      "parameters": {
+        "merge_method": "SQUASH",
+        "grouping_strategy": "ALLGREEN",
+        "max_entries_to_merge": 1,
+        "min_entries_to_merge": 1,
+        "check_response_timeout_minutes": 15,
+        "max_entries_to_build": 5,
+        "min_entries_to_merge_wait_minutes": 5
+      }
     }
   ]
 }
 EOF
 
 # Merge canonical bypass_actors AND required_status_checks into the skeleton.
-# required_status_checks lives at rules[0].parameters.required_status_checks
-# (rules[0] is the only rule today; future siblings would need select-by-type).
+# The skeleton now has TWO rules (required_status_checks + merge_queue, #5780),
+# so address the status-checks rule by TYPE, never a positional .rules[0] —
+# a positional index silently writes into the wrong rule if the order changes.
 jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" --slurpfile rsc "$CANONICAL_RSC_FILE" \
   '. + {bypass_actors: $bypass[0]}
-     | .rules[0].parameters.required_status_checks = $rsc[0]' \
+     | (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks) = $rsc[0]' \
   "$skeleton" > "$payload"
 
 echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
 result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")
 
 echo "Ruleset created. Verification:"
-echo "$result" | jq '{id, name, enforcement, checks: .rules[0].parameters.required_status_checks, bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]}'
+echo "$result" | jq '{
+  id, name, enforcement,
+  checks: (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks),
+  merge_queue: (.rules[] | select(.type == "merge_queue") | .parameters),
+  bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]
+}'

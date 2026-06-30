@@ -235,6 +235,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_rule_prune \
             -target=sentry_cron_monitor.scheduled_ruleset_bypass_audit \
             -target=sentry_cron_monitor.scheduled_seo_aeo_audit \
+            -target=sentry_cron_monitor.scheduled_architecture_diagram_sync \
             -target=sentry_cron_monitor.scheduled_weekly_analytics \
             -target=sentry_cron_monitor.scheduled_nag_4216_readiness \
             -target=sentry_uptime_monitor.soleur_apex \
