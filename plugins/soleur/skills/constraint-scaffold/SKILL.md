@@ -74,3 +74,14 @@ bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --
 via the `@/server/…` alias FAILS, an `import type` of the same PASSES, route-group/metacharacter
 paths are matched (regex-escaping), an empty from-set while `"use client"` files exist is a hard
 error, and a broken `.cjs` fails the runner closed.
+
+## Maintaining `fix-constraints.yml`
+
+When editing the recovery dispatcher (or its tenant template), two non-obvious contracts bite: (1) the
+`fix` job must `Setup Bun` + `bun install` before its verify step re-runs `constraint-gates.sh` — the
+runner fails closed without `node_modules/.bin/depcruise`, so a missing install makes "Recovered:
+pushed" structurally unreachable; (2) the founder-feedback matrix must be exhaustive over the GitHub
+Actions job-result trichotomy — `notify-on-skip` gated on `result != 'success'` misses the
+all-steps-skipped-but-job-`success` perm-fail path (silent re-deadlock); gate it on `== 'skipped'` and
+post dedicated in-job comments for permission/fork/push-rejected/unexpected-failure. See
+`knowledge-base/project/learnings/best-practices/2026-06-30-issue-comment-agentic-dispatcher-toolchain-and-feedback-matrix.md`.
