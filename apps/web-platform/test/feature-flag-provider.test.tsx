@@ -10,7 +10,7 @@ function Probe({ name }: { name: "dev-signin" | "kb-chat-sidebar" }) {
 describe("FeatureFlagProvider + useFeatureFlag", () => {
   test("returns true for a flag set true in the snapshot", () => {
     render(
-      <FeatureFlagProvider flags={{ "dev-signin": false, "team-workspace-invite": false, "byok-delegations": false, "kb-chat-sidebar": true, "c4-visualizer": false, "debug-mode": false, "c4-edit": false, "command-palette": false }}>
+      <FeatureFlagProvider flags={{ "dev-signin": false, "team-workspace-invite": false, "byok-delegations": false, "kb-chat-sidebar": true, "c4-visualizer": false, "debug-mode": false, "c4-edit": false, "command-palette": false, support: false }}>
         <Probe name="kb-chat-sidebar" />
       </FeatureFlagProvider>,
     );
@@ -19,7 +19,7 @@ describe("FeatureFlagProvider + useFeatureFlag", () => {
 
   test("returns false for a flag set false in the snapshot", () => {
     render(
-      <FeatureFlagProvider flags={{ "dev-signin": false, "team-workspace-invite": false, "byok-delegations": false, "kb-chat-sidebar": false, "c4-visualizer": false, "debug-mode": false, "c4-edit": false, "command-palette": false }}>
+      <FeatureFlagProvider flags={{ "dev-signin": false, "team-workspace-invite": false, "byok-delegations": false, "kb-chat-sidebar": false, "c4-visualizer": false, "debug-mode": false, "c4-edit": false, "command-palette": false, support: false }}>
         <Probe name="kb-chat-sidebar" />
       </FeatureFlagProvider>,
     );
