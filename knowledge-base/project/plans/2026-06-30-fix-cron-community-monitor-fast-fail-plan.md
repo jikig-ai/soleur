@@ -6,8 +6,44 @@ type: bug
 lane: cross-domain  # no spec.md present → defaulted to cross-domain (TR2 fail-closed)
 brand_survival_threshold: none
 created: 2026-06-30
-status: draft
+status: resolved  # Phase 0 verdict H-C: fast-fail self-resolved via Anthropic credit top-up (2026-06-29). No code fix warranted. See "Phase 0 Finding" below.
 ---
+
+## Phase 0 Finding — VERDICT: H-C (no code fix) — recorded 2026-06-30
+
+**The ~300 ms fast-fail (#5732) was Anthropic credit exhaustion (H10/H-C), resolved
+by the operator's 2026-06-29 top-up.** The evidence gate (read-only production pulls
++ one allowlisted manual `cron/community-monitor.manual-trigger`, fired 06:59:37Z)
+settled all three hypotheses:
+
+- **H-C CONFIRMED — credit, already resolved.** The fresh post-top-up fire's clone
+  **succeeded** and logged `claude-eval spawned` (Better Stack, 06:59→07:05Z); it
+  produced **real digest issues `#5737` (07:04Z) + `#5740` (07:08Z)** — full
+  platform-status/metrics digests, not error stubs. Contrast: eight consecutive
+  `completed` rows with `duration_ms` 241–387 ms and `error_summary = null`,
+  06-22→06-29. The eval now runs; the daily digest is producing again.
+- **H-B (codeload egress) REFUTED.** The live clone succeeded → codeload was not
+  dropped. No `op:setup-ephemeral-workspace` Sentry exception exists (queried by the
+  `op:` tag, HTTP 200 empty — not a search artifact). The `codeload.github.com`
+  allowlist gap is real but **latent** (resolves inside the `github.com` CIDR set
+  today), not the cause. No allowlist/ADR-052 change shipped.
+- **H-A (ENOSPC/disk) REFUTED.** `cron-workspace-gc` ran a clean 6 h cadence with
+  zero gaps through 06-30 (56 `completed` rows) → no 8-day disk fill.
+
+**Branch outcomes:** Phase 2 H-B/H-A → **none** (both refuted). Phase 1 un-mute →
+**not needed** (monitor `scheduled-community-monitor` is `active`/`isMuted=false`).
+Phase 3 `:356` threading → **not shipped** (the setup-workspace catch does NOT
+execute on the recovered fire — gated out by its own "catch path executes" guard;
+hardening a dormant path is the headline wrong-layer risk). Phase 4 regression test
+→ **not shipped** (tied to the fast-fail path, which no longer executes).
+
+**Residual (NOT #5732, NOT new):** the recovered 06-30 fires still show a `missed`
+Sentry check-in ("digest produced, check-in not delivered") — this is precisely the
+**#5728** delivery-defect class (closed 2026-06-30T06:10Z, fix `b1c560dad`), pending
+deploy. A possible duplicate-digest anomaly (`#5737` + `#5740` from one trigger) is
+noted for the operator but not chased here. Ongoing `error`-regime regression is
+covered by the Sentry cron monitor's auto-page; `missed` regression by the #5728
+delivery soak. **No new probe added** (plan's simplicity caveat; AC10 N/A for H-C).
 
 # fix(cron): root-cause + harden `cron-community-monitor` daily `error` fast-fail 🐛
 
