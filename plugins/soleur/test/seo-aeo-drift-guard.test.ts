@@ -55,9 +55,22 @@ beforeAll(() => {
   }
   tmpSite = mkdtempSync(join(tmpdir(), "seo-aeo-drift-"));
   SITE = tmpSite;
+  // SOLEUR_DOCS_OFFLINE=1 makes the Eleventy build hermetic: the _data/github.js,
+  // githubStats.js, and communityStats.js loaders skip their live GitHub/Discord
+  // fetches and return deterministic fallbacks. Without this, a transient GitHub
+  // API rate-limit/5xx/abort in CI makes github.js (or githubStats.js) throw,
+  // failing this build and surfacing as a flaky top-level beforeAll "(unnamed)"
+  // test (~2.7s, the fetch-failure time). The drift-guards assert on local
+  // markup/JSON-LD invariants, not live release data, so an empty changelog is
+  // correct here.
   const proc = Bun.spawnSync(
     ["npx", "@11ty/eleventy", `--output=${tmpSite}`],
-    { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit" },
+    {
+      cwd: REPO_ROOT,
+      stdout: "inherit",
+      stderr: "inherit",
+      env: { ...process.env, SOLEUR_DOCS_OFFLINE: "1" },
+    },
   );
   if (proc.exitCode !== 0) {
     throw new Error(
