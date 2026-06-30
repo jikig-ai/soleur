@@ -615,20 +615,53 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 5 entries with CodeQL pinned to 57789
+# T-rsc-7: real canonical RSC has 16 entries with CodeQL pinned to 57789.
+# Reconciled from the stale 5-check baseline to the Terraform-managed live set
+# (#4397). The exact count is kept in lockstep with infra/github/
+# ruleset-ci-required.tf by T-rsc-9 below.
 t_rsc_real_canonical_shape() {
   local real="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
   if [[ ! -f "$real" ]]; then
     _report "T-rsc-7 real canonical RSC exists" fail "missing $real"
     return
   fi
-  local n codeql_app
+  local n codeql_app non_codeql_apps
   n=$(jq 'length' < "$real")
   codeql_app=$(jq -r '.[] | select(.context=="CodeQL") | .integration_id' < "$real")
-  if [[ "$n" == "5" && "$codeql_app" == "57789" ]]; then
-    _report "T-rsc-7 real canonical RSC: 5 entries, CodeQL integration_id=57789" ok
+  # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
+  # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
+  non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
+  if [[ "$n" == "16" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
+    _report "T-rsc-7 real canonical RSC: 16 entries, CodeQL=57789, rest=15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 5 entries, CodeQL integration_id=57789" fail "n=$n codeql_app=$codeql_app"
+    _report "T-rsc-7 real canonical RSC: 16 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+  fi
+}
+
+# T-rsc-9 (canonical↔terraform sync gate): the canonical RSC JSON context set
+# MUST equal the required_check contexts declared in the Terraform source of
+# truth (infra/github/ruleset-ci-required.tf). This is the root-cause fix for
+# #4397 — the snapshot silently went stale (5) while Terraform widened the live
+# ruleset (16), and nothing forced them back into lockstep. Any future .tf edit
+# now fails CI until the JSON is reconciled in the same PR.
+t_rsc_canonical_matches_terraform() {
+  local real="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  local tf="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+  if [[ ! -f "$tf" ]]; then
+    _report "T-rsc-9 terraform ruleset source exists" fail "missing $tf"
+    return
+  fi
+  local json_ctx tf_ctx
+  json_ctx=$(jq -r '.[].context' < "$real" | sort)
+  # Extract `context = "..."` (required_check blocks are the only `context =`
+  # assignments in this root); strip quotes; sort for set comparison.
+  tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$tf" \
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+  if [[ "$json_ctx" == "$tf_ctx" ]]; then
+    _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" ok
+  else
+    _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" fail \
+      "diff:$(diff <(echo "$json_ctx") <(echo "$tf_ctx") | tr '\n' ' ')"
   fi
 }
 
@@ -705,6 +738,7 @@ t_rsc_canonical_duplicate_context
 t_rsc_order_insensitive
 t_rsc_real_canonical_shape
 t_rsc_shared_lib_used
+t_rsc_canonical_matches_terraform
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
