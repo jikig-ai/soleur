@@ -9,6 +9,7 @@ import { reportSilentFallback } from "@/server/observability";
 import {
   reportRepoResolverDivergence,
   reportAgentReadinessSelfStop,
+  reportAgentReadinessProbeInconclusive,
   _resetResolverDivergenceDedupeForTests,
 } from "@/server/repo-resolver-divergence";
 
@@ -239,5 +240,86 @@ describe("reportAgentReadinessSelfStop — agent-surface strand observability (#
     reportAgentReadinessSelfStop(base);
     reportAgentReadinessSelfStop({ ...base, gitKind: "dir-invalid", gitValid: false });
     expect(reportSilentFallback).toHaveBeenCalledTimes(2);
+  });
+
+  // #5733 deliverable A/C — the widened event. The host-confirm verdict
+  // (`gitRevParseValid`) makes the proxy-vs-invariant divergence visible in the
+  // ONE event (gitValid=true lstat-says-ready, gitRevParseValid=false git-disagrees),
+  // and the `source` tag distinguishes the host pre-heal emit from the C2 in-sandbox
+  // backstop. NEITHER may carry the subprocess stderr / raw path.
+  it("carries gitRevParseValid + source; the host confirm shows the proxy-vs-invariant divergence; NO stderr/path", () => {
+    reportAgentReadinessSelfStop({
+      userId: "user-1",
+      activeWorkspaceId: "754ee124",
+      gitValid: true,
+      gitRevParseValid: false,
+      gitKind: "dir-valid",
+      source: "host-pre-heal",
+    });
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.extra).toMatchObject({
+      gitValid: true,
+      gitRevParseValid: false,
+      gitKind: "dir-valid",
+      source: "host-pre-heal",
+    });
+    // The git failure text (which embeds the raw `/workspaces/<id>/.git` path ==
+    // raw userId for a solo workspace) must NEVER reach the event.
+    expect(ctx.extra).not.toHaveProperty("stderr");
+    expect(ctx.extra).not.toHaveProperty("error");
+    expect(ctx.extra).not.toHaveProperty("workspacePath");
+    expect(ctx.extra).not.toHaveProperty("gitdirTarget");
+  });
+
+  it("the same workspace+kind from DIFFERENT sources (host vs in-sandbox backstop) are NOT collapsed", () => {
+    const shared = {
+      userId: "user-1",
+      activeWorkspaceId: "754ee124",
+      gitValid: true,
+      gitRevParseValid: false,
+      gitKind: "dir-valid",
+    };
+    reportAgentReadinessSelfStop({ ...shared, source: "host-pre-heal" });
+    reportAgentReadinessSelfStop({ ...shared, source: "in-sandbox-backstop" });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(2);
+    const sources = (reportSilentFallback as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[1].extra.source,
+    );
+    expect(sources).toContain("host-pre-heal");
+    expect(sources).toContain("in-sandbox-backstop");
+  });
+
+  it("source defaults to host-pre-heal when omitted (back-compat with the cold pre-heal emit)", () => {
+    reportAgentReadinessSelfStop(base); // no `source`
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.extra.source).toBe("host-pre-heal");
+    // No host confirm ran on the pure-lstat pre-heal emit → gitRevParseValid absent.
+    expect(ctx.extra).not.toHaveProperty("gitRevParseValid");
+  });
+});
+
+describe("reportAgentReadinessProbeInconclusive — fail-OPEN breadcrumb (#5733)", () => {
+  it("emits a DISTINCT op/issue-group (NOT the self-stop) with only the hashed workspace id", () => {
+    reportAgentReadinessProbeInconclusive({
+      userId: "user-1",
+      activeWorkspaceId: "754ee124",
+    });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect((err as Error).message).toBe("agent_readiness_probe_inconclusive");
+    expect(ctx.op).toBe("agent-readiness-probe-inconclusive");
+    expect(ctx.extra).toMatchObject({ activeWorkspaceIdHash: "hash-754ee124" });
+    expect(ctx.extra).not.toHaveProperty("activeWorkspaceId");
+    expect(ctx.extra).not.toHaveProperty("workspacePath");
+  });
+
+  it("dedupes per (userId, workspace) per process", () => {
+    const args = { userId: "user-1", activeWorkspaceId: "754ee124" };
+    reportAgentReadinessProbeInconclusive(args);
+    reportAgentReadinessProbeInconclusive(args);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
   });
 });

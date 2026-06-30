@@ -122,6 +122,7 @@ import {
 import {
   isReadyGitWorkTree,
   probeGitWorktreeShape,
+  evaluateAgentReadiness,
 } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
@@ -190,7 +191,11 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 // (the only verified sandbox-readable allowWrite dir); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
-import { buildToolProgressWSMessage, buildToolUseWSMessage } from "./tool-labels";
+import {
+  buildToolProgressWSMessage,
+  buildToolUseWSMessage,
+  isInSandboxRevParseStrand,
+} from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -1802,8 +1807,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
     // the readiness decision and the observability emit — no re-lstat. The common
-    // dir-valid case pays this single cheap probe; it is not free, but adds no
-    // subprocess and no DB/JWT.
+    // dir-valid case pays this single cheap probe.
+    // #5733 deliverable A (2026-06-30 — SUPERSEDES the 2026-06-19 "adds no
+    // subprocess" zero-await guarantee for the connected cold path): after this
+    // sync lstat routing, `evaluateAgentReadiness` (below, post-heal) runs ONE
+    // host `git rev-parse` confirm for the `dir-valid` slice — the one shape lstat
+    // greenlights but the agent still strands on. The fast lstat path here is
+    // unchanged; the async confirm is additive and dir-valid-gated.
     const gitShape = probeGitWorktreeShape(workspacePath);
     // Readiness derived from the SAME probe: a self-contained valid dir OR a
     // non-escaping in-workspace pointer (readable in-sandbox) is ready.
@@ -1966,6 +1976,36 @@ export const realSdkQueryFactory: QueryFactory = async (
       installationId: effectiveInstallationId,
       repoUrl,
     });
+
+    // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
+    // self-heal returned `healed.ok=true` AND after `ensureWorkspaceRepoCloned`
+    // (which no-ops at `:207` on a populated-corrupt `dir-valid` — `isValidGit-
+    // WorkTree` passes lstat, so it is NEVER re-cloned/destroyed). This is the
+    // ONLY gate that catches a `dir-valid` `.git` that `git` itself cannot resolve
+    // as a work tree (broken config/refs/gitdir indirection): the agent's in-bwrap
+    // Step 0.0 rev-parse would strand on it, but the lstat verdict greenlit the
+    // spawn. The shared `evaluateAgentReadiness` is the ONE helper across cold /
+    // warm / reconcile, so the emit + heal-route is structural (not the cold-only
+    // drift the 26×-dark incident exposed). A confirmed `"not-a-worktree"` emits
+    // the self-stop (inside the helper) and returns `"block"` → honest
+    // `RepoNotReadyError` (NO destroy of a populated `.git`); an inconclusive probe
+    // FAILS-OPEN (spawn) so a transient blip never blocks a healthy repo. This does
+    // NOT replace the sync `gitDirValid` seam consumed by the self-heal above — it
+    // is an additive re-probe of `agentReady` despite `healed.ok=true`.
+    if (
+      (await evaluateAgentReadiness(workspacePath, {
+        userId: args.userId,
+        activeWorkspaceId,
+        connected: Boolean(repoUrl),
+        dbReady: repoReadiness.ok,
+      })) === "block"
+    ) {
+      throw new RepoNotReadyError(
+        "error",
+        "Your workspace's Git repository is present but unreadable, so I can't safely start work in it. Please re-connect or re-create the repository.",
+        "repo_setup_failed",
+      );
+    }
 
     // Issue A: mint a short-lived GitHub App installation token for the
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
@@ -3347,6 +3387,46 @@ export async function dispatchSoleurGo(
       }
     },
     onToolResult: (block) => {
+      // #5733 deliverable C2 — the agent-context observability backstop. The host
+      // `rev-parse` confirm is blind to the escaping-pointer strand (host git is
+      // NOT sandboxed) AND to object-store corruption (rev-parse passes both
+      // sides). The GUARANTEED signal is the agent's OWN in-bwrap `/soleur:go`
+      // Step 0.0 `git rev-parse --is-inside-work-tree` result: when it reports
+      // not-a-work-tree, emit the self-stop from the agent's REAL context (distinct
+      // `in-sandbox-backstop` source tag), enriched with a host-side
+      // `probeGitWorktreeShape` gitKind — so a strand of ANY on-disk shape produces
+      // a queryable event without pre-confirming 754ee124's (unobservable) shape.
+      // Runs BEFORE the autonomous-posture gate (strand observability is posture-
+      // independent); wrapped so it can never break the command-stream path.
+      try {
+        if (
+          workspacePath &&
+          isInSandboxRevParseStrand(block.command, block.output)
+        ) {
+          const shape = probeGitWorktreeShape(workspacePath);
+          reportAgentReadinessSelfStop({
+            userId,
+            // `<root>/<activeWorkspaceId>` by construction (ADR-044) → basename is
+            // the workspace id, pre-hashed inside reportAgentReadinessSelfStop.
+            activeWorkspaceId: path.basename(workspacePath),
+            gitValid:
+              shape.kind === "dir-valid" || shape.kind === "file-pointer",
+            // The agent's OWN rev-parse said not-a-work-tree (the authoritative
+            // in-sandbox verdict). NEVER the subprocess stderr / raw path.
+            gitRevParseValid: false,
+            gitKind: shape.kind,
+            gitdirEscapesWorkspace: shape.gitdirEscapesWorkspace,
+            source: "in-sandbox-backstop",
+          });
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "agent-readiness-backstop",
+          extra: { userId, conversationId },
+        });
+      }
+
       // feat-concierge-stream-commands — stream the Bash command's
       // (truncated, REDACTED) stdout/stderr into the cc_router bubble, then
       // close the block. Autonomous-only (D1). Both the per-chunk and the
