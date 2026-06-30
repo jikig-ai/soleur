@@ -34,7 +34,7 @@ status: epic — each phase is its own PR / /soleur:plan
 - [ ] 2.4 `git-data.tf` + `network.tf`: shared bare-repo host over private net; worktrees → host-local NVMe
 - [ ] 2.5 Cutover: capture old state first (#5542), drain + rsync objects/refs; verify `git rev-list --all` count match
 - [ ] 2.6 RED→GREEN: two concurrent acquires → one holder/loser-zero-rows; stale-gen write rejected by git-data host; RLS revoke + cascade verified
-- [ ] 2.7 Live-DB restart-survival integration test (deferred from Phase 1, operator decision 2026-06-30) — real tenant-scoped `readWorkspaceIdFromDb` against **dev** Supabase (spy-assert closure-called-once, Map-empty-at-call, writeback asserted); repo's first `*.integration.test` (set vitest glob/env-gating here); no setup workspace-create (mig-053 trigger auto-creates), `anonymise_user` teardown
+- [x] 2.7 Live-DB restart-survival integration test (deferred from Phase 1, operator decision 2026-06-30) — real `readWorkspaceIdFromDb` against **dev** Supabase (spy-assert closure-called-once across cold+warm, all-Maps-empty-at-call, writeback asserted); follows the existing `*.integration.test` convention (≥10 already exist — env-gate + synthetic-allowlist + verbatim teardown, NO glob/config change, per plan Research Reconciliation row 1); no setup workspace-create (mig-053 trigger auto-creates), established `anonymise_*` teardown sequence. → `test/workspace-binding-restart-survival.integration.test.ts` (PR A′)
 
 ## Phase 3 — 2nd host + coordinator (concurrent multi-host, G1)
 - [ ] 3.1 IaC: `2nd hcloud_server`, `hcloud_placement_group type=spread`, `moved` blocks (verify `0 to destroy`); coordinator service; tunnel `service` → coordinator
