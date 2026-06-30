@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { gitWithInstallationAuth } from "@/server/git-auth";
+import { gitWithInstallationAuth, sanitizeGitStderr } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
+import { reportRepoCloneFailed } from "@/server/repo-resolver-divergence";
 import { createChildLogger } from "@/server/logger";
 import {
   isValidGitWorkTree,
@@ -272,12 +273,40 @@ export async function ensureWorkspaceRepoCloned(
     // Fail-soft: surface to Sentry, never crash the conversation. The token is
     // env-only inside gitWithInstallationAuth (never in argv/URL/stderr), so it
     // cannot ride `err`; the format-validated repoUrl is non-sensitive.
-    reportSilentFallback(err, {
+    // #5733 P2 (review) — sanitize the exception VALUE before capture: the
+    // execFile rejection `.message` is `Command failed: git … <workspacePath>
+    // <repoUrl>\n<stderr>`, carrying the absolute `/workspaces/<uuid>` path
+    // (== solo userId) + repo URL, which the key-based `scrubSentryEvent` does
+    // NOT scrub from `event.exception.values[].value`. Mirror the sibling
+    // `reportRepoCloneFailed` sanitization so this op:clone breadcrumb does not
+    // defeat the PR's own redaction in the same catch.
+    const safeCloneErr =
+      err instanceof Error
+        ? new Error(sanitizeGitStderr(err.message))
+        : new Error(sanitizeGitStderr(String(err)));
+    reportSilentFallback(safeCloneErr, {
       feature: "ensure-workspace-repo",
       op: "clone",
       extra: { userId, hasInstallation: true },
       message: "ensure-workspace-repo clone failed; Concierge proceeds degraded (no clone)",
     });
+    // #5733 D0 — also emit the DISTINCT, queryable + paging `repo_clone_failed`
+    // event so the previously SWALLOWED clone failure is loud for EVERY caller
+    // (cold/warm/reconcile). The reason is sanitized at the reporter's write
+    // boundary (no token — askpass env; no absolute path / repo URL). The
+    // workspace id is `basename(workspacePath)` (`<root>/<uuid>`), pre-hashed in
+    // the reporter (== raw userId for a solo workspace). DEFENSIVE: a telemetry
+    // failure must NEVER escape this catch and convert a graceful `"failed"`
+    // clone outcome into an uncaught exception that crashes the dispatch.
+    try {
+      reportRepoCloneFailed({
+        userId,
+        activeWorkspaceId: basename(workspacePath),
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    } catch {
+      // swallow — the op:clone mirror above already recorded the failure.
+    }
     // The ONLY non-benign outcome: a genuine clone failure (token expired /
     // network / repo gone). This is the post-recovery-failure signal the cc
     // reconnect path threads to the honest "workspace reclaimed" message.

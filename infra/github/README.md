@@ -38,6 +38,19 @@ changed yet) or for re-runs after a transient failure.
 
 ## Merge queue (#5780)
 
+> **Status (2026-07-01): reverted; NOT re-adopting now.** The first enablement
+> deadlocked `main` — GitHub CodeQL **default setup** does not post the required
+> `CodeQL` context on `merge_group` temp refs, so every queue entry stalled. The
+> queue was kill-switched (the `merge_queue` rule is REMOVED from this root and
+> from the live ruleset). It is **not being re-enabled**: the queue is an
+> optimization over `/ship`'s BEHIND-auto-sync loop (which already mitigates the
+> starvation #5780 targeted), and re-adoption requires a CodeQL default→advanced
+> migration that disrupts every in-flight PR + adds permanent codeql.yml
+> maintenance. See ADR-032 (2026-07-01 decision + incident note) + the PIR at
+> `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
+> The rest of this section describes the (currently inactive) target state and
+> serves as the re-adoption recipe should the auto-sync loop prove insufficient.
+
 The ruleset carries a second rule sibling — a `merge_queue {}` block in
 `ruleset-ci-required.tf` — adopting a **GitHub merge queue** for `main`. It fixes
 the strict-up-to-date BEHIND starvation: with

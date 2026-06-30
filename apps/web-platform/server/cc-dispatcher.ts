@@ -116,6 +116,9 @@ import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
 } from "./ensure-workspace-repo";
+// #5733 D0 — consume the dispatch-time clone outcome (previously discarded):
+// loud emit (upstream) + F4-gated CAS status write + honest-block.
+import { consumeDispatchCloneOutcome } from "./cc-dispatch-clone-consume";
 // 2026-06-19 — dispatch readiness gates on worktree VALIDITY (not mere `.git`
 // presence) so a corrupt/partial `.git` routes to recovery instead of a silent
 // repo-less spawn.
@@ -1984,12 +1987,50 @@ export const realSdkQueryFactory: QueryFactory = async (
     // wired through). In every non-promotion branch `effectiveInstallationId ===
     // installationId`, so the clone uses exactly the stored install it did before
     // whenever the entitlement gate did not promote — the fix never widens access.
-    await ensureWorkspaceRepoCloned({
+    // #5733 D0 — CAPTURE the dispatch-time clone outcome (previously DISCARDED).
+    // This is the only clone placement guaranteed same-FS-as-agent (in-process,
+    // into the agent's own `workspacePath`). On `"failed"` the distinct
+    // `repo_clone_failed` Sentry event already fired INSIDE this call (sanitized
+    // git stderr, every caller). `consumeDispatchCloneOutcome` then F4-safely
+    // flips `repo_status→error` ONLY on the solo/owner path after a post-clone
+    // `.git`-absence CAS, and returns `"block"` so the dispatch honest-blocks
+    // instead of spawning a doomed agent. NO new clone site; NO service-role read.
+    const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
       userId: args.userId,
       workspacePath,
       installationId: effectiveInstallationId,
       repoUrl,
     });
+    if (
+      (await consumeDispatchCloneOutcome(
+        {
+          outcome: dispatchCloneOutcome,
+          userId: args.userId,
+          activeWorkspaceId,
+          workspacePath,
+        },
+        {
+          // F4 status write via the SECURITY DEFINER RPC on the TENANT client
+          // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
+          // the rare failure path, never on the common success hot path.
+          setRepoStatus: async (status, reason) => {
+            const tenant = await getFreshTenantClient(args.userId);
+            const { error } = await tenant.rpc("set_repo_status", {
+              p_workspace_id: activeWorkspaceId,
+              p_status: status,
+              p_error: reason,
+            });
+            if (error) throw error;
+          },
+        },
+      )) === "block"
+    ) {
+      throw new RepoNotReadyError(
+        "error",
+        "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
+        "repo_setup_failed",
+      );
+    }
 
     // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
     // self-heal returned `healed.ok=true` AND after `ensureWorkspaceRepoCloned`
@@ -2012,6 +2053,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         activeWorkspaceId,
         connected: Boolean(repoUrl),
         dbReady: confirmDbReady, // POST-heal (review P3) — see confirmDbReady note above
+        // #5733 D2 — the self-heal + ensureWorkspaceRepoCloned already ran above,
+        // so an absent/dir-invalid `.git` here is a TERMINAL strand → emit + block.
+        phase: "post-heal",
       })) === "block"
     ) {
       throw new RepoNotReadyError(
@@ -2436,6 +2480,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           controllerSignal: controller.signal,
           deps: ccDeps,
         }),
+        // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
+        // cc-soleur-go Concierge router (the eval-covered workflow-routing path).
+        // The legacy domain-leader runner (agent-runner.ts) does NOT opt in.
+        enablePhaseSurfaceHint: true,
       }),
     });
   } catch (err) {

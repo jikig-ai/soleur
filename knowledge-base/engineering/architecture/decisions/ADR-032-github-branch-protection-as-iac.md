@@ -361,6 +361,41 @@ verified surface, and document every accepted gap.
 **Status of this sub-decision: adopting** (flip to `accepted` once the
 post-enablement canary below passes). The parent ADR remains `accepted`.
 
+> **2026-07-01 incident + correction (read first).** The first enablement
+> (PR #5800) DEADLOCKED `main`: the merge queue requires the `CodeQL` status
+> context (GHAS, integration_id 57789), but GitHub CodeQL **default setup does
+> not run on `merge_group`** (only `push`/`pull_request`), so every queue entry
+> stalled `AWAITING_CHECKS` on a CodeQL result that never posted. All 15 OTHER
+> required contexts DID report on the temp ref — PR-1's wiring was correct; the
+> sole gap was CodeQL-on-`merge_group`. Reverted via the kill-switch (remove the
+> `merge_queue` rule) within ~14 min. The parenthetical "(CodeQL is
+> default-setup)" in this amendment's original Phase-2 text was the load-bearing
+> wrong assumption — default setup is **structurally incompatible** with a
+> required-`CodeQL` merge queue.
+>
+> **Decision (2026-07-01): queue stays OFF; NOT re-adopting now.** The merge
+> queue is an optimization over `/ship`'s BEHIND-auto-sync loop, which already
+> mitigates the strict-up-to-date starvation #5780 set out to fix (both PR #5800
+> and the kill-switch PR #5811 merged cleanly through that loop). Re-adopting the
+> queue requires migrating CodeQL **default → advanced** setup
+> (`.github/workflows/codeql.yml` with `on: merge_group`), which (a) disrupts
+> every in-flight PR until it is rebased onto the codeql.yml-bearing main, and
+> (b) adds permanent codeql.yml maintenance (pin/matrix/query-suite) + SAST-drift
+> risk. That cost is not justified while the auto-sync loop works. CodeQL stays
+> on **default setup**.
+>
+> An advanced-setup `codeql.yml` was prototyped in PR #5811 and **removed again
+> in the follow-up** (it errors continuously while default setup is active —
+> the two are mutually exclusive). The full prototype is preserved in #5811's
+> git history as the re-adoption recipe. **To re-adopt the queue later:** restore
+> that `codeql.yml`, disable CodeQL default setup, verify a `CodeQL` context
+> (integration_id 57789) satisfies the required check on a normal PR, rebase
+> in-flight PRs, THEN re-add the `merge_queue` rule. PIR:
+> `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
+> Generalized lesson: a plan recovered from disk after a subagent crash carries
+> its "verify X before shipping" Phase-0 gates as UNVERIFIED claims — re-run the
+> empirical probes, do not inherit them as done.
+
 ### Decision
 
 Adopt a **GitHub merge queue** for `main`, modeled in this same IaC root via the
@@ -404,8 +439,12 @@ landed in the sequenced predecessor PR-1 (#5784). A merge queue dispatches a
 required check whose workflow never fires on `merge_group` leaves the queue entry
 **permanently pending → the queue stalls forever** (the merge-queue analogue of
 the `[skip ci]` / path-filter deadlock). PR-1 added `merge_group:` to all 7
-producer workflows (the 8th producer, CodeQL, is default-setup), fixed the
-apply-verify `rules[0]` → `select(.type==…)` fragility, and added the
+producer workflows; the 8th producer, CodeQL, was originally left on default
+setup **(this was the bug — default setup never fires on `merge_group`; see the
+2026-07-01 incident note above)**. Fixing it requires CodeQL advanced setup with
+an `on: merge_group` trigger — deferred along with the queue itself per the
+2026-07-01 decision (CodeQL remains on default setup for now). PR-1 also fixed
+the apply-verify `rules[0]` → `select(.type==…)` fragility, and added the
 observability + CLA-synthetic workflows.
 
 **Two-PR sequencing is load-bearing:** PR-1 (triggers + verify fix) merged
@@ -476,9 +515,15 @@ plan tier; the `terraform apply` enables it without a plan upgrade.
 ### Post-enablement canary (flip `adopting` → `accepted` when all pass)
 
 These are post-merge verifications — the queue only fires `merge_group` after
-PR-2 applies:
+the queue rule is re-applied:
 
-- `apply-github-infra.yml` ran green on the PR-2 merge; summary shows the
+- **CodeQL advanced setup verified FIRST (the 2026-07-01 deadlock gate):** before
+  re-enabling the queue, confirm CodeQL default setup is disabled, that
+  `.github/workflows/codeql.yml` runs green on `pull_request`, and that a
+  `CodeQL` status context (integration_id 57789) posts and satisfies the required
+  check on a normal PR. Re-enabling the queue before this is the exact regression
+  that caused the incident.
+- `apply-github-infra.yml` ran green on the re-enable merge; summary shows the
   required_status_checks count (16) via the `select(.type==…)` probe.
 - Discoverability:
   `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[] | select(.type=="merge_queue")] | length'`

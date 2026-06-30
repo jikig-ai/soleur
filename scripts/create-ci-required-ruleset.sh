@@ -9,18 +9,12 @@
 # `terraform import` + `terraform plan/apply` to reconcile the ruleset back
 # to Terraform-managed state.
 #
-# SYNC GUARD (#5780, P1-3): the skeleton below restores BOTH rules the live
-# ruleset carries — `required_status_checks` AND `merge_queue`. The
-# `merge_queue` params here MUST be kept in lockstep with the `merge_queue`
-# block in infra/github/ruleset-ci-required.tf. If they drift, a DR restore
-# would create a ruleset that the next `terraform plan` immediately wants to
-# change (and `scheduled-terraform-drift.yml`'s `infra/github` matrix would
-# flag). Two params the .tf leaves at provider default
-# (`max_entries_to_build`, `min_entries_to_merge_wait_minutes`) are set here
-# to GitHub's defaults (5/5) because the raw REST API requires every field;
-# the post-DR `terraform plan` is the authority on their final values.
-# Omitting the merge_queue rule from this skeleton would silently disable the
-# merge queue after a from-scratch DR restore until the next TF apply.
+# The skeleton restores the single `required_status_checks` rule. (#5780 briefly
+# added a `merge_queue` rule here too, but that was REVERTED — the merge queue
+# deadlocked main because CodeQL default setup does not post on `merge_group`
+# temp refs. See ADR-032 + the PIR.) The jq below addresses the status-checks
+# rule by TYPE (not a positional `.rules[0]`) so it stays correct if a second
+# rule is ever re-introduced.
 #
 # IMPORTANT: Run this AFTER the bot workflow updates have merged to main.
 # If run before, bot PRs using [skip ci] will be permanently blocked
@@ -96,27 +90,14 @@ cat > "$skeleton" << 'EOF'
         "do_not_enforce_on_create": false,
         "required_status_checks": []
       }
-    },
-    {
-      "type": "merge_queue",
-      "parameters": {
-        "merge_method": "SQUASH",
-        "grouping_strategy": "ALLGREEN",
-        "max_entries_to_merge": 1,
-        "min_entries_to_merge": 1,
-        "check_response_timeout_minutes": 15,
-        "max_entries_to_build": 5,
-        "min_entries_to_merge_wait_minutes": 5
-      }
     }
   ]
 }
 EOF
 
 # Merge canonical bypass_actors AND required_status_checks into the skeleton.
-# The skeleton now has TWO rules (required_status_checks + merge_queue, #5780),
-# so address the status-checks rule by TYPE, never a positional .rules[0] —
-# a positional index silently writes into the wrong rule if the order changes.
+# Address the status-checks rule by TYPE, never a positional .rules[0], so this
+# stays correct if a second rule (e.g. a future merge_queue) is reintroduced.
 jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" --slurpfile rsc "$CANONICAL_RSC_FILE" \
   '. + {bypass_actors: $bypass[0]}
      | (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks) = $rsc[0]' \
@@ -129,6 +110,5 @@ echo "Ruleset created. Verification:"
 echo "$result" | jq '{
   id, name, enforcement,
   checks: (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks),
-  merge_queue: (.rules[] | select(.type == "merge_queue") | .parameters),
   bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]
 }'

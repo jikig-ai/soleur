@@ -374,6 +374,12 @@ export async function workspaceReconcileOnPushHandler({
         activeWorkspaceId: ws.id,
         connected: Boolean(targetRepoUrl),
         dbReady: true,
+        // #5733 D2 — reconcile is PRE-heal: it re-clones an absent/dir-invalid
+        // `.git` one line below via `!isReadyGitWorkTree`. Emitting an absent
+        // self-stop here would be a pre-heal false-strand that pollutes the soak
+        // signal — so the gate returns "ready" (no emit) for absent/dir-invalid
+        // and this surface's net-new coverage stays the dir-valid-corrupt confirm.
+        phase: "pre-heal",
       });
       if (!isReadyGitWorkTree(workspacePath) || agentReady === "block") {
         const outcome = await ensureWorkspaceRepoCloned({
