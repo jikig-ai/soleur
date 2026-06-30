@@ -1,34 +1,51 @@
 // PR-H (#3244) Phase 3 — GitHub App webhook ingress.
 //
-// Order of operations mirrors the canonical Stripe webhook at
-// `app/api/webhooks/stripe/route.ts:71-159`. Comments are dense because
-// the ordering is load-bearing: every deviation has caused a known
-// data-loss class in industry literature.
+// This route preserves TWO load-bearing idioms from the canonical Stripe
+// webhook (`app/api/webhooks/stripe/route.ts`): the PG_UNIQUE_VIOLATION→200
+// replay short-circuit, and releaseDedupRow()-on-dispatch-failure so a
+// transient inngest.send failure is re-driven by GitHub's redelivery (not
+// silently swallowed as a "duplicate").
+//
+// It INTENTIONALLY DIVERGES from Stripe's dedup-FIRST ordering (2026-06-30,
+// ADR-036 amendment). Stripe writes its dedup row before its handler switch
+// because every Stripe event type is actioned and volume is ~1 row/day. The
+// GitHub stream is dominated by a guaranteed no-op (`workflow_run` with
+// conclusion !== 'failure'); writing a dedup row for EVERY delivery made that
+// single INSERT 63% of the production database's WAL
+// (pg_stat_statements.wal_bytes on project ifsccnjhymdmidffkzhl) — the
+// Disk-IO-budget consumer this reorder removes. So the dedup INSERT now runs
+// DROP-BEFORE-DEDUP: only on a delivery that will actually dispatch, immediately
+// before each inngest.send, AFTER all drop-filters. The invariant that survives
+// is "INSERT strictly before side-effect dispatch" (concurrency-safe via the
+// delivery_id unique constraint). Drops never write a row.
 //
 //   Step 1: read raw body BEFORE JSON.parse (HMAC needs raw bytes).
 //   Step 2: timingSafeEqual signature verify (NEVER `===`).
 //           Fail-closed 401 on mismatch / missing secret.
-//   Step 3: plain .insert() into processed_github_events (NO ON CONFLICT
-//           — supabase-js returns data:null not [] on no-op, which makes
-//           the affected-row gate unreliable; the Stripe path catches
-//           PG_UNIQUE_VIOLATION instead — same idiom here).
-//   Step 4: JSON.parse + switch on req.headers.get('x-github-event').
+//   Step 4: JSON.parse + drop-filters. (There is no longer a "Step 3" dedup
+//           INSERT here — it moved to Step 7-pre.) installation check,
+//           workflow_run conclusion gate, push reconcilability — each drop
+//           returns its existing 200/4xx WITHOUT writing a dedup row.
 //   Step 5: resolve the SOLO-workspace founder for this installation via the
 //           membership self-join (resolveSoloFounderForInstallation, ADR-044
 //           Amendment 2026-06-17b). The reverse-lookup reads the NON-UNIQUE
 //           workspaces install column, so the count is fail-closed: 0 → 404
 //           (no founder owns this install), 1 → founderId, >1 → 404 + PAGE
-//           (ambiguous standing-state — do NOT pick one), db-error → 500 +
-//           releaseDedupRow (GitHub redelivers).
+//           (ambiguous standing-state — do NOT pick one), db-error → 500.
+//           These are PRE-dedup paths now: no row written, none to release.
 //   Step 6: isGranted(supabase, founderId, actionClass) — fail-closed
 //           on no-grant (log + 200) OR DB-error (Sentry via isGranted + 200).
-//   Step 7: inngest.send({ id: github-<deliveryId>, name, v: '1', data }).
-//   Step 8: ON ANY ERROR in steps 5-7 AFTER step 3 INSERT succeeded:
-//           DELETE processed_github_events row (releaseDedupRow mirror)
-//           so the GitHub redelivery can be processed cleanly. Without
-//           this, a transient inngest.send failure leaves the dedup
-//           row, GitHub redelivers, the redelivery 200s as "duplicate",
-//           the event is silently dropped.
+//   Step 7-pre (claimDedupRow): plain .insert() into processed_github_events
+//           (NO ON CONFLICT — supabase-js returns data:null not [] on no-op,
+//           so the affected-row gate is unreliable; catch PG_UNIQUE_VIOLATION
+//           → 200 instead, the Stripe replay idiom). Runs immediately before
+//           EACH dispatch (push + non-push), AFTER every drop-filter.
+//   Step 7: inngest.send({ id: github-<deliveryId>, name, v, data }).
+//   Step 8: ON ANY ERROR in Step 7 AFTER the Step 7-pre INSERT succeeded:
+//           DELETE processed_github_events row (releaseDedupRow) so the GitHub
+//           redelivery can be processed cleanly. Without this, a transient
+//           inngest.send failure leaves the dedup row, GitHub redelivers, the
+//           redelivery 200s as "duplicate", the event is silently dropped.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
@@ -146,16 +163,19 @@ export async function POST(request: Request) {
 
   const supabase = createServiceClient();
 
-  // Step 3: delivery-id dedup. Plain .insert() — NO ON CONFLICT.
-  // supabase-js .insert() returns data:null (not []) on
-  // ON CONFLICT DO NOTHING without .select(); the affected-row gate
-  // is unreliable. We catch PG_UNIQUE_VIOLATION (23505) → 200 instead,
-  // mirroring the Stripe webhook (route.ts:117-127).
-  const { error: dedupErr } = await supabase
-    .from("processed_github_events")
-    .insert({ delivery_id: deliveryId });
-
-  if (dedupErr) {
+  // Step 7-pre: delivery-id dedup claim. Invoked immediately before EACH
+  // dispatch (push + non-push), AFTER all drop-filters — the drop-before-dedup
+  // reorder (2026-06-30, ADR-036 amendment). Plain .insert() — NO ON CONFLICT.
+  // supabase-js .insert() returns data:null (not []) on ON CONFLICT DO NOTHING
+  // without .select(); the affected-row gate is unreliable. We catch
+  // PG_UNIQUE_VIOLATION (23505) → 200 instead, the Stripe replay idiom. Returns
+  // a NextResponse to return early (200 replay / 500 db-error), or null to
+  // proceed to dispatch.
+  async function claimDedupRow(): Promise<NextResponse | null> {
+    const { error: dedupErr } = await supabase
+      .from("processed_github_events")
+      .insert({ delivery_id: deliveryId });
+    if (!dedupErr) return null;
     if (dedupErr.code === PG_UNIQUE_VIOLATION) {
       logger.info(
         { deliveryId, githubEvent },
@@ -174,11 +194,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "DB error" }, { status: 500 });
   }
 
-  // releaseDedupRow mirror of Stripe's pattern at route.ts:144-159.
-  // On any 5xx error in steps 5-7 below, this MUST run before return
-  // so the GitHub redelivery is processed (not silently dropped as a
-  // duplicate). Silently tolerates a DELETE failure — the redelivery
-  // is the correction mechanism.
+  // releaseDedupRow mirror of Stripe's pattern. After a claimDedupRow() INSERT
+  // succeeds, ANY failure on the immediately-following dispatch (push or
+  // non-push) MUST run this before return so the GitHub redelivery is processed
+  // (not silently dropped as a duplicate). Silently tolerates a DELETE failure —
+  // the redelivery is the correction mechanism.
   async function releaseDedupRow(): Promise<void> {
     const { error } = await supabase
       .from("processed_github_events")
@@ -196,7 +216,8 @@ export async function POST(request: Request) {
     }
   }
 
-  // Step 4: parse body (signature verified, dedup committed).
+  // Step 4: parse body (signature verified; dedup is NOT yet committed — it
+  // moves to Step 7-pre, immediately before dispatch).
   let body: {
     installation?: { id?: number };
     action?: string;
@@ -210,7 +231,6 @@ export async function POST(request: Request) {
     body = JSON.parse(rawBody);
   } catch (err) {
     logger.error({ err, deliveryId }, "GitHub webhook: body is not valid JSON");
-    await releaseDedupRow();
     return NextResponse.json({ error: "Malformed body" }, { status: 400 });
   }
 
@@ -220,18 +240,18 @@ export async function POST(request: Request) {
       { deliveryId, githubEvent },
       "GitHub webhook: no installation.id in payload — ignoring",
     );
-    // No installation to attribute → drop and DO NOT release dedup
-    // (any redelivery would also have no installation; let the row
-    // age out via autovacuum).
+    // No installation to attribute → drop. This is a pre-dedup path
+    // (drop-before-dedup): no row was written, so there is nothing to
+    // release.
     return NextResponse.json({ received: true });
   }
 
   // workflow_run gate: only `failure` conclusions are actionable.
   if (githubEvent === "workflow_run" && body.workflow_run?.conclusion !== "failure") {
-    // Skip silently — neither a 4xx nor a draft. The dedup row stays
-    // so a future legitimate failure replay (same delivery_id) is
-    // 200-deduped; new delivery_ids for the same workflow_run land
-    // here on their own merits.
+    // Skip silently — neither a 4xx nor a draft. This is the dominant no-op
+    // case (the 63%-of-WAL driver): drop-before-dedup means NO row is written
+    // here. A redelivery re-evaluates the gate on its own merits; a future
+    // legitimate failure arrives under a distinct delivery_id anyway.
     return NextResponse.json({ received: true });
   }
 
@@ -267,6 +287,10 @@ export async function POST(request: Request) {
       );
       return NextResponse.json({ received: true });
     }
+    // Step 7-pre: claim the dedup row immediately before dispatch (this push
+    // WILL reconcile). A 23505 replay or db-error returns early here.
+    const claimed = await claimDedupRow();
+    if (claimed) return claimed;
     try {
       const { inngest } = await import("@/server/inngest/client");
       await sendInngestWithRetry(
@@ -326,7 +350,7 @@ export async function POST(request: Request) {
       { installationId, deliveryId, githubEvent },
       "GitHub webhook: non-push event has no repository.full_name — cannot repo-scope founder, 404",
     );
-    await releaseDedupRow();
+    // Pre-dedup path (drop-before-dedup): no row written, none to release.
     return NextResponse.json(
       { error: "No repository for installation" },
       { status: 404 },
@@ -351,7 +375,8 @@ export async function POST(request: Request) {
       { installationId, deliveryId },
       "GitHub webhook: founder resolution DB error",
     );
-    await releaseDedupRow();
+    // Pre-dedup path (drop-before-dedup): no row written, none to release.
+    // GitHub retries 5xx, re-driving the delivery.
     return NextResponse.json({ error: "DB error" }, { status: 500 });
   }
   if (founderResolution.kind === "ambiguous") {
@@ -370,7 +395,7 @@ export async function POST(request: Request) {
         extra: { installationId, deliveryId, count: founderResolution.count },
       },
     );
-    await releaseDedupRow();
+    // Pre-dedup path (drop-before-dedup): no row written, none to release.
     return NextResponse.json(
       { error: "Ambiguous founder for installation" },
       { status: 404 },
@@ -382,10 +407,10 @@ export async function POST(request: Request) {
       "GitHub webhook: no founder for installation_id — 404",
     );
     // 404 mirrors GitHub's expectation that the receiver advertises
-    // "not for me"; GitHub will not retry 4xx. Release the dedup row
-    // so a future install→delivery on the same delivery_id (unlikely
-    // but legitimate) is not silently short-circuited (Kieran #1).
-    await releaseDedupRow();
+    // "not for me"; GitHub will not retry 4xx. Pre-dedup path
+    // (drop-before-dedup): no row was written, so there is nothing to
+    // release and a future install→delivery on the same delivery_id is
+    // not short-circuited.
     return NextResponse.json({ error: "No founder for installation" }, { status: 404 });
   }
   // kind === "found": founderId is byte-equal to the resolver's `w.id`
@@ -415,6 +440,12 @@ export async function POST(request: Request) {
     );
     return NextResponse.json({ received: true });
   }
+
+  // Step 7-pre: claim the dedup row immediately before dispatch (grant
+  // confirmed; this event WILL dispatch). A 23505 replay or db-error returns
+  // early here.
+  const claimed = await claimDedupRow();
+  if (claimed) return claimed;
 
   // Step 7: inngest.send. Single event-id namespace per delivery — the
   // Inngest 24h `event.id` dedup window + our DB dedup combine to give

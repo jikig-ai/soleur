@@ -14,6 +14,18 @@ let cached;
 export default async function () {
   if (cached) return cached;
 
+  // Hermetic-build hatch (SOLEUR_DOCS_OFFLINE=1): skip the live GitHub fetch
+  // and return the deterministic empty fallback. Set by the drift-guard tests
+  // that spawn a full Eleventy build in beforeAll (seo-aeo-drift-guard,
+  // marketing-content-drift) so a transient GitHub API rate-limit/5xx/abort in
+  // CI cannot fail the build via the throw-in-CI branch below and surface as a
+  // flaky "(unnamed)" test. Production/deploy builds never set it, so the
+  // fail-loud-in-CI contract is preserved for the real docs deploy.
+  if (process.env.SOLEUR_DOCS_OFFLINE === "1") {
+    cached = { version: null, changelog: { html: "" } };
+    return cached;
+  }
+
   const headers = { Accept: "application/vnd.github+json" };
   if (process.env.GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
