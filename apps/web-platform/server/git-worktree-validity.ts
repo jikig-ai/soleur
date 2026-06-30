@@ -123,6 +123,24 @@ export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
 }
 
 /**
+ * READINESS-grade validity (#5733). `isValidGitWorkTree` is the STRUCTURAL
+ * fast-path gate, but it returns `true` for a `.git` FILE pointer — which a
+ * personal workspace root must never be, and which strands the agent's in-bwrap
+ * `git rev-parse`. The dispatch + reconcile readiness gates use THIS instead:
+ * lstat-valid AND not a stale gitdir-pointer FILE. A file-pointer therefore
+ * routes into `ensureWorkspaceRepoCloned` (which unlinks the pointer + re-clones
+ * a self-contained `.git`) rather than fast-pathing a doomed agent spawn. Cost:
+ * sync lstat(s) only on the common dir-valid path (no subprocess; the small
+ * pointer-body read happens only when `.git` is actually a FILE).
+ */
+export function isReadyGitWorkTree(workspacePath: string): boolean {
+  return (
+    isValidGitWorkTree(workspacePath) &&
+    probeGitWorktreeShape(workspacePath).kind !== "file-pointer"
+  );
+}
+
+/**
  * SYNC POSITIVE empty-corrupt fingerprint — the ONLY authorization for the
  * destructive re-clone `rm` (deepen-plan F2).
  *

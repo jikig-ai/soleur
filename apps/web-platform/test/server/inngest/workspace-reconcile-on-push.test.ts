@@ -108,9 +108,13 @@ vi.mock("@/server/kb-route-helpers", () => ({ syncWorkspace: syncWorkspaceSpy })
 // dir existence. The default implementation reads EXISTING_DIRS so the legacy
 // valid-path fixtures (which add the dir to EXISTING_DIRS) keep their meaning:
 // "dir present" ⇒ "valid .git". The reclone cases below override per-call.
-const isValidGitWorkTreeSpy = vi.fn();
+// #5733 — reconcile readiness now gates on isReadyGitWorkTree (lstat-valid AND
+// not a stale gitdir-pointer FILE). The default spy keeps "dir present ⇒ ready"
+// so the legacy valid-path fixtures (which add the dir to EXISTING_DIRS) retain
+// their meaning; reclone cases override per-call.
+const isReadyGitWorkTreeSpy = vi.fn();
 vi.mock("@/server/git-worktree-validity", () => ({
-  isValidGitWorkTree: (p: string) => isValidGitWorkTreeSpy(p),
+  isReadyGitWorkTree: (p: string) => isReadyGitWorkTreeSpy(p),
 }));
 // The corrupt/absent-.git re-clone primitive. Returns "ok" | "failed".
 const ensureWorkspaceRepoClonedSpy = vi.fn();
@@ -254,8 +258,8 @@ beforeEach(() => {
   // Default: a workspace whose dir is provisioned (in EXISTING_DIRS) reads as a
   // VALID .git, so the legacy valid-path fixtures take the existing sync path.
   // Reclone cases override per-call with mockReturnValueOnce/mockReturnValue.
-  isValidGitWorkTreeSpy.mockReset();
-  isValidGitWorkTreeSpy.mockImplementation((p: string) => EXISTING_DIRS.has(p));
+  isReadyGitWorkTreeSpy.mockReset();
+  isReadyGitWorkTreeSpy.mockImplementation((p: string) => EXISTING_DIRS.has(p));
   ensureWorkspaceRepoClonedSpy.mockReset();
   ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
   addBreadcrumbSpy.mockReset();
@@ -840,7 +844,7 @@ describe("reconcile — validity-aware readiness gate + re-clone (the fix)", () 
     // the correct result regardless of which caller grafted (data-integrity).
     WORKSPACE_ROWS = [{ id: WS }];
     OWNERS.set(WS, OWNER);
-    isValidGitWorkTreeSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    isReadyGitWorkTreeSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
     ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
 
     const handler = await importHandler();
@@ -864,7 +868,7 @@ describe("reconcile — validity-aware readiness gate + re-clone (the fix)", () 
   it("case 3 — populated-but-broken honest-block ('failed') is NOT claimed as recovered; audit workspace_not_ready, breadcrumb recovered:false", async () => {
     WORKSPACE_ROWS = [{ id: WS }];
     OWNERS.set(WS, OWNER);
-    isValidGitWorkTreeSpy.mockReturnValue(false); // false on both probes
+    isReadyGitWorkTreeSpy.mockReturnValue(false); // false on both probes
     ensureWorkspaceRepoClonedSpy.mockResolvedValue("failed");
 
     const handler = await importHandler();
@@ -883,7 +887,7 @@ describe("reconcile — validity-aware readiness gate + re-clone (the fix)", () 
   it("case 4 — benign 'ok' that did NOT heal (proxy guard): re-probe still false ⇒ recovered:false, workspace_not_ready", async () => {
     WORKSPACE_ROWS = [{ id: WS }];
     OWNERS.set(WS, OWNER);
-    isValidGitWorkTreeSpy.mockReturnValue(false); // re-probe stays false
+    isReadyGitWorkTreeSpy.mockReturnValue(false); // re-probe stays false
     ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok"); // benign skip, healed nothing
 
     const handler = await importHandler();
@@ -900,7 +904,7 @@ describe("reconcile — validity-aware readiness gate + re-clone (the fix)", () 
   it("case 5 — owner-less workspace: ensureWorkspaceRepoCloned userId falls back to ws.id; audit via workspace-keyed path", async () => {
     const WL = "99999999-9999-4999-8999-999999999999"; // no OWNERS entry ⇒ ownerId null
     WORKSPACE_ROWS = [{ id: WL }];
-    isValidGitWorkTreeSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    isReadyGitWorkTreeSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
     ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
 
     const handler = await importHandler();

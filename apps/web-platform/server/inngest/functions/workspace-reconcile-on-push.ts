@@ -25,7 +25,7 @@ import {
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
-import { isValidGitWorkTree } from "@/server/git-worktree-validity";
+import { isReadyGitWorkTree } from "@/server/git-worktree-validity";
 import { ensureWorkspaceRepoCloned } from "@/server/ensure-workspace-repo";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
@@ -350,7 +350,7 @@ export async function workspaceReconcileOnPushHandler({
       // 2026-06-29). A VALID .git takes the existing pull/reset sync path. An INVALID
       // or ABSENT .git is re-cloned via the validity+corrupt-aware ensure path — the
       // permanent-trap that a dir-existence-only readiness check could never recover.
-      if (!isValidGitWorkTree(workspacePath)) {
+      if (!isReadyGitWorkTree(workspacePath)) {
         const outcome = await ensureWorkspaceRepoCloned({
           userId: breadcrumbUserId,
           workspacePath,
@@ -361,7 +361,7 @@ export async function workspaceReconcileOnPushHandler({
         // Assert the INVARIANT, not the "ok" proxy: ensureWorkspaceRepoCloned returns
         // "ok" for a benign skip (e.g. a repo_url that fails its github-https allowlist)
         // WITHOUT having healed anything. Re-probe validity to decide recovered.
-        const recovered = outcome === "ok" && isValidGitWorkTree(workspacePath);
+        const recovered = outcome === "ok" && isReadyGitWorkTree(workspacePath);
 
         // Best-effort transaction-trace context (task-mandated). NOTE: a breadcrumb is
         // only transmitted when a captureException/Message fires on the same Sentry scope;

@@ -121,6 +121,7 @@ import {
 // repo-less spawn.
 import {
   isValidGitWorkTree,
+  isReadyGitWorkTree,
   probeGitWorktreeShape,
 } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
@@ -1807,21 +1808,23 @@ export const realSdkQueryFactory: QueryFactory = async (
     // probe is cheap (lstat + maybe one small read) and evaluated AFTER the
     // readiness short-circuit so the common valid-`.git`-dir hot path is unaffected.
     const gitShape = probeGitWorktreeShape(workspacePath);
-    const gitFilePointerStrand = gitShape.kind === "file-pointer";
-    if (gitFilePointerStrand) {
+    if (gitShape.kind === "file-pointer") {
       reportAgentReadinessSelfStop({
         userId: args.userId,
         activeWorkspaceId,
         workspacePath,
-        gitValid: isValidGitWorkTree(workspacePath),
+        gitValid: isValidGitWorkTree(workspacePath), // lstat-valid (the trap)
         gitKind: gitShape.kind,
         gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
       });
     }
+    // Readiness-grade validity (`isReadyGitWorkTree`) treats a file-pointer as
+    // NOT valid, so it falls through to the self-heal below. `gitDirValid` (the
+    // seam consumed by resolveRepoReadinessWithSelfHeal) MUST use the same
+    // predicate, else the readiness module's fast-path (`:199`) short-circuits
+    // on lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
     const needsSelfHeal =
-      !repoReadiness.ok ||
-      !isValidGitWorkTree(workspacePath) ||
-      gitFilePointerStrand;
+      !repoReadiness.ok || !isReadyGitWorkTree(workspacePath);
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
@@ -1864,10 +1867,12 @@ export const realSdkQueryFactory: QueryFactory = async (
             // TRUE PRESENCE — used only by the null-install divergence gates
             // (a corrupt `.git` is NOT absent; F1).
             gitDirExists: (p) => existsSync(path.join(p, ".git")),
-            // STRUCTURAL VALIDITY (2026-06-19) — the fast-path/recovery gate. A
-            // `.git` present-but-corrupt is `false` here, routing it to the
-            // corrupt-worktree graft instead of fast-pathing a repo-less spawn.
-            gitDirValid: (p) => isValidGitWorkTree(p),
+            // READINESS-grade validity (#5733) — the fast-path/recovery gate. A
+            // `.git` present-but-corrupt OR a stale gitdir-pointer FILE is
+            // `false` here, routing it to the corrupt-worktree graft (which now
+            // re-clones a self-contained `.git` over a pointer) instead of
+            // fast-pathing a repo-less / strand-bound spawn.
+            gitDirValid: (p) => isReadyGitWorkTree(p),
             // Dispatch-time divergence emit. The readiness module recognizes a
             // connected-but-null-install workspace (`connected-null-install-at-
             // dispatch`) OR a corrupt on-disk `.git` (`corrupt-worktree-at-

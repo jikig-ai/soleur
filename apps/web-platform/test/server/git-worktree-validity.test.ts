@@ -14,6 +14,7 @@ import {
   isValidGitWorkTree,
   isEmptyCorruptGitDir,
   probeGitWorktreeShape,
+  isReadyGitWorkTree,
 } from "@/server/git-worktree-validity";
 
 // Safety-critical probes (deepen-plan F2): `isEmptyCorruptGitDir` is the ONLY
@@ -141,6 +142,30 @@ describe("git-worktree-validity", () => {
       const shape = probeGitWorktreeShape(p);
       expect(shape.kind).toBe("file-pointer");
       expect(shape.gitdirEscapesWorkspace).toBe(false);
+    });
+  });
+
+  // #5733 — readiness-grade validity: a `.git` FILE pointer is lstat-VALID but
+  // NOT ready (it strands the agent's in-bwrap rev-parse) → must route to heal.
+  describe("isReadyGitWorkTree (#5733)", () => {
+    it("dir with HEAD+objects → ready (true)", async () => {
+      const p = await ws("ready-valid");
+      await mkdir(join(p, ".git", "objects"), { recursive: true });
+      await writeFile(join(p, ".git", "HEAD"), "ref: refs/heads/main\n");
+      expect(isValidGitWorkTree(p)).toBe(true);
+      expect(isReadyGitWorkTree(p)).toBe(true);
+    });
+
+    it("`.git` FILE pointer → lstat-VALID but NOT ready (false) — routes to re-clone", async () => {
+      const p = await ws("ready-pointer");
+      await writeFile(join(p, ".git"), "gitdir: /workspaces/other/.git/worktrees/x\n");
+      expect(isValidGitWorkTree(p)).toBe(true); // the lstat trap
+      expect(isReadyGitWorkTree(p)).toBe(false); // readiness-grade rejects it
+    });
+
+    it("absent `.git` → not ready (false)", async () => {
+      const p = await ws("ready-absent");
+      expect(isReadyGitWorkTree(p)).toBe(false);
     });
   });
 
