@@ -41,10 +41,9 @@
 --   The prune's own DELETE is WAL-logged, so the prune is a disk/cache-pressure
 --   play, not a WAL play — Statement 1 is the WAL lever. The first daily run drains
 --   the unbounded backlog (~28k rows on dev, ~97% older than 7d, live-probed
---   2026-06-30; well under any chunking threshold) IN ISOLATION — it is NOT coupled
---   to this migration's transaction, so a slow first drain cannot roll back the
---   throttle. This is why NO one-time purge is included here (it would be a
---   non-sargable seq scan on an unindexed table under --single-transaction).
+--   2026-06-30) IN ISOLATION — NOT coupled to this migration's transaction, so a
+--   slow first drain cannot roll back the throttle. No one-time purge here (it would
+--   be a non-sargable seq scan under --single-transaction); see plan §2.
 --
 -- Atomicity: run-migrations.sh runs each file under `psql --single-transaction`,
 -- so both reschedules commit/rollback as one unit. `EXCEPTION WHEN duplicate_object`

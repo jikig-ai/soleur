@@ -18,8 +18,7 @@ const WS_CLOSED = 3;
 // (b) SELECT count on `user_concurrency_slots` terminated by
 // `.gte("last_heartbeat_at", liveCutoff)` (head: true, count: 'exact' —
 // thenable returns `{ count, error }`). The count path freshness-filters
-// stale slots (migration 114 throttle safety, #5738); `.eq()` retains a
-// thenable for backward-safety but the count now resolves via `.gte()`.
+// stale slots (migration 114 throttle safety, #5738) and resolves via `.gte()`.
 const { mockSingle, mockEq, mockSelect, mockFrom, mockCount, mockGte } = vi.hoisted(() => {
   const mockSingle = vi.fn();
   const mockCount = vi.fn();
@@ -32,13 +31,10 @@ const { mockSingle, mockEq, mockSelect, mockFrom, mockCount, mockGte } = vi.hois
   const mockEq = vi.fn((_col: string, _val: unknown) => {
     // `.eq()` on the `users` path is immediately followed by `.single()`;
     // on the count path it is followed by `.gte("last_heartbeat_at", …)`.
-    const result = { single: mockSingle, gte: mockGte } as {
+    return { single: mockSingle, gte: mockGte } as {
       single: typeof mockSingle;
       gte: typeof mockGte;
-      then?: unknown;
     };
-    result.then = (resolve: (v: unknown) => unknown) => resolve(mockCount());
-    return result;
   });
   const mockSelect = vi.fn(() => ({ eq: mockEq }));
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
