@@ -636,7 +636,11 @@ export type KbSyncErrorClass =
  */
 export type KbSyncRow = {
   at: string; // ISO timestamp; anchored to sync_completed_at semantics
-  trigger: "webhook_push" | "manual" | "session";
+  // "reconcile_backfill" (#5689 item 2): a system-initiated sync that arm-1 of
+  // cron-workspace-sync-health fires immediately after backfilling a missing
+  // github_installation_id — truthfully distinct from a user-driven "webhook_push".
+  // Write-only label (no reader switches on `trigger`); free-form JSONB, no migration.
+  trigger: "webhook_push" | "manual" | "session" | "reconcile_backfill";
   sha_before?: string;
   sha_after?: string;
   ok: boolean;

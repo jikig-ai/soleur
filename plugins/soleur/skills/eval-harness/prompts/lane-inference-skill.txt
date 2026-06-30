@@ -1,0 +1,15 @@
+You are the Soleur brainstorm lane classifier. Classify the feature description into EXACTLY ONE lane using this rule.
+
+Lane inference rule:
+| Lane | Phase 0.5 effect | Triggers (case-insensitive token scan) |
+|---|---|---|
+| `single-domain` | Spawn one leader (highest-relevance per Assessment Questions). On tie, fall back to **config declaration order** in this file's domain table (first match wins). | No `cross-domain` trigger AND no `procedural` trigger. |
+| `cross-domain` | Spawn ≥2 leaders in parallel. If fewer than 2 match Assessment Questions, **fail-closed expand**: add the next-highest-relevance domain not yet in the set; tie-break by config declaration order. | `audit`, `review`, `security`, `compliance`, `migration`, `data`, `infra`, `regulated`, `payment`, `auth`, `cross-tenant`, `billing`, `gdpr`, `privacy`. |
+| `procedural` | Spawn zero leaders. | `scaffold`, `lockfile`, `format-only`, `rename-only`, `dep-bump`, `version-bump`, `lint-fix` AND no `cross-domain` trigger. |
+
+**Fail-closed default** when keyword inference returns no signal AND operator selects nothing resolvable: `cross-domain`. Cost asymmetry — false-positive fan-out is recoverable; missed user-impact gate is shipped breach.
+
+Respond with ONLY the single lane token (one of: procedural, single-domain, cross-domain). No explanation, no punctuation, no extra words.
+
+Feature description: {{input}}
+Lane:

@@ -325,20 +325,27 @@ jobs:
     # bump (claude-code/playwright/node) forces a one-time FULL image re-pull on
     # the prod server, which a 900s ceiling cannot fit — see the v0.116.1 buildx
     # full-repull PIR (post-mortems/v0116-1-buildx-driver-full-repull-deploy-timeout).
+    # Ceiling raised 1800s→4800s (#5669 / ADR-068): the cron drain in ci-deploy.sh
+    # can wait up to CRON_DRAIN_TIMEOUT=4200s (MAX per-function maxTurnDurationMs)
+    # for an in-flight cron before swapping, so the deploy wall-clock must exceed
+    # drain + swap overhead (worst-case deploy ~80min). Trade-off named in ADR-068:
+    # IN_FLIGHT_CEILING_S also gates the pre-rerun stale-lock probe below, so a
+    # wedged prior deploy now reads as "alive" for ~80min and hung-deploy failure
+    # surfaces ~80min slower.
     # All four windows move together (asserted at runtime + by ci-deploy-wrapper.test.sh):
-    #   STATUS: 360 * 5s = 1800   HEALTH: 180 * 10s = 1800   IN_FLIGHT_CEILING_S: 1800   wrapper: 1800s
+    #   STATUS: 960 * 5s = 4800   HEALTH: 480 * 10s = 4800   IN_FLIGHT_CEILING_S: 4800   wrapper: 4800s
     env:
-      STATUS_POLL_MAX_ATTEMPTS: 360
+      STATUS_POLL_MAX_ATTEMPTS: 960
       STATUS_POLL_INTERVAL_S: 5
-      HEALTH_POLL_MAX_ATTEMPTS: 180
+      HEALTH_POLL_MAX_ATTEMPTS: 480
       HEALTH_POLL_INTERVAL_S: 10
       # IN_FLIGHT_CEILING_S MUST equal the wall-clock cap in
-      # apps/web-platform/infra/ci-deploy-wrapper.sh (timeout ... 1800s ...)
+      # apps/web-platform/infra/ci-deploy-wrapper.sh (timeout ... 4800s ...)
       # so the server-side hard-kill fires exactly when the workflow gives
       # up polling (#3704). Drift produces either a perpetual "running"
       # state (workflow gives up before kill) or wasted polling cycles
       # (kill fires before workflow times out).
-      IN_FLIGHT_CEILING_S: 1800
+      IN_FLIGHT_CEILING_S: 4800
     steps:
       - name: Pre-rerun lock probe
         # #3408: short-circuit if the prior deploy is still in flight, so a

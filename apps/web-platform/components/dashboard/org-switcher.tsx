@@ -23,6 +23,7 @@ export function OrgSwitcher({
   memberships,
   onSwitch,
   repoName,
+  collapsed = false,
 }: {
   memberships: readonly OrgMembershipSummary[];
   onSwitch?: (organizationId: string) => void;
@@ -32,6 +33,13 @@ export function OrgSwitcher({
    *  The subtitle keeps the `live-repo-badge` testid (inherited from the
    *  retired standalone badge) so existing e2e/unit selectors stay valid. */
   repoName?: string | null;
+  /** Collapsed rail (md:w-14) icon-only mode. The SAME mounted OrgSwitcher (and
+   *  its parent OrgSwitcherContainer) owns BOTH the full pill and the icon tile,
+   *  so a collapse/expand toggle is a prop change on a persistent element — NOT
+   *  an element swap. That is the only thing that preserves the membership fetch
+   *  + switch-confirm state across the toggle (ADR-047; the band's former
+   *  `collapsed` early-return remounted this container and re-fired its fetch). */
+  collapsed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -71,6 +79,32 @@ export function OrgSwitcher({
   if (memberships.length === 0) return null;
 
   const current = memberships.find((m) => m.isCurrent) ?? memberships[0];
+
+  // Collapsed rail (md:w-14): render ONLY the icon-only identity tile — no pill
+  // chrome, no `▾`, no switch button (there is no horizontal room for them at
+  // 56px). Both solo and multi-org collapse to the same icon. The full workspace
+  // name rides the `title`/`aria-label` as the authoritative disambiguator for
+  // shared-initial monograms (P0-3). Keeps the `workspace-identity-icon` testid +
+  // tooltip the band unit suite and nav-states-shell.e2e.ts depend on — they used
+  // to be produced by the band's (now-deleted) collapsed early-return.
+  if (collapsed) {
+    return (
+      <span
+        data-testid="workspace-identity-icon"
+        aria-label={current.organizationName}
+        title={current.organizationName}
+        className="flex shrink-0"
+      >
+        <WorkspaceIdentityTile
+          name={current.organizationName}
+          size="sm"
+          variant="identity"
+          workspaceId={current.workspaceId}
+          hasLogo={current.hasLogo}
+        />
+      </span>
+    );
+  }
 
   // RQ7 / CPO sign-off condition #2: a solo user (exactly one workspace) still
   // sees their workspace NAME in the context band for orientation, but as a

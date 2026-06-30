@@ -123,6 +123,33 @@ Root cause: a silent, string-returning, membership-self-healing resolver used on
 path with no result discriminator and no observability — fixed by an explicit, fail-closed,
 membership-verified resolver resolved once and threaded, plus a deduped divergence breadcrumb.
 
+## Amendment 2026-06-22 — PR-3: reprovision-path manifestation (surviving site)
+
+PR-1 (#5435) closed the dual-resolver divergence in the **cold dispatch factory**
+(`realSdkQueryFactory:1536`). A surviving manifestation of the SAME incident was
+found 2026-06-22 via a team **Member** stranded in the new **routines panel**: the
+per-dispatch `reprovisionWorkspaceOnDispatch` (`cc-reprovision.ts`, fire-and-forget
+on every warm+cold dispatch at `cc-dispatcher.ts:2899`) was a SECOND, separate
+consumer that PR-1 did not thread. It re-derived the workspace id via three
+divergent resolvers (membership-verified path vs. raw-claim install/repo), so a
+non-member/stale-claim member grafted the team repo into the solo
+`/workspaces/<userId>` (no `.git`) and the routine-authoring directive hard-STOPped
+on the missing work tree.
+
+This is **not a new incident** — it is the #4767 divergence class this post-mortem
+already covers, on a code path PR-1's scope missed. **Same disposition:** availability
+(no cross-tenant read — the membership-verified resolver fail-closes to the caller's
+own solo workspace; the install RPC denies for non-members), so **Art. 33/34 remain
+not-triggered** (consistent with this PIR's frontmatter).
+
+**Fix (PR-3):** port PR-1's resolve-once-and-thread into `reprovisionWorkspaceOnDispatch`
+— one `resolveActiveWorkspace`, thread the single membership-verified id into all three
+consumers, fail-closed `db-error` → skip (fire-and-forget, not the readiness boundary),
+and emit a new deduped breadcrumb op `reprovision-non-member-claim-reset` so the
+formerly-invisible reprovision divergence is queryable. Recorded as the PR-3 amendment
+in ADR-044. No new follow-up issue: the only residual (Sentry routing fan-out for the
+new op) is the **already-tracked #5437** soak-gated fast-follow below.
+
 ## Action Items & Follow-ups
 
 | Issue | Item | Owner | Status |

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-06-07T02:04:52Z",
+  "generated_at": "2026-06-21T02:11:02Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -926,6 +926,19 @@
       "rule_text_prefix": " → rest"
     },
     {
+      "id": "wg-architecture-decision-is-a-plan-deliverable",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
+    },
+    {
       "id": "wg-at-session-start-after-cleanup-merged",
       "section": "Workflow Gates",
       "hit_count": 0,
@@ -1070,6 +1083,19 @@
     },
     {
       "id": "wg-pm-class-followthrough-for-operator-dogfood",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "wg-record-recurring-vendor-expense-before-ready",
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1239,8 +1265,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 95,
-    "rules_unused_over_8w": 95,
+    "total_rules_tagged": 97,
+    "rules_unused_over_8w": 97,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,

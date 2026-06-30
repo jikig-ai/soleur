@@ -72,7 +72,11 @@ import {
   deferIfTier2Cron,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  digestIssueExistsForDate,
+  SCHEDULED_DIGEST_TITLE_PREFIX,
   ensureScheduledAuditIssue,
+  finalizeOutputAwareHeartbeat,
+  DeployInProgressError,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -81,6 +85,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -222,7 +227,10 @@ Only changes under knowledge-base/support/community/ are persisted — keep all 
 Creating the monitor issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 
 DEDUP RULE (BEFORE creating the monitor issue): run
-  gh issue list --label scheduled-community-monitor --state open --search 'Community Monitor in:title' --json number,title,createdAt
+  gh issue list --label scheduled-community-monitor --state all --json number,title,createdAt
+Use this LIST form, NOT \`--search 'Community Monitor in:title'\` — the GitHub
+search index lags minutes behind the primary index, so a search would miss an
+issue an earlier same-day run already filed and you would create a duplicate.
 If any results from within the last 24 hours exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same day as the natural 08:00 UTC cron.
 
 CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue \`updatedAt\` timestamps via \`gh issue list --json updatedAt,number\` instead. The containment hook only allows the \`gh issue\` / \`gh label\` verbs listed above plus the community-router.sh script — do NOT reach for any other \`gh\` sub-command or the raw API.
@@ -285,6 +293,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronCommunityMonitorHandler({
   step,
   logger,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
   // this cron needs per-construct Bash-allowlist refinement or non-GitHub
@@ -310,6 +320,36 @@ export async function cronCommunityMonitorHandler({
     async () => new Date().toISOString(),
   );
 
+  // #5751 — producer-side date-dedup (Phase 0 verdict: H-A multiple serialized
+  // invocations, compounded by H-C the stale-search-index in-prompt DEDUP RULE).
+  // On affected days two invocations (the 08:00 cron + an operator manual-trigger,
+  // or a doubled delivery) each filed a full `[Scheduled] Community Monitor - <date>`
+  // digest because the in-prompt rule read the lagging SEARCH index.
+  // concurrency:{scope:"fn",limit:1} (registration below) serializes the two, so
+  // the second's FRESH LIST read sees the first's issue. If a real digest already
+  // exists for today, skip the eval and post a healthy OK heartbeat — do NOT fall
+  // through to verify-output, whose run-window (updated_at >= THIS runStartedAt)
+  // would exclude the earlier issue and false-RED the skip. Date anchor is
+  // runStartedAt.slice(0,10) (replay-stable across the retries:1 memoization).
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-community-monitor",
+    }),
+  );
+  if (digestAlreadyExists) {
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: true,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-community-monitor",
+        logger,
+      });
+    });
+    return { ok: true };
+  }
+
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
@@ -330,6 +370,11 @@ export async function cronCommunityMonitorHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
+    // #5728 G1 — a deploy-in-progress defer (ADR-068/#5686) is a benign fail-SAFE
+    // skip, NOT a failure. Rethrow it bare with NO heartbeat so Inngest retries
+    // after the container swap; posting ?status=error here would red-flag a
+    // benign defer AND defeat the retry intent.
+    if (err instanceof DeployInProgressError) throw err;
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
     const redacted = new Error(redactedMsg);
@@ -347,116 +392,168 @@ export async function cronCommunityMonitorHandler({
   }
 
   try {
-    const spawnResult = await step.run(
-      "claude-eval",
-      async (): Promise<SpawnResult> => {
-        return spawnClaudeEval({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          flags: CLAUDE_CODE_FLAGS,
-          prompt: COMMUNITY_MONITOR_PROMPT,
-          maxTurnDurationMs: MAX_TURN_DURATION_MS,
-          cronName: "cron-community-monitor",
-          buildSpawnEnv,
-          logger,
-        });
-      },
-    );
-
-    if (spawnResult.abortedByTimeout) {
-      reportSilentFallback(
-        new Error(
-          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-        ),
-        {
-          feature: "cron-community-monitor",
-          op: "claude-eval-timeout",
-          message: "claude-eval aborted by AbortController",
-          extra: {
-            fn: "cron-community-monitor",
-            durationMs: spawnResult.durationMs,
-            maxMs: MAX_TURN_DURATION_MS,
-          },
+    // #5728 — flag pattern. The body (claude-eval → verify-output →
+    // safe-commit-pr) runs in an inner try whose throw sets `threw`; the single
+    // terminal heartbeat is posted (or skipped-for-retry) by
+    // finalizeOutputAwareHeartbeat below — NOT from a second catch-site (which,
+    // under retries:1 memoization, would replay a stale `ok` while posting a
+    // conflicting `error`). A throw before the heartbeat previously propagated
+    // out → the heartbeat step never ran → silent `missed` (the 06-13→06-21
+    // class). spawnResult is hoisted so the silence-hole audit issue can read it
+    // even when a later step threw.
+    let heartbeatOk = false;
+    let threw = false;
+    let spawnResult: SpawnResult | null = null;
+    try {
+      spawnResult = await step.run(
+        "claude-eval",
+        async (): Promise<SpawnResult> => {
+          return spawnClaudeEval({
+            spawnCwd: spawnCwd!,
+            installationToken,
+            flags: CLAUDE_CODE_FLAGS,
+            prompt: COMMUNITY_MONITOR_PROMPT,
+            maxTurnDurationMs: MAX_TURN_DURATION_MS,
+            cronName: "cron-community-monitor",
+            buildSpawnEnv,
+            logger,
+          });
         },
       );
-    }
 
-    // --- output-aware heartbeat. This cron is an always-create producer — it
-    //     writes a dated digest and files a GitHub issue summarizing the
-    //     findings every run (even the no-platform-enabled path creates a titled
-    //     issue) — so a clean exit that produced no `scheduled-community-monitor`
-    //     issue in the run window turns the monitor RED (and emits
-    //     `scheduled-output-missing`) instead of false-green on claude's exit
-    //     code. Mirrors the 3 producers wired by PR #4714 (#4730). Infra faults
-    //     still page via the early-return status=error heartbeats. ---
-    const heartbeatOk = await step.run("verify-output", async () =>
-      resolveOutputAwareOk({
-        spawnOk: spawnResult.ok,
-        label: SENTRY_MONITOR_SLUG,
-        runStartedAt,
-        cronName: "cron-community-monitor",
-        stderrTail: spawnResult.stderrTail,
-        exitCode: spawnResult.exitCode,
-        stdoutTail: spawnResult.stdoutTail,
-      }),
-    );
-    // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
-    //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
-    //     than the spawn exit code: exit-0-with-no-issue is unverified
-    //     (possibly mid-edit) work that must not auto-merge, while
-    //     issue-created + non-zero exit is the documented healthy #4747 case
-    //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
-    //     falls back to the spawn exit code when its GitHub verify-read
-    //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
-    //     a hard kill can land mid-edit, and the timeout is already loud via
-    //     the reportSilentFallback above. Guard aborts / persistence failures
-    //     self-report inside the helper (Sentry + issue comment).
-    if (heartbeatOk && !spawnResult.abortedByTimeout) {
-      await step.run("safe-commit-pr", async () =>
-        safeCommitAndPr({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          cronName: "cron-community-monitor",
-          commitMessage: "docs: daily community digest",
-          allowedPaths: COMMUNITY_MONITOR_ALLOWED_PATHS,
+      if (spawnResult.abortedByTimeout) {
+        reportSilentFallback(
+          new Error(
+            `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
+          ),
+          {
+            feature: "cron-community-monitor",
+            op: "claude-eval-timeout",
+            message: "claude-eval aborted by AbortController",
+            extra: {
+              fn: "cron-community-monitor",
+              durationMs: spawnResult.durationMs,
+              maxMs: MAX_TURN_DURATION_MS,
+            },
+          },
+        );
+      }
+
+      // --- output-aware heartbeat. This cron is an always-create producer — it
+      //     writes a dated digest and files a GitHub issue summarizing the
+      //     findings every run (even the no-platform-enabled path creates a titled
+      //     issue) — so a clean exit that produced no `scheduled-community-monitor`
+      //     issue in the run window turns the monitor RED (and emits
+      //     `scheduled-output-missing`) instead of false-green on claude's exit
+      //     code. Mirrors the 3 producers wired by PR #4714 (#4730). Infra faults
+      //     still page via the early-return status=error heartbeats. ---
+      heartbeatOk = await step.run("verify-output", async () =>
+        resolveOutputAwareOk({
+          spawnOk: spawnResult!.ok,
+          label: SENTRY_MONITOR_SLUG,
           runStartedAt,
-          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
-          logger,
+          cronName: "cron-community-monitor",
+          stderrTail: spawnResult!.stderrTail,
+          exitCode: spawnResult!.exitCode,
+          stdoutTail: spawnResult!.stdoutTail,
         }),
       );
-    }
-    await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-community-monitor", logger });
-    });
-
-    // --- Step 5: silence-hole fallback (#4960, generalized #4978). When the
-    //     output-aware check found NO scheduled-community-monitor issue in the
-    //     run window, the prompt's create-issue step never ran (mid-eval crash /
-    //     API 500 / max-turns kill). Self-report a FAILED audit issue so the run
-    //     is never silent. Wrapped so a create failure cannot crash the
-    //     finally/teardown — reported to Sentry instead; the watchdog still
-    //     catches the absence after threshold (defense-in-depth). ---
-    if (!heartbeatOk) {
-      await step.run("ensure-audit-issue", async () => {
-        try {
-          await ensureScheduledAuditIssue({
-            label: SENTRY_MONITOR_SLUG,
-            titlePrefix: "[Scheduled] Community Monitor -",
-            cronName: "cron-community-monitor",
-            runStartedAt,
-            spawnResult,
+      // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
+      //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
+      //     than the spawn exit code: exit-0-with-no-issue is unverified
+      //     (possibly mid-edit) work that must not auto-merge, while
+      //     issue-created + non-zero exit is the documented healthy #4747 case
+      //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
+      //     falls back to the spawn exit code when its GitHub verify-read
+      //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
+      //     a hard kill can land mid-edit, and the timeout is already loud via
+      //     the reportSilentFallback above. Guard aborts / persistence failures
+      //     self-report inside the helper (Sentry + issue comment).
+      if (heartbeatOk && !spawnResult.abortedByTimeout) {
+        await step.run("safe-commit-pr", async () =>
+          safeCommitAndPr({
+            spawnCwd: spawnCwd!,
             installationToken,
-          });
-        } catch (err) {
-          reportSilentFallback(err, {
-            feature: "cron-community-monitor",
-            op: "ensure-audit-issue-failed",
-            message:
-              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
-            extra: { fn: "cron-community-monitor", runStartedAt },
-          });
-        }
+            cronName: "cron-community-monitor",
+            commitMessage: "docs: daily community digest",
+            allowedPaths: COMMUNITY_MONITOR_ALLOWED_PATHS,
+            runStartedAt,
+            scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+            logger,
+          }),
+        );
+      }
+    } catch (err) {
+      // #5728 G1 — a deploy-in-progress defer is benign (ADR-068/#5686): rethrow
+      // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
+      // is a real failure — flag it; finalizeOutputAwareHeartbeat decides
+      // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step
+      // (safe-commit-pr) stays GREEN — heartbeatOk is already true and the
+      // persistence failure self-reports here.
+      if (err instanceof DeployInProgressError) throw err;
+      threw = true;
+      const e = err as Error;
+      const redactedMsg = redactToken(e.message ?? "", installationToken);
+      const redacted = new Error(redactedMsg);
+      redacted.name = e.name;
+      reportSilentFallback(redacted, {
+        feature: "cron-community-monitor",
+        op: "handler-body-threw",
+        message:
+          "cron-community-monitor body threw before the terminal heartbeat",
+        extra: {
+          fn: "cron-community-monitor",
+          attempt: attempt ?? 0,
+          producedOutput: heartbeatOk,
+        },
       });
+    }
+
+    // --- Single authoritative terminal heartbeat (memoization-safe,
+    //     final-attempt gated). On a genuine non-final failure the helper skips
+    //     the whole heartbeat step and returns retry:true (we rethrow to trigger
+    //     the Inngest retry, filing NO premature FAILED issue). On the post path,
+    //     the Step-5 silence-hole fallback (#4960/#4978) files a FAILED audit
+    //     issue when red, ordered BEFORE the heartbeat so the heartbeat stays the
+    //     genuine last step. ---
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      step,
+      heartbeatOk,
+      threw,
+      attempt,
+      maxAttempts,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-community-monitor",
+      logger,
+      onBeforeHeartbeat: heartbeatOk
+        ? undefined
+        : async () => {
+            await step.run("ensure-audit-issue", async () => {
+              try {
+                await ensureScheduledAuditIssue({
+                  label: SENTRY_MONITOR_SLUG,
+                  titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX,
+                  cronName: "cron-community-monitor",
+                  runStartedAt,
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-community-monitor"),
+                  installationToken,
+                });
+              } catch (err) {
+                reportSilentFallback(err, {
+                  feature: "cron-community-monitor",
+                  op: "ensure-audit-issue-failed",
+                  message:
+                    "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+                  extra: { fn: "cron-community-monitor", runStartedAt },
+                });
+              }
+            });
+          },
+    });
+    if (retry) {
+      throw new Error(
+        "cron-community-monitor failed on a non-final attempt; retrying",
+      );
     }
 
     return { ok: heartbeatOk };

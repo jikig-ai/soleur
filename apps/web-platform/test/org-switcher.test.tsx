@@ -197,3 +197,49 @@ describe("OrgSwitcher — workspace identity tile wiring (Phase 1, #4915)", () =
     expect(goldSwatch).toBeUndefined();
   });
 });
+
+// Collapsed icon-only mode (remount-fix, 2026-06-22): the SAME OrgSwitcher
+// instance owns both the full pill and the collapsed icon tile, so a collapse
+// toggle is a prop change on a persistent element — the only thing that
+// preserves the parent container's fetch + confirm state across the toggle.
+describe("OrgSwitcher — collapsed icon-only mode", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("collapsed multi-org renders the identity icon (name as tooltip) with NO `Switch workspace` button or `▾`", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} collapsed />);
+    const icon = screen.getByTestId("workspace-identity-icon");
+    expect(icon).toHaveAttribute("title", "jikigai");
+    expect(within(icon).getByTestId("workspace-identity-tile")).toHaveTextContent(
+      "J",
+    );
+    // no switch chrome at 56px
+    expect(
+      screen.queryByRole("button", { name: /switch workspace/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("▾")).not.toBeInTheDocument();
+  });
+
+  it("collapsed solo renders the SAME identity icon (current workspace name)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} collapsed />);
+    const icon = screen.getByTestId("workspace-identity-icon");
+    expect(icon).toHaveAttribute("title", "jikigai");
+    // and the non-interactive static chip is NOT rendered in collapsed mode
+    expect(screen.queryByTestId("workspace-identity-static")).toBeNull();
+  });
+
+  it("collapsed renders nothing when there are zero memberships", () => {
+    const { container } = render(<OrgSwitcher memberships={[]} collapsed />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("collapsed picks the isCurrent membership for the icon (not just the first)", () => {
+    // ACME is isCurrent:false, JIKIGAI isCurrent:true but listed second here
+    render(<OrgSwitcher memberships={[ACME, JIKIGAI]} collapsed />);
+    expect(screen.getByTestId("workspace-identity-icon")).toHaveAttribute(
+      "title",
+      "jikigai",
+    );
+  });
+});

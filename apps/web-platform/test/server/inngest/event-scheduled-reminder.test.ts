@@ -36,10 +36,21 @@ vi.mock("@octokit/core", () => ({
   }),
 }));
 
+// Neutralize the retry backoff so the suite runs instantly while keeping the
+// real `isRetryable` classifier (the retry decision is under test; the sleep is
+// not). Partial-mock avoids fake-timer interaction with `AbortSignal.timeout`.
+vi.mock("@/server/github-retry", async (orig) => ({
+  ...(await orig<typeof import("@/server/github-retry")>()),
+  delay: vi.fn(() => Promise.resolve()),
+}));
+
 import {
   eventScheduledReminderHandler,
   CHECK_REGISTRY,
 } from "@/server/inngest/functions/event-scheduled-reminder";
+// `delay` is the partial-mocked no-op (see vi.mock above) — imported so the
+// bounded-retry test can assert the exact backoff SCHEDULE, not just the count.
+import { delay } from "@/server/github-retry";
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -231,13 +242,56 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
         const status = opts.statsStatus ?? 200;
         const body =
           "detail" in opts ? opts.detail : { stats: { "30d": opts.stats } };
-        return { ok: status < 400, status, json: async () => body };
+        return { ok: status < 400, status, json: async () => body, text: async () => "" };
       }
       const status = opts.issuesStatus ?? 200;
-      return { ok: status < 400, status, json: async () => opts.issues };
+      return { ok: status < 400, status, json: async () => opts.issues, text: async () => "" };
     });
     vi.stubGlobal("fetch", fetchMock);
   }
+
+  // Per-URL-class response SEQUENCING (vs stubFetch's single fixed response):
+  // each call to the search URL or the detail URL consumes the NEXT entry from
+  // its queue, so attempt 1 and attempt 2 of the SAME url can differ. A queue
+  // entry is either a thrown error (network/timeout) or a `{ status, body }`.
+  // The last entry is reused once a queue is drained (mirrors mockImplementation
+  // fall-through), so a single trailing success serves any remaining attempts.
+  type SeqEntry = Error | { status?: number; body?: unknown };
+  function stubFetchSequence(opts: { search: SeqEntry[]; detail?: SeqEntry[] }) {
+    const search = [...opts.search];
+    const detail = [...(opts.detail ?? [])];
+    const take = (q: SeqEntry[]): SeqEntry => (q.length > 1 ? q.shift()! : q[0]);
+    fetchMock = vi.fn(async (url: string) => {
+      const isDetail = /\/issues\/[^/?]+\/(\?|$)/.test(url);
+      const entry = isDetail ? take(detail) : take(search);
+      if (entry instanceof Error) throw entry;
+      const status = entry.status ?? 200;
+      // `text` mirrors a real fetch Response — the retry loop drains the body of
+      // a transient 5xx/429 before backing off (socket keep-alive hygiene).
+      return {
+        ok: status < 400,
+        status,
+        json: async () => entry.body,
+        text: async () => "",
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  }
+  // Count fetch invocations whose URL is the search list (no detail-path shape).
+  const searchCalls = () =>
+    fetchMock.mock.calls.filter(
+      (c) => !/\/issues\/[^/?]+\/(\?|$)/.test(String(c[0])),
+    ).length;
+  // Count fetch invocations to the issue-DETAIL URL (the search-call inverse).
+  const detailCalls = () =>
+    fetchMock.mock.calls.filter((c) =>
+      /\/issues\/[^/?]+\/(\?|$)/.test(String(c[0])),
+    ).length;
+  const timeoutError = () =>
+    new DOMException("The operation timed out", "TimeoutError");
+  // The exact undici network-error shape `isRetryable` classifies transient.
+  const networkError = () => new TypeError("fetch failed");
+  const passSeries = dailyStats([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   function arm(params: Record<string, unknown>, reportTo = 5417) {
     return run({
@@ -253,6 +307,7 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
   beforeEach(() => {
     for (const [k, v] of Object.entries(ENV)) vi.stubEnv(k, v);
     octokitRequestSpy.mockResolvedValue({});
+    vi.mocked(delay).mockClear(); // per-test backoff-call ledger
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -409,5 +464,124 @@ describe("eventScheduledReminderHandler — sentry-issue-rate", () => {
     expect(
       reportSilentFallbackSpy.mock.calls.some((c) => c[1].op === "named-check-close"),
     ).toBe(true);
+  });
+
+  // --- transient-retry hardening (#5417 AC12 follow-on) ---------------------
+
+  it("transient HTTP 5xx on the search, then success → REAL verdict (not fail-closed)", async () => {
+    stubFetchSequence({
+      search: [{ status: 503 }, { body: [{ id: "120495109" }] }],
+      detail: [{ body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
+    expect(lastComment()!.body).toContain("**pass**");
+    expect(lastComment()!.body).not.toContain("fail-closed");
+    expect(searchCalls()).toBe(2);
+  });
+
+  it("transient AbortSignal.timeout on the search, then success → REAL verdict", async () => {
+    // TimeoutError is what AbortSignal.timeout throws and what isRetryable
+    // classifies transient — an AbortError (old AbortController) would NOT retry.
+    stubFetchSequence({
+      search: [timeoutError(), { body: [{ id: "1" }] }],
+      detail: [{ body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
+    expect(lastComment()!.body).toContain("**pass**");
+    expect(searchCalls()).toBe(2);
+  });
+
+  it("transient network error (undici 'fetch failed') on the search, then success → REAL verdict", async () => {
+    // Exercises the isRetryable network arm (distinct from the TimeoutError arm).
+    stubFetchSequence({
+      search: [networkError(), { body: [{ id: "1" }] }],
+      detail: [{ body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
+    expect(searchCalls()).toBe(2);
+  });
+
+  it("transient HTTP 429 (rate-limit) on the search, then success → REAL verdict", async () => {
+    stubFetchSequence({
+      search: [{ status: 429 }, { body: [{ id: "1" }] }],
+      detail: [{ body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
+    expect(searchCalls()).toBe(2);
+  });
+
+  it("HTTP 4xx does NOT retry → single fetch, fail-closed, Sentry-visible warn", async () => {
+    stubFetchSequence({ search: [{ status: 403 }, { body: [{ id: "1" }] }] });
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-info" });
+    expect(lastComment()!.body).toContain("fail-closed");
+    expect(searchCalls()).toBe(1); // no retry on a deterministic 4xx
+    const warn = warnSilentFallbackSpy.mock.calls.find(
+      (c) => c[1].op === "sentry-issue-rate-fail-closed",
+    );
+    expect(warn).toBeDefined();
+    expect(String(warn![1].extra.reason)).toContain("HTTP 403");
+  });
+
+  it("retries are bounded to SENTRY_FETCH_MAX_RETRIES+1 (3) on persistent 5xx", async () => {
+    stubFetchSequence({ search: [{ status: 503 }] }); // single entry reused every attempt
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-info" });
+    expect(lastComment()!.body).toContain("fail-closed");
+    expect(searchCalls()).toBe(3);
+    // Pin the exact backoff SCHEDULE (not just the count) — the impl deliberately
+    // uses 500/1500, NOT the siblings' geometric 500/1000; a silent drift to
+    // `2 ** attempt` would pass a count-only assertion.
+    expect(vi.mocked(delay).mock.calls).toEqual([[500], [1500]]);
+    expect(
+      warnSilentFallbackSpy.mock.calls.some(
+        (c) => c[1].op === "sentry-issue-rate-fail-closed",
+      ),
+    ).toBe(true);
+  });
+
+  it("retries the SECOND (detail) call too: 500 then success → REAL verdict", async () => {
+    stubFetchSequence({
+      search: [{ body: [{ id: "1" }] }],
+      detail: [{ status: 500 }, { body: { stats: { "30d": passSeries } } }],
+    });
+    const { result } = arm({ ...okParams });
+    expect(await result).toEqual({ ok: true, reason: "named-check-pass" });
+    expect(lastComment()!.body).toContain("**pass**");
+    expect(searchCalls()).toBe(1); // search succeeded first try
+    expect(detailCalls()).toBe(2); // detail retried once — localizes a search-vs-detail regression
+  });
+
+  it("env-unset fail-close is Sentry-visible (warn op), no fetch", async () => {
+    vi.stubEnv("SENTRY_ISSUE_RW_TOKEN", "");
+    stubFetchSequence({ search: [{ body: [{ id: "1" }] }] });
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    expect(await result).toEqual({ ok: true, reason: "named-check-info" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const warn = warnSilentFallbackSpy.mock.calls.find(
+      (c) => c[1].op === "sentry-issue-rate-fail-closed",
+    );
+    expect(warn).toBeDefined();
+    expect(warn![1].extra.reason).toBe("Sentry env not configured");
+  });
+
+  it("token never leaks across the retry + warn paths (5xx exhaustion)", async () => {
+    stubFetchSequence({ search: [{ status: 503 }] });
+    const { result } = arm({ ...okParams, close_on_pass: true });
+    await result;
+    expect(lastComment()!.body).not.toContain("Bearer");
+    expect(lastComment()!.body).not.toContain(ENV.SENTRY_ISSUE_RW_TOKEN);
+    for (const call of [
+      ...reportSilentFallbackSpy.mock.calls,
+      ...warnSilentFallbackSpy.mock.calls,
+    ]) {
+      const s = JSON.stringify(call);
+      expect(s).not.toContain(ENV.SENTRY_ISSUE_RW_TOKEN);
+      expect(s).not.toContain("Bearer");
+    }
   });
 });

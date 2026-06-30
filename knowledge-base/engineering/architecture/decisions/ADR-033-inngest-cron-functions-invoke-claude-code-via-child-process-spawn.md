@@ -47,6 +47,59 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
 - **I6.** Event payloads emitted by `cron-*` functions carry `actor: "platform"` tag. This is the boundary marker that lets platform-loop crons + per-founder runtime share one Inngest server; without it, `hr-gdpr-gate-on-regulated-data-surfaces` fires the moment PR-G (#3947) ships founder cohort exposure.
 - **I7.** Cron containment is a **deny-by-default `PreToolUse` hook**, NOT the OS bash sandbox and NOT `--allowedTools`/`permissions.defaultMode`. `[Added 2026-06-08 — #5018/#5000/#5004.]` The substrate's `DEFAULT_CLAUDE_SETTINGS` sets `sandbox.enabled:false` (host-independence — immune to the recurring bwrap-userns drift #4928/#4932 that broke #5000/#5004) and registers `cron-bash-allowlist-hook.mjs` under a `*` catch-all matcher via `buildCronEvalSettings`. Phase-0 probes (committed AC0 evidence; re-verified on the prod-pinned CLI 2.1.79) proved that with the sandbox off, headless `claude --print` does **NOT** fail-close non-allowlisted commands via `--allowedTools` or any `defaultMode` (dontAsk/default/auto all fail-OPEN), and an unhooked tool class / a crashed hook **fails OPEN** — so the hook is the only fail-closed boundary. Load-bearing sub-invariants: (a) deny-by-default at the **tool-class** level (catch-all + explicit Read/Grep/Glob secret-path deny + Bash allowlist + Write/Edit self-protection) — `bypassPermissions` (the v1 P1-blocked exfil primitive) MUST NOT reappear; (b) **secret-out-of-context** is the real safety property — every env/secret-read path (env dump, `/proc`, `.git/config` where the clone URL embeds the token) is denied across Bash AND Read/Grep, so the allowed egress verbs (`gh issue create`, `git push`) can't leak a secret never read; (c) a **spawn-time self-test** (`runHookSelfTest`) asserts the hook denies a canonical exfil payload before any agent spawns — a failure aborts the cron (→ FAILED self-report) rather than running unprotected; (d) per-cron `--allowedTools` and `permissions.deny` are documented defense-in-depth, NOT relied upon. **Negative guarantee:** this containment governs the claude-code tool layer ONLY — it does NOT extend to Node-level `child_process.spawn("bash", …)` (cron-content-publisher / content-vendor-drift / rule-prune / weekly-analytics bypass it entirely). Those + the broad-bash crons (`TIER2_DEFERRED_CRONS`) are paused (D6) until restored under finite allowlists. `[Refined 2026-06-10 — #5046 PR-2/ADR-052.]` The Tier-2 boundary LANDED: the 4 spawn-bash crons are now contained by the DOCKER-USER container egress allowlist (ADR-052 — content-blind, off-allowlist-severing), and the hook's catch-all was relax-minimally opened to `Task`/`Agent`/`Skill` ONLY (every Bash/secret-read layer intact; gated by extended `runHookSelfTest` probes incl. a `*`-matcher registration check). That restored exactly the two crons whose sole denied construct was `Task` (cron-agent-native-audit, cron-legal-audit — issue-creator allowlists + a `contents:read`+`issues:write` token); the remaining nine stay deferred pending per-construct allowlist refinement (six PR-flow crons) or non-GitHub-egress coverage (bug-fixer, community-monitor, ux-audit). Only crons whose entire command surface is a finite allowlist (`CRON_BASH_ALLOWLISTS`) are restorable.
 
+- **I8.** **Classify-fatal heartbeat + widened `routine_runs` failure contract.** `[Added 2026-06-29 — #5674.]` A claude-eval non-zero exit is NOT uniformly green and NOT uniformly red — it is **classified** from the captured stdout/stderr tail (`resolveBestEffortEvalOk` / `classifyEvalFatal` in `_cron-shared.ts`, single source of the fatal markers, shared with the credit-probe canary):
+  - a **FATAL class** — credit exhausted (`/credit balance is too low/i`), auth/401 revoked (`invalid x-api-key` / `authentication_error`), spawn fault (`exitCode === -1` / `ENOENT`/`EACCES`), OR `abortedByTimeout` — MUST flip the Sentry monitor RED (`postSentryHeartbeat({ ok:false })`) and write a `routine_runs.failed` row carrying the redaction-scrubbed reason;
+  - a **BENIGN** non-zero exit (`claude --print` hitting max-turns, clean no-artifact) MUST stay GREEN (liveness) but still record the reason via `warnSilentFallback` + a scrubbed `sentryExtra`.
+
+  This **supersedes and reconciles** the 2026-06-01 decision (incident `5127648` / #4730 / PR #4727) that decoupled the heartbeat from `spawnResult.ok` — that fix correctly stopped benign max-turns false-pages; classify-fatal keeps that protection while restoring a red signal for the genuinely-fatal classes it over-suppressed (the 2026-06-29 credit-exhaustion incident: the whole fleet no-op'd with green monitors). The four masked best-effort crons (`cron-agent-native-audit`, `cron-legal-audit`, `cron-ux-audit`, `cron-bug-fixer`) route every non-zero exit through `resolveBestEffortEvalOk`; the eight output-aware producers keep `resolveOutputAwareOk` (output presence is their success contract) but now also emit a scrubbed `error_summary`.
+
+  **Widened `routine_runs` contract:** for ANY `ROUTINE_METADATA` cron, a handler that **returns** `data.ok === false` (without throwing) is recorded `failed`. The run-log middleware (`middleware/run-log.ts`) gates ONLY the **thrown** path on the final-attempt retry window — a returned `ok:false` is *terminal* under `retries:1` (no retry) and is written immediately (gating it on the final attempt would drop the exact failure we record). The failure reason (scrubbed last-N stdout/stderr) reaches BOTH Sentry and `routine_runs.error_summary`. Every new tail sink (`formatTailForSentry`) routes through the canonical multi-secret scrubber (`redactGithubSourcedText`), not just `redactToken` — closing a pre-existing `sk-ant` Sentry leak in `resolveOutputAwareOk`.
+
+  **No-balance-endpoint canary.** Anthropic exposes NO remaining-credit/prepaid-balance endpoint (verified live 2026-06-29 against the usage/cost API docs); the Admin Usage/Cost API reports *spend* only, under a separate `sk-ant-admin` key. So credit exhaustion is detected by an hourly 1-token canary (`cron-anthropic-credit-probe.ts`) on the operator `ANTHROPIC_API_KEY` (NOT a BYOK lease — I2), which pages on the classified credit-400 / auth-401 and **re-throws** transient/unclassified errors (429/500/529/network) so Inngest retries and the missed-checkin margin backstops (a 529 overloaded is not an empty wallet — false-paging it would itself be the alert-fatigue bug). Pre-exhaustion spend-vs-budget alerting via the Admin `cost_report` API is a deferred follow-up (`Ref #5674`) — it needs the new `sk-ant-admin` secret + an operator-set `ANTHROPIC_MONTHLY_BUDGET_USD` (no sensible default), so shipping it half-configured would false-alarm or never fire.
+
+  **Alternatives considered (rejected):** (1) the prior *unconditional* "liveness, not success" green check-in — wrong because credit-exhaustion non-zero was indistinguishable from clean-no-artifact at the monitor level (the 2026-06-29 incident); (2) **flip-all non-zero → red** — rejected: reintroduces the #4730 daily false-page because `claude --print` exits non-zero on healthy max-turns runs, and pollutes `routine_runs` with false-`failed` rows; (3) the `in_progress → ok/error` two-phase check-in — not needed once classify-fatal distinguishes the classes at the source. Residual risk: **marker drift** — a new fatal mode whose tail matches no marker stays green; mitigated by keeping the marker set small/centralized/fixture-pinned and by the benign path still recording the reason in `routine_runs` (visible-but-not-paged, never invisible). Two further residuals, both accepted (review #5680): (a) **`abortedByTimeout` pages even on a *healthy* long run** — a cron that legitimately exhausts the 60-min budget (most plausibly `cron-bug-fixer`, the highest benign-non-zero-frequency cron) now flips RED rather than staying green-with-a-Sentry-error as before; this is **intended** — a budget overrun is a degraded outcome worth one page, and the alternative (a per-cron timeout exemption) reintroduces exactly the per-handler special-casing this design removed. If timeout-paging proves noisy in practice, raise the budget (I3) rather than re-exempting the class. (b) **The fatal-marker regexes match two distinct text sources** — the claude-CLI stdout/stderr tail (resolver) and the Anthropic HTTP JSON error body (canary) — coupling both detectors to one phrasing; robust today via case-insensitive substring and fixture-pinned, but a marker reword must be validated against both source shapes.
+
+  **Amendment `[2026-06-29 — #5728]` — heartbeat-DELIVERY guarantee (the gap I8 left).**
+  I8 reasoned about classifying a non-zero *exit* and **assumed the run reaches the
+  `sentry-heartbeat` step**. #5728 surfaced the orthogonal case: the heartbeat is
+  **never delivered** — the run is SIGKILLed mid-eval, a step *throws* before the
+  heartbeat, or the single terminal POST is dropped (5xx/network/timeout) — so
+  Sentry records a server-generated **`missed`** (not a client `?status=`).
+  classify-fatal cannot color a check-in that never posts. Phase-0 evidence
+  (`routine_runs` + Sentry checkins; Better Stack aged out) found the 2026-06-13→
+  06-21 window was **SIGKILL-dominant** (zero `routine_runs` terminal rows while
+  sibling crons logged normally) — whose remedy is the **graceful cron drain before
+  container swap (ADR-068 / #5686)**, NOT a heartbeat-code change. The #5728 code fix
+  closes the *delivery* gap for the throw/dropped-POST classes (defense-in-depth) via
+  (i) a final-attempt-gated, memoization-safe terminal `?status=error` on the throw
+  path (`finalizeOutputAwareHeartbeat`, adopted fleet-wide by the output-aware cohort),
+  and (ii) a bounded retry (5xx/network/timeout; never 4xx) on the heartbeat POST.
+
+  **The `in_progress → ok/error` two-phase check-in REMAINS REJECTED** (alternative
+  (3) above) — single end-of-job POST stays the doctrine.
+  **Recorded rejection COST (do not re-open the I8 debate):** without the
+  run-correlation id an `in_progress` beacon would provide, a **late / retry-chain
+  finish cannot reconcile to its scheduled period** — a standalone late `?status=ok`
+  does NOT retroactively clear a `missed`. Therefore for the slow/late/killed class,
+  **`checkin_margin_minutes` (sized against the worst-case retry-chain + shared
+  `account` `limit:1` queue wall-clock, not single-run duration) and kill-prevention
+  (ADR-068) are the ONLY levers** — Phase 1/2 delivery-hardening cannot close it.
+  **Accepted residual:** a genuinely killed run reads `missed` until a late retry, and
+  `missed` is an honest signal for a killed run. Runbook H11 carries the per-day
+  H11a–d discrimination recipe. (For #5728 the verdict was kill-dominant with H1/H4
+  only plausible on routine_runs-blind days, so the margin was left at 60 — no TF
+  diff.)
+  **Inngest-run-status vs. Sentry divergence (deliberate).** On a final-attempt
+  genuine failure the output-aware cohort posts `?status=error` and **returns
+  `{ok:false}` rather than throwing** (unlike the `cron-stale-deferred-scope-outs`
+  precedent which rethrows). So the Inngest run is marked *succeeded* while the
+  Sentry monitor is RED. This is intentional and preserves the pre-#5728 producer
+  behavior: paging is driven by the Sentry check-in, and the failure is also
+  recorded as a `routine_runs.failed` row (the I8 widened-contract: a returned
+  `data.ok === false` is recorded `failed`) — so the failure is observable via two
+  layers without relying on Inngest's native run status. If Inngest-level failure
+  alerting is ever introduced, revisit this choice.
+
 ## Consequences
 
 **Easier:**
