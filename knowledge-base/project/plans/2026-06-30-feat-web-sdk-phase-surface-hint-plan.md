@@ -24,6 +24,20 @@ registered in `buildAgentQueryOptions` `options.hooks`. This is **lever 1 only**
 hint improves next-skill selection by +6.7pts on `claude-sonnet-4-6` — the model the web
 Concierge defaults to (`agent-runner-query-options.ts:150`). Evidence recorded on #5772.
 
+**Value-claim honesty (spec-flow P1):** the +6.7pts is a *model-level, per-transition* eval result.
+Its transfer to the web depends on the router emitting a `Skill` call at each phase transition; the
+web router locks one workflow per conversation and runs sticky (`soleur-go-runner.ts:2113`). The
+hint is still net-positive (fail-open; biases in-phase skill selection on every `Skill` dispatch),
+but the realized web value is "in-phase biasing per dispatch," not a guaranteed +6.7pts — confirmed
+by QA (AC11), not asserted.
+
+**Both-paths caveat (CTO):** the shared builder makes the hook fire on BOTH callers — the cc-soleur-go
+router (`cc-dispatcher.ts:2328`) AND the legacy domain-leader runner (`agent-runner.ts:1990`). The
+eval justifies it for the workflow-routing path; the hint is fail-open additive guidance (benign on a
+non-workflow session — the model may ignore it), but QA (AC11) must confirm no skew on the cc path,
+and this cc-path eval-coverage caveat is recorded in the ADR-070 amendment's Consequences for the
+deferred lever-2 work to inherit.
+
 **Scope:** ~2 new source files + 1 helper edit + 3 test files + 1 ADR amendment + 1 C4 line.
 The single edit to `buildAgentQueryOptions` covers BOTH web paths (cc-soleur-go and legacy) — they
 share the builder.
@@ -36,6 +50,8 @@ share the builder.
 | SDK PostToolUse supports `additionalContext` | YES — `PostToolUseHookSpecificOutput.additionalContext?: string` (`sdk.d.ts:1422`); `SyncHookJSONOutput.hookSpecificOutput` accepts it (`:3974`) | Direct JS port of the shell hook (FR1) |
 | Adding `PostToolUse` trips the T4 drift-guard | NO — `stableShape` SHARED_KEYS excludes `hooks` (`agent-runner-query-options.test.ts:213`) | Add a positive `PostToolUse`/matcher assertion instead (TR4) |
 | Web agent invokes the `Skill` tool | YES — `soleur-go-runner.ts:2113` detects first `Skill` call; Skill is in the plugin surface, not in `disallowedTools` | Hook fires after every `Skill` execution on both paths (FR5) |
+| `tool_input.skill` is FQN (`soleur:work`) on the web path | **NO — it is BARE** (`work`): `KNOWN_WORKFLOWS` (`soleur-go-runner.ts:559`) + system prompt (`:1291`) + web fixture (`soleur-go-runner-interactive-prompt.test.ts:256`) all use bare names; no prefix-stripping exists. The canonical map is FQN-keyed. | **P0 fix:** normalize `key = skill.includes(":") ? skill : "soleur:"+skill` (FR1a); tests use the bare shape as the primary case. Without this the hint silently never fires on web. |
+| `Skill` reaches execution on the cc path (so PostToolUse fires) | YES — Skill ∉ `CC_PATH_ALLOWED_TOOLS` but ∈ `SAFE_TOOLS` (`tool-path-checker.ts:55`) so `canUseTool` approves it (`permission-callback.ts:883`) | Silent coupling — AC pins `isSafeTool("Skill")===true` so dropping it from `SAFE_TOOLS` fails CI (P2) |
 | `resolveJsonModule` available for a `.json` copy | YES (`tsconfig.json:12`) but build-inclusion of a sibling `.json` into `dist/server` is build-mechanism-dependent | Use a `.ts` const module (always compiled into the bundle) — removes the inclusion risk |
 
 **Premise validation:** #5768 CLOSED via #5769 (MERGED 2026-06-30); #5772 OPEN; ADR-070, ADR-022
@@ -73,7 +89,9 @@ P1-1/P1-2/P1-3).
 ### Phase 1 — Bundled map copy (RED test first)
 1. Write `apps/web-platform/test/phase-surface-map-parity.test.ts` (RED): deep-equal
    `JSON.parse(readFileSync("<repo-root>/.claude/phase-surface-map.json"))` against the imported
-   `PHASE_SURFACE_MAP`. Resolve repo root relative to the test file (`../../..`).
+   `PHASE_SURFACE_MAP`. Resolve repo root with a `findRepoRoot()` upward walk (look for a `.git`
+   marker / `.claude/` dir), NOT a brittle hard-coded `../../..` (CTO low-risk flag — mis-resolves
+   silently if the test file moves); assert the canonical file exists with a clear message.
 2. Create `apps/web-platform/server/phase-surface-map.ts`: `export const PHASE_SURFACE_MAP = { … }
    as const` — a faithful copy of `.claude/phase-surface-map.json` (drop the `_comment` key or keep
    it; the parity test defines the contract). Add a header comment: "Bundled web copy of the
@@ -82,8 +100,9 @@ P1-1/P1-2/P1-3).
 
 ### Phase 2 — The hook module (RED test first)
 1. Write `apps/web-platform/test/phase-surface-hook.test.ts` (RED), cases:
-   (a) `{tool_name:"Skill", tool_input:{skill:"soleur:work"}}` → `additionalContext` contains `work`;
-   (b) unmapped skill → `{}`;
+   (a) **bare web shape (P0 primary case):** `{tool_name:"Skill", tool_input:{skill:"work"}}` →
+   `additionalContext` contains `work`; AND FQN passthrough `{skill:"soleur:work"}` → same hint;
+   (b) unmapped skill (`{skill:"one-shot"}` → normalizes to `soleur:one-shot`, absent from map) → `{}`;
    (c) `tool_name:"Read"` → `{}`;
    (d) `SOLEUR_DISABLE_PHASE_HINT=1` → `{}`;
    (e) malformed input (`tool_input:null`, missing `skill`) → `{}` and **does not throw**;
@@ -93,16 +112,22 @@ P1-1/P1-2/P1-3).
 2. Create `apps/web-platform/server/phase-surface-hook.ts`:
    - `import { PHASE_SURFACE_MAP } from "./phase-surface-map";`
    - pure `buildHint(skill): string | null` — `process.env.SOLEUR_DISABLE_PHASE_HINT==="1"` (strict,
-     not truthy) → null; **security guards (F1):** `typeof skill !== "string"` → null;
-     `Object.hasOwn(map.skill_to_phase, skill)` guard → null; `typeof phase !== "string"` → null;
-     `Object.hasOwn(map.phase_to_surface, phase)` guard → null; phase ∈ `{brainstorm,plan,work,
-     review,ship}` allowlist → else null; then compose the FR4 string from map-derived constants
-     only (skill NEVER interpolated). Read the env var per-invocation (not cached at module load).
-   - `export function createPhaseSurfaceHook(): HookCallback` returning an async callback that:
-     casts input to `PostToolUseHookInput`; returns `{}` unless `tool_name==="Skill"`; reads
-     `(tool_input as {skill?:string}).skill`; `buildHint`; returns `{ hookSpecificOutput:{
-     hookEventName:"PostToolUse", additionalContext:hint } }` or `{}`; wraps the whole body in
-     try/catch → on error `log.warn` + Sentry mirror (TR3) + return `{}`. GREEN.
+     not truthy) → null; `typeof skill !== "string"` → null; **normalize (FR1a, P0):**
+     `key = skill.includes(":") ? skill : "soleur:" + skill` (bare web shape → FQN map key); then
+     **security guards (F1):** `Object.hasOwn(map.skill_to_phase, key)` → else null; `phase =
+     map.skill_to_phase[key]`; `typeof phase !== "string"` → null; `Object.hasOwn(map.phase_to_surface,
+     phase)` → else null; phase ∈ `{brainstorm,plan,work,review,ship}` allowlist → else null; then
+     compose the FR4 string from map-derived constants only (skill/key NEVER interpolated). Read the
+     env var per-invocation (not cached at module load).
+   - `export function createPhaseSurfaceHook(): HookCallback` — the factory MUST be **side-effect-free**
+     (no map access / no work at construction; it only returns the closure) so a builder-time call in
+     the `hooks` literal cannot throw into `buildAgentQueryOptions` → `query()` startup on EITHER
+     caller (P1, spec-flow). The returned async callback: casts input to `PostToolUseHookInput`;
+     returns `{}` unless `tool_name==="Skill"`; reads `(tool_input as {skill?:string}).skill`;
+     `buildHint`; returns `{ hookSpecificOutput:{ hookEventName:"PostToolUse", additionalContext:hint
+     } }` or `{}` (the `buildHint→null` branch yields a clean `{}`, NOT `additionalContext:null`);
+     wraps the whole body in try/catch → on error `log.warn` (static message, NO skill value — F5) +
+     `reportSilentFallback` (TR3) + return `{}`. GREEN.
 
 ### Phase 3 — Wire into the builder
 1. Edit `apps/web-platform/server/agent-runner-query-options.ts`: import `createPhaseSurfaceHook`;
@@ -119,9 +144,14 @@ P1-1/P1-2/P1-3).
    in the "Canonical shared-registry location" section, record the resolved decision (bundled `.ts`
    copy + CI parity test; canonical stays `.claude/phase-surface-map.json`). Add to `## Alternatives
    considered`: (a) read `.claude/…json` at runtime — rejected (not in the web container); (b) single
-   copy relocated into the vendored plugin tree read from `pluginPath` at runtime — rejected
-   (reintroduces a runtime-fs failure class on the paying-user path; the bundled in-process constant
-   makes fail-open trivially true).
+   copy relocated into the vendored plugin tree read from `pluginPath` at runtime — rejected (the
+   plugin symlink is best-effort warn-only `workspace.ts:424` → ENOENT silent-degradation no test
+   catches; and the CLI hook must keep reading `.claude/`, so (b)'s "single source" is illusory — it
+   stays two representations PLUS a runtime fs read). Add to `## Consequences`: the hint fires on BOTH
+   the cc-router and legacy callers, but #5772's +6.7pt eval covered only the workflow-routing path —
+   the deferred lever-2 work inherits this cc-path eval-coverage caveat; AND the bare-vs-FQN
+   `tool_input.skill` normalization (FR1a) is now a documented coupling between the web shape and the
+   FQN canonical map.
 2. Edit `knowledge-base/engineering/architecture/diagrams/model.c4`: broaden the `hooks` container
    description (currently guard-only: "Enforces syntactic rules — blocks commits to main, rm -rf,
    etc.") to also mention advisory PostToolUse phase-surface context injection, so the description is
@@ -155,11 +185,25 @@ open scope-out names `agent-runner-query-options.ts`, the C4 model, or ADR-070.
 **Domains relevant:** Engineering (CTO).
 
 ### Engineering (CTO)
-**Status:** pending (spawned at plan-review).
-**Assessment:** Cross-cutting harness/runtime change on the paying-user web agent loop. Key risks
-the CTO must weigh: (1) does a `PostToolUse` callback that returns `{}` ever interfere with the
-SDK's tool loop; (2) the two-tier fail-open invariant (no `canUseTool`/`disallowedTools` touch);
-(3) the bundled-copy-vs-single-source-of-truth tradeoff for the registry.
+**Status:** reviewed.
+**Assessment:** Approved the bundled-`.ts`-copy + parity-test registry design (rejected the
+single-copy-in-plugin-tree alternative: its "single source" is illusory because the CLI hook must
+keep reading `.claude/`, and it reintroduces an ENOENT silent-degradation via the best-effort
+warn-only plugin symlink `workspace.ts:424`). Raised the cc-path eval-coverage caveat (folded into
+the Overview both-paths note + ADR Consequences) and the steady-state token-injection note (folded
+into Observability).
+
+### Review panel (substitute for DHH/Kieran — stack-appropriate for TS harness)
+**security-sentinel:** F1 prototype-pollution (folded — `typeof` + `Object.hasOwn` both lookups +
+phase allowlist), F2 byte-equal snapshot test, F3 fail-open `{}` confirmed safe (PostToolUse has no
+permission authority — cannot weaken the `canUseTool` floor), F5 keep skill out of the Sentry/log
+path. All folded.
+**spec-flow-analyzer:** P0 bare-vs-FQN key mismatch (folded — FR1a normalization, the load-bearing
+fix), P1 factory-throw + SDK-loop-neutrality (folded — AC1b), P1 value-claim cadence (folded —
+Overview honesty note + AC11), P2 SAFE_TOOLS coupling (folded — AC1c). All folded.
+**architecture-strategist + code-simplicity-reviewer:** transiently rate-limited (server-side); their
+lenses (ADR-070 compliance, C4 enumeration, YAGNI cuts) are re-run by **deepen-plan** (mandated at
+single-user-incident threshold — re-runs the data-integrity + security + architecture substance triad).
 
 ### Product/UX Gate
 **Tier:** none. No UI surface — Files to Create/Edit are `.ts`, a `.ts` const map, an ADR, and one
@@ -185,8 +229,12 @@ failure_modes:
     detection: phase-surface-map-parity.test.ts fails in CI
     alert_route: CI red on PR (pre-merge)
 logs:
-  where: pino child logger "phase-surface-hook" (warn on the fail-open path)
+  where: pino child logger "phase-surface-hook" (warn on the fail-open path; static message, no skill value — F5)
   retention: Better Stack standard
+steady_state_note: >
+  small constant hint text is appended after every mapped Skill call; under the cc/legacy path's
+  maxTurns:50 / maxBudgetUsd:5.0 envelope this is expected per-dispatch context growth (CTO low), not
+  an incident — bounded by the per-turn Skill-call count, not unbounded.
 discoverability_test:
   command: ./node_modules/.bin/vitest run test/phase-surface-hook.test.ts (asserts the catch arm returns {} and mirrors)
   expected_output: all cases pass; malformed-input case proves no-throw
@@ -220,8 +268,19 @@ The ADR amendment and the C4 edit ship in THIS PR (Phase 4), not a follow-up.
 
 ### Pre-merge (PR)
 - [ ] AC1 — `apps/web-platform/server/phase-surface-hook.ts` exists; `createPhaseSurfaceHook()`
-  returns a `HookCallback` that, for `{tool_name:"Skill", tool_input:{skill:"soleur:work"}}`, returns
-  `additionalContext` whose value contains `work` and the `(Guidance only …)` suffix.
+  returns a `HookCallback` that, for the **bare web shape** `{tool_name:"Skill", tool_input:{skill:
+  "work"}}` (P0 primary case), returns `additionalContext` whose value contains `work` and the
+  `(Guidance only …)` suffix; the FQN form `{skill:"soleur:work"}` returns the identical hint.
+- [ ] AC1a (P0 — normalization, load-bearing) — the test fixture's `tool_input.skill` shape matches
+  the REAL web shape (bare, cross-referenced to `KNOWN_WORKFLOWS` `soleur-go-runner.ts:559` and the
+  web fixture `soleur-go-runner-interactive-prompt.test.ts:256`). A test feeding ONLY synthetic FQN
+  would mask the silent-no-op; AC1's bare case is the guard.
+- [ ] AC1b (P1 — SDK loop neutrality) — `createPhaseSurfaceHook()` construction does not throw
+  (factory is side-effect-free); an integration-shim test confirms a hook that throws internally still
+  yields `{}` to the SDK and does NOT abort the iterator (the User-Brand Impact failure mode).
+- [ ] AC1c (P2 — cc-path coupling) — a test pins `isSafeTool("Skill") === true` (`tool-path-checker.ts:55`)
+  so dropping `Skill` from `SAFE_TOOLS` (which would deny-by-default it on the cc path and silently
+  kill the hint there) fails CI.
 - [ ] AC2 — Fail-open: unmapped skill, non-`Skill` tool, missing skill, non-string skill,
   `SOLEUR_DISABLE_PHASE_HINT=1`, and malformed `tool_input` each return `{}`; the malformed case
   asserts **no throw**; the `buildHint→null` internal branch yields a clean `{}` (NOT

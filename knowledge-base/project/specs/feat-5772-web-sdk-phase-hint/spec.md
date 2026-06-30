@@ -50,8 +50,17 @@ none of it.
 
 - FR1. A new hook module `apps/web-platform/server/phase-surface-hook.ts` exports
   `createPhaseSurfaceHook(): HookCallback`. On a PostToolUse event where `tool_name === "Skill"`,
-  it reads `tool_input.skill`, maps it to a phase via the bundled map, and returns
-  `{ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: <hint> } }`.
+  it reads `tool_input.skill`, **normalizes the key** (FR1a), maps it to a phase via the bundled
+  map, and returns `{ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext:
+  <hint> } }`.
+- FR1a. **Key-format normalization (P0 — load-bearing, spec-flow):** the web Concierge emits
+  **bare** workflow names in `tool_input.skill` (`"work"`, `"brainstorm"` — see `KNOWN_WORKFLOWS`
+  `soleur-go-runner.ts:559` and the web fixture `soleur-go-runner-interactive-prompt.test.ts:256`),
+  while the canonical map is **FQN-keyed** (`"soleur:work"`). A naive FQN lookup would miss EVERY
+  real web call → silent no-op. The hook MUST normalize: `key = skill.includes(":") ? skill :
+  "soleur:" + skill` before lookup, so both the bare web shape and the FQN CLI shape resolve. Tests
+  use the **bare** shape as the primary case (FR1a is the difference between the feature working and
+  shipping dead).
 - FR2. **Fail-open:** for an unmapped skill, missing/empty skill, non-`Skill` tool,
   `SOLEUR_DISABLE_PHASE_HINT=1`, or ANY thrown error, the callback returns `{}` (no hint, full
   surface). The callback MUST NOT throw into the SDK.
