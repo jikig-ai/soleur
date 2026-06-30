@@ -53,10 +53,17 @@ export function SupportPanel({
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
+        const active = document.activeElement;
+        // If focus escaped the dialog (e.g. Send became disabled after submit, or
+        // a starter chip unmounted), it lands on <body> — pull it back in so Tab
+        // can't reach the dimmed app behind the panel.
+        if (!active || active === document.body || !panelRef.current.contains(active)) {
+          e.preventDefault();
+          first?.focus();
+        } else if (e.shiftKey && active === first) {
           e.preventDefault();
           last?.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
+        } else if (!e.shiftKey && active === last) {
           e.preventDefault();
           first?.focus();
         }

@@ -1,9 +1,10 @@
 // feat-support-interface — THE BACKEND SEAM.
 //
-// This is the ONLY file that produces support replies. Today it returns canned
-// copy (no LLM, no network). When the real support backend lands, swap the body
-// of `getSupportReply` to call it — every caller already awaits this function,
-// and no UI component contains canned copy, so the swap is localized here.
+// This is the ONLY file that produces support replies. Today it is SYNCHRONOUS
+// and returns canned copy (no LLM, no network). When the real support backend
+// lands, change this to `async`/return a Promise AND update the single caller
+// (use-support-chat.ts `send`) to `await` it — that one caller plus this file are
+// the entire swap surface; no UI component contains canned copy.
 
 import { SUPPORT_KB_HREF } from "./support-persona";
 
@@ -33,8 +34,8 @@ const GENERIC_REPLY =
  *
  * @param _userMessage the user's (already trimmed, non-empty) message text.
  * @param chipKey optional starter-chip key when the message came from a chip tap.
- * @returns the reply text. Async-shaped so the real backend can drop in without
- *   changing any caller.
+ * @returns the reply text (synchronous today). See the file header for the
+ *   backend-swap contract.
  */
 export function getSupportReply(
   _userMessage: string,

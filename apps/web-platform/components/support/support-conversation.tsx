@@ -31,7 +31,7 @@ export function SupportConversation({
 
   return (
     <div className="min-w-0 flex-1 overflow-y-auto px-4 py-4">
-      {!hasConversation ? (
+      {!hasConversation && (
         <div className="flex flex-col gap-4">
           <div className="flex items-start gap-2">
             <SupportAvatar size="md" />
@@ -55,14 +55,16 @@ export function SupportConversation({
             ))}
           </div>
         </div>
-      ) : (
-        <div className="flex flex-col gap-4" aria-live="polite">
-          {messages.map((message) => (
-            <SupportMessage key={message.id} message={message} />
-          ))}
-          <div ref={bottomRef} />
-        </div>
       )}
+      {/* Live region is ALWAYS mounted (even while empty) so the FIRST reply is
+          observed as a mutation and announced — a region that mounts already
+          populated stays silent on its initial content. */}
+      <div className="flex flex-col gap-4" aria-live="polite">
+        {messages.map((message) => (
+          <SupportMessage key={message.id} message={message} />
+        ))}
+        <div ref={bottomRef} />
+      </div>
     </div>
   );
 }
