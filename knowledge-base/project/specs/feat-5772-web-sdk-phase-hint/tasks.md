@@ -33,8 +33,8 @@ plan: knowledge-base/project/plans/2026-06-30-feat-web-sdk-phase-surface-hint-pl
 - [ ] 3.3 Edit `agent-runner-query-options.test.ts`: flag-on → `hooks.PostToolUse[0].matcher==="Skill"`; flag-off → `hooks.PostToolUse` undefined (AC5). T4 `stableShape` UNCHANGED.
 
 ## Phase 4 — ADR + C4 (deliverables)
-- [ ] 4.1 Amend `ADR-070`: record bundled-copy decision + 2 rejected alternatives + Consequences (cc-path eval-coverage caveat + bare/FQN normalization coupling) (AC8).
-- [ ] 4.2 Edit `model.c4`: broaden `hooks` container description (advisory PostToolUse context); run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
+- [ ] 4.1 Amend `ADR-070` as a **dated delimited block** (`## Amendment — 2026-06-30 (#5772)` + `Amended:` header line; original Decision immutable, per ADR-036/030 convention): bundled-copy decision + 2 rejected alternatives + Consequences (per-caller opt-in keeps fail-CLOSED lever-2 off legacy; cc-path eval coverage; bare/FQN normalization coupling) (AC8/P2-C).
+- [ ] 4.2 Edit `model.c4`: **do NOT broaden the CLI `engine.hooks` container** (P1-B) — add a one-line note on the webapp `api`/`claude` container that it registers in-process SDK `options.hooks` (sandbox + SubagentStart + phase-surface), distinct from the CLI `.claude/` shell hooks. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ## Phase 5 — Verify
 - [ ] 5.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (AC6).
@@ -43,4 +43,4 @@ plan: knowledge-base/project/plans/2026-06-30-feat-web-sdk-phase-surface-hint-pl
 - [ ] 5.4 PR body: `Ref #5772` (NOT Closes), `## Changelog`, `semver:minor` (AC9).
 
 ## Post-merge
-- [ ] 6.1 QA (AC11): real web `/soleur:go` multi-phase run — confirm `[phase-scope]` reaches the model after a Skill call (Sentry/transcript); observe cadence on BOTH the cc-router and legacy paths (no skew). Non-blocking.
+- [ ] 6.1 QA (AC11): real web `/soleur:go` run (cc Concierge path only — legacy doesn't opt in) — confirm `[phase-scope]` reaches the model after a Skill call (Sentry/transcript) AND the turn completes normally; observe per-phase Skill-call cadence. Non-blocking.
