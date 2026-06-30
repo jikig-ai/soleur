@@ -91,6 +91,11 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__routine_runs_list": "auto-approve",
   "mcp__soleur_platform__routine_run": "gated",
 
+  // Workstream board (feat-workstream-kanban-tab): read-only board feed over
+  // the shared in-repo seed accessor → auto-approve (parity with routines_list;
+  // non-PII, no side effects). WRITE tools are deferred + tracked.
+  "mcp__soleur_platform__workstream_issues_list": "auto-approve",
+
   // Email WRITE tools (#5325, agent-native outbound). The FR9 boundary that
   // formerly said "there is NO email_triage write tool" now ships: these are
   // `gated` (NEVER auto-approve) because the human review gate IS the trust

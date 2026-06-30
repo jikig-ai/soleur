@@ -9,16 +9,48 @@
 import { Command } from "cmdk";
 import { useShortcuts } from "./use-shortcuts";
 
-const SHORTCUTS: ReadonlyArray<{ keys: string; label: string }> = [
-  { keys: "⌘K", label: "Open command palette" },
-  { keys: "⌘/", label: "Open keyboard shortcuts (this overlay)" },
-  { keys: "?", label: "Open keyboard shortcuts" },
-  { keys: "⌘B", label: "Toggle sidebar" },
-  { keys: "Esc", label: "Close palette / overlay / drawer" },
+// Each row carries the action it performs, so selecting it (click or ↵) RUNS
+// the shortcut rather than only dismissing the overlay — the overlay doubles as
+// a clickable launcher, not just a cheat-sheet.
+type HelpAction = "palette" | "help" | "sidebar" | "close";
+
+const SHORTCUTS: ReadonlyArray<{
+  keys: string;
+  label: string;
+  action: HelpAction;
+}> = [
+  { keys: "⌘K", label: "Open command palette", action: "palette" },
+  { keys: "⌘/", label: "Open keyboard shortcuts (this overlay)", action: "help" },
+  { keys: "?", label: "Open keyboard shortcuts", action: "help" },
+  { keys: "⌘B", label: "Toggle sidebar", action: "sidebar" },
+  { keys: "Esc", label: "Close palette / overlay / drawer", action: "close" },
 ];
 
 export function HelpOverlay() {
-  const { enabled, helpOpen, closeHelp } = useShortcuts();
+  const { enabled, helpOpen, closeHelp, openPalette, runEffect } =
+    useShortcuts();
+
+  function runShortcut(action: HelpAction) {
+    switch (action) {
+      case "palette":
+        // Dismiss the overlay first so the palette opens as the top layer.
+        closeHelp();
+        openPalette();
+        break;
+      case "sidebar":
+        closeHelp();
+        runEffect({ kind: "toggleSidebar" });
+        break;
+      case "help":
+        // This overlay is already open — selecting its own row keeps it open
+        // (a no-op) rather than the confusing "open shortcuts → instantly close".
+        break;
+      case "close":
+        closeHelp();
+        break;
+    }
+  }
+
   if (!enabled) return null;
   return (
     <Command.Dialog
@@ -40,8 +72,9 @@ export function HelpOverlay() {
             <Command.Item
               key={s.keys + s.label}
               value={`${s.label} ${s.keys}`}
-              // Informational rows — selecting simply dismisses the overlay.
-              onSelect={() => closeHelp()}
+              // Selecting a row RUNS its shortcut (open palette / toggle sidebar
+              // / close), not just dismiss the overlay.
+              onSelect={() => runShortcut(s.action)}
               data-testid={`help-row-${s.keys}`}
             >
               <span className="cmdk-help-label">{s.label}</span>

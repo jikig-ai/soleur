@@ -214,8 +214,13 @@ describe("ensure-audit-issue fallback — source-shape anchors (#4960)", () => {
   });
 
   it("fallback step is gated on the output-aware result (heartbeatOk === false)", () => {
-    // The create must NOT fire when the prompt already produced an issue.
-    expect(SUT_SOURCE).toMatch(/if\s*\(\s*!heartbeatOk\s*\)/);
+    // The create must NOT fire when the prompt already produced an issue. The
+    // gate moved into finalizeOutputAwareHeartbeat's onBeforeHeartbeat callback
+    // (#5728), which is `undefined` when heartbeatOk is true and only runs the
+    // ensure-audit-issue step when red.
+    expect(SUT_SOURCE).toMatch(
+      /onBeforeHeartbeat:\s*heartbeatOk\s*\?\s*undefined/,
+    );
   });
 
   it("fallback create is wrapped in try/catch → reportSilentFallback (never throws)", () => {

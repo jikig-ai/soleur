@@ -198,33 +198,144 @@ describe("CommandPalette — empty state", () => {
   });
 });
 
+// Render, open the palette, and drill into a nested sub-page via its parent
+// entry. (Callers stub a custom fetch BEFORE calling this; the drill triggers
+// the lazy fetch, so the stub must already be in place.)
+async function openAndDrill(
+  parentTestId: "cmd-page-kb" | "cmd-page-workflows" | "cmd-page-settings",
+) {
+  renderPalette();
+  pressKey("k", { meta: true });
+  await screen.findByLabelText("Command palette search");
+  fireEvent.click(screen.getByTestId(parentTestId));
+}
+
+describe("CommandPalette — nested pages (submenus)", () => {
+  it("shows Knowledge Base + Workflows as single entries on the root (not flat lists)", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    // Parent entries present…
+    expect(screen.getByTestId("cmd-page-kb")).toBeInTheDocument();
+    expect(screen.getByTestId("cmd-page-workflows")).toBeInTheDocument();
+    // …and the individual docs / routine rows are NOT flat on the root.
+    expect(screen.queryByText("README.md")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("cmd-run-cron-daily-triage"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("drills into Knowledge Base on Enter/click and lists the docs", async () => {
+    await openAndDrill("cmd-page-kb");
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
+    expect(screen.getByText("onboarding.md")).toBeInTheDocument();
+    // A back affordance is present.
+    expect(screen.getByTestId("cmd-back")).toBeInTheDocument();
+  });
+
+  it("drills into Workflows on Enter/click and lists the routines", async () => {
+    await openAndDrill("cmd-page-workflows");
+    expect(
+      await screen.findByTestId("cmd-run-cron-daily-triage"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("cmd-run-cron-content-publisher"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows Settings as a single drill-in entry, with the settings items NOT flat on the root", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    // The Settings drill trigger is present on the root…
+    expect(screen.getByTestId("cmd-page-settings")).toBeInTheDocument();
+    // …but the individual settings destinations are NOT flat on the root.
+    expect(screen.queryByText("All settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Billing")).not.toBeInTheDocument();
+    expect(screen.queryByText("Audit log")).not.toBeInTheDocument();
+  });
+
+  it("drills into Settings on Enter/click and lists the settings items", async () => {
+    await openAndDrill("cmd-page-settings");
+    expect(
+      await screen.findByTestId("cmd-settings-settings:/dashboard/settings"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("All settings")).toBeInTheDocument();
+    expect(screen.getByText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Billing")).toBeInTheDocument();
+    expect(screen.getByText("Audit log")).toBeInTheDocument();
+    expect(screen.getByTestId("cmd-back")).toBeInTheDocument();
+  });
+
+  it("navigates to a settings destination on select", async () => {
+    await openAndDrill("cmd-page-settings");
+    fireEvent.click(await screen.findByText("Team"));
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/settings/team");
+  });
+
+  it("returns to the root menu via the Back row", async () => {
+    await openAndDrill("cmd-page-kb");
+    await screen.findByText("README.md");
+    fireEvent.click(screen.getByTestId("cmd-back"));
+    // Back on root: parent entries visible again, docs gone.
+    expect(screen.getByTestId("cmd-page-workflows")).toBeInTheDocument();
+    expect(screen.queryByText("README.md")).not.toBeInTheDocument();
+  });
+});
+
+describe("CommandPalette — loading state", () => {
+  it("shows a branded, contextual loading row while the KB tree is in flight", async () => {
+    // A fetch that never resolves so the loading phase stays observable.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    renderPalette();
+    pressKey("k", { meta: true });
+    fireEvent.click(await screen.findByTestId("cmd-page-kb"));
+
+    const loading = await screen.findByTestId("cmd-kb-loading");
+    expect(loading).toHaveTextContent(/loading your knowledge base/i);
+    // The bare, unstyled "Searching…" is gone.
+    expect(screen.queryByText("Searching…")).toBeNull();
+  });
+
+  it("shows a contextual loading row while workflows are in flight", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    renderPalette();
+    pressKey("k", { meta: true });
+    fireEvent.click(await screen.findByTestId("cmd-page-workflows"));
+
+    const loading = await screen.findByTestId("cmd-routines-loading");
+    expect(loading).toHaveTextContent(/loading your workflows/i);
+  });
+});
+
 describe("CommandPalette — KB error states", () => {
-  it("renders a reconnect row on needsReconnect without breaking Navigation", async () => {
+  it("renders a reconnect row on needsReconnect inside the KB page", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({ kb: { tree: { children: [] }, needsReconnect: true } }),
     );
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-kb");
     expect(await screen.findByTestId("cmd-kb-reconnect")).toBeInTheDocument();
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
+    // The Back row keeps the rest of the palette reachable.
+    expect(screen.getByTestId("cmd-back")).toBeInTheDocument();
   });
 
   it("renders an unavailable row on a 503 KB error", async () => {
     vi.stubGlobal("fetch", mockFetch({ kbStatus: 503 }));
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-kb");
     expect(await screen.findByTestId("cmd-kb-error")).toBeInTheDocument();
   });
 });
 
 describe("CommandPalette — run routine", () => {
   it("runs an allowed routine (202) with no error affordance", async () => {
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-workflows");
     const row = await screen.findByTestId("cmd-run-cron-daily-triage");
     fireEvent.click(row);
     await waitFor(() =>
@@ -261,9 +372,7 @@ describe("CommandPalette — run routine", () => {
         return { ok: true, status: 200, json: async () => KB_TREE } as Response;
       }),
     );
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-workflows");
     const row = await screen.findByTestId("cmd-run-cron-content-publisher");
     fireEvent.click(row);
     const confirm = await screen.findByTestId("cmd-confirm-run");
@@ -284,9 +393,7 @@ describe("CommandPalette — run routine", () => {
         runError: "dispatch_failed",
       }),
     );
-    renderPalette();
-    pressKey("k", { meta: true });
-    await screen.findByLabelText("Command palette search");
+    await openAndDrill("cmd-page-workflows");
     const row = await screen.findByTestId("cmd-run-cron-daily-triage");
     fireEvent.click(row);
     expect(

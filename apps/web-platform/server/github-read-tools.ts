@@ -12,6 +12,7 @@
  * 4 KB (comments) with a marker pointing at html_url for the full text.
  */
 
+import type { BoardIssueInput } from "@/lib/workstream";
 import { githubApiGet } from "./github-api";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
@@ -84,6 +85,11 @@ interface GhIssueResponse {
   updated_at: string;
   html_url: string;
   user: GhUser;
+  // The list-issues endpoint ALSO returns pull requests; each carries a
+  // `pull_request` key (issues do not) — used to filter PRs out (#workstream).
+  pull_request?: unknown;
+  // completed | reopened | not_planned | duplicate | null (drives Done vs Cancelled).
+  state_reason?: string | null;
 }
 
 interface GhPullRequestResponse extends GhIssueResponse {
@@ -289,4 +295,85 @@ export async function listPullRequestComments(
   }
 
   return [...review, ...convo];
+}
+
+// ---------------------------------------------------------------------------
+// Workstream board reader
+// ---------------------------------------------------------------------------
+
+// GitHub `GET /repos/{owner}/{repo}/issues` returns max 100 items/page (default
+// 30). We page until a short page, capped at MAX_ISSUE_PAGES so a huge repo can
+// never spin unbounded — 5 × 100 = 500 issues covers the board comfortably.
+// SOLEUR-DEBT: if a repo legitimately exceeds the cap we silently drop the tail;
+// switch to a "show open only" or windowed read when a >500-issue repo connects.
+const BOARD_PER_PAGE = 100;
+const MAX_ISSUE_PAGES = 5;
+
+/**
+ * List a repo's issues for the Workstream board, narrowed to `BoardIssueInput`
+ * (the shape the pure `githubIssueToWorkstreamIssue` mapper consumes).
+ *
+ * Contract (verified live against GitHub REST docs 2026-06-26):
+ *   - `?state=all` (default is `open`) so closed → Done/Cancelled render.
+ *   - `?per_page=100` (default 30) + pagination — silent truncation is a
+ *     data-honesty bug; we cap explicitly (MAX_ISSUE_PAGES) and document it.
+ *   - The endpoint ALSO returns pull requests — skip any item with a
+ *     `pull_request` key (PRs are not board issues).
+ *
+ * Errors PROPAGATE (githubApiGet throws on !ok) — the caller's empty-vs-throw
+ * split must let a GitHub failure surface (route → 502 / tool → isError), never
+ * masquerade as an empty board.
+ */
+export async function listRepoIssues(
+  installationId: number,
+  owner: string,
+  repo: string,
+): Promise<BoardIssueInput[]> {
+  const out: BoardIssueInput[] = [];
+  for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
+    const raw = await githubApiGet<GhIssueResponse[]>(
+      installationId,
+      `/repos/${owner}/${repo}/issues?state=all&per_page=${BOARD_PER_PAGE}&page=${page}`,
+    );
+    for (const item of raw) {
+      if (item.pull_request) continue; // skip PRs — board shows issues only
+      out.push({
+        number: item.number,
+        title: item.title,
+        body: item.body ?? null,
+        assignees: item.assignees.map((a) => a.login),
+        labels: item.labels.map(normalizeLabel),
+        state: item.state === "closed" ? "closed" : "open",
+        state_reason: item.state_reason ?? null,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      });
+    }
+    if (raw.length < BOARD_PER_PAGE) break; // short page → last page, no tail
+    if (page === MAX_ISSUE_PAGES) {
+      // We reached the page cap AND the final allowed page came back FULL
+      // (raw.length === BOARD_PER_PAGE — a short page would have broken above),
+      // so a tail beyond the cap is LIKELY and we may have dropped issues. (An
+      // exactly-full repo is indistinguishable from a real tail without a +1
+      // fetch, so we err toward signalling.) SOLEUR-DEBT: if a repo legitimately
+      // exceeds the cap we silently drop the tail; switch to a "show open only"
+      // or windowed read when a >500-issue repo connects.
+      log.warn(
+        { owner, repo, loaded: out.length, cap: MAX_ISSUE_PAGES * BOARD_PER_PAGE },
+        "Workstream issue read hit the page cap — tail issues may not be loaded (SOLEUR-DEBT)",
+      );
+      // Mirror to Sentry for parity with the no-installation reportSilentFallback
+      // path (get-workstream-issues.ts) so on-call sees the truncated read
+      // without SSH (cq-silent-fallback-must-mirror-to-sentry).
+      reportSilentFallback(
+        new Error("workstream issue read hit the page cap"),
+        {
+          feature: "github-read-tools",
+          op: "list-repo-issues-cap",
+          extra: { owner, repo, loaded: out.length },
+        },
+      );
+    }
+  }
+  return out;
 }

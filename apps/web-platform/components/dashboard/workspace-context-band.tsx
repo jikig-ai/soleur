@@ -92,9 +92,12 @@ export function WorkspaceContextBand({
           subtitle (folded in from the old standalone "Working on:" row). When
           collapsed the SAME container renders an icon-only identity tile instead.
 
-          md:pr-20 (expanded only) reserves right clearance for the floated
+          md:pr-12 (expanded only) reserves right clearance for the floated
           collapse toggle (`absolute right-3 top-10`) so the switcher's `▾`
-          chevron never sits under it. md:min-h-[64px] (drill === null, expanded
+          chevron never sits under it. The toggle's footprint is right-3 (12px)
+          + w-6 (24px) = 36px from the rail edge, so md:pr-12 (48px) clears it
+          with a ~12px margin while reclaiming ~32px of card width (do not
+          re-inflate to pr-20). md:min-h-[64px] (drill === null, expanded
           only) reserves the toggle's full vertical footprint so the not-yet-
           loaded band — whose only content is the async pill — cannot collapse
           below the toggle and let the nav rise into its footprint. */}
@@ -102,7 +105,7 @@ export function WorkspaceContextBand({
         className={
           isRailCollapsed
             ? "flex w-full justify-center"
-            : `flex items-center gap-2 px-3 pt-2 md:pr-20${
+            : `flex items-center gap-2 px-3 pt-2 md:pr-12${
                 drill === null ? " md:min-h-[64px]" : ""
               }`
         }

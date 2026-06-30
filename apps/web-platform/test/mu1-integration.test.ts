@@ -125,15 +125,21 @@ describe("MU1 AC-4: per-user isolation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC-1: Supabase handle_new_user trigger writes public.users.workspace_path.
+// AC-1: Supabase handle_new_user trigger provisions the user's workspace.
+// ADR-044 (mig 112) dropped users.workspace_path; the trigger now creates a
+// public.workspaces row (id = user.id) and the path is DERIVED via
+// workspacePathForWorkspaceId, not stored on users.
 // Requires MU1_INTEGRATION=1 + dev Supabase credentials via Doppler.
 // ---------------------------------------------------------------------------
 
 describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
   "MU1 AC-1: handle_new_user trigger",
   () => {
-    test("new auth.users row populates public.users with /workspaces/<uuid> path", async () => {
+    test("new auth.users row provisions a workspaces row with derived /workspaces/<uuid> path", async () => {
       const { createServiceClient } = await import("../lib/supabase/server");
+      const { workspacePathForWorkspaceId } = await import(
+        "../server/workspace-resolver"
+      );
       const client = createServiceClient();
       const email = `mu1-integration-${randomUUID()}@soleur-test.invalid`;
       assertSyntheticEmail(email);
@@ -157,14 +163,20 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
         expect(created.user.email?.toLowerCase()).toBe(email.toLowerCase());
         userId = created.user.id;
 
+        // The trigger creates a public.workspaces row (id = user.id); assert
+        // it exists and that the derived path matches the legacy
+        // /workspaces/<uuid> shape (workspace_id == user_id for solo signups).
         const { data: row, error: selectErr } = await client
-          .from("users")
-          .select("workspace_path")
+          .from("workspaces")
+          .select("id")
           .eq("id", userId)
           .single();
 
         expect(selectErr).toBeNull();
-        expect(row?.workspace_path).toBe(`/workspaces/${userId}`);
+        expect(row?.id).toBe(userId);
+        expect(workspacePathForWorkspaceId(userId)).toBe(
+          `${process.env.WORKSPACES_ROOT || "/workspaces"}/${userId}`,
+        );
       } finally {
         if (userId) {
           assertSyntheticEmail(email);

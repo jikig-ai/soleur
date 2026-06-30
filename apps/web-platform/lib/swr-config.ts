@@ -64,6 +64,7 @@ export const swrKeys = {
   // plain sentinel (no URL shape) so it can't be mistaken for a route.
   dashboardOrphanCount: () => ["dashboard:orphan-conversation-count"] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
+  workstreamIssues: () => ["/api/workstream/issues"] as const,
   conversations: (filters: {
     statusFilter?: string;
     domainFilter?: string;

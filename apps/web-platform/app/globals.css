@@ -309,6 +309,37 @@
   font-size: 0.85rem;
   color: var(--soleur-text-muted, #8a8a8a);
 }
+/* Branded loading row (CommandLoading): a gold ring spinner + contextual copy,
+ * matching the muted row rhythm so it reads as a quiet status, not a heading. */
+.cmdk-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  font-size: 0.85rem;
+  color: var(--soleur-text-muted, #8a8a8a);
+}
+.cmdk-loading-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid var(--soleur-border-default, #2a2a2a);
+  border-top-color: var(--soleur-accent-gold-fg, #c9a962);
+  animation: cmdk-spin 0.7s linear infinite;
+}
+@keyframes cmdk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmdk-loading-spinner {
+    animation: none;
+    /* No sweep: a static gold ring still reads as "in progress". */
+    border-top-color: var(--soleur-accent-gold-fg, #c9a962);
+  }
+}
 .cmdk-routine-row {
   display: flex;
   min-width: 0;

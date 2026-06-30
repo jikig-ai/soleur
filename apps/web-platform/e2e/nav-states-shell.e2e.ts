@@ -478,6 +478,25 @@ test.describe("nav-states visual gate — desktop", () => {
       bandBox!.y - asideBox!.y,
       "workspace band did not rise to the sidebar top — ~45px not reclaimed",
     ).toBeLessThanOrEqual(12);
+
+    // Workspace-button → collapse-toggle gap (md:pr-12): the binding geometric
+    // proof that the tightened right-padding still clears the floated « toggle.
+    // The card's `▾` chevron (right-most child of the switch button) must not
+    // overlap the floated « collapse toggle (`absolute right-3 top-10 w-6`).
+    // pr-20 (80px) over-reserved → big empty gap; pr-12 (48px) clears the 36px
+    // toggle footprint with a ~12px margin. jsdom cannot prove this — it is the
+    // load-bearing rect-non-intersection gate (ADR-049 methodology).
+    const collapseToggle = page.getByRole("button", { name: "Collapse sidebar" });
+    await expect(collapseToggle).toBeVisible({ timeout: 15_000 });
+    const chevron = switcher.getByText("▾");
+    const toggleBox = await collapseToggle.boundingBox();
+    const chevronBox = await chevron.boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(chevronBox).not.toBeNull();
+    expect(
+      chevronBox!.x + chevronBox!.width,
+      "workspace switcher ▾ chevron overlaps the floated « collapse toggle — md:pr-12 does not clear the toggle",
+    ).toBeLessThanOrEqual(toggleBox!.x);
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {
@@ -815,6 +834,11 @@ test.describe("widenable KB rail — desktop", () => {
     await expect(toggle).toHaveAccessibleName("Collapse sidebar");
     await expect(toggle.locator("svg")).not.toHaveClass(/rotate-180/);
 
+    // The collapse toggle's onClick attaches at hydration; settle before the
+    // first click so it is not a no-op (mirrors the sibling double-click and
+    // mobile-drawer tests). See e2e trap #2 (hydration-before-interaction) in
+    // knowledge-base/project/learnings/ui-bugs/2026-06-03-dynamic-width-needs-css-var-not-tailwind-arbitrary-or-usemediaquery.md
+    await page.waitForTimeout(1500);
     await toggle.click();
 
     // Collapsed: rail is the 56px icon rail, the toggle now reads "Expand

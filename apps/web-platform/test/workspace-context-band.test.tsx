@@ -155,6 +155,21 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     expect(pillWrapper.className).toContain("md:min-h-[64px]");
   });
 
+  it("Bug fix (workspace-button → collapse-toggle gap): the expanded pill wrapper reserves md:pr-12 (not the over-wide md:pr-20) so the card reclaims width and the gap to the floated « toggle is tightened", async () => {
+    // The floated collapse toggle (layout.tsx, `absolute right-3 top-10`, w-6) has
+    // a 36px right footprint (right-3 = 12px + w-6 = 24px). md:pr-20 (80px)
+    // over-reserved ~44px, starving the workspace card of width and leaving a big
+    // empty gap; md:pr-12 (48px) clears the toggle with a ~12px margin while the
+    // w-full min-w-0 card auto-grows into the reclaimed ~32px. jsdom has NO layout
+    // engine, so this is a TOKEN tripwire only — the binding geometric proof is the
+    // «↔▾ rect-non-intersection gate in nav-states-shell.e2e.ts (ADR-049).
+    render(<WorkspaceContextBand pathname="/dashboard" />);
+    const band = screen.getByTestId("workspace-context-band");
+    const pillWrapper = band.firstElementChild as HTMLElement;
+    expect(pillWrapper.className).toContain("md:pr-12");
+    expect(pillWrapper.className).not.toContain("md:pr-20");
+  });
+
   it("does NOT reserve the min-height on a DRILLED band (drill !== null already exceeds 64px via back-link + section title)", async () => {
     render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
     await screen.findByRole("button", { name: /switch workspace/i });

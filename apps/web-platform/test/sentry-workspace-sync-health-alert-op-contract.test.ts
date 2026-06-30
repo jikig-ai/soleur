@@ -31,6 +31,10 @@ const cron = readFileSync(
   join(here, "../server/inngest/functions/cron-workspace-sync-health.ts"),
   "utf8",
 );
+const reconcileOnPush = readFileSync(
+  join(here, "../server/inngest/functions/workspace-reconcile-on-push.ts"),
+  "utf8",
+);
 
 const FEATURE_TAG = "workspace-sync-health";
 
@@ -45,5 +49,19 @@ describe("workspace-sync-health alert feature contract", () => {
 
   it("issue-alerts.tf declares the workspace_sync_health alert resource", () => {
     expect(tf).toContain('resource "sentry_issue_alert" "workspace_sync_health"');
+  });
+});
+
+// The push-reconcile readiness gate moved from dir-existence to worktree
+// VALIDITY + re-clone (ADR-044 amendment 2026-06-29). The OLD gate fired
+// `reportSilentFallback(op:"skip-not-ready")` for every dir-absent workspace —
+// a paging signal. The reclone path eliminates it (dir-absent now routes to
+// `ensureWorkspaceRepoCloned`, whose own mirrors page on genuine failure). If
+// any Sentry alert / Better Stack monitor keyed on `skip-not-ready`, this change
+// darks it; pin the REMOVAL so a regression that re-introduces the dead op
+// breaks CI (data-integrity-review P2).
+describe("workspace-reconcile-on-push — skip-not-ready op is removed (data-integrity P2)", () => {
+  it("the reconcile handler no longer emits op:\"skip-not-ready\"", () => {
+    expect(reconcileOnPush).not.toContain("skip-not-ready");
   });
 });

@@ -56,6 +56,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
+  resolveBestEffortEvalOk,
   ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -174,7 +175,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronAgentNativeAuditHandler({
   step,
   logger,
-}: HandlerArgs): Promise<{ ok: boolean }> {
+}: HandlerArgs): Promise<{ ok: boolean; errorSummary?: string }> {
   // D6 (#5018) / #5046 PR-2: RESTORED — out of TIER2_DEFERRED_CRONS since the
   // relax-minimal hook allows Task (this cron's only denied construct). The
   // guard stays as a no-op shape-keeper: it returns false while the cron is
@@ -260,60 +261,56 @@ export async function cronAgentNativeAuditHandler({
       },
     );
 
-    if (spawnResult.abortedByTimeout) {
+    // #5674 — classify-fatal heartbeat (NOT flip-all). resolveBestEffortEvalOk
+    // inspects the captured tail: a non-zero exit matching a FATAL class (credit
+    // exhausted, auth/401 revoked, spawn fault, AbortController timeout) flips the
+    // monitor RED and records the scrubbed reason in routine_runs; a BENIGN
+    // non-zero exit (a clean audit run legitimately files nothing per-gap) stays
+    // GREEN (liveness) but still surfaces the reason via warnSilentFallback +
+    // sentryExtra. This keeps the #4730/#4727 protection (benign max-turns must
+    // not daily-false-page) while restoring a red signal for the genuinely-fatal
+    // classes the old unconditional-green policy masked (the 2026-06-29 credit
+    // incident). The abortedByTimeout infra-fault is folded into the fatal class —
+    // single signal, no double-report. See ADR-033 (classify-fatal invariant) +
+    // knowledge-base/.../2026-06-29-fix-claude-eval-cron-failure-observability-plan.md.
+    const decision = resolveBestEffortEvalOk(spawnResult);
+    if (!decision.ok) {
       reportSilentFallback(
-        new Error(
-          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-        ),
+        new Error(decision.errorSummary ?? "claude-eval fatal failure"),
         {
           feature: "cron-agent-native-audit",
-          op: "claude-eval-timeout",
-          message: "claude-eval aborted by AbortController",
-          extra: {
-            fn: "cron-agent-native-audit",
-            durationMs: spawnResult.durationMs,
-            maxMs: MAX_TURN_DURATION_MS,
-          },
+          op: "claude-eval-fatal",
+          message:
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+          extra: { fn: "cron-agent-native-audit", ...decision.sentryExtra },
         },
       );
     } else if (!spawnResult.ok) {
-      // Best-effort cron: a non-zero claude exit is the NORMAL outcome (a clean
-      // audit run legitimately files nothing per-gap). The monitor's liveness
-      // contract is "the pipeline ran end-to-end without an INFRASTRUCTURE
-      // fault" (token mint, clone, parse) — NOT "claude produced an artifact
-      // today" — so do NOT page; the infra-fault early-returns above keep their
-      // strict status=error. Pattern + rationale: cron-bug-fixer.ts (PR #4727,
-      // incident 5127648 / #4730). warnSilentFallback (not a bare logger.warn)
-      // is load-bearing — a pino logger.warn only adds a Sentry breadcrumb
-      // (flushed solely on a later captureException a clean ok:true run never
-      // produces) and lands in a Docker json-file stream Vector does not tail,
-      // i.e. invisible without SSH (cq-silent-fallback-must-mirror-to-sentry,
-      // hr-observability-layer-citation).
+      // BENIGN non-zero — queryable WARNING, NOT a page (the #4730 carve-out).
+      // warnSilentFallback (not a bare logger.warn) is load-bearing: a pino
+      // logger.warn only adds a Sentry breadcrumb (flushed solely on a later
+      // captureException a clean ok:true run never produces) and lands in a
+      // Docker json-file stream Vector does not tail — invisible without SSH
+      // (cq-silent-fallback-must-mirror-to-sentry, hr-observability-layer-citation).
       warnSilentFallback(
         new Error("claude-eval exited non-zero — best-effort run, no artifact this cycle"),
         {
           feature: "cron-agent-native-audit",
           op: "claude-eval-nonzero-noop",
           message:
-            "claude-eval exited non-zero (best-effort); cron monitor stays green (liveness, not success)",
-          extra: {
-            fn: "cron-agent-native-audit",
-            exitCode: spawnResult.exitCode,
-            durationMs: spawnResult.durationMs,
-          },
+            "claude-eval exited non-zero (benign best-effort); cron monitor stays green (liveness, not success)",
+          extra: { fn: "cron-agent-native-audit", ...decision.sentryExtra },
         },
       );
     }
 
     // --- Step 4: sentry-heartbeat (final POST) ---
-    // The pipeline reached the end without an INFRA fault → healthy liveness
-    // check-in regardless of claude's exit code (the non-zero exit is a
-    // best-effort outcome, surfaced above, never a liveness failure).
+    // classify-fatal: green on a clean/benign run, red on a fatal-class failure.
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-agent-native-audit", logger });
+      await postSentryHeartbeat({ ok: decision.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-agent-native-audit", logger });
     });
 
-    return { ok: true };
+    return { ok: decision.ok, errorSummary: decision.errorSummary };
   } finally {
     // Best-effort teardown (idempotent rm -rf with force:true). The
     // teardown helper already mirrors any failure to Sentry — wrapping

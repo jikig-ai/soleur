@@ -162,6 +162,13 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     expect(mockResolveFounder).not.toHaveBeenCalled();
     // Scope-grant check must NOT fire — GitHub App install IS the consent surface.
     expect(mockIsGranted).not.toHaveBeenCalled();
+    // Drop-before-dedup: a dispatching push DOES write its dedup row, immediately before send.
+    expect(mockInsert).toHaveBeenCalledWith({ delivery_id: "delivery-push-1" });
+    // INSERT-strictly-before-dispatch invariant (push): the dedup claim must
+    // precede inngest.send. Fails loud if a future reorder moves it after.
+    expect(mockInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInngestSend.mock.invocationCallOrder[0],
+    );
   });
 
   it("Case 1b: reconcilable push missing repository.full_name fails closed (no dispatch, P0-2)", async () => {
@@ -169,6 +176,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200); // received, but not dispatched
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("Case 2: tag push (refs/tags/v1) is dropped without dispatch", async () => {
@@ -176,6 +184,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("Case 3: branch deletion (after=zeros) is dropped without dispatch", async () => {
@@ -183,6 +192,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("Case 4: initial default-branch creation (before=zeros, after non-zero, ref=default) SHOULD dispatch", async () => {
@@ -190,6 +200,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
+    expect(mockInsert).toHaveBeenCalledWith({ delivery_id: "delivery-push-1" });
     expect(mockInngestSend).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "platform/workspace.reconcile.requested",
@@ -203,6 +214,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("Case 6: ref=main but repository.default_branch=develop is dropped (operator's default is develop)", async () => {
@@ -210,6 +222,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("Case 7: malformed payload (missing repository.default_branch) drops with pino warn, no Sentry error", async () => {
@@ -217,6 +230,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalled();
     expect(mockSentryCaptureException).not.toHaveBeenCalled();
   });
@@ -226,6 +240,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("Case 9: unmapped installation_id on PUSH → dispatches (no founder gate); reconcile re-derives workspaces", async () => {
@@ -240,7 +255,33 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     expect(res.status).toBe(200);
     expect(mockResolveFounder).not.toHaveBeenCalled();
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
+    expect(mockInsert).toHaveBeenCalledWith({ delivery_id: "delivery-push-1" });
     expect(mockInngestSend.mock.calls[0][0].data.installationId).toBe(9999);
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("Case 10: reconcilable push with duplicate delivery_id (23505) → 200, no dispatch", async () => {
+    // Drop-before-dedup preserves the PG_UNIQUE_VIOLATION→200 replay idiom on
+    // the push path: claimDedupRow() runs immediately before inngest.send, so a
+    // concurrent redelivery that loses the unique-constraint race short-circuits.
+    mockInsert.mockResolvedValueOnce({ error: { code: "23505" } });
+    const req = makePushRequest({});
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("Case 11: reconcilable push with non-23505 dedup insert error → 500, no dispatch", async () => {
+    // The shared claimDedupRow() closure returns 500 {error:"DB error"} on a
+    // non-conflict insert error; GitHub retries 5xx. No dispatch, nothing to
+    // release (the INSERT itself failed). Mirrors the non-push branch covered
+    // in github-route.test.ts.
+    mockInsert.mockResolvedValueOnce({ error: { code: "08006", message: "conn lost" } });
+    const req = makePushRequest({});
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockInngestSend).not.toHaveBeenCalled();
     expect(mockDeleteEq).not.toHaveBeenCalled();
   });
 

@@ -18,6 +18,7 @@ vi.mock("@/server/observability", () => ({
 import {
   resolveReachableInstallationIds,
   resolveOwningInstallationForRepo,
+  resolveOwningInstallationForRepoDetailed,
 } from "@/server/reachable-installations";
 
 type MembershipRow = {
@@ -167,5 +168,58 @@ describe("resolveOwningInstallationForRepo", () => {
     mockCheckRepoAccess.mockResolvedValue("not_found");
     const result = await resolveOwningInstallationForRepo([1, 2], "o", "r");
     expect(result).toBeNull();
+  });
+});
+
+// #5675: the *Detailed variant exposes `allDegraded` so the cron can tell a
+// transient all-degraded sweep (no write, retry next fire) from a conclusive
+// "owner is not entitled to this repo" (needs-reauth, keep the visible signal).
+// The cron mocks this resolver, so its discriminator logic is only directly
+// covered here.
+describe("resolveOwningInstallationForRepoDetailed", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("an 'ok' install returns {installId, allDegraded:false}", async () => {
+    mockCheckRepoAccess.mockImplementation(async (id: number) =>
+      id === 7 ? "ok" : "degraded",
+    );
+    expect(await resolveOwningInstallationForRepoDetailed([1, 7], "o", "r")).toEqual({
+      installId: 7,
+      allDegraded: false,
+    });
+  });
+
+  test("every probe degraded → {installId:null, allDegraded:true} (transient)", async () => {
+    mockCheckRepoAccess.mockResolvedValue("degraded");
+    expect(await resolveOwningInstallationForRepoDetailed([1, 2], "o", "r")).toEqual({
+      installId: null,
+      allDegraded: true,
+    });
+  });
+
+  test("a conclusive not_found among degraded → {installId:null, allDegraded:false} (needs-reauth)", async () => {
+    mockCheckRepoAccess.mockImplementation(async (id: number) =>
+      id === 1 ? "degraded" : "not_found",
+    );
+    expect(await resolveOwningInstallationForRepoDetailed([1, 2], "o", "r")).toEqual({
+      installId: null,
+      allDegraded: false,
+    });
+  });
+
+  test("access_revoked is conclusive (not degraded) → allDegraded:false", async () => {
+    mockCheckRepoAccess.mockResolvedValue("access_revoked");
+    expect(await resolveOwningInstallationForRepoDetailed([1], "o", "r")).toEqual({
+      installId: null,
+      allDegraded: false,
+    });
+  });
+
+  test("empty reachable set → {installId:null, allDegraded:false} (no probe)", async () => {
+    const result = await resolveOwningInstallationForRepoDetailed([], "o", "r");
+    expect(result).toEqual({ installId: null, allDegraded: false });
+    expect(mockCheckRepoAccess).not.toHaveBeenCalled();
   });
 });

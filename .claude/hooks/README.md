@@ -338,3 +338,28 @@ designed to capture **disjoint** event sets — F1 for kernel-decided
 denials, F2 for hook-decided defers; with F1 deferred, F2 is the
 load-bearing piece.
 
+## Soak-gated follow-through enrollment gate (`ship-soak-followthrough-gate.sh`)
+
+A PreToolUse(Bash) hook that blocks `gh pr ready` / `gh pr merge --auto` when
+the PR (or its linked plan/spec) declares a **post-deploy soak / time-gated
+close criterion** for a tracker issue that is NOT enrolled in the follow-through
+sweeper. Mechanical twin of `ship/SKILL.md` §"Soak-Gated Follow-Through
+Enrollment Gate" (`wg-pm-class-followthrough-for-operator-dogfood`) and a sibling
+of `ship-operator-step-gate.sh`. Wired in the PreToolUse(Bash) chain after
+`ship-operator-step-gate.sh`.
+
+- **Fail-open:** non-merge command, no PR, no soak signal in the corpus, a tracker
+  that can't be resolved (gh error), an HTML-comment override
+  `<!-- gate-override: soak-followthrough-enrollment -->`, or
+  `SOLEUR_SKIP_SOAK_FOLLOWTHROUGH_GATE=1`.
+- **Fail-closed (deny):** a soak signal is present AND ≥1 referenced **OPEN**
+  tracker is definitively unenrolled (missing the `follow-through` label, the
+  `<!-- soleur:followthrough … -->` directive, or its on-disk
+  `scripts/followthroughs/*.sh`). Closed trackers are exempt.
+- `SOAK_RE` is kept **byte-identical** to the SKILL gate's regex; the parity is
+  asserted by `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts`.
+- **Why:** 2026-06-29 — PR #5671 (#5673) and PR #5675 (#5689) both shipped
+  soak-gated closures in prose with no sweeper enrollment; both trackers were
+  left to rot until caught manually. See
+  `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
