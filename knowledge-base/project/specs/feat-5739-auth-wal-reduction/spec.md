@@ -1,0 +1,61 @@
+---
+feature: auth-wal-reduction
+issue: 5739
+branch: feat-5739-auth-wal-reduction
+pr: 5762
+lane: cross-domain
+brand_survival_threshold: single-user incident
+status: blocked-on-measurement
+date: 2026-06-30
+---
+
+# Spec: Reduce Supabase Auth (GoTrue) WAL — #5739
+
+## Problem Statement
+
+#5739 tracks the "~18% Auth/GoTrue WAL" residual from the 2026-06-30 Disk-IO-budget
+investigation on prod `soleur-web-platform` (Micro). Live investigation showed the framing
+rests on an **unmeasured premise**: the 63%-of-WAL primary fix (#5736) merged but
+`pg_stat_statements` had not been reset, so the true post-fix auth share is unknown. The
+counts the issue flagged as a possible loop are normal ~30–60/day rates over a 55-day window.
+
+## Goals
+
+- G1: Establish a clean post-#5736 measurement window (DONE — pgss reset 2026-06-30 12:40 UTC).
+- G2: After ~7-day soak, re-measure Disk-IO budget + auth WAL share to decide if any auth
+  WAL work is warranted at all.
+- G3: If warranted, ship the security-neutral `auth.flow_state` expired-row prune (mirror
+  the #5738 cron.job_run_details retention pattern).
+
+## Non-Goals
+
+- NG1: Lengthening the JWT/access-token TTL. Deferred — widens the token-revocation window
+  (sign-out / ban / `user-set-role` demotion don't take effect until expiry) for ~zero
+  user-facing ROI at p3. Revisit only on measured need with recorded CLO sign-off.
+- NG2: Pruning active/in-flight `flow_state` rows (breaks live magic-link/OAuth/MFA logins).
+- NG3: Checkpoint tuning (max_wal_size/checkpoint_timeout) unless confirmed tunable on Micro.
+
+## Functional Requirements
+
+- FR1: Re-measure WAL distribution and Disk-IO budget after the soak window (turnkey query
+  posted to #5739).
+- FR2 (conditional on FR1 showing residual pressure): pg_cron job deleting **expired**
+  `auth.flow_state` rows only, with an explicit expired-row predicate verified against the
+  GoTrue schema (auth_code_issued_at / expiry semantics).
+
+## Technical Requirements
+
+- TR1: All prod reads/writes scoped to project `ifsccnjhymdmidffkzhl`; reads-only until
+  the measurement decision; any DELETE is expired-row-predicated and idempotent.
+- TR2: If FR2 ships, follow the #5738 retention-pattern (pg_cron DELETE on a low-frequency
+  schedule), and re-measure WAL contribution after deploy per the issue's acceptance criteria.
+- TR3: Any future JWT-TTL change (out of scope here) requires recorded baseline + chosen TTL
+  + revocation-window acceptance + rollback trigger + CLO attestation.
+
+## Acceptance Criteria (from #5739)
+
+- Dominant Auth-WAL driver identified with post-soak evidence (loop vs legitimate volume vs
+  short JWT TTL). Investigation to date: **legitimate volume + unpruned flow_state**, no loop.
+- Any JWT/session-lifetime change carries explicit security rationale + CLO sign-off (N/A
+  under current decision — lever deferred).
+- Auth-schema WAL share re-measured after any change.
