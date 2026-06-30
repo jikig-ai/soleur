@@ -371,13 +371,26 @@ post-enablement canary below passes). The parent ADR remains `accepted`.
 > `merge_queue` rule) within ~14 min. The parenthetical "(CodeQL is
 > default-setup)" in this amendment's original Phase-2 text was the load-bearing
 > wrong assumption — default setup is **structurally incompatible** with a
-> required-`CodeQL` merge queue. **Correction (roll-forward):** CodeQL was moved
-> to **advanced setup** — `.github/workflows/codeql.yml` with
-> `on: [push, pull_request, merge_group]`, languages
-> `actions`/`javascript-typescript`/`python`, `security-extended` suite (a
-> byte-faithful replacement of the disabled default setup) — so the `CodeQL`
-> context now posts on the temp ref. The queue is re-enabled only after the
-> advanced setup is verified to satisfy the required `CodeQL` context. PIR:
+> required-`CodeQL` merge queue.
+>
+> **Decision (2026-07-01): queue stays OFF; NOT re-adopting now.** The merge
+> queue is an optimization over `/ship`'s BEHIND-auto-sync loop, which already
+> mitigates the strict-up-to-date starvation #5780 set out to fix (both PR #5800
+> and the kill-switch PR #5811 merged cleanly through that loop). Re-adopting the
+> queue requires migrating CodeQL **default → advanced** setup
+> (`.github/workflows/codeql.yml` with `on: merge_group`), which (a) disrupts
+> every in-flight PR until it is rebased onto the codeql.yml-bearing main, and
+> (b) adds permanent codeql.yml maintenance (pin/matrix/query-suite) + SAST-drift
+> risk. That cost is not justified while the auto-sync loop works. CodeQL stays
+> on **default setup**.
+>
+> An advanced-setup `codeql.yml` was prototyped in PR #5811 and **removed again
+> in the follow-up** (it errors continuously while default setup is active —
+> the two are mutually exclusive). The full prototype is preserved in #5811's
+> git history as the re-adoption recipe. **To re-adopt the queue later:** restore
+> that `codeql.yml`, disable CodeQL default setup, verify a `CodeQL` context
+> (integration_id 57789) satisfies the required check on a normal PR, rebase
+> in-flight PRs, THEN re-add the `merge_queue` rule. PIR:
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
 > Generalized lesson: a plan recovered from disk after a subagent crash carries
 > its "verify X before shipping" Phase-0 gates as UNVERIFIED claims — re-run the
@@ -428,10 +441,11 @@ required check whose workflow never fires on `merge_group` leaves the queue entr
 the `[skip ci]` / path-filter deadlock). PR-1 added `merge_group:` to all 7
 producer workflows; the 8th producer, CodeQL, was originally left on default
 setup **(this was the bug — default setup never fires on `merge_group`; see the
-2026-07-01 incident note above)** and is now an advanced-setup workflow
-(`.github/workflows/codeql.yml`) carrying its own `on: merge_group` trigger.
-PR-1 also fixed the apply-verify `rules[0]` → `select(.type==…)` fragility, and
-added the observability + CLA-synthetic workflows.
+2026-07-01 incident note above)**. Fixing it requires CodeQL advanced setup with
+an `on: merge_group` trigger — deferred along with the queue itself per the
+2026-07-01 decision (CodeQL remains on default setup for now). PR-1 also fixed
+the apply-verify `rules[0]` → `select(.type==…)` fragility, and added the
+observability + CLA-synthetic workflows.
 
 **Two-PR sequencing is load-bearing:** PR-1 (triggers + verify fix) merged
 **first** (2026-06-30); PR-2 (this `merge_queue` block) merges **second** and
