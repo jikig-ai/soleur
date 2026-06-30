@@ -56,11 +56,14 @@ A hook injects a concise phase hint into `additionalContext` (the `session-rules
 injection point): the phase name + the phase-relevant skill/agent shortlist + an explicit
 note that later-phase skills are not yet live. The hint MUST NOT remove or deny any tool.
 
-### FR3: Additive phase scoping (web `agent-runner`)
+### FR3: Additive phase scoping (web `agent-runner`) — DEFERRED to #5772
 
-Per-phase, scope *down* only a high-confidence "never-needed-this-phase" tool subset and
-inject a matching prompt hint. On any phase-classifier ambiguity, restore the full set.
-MUST NOT add any per-phase entry to the `canUseTool` deny path.
+[Plan-time revision 2026-06-30] The web SDK agent runs with `settingSources: []`
+(`agent-runner-query-options.ts:155`) so the CLI hook cannot reach it, and the only
+surface-shrinking web lever (`disallowedTools`) is fail-closed (silent "unknown tool").
+Both contradict "fail-open only," so the web half is deferred to **#5772** (SDK-native
+phase hint + `disallowedTools` subset + TR3 telemetry), gated on v1's eval evidence.
+v1 is **CLI-only**. MUST NOT add any per-phase entry to the `canUseTool` deny path (when built).
 
 ### FR4: Tool-selection measurement (eval-harness)
 
@@ -83,12 +86,14 @@ The ~20 PreToolUse safety hooks (`prod-write-defer-gate`, `git-commit-secret-sca
 `worktree-write-guard`, …) run regardless of phase. Phase scoping must never hide a tool in a
 way that routes an agent around a safety hook.
 
-### TR3: Web silent-failure telemetry
+### TR3: Web silent-failure telemetry — DEFERRED to #5772
 
-The web side instruments both the model-intent surface (tool_use blocks) AND the
-authorization surface (`canUseTool`) so a mis-scope surfaces as a metric, not a silent
-"unknown tool" error to a paying user (per
-`2026-05-13-claude-agent-sdk-canusetool-not-invoked-for-unknown-mcp-tools`).
+[Plan-time revision 2026-06-30] Moves with the web half to **#5772**. v1 (CLI-only,
+additive PostToolUse hint) removes nothing → zero silent-unknown-tool surface → no
+telemetry needed. When #5772 builds the `disallowedTools` subset, it instruments both
+the model-intent surface (tool_use blocks) AND the authorization surface (`canUseTool`)
+so a mis-scope surfaces as a metric, not a silent "unknown tool" error to a paying user
+(per `2026-05-13-claude-agent-sdk-canusetool-not-invoked-for-unknown-mcp-tools`).
 
 ### TR4: Mapping registry consistency (ADR-053 pattern)
 
