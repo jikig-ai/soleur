@@ -7,6 +7,11 @@ vi.mock("@/components/feature-flags/provider", () => ({
     name === "support" ? flagState.support : false,
 }));
 
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush, replace: vi.fn(), prefetch: vi.fn() }),
+}));
+
 import { SupportLauncher } from "@/components/support/support-launcher";
 import { SUPPORT_STARTER_CHIPS } from "@/components/support/support-persona";
 
@@ -19,6 +24,7 @@ function openPanel() {
 describe("SupportPanel — interface shell", () => {
   beforeEach(() => {
     flagState.support = true;
+    routerPush.mockClear();
   });
   afterEach(() => cleanup());
 
@@ -67,6 +73,17 @@ describe("SupportPanel — interface shell", () => {
     // Reply renders as markdown: bold renders as <strong>, no literal "**".
     expect(dialog.querySelector("strong")).toBeTruthy();
     expect(dialog.textContent ?? "").not.toContain("**");
+  });
+
+  it("clicking an internal reply link navigates in-app (router.push) + closes, not a new tab", () => {
+    const dialog = openPanel();
+    fireEvent.click(within(dialog).getByText(SUPPORT_STARTER_CHIPS[0].label));
+    const kbLink = within(dialog).getByText("knowledge base").closest("a");
+    expect(kbLink?.getAttribute("href")).toBe("/dashboard/kb");
+    fireEvent.click(kbLink as Element);
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/kb");
+    // Panel closed so the user lands on the KB (not the dimmed overlay).
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("Escape closes the panel", () => {
