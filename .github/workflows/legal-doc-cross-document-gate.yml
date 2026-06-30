@@ -23,6 +23,12 @@ on:
     # knowledge-base/project/learnings/2026-03-20-github-required-checks-skip-ci-synthetic-status.md).
     # The `surface_hit=false` short-circuit at lines 82-85 of the enforce
     # job exits 0 in O(seconds) for non-DSAR PRs.
+  # Merge queue (#5780). `enforce` is required → must also report on the
+  # gh-readonly-queue/main/* temp ref or the queue entry stalls. The enforce
+  # step derives its diff base from `merge_group.base_sha` on that event and
+  # FORBIDS the empty-base → surface_hit=false → exit-0 path (P1-1/P1-5): a
+  # vacuous pass would let a legal-doc lockstep regression merge unverified.
+  merge_group:
 
 permissions:
   contents: read
@@ -39,7 +45,11 @@ jobs:
 
       - name: Enforce legal-doc cross-document lockstep
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Merge-queue candidate base (a SHA, already an ancestor in the
+          # fetch-depth:0 checkout). GitHub-controlled; quoted in the run: block.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
 
@@ -77,8 +87,23 @@ jobs:
           # — failing the gate on a branch-history artifact, not a real finding.
           # Checkout already runs fetch-depth:0, so this fetch is a cheap
           # incremental that just makes the merge-base reachable.
-          git fetch --quiet origin "$BASE_REF"
-          changed_files=$(git diff --name-only "origin/${BASE_REF}"...HEAD)
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            # Merge-queue candidate (#5780): base_sha is an ancestor commit
+            # already present in the fetch-depth:0 checkout — diff directly
+            # against it (no ref to fetch). A vacuous pass here would post a
+            # green `enforce` on the temp ref WITHOUT checking the candidate
+            # (P1-1/P1-5), so an empty base_sha is a HARD failure, never a
+            # fall-through to surface_hit=false.
+            if [ -z "${MERGE_GROUP_BASE_SHA:-}" ]; then
+              echo "::error::merge_group event with empty base_sha — refusing to run the gate vacuously. The legal-doc surface check would be skipped, letting a lockstep regression merge unverified." >&2
+              exit 1
+            fi
+            diff_base="$MERGE_GROUP_BASE_SHA"
+          else
+            git fetch --quiet origin "$BASE_REF"
+            diff_base="origin/${BASE_REF}"
+          fi
+          changed_files=$(git diff --name-only "${diff_base}"...HEAD)
           echo "Changed files in PR:"
           echo "$changed_files" | sed 's/^/  /'
 
