@@ -1,17 +1,23 @@
--- Negative-proof fixture for verify/117 check 1 (no_single_owner_unique_index).
+-- Negative-proof fixture for verify/117 check 1 (1a no_single_owner_unique_index
+-- + 1b no_single_owner_constraint).
 --
 -- A sentinel that never returns bad>0 is worthless. This fixture PROVES
--- verify/117 check 1 fires: inside a transaction it re-introduces a single-owner
--- partial-UNIQUE index (the exact vector the check targets), runs check 1, and
--- asserts bad>0 — then ROLLBACKs so the schema is untouched.
+-- verify/117 checks 1a + 1b fire: in two transactions it re-introduces the
+-- forbidden single-owner vectors (a partial-UNIQUE index, then a UNIQUE/EXCLUDE
+-- constraint), runs the matching check, and asserts bad>0 — each block ROLLBACKs
+-- so the schema is untouched.
 --
--- RUN (requires a live, freshly-migrated test DB — DATABASE_URL_POOLER /
--- Supabase MCP). In this pipeline run there is NO live DB, so this fixture is
--- AUTHORED but NOT EXECUTED; it is the named negative-proof location referenced
--- by test/supabase-migrations/117-reconcile-ownership-rpc-comments-multi-owner.test.ts
--- and by the release-workflow migrate+verify path.
+-- MANUAL / LOCAL-DB PROOF — NOT part of any automated pipeline. The
+-- release-workflow verify path (apps/web-platform/scripts/run-verify.sh) globs
+-- ONLY supabase/verify/*.sql, so nothing executes THIS fixture automatically. It
+-- is run BY HAND against a seeded/freshly-migrated local DB (psql via
+-- DATABASE_URL_POOLER / Supabase MCP), or wired into a future live-DB
+-- integration step. Its check-1a/1b queries are VERBATIM copies of verify/117's
+-- shipped check 1, kept in lockstep — the parity assertion in
+-- test/supabase-migrations/117-reconcile-ownership-rpc-comments-multi-owner.test.ts
+-- fails if the fixture and the shipped check ever drift.
 --
--- Expected: the SELECT returns bad >= 1; the DO block raises if it does not.
+-- Expected: each SELECT returns bad >= 1; each DO block raises if it does not.
 
 BEGIN;
 
@@ -37,9 +43,46 @@ BEGIN
     INTO v_bad;
 
   IF v_bad < 1 THEN
-    RAISE EXCEPTION 'verify/117 check 1 FAILED to fire on a single-owner partial-unique index (bad=%)', v_bad;
+    RAISE EXCEPTION 'verify/117 check 1a FAILED to fire on a single-owner partial-unique index (bad=%)', v_bad;
   END IF;
-  RAISE NOTICE 'verify/117 check 1 correctly returned bad=% on the negative fixture', v_bad;
+  RAISE NOTICE 'verify/117 check 1a correctly returned bad=% on the negative fixture', v_bad;
+END $$;
+
+ROLLBACK;
+
+-- ---------------------------------------------------------------------------
+-- check 1b (no_single_owner_constraint): the OTHER forbidden vector — a
+-- UNIQUE/EXCLUDE CONSTRAINT mentioning owner. A partial-unique INDEX (block 1)
+-- and a table CONSTRAINT are distinct catalog objects (pg_index vs
+-- pg_constraint), so check 1b needs its own negative proof.
+-- ---------------------------------------------------------------------------
+BEGIN;
+
+-- Re-introduce single-owner enforcement as an EXCLUDE CONSTRAINT: at most one
+-- 'owner' row per workspace_id. (A partial UNIQUE constraint cannot carry a
+-- WHERE predicate, so an EXCLUDE with a WHERE on role='owner' is the realistic
+-- constraint-shaped vector; its constraintdef mentions owner.)
+ALTER TABLE public.workspace_members
+  ADD CONSTRAINT ws_members_one_owner_per_workspace_neg_excl
+  EXCLUDE (workspace_id WITH =) WHERE (role = 'owner');
+
+DO $$
+DECLARE
+  v_bad int;
+BEGIN
+  SELECT (SELECT count(*) FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public'
+             AND c.relname = 'workspace_members'
+             AND con.contype IN ('u', 'x')
+             AND pg_get_constraintdef(con.oid) ILIKE '%owner%'))::int
+    INTO v_bad;
+
+  IF v_bad < 1 THEN
+    RAISE EXCEPTION 'verify/117 check 1b FAILED to fire on a single-owner UNIQUE/EXCLUDE constraint (bad=%)', v_bad;
+  END IF;
+  RAISE NOTICE 'verify/117 check 1b correctly returned bad=% on the negative fixture', v_bad;
 END $$;
 
 ROLLBACK;

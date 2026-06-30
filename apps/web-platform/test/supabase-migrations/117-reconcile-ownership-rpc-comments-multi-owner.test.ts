@@ -35,10 +35,39 @@ const negativeFixture = readFileSync(
   path.join(FIXTURE_DIR, "verify-117-single-owner-negative.sql"),
   "utf8",
 );
+// The migrations whose prior COMMENT values 117.down.sql must restore VERBATIM.
+const mig092 = readFileSync(
+  path.join(MIG_DIR, "092_transfer_ownership_caller_override.sql"),
+  "utf8",
+);
+const mig094 = readFileSync(
+  path.join(MIG_DIR, "094_member_rpc_caller_override_and_byok_cap_update.sql"),
+  "utf8",
+);
 
 // Executable SQL with line comments stripped, so prose mentioning a keyword or
 // "single-owner strict" does not satisfy executable-code assertions.
 const upExecutable = up.replace(/--[^\n]*/g, "");
+
+// Extract the CONCATENATED final value of a `COMMENT ON FUNCTION <sig> IS
+// 'a ' 'b ' ...;` adjacent-string-literal block, so a re-introduced space at a
+// literal boundary (e.g. 'organizations.' / 'owner_user_id') is caught. Joins
+// with "" because PostgreSQL concatenates adjacent literals with no separator.
+function extractCommentValue(sql: string, fnSigPattern: string): string | null {
+  const re = new RegExp(
+    `COMMENT\\s+ON\\s+FUNCTION\\s+${fnSigPattern}\\s+IS\\s+([\\s\\S]*?);`,
+    "i",
+  );
+  const m = sql.match(re);
+  if (!m) return null;
+  const literals = m[1].match(/'([^']*)'/g) ?? [];
+  return literals.map((l) => l.slice(1, -1)).join("");
+}
+
+const TRANSFER_SIG =
+  "public\\.transfer_workspace_ownership\\(uuid,\\s*uuid,\\s*text,\\s*uuid\\)";
+const UPDATE_ROLE_SIG =
+  "public\\.update_workspace_member_role\\(uuid,\\s*uuid,\\s*text,\\s*uuid\\)";
 
 describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
   describe("up: COMMENT ON FUNCTION ONLY (no behavior change)", () => {
@@ -64,8 +93,14 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
       expect(upExecutable).toMatch(/hand-off-and-step-down/i);
       expect(upExecutable).toMatch(/primary\/billing\/DSAR pointer/i);
       expect(upExecutable).toMatch(/promote-before-demote/i);
-      // The stale assertion must be gone from the new comment text.
-      expect(upExecutable).not.toMatch(/Single-owner strict/i);
+      // The exact pre-117 stale phrasing must be GONE from the new comment.
+      // Anchored on the literal stale sentence ("...ownership transfer.
+      // Single-owner strict: promotes target to owner...") rather than the
+      // brittle space-vs-hyphen "Single-owner strict" token — which the new
+      // comment's "NOT a single-owner enforcer" / "single-owner-strict mig-075"
+      // prose would dodge on a technicality.
+      expect(upExecutable).not.toContain("Single-owner strict: promotes");
+      expect(upExecutable).not.toContain("ownership transfer. Single-owner strict");
       expect(upExecutable).toMatch(/ADR-072/i);
     });
 
@@ -77,16 +112,26 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
   });
 
   describe("down: restores the prior COMMENT text VERBATIM (reversibility)", () => {
-    it("restores the exact 092 transfer comment (concatenated value, no inserted space)", () => {
-      // The concatenated final value of the 092:193-198 adjacent string literals.
-      expect(down).toContain("Atomic workspace ownership transfer. Single-owner strict: promotes ");
-      expect(down).toContain("target to owner, demotes caller to member, updates organizations.");
-      expect(down).toContain("owner_user_id, writes attestation + revocation rows.");
+    it("restores the EXACT 092 transfer comment value (concatenated, no inserted space)", () => {
+      // Extract the concatenated final value from migration 092 itself and assert
+      // down.sql restores byte-identical text — so a re-introduced space at the
+      // 'organizations.' / 'owner_user_id' literal boundary (different line breaks,
+      // same value) fails this assertion.
+      const mig092Value = extractCommentValue(mig092, TRANSFER_SIG);
+      const downValue = extractCommentValue(down, TRANSFER_SIG);
+      expect(mig092Value).toBeTruthy();
+      expect(downValue).toBe(mig092Value);
+      // Belt-and-suspenders on the CONCATENATED value (raw source splits the
+      // string across literal lines at the boundary): NO inserted space.
+      expect(downValue).toContain("organizations.owner_user_id");
+      expect(downValue).not.toContain("organizations. owner_user_id");
     });
 
-    it("restores the exact 094 update_workspace_member_role comment", () => {
-      expect(down).toContain("Workspace-member role-change RPC (mig 094 caller-override fix). Caller ");
-      expect(down).toContain("self-mutate + last-owner-demote guards, audit GUC, revocation row, F6 ");
+    it("restores the EXACT 094 update_workspace_member_role comment value", () => {
+      const mig094Value = extractCommentValue(mig094, UPDATE_ROLE_SIG);
+      const downValue = extractCommentValue(down, UPDATE_ROLE_SIG);
+      expect(mig094Value).toBeTruthy();
+      expect(downValue).toBe(mig094Value);
     });
 
     it("targets both 4-arg signatures", () => {
@@ -100,10 +145,16 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
   });
 
   describe("verify/117 sentinel locks the durable multi-owner invariant", () => {
-    it("returns check_name + bad and casts every branch ::int (no boolean/integer UNION, #5474)", () => {
+    it("returns check_name + bad, casts every branch ::int, and ships NINE check rows (no boolean/integer UNION, #5474)", () => {
       expect(verify).toMatch(/AS check_name/i);
-      // Each of the 8 emitted rows ends in an ::int-cast bad column.
-      expect((verify.match(/::int AS bad/gi) ?? []).length).toBe(8);
+      // `AS check_name` aliases ONLY the first UNION branch, so it is NOT a
+      // per-row counter. Count check ROWS by their per-branch check_name literal
+      // (`SELECT '<name>'`) — a counter that survives `AS bad`/`AS check_name`
+      // alias normalization. After adding check 3d (anonymise grant-lock) the
+      // file ships NINE check rows; every branch still casts ::int (the #5474
+      // boolean/integer UNION guard).
+      expect((verify.match(/SELECT\s+'[a-z0-9_]+'/gi) ?? []).length).toBe(9);
+      expect((verify.match(/::int AS bad/gi) ?? []).length).toBe(9);
     });
 
     it("check 1: no single-owner partial-UNIQUE index AND no UNIQUE/EXCLUDE constraint", () => {
@@ -114,23 +165,32 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
       expect(verify).toMatch(/con\.contype\s+IN\s*\(\s*'u',\s*'x'\s*\)/i);
     });
 
-    it("check 2: at-least-one-owner guard pinned to the 4-arg identity signature", () => {
+    it("check 2: at-least-one-owner guard pinned to the 4-arg signature AND the count(owner) <= 1 predicate text", () => {
       expect(verify).toMatch(/last_owner_guard_present_4arg/);
       expect(verify).toMatch(
         /pg_get_function_identity_arguments\(p\.oid\)\s*\n?\s*=\s*'p_workspace_id uuid, p_user_id uuid, p_new_role text, p_caller_user_id uuid'/i,
       );
       expect(verify).toMatch(/ILIKE\s+'%cannot demote the last owner%'/i);
+      // Predicate hardening: the guard's count(owner) <= 1 predicate text is
+      // ALSO pinned, so a future migration that keeps the RAISE message while
+      // neutering the predicate flips bad>0 (mig 094:227-230).
+      expect(verify).toMatch(/ILIKE\s+'%count\(%'/i);
+      expect(verify).toMatch(/ILIKE\s+'%<= 1%'/i);
     });
 
-    it("check 3: service_role-only grant lock on all THREE new-coverage RPCs", () => {
+    it("check 3: service_role-only grant lock on all FOUR new-coverage RPCs (incl. anonymise 3d)", () => {
       for (const sig of [
         "public.update_workspace_member_role(uuid, uuid, text, uuid)",
         "public.create_workspace_invitation(uuid, text, text, text, text, uuid)",
         "public.accept_workspace_invitation(uuid, uuid)",
+        "public.anonymise_organization_membership(uuid)",
       ]) {
         expect(verify).toContain(sig);
       }
       expect(verify).toMatch(/has_function_privilege\(\s*\n?\s*'authenticated'/i);
+      // check 3d: the anonymise Art-17 path (5th owner-minting vector, mig 081)
+      // is grant-locked here; transfer is grant-locked separately in verify/092.
+      expect(verify).toMatch(/anonymise_org_membership_not_granted_to_authenticated/);
     });
 
     it("check 4: the old 3-arg update_workspace_member_role overload stays dropped", () => {
@@ -140,11 +200,15 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
       );
     });
 
-    it("check 5: secondary transfer-comment check + header notes the two known limits", () => {
+    it("check 5: transfer-comment check uses catalog-pinned obj_description + header notes the known limits", () => {
       expect(verify).toMatch(/transfer_comment_not_single_owner_strict/);
-      // Header must disclose the trigger-vector + message-proxy limits.
+      // Resolves the comment via the catalog-pinned 2-arg obj_description(p.oid,
+      // 'pg_proc') — NOT the deprecated single-arg regprocedure form.
+      expect(verify).toMatch(/obj_description\(p\.oid,\s*'pg_proc'\)/i);
+      expect(verify).not.toMatch(/obj_description\(\s*\n?\s*'public\.transfer/i);
+      // Header must disclose the trigger-vector limit + check 2's predicate pinning.
       expect(verify).toMatch(/TRIGGER/);
-      expect(verify).toMatch(/PROXY/i);
+      expect(verify).toMatch(/predicate/i);
     });
   });
 
@@ -154,6 +218,37 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
       expect(negativeFixture).toMatch(/CREATE\s+UNIQUE\s+INDEX[\s\S]*?WHERE\s+role\s*=\s*'owner'/i);
       expect(negativeFixture).toMatch(/RAISE\s+EXCEPTION[\s\S]*?FAILED to fire/i);
       expect(negativeFixture).toMatch(/^\s*ROLLBACK;/m);
+    });
+
+    it("fixture check-1 query stays in LOCKSTEP with shipped verify/117 check 1 (no silent drift)", () => {
+      // String-level parity: the load-bearing check-1 predicate fragments must be
+      // present in BOTH the shipped verify file and the fixture's embedded copy.
+      // If verify/117 check 1 changes a matcher, the fixture must change too or
+      // this fails — they cannot silently diverge.
+      const check1Predicates = [
+        "i.indisunique",
+        "pg_get_expr(i.indpred, i.indrelid) ILIKE '%owner%'",
+        "pg_get_indexdef(i.indexrelid) ILIKE '%workspace_id%'",
+      ];
+      for (const frag of check1Predicates) {
+        expect(verify).toContain(frag);
+        expect(negativeFixture).toContain(frag);
+      }
+      // The planted index must be exactly the shape check 1 detects: a UNIQUE
+      // index scoped by workspace_id whose predicate mentions owner.
+      expect(negativeFixture).toMatch(
+        /CREATE\s+UNIQUE\s+INDEX[\s\S]*?workspace_id[\s\S]*?WHERE\s+role\s*=\s*'owner'/i,
+      );
+    });
+
+    it("fixture check-1b query proves the UNIQUE/EXCLUDE CONSTRAINT branch fires (not just the index branch)", () => {
+      // The second BEGIN;...ROLLBACK; block plants a UNIQUE/EXCLUDE constraint
+      // mentioning owner and asserts check 1b (no_single_owner_constraint) bad>0.
+      expect((negativeFixture.match(/^\s*BEGIN;/gm) ?? []).length).toBeGreaterThanOrEqual(2);
+      expect((negativeFixture.match(/^\s*ROLLBACK;/gm) ?? []).length).toBeGreaterThanOrEqual(2);
+      expect(negativeFixture).toMatch(/con\.contype\s+IN\s*\(\s*'u',\s*'x'\s*\)/i);
+      expect(negativeFixture).toMatch(/pg_get_constraintdef\(con\.oid\)\s+ILIKE\s+'%owner%'/i);
+      expect(negativeFixture).toMatch(/check 1b FAILED to fire/i);
     });
   });
 

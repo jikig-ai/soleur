@@ -3,7 +3,7 @@ adr: ADR-072
 title: Multi-owner workspaces and the organizations.owner_user_id primary-owner pointer
 status: accepted
 date: 2026-06-30
-amends: [ADR-038, ADR-044]
+amends: [ADR-044]
 related_adrs: [ADR-038, ADR-044]
 related: [5756, 5733, 4520]
 related_plans:
@@ -32,11 +32,7 @@ The residual inconsistencies (the actual work of #5756): (a) the migration corpu
 
 ## Considered Options
 
-- **Option A (chosen): pin the multi-owner model as decision-of-record, make NO RPC behavior change; define `organizations.owner_user_id` as the single primary/billing/DSAR pointer (one of N owners); lock the invariant + grants in a runtime verify sentinel.** Reconcile only the live `COMMENT ON FUNCTION` metadata (migration 117) so the recorded architecture stops lying. Defer any *data* reconciliation of `owner_user_id` to a tracked follow-up. Pros: matches the already-running system; zero behavior risk; the verify sentinel makes the invariant non-regressable. Cons: leaves the pointer/owner-set divergence documented-but-unfixed (intentional, see Decision).
-- **Option B (rejected): add a net-new `grant_workspace_co_owner` RPC.** Rejected — redundant with the live invite-as-owner path + the mig-094 promotion primitive; adds surface and another single-owner-era comment to sync.
-- **Option C (rejected): add `UNIQUE(workspace_id) WHERE role='owner'`.** Rejected — contradicts N-co-owners and would break the live invite-as-owner path + any existing 2-owner rows at write time (`23505`).
-- **Option D (rejected): reconcile `organizations.owner_user_id` data now (backfill / junction table).** Deferred, not rejected outright — the *decision* (pointer meaning) belongs here now; the *data* change is medium-effort and only warranted if DSAR/billing correctness requires a non-pointer owner *set*. Tracked as the Phase-6 follow-up, gated on this ADR.
-- **Option E (rejected): ADR-only, no migration/verify.** Rejected — leaves the live DB COMMENT asserting "single-owner strict" and adds no runtime lock against a future migration re-introducing single-owner enforcement or flipping a `service_role`-only grant to `authenticated`.
+The chosen option — **Option A: pin the multi-owner model as decision-of-record, make NO RPC behavior change, define `organizations.owner_user_id` as the single primary/billing/DSAR pointer (one of N owners), and lock the invariant + grants in a runtime verify sentinel** (reconciling only the live `COMMENT ON FUNCTION` metadata via migration 117 so the recorded architecture stops lying; deferring any *data* reconciliation to a tracked follow-up) — is detailed in **## Decision** below. The rejected and deferred alternatives are enumerated once in **## Alternatives Considered** (which also folds in two options not worth a separate paragraph: stop `transfer` auto-demoting the caller, and re-emit function bodies via `CREATE OR REPLACE`).
 
 ## Decision
 
@@ -52,10 +48,10 @@ Adopt **Option A**. This ADR is the dedicated decision-of-record. **No RPC behav
 
 4. **`organizations.owner_user_id` = the single primary/billing/DSAR owner pointer** — one designated owner among the N co-owners. It is maintained by `transfer_workspace_ownership` (which re-points it to the new primary owner). Co-owners added via promotion or invite-as-owner are full `workspace_members` owners but do **NOT** change the pointer. **This divergence is intentional, not accidental**: the pointer names the billing/DSAR-of-record owner, while the owner *set* lives in `workspace_members`. (Whether to backfill or migrate to a junction table is the deferred follow-up — see Alternatives / Sequencing.)
 
-5. **The complete inventory of `owner_user_id` writers is THREE (deepen-verified):**
-   - **(i) `transfer_workspace_ownership`** (mig 092:145-147) — dual-writes the pointer to the new owner, promote-before-demote.
-   - **(ii) `anonymise_organization_membership`** (mig 081:52-75, the account-self-delete / Art-17 path) — re-points the pointer to the **oldest remaining member** (`ORDER BY m.created_at ASC LIMIT 1`) **and promotes that member to owner**. This is an N-owner **wart**: it can mint a brand-new owner on a workspace that already had co-owners instead of preferring an existing co-owner. Acceptable for now (the departing user *is* the pointer-of-record owner, and the path is erasure, not routine promotion); promoted to a Phase-6 re-eval trigger if it ever surfaces a wrong primary owner via DSAR/billing.
-   - **(iii) the promotion + invite-as-owner paths do NOT touch the pointer** — by design (point 4).
+5. **Three paths touch the `owner_user_id` question, exactly TWO of which write the pointer (deepen-verified):**
+   - **(i) `transfer_workspace_ownership` — WRITES** (mig 092:145-147) — dual-writes the pointer to the new owner, promote-before-demote.
+   - **(ii) `anonymise_organization_membership` — WRITES** (mig 081:52-75, the account-self-delete / Art-17 path) — re-points the pointer to the **oldest remaining member** (`ORDER BY m.created_at ASC LIMIT 1`) **and promotes that member to owner**. This is an N-owner **wart**: it can mint a brand-new owner on a workspace that already had co-owners instead of preferring an existing co-owner. Acceptable for now (the departing user *is* the pointer-of-record owner, and the path is erasure, not routine promotion); promoted to a Phase-6 re-eval trigger if it ever surfaces a wrong primary owner via DSAR/billing.
+   - **(iii) the promotion + invite-as-owner paths — DELIBERATELY DO NOT WRITE the pointer** — by design (point 4): they add full `workspace_members` owners but leave the primary pointer unchanged.
 
 6. **Derived invariant (stated explicitly): `owner_user_id` references a *current* owner (or NULL for a true orphan) because every *product-reachable* writer maintains it.** This holds today ONLY because the one path that could strand the pointer at a non-owner — a `update_workspace_member_role` demote of the pointed-to owner — is `service_role`-only with **no live route**. **Naming this makes the breakage trigger explicit:** exposing a product-reachable owner-demote / owner-removal route that can target the pointer's owner promotes the deferred Phase-6 data reconciliation from *deferred* to *required*.
 
