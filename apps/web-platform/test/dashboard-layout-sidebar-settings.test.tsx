@@ -40,6 +40,9 @@ vi.mock("@/lib/supabase/client", () => ({
         Promise.resolve({ data: { session: null }, error: null }),
       getUser: () => Promise.resolve({ data: { user: null }, error: null }),
       signOut: signOutMock,
+      onAuthStateChange: () => ({
+        data: { subscription: { unsubscribe: vi.fn() } },
+      }),
     },
     from: () => ({
       select: () => ({
@@ -210,19 +213,4 @@ describe("DashboardLayout — resizable rail mounts in all expanded drill states
     }
   });
 
-  it("does NOT mount the grip when the rail is fully hidden (0px)", async () => {
-    try {
-      localStorage.setItem("soleur:sidebar.main.hidden", "1");
-    } catch {
-      // no-op
-    }
-    setPathname("/dashboard");
-    await renderDashboard();
-    expect(screen.queryByTestId("kb-rail-resize-handle")).toBeNull();
-    try {
-      localStorage.removeItem("soleur:sidebar.main.hidden");
-    } catch {
-      // no-op
-    }
-  });
 });

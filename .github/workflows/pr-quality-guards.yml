@@ -3,6 +3,13 @@ name: PR quality guards (#2905)
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  # Merge queue (#5780). Only `guard-script-fixture-tests` is a required
+  # context on ruleset 14145388 and it has NO PR-event dependency, so it runs
+  # cleanly on the gh-readonly-queue/main/* temp ref. Every OTHER job here is a
+  # PR-quality gate keyed on `github.event.pull_request.*` (PR number, diff,
+  # opt-out label) that has no meaning on a merge candidate — each is gated to
+  # `pull_request` below so it does not run (and spuriously error) on merge_group.
+  merge_group:
 
 permissions:
   contents: read
@@ -19,6 +26,7 @@ jobs:
 
   settings-json-integrity:
     name: Block destructive .claude/settings.json edits
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     runs-on: ubuntu-latest
     steps:
       - name: Check for opt-out label (must be applied by non-author)
@@ -60,6 +68,7 @@ jobs:
 
   pr-body-vs-diff:
     name: Block PR body citing files not in diff
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     runs-on: ubuntu-latest
     steps:
       - name: Check for opt-out label (must be applied by non-author)
@@ -96,6 +105,7 @@ jobs:
 
   stray-worktree-marker-block:
     name: Block .claude/worktrees/ entries in diff
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     runs-on: ubuntu-latest
     steps:
       - name: Check for opt-out label (must be applied by non-author)
@@ -139,6 +149,7 @@ jobs:
 
   pii-grep:
     name: Block Linear CDN URLs in PR diff (#3635)
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     # Intentionally NO opt-out support. The redaction guard is the
     # load-bearing defense for a single-user incident threshold per
     # knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7.
@@ -194,6 +205,7 @@ jobs:
 
   userid-bypass-lint:
     name: Block direct userId emissions in apps/web-platform (#3698)
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     # Intentionally NO opt-out support. The pino formatters.log rename hook
     # in apps/web-platform/server/logger.ts is the load-bearing defense for
     # the single-user incident threshold per ADR-028 / PA8 §(c)(ii). Future
@@ -252,6 +264,7 @@ jobs:
 
   auto-commit-message-density:
     name: Block PRs dominated by auto-commit headlines
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     runs-on: ubuntu-latest
     steps:
       - name: Check for opt-out label (must be applied by non-author)
@@ -288,6 +301,7 @@ jobs:
 
   client-pii-grep:
     name: Block userId/email in extra of direct client Sentry.capture* (#3703)
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     # SIGNAL-QUALITY gate (NOT a security control). The L3 stripUserContextFromEvent
     # beforeSend backstop (sentry.client.config.ts, #3696/#3700) already strips PII
     # at runtime, so production has never been at risk — this surfaces the bypass in
@@ -304,6 +318,7 @@ jobs:
 
   sweep-completeness:
     name: Sibling-set sweep completeness (#5269)
+    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
     # Fails a PR that changes a sibling-set's TRIGGER file but leaves a
     # registered DEPENDENT unchanged, per .github/enforcement-contracts.json.
     # Closes the cross-file-drift class mechanically (hr-write-boundary-sentinel-

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 // Stable module-level pathname mock — a fresh object each render would refire
 // effects (learning 2026-04-07-userouter-mock-instability). One mutable string.
@@ -34,6 +34,9 @@ vi.mock("@/lib/supabase/client", () => ({
       getSession: () =>
         Promise.resolve({ data: { session: null }, error: null }),
       getUser: () => Promise.resolve({ data: { user: null }, error: null }),
+      onAuthStateChange: () => ({
+        data: { subscription: { unsubscribe: vi.fn() } },
+      }),
     },
     from: () => ({
       select: () => ({
@@ -298,12 +301,11 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
   });
 });
 
-// Widenable rail: the resize handle now renders in EVERY visible state — every
-// drill (KB / Settings / Chat / Dashboard) AND when collapsed (it is the sole
-// collapse/expand affordance). It is suppressed ONLY when the rail is fully
-// hidden (0px — nothing to grab). On non-KB rails the grip carries the generic
-// "Resize sidebar" accessible name.
-describe("rail resize handle gating (all visible states; suppressed only when hidden)", () => {
+// Widenable rail: the resize handle renders in EVERY state — every drill
+// (KB / Settings / Chat / Dashboard) AND when collapsed (it is one of the two
+// collapse/expand affordances, alongside the « toggle button). On non-KB rails
+// the grip carries the generic "Resize sidebar" accessible name.
+describe("rail resize handle gating (renders in every state)", () => {
   beforeEach(() => {
     mockPathname = "/dashboard";
     localStorage.clear();
@@ -343,7 +345,7 @@ describe("rail resize handle gating (all visible states; suppressed only when hi
     }
   });
 
-  it("DOES render the handle when the rail is collapsed (it is the sole expand affordance)", () => {
+  it("DOES render the handle when the rail is collapsed (one of two expand affordances)", () => {
     localStorage.setItem("soleur:sidebar.main.collapsed", "1");
     mockPathname = "/dashboard/kb";
     render(
@@ -354,26 +356,7 @@ describe("rail resize handle gating (all visible states; suppressed only when hi
       </Wrap>,
     );
     // Even collapsed, the slider mounts so the user can drag/double-click to
-    // expand again (the dedicated ▢ collapse button was removed as a duplicate).
+    // expand again (the « toggle button is the other expand affordance).
     expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
-  });
-
-  it("does NOT render the handle when the rail is fully hidden (0px — nothing to grab)", async () => {
-    localStorage.setItem("soleur:sidebar.main.hidden", "1");
-    mockPathname = "/dashboard/kb";
-    render(
-      <Wrap>
-        <DashboardLayout>
-          <div>content</div>
-        </DashboardLayout>
-      </Wrap>,
-    );
-    // useSidebarHidden hydrates in a post-mount effect; wait for the handle to
-    // disappear once hidden=true settles.
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("kb-rail-resize-handle"),
-      ).not.toBeInTheDocument(),
-    );
   });
 });

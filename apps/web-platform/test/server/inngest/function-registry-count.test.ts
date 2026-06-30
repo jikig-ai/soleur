@@ -132,7 +132,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(56);
+    expect(routeEntries.length).toBe(58);
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only

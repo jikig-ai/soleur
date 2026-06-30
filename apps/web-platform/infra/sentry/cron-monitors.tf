@@ -109,6 +109,26 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   timezone                = "UTC"
 }
 
+# #5674: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts`.
+# NEW hourly 1-token canary on the operator ANTHROPIC_API_KEY — pages when the
+# claude-eval fleet's credit is exhausted or the key is revoked (the 2026-06-29
+# silent-fleet-down incident). It is a SMALL / pure-TS Inngest cron (no claude-eval
+# spawn, no 50-min budget), so it takes the 30-min margin of the hourly small-cron
+# cohort (scheduled_oauth_probe / scheduled_github_app_drift_guard / cron_kb_template
+# _health), NOT the 60-min CLAUDE-EVAL COHORT. Fires at :47 (off-peak minute).
+resource "sentry_cron_monitor" "scheduled_anthropic_credit_probe" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-anthropic-credit-probe"
+  schedule                = { crontab = "47 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # scheduled-cf-token-expiry-check: NOT wired this cycle. The workflow's
 # `schedule:` block is currently commented out (manual-dispatch only —
 # waiting on end-to-end validation per its own header). A cron monitor
@@ -822,6 +842,19 @@ resource "sentry_cron_monitor" "scheduled_seo_aeo_audit" {
   schedule                = { crontab = "0 11 * * 1" }
   checkin_margin_minutes  = 60
   max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Sun 02:00 UTC — architecture diagram sync (claude-eval, 60-min budget).
+resource "sentry_cron_monitor" "scheduled_architecture_diagram_sync" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-architecture-diagram-sync"
+  schedule                = { crontab = "0 2 * * 0" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 65
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

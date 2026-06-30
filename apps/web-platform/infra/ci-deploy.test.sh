@@ -132,6 +132,29 @@ create_docker_mock() {
 #!/bin/bash
 mode="${MOCK_DOCKER_MODE:-default}"
 
+# #5669 cron-drain in-flight probe: `docker exec soleur-web-platform pgrep -f
+# claude`. Handled BEFORE the mode case so every swap-reaching test (trace AND
+# default) gets a bounded drain — without this the generic `exec`→exit-0 path
+# makes cron_in_flight loop until CRON_DRAIN_TIMEOUT. Default: NO claude in
+# flight (exit 1) → zero-wait drain, no hang. Armed via MOCK_CRON_INFLIGHT_FILE
+# (a countdown of remaining in-flight polls; decremented each call). The `bwrap`
+# canary sandbox `docker exec` has no `pgrep` arg so it falls through untouched.
+if [[ "${1:-}" == "exec" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "pgrep" ]]; then
+      _f="${MOCK_CRON_INFLIGHT_FILE:-}"
+      if [[ -n "$_f" && -f "$_f" ]]; then
+        _n=$(cat "$_f" 2>/dev/null || echo 0)
+        if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n > 0 )); then
+          echo $(( _n - 1 )) > "$_f"
+          exit 0   # claude in flight
+        fi
+      fi
+      exit 1       # no claude in flight (default)
+    fi
+  done
+fi
+
 case "$mode" in
   trace)
     # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
@@ -397,6 +420,14 @@ run_deploy() {
     export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # #5669: keep the cron-drain lease + state writes off /mnt/data and /var/run
+    # on the runner unless the caller pinned them (drain tests do).
+    if [[ -z "${CRON_DEPLOY_LEASE_FILE:-}" ]]; then
+      export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    fi
+    if [[ -z "${CRON_DRAIN_STATE_FILE:-}" ]]; then
+      export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    fi
     # CI_DEPLOY_STATE defaults to a per-run temp path unless the caller already set one.
     if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
       export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
@@ -468,6 +499,14 @@ run_deploy_traced() {
     export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # #5669: keep the cron-drain lease + state writes off /mnt/data and /var/run
+    # on the runner unless the caller pinned them (drain tests do).
+    if [[ -z "${CRON_DEPLOY_LEASE_FILE:-}" ]]; then
+      export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    fi
+    if [[ -z "${CRON_DRAIN_STATE_FILE:-}" ]]; then
+      export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    fi
     if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
       export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
     fi
@@ -521,6 +560,14 @@ assert_inngest_docker_trace() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
     export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # #5669: keep the cron-drain lease + state writes off /mnt/data and /var/run
+    # on the runner unless the caller pinned them (drain tests do).
+    if [[ -z "${CRON_DEPLOY_LEASE_FILE:-}" ]]; then
+      export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    fi
+    if [[ -z "${CRON_DRAIN_STATE_FILE:-}" ]]; then
+      export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    fi
     export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
@@ -691,11 +738,14 @@ assert_canary_trace_order() {
 }
 
 # Canary success: prune → pull → stop(stale canary) → rm(stale canary) → run(canary) →
-#   bwrap sandbox check (docker exec) → stop(old) → rm(old) →
-#   ps(ADR-027 single-replica assertion) → run(prod) → stop(canary) → rm(canary)
+#   bwrap sandbox check (docker exec) → stop(canary) → rm(canary) [#5669 memory-dwell:
+#   torn down BEFORE the drain] → stop(old) → rm(old) →
+#   ps(ADR-027 single-replica assertion) → run(prod)
+# (#5669/ADR-068: the post-success canary teardown was removed — the canary is now
+#  torn down before the cron drain gate, so it no longer appears after run(prod).)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "image|pull|stop|rm|run|exec|stop|rm|ps|run|stop|rm"
+  "image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run"
 
 # Canary failure / rollback: prune → pull → stop(stale) → rm(stale) → run(canary) →
 #   logs(canary) → stop(canary) → rm(canary)
@@ -860,9 +910,10 @@ assert_prod_start_failure() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # prune, pull, stale cleanup (stop, rm), canary run (ok), canary health ok,
-  # bwrap sandbox check, old stop, old rm, ADR-027 ps assertion (empty in this
-  # mock mode), prod run (fails), canary stop, canary rm
-  local expected="image|pull|stop|rm|run|exec|stop|rm|ps|run|stop|rm"
+  # bwrap sandbox check, #5669 pre-drain canary teardown (stop, rm), old stop,
+  # old rm, ADR-027 ps assertion (empty in this mock mode), prod run (fails),
+  # production_start_failed defensive canary teardown (stop, rm)
+  local expected="image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run|stop|rm"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -917,6 +968,14 @@ run_deploy_doppler() {
     export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # #5669: keep the cron-drain lease + state writes off /mnt/data and /var/run
+    # on the runner unless the caller pinned them (drain tests do).
+    if [[ -z "${CRON_DEPLOY_LEASE_FILE:-}" ]]; then
+      export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    fi
+    if [[ -z "${CRON_DRAIN_STATE_FILE:-}" ]]; then
+      export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    fi
     create_base_mocks "$MOCK_DIR"
 
     # Override: doppler mock with MOCK_DOPPLER_MISSING/MOCK_DOPPLER_FAIL support
@@ -1343,6 +1402,14 @@ assert_env_file_cleanup() {
     # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
     export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # #5669: keep the cron-drain lease + state writes off /mnt/data and /var/run
+    # on the runner unless the caller pinned them (drain tests do).
+    if [[ -z "${CRON_DEPLOY_LEASE_FILE:-}" ]]; then
+      export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    fi
+    if [[ -z "${CRON_DRAIN_STATE_FILE:-}" ]]; then
+      export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    fi
     export ENV_FILE_TRACKER="$tracker_dir/env_file_path"
     create_base_mocks "$MOCK_DIR"
     # Default docker mock already honors MOCK_DOCKER_RUN_FAIL_CANARY and returns
@@ -1648,6 +1715,14 @@ assert_initial_running_has_tag() {
     # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
     export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # #5669: keep the cron-drain lease + state writes off /mnt/data and /var/run
+    # on the runner unless the caller pinned them (drain tests do).
+    if [[ -z "${CRON_DEPLOY_LEASE_FILE:-}" ]]; then
+      export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    fi
+    if [[ -z "${CRON_DRAIN_STATE_FILE:-}" ]]; then
+      export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    fi
     export CI_DEPLOY_STATE="$state_file"
     export RUNNING_SNAPSHOT="$snapshot"
     create_base_mocks "$MOCK_DIR"
@@ -2242,6 +2317,204 @@ else
   FAIL=$((FAIL + 1))
   echo "  FAIL: AC5b (degraded_reason=$G3_REASON detect=$G3_DETECT; file: ci-deploy.sh)"
 fi
+
+echo ""
+echo "--- Cron drain (#5669 / ADR-068) ---"
+
+# This section drives real (mocked) deploys whose runners return non-zero on the
+# negative paths (L2) and uses grep|head extractions that SIGPIPE under
+# `set -o pipefail`; turn errexit/pipefail off for the section (each test below
+# reports PASS/FAIL explicitly, so errexit adds no safety here).
+set +e +o pipefail
+
+# T6 (AC4c memory-dwell): inside the swap success branch the canary is
+# stopped+removed BEFORE the `while cron_in_flight` drain loop, so the up-to-70min
+# drain wait does not hold the 1536m canary resident on the 8GB host. Source-order
+# assertion scoped to the swap block (the stale-canary cleanup in the canary-start
+# block far above is a false match otherwise).
+TOTAL=$((TOTAL + 1))
+# `f &&` guards the exit rule so the same literal in the top-of-file comment does
+# not terminate awk before the swap section begins.
+SWAP_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
+T6_CANARY=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'docker stop soleur-web-platform-canary' | head -1 | cut -d: -f1)
+T6_DRAIN=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+if [[ -n "$T6_CANARY" && -n "$T6_DRAIN" && "$T6_CANARY" -lt "$T6_DRAIN" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T6 canary torn down before the drain loop in the swap branch (memory-dwell fix)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T6 canary-before-drain ordering (canary=$T6_CANARY drain=$T6_DRAIN; file: ci-deploy.sh)"
+fi
+
+# T7 (AC4d probe own timeout): cron_in_flight wraps the pool-agnostic detection
+# probe in its own `timeout "${CRON_DRAIN_PROBE_TIMEOUT}"` so a hung docker exec
+# cannot extend the drain past the wall-clock (G5).
+TOTAL=$((TOTAL + 1))
+T7_FN=$(awk '/^cron_in_flight\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT")
+if printf '%s' "$T7_FN" | grep -qF 'timeout "${CRON_DRAIN_PROBE_TIMEOUT}"' \
+   && printf '%s' "$T7_FN" | grep -qF 'pgrep -f "claude"'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T7 cron_in_flight is pool-agnostic (pgrep -f claude) with its own probe timeout"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T7 cron_in_flight probe shape (file: ci-deploy.sh)"
+fi
+
+# T9 (AC1): CRON_DRAIN_TIMEOUT default ≥ MAX per-function maxTurnDurationMs, so
+# the longest cron (cron-growth-audit, 70min) survives the drain rather than being
+# killed by the timeout. Re-derives the max from the actual function source — a
+# future cron raising its ceiling above the drain default fails this gate.
+TOTAL=$((TOTAL + 1))
+FN_DIR="$(dirname "$DEPLOY_SCRIPT")/../server/inngest/functions"
+T9_MAX_MIN=$(grep -rhoE 'MAX_TURN_DURATION_MS = [0-9]+ \* 60 \* 1000' "$FN_DIR" 2>/dev/null \
+  | grep -oE '= [0-9]+ \*' | grep -oE '[0-9]+' | sort -n | tail -1)
+T9_DRAIN_DEFAULT=$(grep -oE 'CRON_DRAIN_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | grep -oE '[0-9]+$')
+if [[ -n "$T9_MAX_MIN" && -n "$T9_DRAIN_DEFAULT" && "$T9_DRAIN_DEFAULT" -ge $(( T9_MAX_MIN * 60 )) ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T9 CRON_DRAIN_TIMEOUT default ${T9_DRAIN_DEFAULT}s ≥ max per-function ceiling ${T9_MAX_MIN}min ($(( T9_MAX_MIN * 60 ))s)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T9 drain default ${T9_DRAIN_DEFAULT}s < max ceiling ${T9_MAX_MIN}min (raise CRON_DRAIN_TIMEOUT)"
+fi
+
+# T-PARITY (#5669 cross-language drift guard): the lease basename is replicated in
+# bash (ci-deploy.sh CRON_DEPLOY_LEASE_FILE default path) AND TypeScript
+# (_cron-shared.ts DEPLOY_LEASE_BASENAME). The host writes the file and the
+# container substrate reads it; a silent divergence reopens the start-race while
+# both sides' own tests stay green. Assert they agree.
+TOTAL=$((TOTAL + 1))
+PARITY_SHARED="$(dirname "$DEPLOY_SCRIPT")/../server/inngest/functions/_cron-shared.ts"
+BASH_LEASE_BASENAME=$(grep -oE 'CRON_DEPLOY_LEASE_FILE:-[^}]+' "$DEPLOY_SCRIPT" | sed -E 's#.*/##')
+TS_LEASE_BASENAME=$(grep -oE 'DEPLOY_LEASE_BASENAME = "[^"]+"' "$PARITY_SHARED" | sed -E 's/.*"([^"]+)"/\1/')
+if [[ -n "$BASH_LEASE_BASENAME" && "$BASH_LEASE_BASENAME" == "$TS_LEASE_BASENAME" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T-PARITY lease basename agrees across bash + TS ('$BASH_LEASE_BASENAME')"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T-PARITY lease basename drift (ci-deploy.sh='$BASH_LEASE_BASENAME' vs _cron-shared.ts='$TS_LEASE_BASENAME')"
+fi
+
+# T-WALLCLOCK (pattern review): the wrapper / IN_FLIGHT_CEILING_S wall-clock must
+# stay >= CRON_DRAIN_TIMEOUT + overhead, else the wrapper SIGKILLs ci-deploy.sh
+# mid-drain (killing the very cron the drain protects). T9 ties CRON_DRAIN_TIMEOUT
+# UP to the cron ceiling; this ties it UNDER the wall-clock — so a future ceiling
+# raise that lifts the drain default can't silently exceed the wrapper budget while
+# T6/T9/wrapper-Test-6 all stay green.
+TOTAL=$((TOTAL + 1))
+WC_YML="$(dirname "$DEPLOY_SCRIPT")/../../../.github/workflows/web-platform-release.yml"
+WC_CEILING=$(grep -oE 'IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WC_YML" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+WC_DRAIN=$(grep -oE 'CRON_DRAIN_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | grep -oE '[0-9]+$')
+WC_MARGIN=300
+if [[ -n "$WC_CEILING" && -n "$WC_DRAIN" && $(( WC_CEILING - WC_DRAIN )) -ge "$WC_MARGIN" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T-WALLCLOCK IN_FLIGHT_CEILING_S ${WC_CEILING}s − CRON_DRAIN_TIMEOUT ${WC_DRAIN}s ≥ ${WC_MARGIN}s overhead"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T-WALLCLOCK wall-clock ${WC_CEILING}s − drain ${WC_DRAIN}s < ${WC_MARGIN}s margin (wrapper would SIGKILL mid-drain)"
+fi
+
+# T-LEASE-ORDER (test-design review): the lease MUST be written BEFORE the drain
+# loop and the prod stop — that ordering is what closes the start-race (a new run
+# launching claude into the about-to-die container while the loop drains). Source
+# order: lease write < `while cron_in_flight` < `docker stop --time=12`.
+TOTAL=$((TOTAL + 1))
+LO_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
+LO_LEASE=$(printf '%s\n' "$LO_BLOCK" | grep -nE ': > "\$CRON_DEPLOY_LEASE_FILE"' | head -1 | cut -d: -f1)
+LO_DRAIN=$(printf '%s\n' "$LO_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+if [[ -n "$LO_LEASE" && -n "$LO_DRAIN" && "$LO_LEASE" -lt "$LO_DRAIN" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T-LEASE-ORDER lease written (L$LO_LEASE) before drain loop (L$LO_DRAIN) — start-race closed"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T-LEASE-ORDER lease-write/drain ordering (lease=$LO_LEASE drain=$LO_DRAIN)"
+fi
+
+# T1 (AC1): with a cron in flight for N polls then gone, the drain loops until the
+# probe goes false (counter drains to 0), does NOT time out, and clears the lease
+# on success.
+TOTAL=$((TOTAL + 1))
+DTMP=$(mktemp -d)
+echo 3 > "$DTMP/inflight"
+export CRON_DEPLOY_LEASE_FILE="$DTMP/lease" CRON_DRAIN_STATE_FILE="$DTMP/state.json" \
+  MOCK_CRON_INFLIGHT_FILE="$DTMP/inflight" CRON_DRAIN_POLL=0
+T1_OUT=$(run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && T1_RC=0 || T1_RC=$?
+unset CRON_DEPLOY_LEASE_FILE CRON_DRAIN_STATE_FILE MOCK_CRON_INFLIGHT_FILE CRON_DRAIN_POLL
+T1_TIMED=$(jq -r '.cron_drain_timed_out' "$DTMP/state.json" 2>/dev/null || echo "MISSING")
+T1_LEFT=$(cat "$DTMP/inflight" 2>/dev/null || echo "MISSING")
+T1_LEASE=$([[ -f "$DTMP/lease" ]] && echo yes || echo no)
+if [[ "$T1_RC" -eq 0 && "$T1_TIMED" == "false" && "$T1_LEFT" == "0" && "$T1_LEASE" == "no" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T1 drain waited for in-flight cron (counter→0), no timeout, lease cleared on success"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T1 (rc=$T1_RC timed_out=$T1_TIMED inflight_left=$T1_LEFT lease_present=$T1_LEASE)"
+fi
+rm -rf "$DTMP"
+
+# T3 (AC3 no-cron fast path): no claude in flight → zero-wait drain, immediate
+# stop, no timeout, lease cleared.
+TOTAL=$((TOTAL + 1))
+DTMP=$(mktemp -d)
+export CRON_DEPLOY_LEASE_FILE="$DTMP/lease" CRON_DRAIN_STATE_FILE="$DTMP/state.json" CRON_DRAIN_POLL=0
+T3_OUT=$(run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && T3_RC=0 || T3_RC=$?
+unset CRON_DEPLOY_LEASE_FILE CRON_DRAIN_STATE_FILE CRON_DRAIN_POLL
+T3_TIMED=$(jq -r '.cron_drain_timed_out' "$DTMP/state.json" 2>/dev/null || echo "MISSING")
+T3_WAIT=$(jq -r '.cron_drain_wait_secs' "$DTMP/state.json" 2>/dev/null || echo "MISSING")
+# `^[0-9]+$` already excludes the never-reached -1 sentinel (no minus sign); the
+# `-le 2` upper bound pins the no-cron FAST path (a single false probe, 0–1s of
+# wall-clock tick) and excludes any real multi-second drain — without asserting a
+# brittle exact 0 (the single docker-exec probe can cross a 1s boundary).
+if [[ "$T3_RC" -eq 0 && "$T3_TIMED" == "false" && "$T3_WAIT" =~ ^[0-9]+$ && "$T3_WAIT" -le 2 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T3 no-cron deploy: zero-wait drain (${T3_WAIT}s), no timeout"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T3 (rc=$T3_RC timed_out=$T3_TIMED wait=$T3_WAIT)"
+fi
+rm -rf "$DTMP"
+
+# T2 (AC2 bounded, not infinite): a cron that never finishes is killed once the
+# drain passes CRON_DRAIN_TIMEOUT — the state records cron_drain_timed_out=true and
+# the deploy still proceeds (a drain timeout must NOT fail the deploy under set -e).
+TOTAL=$((TOTAL + 1))
+DTMP=$(mktemp -d)
+echo 99 > "$DTMP/inflight"
+export CRON_DEPLOY_LEASE_FILE="$DTMP/lease" CRON_DRAIN_STATE_FILE="$DTMP/state.json" \
+  MOCK_CRON_INFLIGHT_FILE="$DTMP/inflight" CRON_DRAIN_TIMEOUT=0 CRON_DRAIN_POLL=0
+T2_OUT=$(run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && T2_RC=0 || T2_RC=$?
+unset CRON_DEPLOY_LEASE_FILE CRON_DRAIN_STATE_FILE MOCK_CRON_INFLIGHT_FILE CRON_DRAIN_TIMEOUT CRON_DRAIN_POLL
+T2_TIMED=$(jq -r '.cron_drain_timed_out' "$DTMP/state.json" 2>/dev/null || echo "MISSING")
+if [[ "$T2_RC" -eq 0 && "$T2_TIMED" == "true" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: T2 drain timeout sets cron_drain_timed_out=true and does not fail the deploy"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: T2 (rc=$T2_RC timed_out=$T2_TIMED)"
+fi
+rm -rf "$DTMP"
+
+# L2 (lease lifecycle): on a FAILED swap (new prod run fails), the lease is NOT
+# cleared — it is left for the substrate's TTL fail-open backstop (CTO guardrail
+# 2). Proves the lease was written (exists) and that clear is gated on swap
+# success (T1 proves the success-clear).
+TOTAL=$((TOTAL + 1))
+DTMP=$(mktemp -d)
+export CRON_DEPLOY_LEASE_FILE="$DTMP/lease" CRON_DRAIN_STATE_FILE="$DTMP/state.json" \
+  CRON_DRAIN_POLL=0 MOCK_DOCKER_RUN_FAIL_PROD=1
+L2_OUT=$(run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && L2_RC=0 || L2_RC=$?
+unset CRON_DEPLOY_LEASE_FILE CRON_DRAIN_STATE_FILE CRON_DRAIN_POLL MOCK_DOCKER_RUN_FAIL_PROD
+L2_LEASE=$([[ -f "$DTMP/lease" ]] && echo yes || echo no)
+if [[ "$L2_RC" -ne 0 && "$L2_LEASE" == "yes" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: L2 lease written + retained on swap failure (TTL backstop, not cleared)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: L2 (rc=$L2_RC lease_present=$L2_LEASE; expected nonzero rc + lease retained)"
+fi
+rm -rf "$DTMP"
+
+# Restore strict mode for the summary/exit.
+set -e -o pipefail
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

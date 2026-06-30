@@ -4,6 +4,15 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMediaQuery } from "@/hooks/use-media-query";
 
+// TOPOLOGY CAVEAT: the two breakpoints render differently. Mobile portals a
+// bottom-sheet overlay to <body>; desktop returns the panel INLINE as a
+// flex-row child (`h-full w-[380px] shrink-0 border-l`) that shrinks the
+// content area — it is NOT an overlay and renders no backdrop/focus-trap. A
+// desktop consumer MUST place it inside a `flex h-full` parent (push-column).
+// If you want a floating overlay drawer on desktop instead, build a portal
+// overlay yourself — do not use this primitive. See
+// knowledge-base/project/learnings/ui-bugs/2026-06-26-shared-sheet-desktop-branch-is-inline-push-column-not-overlay.md
+//
 // Mobile sheet is a constant 60vh by default. Dragging below 10vh closes.
 const MOBILE_HEIGHT_VH = 0.6;
 const CLOSE_THRESHOLD_VH = 0.1;

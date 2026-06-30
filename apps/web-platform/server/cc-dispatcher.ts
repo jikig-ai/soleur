@@ -116,6 +116,15 @@ import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
 } from "./ensure-workspace-repo";
+// 2026-06-19 — dispatch readiness gates on worktree VALIDITY (not mere `.git`
+// presence) so a corrupt/partial `.git` routes to recovery instead of a silent
+// repo-less spawn.
+import {
+  isReadyGitWorkTree,
+  probeGitWorktreeShape,
+  evaluateAgentReadiness,
+  isLstatValidKind,
+} from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
 // the agent, so a Concierge session never starts against a not-ready workspace.
@@ -134,7 +143,10 @@ import { resolveActiveWorkspace } from "./workspace-resolver";
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
 import { WorkspaceNotReadyError } from "./workspace-not-ready";
-import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
+import {
+  reportRepoResolverDivergence,
+  reportAgentReadinessSelfStop,
+} from "./repo-resolver-divergence";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -180,7 +192,11 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 // (the only verified sandbox-readable allowWrite dir); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
-import { buildToolProgressWSMessage, buildToolUseWSMessage } from "./tool-labels";
+import {
+  buildToolProgressWSMessage,
+  buildToolUseWSMessage,
+  isInSandboxRevParseStrand,
+} from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -1778,9 +1794,69 @@ export const realSdkQueryFactory: QueryFactory = async (
     // the clone outcome honestly (RepoNotReadyError on failure) — no longer
     // relying on the discarded fire-and-forget ensureWorkspaceRepoCloned at the
     // `:1866` self-heal as the only observation of a clone failure.
-    const needsSelfHeal =
-      !repoReadiness.ok ||
-      !existsSync(path.join(workspacePath, ".git"));
+    // 2026-06-19: gate on worktree VALIDITY, not mere `.git` presence. A `.git`
+    // that exists but is corrupt (partial clone / failed atomic-rename) used to
+    // pass `existsSync` → self-heal skipped → repo-less agent spawn (silent). The
+    // structural validity probe stays SYNCHRONOUS and is evaluated AFTER the
+    // `!repoReadiness.ok` short-circuit so `getFreshTenantClient` stays OFF the
+    // common valid-`.git` hot path (AC7).
+    // #5733 Phase 1b + D — gitdir-POINTER strand detection + observability. A
+    // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
+    // strands the agent's IN-BWRAP `git rev-parse` (its `gitdir:` target is
+    // unreadable under the sandbox `denyRead:["/workspaces"]`). The prompt-driven
+    // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
+    // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
+    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
+    // the SYNC readiness decision and the observability emit here — no re-lstat on
+    // the sync path. The common dir-valid case pays this single cheap probe here;
+    // the additive host `rev-parse` confirm below (#5733 deliverable A) then
+    // re-probes ONLY that dir-valid slice the lstat verdict greenlights but the
+    // agent can still strand on (detailed in the note immediately following).
+    // #5733 deliverable A (2026-06-30 — SUPERSEDES the 2026-06-19 "adds no
+    // subprocess" zero-await guarantee for the connected cold path): after this
+    // sync lstat routing, `evaluateAgentReadiness` (below, post-heal) runs ONE
+    // host `git rev-parse` confirm for the `dir-valid` slice — the one shape lstat
+    // greenlights but the agent still strands on. The fast lstat path here is
+    // unchanged; the async confirm is additive and dir-valid-gated.
+    const gitShape = probeGitWorktreeShape(workspacePath);
+    // Readiness derived from the SAME probe: a self-contained valid dir OR a
+    // non-escaping in-workspace pointer (readable in-sandbox) is ready.
+    const gitReady =
+      gitShape.kind === "dir-valid" ||
+      (gitShape.kind === "file-pointer" &&
+        gitShape.gitdirEscapesWorkspace === false);
+    // #5733 Phase 1b — emit the agent-readiness self-stop for ANY connected,
+    // DB-ready workspace whose on-disk `.git` is NOT rev-parse-ready (escaping
+    // pointer / corrupt dir / absent). The agent self-stops on its in-bwrap `git
+    // rev-parse` for ALL of these, and Phase 0 could not confirm WHICH shape prod
+    // has — so the one queryable event must cover them all (`gitKind`
+    // distinguishes). Excludes a legitimately repo-less workspace (no `repoUrl`)
+    // and a cloning/error status (the honest RepoNotReadyError owns those). Fires
+    // BEFORE the heal so the strand is queryable on this very dispatch.
+    if (repoReadiness.ok && repoUrl && !gitReady) {
+      reportAgentReadinessSelfStop({
+        userId: args.userId,
+        activeWorkspaceId,
+        // lstat-validity (the FILE-pointer trap) — derived from the same probe.
+        gitValid: isLstatValidKind(gitShape.kind),
+        gitKind: gitShape.kind,
+        gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
+      });
+    }
+    // `gitReady` treats an escaping pointer / corrupt dir as NOT ready, so it
+    // falls through to the self-heal. `gitDirValid` (the seam consumed by
+    // resolveRepoReadinessWithSelfHeal) uses the same `isReadyGitWorkTree`
+    // predicate, else the readiness module's fast-path (`:199`) short-circuits on
+    // lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
+    const needsSelfHeal = !repoReadiness.ok || !gitReady;
+    // #5733 (review P3) — the readiness used to SCOPE the host `rev-parse` confirm
+    // below. It must reflect the POST-heal state: a heal-from-not-ready dispatch
+    // (repoReadiness.ok=false → self-heal lands the repo → healed.ok=true) would,
+    // if scoped on the PRE-heal `repoReadiness.ok=false`, short-circuit
+    // `evaluateAgentReadiness` to "ready" and SKIP the dir-valid confirm. Seeded to
+    // the pre-heal value (used as-is when no heal runs) and lifted to the post-heal
+    // `repoReadiness.ok || healed.ok` inside the heal block (where `healed` scopes).
+    let confirmDbReady = repoReadiness.ok;
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
@@ -1820,21 +1896,32 @@ export const realSdkQueryFactory: QueryFactory = async (
               if (error) throw error;
             },
             ensureWorkspaceRepoCloned,
+            // TRUE PRESENCE — used only by the null-install divergence gates
+            // (a corrupt `.git` is NOT absent; F1).
             gitDirExists: (p) => existsSync(path.join(p, ".git")),
-            // Dispatch-time divergence emit (this PR). The readiness module
-            // recognizes a connected-but-null-install workspace and routes it
-            // here; we forward to the existing breadcrumb emitter. Distinct op +
-            // trigger from the catch-block `self-heal-failed` emit below (an
-            // orchestration crash) — the divergence is a clean `{ ok:false }`
-            // return, never a thrown error, so it never reaches that catch (no
+            // READINESS-grade validity (#5733) — the fast-path/recovery gate. A
+            // `.git` present-but-corrupt OR a stale gitdir-pointer FILE is
+            // `false` here, routing it to the corrupt-worktree graft (which now
+            // re-clones a self-contained `.git` over a pointer) instead of
+            // fast-pathing a repo-less / strand-bound spawn.
+            gitDirValid: (p) => isReadyGitWorkTree(p),
+            // Dispatch-time divergence emit. The readiness module recognizes a
+            // connected-but-null-install workspace (`connected-null-install-at-
+            // dispatch`) OR a corrupt on-disk `.git` (`corrupt-worktree-at-
+            // dispatch`, with `recovered`) and routes here; we forward to the
+            // existing breadcrumb emitter. Distinct op + trigger from the
+            // catch-block `self-heal-failed` emit below (an orchestration crash) —
+            // the divergence is a clean `{ ok:false }` / `{ ok:true }` return,
+            // never a thrown error, so it never reaches that catch (no
             // double-fire). Both workspace-id fields carry the unified
             // activeWorkspaceId (no claim divergence on this path).
-            reportDivergence: (op, userId, workspaceId) =>
+            reportDivergence: (op, userId, workspaceId, recovered) =>
               reportRepoResolverDivergence({
                 userId,
                 op,
                 activeClaimWorkspaceId: workspaceId,
                 resolvedWorkspaceId: workspaceId,
+                recovered,
               }),
           },
         );
@@ -1874,6 +1961,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       // healed.ok === true → the self-heal landed `.git` (or the row was already
       // recoverable into ready). Dispatch proceeds; the `ensureWorkspaceRepoCloned`
       // below now no-ops because `.git` is present.
+      // Post-heal readiness: a heal-from-not-ready is now connected+ready, so the
+      // dir-valid host confirm below must run (not be short-circuited away).
+      confirmDbReady = repoReadiness.ok || healed.ok;
     }
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
@@ -1900,6 +1990,36 @@ export const realSdkQueryFactory: QueryFactory = async (
       installationId: effectiveInstallationId,
       repoUrl,
     });
+
+    // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
+    // self-heal returned `healed.ok=true` AND after `ensureWorkspaceRepoCloned`
+    // (which no-ops at `:207` on a populated-corrupt `dir-valid` — `isValidGit-
+    // WorkTree` passes lstat, so it is NEVER re-cloned/destroyed). This is the
+    // ONLY gate that catches a `dir-valid` `.git` that `git` itself cannot resolve
+    // as a work tree (broken config/refs/gitdir indirection): the agent's in-bwrap
+    // Step 0.0 rev-parse would strand on it, but the lstat verdict greenlit the
+    // spawn. The shared `evaluateAgentReadiness` is the ONE helper across cold /
+    // warm / reconcile, so the emit + heal-route is structural (not the cold-only
+    // drift the 26×-dark incident exposed). A confirmed `"not-a-worktree"` emits
+    // the self-stop (inside the helper) and returns `"block"` → honest
+    // `RepoNotReadyError` (NO destroy of a populated `.git`); an inconclusive probe
+    // FAILS-OPEN (spawn) so a transient blip never blocks a healthy repo. This does
+    // NOT replace the sync `gitDirValid` seam consumed by the self-heal above — it
+    // is an additive re-probe of `agentReady` despite `healed.ok=true`.
+    if (
+      (await evaluateAgentReadiness(workspacePath, {
+        userId: args.userId,
+        activeWorkspaceId,
+        connected: Boolean(repoUrl),
+        dbReady: confirmDbReady, // POST-heal (review P3) — see confirmDbReady note above
+      })) === "block"
+    ) {
+      throw new RepoNotReadyError(
+        "error",
+        "Your workspace's Git repository is present but unreadable, so I can't safely start work in it. Please re-connect or re-create the repository.",
+        "repo_setup_failed",
+      );
+    }
 
     // Issue A: mint a short-lived GitHub App installation token for the
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
@@ -2895,21 +3015,64 @@ export async function dispatchSoleurGo(
   // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
   // recovery-it-gates.md), never before. Idempotent with the cold factory call
   // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  //
+  // #5715 — WARM turns must AWAIT the re-clone before `runner.dispatch` lets the
+  // turn reach the per-tool bwrap sandbox. The COLD factory already awaits the
+  // clone before `query()` binds the sandbox cwd; the warm path (the factory is
+  // NOT re-invoked) used to fire-and-forget, so after a mid-session reclaim the
+  // next warm turn chdir'd into a `.git`-less workspace before the clone
+  // finished → `fatal: not a git repository`. `reprovisionWorkspaceOnDispatch`
+  // self-short-circuits on a VALID `.git` (one membership-verified resolve
+  // feeds both the validity probe and the clone), so a valid-`.git` warm turn
+  // pays only the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
-  void reprovisionWorkspaceOnDispatch(userId)
-    .then((outcome) => {
-      reprovisionOutcome = outcome;
-    })
-    .catch((err) => {
-      // reprovisionWorkspaceOnDispatch is already fail-soft (returns "ok" on a
-      // resolver error); this catch is belt-and-suspenders for an unexpected
-      // synchronous throw and leaves the outcome unresolved (generic message).
+  if (runner.hasActiveQuery(conversationId)) {
+    // WARM: the factory did NOT run this turn — gate the agent start on the
+    // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
+    // `runner.dispatch` try below) so it can NEVER reject out of dispatch.
+    try {
+      reprovisionOutcome = await reprovisionWorkspaceOnDispatch(userId);
+      if (reprovisionOutcome === "failed") {
+        // Definitively unrecoverable: the recovery ran and lost. Surface the
+        // honest reclaim copy and do NOT spawn the agent into a known-`.git`-less
+        // workspace. Gated STRICTLY on "failed" (never "ok"/undefined), so a
+        // recoverable conversation is never skipped (learning 2026-06-14).
+        sendToClient(userId, {
+          type: "error",
+          message: resolveWorktreeEnterFailedMessage(reprovisionOutcome),
+        });
+        return;
+      }
+    } catch (err) {
+      // Fail-safe: reprovisionWorkspaceOnDispatch is already fail-soft (returns
+      // "ok" on a resolver error) and `isValidGitWorkTree` swallows fs errors
+      // internally (never throws on EACCES/ELOOP); this catches an unexpected
+      // reprovision/resolver throw — mirror it and fall through to dispatch
+      // rather than stranding a recoverable turn.
       reportSilentFallback(err, {
         feature: "cc-dispatcher",
-        op: "reprovision-on-dispatch-publish",
+        op: "reprovision-on-dispatch-await",
         extra: { userId, conversationId },
       });
-    });
+    }
+  } else {
+    // COLD: the factory owns the await before `query()` construction. Keep the
+    // fire-and-forget publish so the honest-message branch can still read the
+    // outcome without delaying the cold dispatch.
+    void reprovisionWorkspaceOnDispatch(userId)
+      .then((outcome) => {
+        reprovisionOutcome = outcome;
+      })
+      .catch((err) => {
+        // Belt-and-suspenders for an unexpected synchronous throw; leaves the
+        // outcome unresolved (generic message).
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "reprovision-on-dispatch-publish",
+          extra: { userId, conversationId },
+        });
+      });
+  }
 
   // #5388 — per-dispatch registered platform-tool set for the unregistered-tool
   // mirror predicate (`onToolUse` below). Seeded with the ALWAYS-registered base
@@ -3238,6 +3401,52 @@ export async function dispatchSoleurGo(
       }
     },
     onToolResult: (block) => {
+      // #5733 deliverable C2 — the agent-context observability backstop. The host
+      // `rev-parse` confirm is blind to the escaping-pointer strand (host git is
+      // NOT sandboxed) AND to object-store corruption (rev-parse passes both
+      // sides). The GUARANTEED signal is the agent's OWN in-bwrap `/soleur:go`
+      // Step 0.0 `git rev-parse --is-inside-work-tree` result: when it reports
+      // not-a-work-tree, emit the self-stop from the agent's REAL context (distinct
+      // `in-sandbox-backstop` source tag), enriched with a host-side
+      // `probeGitWorktreeShape` gitKind — so a strand of ANY on-disk shape produces
+      // a queryable event without pre-confirming 754ee124's (unobservable) shape.
+      // Runs BEFORE the autonomous-posture gate (strand observability is posture-
+      // independent); wrapped so it can never break the command-stream path.
+      try {
+        if (
+          workspacePath &&
+          isInSandboxRevParseStrand(block.command, block.output)
+        ) {
+          const shape = probeGitWorktreeShape(workspacePath);
+          reportAgentReadinessSelfStop({
+            userId,
+            // `<root>/<activeWorkspaceId>` by construction (ADR-044) → basename is
+            // the workspace id, pre-hashed inside reportAgentReadinessSelfStop.
+            activeWorkspaceId: path.basename(workspacePath),
+            gitValid: isLstatValidKind(shape.kind),
+            // The agent's OWN rev-parse said not-a-work-tree (the authoritative
+            // in-sandbox verdict). NEVER the subprocess stderr / raw path.
+            gitRevParseValid: false,
+            gitKind: shape.kind,
+            gitdirEscapesWorkspace: shape.gitdirEscapesWorkspace,
+            source: "in-sandbox-backstop",
+          });
+        }
+      } catch (err) {
+        // Pass a SANITIZED error, never raw `err` (security #5733): a path-bearing
+        // fs error message could carry the raw workspacePath (== userId for a solo
+        // workspace) into Sentry. The error NAME is enough to triage the backstop's
+        // own failure; the `extra` keeps userId (pseudonymized at the boundary).
+        reportSilentFallback(
+          err instanceof Error ? err.name : "agent-readiness-backstop-error",
+          {
+            feature: "cc-dispatcher",
+            op: "agent-readiness-backstop",
+            extra: { userId, conversationId },
+          },
+        );
+      }
+
       // feat-concierge-stream-commands — stream the Bash command's
       // (truncated, REDACTED) stdout/stderr into the cc_router bubble, then
       // close the block. Autonomous-only (D1). Both the per-chunk and the

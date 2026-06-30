@@ -14,15 +14,22 @@
 //        abortedByTimeout, durationMs}. stdout is NOT captured.
 //   I6 — Event payloads emitted by cron-*.ts MUST carry actor: "platform".
 //        (This handler emits none.)
+//
+// Side-effect class: issue-creator + pr-creator. Persistence runs handler-side
+// via safeCommitAndPr after the eval (#5091/#5111); the prompt forbids the
+// spawned claude from running git/gh-pr verbs. Structural template:
+// cron-seo-aeo-audit.ts.
 
 import {
   redactToken,
   mintInstallationToken,
   deferIfTier2Cron,
+  digestIssueExistsForDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
-  warnIfCronWorkspaceLowOnDisk,
+  finalizeOutputAwareHeartbeat,
+  DeployInProgressError,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -31,6 +38,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -43,6 +51,8 @@ import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
 // =============================================================================
 
 const SENTRY_MONITOR_SLUG = "scheduled-architecture-diagram-sync";
+
+const SCHEDULED_ISSUE_TITLE_PREFIX = "[Scheduled] Architecture Diagram Sync -";
 
 // Token-lifetime floor: 60-min wall-clock budget + 10-min headroom for
 // setup / teardown / retry.
@@ -94,17 +104,34 @@ Step 3: Update stale diagrams
 For each diagram that is out of date, edit the .c4 source file directly to bring it in sync with the current codebase. Preserve the existing style and DSL conventions. Do NOT invent speculative components — only add or remove what the code clearly confirms. After each edit, leave a short comment in the diagram noting the date it was last verified: // last-verified: <today>
 
 Step 4: Record a summary issue
-After all diagrams are reviewed, create a single GitHub issue titled: "[Scheduled] Architecture Diagram Sync - <today>"
+After all diagrams are reviewed, create a single GitHub issue titled: "${SCHEDULED_ISSUE_TITLE_PREFIX} <today>"
 Labels: scheduled-architecture-diagram-sync
 Milestone: Post-MVP / Later
 Body: List each diagram file, whether it was up-to-date, and any changes made. If no drift was found, note that explicitly.
+
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
+Only changes under knowledge-base/engineering/architecture/diagrams/ are persisted — keep all edits inside that path.
+Creating the summary issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
 
 // Paths the safeCommitAndPr helper is permitted to stage. Restricted to the
 // diagrams directory to prevent accidental commits outside the audit scope.
 const ARCH_DIAGRAM_ALLOWED_PATHS = [
   "knowledge-base/engineering/architecture/diagrams/",
-];
+] as const;
+
+// Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE
+// set the spawned claude is allowed to see; anything not listed is excluded.
+function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    NODE_ENV: process.env.NODE_ENV,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GH_TOKEN: installationToken,
+  };
+}
 
 // =============================================================================
 // Handler
@@ -113,145 +140,254 @@ const ARCH_DIAGRAM_ALLOWED_PATHS = [
 export async function cronArchitectureDiagramSyncHandler({
   step,
   logger,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<{ ok: boolean }> {
-  const runStartedAt = new Date().toISOString();
-  let ephemeralRoot: string | undefined;
-  let installationToken: string | undefined;
+  // Tier-2 firewall: posts an honest on-schedule check-in and skips the spawn
+  // if this cron is still deferred (no fail-closed FAILED-issue storm).
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-architecture-diagram-sync",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
 
-  try {
-    // --- Step 0: defer on Tier-2 firewall --------------------------------
-    await deferIfTier2Cron(step, "cron-architecture-diagram-sync");
+  // Run-window start — lower bound for the post-run output check. Captured
+  // before the mint step (memoized across replays) so a replay reuses the
+  // original window rather than re-stamping a later "now".
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
 
-    // --- Step 1: mint a scoped GitHub App installation token -------------
-    installationToken = await step.run(
-      "mint-installation-token",
-      async () => {
-        const token = await mintInstallationToken({
-          permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
-          minLifetimeMs: TOKEN_MIN_LIFETIME_MS,
-          cronName: "cron-architecture-diagram-sync",
-        });
-        logger.info("cron-architecture-diagram-sync: token minted", {
-          tokenRedacted: redactToken(token),
-        });
-        return token;
-      },
-    );
-
-    // --- Step 2: clone repo into ephemeral workspace ---------------------
-    let spawnCwd: string | undefined;
-    ({ ephemeralRoot, spawnCwd } = await step.run(
-      "setup-ephemeral-workspace",
-      async () =>
-        setupEphemeralWorkspace({
-          installationToken,
-          cronName: "cron-architecture-diagram-sync",
-        }),
-    ));
-
-    // --- Step 3: run claude eval -----------------------------------------
-    let spawnResult: SpawnResult;
-    spawnResult = await step.run("claude-eval", async () => {
-      await warnIfCronWorkspaceLowOnDisk(
-        "cron-architecture-diagram-sync",
-        logger,
-      );
-      return spawnClaudeEval({
-        cwd: spawnCwd\!,
-        flags: CLAUDE_CODE_FLAGS,
-        prompt: ARCHITECTURE_DIAGRAM_SYNC_PROMPT,
-        maxTurnDurationMs: MAX_TURN_DURATION_MS,
-        cronName: "cron-architecture-diagram-sync",
-        logger,
-      });
-    });
-
-    logger.info("cron-architecture-diagram-sync: claude-eval complete", {
-      exitCode: spawnResult.exitCode,
-      durationMs: spawnResult.durationMs,
-      abortedByTimeout: spawnResult.abortedByTimeout,
-    });
-
-    // --- Step 4: output-aware heartbeat verification ---------------------
-    if (spawnResult.abortedByTimeout) {
-      reportSilentFallback(
-        new Error("cron-architecture-diagram-sync aborted by timeout"),
-        {
-          feature: "cron-architecture-diagram-sync",
-          op: "claude-eval-timeout",
-          message:
-            "Architecture diagram sync aborted by MAX_TURN_DURATION_MS timeout",
-          extra: {
-            fn: "cron-architecture-diagram-sync",
-            exitCode: spawnResult.exitCode,
-            stdoutTail: spawnResult.stdoutTail,
-          },
-        },
-      );
-    }
-
-    const heartbeatOk = await step.run("verify-output", async () =>
-      resolveOutputAwareOk({
-        spawnResult,
-        label: SENTRY_MONITOR_SLUG,
-        runStartedAt,
-        installationToken: installationToken\!,
-        cronName: "cron-architecture-diagram-sync",
-        logger,
-      }),
-    );
-
-    // --- Step 4.5: persist diagram edits as a PR -------------------------
-    if (heartbeatOk && \!spawnResult.abortedByTimeout) {
-      await step.run("safe-commit-pr", async () =>
-        safeCommitAndPr({
-          spawnCwd: spawnCwd\!,
-          installationToken: installationToken\!,
-          cronName: "cron-architecture-diagram-sync",
-          commitMessage: "docs(arch): weekly architecture diagram sync",
-          allowedPaths: ARCH_DIAGRAM_ALLOWED_PATHS,
-          runStartedAt,
-          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
-          logger,
-        }),
-      );
-    }
-
+  // #5786 — producer-side date-dedup. If a real summary issue already exists
+  // for today, skip the eval and post a healthy OK heartbeat — do NOT fall
+  // through to verify-output (whose run-window would exclude the earlier issue
+  // and false-RED the skip). Fail-OPEN: a read error → spawn.
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      titlePrefix: SCHEDULED_ISSUE_TITLE_PREFIX,
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-architecture-diagram-sync",
+    }),
+  );
+  if (digestAlreadyExists) {
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({
-        ok: heartbeatOk,
+        ok: true,
         sentryMonitorSlug: SENTRY_MONITOR_SLUG,
         cronName: "cron-architecture-diagram-sync",
         logger,
       });
     });
+    return { ok: true };
+  }
 
-    // --- Step 5: silence-hole fallback -----------------------------------
-    if (\!heartbeatOk) {
-      await step.run("ensure-audit-issue", async () => {
-        try {
-          await ensureScheduledAuditIssue({
-            label: SENTRY_MONITOR_SLUG,
-            titlePrefix: "[Scheduled] Architecture Diagram Sync -",
-            cronName: "cron-architecture-diagram-sync",
-            runStartedAt,
-            spawnResult,
-            installationToken: installationToken\!,
-          });
-        } catch (err) {
-          reportSilentFallback(err, {
-            feature: "cron-architecture-diagram-sync",
-            op: "ensure-audit-issue-failed",
-            message:
-              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
-            extra: { fn: "cron-architecture-diagram-sync", runStartedAt },
-          });
-        }
+  // --- Step 1: mint installation token (memoized across replays) ---
+  const installationToken = await step.run(
+    "mint-installation-token",
+    async () => {
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
       });
+    },
+  );
+
+  // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
+  let ephemeralRoot: string | null = null;
+  let spawnCwd: string | null = null;
+  try {
+    const workspace = await step.run("setup-workspace", async () => {
+      return setupEphemeralWorkspace({
+        installationToken,
+        cronName: "cron-architecture-diagram-sync",
+      });
+    });
+    ephemeralRoot = workspace.ephemeralRoot;
+    spawnCwd = workspace.spawnCwd;
+  } catch (err) {
+    // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare.
+    if (err instanceof DeployInProgressError) throw err;
+    const e = err as Error;
+    const redacted = new Error(redactToken(e.message ?? "", installationToken));
+    redacted.name = e.name;
+    reportSilentFallback(redacted, {
+      feature: "cron-architecture-diagram-sync",
+      op: "setup-ephemeral-workspace",
+      message: "Failed to scaffold ephemeral cron workspace",
+      extra: { fn: "cron-architecture-diagram-sync" },
+    });
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: false,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-architecture-diagram-sync",
+        logger,
+      });
+    });
+    return { ok: false };
+  }
+
+  try {
+    // #5728 — flag pattern. The body runs in an inner try whose throw sets
+    // `threw`; the single terminal heartbeat is posted by
+    // finalizeOutputAwareHeartbeat below.
+    let heartbeatOk = false;
+    let threw = false;
+    let spawnResult: SpawnResult | null = null;
+    try {
+      // --- Step 3: claude-eval (60-min AbortController) ---
+      spawnResult = await step.run(
+        "claude-eval",
+        async (): Promise<SpawnResult> => {
+          return spawnClaudeEval({
+            spawnCwd: spawnCwd!,
+            installationToken,
+            flags: CLAUDE_CODE_FLAGS,
+            prompt: ARCHITECTURE_DIAGRAM_SYNC_PROMPT,
+            maxTurnDurationMs: MAX_TURN_DURATION_MS,
+            cronName: "cron-architecture-diagram-sync",
+            buildSpawnEnv,
+            logger,
+          });
+        },
+      );
+
+      if (spawnResult.abortedByTimeout) {
+        reportSilentFallback(
+          new Error(
+            `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
+          ),
+          {
+            feature: "cron-architecture-diagram-sync",
+            op: "claude-eval-timeout",
+            message: "claude-eval aborted by AbortController",
+            extra: {
+              fn: "cron-architecture-diagram-sync",
+              durationMs: spawnResult.durationMs,
+              maxMs: MAX_TURN_DURATION_MS,
+            },
+          },
+        );
+      }
+
+      // --- Step 4: output-aware heartbeat. This cron is an always-create
+      //     producer (files a summary issue every run), so a clean exit that
+      //     produced no scheduled-architecture-diagram-sync issue in the run
+      //     window turns the monitor RED instead of false-green on exit code. ---
+      heartbeatOk = await step.run("verify-output", async () =>
+        resolveOutputAwareOk({
+          spawnOk: spawnResult!.ok,
+          label: SENTRY_MONITOR_SLUG,
+          runStartedAt,
+          cronName: "cron-architecture-diagram-sync",
+          stderrTail: spawnResult!.stderrTail,
+          exitCode: spawnResult!.exitCode,
+          stdoutTail: spawnResult!.stdoutTail,
+        }),
+      );
+
+      // --- Step 4.5: deterministic persistence (#5091). Gated on the
+      //     issue-verified output rather than the spawn exit code; abortedByTimeout
+      //     also skips (a hard kill can land mid-edit). ---
+      if (heartbeatOk && !spawnResult.abortedByTimeout) {
+        await step.run("safe-commit-pr", async () =>
+          safeCommitAndPr({
+            spawnCwd: spawnCwd!,
+            installationToken,
+            cronName: "cron-architecture-diagram-sync",
+            commitMessage: "docs(arch): weekly architecture diagram sync",
+            allowedPaths: ARCH_DIAGRAM_ALLOWED_PATHS,
+            runStartedAt,
+            scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+            logger,
+          }),
+        );
+      }
+    } catch (err) {
+      // #5728 G1 — a deploy-in-progress defer is benign: rethrow bare with NO
+      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // finalizeOutputAwareHeartbeat decides error-vs-retry below.
+      if (err instanceof DeployInProgressError) throw err;
+      threw = true;
+      const e = err as Error;
+      const redacted = new Error(
+        redactToken(e.message ?? "", installationToken),
+      );
+      redacted.name = e.name;
+      reportSilentFallback(redacted, {
+        feature: "cron-architecture-diagram-sync",
+        op: "handler-body-threw",
+        message:
+          "cron-architecture-diagram-sync body threw before the terminal heartbeat",
+        extra: {
+          fn: "cron-architecture-diagram-sync",
+          attempt: attempt ?? 0,
+          producedOutput: heartbeatOk,
+        },
+      });
+    }
+
+    // --- Single authoritative terminal heartbeat (memoization-safe,
+    //     final-attempt gated). On a non-final failure the helper skips the
+    //     heartbeat and returns retry:true. On the post path, the silence-hole
+    //     fallback files a FAILED audit issue when red, ordered BEFORE the
+    //     heartbeat so the heartbeat stays the genuine last step. ---
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      step,
+      heartbeatOk,
+      threw,
+      attempt,
+      maxAttempts,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-architecture-diagram-sync",
+      logger,
+      onBeforeHeartbeat: heartbeatOk
+        ? undefined
+        : async () => {
+            await step.run("ensure-audit-issue", async () => {
+              try {
+                await ensureScheduledAuditIssue({
+                  label: SENTRY_MONITOR_SLUG,
+                  titlePrefix: SCHEDULED_ISSUE_TITLE_PREFIX,
+                  cronName: "cron-architecture-diagram-sync",
+                  runStartedAt,
+                  spawnResult:
+                    spawnResult ??
+                    makeThrewSpawnResult("cron-architecture-diagram-sync"),
+                  installationToken,
+                });
+              } catch (err) {
+                reportSilentFallback(err, {
+                  feature: "cron-architecture-diagram-sync",
+                  op: "ensure-audit-issue-failed",
+                  message:
+                    "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+                  extra: {
+                    fn: "cron-architecture-diagram-sync",
+                    runStartedAt,
+                  },
+                });
+              }
+            });
+          },
+    });
+    if (retry) {
+      throw new Error(
+        "cron-architecture-diagram-sync failed on a non-final attempt; retrying",
+      );
     }
 
     return { ok: heartbeatOk };
   } finally {
+    // Best-effort teardown (idempotent rm -rf with force:true).
     await teardownEphemeralWorkspace(
       ephemeralRoot,
       "cron-architecture-diagram-sync",

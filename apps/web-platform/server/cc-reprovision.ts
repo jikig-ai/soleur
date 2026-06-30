@@ -10,6 +10,10 @@ import { reportSilentFallback } from "./observability";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { resolveActiveWorkspace } from "./workspace-resolver";
 import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
+import {
+  isReadyGitWorkTree,
+  evaluateAgentReadiness,
+} from "./git-worktree-validity";
 
 /**
  * Per-dispatch workspace re-provision for the Concierge (cc-soleur-go) path
@@ -72,11 +76,84 @@ export async function reprovisionWorkspaceOnDispatch(
         resolvedWorkspaceId: activeWorkspaceId,
       });
     }
-    const [workspacePath, storedInstallationId, repoUrl] = await Promise.all([
-      fetchUserWorkspacePath(userId, activeWorkspaceId),
-      resolveInstallationId(userId, activeWorkspaceId),
-      getCurrentRepoUrl(userId, activeWorkspaceId),
-    ]);
+    // #5715 — resolve the workspace path FIRST (membership-verified id), then
+    // stat `.git` on EXACTLY that path before the heavier install/repo resolves
+    // + the 120s clone. ONE resolve feeds both the stat and the clone target
+    // (LEADER precedent `agent-runner.ts:1148`) — no second divergent resolve,
+    // so the warm-dispatch gate can AWAIT this on every warm turn and a
+    // `.git`-present turn short-circuits the slow path (instead of the old
+    // fire-and-forget that let the agent run before the clone finished).
+    const workspacePath = await fetchUserWorkspacePath(userId, activeWorkspaceId);
+    // Forced-slow-path observability (AC11): a resolver outage that yields no
+    // path cannot stat `.git`, so we fail soft to the generic route — but make
+    // it queryable in Sentry rather than a silent slow-path forcing.
+    if (!workspacePath) {
+      reportSilentFallback(new Error("workspace_path_unresolved"), {
+        feature: "cc-dispatcher",
+        op: "reprovision-on-dispatch-path-unresolved",
+        extra: {
+          userId,
+          activeWorkspaceId,
+          reason: "workspace-path-unresolved",
+        },
+      });
+      return "ok";
+    }
+    // `.git` READY work tree → the safe symptom (missing/corrupt repo) is absent:
+    // skip the install/repo resolution AND the clone. Safety invariant: a READY
+    // `.git` is NEVER re-cloned/overwritten (never destroy Start-Fresh work /
+    // un-pushed commits — learning 2026-06-03-self-heal-on-brand-path-only-acts-
+    // on-safe-symptom.md). READINESS-not-presence (ADR-044 2026-06-19 +
+    // 2026-06-30 amendments): a CORRUPT `.git` (partial clone / bare `mkdir .git`)
+    // OR a STRANDING gitdir-pointer FILE (#5733 — passes lstat-validity but its
+    // gitdir target escapes the sandbox, so the agent's in-bwrap `git rev-parse`
+    // fails) is NOT a usable work tree, so it must NOT short-circuit "ok" — it
+    // falls through to `ensureWorkspaceRepoCloned`, which does the validity check
+    // + empty-corrupt removal / stale-pointer unlink + re-clone. This is the WARM
+    // turn's only heal gate (the cold `realSdkQueryFactory` does not run on a warm
+    // turn), so it MUST use the same `isReadyGitWorkTree` predicate as the cold
+    // dispatch + reconcile gates or a mid-session pointer strands unhealed. The
+    // path the probe used is exactly the path `ensureWorkspaceRepoCloned` clones
+    // into — probe == clone by construction.
+    //
+    // Observability: a present-but-INVALID `.git` (corrupt / partial clone) falls
+    // through to `ensureWorkspaceRepoCloned`, whose corrupt-recovery surfaces in
+    // Sentry under `feature=ensure-workspace-repo op=corrupt-worktree-block`
+    // (populated-but-broken `.git` honest-blocked, never rm'd) or `op=clone` (a
+    // genuine re-clone failure). These are DISTINCT from the cold dispatch path's
+    // `feature=repo-resolver-divergence op=corrupt-worktree-at-dispatch` breadcrumb
+    // — a warm-path corruption is NOT visible under the cold divergence op.
+    // #5733 (review P3) — resolve the connected repoUrl ONCE (tenant mint + SELECT)
+    // and reuse it in BOTH branches below: the lstat-ready `dir-valid` host-confirm
+    // scoping AND the not-ready re-clone. The previous code resolved it once per
+    // branch — a divergent second read the cold gate already avoids.
+    const repoUrl = await getCurrentRepoUrl(userId, activeWorkspaceId);
+    if (isReadyGitWorkTree(workspacePath)) {
+      // #5733 deliverable A — a lstat-READY `dir-valid` `.git` can STILL fail the
+      // agent's in-bwrap `git rev-parse` (broken config/refs/gitdir indirection),
+      // and the WARM path is the only heal gate on a warm turn. Before short-
+      // circuiting "ok" (→ caller spawns), run the SAME shared `evaluateAgent-
+      // Readiness` host confirm the cold + reconcile gates use (structural cross-
+      // gate consistency, NOT per-gate re-spec — the cold-only-emit drift was the
+      // 26×-dark incident). A confirmed `"not-a-worktree"` emits the self-stop
+      // (inside the helper) and returns "failed" so the caller surfaces the honest
+      // reclaim message instead of spawning into a strand; an inconclusive probe
+      // FAILS-OPEN to "ok". NO memoization (a stale positive masks sub-lstat
+      // corruption from a concurrent reconcile/pull, re-darkening this path). The
+      // `repoUrl` read scopes the confirm to connected workspaces (a repo-less
+      // Start-Fresh `git init` tree is a real work tree → "worktree" → "ok").
+      const verdict = await evaluateAgentReadiness(workspacePath, {
+        userId,
+        activeWorkspaceId,
+        connected: Boolean(repoUrl),
+        dbReady: true, // a lstat-ready warm tree is not mid-clone
+      });
+      return verdict === "block" ? "failed" : "ok";
+    }
+    const storedInstallationId = await resolveInstallationId(
+      userId,
+      activeWorkspaceId,
+    );
     // Promote to the entitled repo-owner install (same selection the cold
     // factory makes) so a cross-account org repo re-clones with the right
     // credential instead of 403-ing and surfacing a false "couldn't restore".

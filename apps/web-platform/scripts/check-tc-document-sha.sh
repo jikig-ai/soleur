@@ -238,9 +238,20 @@ for doc in "${CANONICAL_DOCS[@]}"; do
   fi
 
   if [ "$doc" = "terms-and-conditions" ]; then
-    # Bypass: same PR bumped TC_VERSION.
+    # Bypass: same PR bumped TC_VERSION. Resolve the diff base from
+    # GITHUB_BASE_REF on pull_request (origin/<ref>) or MERGE_GROUP_BASE_SHA on
+    # a merge_group event (github.base_ref is empty there; the candidate base is
+    # an ancestor SHA in the fetch-depth:0 checkout). Without the merge_group
+    # fallback the bypass silently no-ops on the queue ref and false-fails a
+    # legit stale-SHA + TC_VERSION-bump PR. #5780.
+    bypass_base=""
     if [ -n "${GITHUB_BASE_REF:-}" ]; then
-      if git diff --unified=0 "origin/${GITHUB_BASE_REF}...HEAD" -- "$LITERAL_FILE_TC" \
+      bypass_base="origin/${GITHUB_BASE_REF}"
+    elif [ -n "${MERGE_GROUP_BASE_SHA:-}" ]; then
+      bypass_base="${MERGE_GROUP_BASE_SHA}"
+    fi
+    if [ -n "$bypass_base" ]; then
+      if git diff --unified=0 "${bypass_base}...HEAD" -- "$LITERAL_FILE_TC" \
            | grep -qE '^[+-]export const TC_VERSION'; then
         echo "T&C document SHA changed AND TC_VERSION was bumped — accepted." >&2
         continue

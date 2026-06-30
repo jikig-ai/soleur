@@ -101,6 +101,12 @@ apps/web-platform/server/account-delete.ts
 apps/web-platform/server/concurrency.ts
 apps/web-platform/server/notifications.ts
 
+# Worktree write-lease RPC client (epic #5274 Phase 2, ADR-068 §2). Process-
+# scoped infra coordination keyed to workspace_id+worktree_id+host_id; the
+# acquire/touch/release functions are SECURITY DEFINER + service-role-only
+# (migration 116). No founder identity — same posture as concurrency.ts.
+apps/web-platform/server/worktree-write-lease.ts
+
 # Shared per-turn cost writer (PR #3626). Service-role required for the
 # atomic `increment_conversation_cost` + `write_byok_audit` RPCs which
 # are SECURITY DEFINER + service-role-only by migrations 017/037/042.
@@ -243,23 +249,29 @@ apps/web-platform/server/workspace-invitations.ts
 # sole cross-tenant matching contract per ADR-044, hard merge gate AC7).
 apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts
 
-# #4709 — cron-workspace-sync-health.ts is a read-only daily probe that scans
-# the workspaces table for the ready-but-unreachable class (repo_status='ready'
-# AND github_installation_id IS NULL) and reports each to Sentry via
-# reportSilentFallback. Service-role is structurally required: the Inngest cron
-# runs with no user JWT in scope (event-driven / scheduled), and the scan spans
-# tenants by design (a platform-wide health probe, not a per-tenant query). It
-# performs NO writes and no per-tenant mutation — same posture as the other
-# cron-*.ts probes (cron-membership-health) and workspace-reconcile-on-push.
+# #4709 / #5675 — cron-workspace-sync-health.ts is a daily probe that scans the
+# workspaces table for the ready-but-unreachable class (repo_status='ready' AND
+# github_installation_id IS NULL). Service-role is structurally required: the
+# Inngest cron runs with no user JWT in scope (event-driven / scheduled), and the
+# scan spans tenants by design (a platform-wide health probe, not a per-tenant
+# query). As of #5675 arm-1 also performs ONE narrow write: an entitlement-scoped,
+# SOLO-ONLY github_installation_id backfill via writeRepoColsToWorkspace, keyed on
+# the finding's OWN server-derived workspace id (resolveActiveWorkspace-equivalent
+# — the scan id is the authoritative row id, never req.body). The install is
+# resolved within the owner's entitlement scope (resolveReachableInstallationIds
+# keyed on the owner's user_id == solo workspace id), so it cannot bind an install
+# the owner is not entitled to reach. It NEVER flips repo_status (the narrow
+# ADR-044 "never persist repo_status=error" sub-rule). Arms 2/3 remain read-only;
+# same cron posture as cron-membership-health and workspace-reconcile-on-push.
 apps/web-platform/server/inngest/functions/cron-workspace-sync-health.ts
 
 # 2026-06-02 — cron-supabase-disk-io.ts is a read-only proactive Disk-IO monitor.
 # It calls the disk_io_pressure_signal() SECURITY DEFINER RPC (migration 095),
 # which is REVOKE-from-all / GRANT-EXECUTE-to-service_role-only, so the cron must
-# use the service-role client. Same posture as cron-workspace-sync-health: the
-# Inngest cron runs with no user JWT in scope, the signal is platform-wide (not
-# per-tenant), and it performs NO writes and no per-tenant mutation. The RPC
-# returns only aggregate stat-view counts + table names — no row data, no PII.
+# use the service-role client. Same cron posture as cron-workspace-sync-health
+# (no user JWT in scope, platform-wide not per-tenant); cron-supabase-disk-io
+# itself performs NO writes and no per-tenant mutation. The RPC returns only
+# aggregate stat-view counts + table names — no row data, no PII.
 apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
 
 # resolve-installation-id.ts was REMOVED from this allowlist in PR #4559

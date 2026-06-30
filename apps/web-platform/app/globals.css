@@ -191,6 +191,30 @@
 }
 
 /*
+ * ADR-067 refresh shimmer. A ~2px gold sliver sweeps left→right across the top
+ * edge while a warm SWR cache hit revalidates in the background (RefreshShimmer,
+ * gated on `isValidating && data`). Ambient and decorative — no layout shift, no
+ * input block, no "from cache" text. `prefers-reduced-motion` callers get a
+ * static dim sliver instead of the sweep (handled below).
+ */
+@keyframes refresh-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="refresh-shimmer"] > * {
+    animation: none !important;
+    width: 100% !important;
+    opacity: 0.5;
+  }
+}
+
+/*
  * Widenable nav rail. The dashboard rail (`aside`) carries a persisted width set
  * inline by (dashboard)/layout.tsx whenever the rail is expanded — as `--kb-rail-w`
  * when drilled into KB, or `--main-rail-w` in every other drill state (Dashboard /
@@ -209,4 +233,129 @@
   aside[data-main-rail-width] {
     width: var(--main-rail-w, 14rem);
   }
+}
+
+/* feat-web-app-shortcuts — the ⌘K command palette + ? help overlay (cmdk).
+ * cmdk ships unstyled; these rules give the Radix-backed dialog a centered
+ * floating panel using the soleur tokens. Scoped to [cmdk-*] data attributes
+ * the library emits. Unlayered so they are not subject to Tailwind layer order. */
+[cmdk-overlay] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgb(0 0 0 / 0.5);
+}
+[cmdk-dialog] {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  z-index: 50;
+  width: min(40rem, calc(100vw - 2rem));
+  transform: translateX(-50%);
+}
+[cmdk-root] {
+  overflow: hidden;
+  border-radius: 0.75rem;
+  border: 1px solid var(--soleur-border-default, #2a2a2a);
+  background: var(--soleur-bg-surface-1, #161616);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.5);
+}
+[cmdk-input] {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--soleur-border-default, #2a2a2a);
+  background: transparent;
+  padding: 0.875rem 1rem;
+  font-size: 0.9rem;
+  color: var(--soleur-text-primary, #ededed);
+  outline: none;
+}
+[cmdk-list] {
+  max-height: 22rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  scroll-padding-block: 0.5rem;
+}
+[cmdk-group-heading] {
+  padding: 0.5rem 0.5rem 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--soleur-text-muted, #8a8a8a);
+}
+[cmdk-item] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.85rem;
+  color: var(--soleur-text-secondary, #cfcfcf);
+  cursor: pointer;
+  user-select: none;
+}
+[cmdk-item][data-selected="true"] {
+  background: var(--soleur-bg-surface-2, #222);
+  color: var(--soleur-text-primary, #ededed);
+}
+[cmdk-item][data-disabled="true"] {
+  color: var(--soleur-text-muted, #8a8a8a);
+  cursor: default;
+}
+[cmdk-empty] {
+  padding: 1rem;
+  font-size: 0.85rem;
+  color: var(--soleur-text-muted, #8a8a8a);
+}
+/* Branded loading row (CommandLoading): a gold ring spinner + contextual copy,
+ * matching the muted row rhythm so it reads as a quiet status, not a heading. */
+.cmdk-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  font-size: 0.85rem;
+  color: var(--soleur-text-muted, #8a8a8a);
+}
+.cmdk-loading-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid var(--soleur-border-default, #2a2a2a);
+  border-top-color: var(--soleur-accent-gold-fg, #c9a962);
+  animation: cmdk-spin 0.7s linear infinite;
+}
+@keyframes cmdk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmdk-loading-spinner {
+    animation: none;
+    /* No sweep: a static gold ring still reads as "in progress". */
+    border-top-color: var(--soleur-accent-gold-fg, #c9a962);
+  }
+}
+.cmdk-routine-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.cmdk-routine-meta {
+  font-size: 0.7rem;
+  color: var(--soleur-text-muted, #8a8a8a);
+}
+.cmdk-routine-error {
+  font-size: 0.7rem;
+  color: #f87171;
+}
+.cmdk-keys,
+[cmdk-item] kbd.cmdk-keys {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--soleur-text-muted, #8a8a8a);
 }

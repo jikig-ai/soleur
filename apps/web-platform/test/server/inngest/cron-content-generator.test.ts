@@ -214,8 +214,13 @@ describe("ensure-audit-issue fallback — source-shape anchors (#4960)", () => {
   });
 
   it("fallback step is gated on the output-aware result (heartbeatOk === false)", () => {
-    // The create must NOT fire when the prompt already produced an issue.
-    expect(SUT_SOURCE).toMatch(/if\s*\(\s*!heartbeatOk\s*\)/);
+    // The create must NOT fire when the prompt already produced an issue. The
+    // gate moved into finalizeOutputAwareHeartbeat's onBeforeHeartbeat callback
+    // (#5728), which is `undefined` when heartbeatOk is true and only runs the
+    // ensure-audit-issue step when red.
+    expect(SUT_SOURCE).toMatch(
+      /onBeforeHeartbeat:\s*heartbeatOk\s*\?\s*undefined/,
+    );
   });
 
   it("fallback create is wrapped in try/catch → reportSilentFallback (never throws)", () => {
@@ -276,5 +281,17 @@ describe("buildSpawnEnv allowlist (security surface)", () => {
     it("allowlist does NOT use ...process.env spread (would defeat allowlist)", () => {
       expect(buildEnvBody).not.toMatch(/\.\.\.process\.env/);
     });
+  });
+});
+
+// #5786 — producer-side date-dedup serialization anchor (AC6). The cohort
+// behavioral test (cron-cohort-dedup.test.ts) proves the exactly-one-digest
+// invariant; that fake-store test serializes by invoking the handler twice in
+// sequence, so it CANNOT exercise real Inngest concurrency. This anchors the
+// registration's `{ scope: "fn", limit: 1 }` — the serializer BOTH the handler
+// dedup and the cohort test's "invocation #2 sees #1's create" depend on.
+describe("#5786 producer-side dedup — concurrency serialization anchor (AC6)", () => {
+  it('registration concurrency contains { scope: "fn", limit: 1 }', () => {
+    expect(SUT_SOURCE).toContain('{ scope: "fn", limit: 1 }');
   });
 });

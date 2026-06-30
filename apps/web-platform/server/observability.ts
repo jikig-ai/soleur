@@ -128,6 +128,15 @@ export interface SilentFallbackOptions {
   extra?: Record<string, unknown>;
   message?: string;
   art33Breach?: boolean;
+  /**
+   * Extra promoted Sentry TAGS (searchable), merged alongside the always-promoted
+   * `feature`/`op`/`pg_code`/`art_33_breach`. Sentry `extra` is NOT searchable, so
+   * a low-cardinality discriminator the operator must QUERY by (e.g. `source`,
+   * `gitKind`) belongs here, not only in `extra`. Keep values low-cardinality —
+   * tags are indexed. NEVER put PII / raw ids / a raw userId here (tags are not
+   * pseudonymized at the boundary the way the `userId` extra key is).
+   */
+  tags?: Record<string, string>;
 }
 
 /**
@@ -184,10 +193,14 @@ export function reportSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message, art33Breach } = options;
+  const { feature, op, extra, message, art33Breach, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
   if (art33Breach) tags.art_33_breach = "true";
+  // Caller-supplied searchable tags (e.g. `source`, `gitKind`). Merged after the
+  // reserved promotions so a caller can never clobber `feature`; low-cardinality
+  // by contract (see SilentFallbackOptions.tags).
+  if (extraTags) Object.assign(tags, extraTags);
 
   // Surface a PostgREST/Postgres SQLSTATE (e.g. 42501 insufficient_privilege,
   // 23505 unique_violation) as a queryable `pg_code` tag so on-call can search
@@ -242,10 +255,14 @@ export function warnSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message, art33Breach } = options;
+  const { feature, op, extra, message, art33Breach, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
   if (art33Breach) tags.art_33_breach = "true";
+  // Caller-supplied searchable tags (e.g. `source`, `gitKind`). Merged after the
+  // reserved promotions so a caller can never clobber `feature`; low-cardinality
+  // by contract (see SilentFallbackOptions.tags).
+  if (extraTags) Object.assign(tags, extraTags);
 
   // Surface a PostgREST/Postgres SQLSTATE (e.g. 42501 insufficient_privilege,
   // 23505 unique_violation) as a queryable `pg_code` tag so on-call can search
@@ -368,6 +385,13 @@ export function infoSilentFallback(
  *   key is the `workspace_id`, an in-process token, NOT a userId — a systemic
  *   owner-canary regression would otherwise emit one warn per owner-less
  *   workspace per push; see #4906).
+ *   Also `multiple-owners-reconcile` (info-level `Sentry.addBreadcrumb`, NOT a
+ *   warn/page — the honest by-design ≥2-owner signal that distinguishes a
+ *   legitimate team workspace from owner-canary drift; carries
+ *   `{ workspaceId, ownerCount }`; see #5734/#5591).
+ *   Also `owner-attribution-probe` (warn-level via `reportSilentFallback`,
+ *   emitted only on a transient owner-read DB error — NOT on zero owners;
+ *   reconcile falls back to the workspace-keyed audit; see #5734/#5591).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.

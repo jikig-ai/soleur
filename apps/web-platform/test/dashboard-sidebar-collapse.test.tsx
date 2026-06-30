@@ -39,6 +39,9 @@ vi.mock("@/lib/supabase/client", () => ({
         Promise.resolve({ data: { session: null }, error: null }),
       getUser: () => Promise.resolve({ data: { user: null }, error: null }),
       signOut: vi.fn(() => Promise.resolve({ error: null })),
+      onAuthStateChange: () => ({
+        data: { subscription: { unsubscribe: vi.fn() } },
+      }),
     },
     from: () => ({
       select: () => ({
@@ -103,16 +106,39 @@ describe("Dashboard sidebar collapse", () => {
     vi.unstubAllGlobals();
   });
 
-  // The dedicated collapse button is GONE; the resize slider is the sole
-  // collapse/expand + resize affordance and must be present on the main rail.
-  it("renders the resize slider, not a dedicated collapse button", () => {
+  // Both collapse/expand affordances are present: the floated « toggle button
+  // AND the resize slider. (The full-hide 0px control was removed.)
+  it("renders both the collapse toggle button and the resize slider", () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
     expect(screen.getByLabelText("Resize sidebar")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Collapse sidebar")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Expand sidebar")).not.toBeInTheDocument();
+    // Full-hide is gone — no "Hide sidebar" / "Show sidebar" controls remain.
+    expect(screen.queryByLabelText("Hide sidebar")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Show sidebar")).not.toBeInTheDocument();
   });
 
-  // Double-clicking the slider toggles collapse (it replaced the button).
+  // The « toggle button collapses/expands; its aria-label flips with state.
+  it("toggles collapse when the « toggle button is clicked", () => {
+    const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const aside = asideOf(container);
+    expect(isExpanded(aside)).toBe(true);
+    fireEvent.click(screen.getByLabelText("Collapse sidebar"));
+    expect(isCollapsed(aside)).toBe(true);
+    fireEvent.click(screen.getByLabelText("Expand sidebar"));
+    expect(isExpanded(aside)).toBe(true);
+  });
+
+  // The toggle glyph rotates 180° (« → ») when collapsed so it reads as "expand".
+  it("rotates the toggle glyph when collapsed", () => {
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const expandedGlyph = screen.getByLabelText("Collapse sidebar").querySelector("svg");
+    expect(expandedGlyph?.getAttribute("class") ?? "").not.toContain("rotate-180");
+    fireEvent.click(screen.getByLabelText("Collapse sidebar"));
+    const collapsedGlyph = screen.getByLabelText("Expand sidebar").querySelector("svg");
+    expect(collapsedGlyph?.getAttribute("class") ?? "").toContain("rotate-180");
+  });
+
+  // Double-clicking the slider also toggles collapse (second affordance).
   it("toggles collapse when the resize slider is double-clicked", () => {
     const { container } = render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     const aside = asideOf(container);
