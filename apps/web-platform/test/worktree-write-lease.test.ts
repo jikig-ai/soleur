@@ -2,7 +2,7 @@
  * Unit tests — worktree-write-lease.ts thin RPC client (epic #5274, Phase 2, PR A).
  *
  * Covers the result-mapping + fail-closed contract of the acquire/touch/release
- * wrappers over the migration-115 RPCs (the live RPC semantics are covered by
+ * wrappers over the migration-116 RPCs (the live RPC semantics are covered by
  * worktree-write-lease.integration.test.ts against DEV). Mirrors concurrency.ts:
  * lazy service client, transient retry on acquire, reportSilentFallback on error,
  * never throws.

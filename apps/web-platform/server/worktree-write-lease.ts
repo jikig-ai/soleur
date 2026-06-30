@@ -2,7 +2,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "./observability";
 
 /**
- * Thin RPC client over the migration-115 worktree-write-lease functions
+ * Thin RPC client over the migration-116 worktree-write-lease functions
  * (`acquire_worktree_lease` / `touch_worktree_lease` / `release_worktree_lease`).
  * Epic #5274 Phase 2, ADR-068 §2. Mirrors concurrency.ts:77-186 for the
  * RPC-call shape (lazy service client, transient retry on acquire,

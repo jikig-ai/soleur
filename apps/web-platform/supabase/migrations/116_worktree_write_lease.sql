@@ -1,4 +1,4 @@
--- Migration 115: worktree_write_lease — per-(workspace_id, worktree_id) write-lease
+-- Migration 116: worktree_write_lease — per-(workspace_id, worktree_id) write-lease
 -- for the multi-host /workspaces layer (epic #5274, Phase 2, ADR-068 §2).
 --
 -- Mirrors the canonical acquire_conversation_slot fenced-upsert precedent

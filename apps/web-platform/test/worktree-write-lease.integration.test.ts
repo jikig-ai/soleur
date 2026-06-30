@@ -1,5 +1,5 @@
 /**
- * Integration test — worktree_write_lease (migration 115) acquire/touch/release
+ * Integration test — worktree_write_lease (migration 116) acquire/touch/release
  * semantics, RLS shape, and Art.17 cascade. Epic #5274 Phase 2, PR A.
  *
  * Covers plan ACs:
@@ -262,11 +262,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect((data as { lease_generation: number }).lease_generation).toBe(2);
     }, 30_000);
 
-    test("AC4: table exists + service_role can read (RLS shape asserted in verify/115)", async () => {
+    test("AC4: table exists + service_role can read (RLS shape asserted in verify/116)", async () => {
       // pg_policy is not exposed via PostgREST, so the authoritative RLS-shape
       // assertion (exactly one SELECT policy, zero write policies, REVOKEd from
       // anon/authenticated, search_path-pinned RPCs) lives in the SQL sentinel
-      // apps/web-platform/supabase/verify/115_worktree_write_lease.sql, run by
+      // apps/web-platform/supabase/verify/116_worktree_write_lease.sql, run by
       // CI's verify-migrations job. Here, a service_role smoke check only:
       // service_role bypasses RLS, so a clean read proves the table + grants
       // exist without contradicting the RLS posture.

@@ -1,7 +1,7 @@
--- Verify 115_worktree_write_lease.sql.
+-- Verify 116_worktree_write_lease.sql.
 --
 -- Contract: every row returns `check_name` + `bad`. Any `bad > 0` row fails CI
--- verify-migrations. Asserts post-apply state from migration 115:
+-- verify-migrations. Asserts post-apply state from migration 116:
 --   * worktree_write_lease exists with RLS enabled.
 --   * exactly one PERMISSIVE SELECT policy (worktree_write_lease_member_select);
 --     zero write policies.

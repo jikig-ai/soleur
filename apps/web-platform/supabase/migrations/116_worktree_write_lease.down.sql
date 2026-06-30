@@ -1,4 +1,4 @@
--- Down-migration for 115_worktree_write_lease.sql.
+-- Down-migration for 116_worktree_write_lease.sql.
 -- Drop the RPCs (all signatures) first, then the table. The member SELECT
 -- policy drops with the table. No Storage/external resources to reverse.
 
