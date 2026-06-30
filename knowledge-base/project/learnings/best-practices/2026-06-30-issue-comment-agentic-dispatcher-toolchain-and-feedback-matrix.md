@@ -72,6 +72,16 @@ it exists to remove. Enumerate the case × job-result matrix and assert one comm
 `user-impact-reviewer` (single-user-incident threshold) and `architecture-strategist` walk it — they
 catch both classes where the author and green CI do not.
 
+## Critical security finding — the multi-agent review MISSED the structural untrusted-checkout class (held PR #5804 → redesign #5814)
+
+The bigger lesson: **an `issue_comment` (or `pull_request_target` / `workflow_run`) workflow that checks out PR-head code AND executes it (`bun install` postinstall, the PR's own scripts, an agent operating on PR files) inside a job holding secrets + a write token is a CRITICAL `actions/untrusted-checkout-toctou` pattern — and author-association / collaborator-permission / head==base gates do NOT clear it.** Those gates bound *who* triggers it; CodeQL fires on the *structural sink* (privileged trigger → untrusted-derived code runs with secrets present).
+
+CodeQL caught it (3× `actions/untrusted-checkout-toctou/critical`); the 6-agent LLM review did NOT — security-sentinel verified the fork-push block + the perm gate + credential isolation, but never asked "is running untrusted PR code with secrets in a privileged trigger itself the vuln?" **When reviewing any workflow on a secret-bearing privileged trigger that checks out + runs PR-derived code, the security-review spawn prompt MUST name the `untrusted-checkout-toctou` / untrusted-code-execution-with-secrets class explicitly** — and treat CodeQL's `actions/*` queries as the deterministic backstop (run/anticipate them; don't let the LLM review stand alone for this class).
+
+Targeted hardening does NOT clear the rule (SHA-pin closes the TOCTOU race but not the execution-with-secrets; `--ignore-scripts` kills postinstall but the agent must still run the PR's gate script). The fix is architectural: a two-stage `pull_request` (untrusted, no write token) → `workflow_run` (privileged, `git apply`s a validated patch artifact — data, not code execution) split, bot-branch + follow-up PR recovery (never push to the contributor head), and a capped/rotatable per-tenant API key as the one unavoidable secret in the untrusted stage. Full redesign: #5814.
+
+Process corollary: a critical CodeQL `actions/*` finding can be **masked** by a separate repo misconfiguration. Here CodeQL "default setup" was enabled alongside the committed advanced `codeql.yml`, so every SARIF upload was rejected repo-wide ("analyses from advanced configurations cannot be processed when the default setup is enabled") — main's CodeQL was red too. Disabling default setup (operator-authorized) both unblocked the repo AND let the real 3 critical alerts surface. A green-because-the-uploader-is-broken CodeQL is worse than a red one.
+
 ## Session Errors
 
 1. **AC `grep -c 'pull_request_target' == 0` false-matched the workflow's own security comments.** The
