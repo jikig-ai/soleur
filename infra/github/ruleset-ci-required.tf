@@ -157,33 +157,17 @@ resource "github_repository_ruleset" "ci_required" {
       }
     }
 
-    # Merge queue (#5780). Adopted to fix the strict-up-to-date BEHIND
-    # starvation: with `strict_required_status_checks_policy = true`, a
-    # web-platform PR's CI (~8 min) cannot converge faster than `main` merges
-    # on an active day, so the PR is flipped BEHIND and restarts forever. The
-    # queue builds each candidate against the projected post-merge state, so
-    # "up-to-date" is satisfied BY CONSTRUCTION — no human/agent re-update race
-    # — and routine admin-merge is no longer needed.
-    #
-    # HARD PRECONDITION (landed in PR-1, #5784): every required-check workflow
-    # must ALSO fire on `merge_group`. The queue dispatches a `merge_group`
-    # event against a temporary `gh-readonly-queue/main/*` ref; a required
-    # check whose workflow never fires there leaves the queue entry pending
-    # FOREVER (the queue stalls). All 16 `context` strings above map to a
-    # producer that now listens for `merge_group` (CodeQL is default-setup).
-    #
-    # Provider `merge_queue` block supported on integrations/github 6.12.1
-    # (locked) — schema re-probed at /work (all 7 fields present). Only the
-    # value-bearing decisions are set; `max_entries_to_build` and
-    # `min_entries_to_merge_wait_minutes` are left at provider default (inert
-    # at max/min_entries_to_merge = 1). See ADR-032 (#5780 amendment) and
-    # infra/github/README.md for param rationale + the post-enablement canary.
-    merge_queue {
-      merge_method                   = "SQUASH"   # behavior-defining; matches `gh pr merge --squash`
-      grouping_strategy              = "ALLGREEN" # per-candidate bisection; safe default at our volume
-      max_entries_to_merge           = 1          # merge one candidate at a time (no batching)
-      min_entries_to_merge           = 1          # merge as soon as a single candidate is green
-      check_response_timeout_minutes = 15         # MUST exceed the slowest required check on merge_group (see README; re-derive from observed p95)
-    }
+    # Merge queue REVERTED (#5780 kill-switch, 2026-06-30). The queue was
+    # enabled by PR #5800 but DEADLOCKED main: GitHub CodeQL *default setup*
+    # does not run / post the required `CodeQL` context on a `merge_group`
+    # temp ref (it fires only on `push`/`pull_request`), so every queue entry
+    # stalled AWAITING_CHECKS until the 15-min timeout, then re-jammed (3 real
+    # PRs — #5808/#5794/#5798 — were stuck). All 15 OTHER required contexts DID
+    # report on the temp ref, so PR-1's `merge_group` wiring is correct; the
+    # gap is CodeQL-on-`merge_group` only. Reverting to direct-merge restores
+    # CodeQL coverage (it runs on `pull_request`). Re-adopt the queue ONLY
+    # after CodeQL is converted to *advanced* setup (a `codeql.yml` workflow
+    # with an `on: merge_group` trigger) so the `CodeQL` context posts on the
+    # temp ref. Tracked in #5780; see the PIR + ADR-032 amendment.
   }
 }
