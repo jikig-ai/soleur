@@ -186,30 +186,52 @@ export function forEachSessionForConversation(
  * abort branch can read `controller.signal.reason` and route the
  * persistence + status-update logic via `classifyAbortReason` in
  * `abort-classifier.ts`.
+ *
+ * Returns the number of REGISTERED `activeSessions` entries matched and
+ * signalled on THIS host. Two scoping caveats are load-bearing for any future
+ * consumer (notably the Phase-3 coordinator-forward decision, ADR-068 §4):
+ *   - LEGACY LINEAGE ONLY. This counts only the `sendUserMessage` /
+ *     `activeSessions` lineage. A live cc-soleur-go turn (the dominant path,
+ *     #3270) lives in the cc registry (`activeQueries`, aborted via
+ *     `closeCcConversation`) and is NEVER registered in `activeSessions`, so it
+ *     returns 0 here. A complete "is this conversation live on this host?"
+ *     predicate must OR this with a cc-registry found-count — do NOT route a
+ *     forward decision on this count alone (the dual-lineage trap,
+ *     `2026-06-14-ws-lifecycle-hook-must-cover-both-legacy-and-cc-soleur-go-turn-boundaries.md`;
+ *     `runDisconnectGraceAbort` itself signals BOTH surfaces for this reason).
+ *   - REGISTERED, not live: a finishing-but-not-yet-`unregisterSession`'d entry
+ *     still counts (over-count ⇒ suppress an unneeded forward — the safe
+ *     direction), and a just-starting turn before `registerSession` returns 0.
+ * Harmless at `replicas = 1` (no consumer reads the return). The full forward
+ * rationale lives in ADR-068, not here.
  */
 export function abortSession(
   userId: string,
   conversationId: string,
   reason?: AbortKind,
   leaderId?: string,
-): void {
+): number {
   const kind: AbortKind = reason ?? "disconnected";
 
   if (leaderId) {
     const session = activeSessions.get(sessionKey(userId, conversationId, leaderId));
     if (session) {
       session.abort.abort(new SessionAbortError(kind));
+      return 1;
     }
-    return;
+    return 0;
   }
 
   // Broadcast: abort every session for this (userId, conversationId).
   const prefix = `${userId}:${conversationId}`;
+  let aborted = 0;
   for (const [key, session] of activeSessions) {
     if (key === prefix || key.startsWith(`${prefix}:`)) {
       session.abort.abort(new SessionAbortError(kind));
+      aborted += 1;
     }
   }
+  return aborted;
 }
 
 /** Abort every session for a user. Called during account deletion. */
