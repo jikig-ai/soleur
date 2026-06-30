@@ -28,7 +28,15 @@
 // operation.
 // ---------------------------------------------------------------------------
 
-import { lstatSync, existsSync, readFileSync } from "node:fs";
+import {
+  lstatSync,
+  existsSync,
+  readFileSync,
+  openSync,
+  fstatSync,
+  closeSync,
+  constants,
+} from "node:fs";
 import { join, isAbsolute, resolve, sep } from "node:path";
 
 /**
@@ -90,36 +98,52 @@ export interface GitWorktreeShape {
 
 export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
   const gitPath = join(workspacePath, ".git");
-  let st;
+  // Open ONCE and stat+read on the SAME file descriptor — no lstat-then-readFile
+  // TOCTOU (CodeQL js/file-system-race). `O_NOFOLLOW` preserves the no-follow
+  // semantics of `isValidGitWorkTree`'s lstat: a `.git` SYMLINK fails to open
+  // (ELOOP) and is classified `"other"`, never followed.
+  let fd: number;
   try {
-    st = lstatSync(gitPath);
-  } catch {
-    return { kind: "absent" };
+    fd = openSync(gitPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    // ENOENT → genuinely absent; ELOOP (symlink) / EACCES / other → an
+    // unusable plain `.git`, conservatively bucketed `"other"` (not ready,
+    // never destructively healed).
+    return (err as NodeJS.ErrnoException).code === "ENOENT"
+      ? { kind: "absent" }
+      : { kind: "other" };
   }
-  if (st.isFile()) {
-    let gitdirTarget: string | undefined;
-    let gitdirEscapesWorkspace: boolean | undefined;
-    try {
-      const body = readFileSync(gitPath, "utf8");
-      const m = body.match(/^gitdir:\s*(.+?)\s*$/m);
-      gitdirTarget = m?.[1];
-      if (gitdirTarget) {
-        const resolved = isAbsolute(gitdirTarget)
-          ? resolve(gitdirTarget)
-          : resolve(workspacePath, gitdirTarget);
-        const root = resolve(workspacePath);
-        gitdirEscapesWorkspace =
-          resolved !== root && !resolved.startsWith(root + sep);
+  try {
+    const st = fstatSync(fd);
+    if (st.isFile()) {
+      let gitdirTarget: string | undefined;
+      let gitdirEscapesWorkspace: boolean | undefined;
+      try {
+        const body = readFileSync(fd, "utf8"); // reads from the open fd — same file
+        const m = body.match(/^gitdir:\s*(.+?)\s*$/m);
+        gitdirTarget = m?.[1];
+        if (gitdirTarget) {
+          const resolved = isAbsolute(gitdirTarget)
+            ? resolve(gitdirTarget)
+            : resolve(workspacePath, gitdirTarget);
+          const root = resolve(workspacePath);
+          gitdirEscapesWorkspace =
+            resolved !== root && !resolved.startsWith(root + sep);
+        }
+      } catch {
+        // Unreadable pointer body — still a file-pointer (escapes unknown).
       }
-    } catch {
-      // Unreadable pointer body — still a file-pointer (escapes unknown).
+      return { kind: "file-pointer", gitdirTarget, gitdirEscapesWorkspace };
     }
-    return { kind: "file-pointer", gitdirTarget, gitdirEscapesWorkspace };
+    if (st.isDirectory()) {
+      return {
+        kind: isValidGitWorkTree(workspacePath) ? "dir-valid" : "dir-invalid",
+      };
+    }
+    return { kind: "other" }; // socket / fifo / etc. — never the file-pointer path
+  } finally {
+    closeSync(fd);
   }
-  if (st.isDirectory()) {
-    return { kind: isValidGitWorkTree(workspacePath) ? "dir-valid" : "dir-invalid" };
-  }
-  return { kind: "other" }; // symlink / socket / etc. — never the file-pointer path
 }
 
 /**

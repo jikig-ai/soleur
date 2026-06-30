@@ -144,6 +144,17 @@ describe("git-worktree-validity", () => {
       expect(shape.kind).toBe("file-pointer");
       expect(shape.gitdirEscapesWorkspace).toBe(false);
     });
+
+    it("`.git` SYMLINK → other (O_NOFOLLOW does not follow it; never a file-pointer)", async () => {
+      // Pins the no-follow semantics the TOCTOU-safe fd open relies on: a
+      // symlink `.git` must NOT be read-through and classified file-pointer.
+      const p = await ws("shape-symlink");
+      const real = join(dir, "shape-real-git");
+      await mkdir(join(real, "objects"), { recursive: true });
+      await writeFile(join(real, "HEAD"), "ref: refs/heads/main\n");
+      await symlink(real, join(p, ".git"));
+      expect(probeGitWorktreeShape(p).kind).toBe("other");
+    });
   });
 
   // #5733 — readiness-grade validity: a `.git` FILE pointer is lstat-VALID but
