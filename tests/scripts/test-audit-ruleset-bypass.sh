@@ -669,6 +669,61 @@ t_rsc_canonical_matches_terraform() {
   fi
 }
 
+# T-mq-1 (merge_queue param parity, #5780): the merge_queue params POSTed by the
+# DR-restore skeleton (scripts/create-ci-required-ruleset.sh) MUST match the
+# merge_queue block in the Terraform source of truth
+# (infra/github/ruleset-ci-required.tf) for the 5 explicitly-set params, and the
+# 2 REST-required-but-TF-defaulted params (max_entries_to_build,
+# min_entries_to_merge_wait_minutes) MUST equal GitHub's defaults (5/5). The DR
+# params are a hardcoded literal with no canonical-JSON source, so this is the
+# lockstep gate (mirrors T-rsc-9 for required_status_checks); without it the
+# sync-guard comment is an unenforced "MUST" and a divergence only surfaces
+# post-DR-restore via scheduled-terraform-drift.yml.
+t_mq_dr_matches_terraform() {
+  local tf="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+  local dr="$REPO_ROOT/scripts/create-ci-required-ruleset.sh"
+  if [[ ! -f "$tf" || ! -f "$dr" ]]; then
+    _report "T-mq-1 merge_queue source files exist" fail "missing $tf or $dr"
+    return
+  fi
+  # Read the DR-script skeleton heredoc and extract the merge_queue rule params.
+  local dr_params
+  dr_params=$(sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$dr" \
+    | sed '1d;$d' \
+    | jq -c '.rules[] | select(.type=="merge_queue") | .parameters' 2>/dev/null)
+  if [[ -z "$dr_params" || "$dr_params" == "null" ]]; then
+    _report "T-mq-1 DR script skeleton has a merge_queue rule" fail "no merge_queue rule found"
+    return
+  fi
+  # Extract the .tf merge_queue block, then the 5 explicit params. min_entries_to_merge
+  # is anchored on `=` so it does not also match min_entries_to_merge_wait_minutes.
+  local tf_block
+  tf_block=$(awk '/merge_queue[[:space:]]*\{/{f=1} f{print} f&&/^[[:space:]]*\}/{exit}' "$tf")
+  local mm gs me mi ct
+  mm=$(grep -oE 'merge_method[[:space:]]*=[[:space:]]*"[^"]+"' <<<"$tf_block" | sed -E 's/.*"([^"]+)"/\1/')
+  gs=$(grep -oE 'grouping_strategy[[:space:]]*=[[:space:]]*"[^"]+"' <<<"$tf_block" | sed -E 's/.*"([^"]+)"/\1/')
+  me=$(grep -oE 'max_entries_to_merge[[:space:]]*=[[:space:]]*[0-9]+' <<<"$tf_block" | grep -oE '[0-9]+$')
+  mi=$(grep -oE 'min_entries_to_merge[[:space:]]*=[[:space:]]*[0-9]+' <<<"$tf_block" | grep -oE '[0-9]+$')
+  ct=$(grep -oE 'check_response_timeout_minutes[[:space:]]*=[[:space:]]*[0-9]+' <<<"$tf_block" | grep -oE '[0-9]+$')
+  if [[ -z "$mm" || -z "$gs" || -z "$me" || -z "$mi" || -z "$ct" ]]; then
+    _report "T-mq-1 .tf merge_queue block parses (5 explicit params)" fail \
+      "mm='$mm' gs='$gs' me='$me' mi='$mi' ct='$ct'"
+    return
+  fi
+  local tf_explicit dr_explicit dr_build dr_wait
+  tf_explicit=$(jq -nc --arg mm "$mm" --arg gs "$gs" --argjson me "$me" --argjson mi "$mi" --argjson ct "$ct" \
+    '{merge_method:$mm, grouping_strategy:$gs, max_entries_to_merge:$me, min_entries_to_merge:$mi, check_response_timeout_minutes:$ct}')
+  dr_explicit=$(jq -c '{merge_method, grouping_strategy, max_entries_to_merge, min_entries_to_merge, check_response_timeout_minutes}' <<<"$dr_params")
+  dr_build=$(jq -r '.max_entries_to_build' <<<"$dr_params")
+  dr_wait=$(jq -r '.min_entries_to_merge_wait_minutes' <<<"$dr_params")
+  if [[ "$tf_explicit" == "$dr_explicit" && "$dr_build" == "5" && "$dr_wait" == "5" ]]; then
+    _report "T-mq-1 merge_queue DR params == terraform (+ REST extras 5/5)" ok
+  else
+    _report "T-mq-1 merge_queue DR params == terraform (+ REST extras 5/5)" fail \
+      "tf=$tf_explicit dr=$dr_explicit build=$dr_build wait=$dr_wait"
+  fi
+}
+
 # T-rsc-8: cross-script parity — shared canonicalize-required-status-checks lib is sourced
 t_rsc_shared_lib_used() {
   local audit_file="$REPO_ROOT/scripts/audit-ruleset-bypass.sh"
@@ -743,6 +798,7 @@ t_rsc_order_insensitive
 t_rsc_real_canonical_shape
 t_rsc_shared_lib_used
 t_rsc_canonical_matches_terraform
+t_mq_dr_matches_terraform
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
