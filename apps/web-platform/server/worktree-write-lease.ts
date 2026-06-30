@@ -182,3 +182,66 @@ export async function releaseWorktreeLease(
     });
   }
 }
+
+// --- Held-lease registry (SIGTERM drain) ------------------------------------
+// Process-local record of the leases this host currently holds, so the SIGTERM
+// handler can release them before exit (a graceful release lets a surviving host
+// reclaim immediately rather than waiting out the 120s heartbeat expiry). Mirrors
+// the module-level Map pattern in agent-session-registry.ts, collocated here so
+// the lease concern owns its own lifecycle state.
+
+/** A lease currently held by this host, keyed by `(workspaceId, worktreeId)`. */
+export interface HeldWorktreeLease {
+  workspaceId: string;
+  worktreeId: string;
+  hostId: string;
+  leaseGeneration: number;
+}
+
+const heldLeases = new Map<string, HeldWorktreeLease>();
+
+function heldKey(workspaceId: string, worktreeId: string): string {
+  return `${workspaceId}:${worktreeId}`;
+}
+
+/** Record a held lease (call after a successful acquire). Idempotent per key. */
+export function registerHeldLease(lease: HeldWorktreeLease): void {
+  heldLeases.set(heldKey(lease.workspaceId, lease.worktreeId), lease);
+}
+
+/** Drop a held lease from the registry (call after release / on loss). */
+export function unregisterHeldLease(
+  workspaceId: string,
+  worktreeId: string,
+): void {
+  heldLeases.delete(heldKey(workspaceId, worktreeId));
+}
+
+/**
+ * Release every held lease — the SIGTERM drain step (server/index.ts, after the
+ * cc-query drain, before server.close()). Best-effort + bounded: each release is
+ * a never-throwing RPC, run concurrently via allSettled so one slow release can't
+ * starve the 8s shutdown budget. Clears the registry up front so a release that
+ * races a concurrent acquire doesn't resurrect a stale entry. A lease that fails
+ * to release simply expires at 120s and a surviving host reclaims it.
+ */
+export async function releaseAllHeldLeases(): Promise<void> {
+  const leases = [...heldLeases.values()];
+  heldLeases.clear();
+  await Promise.allSettled(
+    leases.map((l) =>
+      releaseWorktreeLease(
+        l.workspaceId,
+        l.worktreeId,
+        l.hostId,
+        l.leaseGeneration,
+      ),
+    ),
+  );
+}
+
+/** Test-only registry accessors (the runtime never reads these). */
+export const __test_only__ = {
+  heldLeaseCount: (): number => heldLeases.size,
+  clearHeldLeases: (): void => heldLeases.clear(),
+};
