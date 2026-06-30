@@ -116,6 +116,10 @@ import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
 } from "./ensure-workspace-repo";
+// 2026-06-19 — dispatch readiness gates on worktree VALIDITY (not mere `.git`
+// presence) so a corrupt/partial `.git` routes to recovery instead of a silent
+// repo-less spawn.
+import { isValidGitWorkTree } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
 // the agent, so a Concierge session never starts against a not-ready workspace.
@@ -1778,9 +1782,15 @@ export const realSdkQueryFactory: QueryFactory = async (
     // the clone outcome honestly (RepoNotReadyError on failure) — no longer
     // relying on the discarded fire-and-forget ensureWorkspaceRepoCloned at the
     // `:1866` self-heal as the only observation of a clone failure.
+    // 2026-06-19: gate on worktree VALIDITY, not mere `.git` presence. A `.git`
+    // that exists but is corrupt (partial clone / failed atomic-rename) used to
+    // pass `existsSync` → self-heal skipped → repo-less agent spawn (silent). The
+    // structural validity probe stays SYNCHRONOUS and is evaluated AFTER the
+    // `!repoReadiness.ok` short-circuit so `getFreshTenantClient` stays OFF the
+    // common valid-`.git` hot path (AC7).
     const needsSelfHeal =
       !repoReadiness.ok ||
-      !existsSync(path.join(workspacePath, ".git"));
+      !isValidGitWorkTree(workspacePath);
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
@@ -1820,21 +1830,30 @@ export const realSdkQueryFactory: QueryFactory = async (
               if (error) throw error;
             },
             ensureWorkspaceRepoCloned,
+            // TRUE PRESENCE — used only by the null-install divergence gates
+            // (a corrupt `.git` is NOT absent; F1).
             gitDirExists: (p) => existsSync(path.join(p, ".git")),
-            // Dispatch-time divergence emit (this PR). The readiness module
-            // recognizes a connected-but-null-install workspace and routes it
-            // here; we forward to the existing breadcrumb emitter. Distinct op +
-            // trigger from the catch-block `self-heal-failed` emit below (an
-            // orchestration crash) — the divergence is a clean `{ ok:false }`
-            // return, never a thrown error, so it never reaches that catch (no
+            // STRUCTURAL VALIDITY (2026-06-19) — the fast-path/recovery gate. A
+            // `.git` present-but-corrupt is `false` here, routing it to the
+            // corrupt-worktree graft instead of fast-pathing a repo-less spawn.
+            gitDirValid: (p) => isValidGitWorkTree(p),
+            // Dispatch-time divergence emit. The readiness module recognizes a
+            // connected-but-null-install workspace (`connected-null-install-at-
+            // dispatch`) OR a corrupt on-disk `.git` (`corrupt-worktree-at-
+            // dispatch`, with `recovered`) and routes here; we forward to the
+            // existing breadcrumb emitter. Distinct op + trigger from the
+            // catch-block `self-heal-failed` emit below (an orchestration crash) —
+            // the divergence is a clean `{ ok:false }` / `{ ok:true }` return,
+            // never a thrown error, so it never reaches that catch (no
             // double-fire). Both workspace-id fields carry the unified
             // activeWorkspaceId (no claim divergence on this path).
-            reportDivergence: (op, userId, workspaceId) =>
+            reportDivergence: (op, userId, workspaceId, recovered) =>
               reportRepoResolverDivergence({
                 userId,
                 op,
                 activeClaimWorkspaceId: workspaceId,
                 resolvedWorkspaceId: workspaceId,
+                recovered,
               }),
           },
         );
@@ -2895,21 +2914,64 @@ export async function dispatchSoleurGo(
   // (placement learning 2026-06-14-short-circuit-guard-must-sit-after-the-
   // recovery-it-gates.md), never before. Idempotent with the cold factory call
   // (`.git`-absent-gated). Fail-closed `undefined` → generic retryable message.
+  //
+  // #5715 — WARM turns must AWAIT the re-clone before `runner.dispatch` lets the
+  // turn reach the per-tool bwrap sandbox. The COLD factory already awaits the
+  // clone before `query()` binds the sandbox cwd; the warm path (the factory is
+  // NOT re-invoked) used to fire-and-forget, so after a mid-session reclaim the
+  // next warm turn chdir'd into a `.git`-less workspace before the clone
+  // finished → `fatal: not a git repository`. `reprovisionWorkspaceOnDispatch`
+  // self-short-circuits on a VALID `.git` (one membership-verified resolve
+  // feeds both the validity probe and the clone), so a valid-`.git` warm turn
+  // pays only the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
-  void reprovisionWorkspaceOnDispatch(userId)
-    .then((outcome) => {
-      reprovisionOutcome = outcome;
-    })
-    .catch((err) => {
-      // reprovisionWorkspaceOnDispatch is already fail-soft (returns "ok" on a
-      // resolver error); this catch is belt-and-suspenders for an unexpected
-      // synchronous throw and leaves the outcome unresolved (generic message).
+  if (runner.hasActiveQuery(conversationId)) {
+    // WARM: the factory did NOT run this turn — gate the agent start on the
+    // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
+    // `runner.dispatch` try below) so it can NEVER reject out of dispatch.
+    try {
+      reprovisionOutcome = await reprovisionWorkspaceOnDispatch(userId);
+      if (reprovisionOutcome === "failed") {
+        // Definitively unrecoverable: the recovery ran and lost. Surface the
+        // honest reclaim copy and do NOT spawn the agent into a known-`.git`-less
+        // workspace. Gated STRICTLY on "failed" (never "ok"/undefined), so a
+        // recoverable conversation is never skipped (learning 2026-06-14).
+        sendToClient(userId, {
+          type: "error",
+          message: resolveWorktreeEnterFailedMessage(reprovisionOutcome),
+        });
+        return;
+      }
+    } catch (err) {
+      // Fail-safe: reprovisionWorkspaceOnDispatch is already fail-soft (returns
+      // "ok" on a resolver error) and `isValidGitWorkTree` swallows fs errors
+      // internally (never throws on EACCES/ELOOP); this catches an unexpected
+      // reprovision/resolver throw — mirror it and fall through to dispatch
+      // rather than stranding a recoverable turn.
       reportSilentFallback(err, {
         feature: "cc-dispatcher",
-        op: "reprovision-on-dispatch-publish",
+        op: "reprovision-on-dispatch-await",
         extra: { userId, conversationId },
       });
-    });
+    }
+  } else {
+    // COLD: the factory owns the await before `query()` construction. Keep the
+    // fire-and-forget publish so the honest-message branch can still read the
+    // outcome without delaying the cold dispatch.
+    void reprovisionWorkspaceOnDispatch(userId)
+      .then((outcome) => {
+        reprovisionOutcome = outcome;
+      })
+      .catch((err) => {
+        // Belt-and-suspenders for an unexpected synchronous throw; leaves the
+        // outcome unresolved (generic message).
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "reprovision-on-dispatch-publish",
+          extra: { userId, conversationId },
+        });
+      });
+  }
 
   // #5388 — per-dispatch registered platform-tool set for the unregistered-tool
   // mirror predicate (`onToolUse` below). Seeded with the ALWAYS-registered base

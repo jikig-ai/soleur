@@ -133,3 +133,4 @@ Three independent health surfaces (routine_runs status, Sentry heartbeat colour,
 | #5692 | Pre-exhaustion spend-vs-budget alert (page BEFORE balance hits zero, not just at exhaustion). | open |
 | #5676 | Residual container egress drops to Cloudflare 104.16.x.34 after #5413 — the diagnosis red herring; confirm non-causal and resolve. | open |
 | #5675 | cron-follow-through-monitor: ready workspace with NULL `github_installation_id` unreachable by reconcile (separate defect surfaced during diagnosis). | open |
+| #5728 | `scheduled-community-monitor` check-ins were `missed` 2026-06-13→06-21 *despite* real digests being produced (a check-in delivery/timing defect distinct from credit exhaustion) — surfaced 2026-06-29 while reconciling the "failing since June 13" Sentry alert; the credit regime (this incident) was 06-22→06-29. Runbook H10 gained an un-mute/re-enable step for the prolonged-outage case in the same remediation. | open |

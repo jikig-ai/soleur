@@ -131,6 +131,10 @@ model {
         technology "Review Agent"
         description "Architectural compliance and ADR coverage check"
       }
+      evalharness = component "eval-harness skill" {
+        technology "Validation Gate"
+        description "Validation-gates classifier-skill block edits (no-regression + target-passes)"
+      }
     }
 
     infra = system "Infrastructure" {
@@ -277,7 +281,7 @@ model {
   claude -> gitDataStore "Bare repo data; worktrees local" { technology "git over private net" }
   scheduler -> hetzner "Schedules" { technology "Nomad" }
 
-  // ---- C4 L3 (Component — Soleur Plugin) — 20 relationships --------------
+  // ---- C4 L3 (Component — Soleur Plugin) — 21 relationships --------------
   // (the L3 `hooks -> claude` edge is identical to the L2 one above and is not
   //  re-declared; it still renders in the component view, which includes both.)
   go -> brainstorm "Routes explore/generate"
@@ -300,4 +304,5 @@ model {
   work -> kb "Reads plans, writes code"
   compound -> kb "Writes learnings, promotes to constitution"
   architecture -> kb "Writes ADRs and diagrams"
+  compound -> evalharness "Validates classifier-skill edits before applying"
 }

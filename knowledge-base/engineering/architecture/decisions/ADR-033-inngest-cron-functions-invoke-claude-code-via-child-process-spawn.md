@@ -59,6 +59,47 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
 
   **Alternatives considered (rejected):** (1) the prior *unconditional* "liveness, not success" green check-in — wrong because credit-exhaustion non-zero was indistinguishable from clean-no-artifact at the monitor level (the 2026-06-29 incident); (2) **flip-all non-zero → red** — rejected: reintroduces the #4730 daily false-page because `claude --print` exits non-zero on healthy max-turns runs, and pollutes `routine_runs` with false-`failed` rows; (3) the `in_progress → ok/error` two-phase check-in — not needed once classify-fatal distinguishes the classes at the source. Residual risk: **marker drift** — a new fatal mode whose tail matches no marker stays green; mitigated by keeping the marker set small/centralized/fixture-pinned and by the benign path still recording the reason in `routine_runs` (visible-but-not-paged, never invisible). Two further residuals, both accepted (review #5680): (a) **`abortedByTimeout` pages even on a *healthy* long run** — a cron that legitimately exhausts the 60-min budget (most plausibly `cron-bug-fixer`, the highest benign-non-zero-frequency cron) now flips RED rather than staying green-with-a-Sentry-error as before; this is **intended** — a budget overrun is a degraded outcome worth one page, and the alternative (a per-cron timeout exemption) reintroduces exactly the per-handler special-casing this design removed. If timeout-paging proves noisy in practice, raise the budget (I3) rather than re-exempting the class. (b) **The fatal-marker regexes match two distinct text sources** — the claude-CLI stdout/stderr tail (resolver) and the Anthropic HTTP JSON error body (canary) — coupling both detectors to one phrasing; robust today via case-insensitive substring and fixture-pinned, but a marker reword must be validated against both source shapes.
 
+  **Amendment `[2026-06-29 — #5728]` — heartbeat-DELIVERY guarantee (the gap I8 left).**
+  I8 reasoned about classifying a non-zero *exit* and **assumed the run reaches the
+  `sentry-heartbeat` step**. #5728 surfaced the orthogonal case: the heartbeat is
+  **never delivered** — the run is SIGKILLed mid-eval, a step *throws* before the
+  heartbeat, or the single terminal POST is dropped (5xx/network/timeout) — so
+  Sentry records a server-generated **`missed`** (not a client `?status=`).
+  classify-fatal cannot color a check-in that never posts. Phase-0 evidence
+  (`routine_runs` + Sentry checkins; Better Stack aged out) found the 2026-06-13→
+  06-21 window was **SIGKILL-dominant** (zero `routine_runs` terminal rows while
+  sibling crons logged normally) — whose remedy is the **graceful cron drain before
+  container swap (ADR-068 / #5686)**, NOT a heartbeat-code change. The #5728 code fix
+  closes the *delivery* gap for the throw/dropped-POST classes (defense-in-depth) via
+  (i) a final-attempt-gated, memoization-safe terminal `?status=error` on the throw
+  path (`finalizeOutputAwareHeartbeat`, adopted fleet-wide by the output-aware cohort),
+  and (ii) a bounded retry (5xx/network/timeout; never 4xx) on the heartbeat POST.
+
+  **The `in_progress → ok/error` two-phase check-in REMAINS REJECTED** (alternative
+  (3) above) — single end-of-job POST stays the doctrine.
+  **Recorded rejection COST (do not re-open the I8 debate):** without the
+  run-correlation id an `in_progress` beacon would provide, a **late / retry-chain
+  finish cannot reconcile to its scheduled period** — a standalone late `?status=ok`
+  does NOT retroactively clear a `missed`. Therefore for the slow/late/killed class,
+  **`checkin_margin_minutes` (sized against the worst-case retry-chain + shared
+  `account` `limit:1` queue wall-clock, not single-run duration) and kill-prevention
+  (ADR-068) are the ONLY levers** — Phase 1/2 delivery-hardening cannot close it.
+  **Accepted residual:** a genuinely killed run reads `missed` until a late retry, and
+  `missed` is an honest signal for a killed run. Runbook H11 carries the per-day
+  H11a–d discrimination recipe. (For #5728 the verdict was kill-dominant with H1/H4
+  only plausible on routine_runs-blind days, so the margin was left at 60 — no TF
+  diff.)
+  **Inngest-run-status vs. Sentry divergence (deliberate).** On a final-attempt
+  genuine failure the output-aware cohort posts `?status=error` and **returns
+  `{ok:false}` rather than throwing** (unlike the `cron-stale-deferred-scope-outs`
+  precedent which rethrows). So the Inngest run is marked *succeeded* while the
+  Sentry monitor is RED. This is intentional and preserves the pre-#5728 producer
+  behavior: paging is driven by the Sentry check-in, and the failure is also
+  recorded as a `routine_runs.failed` row (the I8 widened-contract: a returned
+  `data.ok === false` is recorded `failed`) — so the failure is observable via two
+  layers without relying on Inngest's native run status. If Inngest-level failure
+  alerting is ever introduced, revisit this choice.
+
 ## Consequences
 
 **Easier:**

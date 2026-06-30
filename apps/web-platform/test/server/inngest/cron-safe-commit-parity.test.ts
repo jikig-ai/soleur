@@ -69,9 +69,31 @@ const EXEMPT: Record<string, string> = {
   "cron-bug-fixer.ts": "fix-issue skill owns the commit step (scoped add)",
 };
 
+// Read-only probe crons (#5674) — a third class beyond MIGRATED/EXEMPT.
+// `cron-anthropic-credit-probe.ts` does NO git and opens NO PR (it pages a
+// Sentry heartbeat from a 1-token Anthropic canary call), so the safe-commit
+// invariant does not apply: it is neither migrated (nothing to route through
+// safeCommitAndPr) nor exempt (exemption is for crons that DO self-commit).
+// It is covered by invariant 1's directory walk (carries no blanket git-add)
+// and needs no list entry. Documented here so the cron-tier2-parity sibling-set
+// sweep sees this dependent acknowledged when EXPECTED_CRON_FUNCTIONS grows.
+const READ_ONLY_PROBES = ["cron-anthropic-credit-probe.ts"];
+
 const cronFiles = readdirSync(FUNCTIONS_DIR).filter((f) =>
   /^(cron|event)-.*\.ts$/.test(f),
 );
+
+describe("safe-commit parity — read-only probe crons own no persistence path", () => {
+  it.each(READ_ONLY_PROBES.map((f) => [f]))(
+    "%s exists, does not import safeCommitAndPr, and is not EXEMPT-listed",
+    (file) => {
+      expect(cronFiles).toContain(file);
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      expect(src).not.toMatch(/safeCommitAndPr\(\{/);
+      expect(EXEMPT[file]).toBeUndefined();
+    },
+  );
+});
 
 describe("safe-commit parity — invariant 1: no blanket git-add literal anywhere", () => {
   it.each(cronFiles.map((f) => [f]))("%s carries no blanket-add literal", (file) => {

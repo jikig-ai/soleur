@@ -154,6 +154,30 @@ container_restart_json() {
       restart_rate_per_hour: $rate, oom_journal_tail: $oom_tail}'
 }
 
+# Cron-drain observability (#5669 / ADR-068). The no-SSH surface for the
+# graceful-drain fix: how long the last deploy waited for an in-flight cron
+# before swapping the container (cron_drain_wait_secs), and whether the drain
+# timed out and killed the cron anyway (cron_drain_timed_out — the only path
+# that pages). Read from the small state file ci-deploy.sh writes
+# (write_cron_drain_state). Safe sentinels (wait -1, timed_out false) when the
+# file is absent because a deploy never reached the drain — distinguishable from
+# a real 0-wait drain (wait 0). Best-effort + read-only.
+cron_drain_json() {
+  local wait_secs=-1 timed_out=false
+  local f="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.json}"
+  if [[ -f "$f" ]]; then
+    local w t
+    w="$(jq -r '.cron_drain_wait_secs // -1' "$f" 2>/dev/null || true)"
+    t="$(jq -r '.cron_drain_timed_out // false' "$f" 2>/dev/null || true)"
+    [[ "$w" =~ ^-?[0-9]+$ ]] && wait_secs="$w"
+    [[ "$t" == "true" || "$t" == "false" ]] && timed_out="$t"
+  fi
+  jq -nc \
+    --argjson w "$wait_secs" \
+    --argjson t "$timed_out" \
+    '{cron_drain_wait_secs: $w, cron_drain_timed_out: $t}'
+}
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
 # inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
@@ -173,6 +197,7 @@ INNGEST_JOURNAL_TAIL="$(service_journal_tail inngest-server.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
+CRON_DRAIN="$(cron_drain_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -196,7 +221,8 @@ jq -nc \
   --argjson ic "$INNGEST_CRONS" \
   --argjson js "$JOURNALD_STORAGE" \
   --argjson cr "$CONTAINER_RESTART" \
-  '$base + $cr + {journald_storage: $js, services: (($base.services // {}) + {
+  --argjson cd "$CRON_DRAIN" \
+  '$base + $cr + $cd + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,

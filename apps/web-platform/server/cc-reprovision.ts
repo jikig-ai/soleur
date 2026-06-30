@@ -10,6 +10,7 @@ import { reportSilentFallback } from "./observability";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { resolveActiveWorkspace } from "./workspace-resolver";
 import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
+import { isValidGitWorkTree } from "./git-worktree-validity";
 
 /**
  * Per-dispatch workspace re-provision for the Concierge (cc-soleur-go) path
@@ -72,8 +73,52 @@ export async function reprovisionWorkspaceOnDispatch(
         resolvedWorkspaceId: activeWorkspaceId,
       });
     }
-    const [workspacePath, storedInstallationId, repoUrl] = await Promise.all([
-      fetchUserWorkspacePath(userId, activeWorkspaceId),
+    // #5715 — resolve the workspace path FIRST (membership-verified id), then
+    // stat `.git` on EXACTLY that path before the heavier install/repo resolves
+    // + the 120s clone. ONE resolve feeds both the stat and the clone target
+    // (LEADER precedent `agent-runner.ts:1148`) — no second divergent resolve,
+    // so the warm-dispatch gate can AWAIT this on every warm turn and a
+    // `.git`-present turn short-circuits the slow path (instead of the old
+    // fire-and-forget that let the agent run before the clone finished).
+    const workspacePath = await fetchUserWorkspacePath(userId, activeWorkspaceId);
+    // Forced-slow-path observability (AC11): a resolver outage that yields no
+    // path cannot stat `.git`, so we fail soft to the generic route — but make
+    // it queryable in Sentry rather than a silent slow-path forcing.
+    if (!workspacePath) {
+      reportSilentFallback(new Error("workspace_path_unresolved"), {
+        feature: "cc-dispatcher",
+        op: "reprovision-on-dispatch-path-unresolved",
+        extra: {
+          userId,
+          activeWorkspaceId,
+          reason: "workspace-path-unresolved",
+        },
+      });
+      return "ok";
+    }
+    // `.git` VALID work tree → the safe symptom (missing/corrupt repo) is absent:
+    // skip the install/repo resolution AND the clone. Safety invariant: a VALID
+    // `.git` is NEVER re-cloned/overwritten (never destroy Start-Fresh work /
+    // un-pushed commits — learning 2026-06-03-self-heal-on-brand-path-only-acts-
+    // on-safe-symptom.md). Validity-not-presence (ADR-044 2026-06-19 amendment):
+    // a CORRUPT `.git` (a partial/interrupted clone, or a bare `mkdir .git` with
+    // no HEAD/objects) is NOT a usable work tree, so it must NOT short-circuit
+    // "ok" — it falls through to `ensureWorkspaceRepoCloned`, which does the
+    // validity check + empty-corrupt removal + re-clone. The path the probe used
+    // is exactly the path `ensureWorkspaceRepoCloned` clones into — probe == clone
+    // by construction.
+    //
+    // Observability: a present-but-INVALID `.git` (corrupt / partial clone) falls
+    // through to `ensureWorkspaceRepoCloned`, whose corrupt-recovery surfaces in
+    // Sentry under `feature=ensure-workspace-repo op=corrupt-worktree-block`
+    // (populated-but-broken `.git` honest-blocked, never rm'd) or `op=clone` (a
+    // genuine re-clone failure). These are DISTINCT from the cold dispatch path's
+    // `feature=repo-resolver-divergence op=corrupt-worktree-at-dispatch` breadcrumb
+    // — a warm-path corruption is NOT visible under the cold divergence op.
+    if (isValidGitWorkTree(workspacePath)) {
+      return "ok";
+    }
+    const [storedInstallationId, repoUrl] = await Promise.all([
       resolveInstallationId(userId, activeWorkspaceId),
       getCurrentRepoUrl(userId, activeWorkspaceId),
     ]);

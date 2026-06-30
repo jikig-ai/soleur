@@ -74,6 +74,36 @@ from temporal coincidence. (Here egress, credit exhaustion, AND a separate
 `follow-through` NULL-installation_id bug were all live at once; filed as #5676 /
 #5674 / #5675 respectively.)
 
+## Addendum (2026-06-29): the `scheduled-community-monitor` "failing since June 13" alert
+
+A Sentry "Your Cron Monitors Aren't Working — failing since 2026-06-13" alert for
+`scheduled-community-monitor` turned out to span **two distinct failure regimes**,
+and the same "which layer is lying" trap applied — inverted:
+
+- **2026-06-13 → 06-21: check-ins `missed` while real digests WERE produced.** The
+  Sentry check-in timeline shows last `ok` on 06-12, then `missed` daily through
+  06-21 — yet the GitHub layer has full daily digest issues those days (#5586,
+  #5596, #5597, …), not the `#4960` FAILED fallback. So the **digest layer
+  over-reported health relative to the check-in layer**: a completed run filed its
+  issue but posted no `?status=ok` heartbeat. This is a check-in **delivery/timing**
+  defect, NOT credit — filed as its own follow-up **#5728** (hypotheses: run
+  duration > the 30→60 min margin; a dual fire path crashing before
+  `postSentryHeartbeat`; a swallowed OK POST).
+- **2026-06-22 → 06-29: credit exhaustion** (`?status=error`, the regime this
+  learning's body is about), resolved by the operator top-up (direct key probe →
+  HTTP 200).
+
+Two takeaways: (1) **the alert date keys off the check-in layer, not the digest
+layer** — "since June 13" was accurate against Sentry check-ins (last ok 06-12) even
+though digests kept appearing, so reconcile an alert date against the SAME layer the
+alert is emitted from before calling it imprecise. (2) **Sentry does not auto-undo a
+prolonged-outage mute/disable when the cause clears** — after a multi-day outage the
+monitor can stay muted/disabled and ignore a recovery `?status=ok` until it is
+re-enabled via the Sentry REST API; per-monitor un-mute is a distinct recovery step
+(runbook `cloud-scheduled-tasks.md` H10). (Here the monitor was still `active` /
+un-muted when checked live via the Sentry monitors API GET — `status: active,
+isMuted: false` — so no un-mute was needed, but the window was closing.)
+
 ## Session Errors
 
 - **Read `routine_runs.completed` as "recovered" (twice).** Recovery: cross-checked
