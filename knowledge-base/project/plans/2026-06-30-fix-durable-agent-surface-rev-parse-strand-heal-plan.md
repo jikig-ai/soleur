@@ -1,5 +1,5 @@
 ---
-title: "Durable agent-surface git-strand heal — gate dispatch readiness on the agent-context rev-parse signal (union) + un-blind the self-stop observability across all three gates"
+title: "Durable agent-surface git-strand heal — add a host rev-parse confirm for dir-valid worktrees + an agent-context observability backstop, via one shared gate helper across all three dispatch gates"
 type: fix
 date: 2026-06-30
 issue: 5733
@@ -9,6 +9,25 @@ lane: cross-domain  # no spec.md on the one-shot path → defaulted to cross-dom
 ---
 
 # Durable agent-surface git-strand heal (#5733)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-30. **Review lenses:** 8 — CTO + spec-flow-analyzer (plan phase), then architecture-strategist, data-integrity-guardian, security-sentinel, performance-oracle, code-simplicity-reviewer, and a verify-the-negative grep pass (deepen phase). All 6 of the plan's factual premises were independently CONFIRMED against the code; zero P0 on the destroy boundary.
+
+### Key revisions folded from review
+1. **The "union" collapses to a single new arm.** `isReadyGitWorkTree` already heals escaping pointers on main (`git-worktree-validity.ts:183`), so behind the lstat pre-filter the `isStrandingFilePointer` arm is dead — the net-new mechanism is **just a host `git rev-parse` confirm for `dir-valid` shapes** (the one slice lstat cannot adjudicate). Reframed throughout.
+2. **`rev-parse --is-inside-work-tree` does NOT validate object integrity** (perf P1) — it confirms gitdir *discoverability*. So this fix catches the corrupt-/unresolvable-`dir-valid` slice, NOT object-store corruption (HEAD→missing objects), which stays the documented out-of-scope residual.
+3. **754ee124's shape is unconfirmed and may not be union-catchable** (arch/data P1). Shape confirmation moves to **Phase 0** (read-only live probe); the plan is made robust to the unconfirmed shape by an **agent-context observability backstop** (deliverable C2) that fires on the agent's *actual* in-sandbox Step 0.0 rev-parse failure regardless of on-disk shape.
+4. **Fail-OPEN on an inconclusive probe** (arch P0 / data+perf P1) — a transient timeout/spawn-error must NOT honest-block a healthy `dir-valid` repo (that manufactures the exact #5733 strand). Disambiguate genuine `not-a-worktree` (heal/block + self-stop) from `probe-error` (re-probe once → spawn + low-signal breadcrumb).
+5. **One shared `evaluateAgentReadinessAndEmit` helper** across cold/warm/reconcile (arch/data/simplicity P1) — the cold-only emit + warm/reconcile drift IS the 26×-dark incident; structural sharing > the type-widening grep.
+6. **Reconcile `:368` `recovered` re-probe must also swap to `agentReady`** (data P1) — else populated-corrupt takes the recovered branch and the event never fires.
+7. **Drop warm memoization** (perf/data/simplicity P1) — staleness masks sub-lstat corruption.
+8. **Security hardening** (5×P1): `execFileAsync("git",[…])` array form, hardened git env (`GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL=/dev/null`/`GIT_TERMINAL_PROMPT=0`), no installation token, **no subprocess stderr/path in the Sentry `extra`** (git errors embed the raw path = raw userId for solo), tight ~2s timeout + `maxBuffer` + `killSignal`.
+
+### New considerations discovered
+- The escaping-pointer strand is already healed on main at all 3 gates; the subprocess earns its ADR-044 perf reversal ONLY for the corrupt-`dir-valid` slice — attributed honestly in the ADR Alternatives.
+- `ensure-workspace-repo.ts` has **three** `rm(` calls (`:174`, `:236`, `:354` tmp-clean) — AC6's write-boundary assertion must scope to `.git`-targeting rm.
+- `GIT_CEILING_DIRECTORIES` must be the absolute, symlink-resolved parent (AC2 adds a symlinked-`/workspaces` fixture).
 
 ## Overview
 
@@ -37,12 +56,15 @@ left:
    reconcile path is the surface a prior session proved actually fires (26× on the
    affected workspace, zero actionable events; `2026-06-30-verify-the-fixed-code-path-actually-executes-on-the-affected-surface.md`).
 
-**The durable fix:** gate the heal/spawn decision — and the self-stop emit — on the
-agent's **own-context readiness verdict**, computed as a structural UNION
-(`isStrandingFilePointer(shape) || !hostGitRevParse(workspacePath)`), at all three
-gates, robust to *all* H2 realizations (escaping gitdir pointer, corrupt
-`dir-valid`, invalid HEAD/objects). Preserve the never-destroy-populated invariant:
-heal only provably-safe shapes; **emit-and-honest-block** the populated-corrupt dir.
+**The durable fix (two complementary deliverables, one shared gate helper across all
+three gates):** (A) for the one shape the on-main lstat verdict greenlights but the
+agent still strands on — a `dir-valid` `.git` that `git rev-parse` itself cannot
+resolve — add an authoritative host `rev-parse` confirm, fail-OPEN on an inconclusive
+probe, emit-and-honest-block on a confirmed corruption (never destroy a populated
+`.git`); and (C2) an **agent-context observability backstop** that fires on the
+agent's *actual* in-sandbox Step 0.0 rev-parse failure, so the strand surfaces for
+*any* on-disk shape — including the object-store residual the host confirm is blind
+to. The escaping-pointer and dir-invalid realizations are already healed on main.
 
 PR body uses **Ref #5733** (not Closes) — operator-surface reproduction on 754ee124
 is post-merge verification.
@@ -68,77 +90,141 @@ paths so the next strand surfaces the shape.
 
 | Brief / issue claim | Codebase reality (verified) | Plan response |
 |---|---|---|
-| "Gate the dispatch self-heal on git rev-parse — NOT lstat `isValidGitWorkTree`" | All 3 gates already use the lstat proxy `isReadyGitWorkTree` (`cc-dispatcher.ts:1810-1838`, `cc-reprovision.ts:123`, `workspace-reconcile-on-push.ts:357`). `probeGitWorktreeShape`/`isStrandingFilePointer`/`reportAgentReadinessSelfStop` already exist on main. | Delta is the gate **signal**, not the scaffolding: swap the lstat-proxy verdict for the agent-context UNION verdict at all 3 sites + the emit. |
-| "the merged self-stop mirror does NOT fire on the real strand (host-side git rev-parse runs outside bwrap)" | The merged mirror does not run *any* rev-parse — host- or in-bwrap. It fires on `!gitReady` (the lstat proxy), which returns **ready** for 754ee124 → mirror silent. | Refined diagnosis: the mirror is blind because its gate is the lstat proxy. Fix fires it on the UNION verdict (`!agentReady`), carrying both `gitValid` (lstat) and the new `gitRevParseValid` so the proxy-vs-invariant divergence is itself the diagnostic. |
+| "Gate the dispatch self-heal on git rev-parse — NOT lstat `isValidGitWorkTree`" | All 3 gates already use the lstat verdict `isReadyGitWorkTree`, which on main ALREADY heals escaping pointers + dir-invalid (`:183`); only a corrupt `dir-valid` slips through. `probeGitWorktreeShape`/`isStrandingFilePointer`/`reportAgentReadinessSelfStop` already exist on main. | Delta is narrow: add a host `rev-parse` confirm for `dir-valid` shapes only (the one slice lstat can't adjudicate) + the C2 agent-context backstop. |
+| "the merged self-stop mirror does NOT fire on the real strand (host-side git rev-parse runs outside bwrap)" | The merged mirror runs NO rev-parse; it fires on `!isReadyGitWorkTree` (lstat), which returns **ready** for 754ee124 → mirror silent. Host-side rev-parse is itself blind to the escaping-pointer strand (host isn't sandboxed). | Two-pronged: host confirm fires the mirror on a confirmed `dir-valid` corruption; the **C2 backstop** fires it from the agent's real in-sandbox context for any shape the host confirm can't see. |
 | "clone a SELF-CONTAINED .git into workspacePath before query() constructs; assert ordering structurally" | Cold factory already `await ensureWorkspaceRepoCloned` (`cc-dispatcher.ts:1963`) before `sdkQuery()` (`:2326`); `ensureWorkspaceRepoCloned` unlinks an escaping pointer (`:174`) + clones self-contained (`git clone --depth 1` → `rename(tmp/.git, ws/.git)` sentinel, `:352`). | Part B is largely satisfied. New work: a structural **await-before-query ordering test**; route the rev-parse-invalid case into the heal; preserve the destroy boundary (see CTO trap below). |
 | (B) implies "rev-parse failure → reclone fixes it" | For a populated `dir-valid` that fails rev-parse, `ensureWorkspaceRepoCloned` **early-returns `"ok"` at `ensure-workspace-repo.ts:207`** (`isValidGitWorkTree` passes) → it NO-OPS, does not heal. | Make populated-corrupt an explicit **"unhealed-by-design, observed-and-honest-blocked"** row: emit the self-stop + surface `RepoNotReadyError` (no destroy, no spawn). Strand is prevented by NOT spawning, not by destroying un-pushed work. |
-| "robust to all H2 realizations (file-pointer, escaping gitdir, invalid HEAD/objects)" | `isStrandingFilePointer` catches only the escaping FILE-pointer. A corrupt `dir-valid` (HEAD+objects present but broken) passes `isReadyGitWorkTree` as ready → no heal, no emit (SpecFlow P0-1). | The UNION's `!hostGitRevParse` arm catches genuine corruption (fails host-side too); the `isStrandingFilePointer` arm catches the escaping pointer (host-readable, sandbox-denied). Together = all realizations. |
+| "robust to all H2 realizations (file-pointer, escaping gitdir, invalid HEAD/objects)" | Escaping pointer is ALREADY healed on main (lstat verdict `:183`). A corrupt `dir-valid` passes `isReadyGitWorkTree` as ready (SpecFlow P0-1). `rev-parse --is-inside-work-tree` does NOT validate object integrity (perf P1). | Split by mechanism: on-main lstat heals escaping/dir-invalid; deliverable A's `dir-valid` host confirm catches config/gitdir-indirection corruption; object-store corruption is the out-of-scope residual. **Deliverable C2 (agent-context backstop) guarantees observability for ALL realizations** regardless of which mechanism heals — that is what makes the fix robust to the unconfirmed shape. |
 
 ## Proposed Solution — Technical Approach
 
-### Architecture — the agent-context readiness UNION (adopted over bwrap-reproduction)
+### Architecture — a host `rev-parse` confirm for `dir-valid` shapes (deliverable A) + an agent-context observability backstop (deliverable C2)
 
-Introduce an **injected probe seam** (mirroring the existing `gitDirValid` /
-`ensureWorkspaceRepoCloned` seams at `cc-dispatcher.ts:1877/1886`) that computes the
-agent-equivalent readiness verdict:
+**Deliverable A — the heal gate.** Keep the existing cheap, sync lstat verdict
+(`isReadyGitWorkTree`, which on main already routes escaping pointers + dir-invalid
+to the heal at all three gates — `git-worktree-validity.ts:183`). For the ONE shape
+the lstat verdict greenlights but the agent can still strand on — a **`dir-valid`**
+`.git` (HEAD+objects present) that `git` itself cannot resolve as a work tree
+(broken `config`/`commondir`/gitdir-indirection) — add an authoritative async
+confirm:
 
 ```
-agentReady(workspacePath) =
-  NOT isStrandingFilePointer(probeGitWorktreeShape(workspacePath))   // escaping/unclassifiable pointer
-  AND hostGitRevParse(workspacePath)                                  // genuine corruption / invalid HEAD-objects
+hostGitRevParseOutcome(workspacePath): "worktree" | "not-a-worktree" | "inconclusive"
+  runs: execFileAsync("git", ["-C", workspacePath, "rev-parse", "--is-inside-work-tree"])
+  env:  GIT_CEILING_DIRECTORIES=<abs, symlink-resolved parent of workspacePath>,
+        GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null, GIT_TERMINAL_PROMPT=0
+        (NO GIT_INSTALLATION_TOKEN — read-only, no network)
+  ~2s timeout + maxBuffer cap + killSignal; stdout "true" → "worktree";
+  clean "not a git repository"/exit-128 → "not-a-worktree"; spawn-error/timeout/EACCES → "inconclusive"
 ```
 
-- `hostGitRevParse` runs `git -C <workspacePath> rev-parse --is-inside-work-tree`
-  with **`GIT_CEILING_DIRECTORIES=<parent-of-workspacePath>`** (load-bearing — without
-  the ceiling, host `git` ascends to a parent `.git` and false-passes, exactly the
-  jail the agent's sandbox enforces). Bounded `timeout`. Returns `false` on non-zero
-  exit / spawn error / timeout (fail-closed-to-heal).
-- **Why UNION, not a bwrap-reproducing probe (CTO Q3):** the *only* host/in-sandbox
-  divergence for `--is-inside-work-tree` is the escaping pointer — already detected
-  structurally and synchronously by `isStrandingFilePointer`. Reproducing the bwrap
-  `denyRead` mount adds nothing a host `rev-parse` + the structural check don't
-  already cover, costs the expensive namespace setup, and creates a silent-drift
-  coupling to `agent-runner-sandbox-config.ts`. The union is equivalent detection
-  with less machinery and no coupling.
-- **Hot-path scoping (CTO Q2):** keep `isReadyGitWorkTree` (lstat) as the cheap
-  pre-filter. Run the UNION subprocess **only when** lstat says ready **AND** the
-  workspace is connected (`repoUrl`) **AND** DB-ready (`repoReadiness.ok`) — exactly
-  the population where a false-ready causes a silent strand. Everything else
-  (repo-less, lstat-not-ready, cloning/error) keeps the existing cheap routing.
+The net-new readiness rule, applied **only** to `dir-valid` shapes within the
+lstat-ready + connected (`repoUrl`) + DB-ready (`repoReadiness.ok`) population:
 
-### Heal / observe decision matrix (applied at ALL THREE gates)
+```
+dir-valid + "worktree"        → ready (fast path; common case)
+dir-valid + "not-a-worktree"  → NOT ready → emit self-stop + honest-block (no spawn, no destroy)
+dir-valid + "inconclusive"    → re-probe ONCE; still inconclusive → FAIL-OPEN: spawn + low-signal breadcrumb
+```
 
-For a connected + DB-ready workspace that passes the lstat pre-filter:
+- **Why this, not the "union" (arch P2 / perf cheaper-eq #2):** behind the lstat
+  pre-filter, `isStrandingFilePointer` is always false (the pre-filter already
+  excluded escaping pointers), so the union reduces to `!hostGitRevParse` on
+  `dir-valid` shapes. Stating it as a `dir-valid`-only confirm removes a dead arm and
+  two overlapping authorities for the pointer shape.
+- **Why NOT bwrap-reproduction (CTO Q3):** the only host/in-sandbox divergence is the
+  escaping pointer — already handled structurally on main. Host `rev-parse` cannot
+  reproduce the sandbox `denyRead` (perf/arch P2), so it is honestly **blind to the
+  escaping-pointer strand**; its net-new coverage is exactly the corrupt-`dir-valid`
+  slice. Reproducing the bwrap mount adds cost + a silent-drift coupling to
+  `agent-runner-sandbox-config.ts` for zero extra coverage.
+- **`rev-parse` does NOT validate object integrity (perf P1):** a `dir-valid` whose
+  `objects` are pruned / `HEAD` dangles still returns `"worktree"`. That object-store
+  corruption is the documented out-of-scope residual — NOT a rev-parse strand. This
+  fix does not claim to catch it; **deliverable C2 is what surfaces it.**
+- **Fail-OPEN on inconclusive (arch P0):** a transient probe failure must never
+  honest-block a healthy `dir-valid` repo — that manufactures the exact #5733 strand.
+  Inconclusive → spawn; the agent's own Step 0.0 + C2 catch a genuine strand.
 
-| On-disk shape | `agentReady` | Heal action | Self-stop emit | Spawn? |
-|---|---|---|---|---|
-| `dir-valid` + rev-parse OK | true | none (fast path) | no | yes |
-| non-escaping in-workspace pointer + rev-parse OK | true | none | no | yes |
-| escaping / unclassifiable `file-pointer` | false | `ensureWorkspaceRepoCloned` unlinks pointer (`:174`) + reclones self-contained; re-probe | **YES** (`gitRevParseValid=false`, `gitKind`) | yes iff re-probe ready |
-| empty-corrupt `dir` (`isEmptyCorruptGitDir`) | false | `ensureWorkspaceRepoCloned` rm (`:236`) + reclone; re-probe | **YES** | yes iff re-probe ready |
-| **populated `dir-valid` that fails host rev-parse (genuine corruption)** | false | **NONE — `ensureWorkspaceRepoCloned` no-ops at `:207`** | **YES** | **NO — honest-block (`RepoNotReadyError`), never destroy** |
-| probe error / timeout | false (fail-closed) | route to heal; honest-block if not a provably-safe shape | **YES** | no |
+**Deliverable C2 — the agent-context observability backstop (the brief's literal
+"read in the agent's OWN bwrap context").** Because host `rev-parse` is blind to the
+escaping pointer AND to object-store corruption, the host-side pre-heal emit alone
+can leave a strand dark for shapes it can't see (arch/perf P1). The guaranteed signal
+is the agent's **own** in-sandbox `/soleur:go` Step 0.0 `git rev-parse
+--is-inside-work-tree` outcome. Hook the existing agent-Bash tool-use mirror path
+(the one that already emits "Unknown Bash verb" — `tool-labels.ts:198`, fired live at
+15:18 UTC per the issue) so that when the agent's in-sandbox rev-parse reports
+not-a-work-tree, a `reportAgentReadinessSelfStop` fires from the agent's real context,
+carrying `gitKind` from a host-side `probeGitWorktreeShape` for enrichment. This fires
+on the real strand regardless of on-disk shape — it is the backstop that lets us ship
+without pre-confirming 754ee124's (unobservable) shape. Phase 0 locates the exact
+onToolUse/Bash-result emit site.
 
-The destroy authorizations stay exactly the two that exist today
-(`ensure-workspace-repo.ts:174` pointer FILE, `:236` empty-corrupt) — **this PR adds
-no third `rm`** (CTO write-boundary requirement; `hr-write-boundary-sentinel-sweep-all-write-sites`).
+### Shared gate helper (deliverables A + C, arch/data/simplicity P1)
 
-### Un-blinding the two dark gates (SpecFlow P0-2, P0-3)
+Extract one helper so the emit + heal-route + re-probe + honest-block decision is
+**structural, not re-specified per gate** (the cold-only emit + warm/reconcile drift
+is the 26×-dark incident):
+
+```
+evaluateAgentReadiness(workspacePath, ctx): "ready" | "block"
+  // ctx: { connected, dbReady } — caller already holds these
+  // owns: the dir-valid host rev-parse confirm, the inconclusive re-probe + fail-open,
+  //       the reportAgentReadinessSelfStop emit on "not-a-worktree", and returning
+  //       "block" so the caller surfaces RepoNotReadyError instead of spawning.
+```
+
+Each of the three gates calls it after its existing lstat-gated heal; the
+async `dir-valid` confirm CANNOT replace the **sync** `gitDirValid` seam
+(`cc-dispatcher.ts:1886`) in place (data P2) — it is an additional re-probe of
+`agentReady` AFTER `resolveRepoReadinessWithSelfHeal` returns `healed.ok=true`,
+throwing `RepoNotReadyError` despite `healed.ok` for a confirmed-corrupt `dir-valid`.
+
+### Heal / observe decision matrix (applied at ALL THREE gates via the shared helper)
+
+Escaping pointers + dir-invalid + empty-corrupt are **already** routed to the heal by
+the on-main lstat verdict (`isReadyGitWorkTree`) — unchanged. The rows below are the
+net-new behavior for the lstat-ready + connected + DB-ready population:
+
+| Shape / probe outcome | Heal action | Self-stop emit | Spawn? |
+|---|---|---|---|
+| `dir-valid` + `"worktree"` | none (fast path; common case) | no | yes |
+| **`dir-valid` + `"not-a-worktree"`** (config/gitdir-indirection corruption) | **NONE — `ensureWorkspaceRepoCloned` no-ops at `:207`** | **YES** (`gitRevParseValid=false`, `gitKind=dir-valid`) | **NO — honest-block `RepoNotReadyError`, never destroy** |
+| `dir-valid` + `"inconclusive"` (×2: re-probe still inconclusive) | none | low-signal `probe-inconclusive` breadcrumb (NOT the self-stop) | **YES — FAIL-OPEN** (don't block a healthy repo on a blip) |
+| escaping/dir-invalid/empty-corrupt (on-main path) | existing `ensureWorkspaceRepoCloned` (`:174`/`:236`) | (cold pre-heal emit, unchanged) | iff re-clone succeeds |
+| **agent's in-sandbox Step 0.0 rev-parse fails (C2 backstop, ANY shape)** | n/a (already spawned) | **YES** (`gitKind` enrichment) | already spawned — surfaces the strand |
+
+The destroy authorizations stay exactly the two `.git`-targeting `rm`s that exist
+today (`ensure-workspace-repo.ts:174` pointer FILE, `:236` empty-corrupt) — **this PR
+adds no third** (`hr-write-boundary-sentinel-sweep-all-write-sites`). A populated
+`dir-valid` satisfies *neither* destroy fingerprint, so it can only hit the `:207`
+no-op or the `:215` honest-block — never an `rm` (data-integrity P0 verdict: invariant
+structurally preserved). Note `:354` is a tmp-clone cleanup, not a `.git` site.
+
+### Un-blinding the two dark gates (SpecFlow P0-2, P0-3; via the shared helper)
 
 - **WARM** (`cc-reprovision.ts reprovisionWorkspaceOnDispatch`): currently returns
   `"ok"` on a benign `ensureWorkspaceRepoCloned` skip without healing, then the
-  caller spawns regardless. Change: compute `agentReady`; on `!agentReady` fire the
-  self-stop; **re-probe readiness after the heal** and return a `"failed"`-class
-  outcome (honest reclaim message, no spawn) if still not ready.
-- **RECONCILE** (`workspace-reconcile-on-push.ts`): the benign-skip branch
-  (`:384-398`) writes only a `kb_sync_history` audit row, no Sentry mirror — the
-  exact dark surface of the prior incident. Change: fire `reportAgentReadinessSelfStop`
-  on the `!agentReady` / unrecovered branch (including benign-skip) so the strand is
-  queryable on the path that actually fires.
+  caller spawns regardless. Change: call `evaluateAgentReadiness`; a confirmed
+  `"not-a-worktree"` returns a `"failed"`-class outcome (honest reclaim message, no
+  spawn) and fires the self-stop. **No memoization** (perf/data/simplicity P1): a
+  positive memo invalidated only on lstat-shape-change would serve a stale `ready`
+  after a concurrent reconcile/pull corrupts a `dir-valid` below lstat granularity,
+  re-darkening the warm path. The probe is a single ~2s-timeout, `dir-valid`-gated
+  call per warm turn on a connected workspace — acceptable (the turn does an agent
+  round-trip regardless). Warm intentionally bypasses the DB `claim_repo_clone_lock`
+  (pre-existing; convergent via the unique-tmp + `isValidGitWorkTree` sentinel) — the
+  new re-probe may observe a cold clone mid-flight and fail-OPEN spawn; acceptable.
+- **RECONCILE** (`workspace-reconcile-on-push.ts`): two edits, BOTH load-bearing —
+  (1) the benign-skip branch (`:384-398`) writes only a `kb_sync_history` row, no
+  Sentry mirror (the exact dark surface of the 26×-fire incident); (2) **`:368`
+  `recovered = outcome === "ok" && isReadyGitWorkTree(...)` must also swap to
+  `agentReady`** (data P1) — else a populated-corrupt `dir-valid` reads `recovered=true`,
+  takes the recovered branch (`:404`), and the self-stop never fires on reconcile.
 
-The self-stop emit is consistent across all three gates so the strand surfaces **no
-matter which path the affected surface traverses** — directly answering the
-wrong-layer learning.
+Because the emit + heal-route lives in the **one shared helper**, "consistent across
+all three gates" is structural, not hand-reviewed — directly answering the wrong-layer
+learning.
 
 ### Observability event change (#5733 deliverable C)
 
@@ -147,57 +233,88 @@ pseudonymizes (userId→`userIdHash` at the boundary, `activeWorkspaceIdHash`
 pre-hashed, **no `installationId`/`repoUrl`/raw `gitdirTarget`**) — the privacy bar
 is already met. Changes:
 
-- **Add `gitRevParseValid: boolean`** (the authoritative agent-context verdict) to
-  the args + `extra`. Keep `gitValid` (lstat) — when the two diverge, the event
-  itself shows the proxy-vs-invariant trap shape.
+- **Add `gitRevParseValid: boolean`** (the host-confirm verdict) to the args +
+  `extra`. Keep `gitValid` (lstat) — when the two diverge (`gitValid=true,
+  gitRevParseValid=false`), the event itself shows the proxy-vs-invariant trap shape.
+- **SECURITY (security P1, sharpest): never put the probe's `stderr` /
+  `error.message` into `extra` or any `reportSilentFallback`.** git's failure text
+  embeds the raw absolute path (`fatal: not a git repository: /workspaces/<id>/.git`);
+  for a solo workspace `id == raw userId`, so leaking it defeats the deliberate
+  boundary-rename pseudonymization (`repo-resolver-divergence.ts:121`). Only the
+  structured booleans + `gitKind` are emitted.
 - Type-widening of the args object → cross-consumer grep
   (`hr-type-widening-cross-consumer-grep`): consumers are `cc-dispatcher.ts:1823`
-  (cold emit) + `test/server/repo-resolver-divergence.test.ts`; new emit sites in
-  `cc-reprovision.ts` + `workspace-reconcile-on-push.ts`.
+  (cold emit) + `test/server/repo-resolver-divergence.test.ts`; new emit sites are the
+  shared helper (reached from warm + reconcile) and the C2 agent-context hook.
 - Fingerprint stays `(op,userId,activeWorkspaceId,gitKind)` — acceptable (the emit
-  now fires only on `!agentReady`, so a `dir-valid` in the fingerprint always means
-  "dir-valid that rev-parse-failed").
+  fires only on a confirmed `"not-a-worktree"` or the C2 in-sandbox failure, so a
+  `dir-valid` in the fingerprint always means "dir-valid that rev-parse-failed").
+- **C2 backstop emit** reuses the same `reportAgentReadinessSelfStop` (a distinct
+  `gitKind`/source tag distinguishes the in-sandbox backstop from the host pre-heal
+  emit), so a strand of ANY shape — including the object-store residual the host
+  confirm is blind to — produces a queryable event.
 
 ## Implementation Phases (failing tests FIRST — `cq-write-failing-tests-before`)
 
-### Phase 0 — Preconditions / verification (no code)
-- Confirm `git rev-parse --is-inside-work-tree` exit semantics + that
-  `GIT_CEILING_DIRECTORIES=<parent>` prevents parent-`.git` ascension, with a
-  throwaway fixture (escaping-pointer dir, corrupt `dir-valid`, healthy clone). Pin
-  the verified output in Research Insights.
-- Confirm the injected-seam pattern by reading the existing seam wiring at
-  `cc-dispatcher.ts:1877/1886` and the harness `test/helpers/cc-dispatcher-harness.ts`.
-- Grep the type-widening consumers; grep `rm(` in `ensure-workspace-repo.ts` to
-  re-confirm exactly two `.git` destroy sites (`:174`, `:236`).
+### Phase 0 — GATING shape confirmation + preconditions (no code)
+- **Confirm 754ee124's actual on-disk `.git` shape FIRST (arch/data P1 — gates the
+  whole design).** Read-only probe the live workspace path (`probeGitWorktreeShape`
+  + a host `rev-parse`) if reachable from the work environment. Branch:
+  - corrupt-`dir-valid` (`"not-a-worktree"`) → deliverable A's host confirm is the
+    right heal gate; proceed.
+  - object-store residual (rev-parse passes both sides) → A cannot heal it; the
+    durable value is C2 (observability) + a follow-up for the residual; do NOT bill
+    the ADR-044 perf reversal as fixing this shape.
+  - escaping pointer (would contradict on-main already-heals) → fix escape detection.
+  - **If the live workspace is NOT reachable** from the work env: proceed building
+    A + C2 — C2 makes the plan robust to all shapes (it fires on the agent's real
+    strand regardless), and AC11 confirms the shape post-merge.
+- Verify `git rev-parse --is-inside-work-tree` exit semantics + that
+  `GIT_CEILING_DIRECTORIES=<abs symlink-resolved parent>` prevents ascension, with
+  throwaway fixtures incl. a **symlinked** `/workspaces` path component (arch P2). Pin
+  output in Research Insights.
+- Read the hardened git-spawn precedent (`git-auth.ts:283-309`) to mirror its
+  `execFileAsync` + env block. Read the agent-Bash tool-use mirror site that emits
+  "Unknown Bash verb" (`tool-labels.ts:198` + its onToolUse emit) to locate the C2
+  hook. Read the existing sync `gitDirValid` seam (`cc-dispatcher.ts:1886`).
+- Grep `rm(` in `ensure-workspace-repo.ts`: confirm exactly two `.git`-targeting
+  destroy sites (`:174`, `:236`); `:354` is tmp-clone cleanup (exclude).
 
-### Phase 1 — Probe seam + failing tests (RED)
-- Add `agentReadyGitWorkTree(workspacePath): Promise<boolean>` (UNION + ceiling +
-  bounded timeout, fail-closed) to `git-worktree-validity.ts`. Inject it as a seam
-  so the three gates are unit-testable without spawning git.
-- Write failing tests in `test/server/` (collected by `test/**/*.test.ts`):
-  escaping-pointer → false; corrupt `dir-valid` → false; healthy clone → true;
-  non-escaping pointer → true; probe timeout → false.
+### Phase 1 — Probe + shared helper + failing tests (RED)
+- Add `hostGitRevParseOutcome(workspacePath): Promise<"worktree"|"not-a-worktree"|"inconclusive">`
+  to `git-worktree-validity.ts` — `execFileAsync("git",[array])`, hardened env (NO
+  install token), `~2s` timeout + `maxBuffer` + `killSignal`. Standalone-testable
+  (security/simplicity).
+- Add `evaluateAgentReadiness(workspacePath, ctx): Promise<"ready"|"block">` — owns
+  the `dir-valid` confirm, the inconclusive re-probe + fail-OPEN, and the
+  `reportAgentReadinessSelfStop` emit on `"not-a-worktree"`.
+- RED tests in `test/server/` (`test/**/*.test.ts`): dir-valid+worktree → ready;
+  dir-valid+not-a-worktree → block + emit; dir-valid+inconclusive(×2) → ready
+  (fail-open) + breadcrumb (no self-stop); ceiling no-ascension incl. symlinked
+  parent; env asserts no install token; no stderr/path in `extra`.
 
 ### Phase 2 — Cold gate (cc-dispatcher) GREEN
-- Replace the lstat-derived `gitReady` verdict at `:1810-1838` with `agentReady`
-  (lstat pre-filtered). Fire the self-stop on `!agentReady` carrying `gitRevParseValid`.
-- Populated-corrupt branch: honest-block (`RepoNotReadyError`) rather than spawn.
-- Add the structural **await-before-query** ordering test (the clone await at
-  `:1963` precedes `sdkQuery()` at `:2326`).
+- Call `evaluateAgentReadiness` after the existing lstat-gated self-heal; on `"block"`
+  surface `RepoNotReadyError` (re-probe AFTER `resolveRepoReadinessWithSelfHeal`
+  returns `healed.ok=true`; do NOT replace the sync `gitDirValid` seam in place).
+- Update the now-stale load-bearing comment at `:1802-1806` ("adds no subprocess")
+  (arch P1).
 
 ### Phase 3 — Warm gate (cc-reprovision) GREEN
-- Compute `agentReady`; memoize a positive result per-workspace-per-process
-  (invalidate on shape-change/disconnect) so steady-state warm turns pay lstat only.
-- Re-probe after heal; honest "failed" outcome (no spawn) if still not ready; fire
-  the self-stop.
+- Call `evaluateAgentReadiness`; `"block"` → `"failed"` outcome (no spawn). **No memo.**
 
 ### Phase 4 — Reconcile gate (workspace-reconcile-on-push) GREEN
-- Gate on `agentReady`; fire the self-stop on the unrecovered / benign-skip branch.
+- Swap `:357` gate AND `:368` `recovered` re-probe to the helper's verdict; emit on
+  the unrecovered/benign-skip branch. Assert **one `rev-parse` spawn per event** (the
+  handler evaluates a single workspace) (perf P2).
 
-### Phase 5 — Observability event widening + ADR-044 amendment
+### Phase 5 — C2 agent-context backstop + event widening + ADR-044
+- Wire the C2 emit at the agent-Bash mirror site (Phase 0-located) on an in-sandbox
+  `rev-parse` not-a-worktree result.
 - Widen `reportAgentReadinessSelfStop` with `gitRevParseValid`; update all emit sites
-  + tests.
-- Amend ADR-044 (see Architecture Decision section).
+  + tests (no stderr/path leak).
+- Amend ADR-044 (see Architecture Decision section) — **supersede** AC7's zero-await
+  guarantee for the connected cold path; do not claim "retained."
 
 ### Phase 6 — Typecheck + full runner
 - `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
@@ -211,7 +328,7 @@ is already met. Changes:
 | **Predicate-swap only** (`isReadyGitWorkTree` → richer lstat) without a real rev-parse | SpecFlow P0-1: still shape-specific; misses corrupt `dir-valid`. If 754ee124 is corrupt-dir not escaping-pointer, the fix lands and still strands. |
 | **bwrap-reproducing probe** (run rev-parse under a hand-rolled `denyRead` mount) | CTO Q3: the only divergence (escaping pointer) is already caught by `isStrandingFilePointer`; reproduction adds the expensive namespace setup + a silent-drift coupling to `agent-runner-sandbox-config.ts` for zero extra coverage. |
 | **Widen destroy to "rev-parse-invalid + has origin → reclone"** | CTO Q1: origin is canonical for the *base*, not the working tree; a populated `.git` may hold the only copy of un-pushed prior-turn work. Loses the brand-survival invariant. |
-| **Unconditional rev-parse on every dispatch** | CTO Q2: lstat pre-filter + connected-gate + warm memoization keeps the common hot path lstat-only; rev-parse fires only on the lstat-ready-but-suspect transition. |
+| **Unconditional rev-parse on every dispatch** | Scoped to `dir-valid` shapes in the lstat-ready + connected + DB-ready population — repo-less / lstat-not-ready / pointer / cloning paths keep the cheap sync routing. (Warm memoization was considered and DROPPED — perf/data P1: a stale positive memo masks sub-lstat corruption and re-darkens the warm path.) |
 
 ## User-Brand Impact
 
@@ -247,9 +364,12 @@ failure_modes:
   - mode:          "false-heal destroys a populated .git"
     detection:     "no third rm authorization (asserted by write-boundary test); isEmptyCorruptGitDir/isStrandingFilePointer remain the only two"
     alert_route:   "CI test failure on the destroy-boundary assertion"
-  - mode:          "probe subprocess error/timeout"
-    detection:     "fail-closed-to-heal + honest-block; emit fires; no silent spawn"
-    alert_route:   "Sentry agent_readiness_self_stop (probe-error path)"
+  - mode:          "probe subprocess error/timeout (inconclusive)"
+    detection:     "re-probe once → FAIL-OPEN spawn + low-signal probe-inconclusive breadcrumb; the C2 in-sandbox backstop still fires if the open spawn really strands"
+    alert_route:   "Sentry probe-inconclusive breadcrumb + agent_readiness_self_stop (C2 backstop)"
+  - mode:          "object-store residual (rev-parse passes both sides, agent strands on object access)"
+    detection:     "C2 agent-context backstop fires from the agent's in-sandbox failure (host confirm is blind to this shape)"
+    alert_route:   "Sentry agent_readiness_self_stop (C2 source tag)"
 logs:
   where:           "Sentry (events) + pino logger.error line via reportSilentFallback; Docker container stdout"
   retention:       "Sentry project retention (90d)"
@@ -262,16 +382,20 @@ discoverability_test:
 
 ### ADR
 **Amend ADR-044** (`knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md`,
-status `accepted`) with a new **Amendment 2026-06-30 — dispatch readiness gates on
-the agent-context rev-parse verdict (union), superseding the lstat-proxy trade-off
+status `accepted`) with a new **Amendment 2026-06-30 — dispatch readiness adds a host
+`rev-parse` confirm for `dir-valid` worktrees, superseding the lstat-proxy trade-off
 for the connected case.** This is an in-scope plan deliverable
 (`wg-architecture-decision-is-a-plan-deliverable`) — it reverses the 2026-06-19
 amendment's explicit "deliberately WEAKER than `git rev-parse` … cheap enough to keep
-the AC7 zero-await hot path" decision. The amendment must record: lstat fast-path
-**retained** as the pre-filter; the UNION rev-parse confirm fires **only** on the
-lstat-ready + connected + DB-ready transition; warm-path memoization; destroy
-authorizations **unchanged** (populated-corrupt stays honest-blocked); and add the
-union approach to `## Alternatives Considered` against the rejected bwrap-reproduction.
+the AC7 zero-await hot path" decision. The amendment must record: it **supersedes**
+the 2026-06-19 zero-await guarantee for the connected cold path (arch P1 — do NOT
+claim the fast path is "retained"; an async `dir-valid` confirm now runs on the common
+healthy connected cold dispatch); the confirm fires **only** for `dir-valid` shapes in
+the lstat-ready + connected + DB-ready population; the subprocess's net-new coverage is
+honestly the corrupt-`dir-valid` slice ONLY (blind to the escaping pointer, which the
+lstat verdict already heals, and to object-store corruption, the residual); destroy
+authorizations **unchanged**; and add the `dir-valid`-only confirm to
+`## Alternatives Considered` against the rejected bwrap-reproduction.
 Author via the `architecture` skill / Edit (Concierge and the plugin terminal are
 equally-trusted agent contexts that edit ADR files on the filesystem and commit).
 
@@ -296,10 +420,12 @@ description is falsified.
 **Assessment:** Verified against the code. (Q1 destroy-boundary — HIGH: do NOT widen
 `rm`; heal only provably-safe shapes, emit-and-honest-block the populated-corrupt dir;
 flagged the `ensure-workspace-repo.ts:207` no-op trap that makes (B) observability,
-not auto-heal, for that shape.) (Q2 hot-path — MEDIUM: acceptable; lstat pre-filter +
-connected-gate + warm memoization keeps the common path lstat-only.) (Q3 mechanism —
-MEDIUM: adopt the structural UNION + `GIT_CEILING_DIRECTORIES`; drop bwrap-reproduction
-to avoid sandbox-config coupling.) Flags folded into the plan: ADR-044 amendment is a
+not auto-heal, for that shape.) (Q2 hot-path — MEDIUM: acceptable when scoped to
+`dir-valid` shapes; **deepen-review DROPPED the warm memoization** the CTO floated —
+perf/data P1 staleness risk.) (Q3 mechanism — MEDIUM: `GIT_CEILING_DIRECTORIES`; drop
+bwrap-reproduction. **Deepen-review further collapsed the "union" to a `dir-valid`-only
+host confirm** — behind the lstat pre-filter the `isStrandingFilePointer` arm is dead,
+arch P2.) Flags folded into the plan: ADR-044 amendment is a
 deliverable; write-boundary sweep asserts no third `rm`; probe must be an injected
 seam (unit-testable); `user-impact-reviewer` + `observability-coverage-reviewer` apply
 at review-time. Known residual (out of scope for #5733): a `dir-valid` `.git` with
@@ -323,42 +449,55 @@ boundary-rename (no raw identifiers). Full `/soleur:gdpr-gate` invocation not re
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **AC1** `agentReadyGitWorkTree` returns `false` for an escaping `file-pointer`,
-      `false` for a corrupt `dir-valid` (host rev-parse fails), `true` for a healthy
-      clone, `true` for a non-escaping in-workspace pointer with valid rev-parse,
-      `false` (fail-closed) on probe timeout/spawn error — RED tests authored first.
-- [ ] **AC2** `hostGitRevParse` runs with `GIT_CEILING_DIRECTORIES=<parent>`; a test
-      proves it returns `false` for a workspace whose own `.git` is invalid even when
-      a parent dir contains a valid `.git` (no false-pass via ascension).
-- [ ] **AC3** All three gates (`cc-dispatcher` cold, `cc-reprovision` warm,
-      `workspace-reconcile-on-push` reconcile) decide heal/spawn on `agentReady`, lstat
-      pre-filtered + connected-gated. Verified by a grep that no gate's spawn decision
-      reads `isReadyGitWorkTree` as the sole authority for a connected+ready workspace.
-- [ ] **AC4** `reportAgentReadinessSelfStop` fires on `!agentReady` from **all three**
-      gates (cold + warm + reconcile incl. benign-skip), carrying `gitRevParseValid`
-      (new), `gitValid` (lstat), `gitKind`, `activeWorkspaceIdHash` — and **no**
-      `installationId`/`repoUrl`/raw path/`gitdirTarget` (assert the `extra` keys).
-- [ ] **AC5** WARM re-probes readiness after `ensureWorkspaceRepoCloned` and surfaces
-      the honest reclaim outcome (no spawn) when still `!agentReady` — no spawn-regardless.
-- [ ] **AC6** Populated-corrupt `dir-valid` → emit + `RepoNotReadyError` honest-block;
-      **no destroy**. Write-boundary test asserts exactly two `.git` `rm` sites remain
-      (`ensure-workspace-repo.ts:174`, `:236`); no third authorization added.
-- [ ] **AC7** Structural ordering test: in the cold factory the `ensureWorkspaceRepoCloned`
-      await (`:1963`) precedes `sdkQuery()` (`:2326`).
-- [ ] **AC8** ADR-044 Amendment 2026-06-30 written (lstat pre-filter retained; union
-      rev-parse confirm; warm memoization; destroy unchanged; union in Alternatives).
-- [ ] **AC9** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes;
+- [ ] **AC1** `hostGitRevParseOutcome` returns `"worktree"` for a healthy clone,
+      `"not-a-worktree"` for a `dir-valid` whose `.git` git cannot resolve,
+      `"inconclusive"` on spawn-error/timeout — RED tests first. Uses
+      `execFileAsync("git",[array])` (no shell string), `~2s` timeout + `maxBuffer` +
+      `killSignal`, and env `GIT_CONFIG_NOSYSTEM=1` / `GIT_CONFIG_GLOBAL=/dev/null` /
+      `GIT_TERMINAL_PROMPT=0` with **no installation token** (assert the env).
+- [ ] **AC2** `GIT_CEILING_DIRECTORIES=<abs, symlink-resolved parent>`; tests prove no
+      false-pass via parent-`.git` ascension AND via a **symlinked** `/workspaces` path
+      component.
+- [ ] **AC3** The `dir-valid` host confirm runs only in the lstat-ready + connected
+      (`repoUrl`) + DB-ready population; a `"not-a-worktree"` routes to honest-block, an
+      `"inconclusive"` (after one re-probe) FAILS-OPEN to spawn (a healthy repo is
+      never blocked by a probe blip).
+- [ ] **AC4** A single shared `evaluateAgentReadiness` helper owns the emit + heal-route
+      + re-probe for all three gates (no per-gate duplication); a test asserts cold,
+      warm, and reconcile all reach it.
+- [ ] **AC5** `reportAgentReadinessSelfStop` fires on a confirmed `"not-a-worktree"`
+      from all three gates (incl. reconcile after the `:368` `recovered` swap) AND from
+      the C2 in-sandbox backstop, carrying `gitRevParseValid` + `gitValid` + `gitKind`
+      + `activeWorkspaceIdHash` — and **no** `installationId`/`repoUrl`/raw path/
+      `gitdirTarget`/**subprocess stderr** (assert the `extra` keys + that no git error
+      string is captured).
+- [ ] **AC6** Populated `dir-valid` + `"not-a-worktree"` → emit + `RepoNotReadyError`
+      honest-block; **no destroy**. Write-boundary test asserts exactly two
+      `.git`-targeting `rm` sites remain (`ensure-workspace-repo.ts:174`, `:236`); the
+      assertion is scoped to `.git` paths so the `:354` tmp-clone `rm` is excluded; no
+      third `.git` authorization added.
+- [ ] **AC7** C2 backstop: an in-sandbox Step 0.0 `rev-parse` not-a-worktree result
+      emits the self-stop (distinct source tag) regardless of on-disk shape — so the
+      object-store residual the host confirm is blind to is still queryable.
+- [ ] **AC8** Reconcile asserts **one** `rev-parse` spawn per event (single workspace
+      per invocation).
+- [ ] **AC9** ADR-044 Amendment 2026-06-30 written — **supersedes** AC7's zero-await
+      guarantee for the connected cold path (does NOT claim "retained"); destroy
+      authorizations unchanged; the `dir-valid`-only confirm + the rejected
+      bwrap-reproduction in Alternatives; the stale `:1802-1806` comment updated.
+- [ ] **AC10** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes;
       `./node_modules/.bin/vitest run` green (the real runner — not `npm run -w`).
 
 ### Post-merge (operator / automatable)
-- [ ] **AC10** Assert 754ee124's **actual on-disk `.git` shape** first (escaping
-      pointer vs. corrupt dir vs. in-workspace pointer) so a green dispatch isn't a
-      false-green for an unrelated reason (SpecFlow P0-4). Automatable via a read-only
-      shape probe.
-- [ ] **AC11** Exercise the path the live strand actually traverses — per the prior
+- [ ] **AC11** Confirm 754ee124's **actual on-disk `.git` shape** on the live prod
+      surface (the Phase-0 attempt may have been unreachable from the work env) —
+      corrupt-`dir-valid` vs. object-store residual vs. pointer — so a green dispatch
+      isn't a false-green and so the ADR-044 perf reversal is attributed to a real
+      shape (SpecFlow P0-4 / arch P1). Read-only shape probe.
+- [ ] **AC12** Exercise the path the live strand actually traverses — per the prior
       incident, **RECONCILE / WARM**, not only a fresh COLD `/soleur:go` — and confirm
-      no strand + an `agent_readiness_self_stop` event is queryable (or absent because
-      healed). Ref #5733; close the issue in a post-merge step (`gh issue close 5733`)
+      no strand + an `agent_readiness_self_stop` event is queryable (host pre-heal emit
+      OR the C2 backstop), or absent because healed. Ref #5733; `gh issue close 5733`
       after the operator-surface repro, not at merge.
 
 ## Test Scenarios
@@ -375,9 +514,10 @@ boundary-rename (no raw identifiers). Full `/soleur:gdpr-gate` invocation not re
 - Given a RECONCILE benign-skip (repoUrl fails the allowlist) that did not heal, when
   the handler returns, then `agent_readiness_self_stop` is queryable (regression for
   P0-3 / the 26×-dark-fire incident).
-- Given a healthy clone (`dir-valid` + rev-parse OK), when any gate evaluates, then no
-  subprocess beyond the cheap lstat is paid on the warm steady state (memoized) — no
-  hot-path regression.
+- Given a healthy `dir-valid` clone, when a gate evaluates, then one bounded ~2s
+  `rev-parse` returns `"worktree"` and the agent spawns (no memo; the agent round-trip
+  dominates the probe cost). Given a probe timeout/spawn-error on that healthy repo,
+  then it re-probes once and FAILS-OPEN to spawn (never honest-blocks a healthy repo).
 - Given a repo-less Start-Fresh workspace (`git init`, no `repoUrl`, no origin), when
   the cold gate evaluates an absent or `dir-valid` `.git`, then it benign-skips / fast-
   paths and never destroys un-pushed init state (P2 edge).
@@ -405,6 +545,35 @@ the op there, rebase after #5783 merges.
 
 ## Risks & Sharp Edges
 
+- **Fail-OPEN on inconclusive, NOT fail-closed (arch P0 / data+perf P1):** a transient
+  probe timeout/spawn-error on a healthy `dir-valid` repo must spawn (after one
+  re-probe), never honest-block — fail-closed-to-heal manufactures the exact #5733
+  strand on a working repo. Only a deterministic `"not-a-worktree"` blocks. Encoded in
+  AC3.
+- **Host `rev-parse` is blind to the original (sandbox-only) strand (arch/perf P2):**
+  an escaping pointer is host-readable, so host `rev-parse` returns `"worktree"` for
+  it — the escaping-pointer case is healed by the on-main lstat verdict + structural
+  `isStrandingFilePointer`, NOT by this subprocess. The subprocess's only net-new
+  coverage is the corrupt-`dir-valid` slice. Stated honestly in the ADR.
+- **`rev-parse --is-inside-work-tree` does NOT validate object integrity (perf P1):**
+  object-store corruption (HEAD→missing objects, broken alternates) passes it. That is
+  the out-of-scope residual; **C2 (agent-context backstop) is the only thing that
+  surfaces it** — which is why C2 is in-scope, not deferred.
+- **754ee124's shape is unconfirmed and may be the residual (arch/data P1):** if the
+  live workspace is corrupt-`dir-valid`, deliverable A heals it; if it is the
+  object-store residual, A does NOT, and only C2 + AC11/AC12 close it. The plan ships
+  robust to both because C2 fires on the agent's real strand regardless of shape.
+- **The stderr-path leak (security P1, sharpest):** the new probe-error path must not
+  copy git's stderr into the Sentry `extra` — it embeds the raw absolute path (= raw
+  userId for a solo workspace), defeating the deliberate pseudonymization. Encoded in
+  AC5.
+- **AC6 write-boundary grep miscounts if unscoped (data P2):** `ensure-workspace-repo.ts`
+  has THREE `rm(` calls — `:174` + `:236` (.git) + `:354` (tmp clean). Scope the
+  assertion to `.git`-targeting paths.
+- **Honest-block is a NEW branch, not a verdict swap (data P2):** the async confirm
+  re-probes AFTER `resolveRepoReadinessWithSelfHeal` returns `healed.ok=true` and
+  throws `RepoNotReadyError` despite it — the sync `gitDirValid` seam (`:1886`) stays
+  unchanged.
 - **The `ensure-workspace-repo.ts:207` no-op trap (CTO):** routing a populated-corrupt
   `dir-valid` into `ensureWorkspaceRepoCloned` does NOT heal it (early-returns `"ok"`).
   Anyone reading deliverable B as "rev-parse failure → reclone fixes it" is wrong for
@@ -425,24 +594,31 @@ the op there, rebase after #5783 merges.
 
 ## Files to Edit
 
-- `apps/web-platform/server/git-worktree-validity.ts` — add `agentReadyGitWorkTree` +
-  `hostGitRevParse` (union, ceiling, bounded timeout, fail-closed).
-- `apps/web-platform/server/cc-dispatcher.ts` — cold gate (`:1807-1838`, seam
-  `:1886`): swap verdict to `agentReady`; emit `gitRevParseValid`; honest-block
-  populated-corrupt.
-- `apps/web-platform/server/cc-reprovision.ts` — warm gate (`:123`): `agentReady` +
-  memoization; re-probe-after-heal honest fail; self-stop emit.
+- `apps/web-platform/server/git-worktree-validity.ts` — add `hostGitRevParseOutcome`
+  (execFile array, ceiling, hardened env, ~2s timeout, no token) + the shared
+  `evaluateAgentReadiness(workspacePath, ctx)` helper.
+- `apps/web-platform/server/cc-dispatcher.ts` — cold gate: call `evaluateAgentReadiness`
+  after the existing self-heal (`:1807-1838`); honest-block `RepoNotReadyError` on a
+  confirmed `dir-valid` corruption; update the stale `:1802-1806` comment. C2 hook at
+  the agent-Bash onToolUse mirror (Phase-0-located near `tool-labels.ts:198`).
+- `apps/web-platform/server/cc-reprovision.ts` — warm gate (`:123`): call the helper;
+  honest "failed" on block; **no memoization**.
 - `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` —
-  reconcile gate (`:357`, `:384-398`): `agentReady`; self-stop on unrecovered/benign-skip.
+  reconcile gate `:357` **AND** the `:368` `recovered` re-probe → helper verdict;
+  self-stop on unrecovered/benign-skip (`:384-398`).
 - `apps/web-platform/server/repo-resolver-divergence.ts` — widen
-  `reportAgentReadinessSelfStop` with `gitRevParseValid` (`:128-162`).
+  `reportAgentReadinessSelfStop` with `gitRevParseValid` (`:128-162`); ensure no
+  subprocess stderr/path can enter `extra`.
+- `apps/web-platform/server/tool-labels.ts` (or its onToolUse emit site) — C2 backstop
+  emit on in-sandbox Step 0.0 rev-parse failure (exact site Phase-0-located).
 - `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md`
-  — Amendment 2026-06-30.
+  — Amendment 2026-06-30 (supersede AC7 zero-await for connected cold).
 
 ## Files to Create (tests)
 
-- `apps/web-platform/test/server/agent-ready-git-worktree.test.ts` — probe unit tests
-  (union, ceiling, fail-closed).
+- `apps/web-platform/test/server/agent-ready-git-worktree.test.ts` — `hostGitRevParseOutcome`
+  + `evaluateAgentReadiness` unit tests (dir-valid worktree/not-a-worktree/inconclusive,
+  ceiling incl. symlinked parent, hardened env / no token, fail-OPEN, no stderr leak).
 - Extend `apps/web-platform/test/cc-dispatcher-self-heal-observability.test.ts` +
   `apps/web-platform/test/helpers/cc-dispatcher-harness.ts` — three-gate emit/heal/honest-block
   + await-before-query ordering, via the injected seam.
