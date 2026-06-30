@@ -651,6 +651,10 @@ t_rsc_canonical_matches_terraform() {
     _report "T-rsc-9 terraform ruleset source exists" fail "missing $tf"
     return
   fi
+  # Context-set equality only. integration_id pinning is covered elsewhere:
+  # T-rsc-7 asserts the JSON's CodeQL=57789/rest=15368, and the live audit's
+  # compareRequiredStatusChecks flags any integration_id divergence as a
+  # critical `removed` — so a CodeQL app swap still surfaces at audit time.
   local json_ctx tf_ctx
   json_ctx=$(jq -r '.[].context' < "$real" | sort)
   # Extract `context = "..."` (required_check blocks are the only `context =`
