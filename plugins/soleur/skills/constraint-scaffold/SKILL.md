@@ -31,13 +31,13 @@ maintenance and recovery:
 3. **In-code escape hatch (agent-owned, used sparingly):** dependency-cruiser's native
    `// dependency-cruiser-disable-next-line` comment on the importing line.
 4. **Founder hotfix with no agent in the loop (the brand-survival deadlock).** A GitHub-web hotfix
-   or a machine without the repo tooling can trip the gate with no agent present. The intended
-   single-account recovery is **`/soleur fix constraints`** — but that comment-dispatcher is
-   **PLANNED (#5791), not yet wired** (no `issue_comment` handler exists for it today). Until #5791
-   lands the agent owns gate maintenance directly (re-run this skill: fix the import, or
-   `--refresh-baseline`), and the gate stays **informational / non-blocking** — it is NOT promoted
-   to a required check (promotion is blocked on #5791 and #5778), so it cannot deadlock a founder
-   hotfix. **No override label, no `.cjs` edit, no second human required.**
+   or a machine without the repo tooling can trip the gate with no agent present. The
+   single-account recovery is to comment **`/soleur fix constraints`** on the PR — the
+   `fix-constraints.yml` dispatcher (#5791) is **wired**: an `issue_comment` handler dispatches the
+   agent to fix the import (or `--refresh-baseline`) and push the fix to the PR head. The gate stays
+   **informational / non-blocking** — it is NOT promoted to a required check (promotion is now
+   blocked on #5778 only), so it cannot deadlock a founder hotfix. **No override label, no `.cjs`
+   edit, no second human required.**
 5. The founder is **never** required to read or unblock the gate.
 
 ## Usage
@@ -65,7 +65,8 @@ bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --
 | `.dependency-cruiser.cjs` | Executable CommonJS config. Computes the `"use client"` from-set at require-time (recomputed every run, **never** committed static), regex-escaping route-group paths. `tsConfig.fileName` + `tsPreCompilationDeps` give `@/*` alias resolution and the type-only/value distinction. |
 | `.dependency-cruiser-known-violations.json` | dependency-cruiser native baseline (`--output-type baseline` / `--ignore-known`). Grandfathers only pre-existing violations. |
 | `apps/web-platform/scripts/constraint-gates.sh` | Shared runner — owns the single pinned `depcruise --ignore-known … --output-type err` invocation. Fails closed on any non-zero depcruise rc; CI (and future pre-commit) both exec this. |
-| `.github/workflows/constraint-gates.yml` | Always-runs + internal path-check (reports a real conclusion on every PR; no pending-forever deadlock). On failure prints the recovery path (re-run the skill; the `/soleur fix constraints` auto-dispatcher is planned (#5791), not yet wired). Informational/non-blocking until promoted (blocked on #5791, #5778). |
+| `.github/workflows/constraint-gates.yml` | Always-runs + internal path-check (reports a real conclusion on every PR; no pending-forever deadlock). On failure prints the recovery path (comment `/soleur fix constraints` on the PR). Informational/non-blocking until promoted (promotion now blocked on #5778 only). |
+| `.github/workflows/fix-constraints.yml` | The `/soleur fix constraints` recovery dispatcher (#5791). An `issue_comment`-triggered workflow that, on an authorized PR comment, dispatches the agent to fix the tripped gate (or `--refresh-baseline`) and push to the PR head. Author-association + collaborator-permission gated; head==base (no fork pushes); plain `issue_comment` (never the privileged pull-request-target trigger). |
 
 ## Self-tests
 

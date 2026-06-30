@@ -1,0 +1,234 @@
+name: fix-constraints (recovery dispatcher)
+
+# issue_comment-triggered recovery for the L1 constraint-gates suite (ADR-071, #5791).
+# A stranded founder comments `/soleur fix constraints` on a PR whose constraint-gate
+# tripped; this workflow dispatches the agent to fix-or---refresh-baseline and pushes
+# a clean commit to the PR's OWN head ref.
+#
+# SECURITY: plain `issue_comment` + explicit `gh pr checkout` — never the privileged
+# pull-request-target trigger. (A write-token + a PR-head checkout in that privileged
+# trigger context is the classic arbitrary-code-execution exploit.)
+# Guards: exact-match command, author-association + collaborator-permission gate,
+# head==base (no fork pushes), credential isolation (persist-credentials: false),
+# every PR-derived string passed via `env:` (never inline `${{ github.event.* }}` in run:).
+
+on:
+  issue_comment:
+    types: [created]
+
+# NO top-level permissions block. Job-level `permissions:` REPLACES (not merges with)
+# the top-level set in GitHub Actions, so each job declares its own minimal scope.
+
+concurrency:
+  group: fix-constraints-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    # PR-comment-only + exact-match command (NOT `contains`) + author-association gate.
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/soleur fix constraints' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # anthropic-preflight EXITS 1 (red) when ANTHROPIC_API_KEY is absent; it only
+      # emits ok=false for billing-cap / credit-low / 5xx / transient. So `fix` is
+      # skipped on every non-ok preflight and the notify-on-skip job gives feedback.
+      - id: check
+        uses: ./.github/actions/anthropic-preflight
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  fix:
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write # OIDC identity federation (claude-code-action convention), NOT repo-write scope.
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          # Do NOT leave a push-capable token in git config while the agent step runs
+          # attacker-influenceable PR-head content. The dedicated push step below uses
+          # an explicit, env-passed credential instead.
+          persist-credentials: false
+
+      - name: Verify commenter has write/admin permission
+        id: perm
+        # author_association is a relationship, not a push right (a read-only
+        # COLLABORATOR/MEMBER satisfies the if-guard). Require admin|write here.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          p=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" -q .permission)
+          if [ "$p" = admin ] || [ "$p" = write ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve PR metadata + head==base guard
+        if: steps.perm.outputs.ok == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          cross=$(gh pr view "$PR_NUMBER" --json isCrossRepository -q .isCrossRepository)
+          headref=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
+          echo "cross=$cross" >> "$GITHUB_OUTPUT"
+          echo "headref=$headref" >> "$GITHUB_OUTPUT"
+
+      - name: Skip-and-explain on fork PR
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --body "Fork PRs can't be auto-fixed (GITHUB_TOKEN is read-only on a fork head). A maintainer must run \`constraint-scaffold\` locally and push the fix."
+
+      - name: Configure git identity
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Checkout the PR's own head ref
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: gh pr checkout "$PR_NUMBER"
+
+      - name: Dispatch agent to fix the gate
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        id: agent
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Model pin + action SHA mirror claude-code-review.yml / test-pretooluse-hooks.yml
+          # verbatim (CI-validated). Pin freshness is model-launch-review's job — do NOT
+          # substitute a model id from memory.
+          claude_args: '--model claude-sonnet-4-6 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          prompt: |
+            A constraint-gate tripped on this PR. Run `apps/web-platform/scripts/constraint-gates.sh`,
+            read the failure, and recover per the agent-owns-gates model (constraint-scaffold SKILL.md):
+            fix the offending import if it is a real client->server-secret leak, OR re-run the
+            constraint-scaffold generator with --refresh-baseline if it is a legitimate new
+            cross-boundary import that belongs in the baseline. Make the file edits only.
+            Do NOT commit or push — the workflow owns commit + push.
+
+      - name: Capture API spend
+        if: steps.agent.outputs.execution_file != ''
+        continue-on-error: true
+        env:
+          SOLEUR_RUN_ID: ${{ github.run_id }}
+          SOLEUR_SHA: ${{ github.sha }}
+          SOLEUR_WORKFLOW: fix-constraints.yml
+          EXEC_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/api-spend
+          out="/tmp/api-spend/api-spend-${SOLEUR_RUN_ID}.json"
+          bash scripts/extract-api-spend.sh "$EXEC_FILE" > "$out" \
+            || { echo "::warning::api-spend capture failed (non-fatal)"; rm -f "$out"; exit 0; }
+
+      - name: Upload API spend artifact
+        if: steps.agent.outputs.execution_file != '' && hashFiles(format('/tmp/api-spend/api-spend-{0}.json', github.run_id)) != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: api-spend-${{ github.run_id }}
+          path: /tmp/api-spend/api-spend-${{ github.run_id }}.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Re-run the gate to VERIFY the fix
+        # Assert the invariant — never trust "agent exited 0" (it exits 0 even on give-up).
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        id: verify
+        run: |
+          set +e
+          bash apps/web-platform/scripts/constraint-gates.sh
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          # no-change != fixed: record whether the agent produced any diff at all.
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit + push to the head ref
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true' && steps.verify.outputs.changed == 'true' && steps.verify.outputs.rc == '0'
+        id: push
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.headref }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git add -A
+          git commit -m "fix(constraint-gates): auto-recover tripped gate via /soleur fix constraints"
+          # persist-credentials:false -> push with an explicit, scoped, env-passed credential.
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Outcome comment
+        # Deterministic from step outputs: recovered / no-change / still-red. Never a false success.
+        if: always() && steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          CHANGED: ${{ steps.verify.outputs.changed }}
+          RC: ${{ steps.verify.outputs.rc }}
+          PUSHED_SHA: ${{ steps.push.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGED" = 'true' ] && [ "$RC" = '0' ]; then
+            body="Recovered: the constraint-gate is green again and the fix was pushed ($PUSHED_SHA)."
+          elif [ "$CHANGED" = 'false' ]; then
+            body="Ran, but made no edits — the gate may not be auto-fixable. See the failing rule in the run logs; a maintainer may need to act."
+          else
+            body="Attempted a fix but the gate is STILL red after re-running — nothing was pushed. See the run logs."
+          fi
+          gh pr comment "$PR_NUMBER" --body "$body"
+
+  # Every non-success path that is NOT an intended-silent case (unauthorized commenter,
+  # non-PR comment, non-matching command) must still give the founder feedback —
+  # otherwise a billing-cap / key-absent / transient window silently re-creates the
+  # exact #5791 deadlock. This always() job re-checks the same PR+command+author gate
+  # so it stays silent for the intended-silent paths.
+  notify-on-skip:
+    needs: [preflight, fix]
+    if: >-
+      always() &&
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/soleur fix constraints' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      needs.fix.result != 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Fallback feedback comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --body "Auto-recovery is temporarily unavailable (API billing/transient, missing key, fork PR, or insufficient permission). Re-comment later, or a maintainer can run \`constraint-scaffold\` locally. See the workflow run for detail."

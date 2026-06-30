@@ -67,6 +67,31 @@ else
   printf '%s\n' "$D" | sed 's/^/    /'
 fi
 
+# 5. repo-root fix-constraints.yml BODY == substituted fix-constraints template body,
+#    EXCEPT the two API-spend-capture steps (Capture/Upload) which the dogfooding
+#    repo-root copy carries and the tenant template intentionally omits (a tenant repo
+#    has no scripts/extract-api-spend.sh). Strip comments, blanks, AND that step block
+#    from the repo-root copy, then compare the security-critical body the two MUST share.
+FIX_SUBST="$(sed "s|__TARGET_DIR__|$TARGET_DIR|g" "$REF/fix-constraints-workflow.template")"
+# Drop the API-spend block: from the "Capture API spend" step up to (not including) the
+# next step "Re-run the gate to VERIFY the fix". Anchored on step names → robust to edits.
+strip_apispend() {
+  awk '
+    /^[[:space:]]*- name: Capture API spend[[:space:]]*$/ { skip=1 }
+    /^[[:space:]]*- name: Re-run the gate to VERIFY the fix[[:space:]]*$/ { skip=0 }
+    !skip { print }
+  '
+}
+ROOT_FIX_BODY="$(strip_apispend < "$REPO_ROOT/.github/workflows/fix-constraints.yml" | strip_body)"
+TMPL_FIX_BODY="$(printf '%s\n' "$FIX_SUBST" | strip_body)"
+D="$(diff <(printf '%s\n' "$ROOT_FIX_BODY") <(printf '%s\n' "$TMPL_FIX_BODY") 2>&1 || true)"
+if [[ -z "$D" ]]; then
+  pass "repo-root fix-constraints.yml body (minus API-spend steps) == substituted template body"
+else
+  fail "repo-root fix-constraints.yml DIVERGES from the substituted template body"
+  printf '%s\n' "$D" | sed 's/^/    /'
+fi
+
 echo "---"
 echo "parity.test.sh: $passes passed, $fails failed"
 [[ "$fails" -eq 0 ]]

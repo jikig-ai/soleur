@@ -31,14 +31,15 @@ rejects the violation **before** the LLM-judged review layer — the product-cod
 instantiation of ADR-011 tier 1.
 
 **The agent — never the founder — owns gate maintenance, baseline refresh, and recovery.**
-The intended founder-hotfix recovery is one comment, `/soleur fix constraints` — but that
-recovery dispatcher is **planned (#5791), not yet wired**: no `issue_comment` handler for it
-exists in the repo today. Until #5791 lands, the agent owns recovery directly (re-run
-`constraint-scaffold`: fix the import, or `--refresh-baseline`), and the gate stays
-**informational / non-blocking** — it is NOT promoted to a required check. Promotion to a
-REQUIRED check is **blocked on #5791** (no agent-free recovery for a tripped required gate
-until the dispatcher exists) **and #5778** (monorepo/multi-stack follow-up). No override label,
-no `.cjs` edit, no second human required.
+The founder-hotfix recovery is one comment, `/soleur fix constraints` — and that recovery
+dispatcher is now **wired** (`.github/workflows/fix-constraints.yml`, #5791): an `issue_comment`
+handler dispatches the agent to fix the import (or `--refresh-baseline`) and push the fix to the
+PR head, gated by author-association + collaborator-permission, head==base (no fork pushes), and
+the plain `issue_comment` trigger (never the privileged pull-request-target trigger, to avoid the
+ACE surface). The gate stays **informational / non-blocking** — it is NOT promoted to a required
+check. Promotion to a REQUIRED check is now **blocked on #5778** (monorepo/multi-stack follow-up)
+only, the #5791 recovery prerequisite having landed. No override label, no `.cjs` edit, no second
+human required.
 
 **Mechanism (Option D).** `dependency-cruiser` is the engine — it robustly owns `@/*`
 alias resolution (`tsConfig` + `tsPreCompilationDeps`), the type-only/value erasure, and the
