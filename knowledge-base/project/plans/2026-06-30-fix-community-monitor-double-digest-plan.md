@@ -355,23 +355,23 @@ degrades the heartbeat verify, file a follow-up note on #5728 rather than wideni
 
 ### Pre-merge (PR)
 
-- [ ] Phase 0 verdict (H-A / H-B / H-C-compound) recorded in PR body, citing the
+- [x] Phase 0 verdict (H-A / H-B / H-C-compound) recorded in PR body, citing the
       `routine_runs` rows (run_id/trigger/attempt) and the six issues' create-times.
-- [ ] A RED test reproduced the dual-production path; it is GREEN after the fix.
-- [ ] The regression test asserts issue-**count == 1** per date across ≥2 invocations
+- [x] A RED test reproduced the dual-production path; it is GREEN after the fix.
+- [x] The regression test asserts issue-**count == 1** per date across ≥2 invocations
       (or ≥2 attempts for H-B) through a **fake octokit issue store** — the observable
       invariant, not "dedup mock called once".
-- [ ] The handler still posts a healthy OK heartbeat on the dedup-skip path (no
+- [x] The handler still posts a healthy OK heartbeat on the dedup-skip path (no
       false-RED introduced) — test exercises the chosen skip-path heartbeat mechanism.
-- [ ] Dedup **excludes FAILED/audit stubs**: a pre-existing `… - FAILED` issue or an
+- [x] Dedup **excludes FAILED/audit stubs**: a pre-existing `… - FAILED` issue or an
       `Automated FAILED self-report` body does NOT suppress a real digest (test-covered).
-- [ ] Dedup read **fails OPEN** (spawns on a GitHub LIST error) — test-covered.
-- [ ] Date anchor is `runStartedAt.slice(0,10)` (replay-stable), not `new Date()`.
-- [ ] No Inngest `idempotency`/`debounce` added to `createFunction` (deepen-pass verdict).
-- [ ] Existing `cron-community-monitor.test.ts` + `…-heartbeat.test.ts` stay green
+- [x] Dedup read **fails OPEN** (spawns on a GitHub LIST error) — test-covered.
+- [x] Date anchor is `runStartedAt.slice(0,10)` (replay-stable), not `new Date()`.
+- [x] No Inngest `idempotency`/`debounce` added to `createFunction` (deepen-pass verdict).
+- [x] Existing `cron-community-monitor.test.ts` + `…-heartbeat.test.ts` stay green
       (no regression to #5728 throw-path heartbeat behavior).
-- [ ] `tsc --noEmit` clean in `apps/web-platform`.
-- [ ] No change to `resolveOutputAwareOk`/`verifyScheduledIssueCreated` (scope kept
+- [x] `tsc --noEmit` clean in `apps/web-platform`.
+- [x] No change to `resolveOutputAwareOk`/`verifyScheduledIssueCreated` (scope kept
       out of #5728's heartbeat-delivery class), or an explicit one-line rationale if
       Phase 0 proves the fix must touch them.
 

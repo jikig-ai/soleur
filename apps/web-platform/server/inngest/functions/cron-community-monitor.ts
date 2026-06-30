@@ -72,6 +72,7 @@ import {
   deferIfTier2Cron,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  digestIssueExistsForDate,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
   DeployInProgressError,
@@ -225,7 +226,10 @@ Only changes under knowledge-base/support/community/ are persisted — keep all 
 Creating the monitor issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 
 DEDUP RULE (BEFORE creating the monitor issue): run
-  gh issue list --label scheduled-community-monitor --state open --search 'Community Monitor in:title' --json number,title,createdAt
+  gh issue list --label scheduled-community-monitor --state all --json number,title,createdAt
+Use this LIST form, NOT \`--search 'Community Monitor in:title'\` — the GitHub
+search index lags minutes behind the primary index, so a search would miss an
+issue an earlier same-day run already filed and you would create a duplicate.
 If any results from within the last 24 hours exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same day as the natural 08:00 UTC cron.
 
 CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue \`updatedAt\` timestamps via \`gh issue list --json updatedAt,number\` instead. The containment hook only allows the \`gh issue\` / \`gh label\` verbs listed above plus the community-router.sh script — do NOT reach for any other \`gh\` sub-command or the raw API.
@@ -314,6 +318,36 @@ export async function cronCommunityMonitorHandler({
     "run-started-at",
     async () => new Date().toISOString(),
   );
+
+  // #5751 — producer-side date-dedup (Phase 0 verdict: H-A multiple serialized
+  // invocations, compounded by H-C the stale-search-index in-prompt DEDUP RULE).
+  // On affected days two invocations (the 08:00 cron + an operator manual-trigger,
+  // or a doubled delivery) each filed a full `[Scheduled] Community Monitor - <date>`
+  // digest because the in-prompt rule read the lagging SEARCH index.
+  // concurrency:{scope:"fn",limit:1} (registration below) serializes the two, so
+  // the second's FRESH LIST read sees the first's issue. If a real digest already
+  // exists for today, skip the eval and post a healthy OK heartbeat — do NOT fall
+  // through to verify-output, whose run-window (updated_at >= THIS runStartedAt)
+  // would exclude the earlier issue and false-RED the skip. Date anchor is
+  // runStartedAt.slice(0,10) (replay-stable across the retries:1 memoization).
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-community-monitor",
+    }),
+  );
+  if (digestAlreadyExists) {
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: true,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-community-monitor",
+        logger,
+      });
+    });
+    return { ok: true };
+  }
 
   const installationToken = await step.run(
     "mint-installation-token",

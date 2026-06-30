@@ -695,6 +695,86 @@ export async function verifyScheduledIssueCreated(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Producer-side date-dedup (#5751) — "does a REAL `${label}` digest already
+// exist for <date>?" so a second serialized invocation (the 08:00 cron + an
+// operator manual-trigger, or a doubled delivery) does NOT file a duplicate
+// full digest. Distinct from BOTH siblings:
+//   - verifyScheduledIssueCreated reads the RUN WINDOW (updated_at >= a single
+//     invocation's runStartedAt) for the heartbeat; this reads the whole day.
+//   - ensureScheduledAuditIssue's title-dedup INTENTIONALLY counts FAILED/audit
+//     stubs (to avoid double-auditing); this read EXCLUDES them so a same-day
+//     recovery still files the real digest (zero-digest guard, P1).
+//
+// Fresh LIST/REST index (GET /issues?labels=…), NOT the in-prompt
+// `gh issue list --search '… in:title'`: the search index lags minutes behind
+// the primary index, so the second invocation's search did not see the first's
+// issue (the #5751 H-C miss). concurrency:{scope:"fn",limit:1} serializes the
+// two invocations, so the second's LIST read runs after the first's create.
+//
+// FAIL-OPEN (P1): a duplicate digest is a single-operator paper-cut; a MISSED
+// digest blinds the only community-health signal. On any read error we report
+// and return false (→ caller spawns), mirroring resolveOutputAwareOk's
+// verify-throw fallback. The octokit is injectable purely for unit tests.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure predicate: is `issue` a REAL scheduled digest for `date` (YYYY-MM-DD)?
+ * Excludes the no-platform `… - FAILED` title (no date suffix) and the
+ * handler-level audit fallback, which files the BYTE-IDENTICAL `${prefix} ${date}`
+ * title with a hardcoded `Automated FAILED self-report` body.
+ */
+export function isRealScheduledDigest(
+  issue: { title?: string | null; body?: string | null },
+  date: string,
+): boolean {
+  const title = issue.title ?? "";
+  // Today's dated issue only. The no-platform `[Scheduled] … - FAILED` title
+  // has no date suffix → excluded here.
+  if (!title.endsWith(date)) return false;
+  // Defensive belt: an explicit `- FAILED` suffix is never a real digest.
+  if (/-\s*FAILED$/i.test(title)) return false;
+  // Exclude the audit stub by body so a prior FAILED self-report does NOT
+  // suppress a same-day real digest.
+  if ((issue.body ?? "").startsWith("Automated FAILED self-report")) return false;
+  return true;
+}
+
+export async function digestIssueExistsForDate(args: {
+  label: string;
+  date: string;
+  cronName: string;
+  octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
+}): Promise<boolean> {
+  const { label, date, cronName, octokit } = args;
+  try {
+    const client = octokit ?? (await createProbeOctokit());
+    // Explicit sort:created desc + per_page:10 so today's issue is guaranteed on
+    // page 1 (matches ensureScheduledAuditIssue's dedup read shape — :1091-1101).
+    const res = await client.request("GET /repos/{owner}/{repo}/issues", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      state: "all",
+      labels: label,
+      sort: "created",
+      direction: "desc",
+      per_page: 10,
+      headers: { "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    const issues = res.data as Array<{ title?: string | null; body?: string | null }>;
+    return issues.some((i) => isRealScheduledDigest(i, date));
+  } catch (err) {
+    // Fail-OPEN: a transient GitHub error must not become a missed digest.
+    reportSilentFallback(err, {
+      feature: cronName,
+      op: "digest-dedup-read-failed",
+      message: `Could not read ${label} digests for date-dedup (failing OPEN → will spawn)`,
+      extra: { fn: cronName, label, date },
+    });
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Output-aware heartbeat resolver — the value each always-create producer
 // feeds to postSentryHeartbeat instead of the bare spawn exit code.
 //
