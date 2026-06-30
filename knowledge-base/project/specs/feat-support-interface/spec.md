@@ -64,11 +64,15 @@ knowledge base?", "What is the Workstream?"). Tapping a chip prefills/sends it.
 Includes a gold "interface preview / coming soon" note.
 
 ### FR4: Canned conversation behavior
-On send (or chip tap): the user's message renders as a user bubble, then a fixed
-Soleur Support reply renders as an assistant bubble (support avatar + name +
-`PREVIEW` badge). No network call. Conversation lives in local React state only
-(not persisted across reload). Reply copy is a friendly "live support is coming
-soon; here's how to find your way / reach us meanwhile" message.
+On send (or chip tap): the user's (trimmed) message renders as a user bubble, then a
+canned Soleur Support reply renders as an assistant bubble (support avatar + name +
+`PREVIEW` badge). No network call. **Replies are chip-keyed** (resolves spec-flow
+gap #1 — the wireframe shows a topic-specific answer): a small lookup maps each of
+the 3 starter chips to its own canned answer, with a generic friendly fallback for
+free-text input. Every reply restates "live support is coming soon" and includes one
+real escape hatch (a link to the knowledge base / docs) so a stuck user is never
+dead-ended. Conversation lives in local React state, **retained across close/reopen
+within the page session** but reset on full reload (not persisted).
 Wireframe: `03-support-conversation-canned-reply.png`.
 
 ### FR5: Composer
@@ -106,6 +110,34 @@ aria roles/labels. Respects reduced-motion for the slide animation.
 ### TR5: Tokens / styling fidelity
 Match existing idioms: cards `rounded-xl border border-soleur-border-default`,
 surfaces step `bg-base → surface-1 → surface-2`, gold accents for CTAs/active.
+
+## Interaction Details (spec-flow resolved)
+
+- **Reply mapping (#1):** chip→reply lookup (3 keyed answers) + generic fallback; every
+  reply restates "coming soon" + a KB/docs escape-hatch link.
+- **Launcher while open (#2):** the floating bubble hides while the panel is open; the
+  header X (plus Escape / backdrop) is the close affordance (matches wireframes 02/03).
+- **Empty/whitespace send (#3):** input is trimmed; Enter on empty/whitespace is a
+  no-op; send button disabled until non-empty. No blank user bubble can render.
+- **Rapid send (#4):** composer briefly disabled during the (synchronous) reply tick;
+  starter chips are empty-state-only and dismiss after the first send (no chip spam).
+- **Motion (#5):** panel slide, backdrop fade, and bubble appearance all honor
+  `prefers-reduced-motion`. Reply is rendered promptly (no deceptive fake-typing delay).
+- **Focus / a11y (#6):** on open, focus moves to the composer; Tab order =
+  chips → composer → send → X; focus returns to the launcher on every close path
+  (Esc / backdrop / X); new reply bubbles announced via an `aria-live="polite"` region;
+  panel has `role="dialog"` + `aria-modal` + labelled header.
+- **Mobile (#7):** bottom-sheet covers a large fixed fraction of viewport height,
+  composer stays above the on-screen keyboard, backdrop tap closes, launcher clears the
+  OS safe-area inset.
+- **Scroll / growth (#8):** conversation auto-scrolls to latest; chips do not return
+  once a conversation starts; thread retained across close/reopen within the session.
+- **Input ceiling (#9):** composer max height with internal scroll; soft character cap
+  (~2000) to keep the mobile sheet from being overrun.
+- **Light theme (#12):** capture a light-mode screenshot of the open panel during build
+  to close the light-theme AC (backdrop opacity + gold contrast differ in light mode).
+- **Flag-flip mid-session (#13):** if the flag re-evaluates OFF, the launcher/panel
+  unmount cleanly without trapping focus in a detached node.
 
 ## Acceptance Criteria
 
