@@ -40,6 +40,14 @@ export function GuidedTour({
   const cardRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const [rect, setRect] = useState<Rect | null>(null);
+  // The keyboard handler + cleanup live in a once-only ([]) effect, so they must
+  // read the LIVE onSkip / current target through refs — not the first-render
+  // closure (which would report step 0 on Escape and never restore focus to the
+  // step's nav item). Synced every render.
+  const onSkipRef = useRef(onSkip);
+  onSkipRef.current = onSkip;
+  const targetRef = useRef<string | null>(step?.target ?? null);
+  targetRef.current = step?.target ?? null;
 
   // Measure the target rect (or null → centered card). Null when: no target,
   // mobile, target absent, or target has a zero / off-screen rect.
@@ -109,7 +117,7 @@ export function GuidedTour({
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        onSkip();
+        onSkipRef.current();
         return;
       }
       if (e.key === "Tab" && cardRef.current) {
@@ -123,8 +131,11 @@ export function GuidedTour({
         if (
           !activeEl ||
           activeEl === document.body ||
+          activeEl === cardRef.current ||
           !cardRef.current.contains(activeEl)
         ) {
+          // Focus on the dialog container itself (or escaped to body/background):
+          // pull it onto the first control so Tab AND Shift+Tab stay trapped.
           e.preventDefault();
           first.focus();
         } else if (e.shiftKey && activeEl === first) {
@@ -141,11 +152,11 @@ export function GuidedTour({
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = prevOverflow;
       // Restore focus to a sensible target (the spotlit nav item if present,
-      // else the original trigger) — never leave it on a detached node.
-      const target = step?.target
-        ? document.querySelector<HTMLElement>(
-            `[data-tour-id="${step?.target}"]`,
-          )
+      // else the original trigger) — never leave it on a detached node. Reads the
+      // LIVE target via ref (the closure's `step` is frozen to the mount step).
+      const liveTarget = targetRef.current;
+      const target = liveTarget
+        ? document.querySelector<HTMLElement>(`[data-tour-id="${liveTarget}"]`)
         : null;
       (target ?? triggerRef.current)?.focus?.();
     };

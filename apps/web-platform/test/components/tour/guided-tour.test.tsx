@@ -56,6 +56,21 @@ describe("GuidedTour overlay", () => {
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 
+  it("Escape uses the LIVE onSkip after a step change (no stale closure)", () => {
+    const onSkip1 = vi.fn();
+    const onSkip3 = vi.fn();
+    const { rerender } = render(
+      <GuidedTour stepIndex={1} onNext={vi.fn()} onBack={vi.fn()} onSkip={onSkip1} onFinish={vi.fn()} />,
+    );
+    // Re-render at a later step with a fresh onSkip (provider recreates it per step).
+    rerender(
+      <GuidedTour stepIndex={3} onNext={vi.fn()} onBack={vi.fn()} onSkip={onSkip3} onFinish={vi.fn()} />,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onSkip3).toHaveBeenCalledTimes(1);
+    expect(onSkip1).not.toHaveBeenCalled();
+  });
+
   it("locks body scroll while mounted and restores on unmount", () => {
     const { unmount } = (() => {
       const r = render(
