@@ -106,6 +106,14 @@ fi
 #    server-side `git init --bare` is unaffected.
 git config --system core.hooksPath "$HOOKS_DIR"
 
+# 6b. Advertise push-options so the app-server's fence-guarded replication push
+#     can deliver `--push-option=lease-gen=<N> --push-option=worktree-id=primary`
+#     to the pre-receive CAS fence (ADR-068 amendment, PR B). WITHOUT this, git
+#     silently drops the options and the hook never sees the gen — the fence then
+#     fail-closed-rejects every push. Forward-compat: the Phase-2 replication push
+#     is app-server-side; the in-sandbox GIT_PUSH_OPTION_* path lands in Phase 3.
+git config --system receive.advertisePushOptions true
+
 # 7. Liveness assert — fail LOUD if any invariant is unmet (the post-merge
 #    readiness/cutover gate surfaces it; never leave a half-provisioned host
 #    silently "green" — hr-fresh-host-provisioning-reachable-from-terraform-apply).
@@ -121,4 +129,8 @@ mountpoint -q "$GIT_DATA_ROOT" || {
   log "FATAL: core.hooksPath not set to $HOOKS_DIR"
   exit 1
 }
-log "bootstrap complete: volume mounted, git+flock present, bare-repo root $REPO_ROOT, fail-closed placeholder hook active"
+[[ "$(git config --system receive.advertisePushOptions)" == "true" ]] || {
+  log "FATAL: receive.advertisePushOptions not advertised — push-option fence unreachable"
+  exit 1
+}
+log "bootstrap complete: volume mounted, git+flock present, bare-repo root $REPO_ROOT, fail-closed placeholder hook active, push-options advertised"
