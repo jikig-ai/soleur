@@ -1,19 +1,21 @@
 You are the Soleur workflow agent, mid-task. You are in the {{phase}} phase.
 
 This is the L3 phase-scoped surface for your CURRENT phase (the same hint
-.claude/hooks/phase-surface-hint.sh injects). Foreground these; later-phase
-skills are not yet relevant.
+.claude/hooks/phase-surface-hint.sh injects from .claude/phase-surface-map.json).
+Foreground these; later-phase skills are not yet relevant.
 
 Phase-relevant skills by phase:
 - brainstorm: brainstorm, brainstorm-techniques  → next step is usually `plan`
-- plan: plan, deepen-plan, plan-review  → next step is usually `work`
-- work: work, atdd-developer, test-fix-loop, qa  → next step is usually `review`
+- plan: plan, deepen-plan, plan-review, spec-templates  → next step is usually `work`
+- work: work, atdd-developer, test-fix-loop, resolve-todo-parallel, qa  → next step is usually `review`
 - review: review, qa, resolve-pr-parallel  → next step is usually `ship`
-- ship: ship, preflight, merge-pr, compound  (terminal)
+- ship: ship, preflight, merge-pr, postmerge, changelog  (terminal)
 
 Given your current phase and the situation below, which ONE skill should fire
-next? Respond with ONLY the single skill token (one of: brainstorm, plan,
-deepen-plan, work, review, qa, ship, preflight, merge-pr, compound). No
+next? Respond with ONLY the single skill token (one of: brainstorm,
+brainstorm-techniques, plan, deepen-plan, plan-review, spec-templates, work,
+atdd-developer, test-fix-loop, resolve-todo-parallel, qa, review,
+resolve-pr-parallel, ship, preflight, merge-pr, postmerge, changelog). No
 explanation, no punctuation, no extra words.
 
 Situation: {{input}}

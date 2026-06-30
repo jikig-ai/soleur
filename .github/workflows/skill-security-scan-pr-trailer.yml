@@ -26,6 +26,13 @@ name: skill-security-scan / pre-merge required check
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # Merge queue (#5780). This workflow is the SOLE producer of the required
+  # context `skill-security-scan PR gate` (job name below). Without merge_group
+  # it never fires on the gh-readonly-queue/main/* temp ref → the context never
+  # reports → the queue stalls on the FIRST PR (P0-1, the easily-missed 7th
+  # producer). The checkout ref and diff base/head are branched to
+  # merge_group.{base_sha,head_sha} on that event below.
+  merge_group:
 
 permissions:
   contents: read
@@ -43,7 +50,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          # PR head on pull_request; queue-candidate head on merge_group. Both
+          # are GitHub-controlled COMMIT SHAs (not branch refs/labels), so this
+          # is not the untrusted-ref-injection class the hook warns about.
+          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
@@ -56,8 +66,8 @@ jobs:
       - name: Identify added SKILL/agent files in PR diff
         id: diff
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           added=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" | \
@@ -76,8 +86,8 @@ jobs:
       - name: Validate override artifacts (if any)
         if: steps.diff.outputs.no_new_skills == 'false'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" || echo '{"matched":[],"invalid_schema":[{"reason":"parser failed"}],"stale_findings":[]}')
@@ -97,8 +107,8 @@ jobs:
         if: steps.diff.outputs.no_new_skills == 'false'
         env:
           ADDED: ${{ steps.diff.outputs.added }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           CI: 'true'
         run: |
           set -euo pipefail

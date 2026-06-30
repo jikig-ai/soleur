@@ -119,3 +119,15 @@ describe("ROADMAP_REVIEW_PROMPT — anchor strings (regression-detection)", () =
     });
   });
 });
+
+// #5786 — producer-side date-dedup serialization anchor (AC6). The cohort
+// behavioral test (cron-cohort-dedup.test.ts) proves the exactly-one-digest
+// invariant; that fake-store test serializes by invoking the handler twice in
+// sequence, so it CANNOT exercise real Inngest concurrency. This anchors the
+// registration's `{ scope: "fn", limit: 1 }` — the serializer BOTH the handler
+// dedup and the cohort test's "invocation #2 sees #1's create" depend on.
+describe("#5786 producer-side dedup — concurrency serialization anchor (AC6)", () => {
+  it('registration concurrency contains { scope: "fn", limit: 1 }', () => {
+    expect(SUT_SOURCE).toContain('{ scope: "fn", limit: 1 }');
+  });
+});
