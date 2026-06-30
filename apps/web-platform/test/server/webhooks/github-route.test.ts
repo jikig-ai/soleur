@@ -165,6 +165,8 @@ describe("POST /api/webhooks/github — signature verification", () => {
 
 describe("POST /api/webhooks/github — dedup (AC1)", () => {
   it("returns 200 without inngest.send on duplicate delivery_id (PG_UNIQUE_VIOLATION)", async () => {
+    // The dedup INSERT now happens post-isGranted, immediately before dispatch
+    // (drop-before-dedup reorder) — the 23505 replay short-circuit is preserved.
     mockInsert.mockResolvedValueOnce({ error: { code: "23505" } });
     const req = makeRequest({ body: { installation: { id: 42 } } });
     const res = await POST(req);
@@ -187,6 +189,7 @@ describe("POST /api/webhooks/github — scope-grant gate (AC2)", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
     expect(mockLogger.info).toHaveBeenCalled();
     expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
   });
@@ -289,7 +292,7 @@ describe("POST /api/webhooks/github — payload & routing", () => {
     );
   });
 
-  it("ignores workflow_run with non-failure conclusion (200, no inngest)", async () => {
+  it("ignores workflow_run with non-failure conclusion (200, no inngest, NO dedup row)", async () => {
     const req = makeRequest({
       body: { installation: { id: 42 }, workflow_run: { conclusion: "success" } },
       event: "workflow_run",
@@ -297,25 +300,39 @@ describe("POST /api/webhooks/github — payload & routing", () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    // Drop-before-dedup: the dominant no-op case writes NO processed_github_events row.
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
-  it("fires inngest for workflow_run with failure conclusion", async () => {
+  it("fires inngest for workflow_run with failure conclusion (and writes the dedup row)", async () => {
     const req = makeRequest({
       body: { installation: { id: 42 }, workflow_run: { conclusion: "failure" } },
       event: "workflow_run",
     });
     const res = await POST(req);
     expect(res.status).toBe(200);
+    expect(mockInsert).toHaveBeenCalledWith({ delivery_id: "delivery-abc-123" });
     expect(mockInngestSend).toHaveBeenCalledWith(
       expect.objectContaining({ name: "engineering.ci_failed" }),
     );
   });
 
-  it("ignores unsupported x-github-event headers with 200", async () => {
+  it("returns 200 with NO dedup row when payload has no installation.id (drop)", async () => {
+    // Raw-string body bypasses withDefaultRepo; no installation → drop before dispatch.
+    const raw = JSON.stringify({ action: "opened", repository: { full_name: "octo/repo" } });
+    const req = makeRequest({ body: raw, event: "pull_request" });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  it("ignores unsupported x-github-event headers with 200 (NO dedup row)", async () => {
     const req = makeRequest({ body: { installation: { id: 42 } }, event: "ping" });
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });
 
@@ -358,7 +375,10 @@ describe("POST /api/webhooks/github — repo-scoped founder resolution (BUG 1)",
     expect(res.status).toBe(404);
     expect(mockResolveFounder).not.toHaveBeenCalled();
     expect(mockInngestSend).not.toHaveBeenCalled();
-    expect(mockDeleteEq).toHaveBeenCalledTimes(1); // releaseDedupRow on 404
+    // Drop-before-dedup: no dedup row is written on the pre-dispatch 404 path,
+    // so there is nothing to release.
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
   });
 
   // AC4b: the ACTUAL prod signal (WEB-PLATFORM-3M) — an UNMAPPED event
@@ -389,10 +409,11 @@ describe("POST /api/webhooks/github — repo-scoped founder resolution (BUG 1)",
     expect(mockIsGranted).not.toHaveBeenCalled();
   });
 
-  // AC4c: a db-error from the repo-scoped resolver returns 500 + releaseDedupRow
-  // (re-drivable). GitHub retries 5xx, not 4xx — this distinction from the 404
-  // of none/ambiguous is load-bearing for redelivery.
-  it("repo-scoped resolver db-error → 500 + releaseDedupRow (re-drivable)", async () => {
+  // AC4c: a db-error from the repo-scoped resolver returns 500 (re-drivable).
+  // GitHub retries 5xx, not 4xx — this distinction from the 404 of none/ambiguous
+  // is load-bearing for redelivery. Drop-before-dedup: this is a pre-dispatch
+  // path, so NO dedup row is written (and none released).
+  it("repo-scoped resolver db-error → 500, no dedup row written (re-drivable)", async () => {
     mockResolveFounder.mockResolvedValueOnce({ kind: "db-error" });
     const req = makeRequest({
       body: {
@@ -404,7 +425,9 @@ describe("POST /api/webhooks/github — repo-scoped founder resolution (BUG 1)",
     });
     const res = await POST(req);
     expect(res.status).toBe(500);
-    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
+    // Drop-before-dedup: db-error is a pre-dispatch path — no row written, none released.
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 });

@@ -10,8 +10,10 @@ import { createHmac } from "node:crypto";
 // The route resolves non-push founders via `resolveSoloFounderForInstallation`
 // (server/resolve-founder-for-installation.ts). The load-bearing scenario is
 // the `>1` (ambiguous) fail-closed drop: NO founder selected, Sentry
-// `op:founder-ambiguous`, dedup released, 404, ZERO inngest.send, ZERO
-// isGranted. Cross-tenant misattribution is the brand-survival hazard.
+// `op:founder-ambiguous`, 404, ZERO inngest.send, ZERO isGranted. Under the
+// drop-before-dedup reorder the founder-resolution paths run BEFORE the dedup
+// INSERT, so these drops write NO processed_github_events row (nothing to
+// release). Cross-tenant misattribution is the brand-survival hazard.
 // ---------------------------------------------------------------------------
 
 const WEBHOOK_SECRET = "test-webhook-secret";
@@ -179,21 +181,23 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
     expect(sentPayload.data.installationId).toBe(INSTALLATION_ID);
   });
 
-  // Scenario 2 — zero match → 404 + dedup released, no dispatch.
-  test("zero match → 404, releaseDedupRow, zero inngest.send", async () => {
+  // Scenario 2 — zero match → 404, no dedup row written (drop-before-dedup).
+  test("zero match → 404, NO dedup row written, zero inngest.send", async () => {
     mockResolveFounder.mockResolvedValue({ kind: "none" });
     const res = await POST(
       makeRequest("pull_request", { installation: { id: INSTALLATION_ID } }),
     );
     expect(res.status).toBe(404);
-    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
+    // Founder 404 is a pre-dispatch path: no INSERT, so nothing to release.
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
     expect(mockSendWithRetry).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalled();
   });
 
   // Scenario 3 — >1 solo match → fail-closed drop (LOAD-BEARING).
-  test(">1 ambiguous → Sentry founder-ambiguous, 404, dedup released, ZERO dispatch & ZERO isGranted", async () => {
+  test(">1 ambiguous → Sentry founder-ambiguous, 404, NO dedup row written, ZERO dispatch & ZERO isGranted", async () => {
     mockResolveFounder.mockResolvedValue({ kind: "ambiguous", count: 2 });
     const res = await POST(
       makeRequest("pull_request", { installation: { id: INSTALLATION_ID } }),
@@ -204,7 +208,9 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
     expect(sentryOpts.tags.op).toBe("founder-ambiguous");
     expect(sentryOpts.tags.feature).toBe("github-webhook");
     expect(sentryOpts.level).toBe("error");
-    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
+    // Ambiguous is a pre-dispatch path: no INSERT, so nothing to release.
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
     expect(mockSendWithRetry).not.toHaveBeenCalled();
     expect(mockInngestSend).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
@@ -253,14 +259,16 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
   // Error under the same op (one report per failure — review P3 dedup). The
   // resolver is mocked here, so the route's captureException count is the
   // observable: it must be 0 on this branch.
-  test("resolver db-error → 500, dedup released, route does NOT double-report", async () => {
+  test("resolver db-error → 500, NO dedup row written, route does NOT double-report", async () => {
     mockResolveFounder.mockResolvedValue({ kind: "db-error" });
     const res = await POST(
       makeRequest("pull_request", { installation: { id: INSTALLATION_ID } }),
     );
     expect(res.status).toBe(500);
     expect(mockCaptureException).not.toHaveBeenCalled();
-    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
+    // Resolver db-error is a pre-dispatch path: no INSERT, nothing to release.
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
     expect(mockSendWithRetry).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
   });
@@ -334,7 +342,7 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
   // AC4: a non-push event with NO repository.full_name drops via the pre-compose
   // none/404 guard — NOT an ambiguous throw — AND does NOT issue the resolver
   // SELECT (the resolver is never called).
-  test("non-push with no repository.full_name → 404, resolver NOT called, dedup released", async () => {
+  test("non-push with no repository.full_name → 404, resolver NOT called, NO dedup row written", async () => {
     // Build the request directly to bypass makeRequest's default-repo injection.
     const body = JSON.stringify({
       installation: { id: INSTALLATION_ID },
@@ -354,7 +362,9 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
     expect(mockResolveFounder).not.toHaveBeenCalled();
     expect(mockSendWithRetry).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
-    expect(mockDeleteEq).toHaveBeenCalledTimes(1); // releaseDedupRow
+    // Drop-before-dedup: pre-compose 404 is a pre-dispatch path — no row written.
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
   });
 
   // AC4b: the ACTUAL prod signal — an UNMAPPED event (`check_suite`) reaches the
