@@ -26,6 +26,16 @@ When analyzing code, you systematically evaluate:
 - Analyze query execution plans when possible
 - Recommend query optimizations and proper eager loading
 
+### 2a. Database Write-Cost / Disk-IO
+Read latency and N+1 are not the whole DB story — on a managed Postgres (e.g. Supabase) the **Disk-IO budget** is usually driven by WRITES, not reads, and a write can be correct and fast yet still dominate the budget. For any new or modified `INSERT`/`UPDATE`/`DELETE` (supabase-js `.insert()/.update()/.delete()` or a migration), check:
+- **Write frequency** — estimate calls/day = write count × the path's trigger (per-request, per-webhook-delivery, per-cron-tick, per-row). One write on a per-event path is a high-frequency write.
+- **Per-event / per-request writes** — flag dedup, audit, log, heartbeat, and analytics inserts on hot paths; these are the modal Disk-IO offenders.
+- **WAL + full-page-writes (FPI)** — every write emits WAL, and the first write to a page after a checkpoint also emits a full-page image; high-frequency small writes amplify both.
+- **Autovacuum + index maintenance** — insert/delete churn drives autovacuum work and per-index write amplification (every index on the table is written too).
+- **Retention ≠ WAL bound** — retention sweeps bound row-COUNT, NOT WAL: a row deleted minutes later still cost its full WAL + FPI (and the DELETE costs more WAL). Never accept "a retention cron keeps the table small" as evidence the write is cheap.
+
+The #5736 lesson: a per-webhook-delivery dedup `INSERT` was 63% of prod WAL (`pg_stat_statements.wal_bytes`) despite a bounded row-count. When flagging one of these, give a back-of-envelope calls/day × per-write-WAL estimate, not just "this looks frequent."
+
 ### 3. Memory Management
 - Identify potential memory leaks
 - Check for unbounded data structures
