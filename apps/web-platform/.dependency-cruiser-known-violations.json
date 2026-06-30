@@ -1,0 +1,92 @@
+[
+  {
+    "type": "dependency",
+    "from": "app/(dashboard)/dashboard/page.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/chat/at-mention-dropdown.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/chat/message-bubble.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/chat/naming-nudge.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/chat/routed-leaders-strip.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/chat/subagent-group.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/onboarding/naming-modal.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/settings/connected-services-content.tsx",
+    "to": "server/providers.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/settings/conversation-names-settings.tsx",
+    "to": "server/domain-leaders.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "components/settings/conversation-names-settings.tsx",
+    "to": "server/team-names-validation.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-client-to-server-secret"
+    }
+  }
+]
