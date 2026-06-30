@@ -59,6 +59,7 @@ import {
   redactToken,
   mintInstallationToken,
   deferIfTier2Cron,
+  digestIssueExistsForDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -209,6 +210,35 @@ export async function cronCompetitiveAnalysisHandler({
     "run-started-at",
     async () => new Date().toISOString(),
   );
+
+  // #5786 — producer-side date-dedup (extends the #5751 community-monitor fix).
+  // If a real `[Scheduled] Competitive Analysis - <date>` digest already exists
+  // for today, skip the eval and post a healthy OK heartbeat — do NOT fall
+  // through to verify-output, whose run-window (updated_at >= THIS runStartedAt)
+  // would exclude the earlier issue and false-RED the skip.
+  // concurrency:{scope:"fn",limit:1} (registration below) serializes the two
+  // invocations, so the second's FRESH LIST read sees the first's create. Date
+  // anchor is runStartedAt.slice(0,10) (replay-stable). Fail-OPEN: a read error
+  // → spawn (a duplicate paper-cut beats a missed digest).
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      titlePrefix: "[Scheduled] Competitive Analysis -",
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-competitive-analysis",
+    }),
+  );
+  if (digestAlreadyExists) {
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: true,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-competitive-analysis",
+        logger,
+      });
+    });
+    return { ok: true };
+  }
 
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
