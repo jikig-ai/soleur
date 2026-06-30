@@ -375,6 +375,22 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    via `git hash-object` content_sha) took ~30 min and could have been
    zero-cost if the operator had grepped origin/main first.
 
+   **The collision window extends through `/ship`, not just work-time.** This
+   check at work-start is necessary but NOT sufficient: a sibling migration can
+   land on main DURING the (often 30–90 min) ship phase — especially under a
+   fast-moving-main burst where `/ship` Phase 7 performs repeated `git merge
+   origin/main` auto-syncs on `OPEN BEHIND`. Each sync that pulls in a sibling
+   `supabase/migrations/NNN_*.sql` sharing your prefix is a silent collision the
+   BEHIND loop pushes straight to CI (where the migration drift/shape gate fails,
+   ~16 min later). After ANY ship-time sync whose merge output lists
+   `supabase/migrations/`, re-run the prefix check above and renumber-during-ship
+   (`git mv` both up/down + update every in-repo reference: migration headers,
+   code comments, plan/tasks/learning) BEFORE the next push. **Why:** PR #5760 —
+   `114_disk_io_top_wal_statements` (a #5739-sibling) landed mid-ship; my
+   `114_prune_cron_job_run_details` collided and surfaced only at CI after ~6
+   auto-syncs; recovery was a renumber to 115. See
+   `knowledge-base/project/learnings/workflow-patterns/2026-06-30-migration-number-collision-mid-pipeline.md`.
+
    **Tracking row in the SAME transaction as the migration body.**
    The project's canonical `apps/web-platform/scripts/run-migrations.sh`
    writes `INSERT INTO public._schema_migrations (filename, content_sha)
