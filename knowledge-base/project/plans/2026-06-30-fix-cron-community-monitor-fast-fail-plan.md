@@ -11,6 +11,47 @@ status: draft
 
 # fix(cron): root-cause + harden `cron-community-monitor` daily `error` fast-fail 🐛
 
+## Enhancement Summary (deepen-plan 2026-06-30)
+
+Deepened with 5 parallel agents (observability-coverage, architecture-strategist,
+code-simplicity, silent-failure-hunter, Network-Outage L3 deep-dive) + 2 research
+agents. Load-bearing corrections folded in:
+
+1. **Leading pre-eval hypothesis is now concrete (H-B / codeload egress).** Network L3
+   deep-dive: `apps/web-platform/infra/cron-egress-allowlist.txt` allowlists
+   `github.com` + `api.github.com` but **NOT `codeload.github.com`** — the host a
+   `git clone --depth=1` redirects to for shallow pack delivery. nftables default-drop
+   (`cron-egress-nftables.sh:151,154`) → immediate kernel rejection → ~300 ms fast-fail.
+   This explains the symptom precisely. Open reconciliation: the gap is *standing* (no
+   allowlist change in-window), yet the eval ran 06-13→21 — so the 06-22 onset must be a
+   **CIDR/IP-rotation drift** (codeload's Fastly IPs falling out of the resolved
+   `github.com` CIDR set; cf. #5413 grace-window commit `f743bc263`). Phase 0 settles it.
+2. **H-A's reclaim already has an owner — my "no precedent" claim was WRONG.**
+   `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts` already sweeps
+   `soleur-*` dirs >60 min every 6 h (built for the leaked-clone→ENOSPC mode). H-A must
+   **route through / harden the GC**, never add a second divergent sweep; Phase 0 must
+   pull the GC's own health (was it down 06-13→22? — else H-A's accumulation narrative is
+   incoherent). New Phase 0.7.
+3. **Do NOT mutate `warnIfCronWorkspaceLowOnDisk`** — its docstring is an explicit
+   MUST-NEVER-THROW fleet-wide contract (`_cron-shared.ts:129-133`); flipping it fatal
+   could dark the whole cron fleet. Use a *separate* `assertCronWorkspaceFloor` fn if a
+   hard floor is wanted.
+4. **H-D was a category error** — it is a Phase-3 *deliverable*, not a cause. Demoted to a
+   Phase-0 **fork**: per observability review, `reportSilentFallback` emits on 3 channels
+   (`observability.ts:210,219-220` — Better Stack + pino→Sentry + direct
+   `captureException` with `feature`/`op` tags), and the sibling seo-aeo cron *does* carry
+   such an exception, proving the transport works. So the plan-time "no
+   `setup-ephemeral-workspace` exception" is EITHER (a) my fuzzy Sentry search missing it
+   (the catch ran — codeload H-B), OR (b) the catch did not run (re-discriminate). Phase 0
+   must definitively confirm presence/absence of that exception.
+5. **Decision collapsed to 1 datum then 1 datum** (simplicity): `duration_ms` forks
+   credit-ran (H-C, already resolved) vs pre-eval; then the clone-stderr / Sentry-exception
+   forks codeload-egress (H-B) vs disk (H-A). The H-A *build* is deferred until Phase 0
+   reproduces ENOSPC AND shows the GC failed.
+6. ADR-033 I5 widening confirmed sound (middleware already reads `data.errorSummary`,
+   `run-log.ts:158-189` — zero middleware change). Phase 4 test must assert the **literal**
+   `errorSummary` field name + exact scrubbed reason. Soak-enrollment + C4 prose trimmed.
+
 ## Overview
 
 `cron-community-monitor` (Inngest, `0 8 * * *` UTC) has posted a daily Sentry
@@ -92,47 +133,85 @@ aggregate-only), and the fix touches infra/observability, not data handling. No 
 data-movement surface.
 
 **Brand-survival threshold:** none — internal operator-facing monitoring tooling;
-single-operator product, no external user data surface. `cron-community-monitor.ts`
-is server code but matches no sensitive-path (auth/schema/migration/`.sql`) class.
-Reason recorded for preflight Check 6: this plan touches no sensitive path and adds
-no data-movement surface; it hardens observability and root-causes a fast-fail.
+single-operator product, no external user data surface.
+
+`threshold: none, reason: the diff touches apps/web-platform/server/** (a sensitive
+path) but adds no auth/data-movement/credential surface — it reclaims disk / corrects
+a token scope or egress allowlist / threads an existing scrubbed error string into
+routine_runs, and hardens observability for a cron fast-fail.` (scope-out bullet for
+preflight Check 6 / deepen Phase 4.6, since `cron-community-monitor.ts` lives under
+`apps/web-platform/server`.)
 
 ## Hypotheses
 
-Ranked; **each is a Phase-0-falsifiable branch.** The fix taken depends on which
-Phase 0 confirms. Per `hr-no-dashboard-eyeball-pull-data-yourself`, every branch is
-discriminated by a pulled datum, not a dashboard glance.
+**The whole investigation is a 2-step decision tree on pulled data** (`hr-no-dashboard-eyeball-pull-data-yourself`), not four co-equal branches:
 
-- **H-A — clone fast-fail, `ENOSPC` (disk full).** The 06-13→21 `missed` window was
-  mid-eval SIGKILLs (H11a). `teardownEphemeralWorkspace` runs in `finally` and is
-  **skipped on SIGKILL**, so each killed run orphaned a `soleur-cron-community-monitor-*`
-  workspace under `CRON_WORKSPACE_ROOT` (`/workspaces` on `/mnt/data`). Accumulation
-  could cross the volume full ~06-22 → `git clone` fails fast with *"No space left on
-  device"* every fire thereafter (monotonic, deterministic, daily — fits the regime
-  shape). `warnIfCronWorkspaceLowOnDisk` (`_cron-shared.ts:137`) would have WARNed
-  pre-fail. **Signal:** clone stderr in the `setup-ephemeral-workspace` Sentry event
-  / Better Stack contains `No space left on device`; `df`-style low-disk WARN events
-  present 06-2x. **Fix:** automated orphan-workspace reclaim (a sweep in
-  `setupEphemeralWorkspace` and/or a maintenance step) + **promote the low-disk warn
-  to a loud, self-diagnosing pre-clone failure** — never an operator SSH (`hr-no-ssh-fallback-in-runbooks`, `hr-all-infrastructure-provisioning-servers`).
-- **H-B — clone fast-fail, auth/egress/DNS.** Minted token lacks `contents:read`, or
-  the Tier-2 container egress firewall / DNS blocks the clone host. **Signal:** clone
-  stderr shows `403`/`Authentication failed`/`Could not resolve host`. **Fix:** token
-  scope (`DEFAULT_CRON_TOKEN_PERMISSIONS`) or egress-allowlist (`cron-egress-allowlist.txt`) correction.
-- **H-C — eval actually ran; credit (H10).** If Phase 0 shows `duration_ms ≫ 300`,
-  a `scheduled-output-missing` event, and spawn-non-zero, then it is the fleet credit
-  outage — **already resolved 2026-06-29**. **Fix:** verify recovery only + Sentry
-  monitor un-mute (below) + close as resolved-by-#5674-top-up. (Down-weighted: the
-  300 ms duration + missing output event argue against this for community-monitor.)
-- **H-D — error posted with no exception event (observability hole).** community-monitor
-  reaches a `?status=error` with no `reportSilentFallback` exception (the empirically
-  observed state). Whatever the proximate cause, the next pre-eval fast-fail is **not
-  self-diagnosing without SSH** — a defect in itself. **Fix:** the durable
-  observability deliverable below, regardless of A/B/C.
+```
+Step 1 — routine_runs.duration_ms of a fresh post-top-up fire (Phase 0.1/0.2):
+  ≫ 300 ms  → the eval RAN → H-C (Anthropic credit / H10) → already resolved 06-29 → NO code fix
+  ≈ 300 ms  → pre-eval fast-fail → go to Step 2
+Step 2 — the setup-workspace failure signal (clone stderr + Sentry exception, Phase 0.3/0.4):
+  "Connection refused"/firewall-drop on a codeload redirect → H-B (egress allowlist)
+  "No space left on device" + GC was down (Phase 0.7)         → H-A (disk / cron-workspace-gc)
+```
 
-> Network-outage checklist note: the `error`/clone hypotheses are connectivity-adjacent.
-> H-B explicitly puts **firewall + egress IP + DNS verification BEFORE** any
-> service-layer hypothesis, per `hr-ssh-diagnosis-verify-firewall`.
+- **H-B — clone fast-fail on egress (LEADING pre-eval hypothesis; strong repo evidence).**
+  `cron-egress-allowlist.txt` allowlists `github.com` + `api.github.com` but **NOT
+  `codeload.github.com`** — the host `git clone --depth=1` redirects to for shallow pack
+  delivery (documented off-allowlist in `learnings/bug-fixes/2026-06-10-sandbox-network-plane-not-token-plane-error-shape-triage.md:60-61`).
+  The nftables ruleset default-drops un-allowlisted dests at the kernel
+  (`cron-egress-nftables.sh:151,154`) → immediate rejection → ~300 ms (mint to
+  api.github.com succeeds; clone to codeload is dropped). **Open reconciliation Phase 0
+  must close:** the gap is *standing* (no in-window allowlist change) yet the eval ran
+  06-13→21, so the 06-22 onset is an **IP/CIDR drift** — codeload's Fastly IPs falling
+  out of the resolved `github.com` CIDR set the allowlist pins (`cron-egress-resolve.sh`;
+  cf. #5413 grace-window commit `f743bc263`, 06-16). **Signal:** clone stderr =
+  `Connection refused`/`Could not resolve host` (NOT a 403 auth error). **Fix:** add
+  `codeload.github.com` to `cron-egress-allowlist.txt` (+ the CIDR resolve set) with an
+  evidence comment, and amend ADR-052 (whose two-host model omits codeload). Verify
+  firewall/egress-IP/DNS BEFORE any token-scope hypothesis (`hr-ssh-diagnosis-verify-firewall`).
+- **H-A — clone fast-fail, `ENOSPC` (disk full) — reclaim already has an owner.** The
+  06-13→21 SIGKILLs (`teardownEphemeralWorkspace` runs in `finally`, skipped on SIGKILL)
+  orphan `soleur-*` workspaces under `CRON_WORKSPACE_ROOT` (`/workspaces`). **BUT
+  `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts` already sweeps
+  `soleur-*` dirs >60 min every 6 h** for exactly this leak — so H-A is **incoherent
+  unless the GC was itself down/failing 06-13→22** (a healthy GC would have reclaimed
+  ~36 times before 06-22). **Phase 0.7 pulls the GC health.** **Signal:** clone stderr =
+  `No space left on device` AND GC unhealthy in-window. **Fix (only if confirmed):** fix
+  the **GC** (its outage is the root cause) and/or tune its cadence/TTL; if a *synchronous*
+  pre-clone guard is genuinely needed, reuse the GC's exported `isSweepable` (do NOT fork
+  a second policy) and add a *separate* `assertCronWorkspaceFloor` fn (do NOT mutate the
+  MUST-NEVER-THROW `warnIfCronWorkspaceLowOnDisk`, `_cron-shared.ts:129-133`). **Defer the
+  build until Phase 0 reproduces ENOSPC + GC-down.**
+- **H-C — eval actually ran; credit (H10), already resolved.** `duration_ms ≫ 300` + a
+  `scheduled-output-missing` event + spawn-non-zero ⇒ the fleet credit outage (the sibling
+  seo-aeo signature) — topped up 2026-06-29. **Fix:** Phase 1 un-mute + a recovery
+  confirmation; no code. (Down-weighted for community-monitor by the 300 ms duration.)
+
+**Fork note (was "H-D") — the observability contradiction Phase 0 MUST resolve.** Whatever
+the cause, the durable diagnosis gap is real: the `setup-workspace` catch returns
+`{ok:false}` with no `errorSummary`, so `routine_runs.error_summary` is the generic
+`"cron returned ok:false"` fallback (`run-log.ts:185-189`). **However**,
+`reportSilentFallback` (`observability.ts:210,219-220`) emits on **three** channels —
+`logger.error`→Better Stack, pino→Sentry, and a direct `Sentry.captureException` tagged
+`feature:cron-community-monitor op:setup-ephemeral-workspace` — and the sibling seo-aeo
+cron *does* carry such an exception, proving the transport works.
+
+**The plan-time "no exception" finding is a SEARCH ARTIFACT, not evidence (silent-failure
+review, HIGH).** `Sentry.captureException(err, {tags, extra})` (`observability.ts:218-221`)
+does **not** pass the human `message` arg — so the Sentry issue **title = `err.message`**,
+which for the setup catch is the redacted git-clone stderr built at
+`_cron-claude-eval-substrate.ts:628-631` (e.g. `"git clone failed (exit 128 …): …"`). My
+plan-time free-text searches (`"setup-ephemeral-workspace"` = only a `tags.op` value;
+`"scaffold ephemeral"` = only the *dropped* `message` arg) appear **nowhere** in the title
+or body → a guaranteed false-negative. So the exception **very likely exists** under its
+git-clone-error title and my search simply could not match it. **Phase 0.3 MUST query by
+the `op:` TAG (`op:setup-ephemeral-workspace`), never free text.** The likely truth: the
+catch DID run (codeload H-B), and its exception title carries the decisive clone stderr.
+(DSN-unset — which would make `captureException` a silent no-op while `?status=error` still
+posts via the separate Crons-ingest `fetch` — is *refuted* by seo-aeo's event delivering
+fleet-wide.) The Phase-3 `error_summary` threading is the durable fix for the diagnosis gap
+**regardless of cause**, gated on Phase 0 confirming the catch is the executing path.
 
 ## Implementation Phases
 
@@ -153,24 +232,40 @@ discriminated by a pulled datum, not a dashboard glance.
    For `cron-community-monitor` rows 06-22→06-30: `status`, `error_summary`,
    `duration_ms`, `started_at` (start_lag vs 08:00), `trigger_source`. Settles the
    `completed`-vs-`failed` reconciliation and the real duration.
-0.3 **Sentry exception events** (not just the monitor alert). Confirm/refute the
-   plan-time finding that community-monitor has **no** `feature:cron-community-monitor`
-   exception (`op:setup-ephemeral-workspace` / `handler-body-threw` /
-   `scheduled-output-missing`). If one exists, read its title (the redacted clone
-   stderr / spawn tail) — that string discriminates H-A vs H-B vs H-C.
+0.3 **Sentry exception events — query by `op:` TAG, NOT free text.** The plan-time
+   free-text search was a guaranteed false-negative (the issue title = `err.message` =
+   the git-clone stderr, NOT the `op` tag / dropped message arg — see the fork note).
+   Pull `feature:cron-community-monitor` events filtered by tag
+   `op:setup-ephemeral-workspace` (and `op:handler-body-threw`,
+   `op:scheduled-output-missing`, `op:ensure-audit-issue-failed`). If the
+   `op:setup-ephemeral-workspace` event exists, **its title is the redacted git-clone
+   stderr**: `Connection refused`/`Could not resolve host` ⇒ H-B (codeload egress);
+   `No space left on device` ⇒ H-A; absence across ALL ops ⇒ the catch did not run,
+   re-discriminate. Also pull `feature:cron-sentry-heartbeat op:fetch` (the cross-tag
+   heartbeat-POST-failure blind spot a community-monitor-scoped search misses).
 0.4 **Better Stack stdout tail** of the freshest fire (`scripts/betterstack-query.sh`
    under `doppler run -p soleur -c prd_terraform`; hot retention ~1 h, so pull the
-   0.1 fire promptly): the `git clone` stderr line, the low-disk WARN, the last
-   `claude-eval`/`sentry-heartbeat` log line per run.
+   0.1 fire promptly): the `git clone` stderr line (codeload `Connection refused`
+   ⇒ H-B), the low-disk WARN, the last `claude-eval`/`sentry-heartbeat` log line per run.
 0.5 **Disk state** (H-A): from the freshest fire's Better Stack output and any
    `warnIfCronWorkspaceLowOnDisk` event, read the `CRON_WORKSPACE_ROOT` free bytes and
-   count orphaned `soleur-cron-community-monitor-*` dirs (read-only; no SSH — derive
-   from logged events, not a host shell).
+   count orphaned `soleur-*` dirs (read-only; no SSH). **Chicken-and-egg caveat:** if no
+   logged event carries free-bytes, H-A is **unconfirmable non-SSH on the current build**
+   — do NOT read absence as refutation; ship the Phase-2 H-A instrumentation and
+   discriminate on the next fire.
+0.7 **`cron-workspace-gc` health for 06-13→22** (load-bearing for H-A; the GC owns
+   orphan reclaim). Pull its Sentry monitor `scheduled-workspace-gc` check-ins +
+   `routine_runs` rows + the `workspace-gc-sweep-complete`/`workspace-gc-low-after-sweep`
+   freed-bytes events. **If the GC was healthy in-window, H-A's "disk filled over 8 days"
+   is REFUTED** (a 6 h-cadence GC reclaims orphans ~36× before 06-22) — so H-A stands
+   ONLY if the GC was itself down/failing, in which case **the GC outage is the root
+   cause**, not a reason to duplicate its sweep.
 0.6 **Write the verdict** into the plan's Research Reconciliation as a 1-paragraph
-   "Phase 0 finding": the named executing path + the discriminated branch (A/B/C/D),
-   with the citing datum. **This is the gate** — `/work` proceeds to the matching fix
-   branch only; if evidence is ambiguous, fire one more run and re-pull (do not guess
-   the layer — `2026-06-30-verify-the-fixed-code-path...`).
+   "Phase 0 finding": the named executing path + the discriminated branch (H-B / H-A /
+   H-C) + the citing datum (`duration_ms`, the `op:`-tag exception title, GC health).
+   **This is the gate** — `/work` proceeds to the matching fix branch only; if evidence
+   is ambiguous, fire one more run and re-pull (do not guess the layer —
+   `2026-06-30-verify-the-fixed-code-path...`).
 
 ### Phase 1 — Sentry monitor un-mute / re-enable (runs regardless of branch)
 
@@ -185,65 +280,87 @@ live-verified; the PUT is unverified — treat a 403 as the dashboard-fallback t
 
 ### Phase 2 — Conditional root-cause fix (branch on Phase 0 verdict)
 
-- **If H-A (ENOSPC):** add an **automated** orphan-workspace reclaim — sweep stale
-  `soleur-*` dirs older than a TTL under `CRON_WORKSPACE_ROOT` at the start of
-  `setupEphemeralWorkspace` (and/or a small maintenance step) — and **promote
-  `warnIfCronWorkspaceLowOnDisk` from warn-only to a loud pre-clone failure** below a
-  hard free-bytes floor so the next disk-fill is self-diagnosing (`error_summary` +
-  Sentry op carry the free-bytes). No SSH/operator disk step.
-- **If H-B (auth/egress):** correct `DEFAULT_CRON_TOKEN_PERMISSIONS` scope OR
-  `apps/web-platform/infra/cron-egress-allowlist.txt`; verify the firewall/egress IP
-  + DNS first (`hr-ssh-diagnosis-verify-firewall`). Egress/firewall changes route
-  through IaC (Phase 2.8), never a hand-edit on the host.
+- **If H-B (codeload egress — leading):** add `codeload.github.com` to
+  `apps/web-platform/infra/cron-egress-allowlist.txt` (+ the resolved CIDR set in
+  `cron-egress-resolve.sh`) with an evidence comment, and amend **ADR-052** (two-host →
+  three-host shallow-clone model). Verify firewall/egress-IP/DNS first
+  (`hr-ssh-diagnosis-verify-firewall`); route via IaC (Phase 2.8), never a host edit. If
+  Phase 0 instead shows a 403/auth stderr (not a firewall drop), the fix is
+  `DEFAULT_CRON_TOKEN_PERMISSIONS` scope, not the allowlist.
+- **If H-A (ENOSPC) — route through the EXISTING GC, do NOT add a second sweep.**
+  `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts` already owns
+  `soleur-*` reclaim. Fix is the **GC** (Phase 0.7 names its outage as root cause)
+  and/or tuning its cadence/TTL (`CRON_WORKSPACE_GC_MAX_AGE_MS`). If — and only if —
+  Phase 0 proves a *synchronous* pre-clone reclaim is genuinely required, **reuse the
+  GC's exported `isSweepable`** (extract a shared helper; never fork the policy), scoped
+  to `soleur-${cronName}-`, with a TTL exceeding worst-case total wall-clock ×
+  `retries:1`. For a hard low-disk floor, add a **separate** `assertCronWorkspaceFloor`
+  fn — do **NOT** mutate `warnIfCronWorkspaceLowOnDisk` (its `_cron-shared.ts:129-133`
+  docstring is a MUST-NEVER-THROW fleet-wide contract; flipping it fatal could dark the
+  whole cron fleet). **Defer this build until Phase 0 reproduces ENOSPC AND shows the GC
+  failed.** Also narrow H-A's orphan trigger: only a **Node/handler-process** kill
+  (container swap / OOM / deploy) skips the `finally` teardown — the I3 SIGTERM→SIGKILL
+  escalation kills the *claude child* and Node survives, so teardown still runs.
 - **If H-C (credit, already resolved):** no code fix; Phase 1 un-mute + a Phase-0
   recovery confirmation is the close. Record that #5674's top-up resolved it.
 
-### Phase 3 — Durable observability hardening (runs unless Phase 0 proves it already self-diagnosed)
+### Phase 3 — Durable observability hardening (gated on Phase 0 confirming the catch path executes)
 
-Close the H-D gap so a pre-eval fast-fail is **self-diagnosing without SSH**: the
-`setup-workspace` catch (`cron-community-monitor.ts:337-357`) currently returns
-`{ok:false}` with **no `errorSummary` field**, so `routine_runs.error_summary` falls
-back to the generic *"cron returned ok:false (see Sentry)"* (`run-log.ts:185-189`)
-and the cause lives only in a Sentry event that (empirically) was absent/ungroupable.
-Thread the redacted setup-failure reason into the handler's `{ok:false}` return so it
-lands in `routine_runs.error_summary` (and verify the `setup-ephemeral-workspace`
-Sentry event groups searchably). **Constraint:** preserve ADR-033 I5's deterministic
-`step.run` return shape — extend the *handler* return, not the substrate
-`SpawnResult`. Apply the same hardening to the cohort siblings only if the precedent
-diff (deepen-plan Phase 4.4) shows they share the gap (scope-out otherwise).
+Close the diagnosis gap so a pre-eval fast-fail is **self-diagnosing without SSH**. Two
+terminal `{ok:false}` sites in the handler currently drop the reason into the generic
+`routine_runs.error_summary` fallback *"cron returned ok:false (see Sentry)"*
+(`run-log.ts:64,185-189`):
+
+1. the `setup-workspace` catch return (`cron-community-monitor.ts:356`) — thread the
+   redacted clone/setup reason;
+2. **`return { ok: heartbeatOk }` (`:524`)** — the output-missing / body-threw /
+   ensure-audit-issue-failed paths — thread a scrubbed reason from `spawnResult.stderrTail`
+   / the captured `threw` error. (Silent-failure review: Phase 3 scoped to only `:356`
+   leaves these classes still-generic.)
+
+The middleware **already reads `data.errorSummary`** (`run-log.ts:158-189`, added by
+#5674) — **zero middleware change**; only the handler return widens
+`{ok:boolean}` → `{ok:boolean, errorSummary?:string}` (ADR-033 I5 preserved — the
+*handler* return, not `SpawnResult`). The `routine_runs` row is the durable, SSH-free fix;
+the Sentry `op:`-tagged exception already delivers (the "ungroupable" framing was a
+search-method artifact, not a code gap). Apply to cohort siblings only if the precedent
+diff (Phase 4.4) shows the shared gap. **Gate:** only ship Phase 3's `:356` threading if
+Phase 0 confirms the setup catch is the executing path (else it hardens a dormant path).
 
 ### Phase 4 — Regression test (cq-write-failing-tests-before)
 
-The repo-research-analyst confirmed **no** test exercises the `setupEphemeralWorkspace`
-throw → `error`-heartbeat flow. Add a RED-first test in
-`apps/web-platform/test/server/inngest/cron-community-monitor-heartbeat.test.ts` (or
-`cron-community-monitor.test.ts`): mock `setupEphemeralWorkspace` to throw a
-clone/ENOSPC error → assert exactly one `?status=error` heartbeat AND (Phase 3) that
-the handler return carries the scrubbed reason that the run-log middleware maps to
-`routine_runs.error_summary`. For H-A, add a substrate unit test in
-`cron-claude-eval-substrate.test.ts` for the orphan-reclaim sweep + the hard low-disk
-floor (synthesized fixtures only — `cq-test-fixtures-synthesized-only`).
+No existing test exercises the `setupEphemeralWorkspace`-throw → `error`-heartbeat flow.
+Add a RED-first test in `cron-community-monitor-heartbeat.test.ts`: mock
+`setupEphemeralWorkspace` to throw a clone error → assert (a) exactly one `?status=error`
+heartbeat, (b) on a **non-final** attempt the heartbeat step is skipped + the handler
+rethrows (memoization contract), and (c) the handler return carries the **literal**
+`errorSummary` field whose value the run-log middleware maps **exactly** to
+`routine_runs.error_summary` (assert string equality with the scrubbed reason, not merely
+"non-generic" — a typo'd field name compiles fine and silently degrades). Add a second
+case for the `:524` return path (output-missing). For H-A only, add a substrate test
+reusing `isSweepable` (synthesized fixtures — `cq-test-fixtures-synthesized-only`).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Phase 0 verdict recorded.** The plan/PR body names the executing path
-  for the 06-22→ `error` regime with a citing datum (`routine_runs.status` +
-  `error_summary` + `duration_ms` for a 06-22→06-30 row, and the Sentry exception
-  title or its confirmed absence). No code in the PR predates this verdict.
-- [ ] **AC2 — branch-matched fix only.** The diff implements exactly the Phase-0
-  branch (A/B/C/D); no fix for a layer Phase 0 did not confirm executes.
+- [ ] **AC1 — Phase 0 verdict + branch-matched diff (checkable post-condition).** The
+  PR body cites the selecting datum — `routine_runs.duration_ms` (+ `status`/`error_summary`)
+  for a 06-22→06-30 row AND, if pre-eval, the `op:`-tag Sentry exception title (clone
+  stderr) and `cron-workspace-gc` health — and the diff touches **only** that branch's
+  files (H-B: `cron-egress-allowlist.txt`/ADR-052; H-A: `cron-workspace-gc.ts`; H-C: none).
+  (Replaces the prior AC1+AC2; drops the unverifiable "no code predates verdict" clause.)
 - [ ] **AC3 — regression test RED→GREEN.** The Phase 4 test fails on `main` (or a
   stubbed pre-fix tree) and passes post-fix: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-community-monitor-heartbeat.test.ts test/server/inngest/cron-claude-eval-substrate.test.ts`.
-- [ ] **AC4 — observability post-condition (Phase 3).** A simulated `setup-workspace`
-  throw yields a non-generic `routine_runs.error_summary` carrying the scrubbed
-  reason (asserted in the test against the run-log mapping), not the
-  `"cron returned ok:false"` fallback.
+- [ ] **AC4 — observability post-condition (Phase 3).** A simulated throw at **both**
+  return sites (`:356` setup catch AND `:524`) yields a `routine_runs.error_summary`
+  **equal** (string equality) to the scrubbed reason, not the
+  `"cron returned ok:false (see Sentry)"` fallback — asserted via the run-log mapping with
+  the literal `errorSummary` field name.
 - [ ] **AC5 — typecheck.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] **AC6 — no ADR/C4 drift.** `### C4 views` enumeration holds (no new external
-  actor/system/relationship); `apps/web-platform/test/c4-code-syntax.test.ts` +
-  `c4-render.test.ts` green if touched.
+- [ ] **AC6 — ADR/C4.** No C4 drift (no new external actor/system/relationship). On
+  branch H-B, ADR-052 is **amended** (two-host → three-host) in this PR — not deferred.
+  `c4-code-syntax.test.ts` + `c4-render.test.ts` green if any `.c4` touched (none expected).
 - [ ] **AC7 — PR body uses `Ref #5732`** (not `Closes`) if any verification/close step
   is post-merge/operator-gated; otherwise `Closes #5732`.
 
@@ -255,9 +372,10 @@ floor (synthesized fixtures only — `cq-test-fixtures-synthesized-only`).
   via `routine_runs` + the Sentry checkins endpoint (no dashboard eyeball).
 - [ ] **AC9 — monitor healthy.** `GET …/monitors/scheduled-community-monitor/` returns
   `status:active, isMuted:false` and a fresh `ok` check-in (Phase 1).
-- [ ] **AC10 — soak follow-through enrolled.** AC8's "stays `ok` for N days" close
-  criterion is enrolled as a follow-through probe (see Soak section), not left to
-  memory.
+- [ ] **AC10 — soak follow-through enrolled by REUSING the existing probe.** AC8's
+  "stays `ok` for N days" is tracked by re-pointing
+  `scripts/followthroughs/community-monitor-checkin-soak-5728.sh`'s tracker directive at
+  #5732 (`earliest=<deploy+Nd>`), not by building a new script (see Soak section).
 
 ## Observability
 
@@ -271,45 +389,40 @@ error_reporting:
   destination: Sentry via reportSilentFallback (feature:cron-community-monitor) + routine_runs.error_summary (Supabase, via run-log.ts middleware)
   fail_loud: true  # Phase 3 promotes the setup-workspace catch reason into routine_runs.error_summary (no longer the generic "cron returned ok:false" fallback)
 failure_modes:
-  - mode: pre-eval clone ENOSPC (H-A)
-    detection: clone stderr "No space left on device" in setup-ephemeral-workspace Sentry event + low-disk WARN; routine_runs.error_summary (Phase 3)
-    alert_route: Sentry monitor error + scheduled-output-missing audit issue
-  - mode: pre-eval clone auth/egress/DNS (H-B)
-    detection: clone stderr 403/auth/resolve-host in Sentry event / Better Stack tail
-    alert_route: Sentry monitor error
+  - mode: pre-eval clone egress drop — codeload.github.com not allowlisted (H-B, leading)
+    detection: setup-ephemeral-workspace Sentry exception (query op: TAG) titled with clone stderr "Connection refused"/"Could not resolve host"; Better Stack tail; routine_runs.error_summary (after Phase 3)
+    alert_route: Sentry monitor scheduled-community-monitor error
+  - mode: pre-eval clone ENOSPC — orphan workspaces, GC outage (H-A)
+    detection: setup-ephemeral-workspace Sentry exception titled "No space left on device" + scheduled-workspace-gc monitor unhealthy + workspace-gc-low-after-sweep freed-bytes events
+    alert_route: Sentry monitor scheduled-community-monitor error + scheduled-workspace-gc monitor
   - mode: eval ran, credit/key (H-C / H10)
-    detection: cron-anthropic-credit-probe RED (op=anthropic-credit-exhausted) + scheduled-output-missing event + duration_ms >> 300
-    alert_route: scheduled-anthropic-credit-probe monitor + community-monitor monitor
-  - mode: error posted with no exception event (H-D)
-    detection: Sentry checkin error with NO feature:cron-community-monitor exception (the plan-time observed gap) — closed by Phase 3
-    alert_route: Sentry monitor error (generic) → Phase 3 makes it self-diagnosing
+    detection: scheduled-anthropic-credit-probe RED (op=anthropic-credit-exhausted) + scheduled-output-missing event + duration_ms >> 300
+    alert_route: Sentry monitor scheduled-anthropic-credit-probe + scheduled-community-monitor
+  - mode: heartbeat POST itself fails (cross-tag blind spot)
+    detection: feature:cron-sentry-heartbeat op:fetch Sentry event (NOT under feature:cron-community-monitor); monitor then sees neither ok nor error -> missed
+    alert_route: Sentry monitor missed-checkin backstop (margin 60m)
 logs:
   where: Better Stack (Vector-shipped app stdout/stderr tail; ADR-033 I5 discards full stdout — only the bounded SpawnResult tail + reportSilentFallback reach Sentry) ; routine_runs (Supabase, durable)
   retention: Better Stack hot ~1h ; routine_runs durable (middleware since 2026-06-16)
 discoverability_test:
-  command: "doppler run -p soleur -c prd -- <transient node+pg verify script> 'select status,error_summary,duration_ms,started_at from routine_runs where routine=$1 and started_at > now() - interval $2 order by started_at desc' (params: cron-community-monitor, '10 days')  AND  doppler run -p soleur -c prd_terraform -- curl -s .../monitors/scheduled-community-monitor/checkins/"
-  expected_output: post-fix — most recent row status=completed/ok with a real duration and a digest issue filed; Sentry checkin status=ok
+  command: "doppler run -p soleur -c prd -- node scripts/<routine-runs-verify>.mjs cron-community-monitor 10   # transient node+pg read per the routine_runs runbook (no SSH)  AND  doppler run -p soleur -c prd_terraform -- curl -s -H \"Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN\" https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-community-monitor/checkins/"
+  expected_output: "recovered: most recent routine_runs row status=completed with multi-second duration + a [Scheduled] Community Monitor digest issue; Sentry checkin status=ok. failure (Phase 3 proof): a setup fast-fail row is status=failed with error_summary = the scrubbed clone reason (NOT 'cron returned ok:false')."
 ```
 
 ## Architecture Decision (ADR/C4)
 
-**No architectural decision.** This is a bug fix + observability hardening inside the
-existing Inngest claude-eval cron substrate (ADR-033 governs; no invariant changes —
-Phase 3 explicitly preserves I5's deterministic `step.run` return shape by extending
-the *handler* return, not `SpawnResult`). If Phase 0 lands H-B (egress/firewall), the
-change routes through existing IaC (`cron-egress-allowlist.txt`) under an established
-pattern — still not a new decision.
+**No architectural decision.** Bug fix + observability hardening inside the existing
+Inngest claude-eval cron substrate (ADR-033 governs; no invariant change — Phase 3
+preserves I5 by widening the *handler* return, not `SpawnResult`). **One amendment, not
+a new ADR:** if Phase 0 lands H-B, adding `codeload.github.com` to the egress allowlist
+**amends ADR-052** (whose two-host model omits codeload) — an extension of an existing
+decision, authored in this PR per `wg-architecture-decision-is-a-plan-deliverable`.
 
-**### C4 views — no impact (enumerated against all three `.c4` files).** Reviewed
-`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`:
-(a) **external human actors** — none added (the operator already models the cron
-consumer); (b) **external systems/vendors** — Discord/X/Bluesky/LinkedIn/HN/GitHub
-already modeled as the community-monitor's external read sources; no new vendor edge
-(Anthropic/Sentry/Better Stack/Supabase already present); (c) **containers/data
-stores** — none added (`routine_runs` in Supabase already modeled); (d)
-**access relationships** — unchanged. The fix adds no element, tag, or edge — it
-reclaims disk / corrects scope / threads an existing error string. `### C4 views`
-task: none. (Deepen-plan re-verifies this enumeration against the live `.c4`.)
+**### C4 views — no impact.** Enumerated against all three `.c4` files
+(`knowledge-base/engineering/architecture/diagrams/{model,views,spec}.c4`): no external
+human actor, vendor edge (codeload is the same GitHub system already modeled), data
+store, or access relationship is added. `### C4 views` task: none. (Deepen re-verifies
+against the live `.c4`.)
 
 ## Domain Review
 
@@ -319,10 +432,13 @@ strategy (advisory only).
 
 ### Engineering (CTO)
 **Status:** to-confirm at deepen-plan/domain-sweep
-**Assessment:** Cron substrate bug + observability hardening. Risk surfaces: (1) the
-H-A orphan-reclaim sweep must not delete a *live* concurrent run's workspace (TTL +
-the `account:cron-platform limit:1` concurrency bounds this); (2) Phase 3 must
-preserve ADR-033 I5; (3) any egress/disk remediation must be automated, never SSH.
+**Assessment:** Cron substrate bug + observability hardening. Risk surfaces: (1) H-A
+reclaim is **owned by the existing `cron-workspace-gc.ts`** — do not add a duplicate
+sweep; if a synchronous guard is needed reuse `isSweepable` (the `cron-platform limit:1`
+concurrency + the GC's >maxAge mtime gate already bound live-workspace deletion); (2)
+do NOT flip the MUST-NEVER-THROW `warnIfCronWorkspaceLowOnDisk` fatal (fleet blast
+radius) — use a separate fn; (3) Phase 3 preserves ADR-033 I5; (4) all egress/disk
+remediation automated, never SSH.
 
 ### Product/UX Gate
 **Tier:** NONE — no user-facing surface; `## Files to Edit` contains no `components/**`,
@@ -337,49 +453,54 @@ None — to be confirmed at deepen-plan once `## Files to Edit` is finalized
 
 ## Files to Edit (provisional — finalized by Phase 0 branch)
 
-- `apps/web-platform/server/inngest/functions/cron-community-monitor.ts` — Phase 3 (thread setup-failure reason into the `{ok:false}` return).
-- `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts` — H-A (orphan-reclaim sweep + hard low-disk floor in `setupEphemeralWorkspace`).
-- `apps/web-platform/server/inngest/functions/_cron-shared.ts` — H-A (`warnIfCronWorkspaceLowOnDisk` → loud failure) / H-B (`DEFAULT_CRON_TOKEN_PERMISSIONS`).
-- `apps/web-platform/infra/cron-egress-allowlist.txt` — H-B only.
-- `apps/web-platform/test/server/inngest/cron-community-monitor-heartbeat.test.ts` — Phase 4.
-- `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts` — Phase 4 (H-A sweep/floor).
+- `apps/web-platform/server/inngest/functions/cron-community-monitor.ts` — Phase 3 (thread scrubbed reason into BOTH `{ok:false}` returns: `:356` + `:524`).
+- `apps/web-platform/infra/cron-egress-allowlist.txt` + `apps/web-platform/infra/cron-egress-resolve.sh` — **H-B** (add `codeload.github.com`).
+- `knowledge-base/engineering/architecture/decisions/ADR-052-*.md` — **H-B** (two-host → three-host amendment).
+- `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts` — **H-A only** (fix/tune the GC; reuse `isSweepable` if a synchronous guard is needed). Do NOT add a new sweep to `setupEphemeralWorkspace`; do NOT mutate `warnIfCronWorkspaceLowOnDisk`.
+- `apps/web-platform/test/server/inngest/cron-community-monitor-heartbeat.test.ts` — Phase 4 (both return sites + non-final-attempt suppression).
+- `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts` — Phase 4 (H-A only, `isSweepable`).
 
 ## Soak Follow-Through Enrollment
 
-AC8/AC9 declare a post-deploy soak ("digest + `ok` check-in hold for N days"). Enroll
-a probe `scripts/followthroughs/community-monitor-recovered-<5732>.sh` (mirror
-`community-monitor-checkin-soak-5728.sh` / `reconcile-ff-only-sentry-4977.sh`, `start=`
-pinned strictly after deploy; exit 0 when the soak holds), add the tracker's
-`<!-- soleur:followthrough script=… earliest=<deploy+Nd> secrets=SENTRY_IAC_AUTH_TOKEN,DATABASE_URL_POOLER -->`
-directive + `follow-through` label, and wire any new `secrets=` into
-`.github/workflows/scheduled-followthrough-sweeper.yml`. Builds at /work, enforced at
-ship Phase 5.5.
+AC8/AC9 declare a post-deploy soak ("digest + `ok` check-in hold for N days"). **Reuse the
+existing probe — do NOT build a new one** (simplicity review: a new script + secrets +
+sweeper wiring for an internal cron is gold-plating). `scripts/followthroughs/community-monitor-checkin-soak-5728.sh`
+already soaks the `scheduled-community-monitor` check-in timeline; re-point its tracker
+directive at #5732 with `earliest=<deploy+Nd>` (and `start=` strictly after this deploy)
+and the `follow-through` label. Only add a new probe if Phase 0 lands H-A/H-B and the close
+criterion needs a `routine_runs`-duration assertion the checkin soak can't express.
 
 ## Test Scenarios
 
 1. `setupEphemeralWorkspace` throws a clone error → handler posts exactly one
-   `?status=error` heartbeat, returns `{ok:false}` carrying the scrubbed reason; no
+   `?status=error` heartbeat AND the `{ok:false}` return carries the scrubbed reason; no
    second/conflicting heartbeat (memoization-safe).
-2. `DeployInProgressError` from `setup-workspace` → bare rethrow, NO heartbeat (benign
+2. **Non-final attempt:** body throws with no output on attempt 0 (maxAttempts 2) →
+   heartbeat step skipped + handler rethrows (no interim `routine_runs` row).
+3. `DeployInProgressError` from `setup-workspace` → bare rethrow, NO heartbeat (benign
    defer; unchanged — regression guard).
-3. (H-A) `setupEphemeralWorkspace` with N stale `soleur-*` dirs present → sweep removes
-   only those older than the TTL, never the current run's `spawnCwd`.
-4. (H-A) free bytes below the hard floor → loud pre-clone failure with free-bytes in
-   the error, not a silent warn-and-continue.
-5. (Phase 3) run-log middleware maps the handler's `{ok:false, errorSummary}` to a
-   non-generic `routine_runs.error_summary`.
+4. (Phase 3) run-log middleware maps the handler's `{ok:false, errorSummary}` to a
+   `routine_runs.error_summary` **equal** to the scrubbed reason — for BOTH the `:356`
+   setup-catch return AND the `:524` output-missing return.
+5. (H-A only) `isSweepable` removes only `soleur-*` dirs older than the GC TTL, never the
+   current run's `spawnCwd`.
 
 ## Risks & Sharp Edges
 
-- **Wrong-layer fix (the headline risk).** Shipping a code fix before Phase 0 names
-  the executing path repeats the 2026-06-30 Concierge-strand failure (two merged fixes
-  the surface never executed). Phase 0 is a hard gate; AC1/AC2 enforce it.
+- **Wrong-layer fix (the headline risk).** Shipping a code fix before Phase 0 names the
+  executing path repeats the 2026-06-30 Concierge-strand failure (two merged fixes the
+  surface never executed). Phase 0 is a hard gate; AC1 enforces it. Acute here because the
+  plan-time "no Sentry exception" was a *search artifact* (title = clone stderr, not the
+  `op` tag) — Phase 0.3 MUST query by `op:` tag before concluding anything.
 - **A plan whose `## User-Brand Impact` is empty/placeholder fails deepen-plan Phase
-  4.6** — filled above (threshold `none` + reason).
-- **H-A sweep deleting a live workspace.** Bound by TTL + `cron-platform` concurrency
-  limit 1; test scenario 3 guards it.
-- **ADR-033 I5 drift.** Phase 3 must extend the handler return, not `SpawnResult`;
-  deepen-plan Phase 4.4 precedent-diff against the cohort.
+  4.6** — filled above (threshold `none` + scope-out reason).
+- **H-A duplicating `cron-workspace-gc`.** Reclaim already has an owner; route through it
+  (Phase 0.7 confirms whether the GC was the failing layer). Do not add a second sweep; do
+  not flip `warnIfCronWorkspaceLowOnDisk` fatal (fleet blast radius).
+- **Phase 3 under-scope.** Two `{ok:false}` return sites (`:356`, `:524`) — both must
+  carry `errorSummary` or the output-missing/body-threw classes stay generic.
+- **ADR-033 I5 drift.** Phase 3 widens the handler return, not `SpawnResult`; Phase 4.4
+  precedent-diff against the cohort.
 - **`Closes` vs `Ref`.** If recovery/un-mute is post-merge, use `Ref #5732` + a
   post-merge `gh issue close` after AC8 confirms (`wg-use-closes-n-in-pr-body-not-title`
   / the ops-remediation Sharp Edge).
