@@ -15,6 +15,7 @@ const {
   mockRename,
   mockRm,
   mockMkdir,
+  mockIsValid,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
   mockGitWithInstallationAuth: vi.fn(),
@@ -23,9 +24,17 @@ const {
   mockRename: vi.fn(),
   mockRm: vi.fn(),
   mockMkdir: vi.fn(),
+  mockIsValid: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({ existsSync: mockExistsSync }));
+// 2026-06-19 — the pre-move sentinel re-check now keys on worktree VALIDITY (a
+// stale empty-corrupt `.git` must NOT make the winner skip); mock the helper so
+// the loser-skips-on-a-VALID-`.git` decision is driven directly.
+vi.mock("@/server/git-worktree-validity", () => ({
+  isValidGitWorkTree: mockIsValid,
+  isEmptyCorruptGitDir: vi.fn(() => false),
+}));
 vi.mock("node:fs/promises", () => ({
   readdir: mockReaddir,
   cp: mockCp,
@@ -54,6 +63,7 @@ beforeEach(() => {
   mockRename.mockResolvedValue(undefined);
   mockRm.mockResolvedValue(undefined);
   mockMkdir.mockResolvedValue(undefined);
+  mockIsValid.mockReturnValue(false); // default: no valid `.git` yet → winner grafts
 });
 
 describe("realGraftRepoClone concurrency hardening", () => {
@@ -95,10 +105,12 @@ describe("realGraftRepoClone concurrency hardening", () => {
     expect(tmpA).not.toBe(tmpB);
   });
 
-  it("skips the .git rename when a concurrent attempt grafted first (no ENOTEMPTY)", async () => {
-    // `.git` is absent at the top-level guard but APPEARS by the pre-move
-    // re-check (the winning concurrent attempt grafted while this one cloned).
+  it("skips the .git rename when a concurrent attempt grafted a VALID .git first (no ENOTEMPTY)", async () => {
+    // A VALID `.git` APPEARS by the pre-move re-check (the winning concurrent
+    // attempt grafted while this one cloned). 2026-06-19: the re-check keys on
+    // validity, so a VALID winner makes the loser skip.
     mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(true); // winner's VALID .git now present
     await realGraftRepoClone(WS, REPO, 123);
     expect(mockRename).not.toHaveBeenCalled();
     // The loser still cleans up its own unique temp dir.

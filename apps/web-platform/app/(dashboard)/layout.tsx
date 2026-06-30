@@ -23,6 +23,7 @@ import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-ite
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { SupportLauncher } from "@/components/support/support-launcher";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
@@ -104,6 +105,7 @@ export function PaymentWarningBanner({
 const NAV_ICONS: Record<string, (props: { className?: string }) => React.JSX.Element> = {
   "/dashboard": GridIcon,
   "/dashboard/inbox": InboxIcon,
+  "/dashboard/workstream": KanbanIcon,
   "/dashboard/kb": BookIcon,
   "/dashboard/routines": RepeatIcon,
   "/dashboard/admin/analytics": ChartIcon,
@@ -568,6 +570,9 @@ export default function DashboardLayout({
         command-palette flag is off (enabled=false). */}
     <CommandPalette />
     <HelpOverlay />
+    {/* feat-support-interface — flag-gated floating support launcher + slide-over.
+        No-op when the `support` flag is off (renders null internally). */}
+    <SupportLauncher />
     </ShortcutsProvider>
     </RailCollapsedProvider>
     </RailSlotProvider>
@@ -761,6 +766,24 @@ function ChartIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
+      />
+    </svg>
+  );
+}
+
+function KanbanIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.75 5.25h4.5v13.5h-4.5V5.25Zm6 0h4.5v9h-4.5v-9Zm6 0h4.5v6h-4.5v-6Z"
       />
     </svg>
   );

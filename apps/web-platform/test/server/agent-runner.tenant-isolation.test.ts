@@ -149,6 +149,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           custom_name: `Synthetic ${user.id.slice(0, 8)}`,
         });
         expect(nameError, `seed team_names for ${user.email}`).toBeNull();
+
+        // Seed workspaces.github_installation_id (ADR-044: the credential
+        // moved off `users` to the trigger-created `workspaces` row, mig 112).
+        // UPDATE the row the mig-053 trigger pre-creates (INSERT would
+        // PK-collide). Read/deny goes through resolve_workspace_installation_id.
+        const { error: wsError } = await service
+          .from("workspaces")
+          .update({ github_installation_id: parseInt(user.id.slice(0, 8), 16) })
+          .eq("id", user.id);
+        expect(wsError, `seed workspaces for ${user.email}`).toBeNull();
       }
 
       // 3. Mint runtime JWTs for A and B via tenant.ts (the SUT).
@@ -260,17 +270,47 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     // Per user-impact-reviewer FINDING 5 (#3244): the `users` SELECT site at
-    // session start is a high-value cross-tenant probe surface. A leak of
-    // `github_installation_id` enumerates which founders connected which
-    // GitHub orgs. Per RLS-policy `Users can read own profile` (auth.uid() = id),
-    // a cross-founder probe must return zero rows.
+    // session start is a high-value cross-tenant probe surface. Per RLS-policy
+    // `Users can read own profile` (auth.uid() = id), a cross-founder probe
+    // must return zero rows. The columns this originally probed
+    // (`workspace_path`, `github_installation_id`) were dropped from `users`
+    // by mig 112 (ADR-044 PR-2b); we probe the surviving `users` columns so
+    // the `auth.uid() = id` RLS deny stays covered.
     test("users: A's JWT cannot read B's users row (RLS deny via auth.uid()=id)", async () => {
       const { data, error } = await aClient
         .from("users")
-        .select("workspace_path, repo_status, github_installation_id")
+        .select("email, role")
         .eq("id", userB.id);
       expect(error).toBeNull();
       expect(data).toEqual([]);
+    });
+
+    // The `github_installation_id` enumeration concern from FINDING 5 now
+    // lives on `workspaces` (REVOKE'd from `authenticated`, mig 079), reachable
+    // only via the membership-scoped `resolve_workspace_installation_id` RPC.
+    // A non-member caller gets NULL (deny == not-connected by design), never
+    // B's seeded installation id.
+
+    // Positive control (pairs with the deny below so it is non-vacuous): A
+    // resolves its OWN workspace's seeded installation id via the RPC. Without
+    // this, a broken RPC that returned NULL for everyone would make the deny
+    // pass green-but-wrong.
+    test("baseline: A resolves own github_installation_id via workspaces RPC", async () => {
+      const { data, error } = await aClient.rpc(
+        "resolve_workspace_installation_id",
+        { p_workspace_id: userA.id },
+      );
+      expect(error).toBeNull();
+      expect(Number(data)).toBe(parseInt(userA.id.slice(0, 8), 16));
+    });
+
+    test("github_installation_id: A cannot resolve B's installation id (membership deny → NULL)", async () => {
+      const { data, error } = await aClient.rpc(
+        "resolve_workspace_installation_id",
+        { p_workspace_id: userB.id },
+      );
+      expect(error).toBeNull();
+      expect(data).toBeNull();
     });
 
     // Per user-impact-reviewer FINDING 4 (#3244): team_names is a known

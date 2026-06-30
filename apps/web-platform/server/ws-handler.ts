@@ -226,6 +226,29 @@ const DISCONNECT_GRACE_MS = 30_000;
  * any turn-boundary lifecycle hook needs wiring on BOTH lineages.
  */
 export function runDisconnectGraceAbort(uid: string, convId: string): void {
+  // Host-local owning-host guard (TR2 — epic #5274 Phase 1, ADR-068 §5).
+  // A live local OPEN socket for this user means they have reconnected. This
+  // CLOSES A REAL replicas=1 RACE: the auth/connect handler registers the new
+  // socket (`sessions.set`) BEFORE its `pendingDisconnects`-cancel loop runs —
+  // and that cancel sits behind three awaited workspace-bind DB calls
+  // (resolveCurrentOrganizationId / getWorkspaceForUserInOrganization /
+  // getDefaultWorkspaceForUser). A 30s grace timer expiring in that window would
+  // otherwise abort a just-reconnected live turn (#5240). This guard relies on
+  // `sessions` being keyed by userId (one live socket per user), so an OPEN entry
+  // means the user is back — the same user-level semantics as that cancel loop,
+  // which clears every `${userId}:`-prefixed timer regardless of conversation. It
+  // also localises the ownership decision inside this function — the one seam
+  // Phase 3 routes through the coordinator/Postgres lease so a reconnect landing
+  // on ANOTHER host no longer lets this host abort a now-remote-live session. NO
+  // host_id / lease / poll in Phase 1.
+  const live = sessions.get(uid);
+  if (live && live.ws.readyState === WebSocket.OPEN) {
+    log.info(
+      { userId: uid, conversationId: convId },
+      "Reconnected on this host before grace fired — skipping grace abort (owning-host guard)",
+    );
+    return;
+  }
   log.info(
     { userId: uid, conversationId: convId },
     "Grace period expired, aborting session",
@@ -765,10 +788,18 @@ export async function refreshSubscriptionStatus(
     // Non-deterministic which over-cap session gets closed — all of them
     // will on their next refresh tick, converging within one interval.
     const newCap = effectiveCap(session.planTier, session.concurrencyOverride);
+    // Freshness-filter the count so crashed-but-unreaped slots don't trigger a
+    // false eviction. Mirrors the acquire-RPC self-reap (093:79-81) and the
+    // sibling slot probes (:526 divergence, :2013 sibling-slot). Load-bearing
+    // for the migration-115 throttle (#5738): the slots sweep moved */15 → hourly,
+    // so stale rows linger up to ~1h; without this filter a downgraded user with
+    // a stale slot would be falsely evicted on the next refresh tick.
+    const liveCutoff = new Date(Date.now() - 120_000).toISOString();
     const { count, error: countErr } = await tenant
       .from("user_concurrency_slots")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .gte("last_heartbeat_at", liveCutoff);
     if (!countErr && typeof count === "number" && count > newCap) {
       const convId = session.conversationId ?? session.pending?.id;
       log.info(

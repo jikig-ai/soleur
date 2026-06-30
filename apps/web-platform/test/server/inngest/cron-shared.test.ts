@@ -40,12 +40,19 @@ vi.mock("@/server/github/probe-octokit", () => ({
 }));
 
 import {
+  AnthropicApiError,
+  classifyEvalFatal,
   deferIfTier2Cron,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
+  digestIssueExistsForDate,
   ensureScheduledAuditIssue,
+  formatTailForSentry,
+  isRealScheduledDigest,
   mintInstallationToken,
   postAnthropicMessage,
+  postSentryHeartbeat,
   REPO_NAME,
+  resolveBestEffortEvalOk,
   resolveOutputAwareOk,
   ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   TIER2_DEFERRED_CRONS,
@@ -822,5 +829,450 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     });
 
     expect(result).toEqual({ text: "", stopReason: "end_turn" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5674 — formatTailForSentry + classify-fatal resolver + AnthropicApiError.
+// ---------------------------------------------------------------------------
+
+// Runtime-constructed token shapes that MATCH the redaction-allowlist regexes
+// (sk-ant-[A-Za-z0-9_-]{20,}, ghs_[A-Za-z0-9_-]{20,}) WITHOUT a literal
+// sk-ant-<alnum> string in the source (GitHub push-protection Sharp Edge — the
+// secret only exists at runtime, assembled from non-secret fragments).
+const SYNTH_SK_ANT = "sk-ant-" + "A".repeat(40);
+const SYNTH_GHS = "ghs_" + "B".repeat(40);
+// Standalone Supabase secret-grade tokens (sbp_ management token, sb_secret_
+// key) — secret-shaped, regex-matching the allowlist, no literal token in
+// source (push-protection Sharp Edge). review #5680 hardening.
+const SYNTH_SBP = "sbp_" + "c".repeat(40);
+const SYNTH_SB_SECRET = "sb_secret_" + "D".repeat(30);
+
+describe("formatTailForSentry (multi-secret scrub + slice)", () => {
+  it("strips an sk-ant key AND an installation-token-shaped string (AC2)", () => {
+    const tail = `boot ok\nAPI Error: invalid x-api-key ${SYNTH_SK_ANT} and ${SYNTH_GHS} leaked`;
+    const out = formatTailForSentry(tail);
+    expect(out).toBeDefined();
+    expect(out).not.toContain(SYNTH_SK_ANT);
+    expect(out).not.toContain(SYNTH_GHS);
+  });
+
+  it("strips bare standalone Supabase secret tokens (sbp_ / sb_secret_) (review #5680)", () => {
+    const tail = `crash stack\nleaked ${SYNTH_SBP} and ${SYNTH_SB_SECRET} in trace`;
+    const out = formatTailForSentry(tail);
+    expect(out).toBeDefined();
+    expect(out).not.toContain(SYNTH_SBP);
+    expect(out).not.toContain(SYNTH_SB_SECRET);
+    // public-grade publishable key is NOT secret — left intact
+    const pub = "sb_publishable_" + "e".repeat(30);
+    expect(formatTailForSentry(`url uses ${pub}`)).toContain(pub);
+  });
+
+  it("returns undefined for empty/absent input (caller omits the key)", () => {
+    expect(formatTailForSentry(undefined)).toBeUndefined();
+    expect(formatTailForSentry("")).toBeUndefined();
+  });
+
+  it("preserves the human-readable cause line (reason survives scrub, AC6)", () => {
+    const tail = `Credit balance is too low. Visit billing. token ${SYNTH_SK_ANT} here`;
+    const out = formatTailForSentry(tail);
+    expect(out).toContain("Credit balance is too low");
+    expect(out).not.toContain(SYNTH_SK_ANT);
+  });
+});
+
+describe("classifyEvalFatal", () => {
+  const base = { exitCode: 1, abortedByTimeout: false, stdoutTail: "", stderrTail: "" };
+
+  it("credit-balance tail → fatal credit-exhausted", () => {
+    const c = classifyEvalFatal({ ...base, stdoutTail: "Credit balance is too low" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("credit-exhausted");
+  });
+
+  it("auth marker tail → fatal auth-failure", () => {
+    const c = classifyEvalFatal({ ...base, stderrTail: "API Error: invalid x-api-key" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("auth-failure");
+  });
+
+  it("abortedByTimeout → fatal timeout", () => {
+    const c = classifyEvalFatal({ ...base, abortedByTimeout: true });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("timeout");
+  });
+
+  it("exitCode -1 (spawn never started) → fatal spawn-fault", () => {
+    const c = classifyEvalFatal({ ...base, exitCode: -1 });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("spawn-fault");
+  });
+
+  it("plain non-zero with no marker → NOT fatal (benign)", () => {
+    const c = classifyEvalFatal({ ...base, stdoutTail: "Reached max turns; no artifact." });
+    expect(c.fatal).toBe(false);
+  });
+});
+
+describe("resolveBestEffortEvalOk (classify-fatal heartbeat)", () => {
+  const FATAL_TAIL = {
+    ok: false,
+    exitCode: 1,
+    abortedByTimeout: false,
+    durationMs: 1234,
+    stdoutTail: `Credit balance is too low. token ${SYNTH_SK_ANT}`,
+    stderrTail: "",
+  };
+
+  it("FATAL credit tail → ok:false + scrubbed reason in sentryExtra (AC1)", () => {
+    const d = resolveBestEffortEvalOk(FATAL_TAIL);
+    expect(d.ok).toBe(false);
+    expect(d.errorSummary).toMatch(/credit balance is too low/i);
+    // Scrubbed tail present, secret absent (AC1 + AC6).
+    expect(d.sentryExtra.stdoutTail).toContain("Credit balance is too low");
+    expect(JSON.stringify(d.sentryExtra)).not.toContain(SYNTH_SK_ANT);
+    expect(d.sentryExtra.fatalClass).toBe("credit-exhausted");
+  });
+
+  it("BENIGN max-turns non-zero → ok:true (monitor stays GREEN) + reason recorded (the #4730 carve-out)", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: false,
+      exitCode: 1,
+      abortedByTimeout: false,
+      durationMs: 42,
+      stdoutTail: "Reached max turns with no artifact this cycle.",
+      stderrTail: "",
+    });
+    expect(d.ok).toBe(true); // <-- flip-all would have made this false (false page)
+    expect(d.errorSummary).toMatch(/non-zero/i);
+    expect(d.sentryExtra.fatalClass).toBe("benign");
+  });
+
+  it("clean exit (ok:true) → ok:true, no reason", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: true,
+      exitCode: 0,
+      abortedByTimeout: false,
+      durationMs: 10,
+      stdoutTail: "done",
+      stderrTail: "",
+    });
+    expect(d.ok).toBe(true);
+    expect(d.errorSummary).toBeUndefined();
+  });
+});
+
+describe("AnthropicApiError (widened transport, #5674)", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("throws a typed AnthropicApiError carrying status + scrubbed bodyExcerpt on non-ok", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Credit balance is too low" } }),
+        { status: 400 },
+      ),
+    );
+    const err = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic",
+      model: "claude-sonnet-4-6",
+      maxTokens: 1,
+      messages: [{ role: "user", content: "ping" }],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnthropicApiError);
+    expect((err as AnthropicApiError).status).toBe(400);
+    expect((err as AnthropicApiError).bodyExcerpt).toMatch(/credit balance is too low/i);
+    // Backward-compatible message prefix (existing callers/tests match it).
+    expect((err as Error).message).toContain("Anthropic API 400");
+  });
+
+  it("backward-compat: `Anthropic API <status>` substring still matches (AC8)", async () => {
+    fetchSpy.mockResolvedValue(new Response("upstream error", { status: 503 }));
+    await expect(
+      postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic",
+        model: "claude-sonnet-4-6",
+        maxTokens: 1,
+        messages: [{ role: "user", content: "x" }],
+      }),
+    ).rejects.toThrow("Anthropic API 503");
+  });
+});
+
+describe("resolveOutputAwareOk — F1 retrofit (scheduled-output-missing extra is scrubbed)", () => {
+  it("routes the stdout/stderr tails through formatTailForSentry (no raw sk-ant in the extra, AC2)", async () => {
+    const octokit = octokitReturning([]); // no issue → output-missing
+    await resolveOutputAwareOk({
+      spawnOk: true,
+      label: "scheduled-roadmap-review",
+      runStartedAt: RUN_START,
+      cronName: "cron-roadmap-review",
+      octokit,
+      stdoutTail: `max-turns. leaked ${SYNTH_SK_ANT} here`,
+      stderrTail: `boom ${SYNTH_GHS}`,
+      exitCode: 0,
+    });
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    const extra = reportSilentFallbackSpy.mock.calls[0][1].extra as Record<string, unknown>;
+    const serialized = JSON.stringify(extra);
+    expect(serialized).not.toContain(SYNTH_SK_ANT);
+    expect(serialized).not.toContain(SYNTH_GHS);
+  });
+});
+
+// #5728 — heartbeat POST delivery robustness. The pre-fix postSentryHeartbeat
+// POSTed ONCE and never inspected resp.ok, so (a) a transient 5xx/timeout/network
+// drop of the OK check-in left a silent `missed` (the 2026-06-13→06-21 H3 class),
+// and (b) a resolved non-2xx was treated as success. These tests pin the new
+// contract: inspect resp.ok, bounded-retry on 5xx/network/timeout ONLY (never a
+// 4xx), then fall back to reportSilentFallback once retries are exhausted. The
+// retry wall-clock is bounded by construction (SENTRY_HEARTBEAT_TOTAL_BUDGET_MS,
+// well under the 60-min check-in margin) — asserted structurally via the
+// at-most-MAX_ATTEMPTS fetch-call cap, not a flaky timing assertion.
+describe("postSentryHeartbeat — delivery robustness (#5728)", () => {
+  const VALID_DOMAIN = "o4509.ingest.sentry.io";
+  const VALID_PROJECT = "4509999";
+  const VALID_PUBLIC_KEY = "abcdef0123456789abcdef0123456789";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+  const call = (ok = true) =>
+    postSentryHeartbeat({
+      ok,
+      sentryMonitorSlug: "scheduled-community-monitor",
+      cronName: "cron-community-monitor",
+      logger,
+    });
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", VALID_DOMAIN);
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", VALID_PUBLIC_KEY);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    logger.info.mockClear();
+    logger.warn.mockClear();
+    logger.error.mockClear();
+  });
+
+  it("posts exactly once and does NOT fall back when the first POST succeeds (200)", async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 202 }));
+    await call(false); // ok:false avoids the best-effort cron-fires file write
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    // posts the error status on the documented ?status= query shape
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url).toContain(`/cron/scheduled-community-monitor/${VALID_PUBLIC_KEY}/?status=error`);
+  });
+
+  it("retries a transient 5xx and succeeds on the 200 — one effective check-in, no fallback", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response("upstream", { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await call(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient network failure and succeeds on the 200 — no fallback", async () => {
+    fetchSpy
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await call(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("treats a resolved non-2xx (all 5xx) as failure → bounded retries then ONE reportSilentFallback (today's silently-swallowed gap)", async () => {
+    fetchSpy.mockResolvedValue(new Response("upstream", { status: 500 }));
+    await call(false);
+    // bounded — never more than MAX_ATTEMPTS POSTs
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy.mock.calls[0][1].feature).toBe("cron-sentry-heartbeat");
+  });
+
+  it("does NOT retry a 4xx (permanent bad-slug/DSN) — posts once, falls back immediately", async () => {
+    fetchSpy.mockResolvedValue(new Response("bad request", { status: 400 }));
+    await call(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("exhausts retries on repeated timeouts then falls back once (bounded)", async () => {
+    fetchSpy.mockRejectedValue(
+      Object.assign(new Error("The operation timed out."), { name: "TimeoutError" }),
+    );
+    await call(false);
+    // Lower bound is load-bearing: a regression that STOPPED retrying timeouts
+    // (post once → straight to fallback) yields exactly 1 call, which is <= 3 and
+    // would pass without it. Assert the retry actually fired, bounded by the cap.
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// digestIssueExistsForDate / isRealScheduledDigest (#5751) — producer-side
+// date-dedup. Distinct from ensureScheduledAuditIssue's title-dedup (which
+// INTENTIONALLY counts FAILED/audit stubs to avoid double-auditing): this read
+// must EXCLUDE those stubs so a same-day recovery still files the real digest.
+// ---------------------------------------------------------------------------
+
+const CM_LABEL = "scheduled-community-monitor";
+const CM_PREFIX = "[Scheduled] Community Monitor -";
+const CM_DATE = "2026-06-30";
+
+function octokitReturningIssues(
+  issues: Array<{ title?: string | null; body?: string | null }>,
+) {
+  const request = vi.fn().mockResolvedValue({ data: issues });
+  return { request } as unknown as Parameters<
+    typeof digestIssueExistsForDate
+  >[0]["octokit"] & { request: typeof request };
+}
+
+describe("isRealScheduledDigest", () => {
+  it("matches a real digest with today's dated title", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} ${CM_DATE}`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(true);
+  });
+
+  it("EXCLUDES the audit FAILED self-report (byte-identical dated title, hardcoded body)", () => {
+    expect(
+      isRealScheduledDigest(
+        {
+          title: `${CM_PREFIX} ${CM_DATE}`,
+          body: "Automated FAILED self-report from `cron-community-monitor`.",
+        },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES the no-platform `- FAILED` title (no date suffix)", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} FAILED`, body: "misconfig" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES a real digest for a DIFFERENT date (replay-stable anchor)", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} 2026-06-29`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES a coincidental-date issue whose title merely ENDS in the date (positive-anchor)", () => {
+    // A human/triage issue like `Investigate community drop 2026-06-30` ends in
+    // today's date but is NOT the canonical digest title. The old
+    // endsWith(date) check misclassified it as a real digest → would suppress
+    // the genuine digest. The positive title-shape anchor closes that gap.
+    expect(
+      isRealScheduledDigest(
+        { title: `Investigate community drop ${CM_DATE}`, body: "looks low" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES an LLM-drifted `- FAILED - <date>` title (positive-anchor)", () => {
+    // A drifted title that both ends in the date AND carries `- FAILED` would
+    // have slipped past endsWith(date) (the dead /-FAILED$/ belt only matched a
+    // trailing FAILED). Only the exact canonical title counts now.
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} FAILED - ${CM_DATE}`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("digestIssueExistsForDate", () => {
+  it("returns true when a real digest exists for the date", async () => {
+    const octokit = octokitReturningIssues([
+      { title: `${CM_PREFIX} ${CM_DATE}`, body: "## Platform Status" },
+    ]);
+    const exists = await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    expect(exists).toBe(true);
+  });
+
+  it("returns false when only a FAILED audit stub exists (does NOT suppress a real digest)", async () => {
+    const octokit = octokitReturningIssues([
+      {
+        title: `${CM_PREFIX} ${CM_DATE}`,
+        body: "Automated FAILED self-report from `cron-community-monitor`.",
+      },
+    ]);
+    const exists = await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    expect(exists).toBe(false);
+  });
+
+  it("reads the fresh LIST endpoint (sort=created desc, state=all, labels)", async () => {
+    const octokit = octokitReturningIssues([]);
+    await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    const [route, params] = octokit.request.mock.calls[0];
+    expect(route).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(params).toMatchObject({
+      labels: CM_LABEL,
+      state: "all",
+      sort: "created",
+      direction: "desc",
+    });
+  });
+
+  it("fails OPEN (returns false) and reports when the LIST read throws", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("GitHub 502"));
+    const octokit = { request } as unknown as Parameters<
+      typeof digestIssueExistsForDate
+    >[0]["octokit"];
+    const exists = await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    expect(exists).toBe(false);
+    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    expect(
+      reportSilentFallbackSpy.mock.calls.some(
+        (c) => c[1]?.op === "digest-dedup-read-failed",
+      ),
+    ).toBe(true);
   });
 });
