@@ -695,6 +695,98 @@ export async function verifyScheduledIssueCreated(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Producer-side date-dedup (#5751) — "does a REAL `${label}` digest already
+// exist for <date>?" so a second serialized invocation (the 08:00 cron + an
+// operator manual-trigger, or a doubled delivery) does NOT file a duplicate
+// full digest. Distinct from BOTH siblings:
+//   - verifyScheduledIssueCreated reads the RUN WINDOW (updated_at >= a single
+//     invocation's runStartedAt) for the heartbeat; this reads the whole day.
+//   - ensureScheduledAuditIssue's title-dedup INTENTIONALLY counts FAILED/audit
+//     stubs (to avoid double-auditing); this read EXCLUDES them so a same-day
+//     recovery still files the real digest (zero-digest guard, P1).
+//
+// Fresh LIST/REST index (GET /issues?labels=…), NOT the in-prompt
+// `gh issue list --search '… in:title'`: the search index lags minutes behind
+// the primary index, so the second invocation's search did not see the first's
+// issue (the #5751 H-C miss). concurrency:{scope:"fn",limit:1} serializes the
+// two invocations, so the second's LIST read runs after the first's create.
+//
+// FAIL-OPEN (P1): a duplicate digest is a single-operator paper-cut; a MISSED
+// digest blinds the only community-health signal. On any read error we report
+// and return false (→ caller spawns), mirroring resolveOutputAwareOk's
+// verify-throw fallback. The octokit is injectable purely for unit tests.
+// ---------------------------------------------------------------------------
+
+// Single-sourced contract strings (#5751 review). The stub-exclusion predicate
+// (isRealScheduledDigest) and the producers that MINT these shapes must move
+// together — independent drift silently breaks the zero-digest guard (a digest
+// whose title/body no longer matches gets misclassified, suppressing the real
+// one). The community-monitor handler passes SCHEDULED_DIGEST_TITLE_PREFIX as
+// its ensureScheduledAuditIssue `titlePrefix`; ensureScheduledAuditIssue mints
+// the audit body from AUDIT_SELF_REPORT_BODY_PREFIX.
+export const SCHEDULED_DIGEST_TITLE_PREFIX = "[Scheduled] Community Monitor -";
+export const AUDIT_SELF_REPORT_BODY_PREFIX = "Automated FAILED self-report";
+
+/**
+ * Pure predicate: is `issue` a REAL scheduled digest for `date` (YYYY-MM-DD)?
+ * Positive title-shape anchor: ONLY the exact canonical digest title for `date`
+ * counts. This excludes a coincidental-date issue (e.g. `Investigate community
+ * drop <date>`) and an LLM-drifted `… - FAILED - <date>` title — both of which
+ * an `endsWith(date)` check would misclassify as a real digest and suppress the
+ * genuine one. The handler-level audit fallback files the BYTE-IDENTICAL
+ * `${SCHEDULED_DIGEST_TITLE_PREFIX} ${date}` title, so it is excluded by body.
+ */
+export function isRealScheduledDigest(
+  issue: { title?: string | null; body?: string | null },
+  date: string,
+): boolean {
+  const title = (issue.title ?? "").trim();
+  // Positive anchor: ONLY the exact canonical digest title for THIS date counts.
+  // Excludes coincidental-date issues and the no-platform `- FAILED` title.
+  // Fail-OPEN on title drift: a slightly-different title → no dedup → a duplicate
+  // (paper-cut), never zero-digest.
+  if (title !== `${SCHEDULED_DIGEST_TITLE_PREFIX} ${date}`) return false;
+  // Audit fallback files the BYTE-IDENTICAL title → exclude it by body.
+  if ((issue.body ?? "").startsWith(AUDIT_SELF_REPORT_BODY_PREFIX)) return false;
+  return true;
+}
+
+export async function digestIssueExistsForDate(args: {
+  label: string;
+  date: string;
+  cronName: string;
+  octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
+}): Promise<boolean> {
+  const { label, date, cronName, octokit } = args;
+  try {
+    const client = octokit ?? (await createProbeOctokit());
+    // Explicit sort:created desc + per_page:10 so today's issue is guaranteed on
+    // page 1 (matches ensureScheduledAuditIssue's dedup read shape).
+    const res = await client.request("GET /repos/{owner}/{repo}/issues", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      state: "all",
+      labels: label,
+      sort: "created",
+      direction: "desc",
+      per_page: 10,
+      headers: { "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    const issues = res.data as Array<{ title?: string | null; body?: string | null }>;
+    return issues.some((i) => isRealScheduledDigest(i, date));
+  } catch (err) {
+    // Fail-OPEN: a transient GitHub error must not become a missed digest.
+    reportSilentFallback(err, {
+      feature: cronName,
+      op: "digest-dedup-read-failed",
+      message: `Could not read ${label} digests for date-dedup (failing OPEN → will spawn)`,
+      extra: { fn: cronName, label, date },
+    });
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Output-aware heartbeat resolver — the value each always-create producer
 // feeds to postSentryHeartbeat instead of the bare spawn exit code.
 //
@@ -1106,7 +1198,7 @@ export async function ensureScheduledAuditIssue(args: {
   // failure is triageable without SSH (app stdout is not shipped to Better
   // Stack). The tails are already token-redacted by the eval substrate.
   const body =
-    `Automated FAILED self-report from \`${cronName}\`.\n\n` +
+    `${AUDIT_SELF_REPORT_BODY_PREFIX} from \`${cronName}\`.\n\n` +
     `This run terminated WITHOUT producing a \`${label}\` ` +
     `audit issue via the prompt (mid-eval crash / upstream API error / ` +
     `max-turns kill). The handler-level fallback (#4960) filed this issue so ` +
