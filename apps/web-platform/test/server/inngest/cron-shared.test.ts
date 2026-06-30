@@ -44,8 +44,10 @@ import {
   classifyEvalFatal,
   deferIfTier2Cron,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
+  digestIssueExistsForDate,
   ensureScheduledAuditIssue,
   formatTailForSentry,
+  isRealScheduledDigest,
   mintInstallationToken,
   postAnthropicMessage,
   postSentryHeartbeat,
@@ -1117,5 +1119,160 @@ describe("postSentryHeartbeat — delivery robustness (#5728)", () => {
     expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(3);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// digestIssueExistsForDate / isRealScheduledDigest (#5751) — producer-side
+// date-dedup. Distinct from ensureScheduledAuditIssue's title-dedup (which
+// INTENTIONALLY counts FAILED/audit stubs to avoid double-auditing): this read
+// must EXCLUDE those stubs so a same-day recovery still files the real digest.
+// ---------------------------------------------------------------------------
+
+const CM_LABEL = "scheduled-community-monitor";
+const CM_PREFIX = "[Scheduled] Community Monitor -";
+const CM_DATE = "2026-06-30";
+
+function octokitReturningIssues(
+  issues: Array<{ title?: string | null; body?: string | null }>,
+) {
+  const request = vi.fn().mockResolvedValue({ data: issues });
+  return { request } as unknown as Parameters<
+    typeof digestIssueExistsForDate
+  >[0]["octokit"] & { request: typeof request };
+}
+
+describe("isRealScheduledDigest", () => {
+  it("matches a real digest with today's dated title", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} ${CM_DATE}`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(true);
+  });
+
+  it("EXCLUDES the audit FAILED self-report (byte-identical dated title, hardcoded body)", () => {
+    expect(
+      isRealScheduledDigest(
+        {
+          title: `${CM_PREFIX} ${CM_DATE}`,
+          body: "Automated FAILED self-report from `cron-community-monitor`.",
+        },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES the no-platform `- FAILED` title (no date suffix)", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} FAILED`, body: "misconfig" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES a real digest for a DIFFERENT date (replay-stable anchor)", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} 2026-06-29`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES a coincidental-date issue whose title merely ENDS in the date (positive-anchor)", () => {
+    // A human/triage issue like `Investigate community drop 2026-06-30` ends in
+    // today's date but is NOT the canonical digest title. The old
+    // endsWith(date) check misclassified it as a real digest → would suppress
+    // the genuine digest. The positive title-shape anchor closes that gap.
+    expect(
+      isRealScheduledDigest(
+        { title: `Investigate community drop ${CM_DATE}`, body: "looks low" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES an LLM-drifted `- FAILED - <date>` title (positive-anchor)", () => {
+    // A drifted title that both ends in the date AND carries `- FAILED` would
+    // have slipped past endsWith(date) (the dead /-FAILED$/ belt only matched a
+    // trailing FAILED). Only the exact canonical title counts now.
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} FAILED - ${CM_DATE}`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("digestIssueExistsForDate", () => {
+  it("returns true when a real digest exists for the date", async () => {
+    const octokit = octokitReturningIssues([
+      { title: `${CM_PREFIX} ${CM_DATE}`, body: "## Platform Status" },
+    ]);
+    const exists = await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    expect(exists).toBe(true);
+  });
+
+  it("returns false when only a FAILED audit stub exists (does NOT suppress a real digest)", async () => {
+    const octokit = octokitReturningIssues([
+      {
+        title: `${CM_PREFIX} ${CM_DATE}`,
+        body: "Automated FAILED self-report from `cron-community-monitor`.",
+      },
+    ]);
+    const exists = await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    expect(exists).toBe(false);
+  });
+
+  it("reads the fresh LIST endpoint (sort=created desc, state=all, labels)", async () => {
+    const octokit = octokitReturningIssues([]);
+    await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    const [route, params] = octokit.request.mock.calls[0];
+    expect(route).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(params).toMatchObject({
+      labels: CM_LABEL,
+      state: "all",
+      sort: "created",
+      direction: "desc",
+    });
+  });
+
+  it("fails OPEN (returns false) and reports when the LIST read throws", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("GitHub 502"));
+    const octokit = { request } as unknown as Parameters<
+      typeof digestIssueExistsForDate
+    >[0]["octokit"];
+    const exists = await digestIssueExistsForDate({
+      label: CM_LABEL,
+      date: CM_DATE,
+      cronName: "cron-community-monitor",
+      octokit,
+    });
+    expect(exists).toBe(false);
+    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    expect(
+      reportSilentFallbackSpy.mock.calls.some(
+        (c) => c[1]?.op === "digest-dedup-read-failed",
+      ),
+    ).toBe(true);
   });
 });
