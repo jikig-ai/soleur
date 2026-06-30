@@ -847,6 +847,19 @@ resource "sentry_cron_monitor" "scheduled_seo_aeo_audit" {
   timezone                = "UTC"
 }
 
+# Weekly Sun 02:00 UTC — architecture diagram sync (claude-eval, 60-min budget).
+resource "sentry_cron_monitor" "scheduled_architecture_diagram_sync" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-architecture-diagram-sync"
+  schedule                = { crontab = "0 2 * * 0" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 65
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Weekly Mon 06:00 UTC — Plausible analytics snapshot (spawns
 # weekly-analytics.sh; no explicit cap → 15-min runtime budget).
 resource "sentry_cron_monitor" "scheduled_weekly_analytics" {

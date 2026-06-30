@@ -594,6 +594,44 @@ that is **deterministically re-cloned**:
   pg_temp`, REVOKE/GRANT precedent per migration 108; the membership check is
   retained.)
 
+### Amendment 2026-06-30 (#5733) — the in-process dispatch clone is the authoritative same-FS lander; absent/dir-invalid + empty-output are strands
+
+A third multi-workspace defect on the same dispatch surface: a connected
+workspace (`754ee124`) whose `/workspaces/<id>/.git` is **ABSENT** stranded
+`/soleur:go` Step 0.0 while emitting ZERO server-side signal — every prior
+re-clone mechanism (push-reconcile, `/api/repo/setup` reconnect) failed to land
+the repo, and the cold dispatch path's existing in-process clone outcome was
+**silently discarded**. Decided here:
+
+- **The authoritative lander is the IN-PROCESS dispatch-time clone.** The repo
+  re-clone the agent depends on MUST run in the SAME process that constructs the
+  agent sandbox (the cc-dispatcher cold path, `ensureWorkspaceRepoCloned` into the
+  agent's own `workspacePath` — the one placement guaranteed to share the agent's
+  bwrap filesystem), keyed on the **workspace's OWN `github_installation_id`**
+  (never the dispatching user's membership-resolved install, never founder/owner
+  resolution — the #5591 owner-canary drift makes founder resolution unusable).
+  Out-of-process re-clones (Inngest reconcile, cron) are best-effort backstops
+  only; they are NOT guaranteed to share the agent's filesystem (an open
+  FS/mount-divergence question for multi-replica `/workspaces` — tracked for a
+  same-container periodic backstop if confirmed).
+- **The clone outcome must be consumed LOUDLY, never swallowed.** On a `"failed"`
+  clone a distinct, paging `repo_clone_failed` Sentry event fires with the
+  git-token-redacted + path/url-sanitized reason (ADR-029 pseudonymization), and
+  the dispatch honest-blocks. The `repo_status→error` write is **F4-gated**: only
+  on the solo/owner path (`workspaceId===userId`) AND after a post-clone
+  `.git`-absence CAS (a member must not flip a co-owned workspace's shared status;
+  a concurrent winner's fresh `ready` must never be clobbered). The pre-existing
+  `graftReadyButGitAbsent` failure write is gated identically (matching the
+  corrupt sibling's emit-only team posture). cc-dispatcher stays OFF the
+  service-role allowlist (no new column read).
+- **The DB `repo_status` is NOT authoritative over on-disk reality.** The shared
+  dispatch gate (`evaluateAgentReadiness`) treats `absent`/`dir-invalid` `.git` as
+  a confirmed terminal strand on the **post-heal** surface (cold/warm) →
+  honest-block + `agent_readiness_self_stop`; on the **pre-heal** surface
+  (reconcile, which re-clones the same shape one line later) it does NOT emit
+  (soak-signal guard). The agent's in-sandbox Step 0.0 `git rev-parse … 2>/dev/null
+  || true` EMPTY output is also a strand signal (the C2 in-sandbox backstop).
+
 ### C4 edge note
 
 No `.c4` model edit. C4 enumeration for this change (all already covered or
@@ -1187,8 +1225,11 @@ migration `075` (#4520). The reconcile attribution now tolerates N owners
 (deterministic self-row/earliest pick; "owner-less" warns only on genuinely zero
 owners). Reconciling the single-owner ownership RPCs (`transfer_workspace_ownership`,
 the `update_workspace_member_role` owner-promotion block) to the multi-owner model
-is tracked as a follow-up; this ADR records the direction, the dedicated ADR
-captures the supersession.
+is tracked as a follow-up; this ADR records the direction, and the dedicated
+decision-of-record is now **ADR-073** (multi-owner workspaces + the
+`organizations.owner_user_id` primary-owner pointer), which captures the
+supersession and additionally pins the `owner_user_id` pointer semantics under
+N owners.
 
 ## Amendment 2026-06-30 — dispatch readiness adds a host `git rev-parse` confirm for `dir-valid` worktrees (SUPERSEDES the 2026-06-19 zero-await trade-off for the connected cold path) + an agent-context observability backstop (#5733)
 

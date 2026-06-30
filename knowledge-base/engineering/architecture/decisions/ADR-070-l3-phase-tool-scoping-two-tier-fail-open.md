@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-30
+- **Amended:** 2026-06-30 (#5772 — shared-registry resolution; see Amendment below)
 - **Issue:** #5768 (L3 "Execution" gap of the harness 5-layer analysis)
 - **Deferred follow-up:** #5772 (web/SDK parity)
 
@@ -113,3 +114,48 @@ skills/agents the model foregrounds per phase — **without removing anything**.
   evidenced operator-side.
 - The two-tier fail-open rule is now the binding constraint for any future
   tool-surface scoping work, especially #5772.
+
+## Amendment — 2026-06-30 (#5772): shared-registry resolution + web lever 1
+
+The original Decision (above) is unchanged. This amendment resolves the
+"Canonical shared-registry location" sub-decision that the Decision explicitly
+deferred to "#5772 build time", and records how lever 1 shipped on the web.
+
+**Shared-registry location — resolved: bundled `.ts` copy + CI parity test.**
+The canonical map stays at `.claude/phase-surface-map.json` (the CLI hook's
+source). The web SDK agent gets a bundled copy at
+`apps/web-platform/server/phase-surface-map.ts` (a `.ts` const, guaranteed
+compiled into `dist/server` regardless of build mechanism), guarded by
+`apps/web-platform/test/phase-surface-map-parity.test.ts` which deep-equals it
+against the canonical JSON and fails CI on drift (the ADR-053 three-coupling
+pattern). Rejected alternatives:
+
+- **Read `.claude/…json` at web runtime** — rejected: the Dockerfile does not
+  ship `.claude/` into the container (`.dockerignore`), so the file is absent.
+- **Single copy relocated into the vendored plugin tree, read from
+  `pluginPath` at runtime** — rejected: the plugin symlink is best-effort
+  warn-only (`workspace.ts`), so a missing/broken symlink → ENOENT → the hint
+  silently never fires (a prod-only degradation no test catches); and the CLI
+  hook must keep reading `.claude/`, so the "single source of truth" is
+  illusory — it stays two representations PLUS a runtime fs read. The bundled
+  in-process constant makes the fail-open guarantee structurally true (it cannot
+  ENOENT) and confines drift to a deterministic CI gate.
+
+**Web lever 1 — per-caller opt-in (consequence the lever-2 implementer inherits).**
+The web hook is an SDK-native `PostToolUse(Skill)` callback registered in
+`buildAgentQueryOptions` `options.hooks` (`apps/web-platform/server/phase-surface-hook.ts`).
+It is registered **only when the caller passes `enablePhaseSurfaceHint: true`** —
+the cc-soleur-go Concierge router (the eval-covered workflow-routing path) opts
+in; the legacy domain-leader runner does NOT. This per-caller seam is binding for
+**lever 2** (`disallowedTools`), which is fail-CLOSED: a "both-callers-always-on"
+default would have silently restricted the legacy path (the unknown-tool hazard
+the two-tier rule guards against). #5772's +6.7pt eval (`claude-sonnet-4-6`,
+PR #5792) covered only the cc workflow-routing path — the lever-2 implementer
+inherits this cc-path eval-coverage caveat.
+
+**Cross-surface key normalization (documented coupling).** The web Concierge
+emits **bare** Skill names (`work`) in `tool_input.skill`, while the canonical
+map is **FQN-keyed** (`soleur:work` — the CLI emits FQN). The web hook normalizes
+bare→FQN at lookup (`SOLEUR_SKILL_PREFIX`). Without this, the hint silently never
+fires on the web. Re-keying the bundled copy to bare names would break byte-parity
+with the canonical JSON, so normalization lives in the hook, not the map.
