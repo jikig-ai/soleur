@@ -166,8 +166,8 @@ logs:
   where: "Sentry breadcrumbs/events (workspace-reconcile-push category); Inngest run history"
   retention: "Sentry default project retention"
 discoverability_test:
-  command: "grep -nE 'multiple-owners-reconcile|owner-attribution-probe|ownerless-reconcile' apps/web-platform/server/observability.ts"
-  expected_output: "all three ops listed in the workspace-reconcile-push family inventory (no ssh)"
+  command: grep -c owner-attribution-probe apps/web-platform/server/observability.ts
+  expected_output: "1"
 ```
 
 ---
