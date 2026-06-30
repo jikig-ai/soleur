@@ -3,7 +3,7 @@ import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { gitWithInstallationAuth } from "@/server/git-auth";
+import { gitWithInstallationAuth, sanitizeGitStderr } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
 import { reportRepoCloneFailed } from "@/server/repo-resolver-divergence";
 import { createChildLogger } from "@/server/logger";
@@ -273,7 +273,18 @@ export async function ensureWorkspaceRepoCloned(
     // Fail-soft: surface to Sentry, never crash the conversation. The token is
     // env-only inside gitWithInstallationAuth (never in argv/URL/stderr), so it
     // cannot ride `err`; the format-validated repoUrl is non-sensitive.
-    reportSilentFallback(err, {
+    // #5733 P2 (review) — sanitize the exception VALUE before capture: the
+    // execFile rejection `.message` is `Command failed: git … <workspacePath>
+    // <repoUrl>\n<stderr>`, carrying the absolute `/workspaces/<uuid>` path
+    // (== solo userId) + repo URL, which the key-based `scrubSentryEvent` does
+    // NOT scrub from `event.exception.values[].value`. Mirror the sibling
+    // `reportRepoCloneFailed` sanitization so this op:clone breadcrumb does not
+    // defeat the PR's own redaction in the same catch.
+    const safeCloneErr =
+      err instanceof Error
+        ? new Error(sanitizeGitStderr(err.message))
+        : new Error(sanitizeGitStderr(String(err)));
+    reportSilentFallback(safeCloneErr, {
       feature: "ensure-workspace-repo",
       op: "clone",
       extra: { userId, hasInstallation: true },

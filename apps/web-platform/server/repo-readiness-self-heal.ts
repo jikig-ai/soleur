@@ -25,7 +25,7 @@
 // the `__setGraftForTests` pattern in `ensure-workspace-repo.ts`.
 // ---------------------------------------------------------------------------
 
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, hashUserId } from "@/server/observability";
 import { sanitizeGitStderr } from "@/server/git-auth";
 import {
   evaluateRepoReadiness as pureEvaluateRepoReadiness,
@@ -318,7 +318,7 @@ async function failReadyAbsentHonestly(
     {
       feature: "cc-dispatcher",
       op: "repo-readiness-self-heal",
-      extra: { userId: args.userId, workspaceId: args.workspaceId },
+      extra: { userId: args.userId, workspaceIdHash: hashUserId(args.workspaceId) },
       message:
         "Concierge ready-but-.git-absent self-heal clone failed; honest-blocking (F4: the status flip is gated on solo/owner + a post-clone .git-absence CAS)",
     },

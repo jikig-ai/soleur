@@ -51,7 +51,10 @@ vi.mock("@/server/git-worktree-validity", () => ({
 vi.mock("@/server/workspace-permission-lock", () => ({
   withWorkspacePermissionLock: (_p: string, fn: () => unknown) => fn(),
 }));
-vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: vi.fn() }));
+vi.mock("@/server/git-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/git-auth")>()),
+  gitWithInstallationAuth: vi.fn(),
+}));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
 }));
