@@ -57,6 +57,12 @@ real `"use client"` → server-secret **value** import (shipping a server secret
 bundle) because alias resolution was silently off, the type-only/value distinction was inert, or
 the baseline grandfathered a same-PR leak.
 
+The **10** edges captured in the initial baseline were verified **value-safe by security review**:
+`server/domain-leaders.ts` is a static array (no secrets); `server/providers.ts` exposes env-var
+**NAMES** as metadata strings (not values); `server/team-names-validation.ts` ships no secret VALUES
+into the client bundle. They are pre-existing on `main` and grandfathered only because of that
+review — not blindly.
+
 **Brand-survival threshold:** single-user incident.
 
 `requires_cpo_signoff: true` (CPO reviewed at brainstorm Phase 0.5 — carried forward);
@@ -80,13 +86,16 @@ Keeps the fail-closed gate from becoming a founder footgun. Captured in ADR-070,
    comment, documented in `SKILL.md`. Agent-owned; used sparingly.
 4. **Founder hotfix with no agent in the loop (SpecFlow P0-4 — the brand-survival deadlock).**
    Nothing forces every change through an agent (a GitHub-web hotfix, a machine without the
-   repo's tooling). The single-account-safe recovery: the red `constraint-gates` check
-   annotation prints **one** instruction — comment `/soleur fix constraints` on the PR — which
-   dispatches the **existing `/soleur` comment-handler** (claude-code-action) to run the agent;
-   the agent fixes-or-refreshes and pushes a clean commit, after which the gate passes normally.
-   **No override label, no synthetic App-as-labeler actor, no net-new dispatch workflow.**
-   (This removes the internal contradiction code-simplicity flagged: the prior plan disabled the
-   non-author label on the only gate that mattered, so the label apparatus served nothing.)
+   repo's tooling). The intended single-account-safe recovery is `/soleur fix constraints` —
+   but that comment-dispatcher does **NOT exist yet** (verified: no `issue_comment` handler for
+   it in the repo; only `cla.yml` / `cla-evidence.yml` use `issue_comment`). It is **planned
+   under #5791, not yet wired.** Until #5791 lands, the agent owns recovery directly (re-run
+   `constraint-scaffold`: fix the import, or `--refresh-baseline`) and the gate stays
+   **informational / non-blocking** — it is NOT promoted to a required check, so it cannot
+   deadlock a founder hotfix. **Promotion to a REQUIRED check is blocked on #5791** (no
+   agent-free recovery for a tripped required gate until the dispatcher exists) **and #5778**
+   (monorepo/multi-stack follow-up). **No override label, no synthetic App-as-labeler actor, no
+   net-new dispatch workflow.** Do NOT build the dispatcher as part of this PR.
 5. **The founder is never required to read or unblock the gate** — `never-defer-operator-actions`.
 
 ## Architecture Decision (ADR/C4)
@@ -102,7 +111,7 @@ the engine, but the `"use client"` side is **not expressible as a static dep-cru
 it is a content-derived `from.path` set computed at `.cjs` config-evaluation time and regenerated
 every run. **Rejected alternatives** (record in the ADR): **A** bespoke AST-lite checker — rejected,
 concentrates `@/*`-resolution + type-only-erasure correctness risk in untested code; **B**
-`server-only` package — rejected for v1 (not baseline-grandfatherable → breaks the build on all ~13
+`server-only` package — rejected for v1 (not baseline-grandfatherable → breaks the build on all 10
 existing violations at once; bypasses the discrete-check + comment-recovery model; retained as
 optional later defense-in-depth); **C** dep-cruiser native directive match — impossible (no
 directive matcher exists). Cross-reference ADR-011 (Three-Tier Enforcement) as the parent. Status
@@ -248,9 +257,11 @@ discoverability_test:
   `/soleur fix constraints` summon path on failure.
 - [ ] AC8 — `constraint-scaffold.sh --refresh-baseline` regenerates the baseline (clean-tree +
   merge-base) and the baseline diff is the only change (OQ3 agent-owned recovery).
-- [ ] AC9 — Founder-recovery (SpecFlow P0-4): a human-authored commit tripping the gate is
-  recoverable with exactly one (founder) account via the `/soleur fix constraints` comment — no
-  override label, no `.cjs` edit. Recovery contract recorded in ADR-070.
+- [ ] AC9 — Founder-recovery (SpecFlow P0-4): the `/soleur fix constraints` comment-dispatcher is
+  **planned (#5791), not yet wired** — so until it lands, recovery is agent-direct (re-run the
+  skill / `--refresh-baseline`) and the gate is kept **informational/non-blocking** (NOT a required
+  check; promotion blocked on #5791 + #5778), which is what prevents the single-account deadlock in
+  the interim. No override label, no `.cjs` edit. Recovery contract recorded in ADR-070.
 - [ ] AC10 — On `apps/web-platform` HEAD the gate is **green** via
   `depcruise --ignore-known .dependency-cruiser-known-violations.json --output-type err app
   components server` (exit 0); the same `--ignore-known` invocation is used identically in the

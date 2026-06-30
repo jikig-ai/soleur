@@ -31,9 +31,14 @@ rejects the violation **before** the LLM-judged review layer — the product-cod
 instantiation of ADR-011 tier 1.
 
 **The agent — never the founder — owns gate maintenance, baseline refresh, and recovery.**
-A founder hotfix that trips the gate recovers via one comment, `/soleur fix constraints`
-(the existing `/soleur` comment-dispatch runs the agent to fix-or-refresh and push a clean
-commit). No override label, no `.cjs` edit, no second human required.
+The intended founder-hotfix recovery is one comment, `/soleur fix constraints` — but that
+recovery dispatcher is **planned (#5791), not yet wired**: no `issue_comment` handler for it
+exists in the repo today. Until #5791 lands, the agent owns recovery directly (re-run
+`constraint-scaffold`: fix the import, or `--refresh-baseline`), and the gate stays
+**informational / non-blocking** — it is NOT promoted to a required check. Promotion to a
+REQUIRED check is **blocked on #5791** (no agent-free recovery for a tripped required gate
+until the dispatcher exists) **and #5778** (monorepo/multi-stack follow-up). No override label,
+no `.cjs` edit, no second human required.
 
 **Mechanism (Option D).** `dependency-cruiser` is the engine — it robustly owns `@/*`
 alias resolution (`tsConfig` + `tsPreCompilationDeps`), the type-only/value erasure, and the
@@ -61,7 +66,7 @@ rule.
   correctness risk in untested code.
 - **B — `server-only` npm package marker** (build throws if a client module imports a marked
   module). Rejected for v1: not baseline-grandfatherable (all-or-nothing → hard-breaks the
-  webpack build on all ~13 pre-existing violations at once = the "deploy stranded, no
+  webpack build on all 10 pre-existing violations at once = the "deploy stranded, no
   engineer-free recovery" outcome the threshold forbids), and a build error bypasses the
   discrete `constraint-gates` check + comment-summon recovery model. Retained as optional
   later defense-in-depth.
