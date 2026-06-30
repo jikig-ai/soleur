@@ -7,11 +7,15 @@ name: constraint-gates (L1 import boundary)
 # `.github/workflows/`, so this repo-root copy is what actually dogfoods the
 # gate on Soleur's own `apps/web-platform`. It is informational (NOT in branch
 # protection) until deliberately promoted to a required check — a one-line
-# branch-protection change, tracked with the monorepo/multi-stack follow-up
-# (#5778). Always-runs + internal path-check: fires on every PR, reports a real
-# conclusion, exits 0 fast when `apps/web-platform/**` is untouched. The agent —
-# never the founder — owns this file. To recover a tripped gate, comment
-# `/soleur fix constraints`.
+# branch-protection change. Promotion to a REQUIRED check is BLOCKED on #5791
+# (the `/soleur fix constraints` recovery dispatcher — not yet wired, so a
+# founder hotfix that trips a required gate would have no agent-free recovery)
+# and #5778 (the monorepo/multi-stack follow-up). Always-runs + internal
+# path-check: fires on every PR, reports a real conclusion, exits 0 fast when
+# `apps/web-platform/**` is untouched. The agent — never the founder — owns this
+# file. To recover a tripped gate, re-run the constraint-scaffold skill (the
+# agent fixes the import or runs `--refresh-baseline`); the
+# `/soleur fix constraints` comment-dispatcher is PLANNED (#5791), not yet wired.
 
 on:
   pull_request:
@@ -35,7 +39,10 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          # No --depth here: a shallow fetch can leave the merge-base unreachable,
+          # making the three-dot diff fail under `set -e` and redden every
+          # non-target PR. checkout already used fetch-depth: 0 (full history).
+          git fetch --no-tags origin "$BASE_REF"
           if git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '^apps/web-platform/'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else

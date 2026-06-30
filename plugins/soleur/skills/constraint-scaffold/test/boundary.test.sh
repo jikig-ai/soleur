@@ -75,6 +75,15 @@ JSON
   # would match literal "a"/"b" (never the literal "(a|b)" source) and the leak
   # would be silently missed.
   printf '"use client";\nimport { SECRET_TOKEN } from "@/server/secret";\nexport const P = () => SECRET_TOKEN;\n' > "$fx/components/(a|b)/parenleak.tsx"
+  # client module with a leading license/eslint LINE-comment before the
+  # directive (valid Next.js). If the directive test required the directive to
+  # be the exact first non-empty line, this is misclassified as non-client and
+  # its value import goes UNFLAGGED (silent leak). -> must be flagged.
+  printf '// SPDX-License-Identifier: MIT\n"use client";\nimport { SECRET_TOKEN } from "@/server/secret";\nexport const B = () => SECRET_TOKEN;\n' > "$fx/components/leakdir/bannerleak.tsx"
+  # client module with a leading BLOCK-comment banner before the directive.
+  printf '/* banner\n   spanning lines */\n"use client";\nimport { SECRET_TOKEN } from "@/server/secret";\nexport const K = () => SECRET_TOKEN;\n' > "$fx/components/leakdir/blockbannerleak.tsx"
+  # client module with a trailing comment on the directive line: `"use client"; // x`.
+  printf '"use client"; // hydration boundary\nimport { SECRET_TOKEN } from "@/server/secret";\nexport const H = () => SECRET_TOKEN;\n' > "$fx/components/leakdir/trailingleak.tsx"
   cp "$CFG" "$fx/.dependency-cruiser.cjs"
   printf '%s' "$fx"
 }
@@ -101,6 +110,26 @@ if printf '%s' "$ERR_OUT" | grep -qF 'components/(a|b)/parenleak.tsx'; then
   ok "AC6b: regex-metacharacter route-group path matched (regex-escaping works)"
 else
   bad "AC6b: parenthesized-path client file NOT matched — regex-escaping is broken"
+  printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
+fi
+
+# --- #2: directive preceded by a leading comment banner is still client -------
+if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/bannerleak.tsx'; then
+  ok "#2: leading line-comment before \"use client\" still classified client (flagged)"
+else
+  bad "#2: leading line-comment banner client file NOT flagged (fail-open misclassification)"
+  printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
+fi
+if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/blockbannerleak.tsx'; then
+  ok "#2: leading block-comment before \"use client\" still classified client (flagged)"
+else
+  bad "#2: leading block-comment banner client file NOT flagged (fail-open misclassification)"
+  printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
+fi
+if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/trailingleak.tsx'; then
+  ok "#2: \"use client\"; // trailing-comment form still classified client (flagged)"
+else
+  bad "#2: trailing-comment directive form client file NOT flagged (fail-open misclassification)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 
