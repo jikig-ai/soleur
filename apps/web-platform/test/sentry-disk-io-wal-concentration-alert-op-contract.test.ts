@@ -41,6 +41,19 @@ describe("disk-io-wal-concentration alert op/feature contract (#5736)", () => {
     expect(tfBlock).toContain(RESOURCE_DECL);
   });
 
+  it("declares the resource EXACTLY ONCE (Terraform rejects duplicate type+name)", () => {
+    // The block-slicing assertions above only inspect the FIRST match, so a
+    // duplicated `resource "..." "disk_io_wal_concentration"` block would pass
+    // them while making `terraform plan` fail with "Duplicate resource" — which
+    // creates NO rule AND blocks every other targeted rule in the apply. Count
+    // the whole-file occurrences so the duplicate is caught here, not at apply.
+    const occurrences =
+      tf.match(
+        /resource "sentry_issue_alert" "disk_io_wal_concentration"/g,
+      ) ?? [];
+    expect(occurrences.length).toBe(1);
+  });
+
   it("the feature tag appears in both the cron emit + the alert filter", () => {
     // Anchored (value-equality / closing-quote) so a suffix rename fails.
     expect(cron).toContain(`feature: "${FEATURE_TAG}"`);
