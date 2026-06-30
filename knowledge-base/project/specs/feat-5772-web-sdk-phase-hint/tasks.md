@@ -21,15 +21,16 @@ plan: knowledge-base/project/plans/2026-06-30-feat-web-sdk-phase-surface-hint-pl
   - [ ] (a) **bare** `{skill:"work"}` → hint contains `work` + `(Guidance only …)`; FQN `{skill:"soleur:work"}` → identical (AC1/AC1a, P0)
   - [ ] (b) unmapped (`one-shot`) → `{}`; (c) `tool_name:"Read"` → `{}`; (d) `SOLEUR_DISABLE_PHASE_HINT=1` → `{}`
   - [ ] (e) malformed (`tool_input:null`, missing/non-string skill) → `{}`, **no throw**; null-branch → clean `{}` (AC2/F3)
-  - [ ] (f) byte-equal snapshot for a mapped skill; `__proto__`/`constructor`/`toString` → `{}`; crafted `"ship INJECT"` → `{}`, never echoed (AC3/F1/F2)
+  - [ ] (f) byte-equal snapshot for a mapped skill; `__proto__`/`constructor`/`toString` → `{}`; crafted `"ship\u2028INJECT"` → `{}`, never echoed (AC3/F1/F2)
   - [ ] (g) factory does not throw at construction; throwing-internal hook still yields `{}` (AC1b/P1)
   - [ ] (h) `isSafeTool("Skill") === true` pin (AC1c/P2)
   - [ ] (i) catch arm: log/Sentry/error carry NO raw skill value (AC3b/F5)
-- [ ] 2.2 GREEN: `apps/web-platform/server/phase-surface-hook.ts` — side-effect-free factory; `buildHint` with env kill-switch (strict `==="1"`, per-invocation) + `typeof` + FR1a normalize (`skill.includes(":") ? skill : "soleur:"+skill`) + `Object.hasOwn` both lookups + phase allowlist; map-derived hint only; try/catch → `reportSilentFallback` (static msg) + `{}`.
+- [ ] 2.2 GREEN: `apps/web-platform/server/phase-surface-hook.ts` — `SOLEUR_SKILL_PREFIX` const + WHY header; side-effect-free factory; `buildHint` **minimal guard set (CLI parity)**: env kill-switch (strict `==="1"`, per-invocation) → `typeof skill !== "string"` → normalize (`skill.includes(":") ? skill : SOLEUR_SKILL_PREFIX+skill`) → `Object.hasOwn(skill_to_phase, key)` (single security gate) → `surface = phase_to_surface[phase]; if(!surface) return null`. NO typeof-phase, NO phase allowlist. Map-derived hint only; try/catch → `reportSilentFallback` (static msg, no skill) + `{}`.
 
-## Phase 3 — Wire into builder
-- [ ] 3.1 Edit `agent-runner-query-options.ts`: import `createPhaseSurfaceHook`; add `PostToolUse: [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }]`.
-- [ ] 3.2 Edit `agent-runner-query-options.test.ts`: assert `hooks.PostToolUse[0].matcher === "Skill"`; T4 `stableShape` snapshot UNCHANGED (AC5).
+## Phase 3 — Wire into builder (per-caller opt-in, P1-A)
+- [ ] 3.1 Add `enablePhaseSurfaceHint?: boolean` to `AgentQueryOptionsArgs` (default false).
+- [ ] 3.2 Edit `agent-runner-query-options.ts`: import `createPhaseSurfaceHook`; register `PostToolUse: [{ matcher:"Skill", hooks:[createPhaseSurfaceHook()] }]` **conditionally** via spread when `args.enablePhaseSurfaceHint`. cc-dispatcher.ts:2328 passes `true`; agent-runner.ts:1990 does not.
+- [ ] 3.3 Edit `agent-runner-query-options.test.ts`: flag-on → `hooks.PostToolUse[0].matcher==="Skill"`; flag-off → `hooks.PostToolUse` undefined (AC5). T4 `stableShape` UNCHANGED.
 
 ## Phase 4 — ADR + C4 (deliverables)
 - [ ] 4.1 Amend `ADR-070`: record bundled-copy decision + 2 rejected alternatives + Consequences (cc-path eval-coverage caveat + bare/FQN normalization coupling) (AC8).

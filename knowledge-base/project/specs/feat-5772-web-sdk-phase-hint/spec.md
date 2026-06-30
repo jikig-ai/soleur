@@ -66,22 +66,28 @@ none of it.
   surface). The callback MUST NOT throw into the SDK.
 - FR3. **Security parity with the CLI hook:** the model-controlled `skill` value is used ONLY as
   a map lookup key and is NEVER echoed into the hint; the hint is composed from map-derived
-  constant text only (mirrors P1-1/P1-2/P1-3 of the shell hook). **Prototype-pollution guard
-  (TS-specific, security-sentinel F1 — `as const` is erased at runtime, NOT a null-proto object):**
-  (1) `if (typeof skill !== "string") return null` up front (the model may send a non-string);
-  (2) `Object.hasOwn(map.skill_to_phase, skill)` before the phase lookup AND `Object.hasOwn(
-  map.phase_to_surface, phase)` before the surface lookup — own-property guards defeat every
-  inherited-key read (`__proto__`, `constructor`, `toString`); (3) `typeof phase === "string"`
-  after; (4) belt-and-suspenders: validate `phase` against the literal allowlist
-  `{brainstorm,plan,work,review,ship}`. The bash hook is immune via `jq --arg`; the JS port must
-  add these guards explicitly — the "injection-safe" claim must rest on them, not on accidental
-  two-stage dead-ending.
+  constant text only (mirrors P1-1/P1-2/P1-3 of the shell hook). **Minimal sufficient guard set
+  (security-sentinel F1 + code-simplicity — restore exact CLI parity, one gate on the model-controlled
+  key):** (1) `typeof skill !== "string"` → null (the model may send a non-string); (2) normalize the
+  key (FR1a); (3) `Object.hasOwn(map.skill_to_phase, key)` → else null — **this single own-property
+  guard is the security gate** that rejects every inherited-key read (`__proto__`, `constructor`,
+  `toString`); (4) look up `surface = map.phase_to_surface[phase]`; `if (!surface) return null` (a
+  plain null-check, exactly mirroring the CLI hook's `$s == null`). NOTE — deliberately NOT added: a
+  `typeof phase` check (dead under `as const` — `phase` is map-derived, no input can falsify it) and a
+  hand-copied phase allowlist (it would duplicate `phase_to_surface`'s own keys and silently suppress
+  a legitimately-added 6th phase, fighting the TR2 parity test). The CLI hook — ported under the same
+  ADR-070 — has neither; adding them is divergence, not parity.
 - FR4. The hint string is byte-equivalent in shape to the CLI hook's output (`[phase-scope] You
   are in the <phase> phase. Phase-relevant skills: … Phase-relevant agents: … Not yet live: …
   (Guidance only — all tools remain available; this never restricts what you can call.)`).
 - FR5. `buildAgentQueryOptions` registers the hook as `PostToolUse: [{ matcher: "Skill", hooks:
-  [createPhaseSurfaceHook()] }]` so it fires on both production callers (`cc-dispatcher.ts:2328`,
-  `agent-runner.ts:1990`).
+  [createPhaseSurfaceHook()] }]` **only when `args.enablePhaseSurfaceHint === true`** (architecture
+  P1-A — per-caller opt-in seam). The **cc-soleur-go Concierge router** (`cc-dispatcher.ts:2328`, the
+  eval-covered workflow-routing path) opts in; the **legacy domain-leader runner**
+  (`agent-runner.ts:1990`, no workflow-phase concept) does NOT, so it stays truly zero-change. This
+  scopes the eval-justified behavior to the eval-covered path AND prevents the deferred fail-CLOSED
+  lever 2 from inheriting a "both-callers-always-on" default that would silently restrict the
+  legacy path (the exact ADR-070 unknown-tool hazard). The arg defaults to `false`/undefined.
 - FR6. A bundled web map copy `apps/web-platform/server/phase-surface-map.ts` (exported const,
   guaranteed in `dist/server`) holds the same data as `.claude/phase-surface-map.json`.
 
