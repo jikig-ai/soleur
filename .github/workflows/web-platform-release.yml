@@ -52,27 +52,33 @@ jobs:
       contents: read
       checks: read          # commits/<sha>/check-runs API
       actions: read         # actions/workflows/ci.yml/runs API (fast no-CI-run detection)
-    # > (MAX_ATTEMPTS + RECONCILE_ATTEMPTS) * INTERVAL_S = 3070s = 51.2m (AC5).
-    # Hard backstop only: the in-bash adaptive ceiling fires FIRST so the
-    # diagnostic ::error:: always emits (a bare GitHub job-kill reproduces the
-    # "silent skip, no signal" symptom #5795 is about). Do NOT lower without
-    # re-reading ADR-072.
-    timeout-minutes: 55
+    # Hard backstop only — sized for ≥20% wall-clock headroom over the in-bash
+    # CEILING_S (3000s): 60m = 3600s. The in-bash ceiling is keyed on WALL-CLOCK
+    # `elapsed` (not attempt count), so it fires FIRST regardless of per-iteration
+    # gh-api latency and the diagnostic ::error:: always emits (a bare GitHub
+    # job-kill reproduces the "silent skip, no signal" symptom #5795 is about — an
+    # attempt-count ceiling could be out-raced by API latency stretching each
+    # iteration; #5795 review P3). Do NOT lower without re-reading ADR-072.
+    timeout-minutes: 60
     steps:
       - name: Wait for CI test check-run on this SHA
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          # ADAPTIVE CEILING — do NOT lower MAX_ATTEMPTS or timeout-minutes without
-          # re-reading ADR-072. This ceiling is bounded by ci.yml-run LIVENESS, not
-          # by a fixed CI latency: we only approach it while CI is provably alive
-          # (the ci.yml run status != completed). 300 * 10s = 3000s = 50m, sized
-          # above the observed p100 CI-under-contention duration (~28m, measured
-          # 2026-06-30 over the last 50 main ci.yml runs) with margin. Raising the
-          # attempt budget REQUIRES raising timeout-minutes in lockstep
-          # (AC5: timeout-minutes*60 > (MAX_ATTEMPTS+RECONCILE_ATTEMPTS)*INTERVAL_S + INTERVAL_S).
-          MAX_ATTEMPTS: "300"
+          # ADAPTIVE CEILING — do NOT lower CEILING_S, MAX_ATTEMPTS, or
+          # timeout-minutes without re-reading ADR-072. The ceiling is bounded by
+          # ci.yml-run LIVENESS, not a fixed CI latency: we only approach it while CI
+          # is provably alive (run status != completed). CEILING_S=3000s=50m is the
+          # WALL-CLOCK budget, sized above the observed p100 CI-under-contention
+          # duration (~28m, measured 2026-06-30 over the last 50 main ci.yml runs).
+          # The in-bash ceiling keys on `elapsed >= CEILING_S` (NOT attempt count) so
+          # it fires before the timeout-minutes hard-kill regardless of per-iteration
+          # gh-api latency (#5795 review P3 — an attempt-count ceiling could be
+          # out-raced by API latency). MAX_ATTEMPTS is the loop's iteration backstop;
+          # timeout-minutes (3600s) carries ≥20% headroom over CEILING_S.
+          CEILING_S: "3000"          # wall-clock adaptive ceiling = MAX_ATTEMPTS * INTERVAL_S
+          MAX_ATTEMPTS: "300"        # iteration backstop (300 * 10s = CEILING_S); the elapsed ceiling is primary
           INTERVAL_S: "10"
           GRACE_ATTEMPTS: "6"        # 60s grace for a ci.yml run to register before declaring "no CI for this SHA"
           RECONCILE_ATTEMPTS: "6"    # bounded post-ci-completion re-poll absorbing run-completed→test-check-run eventual-consistency lag (load-bearing for green builds; spec-flow P0)
@@ -156,9 +162,13 @@ jobs:
             run_conclusion=$(jq -r '(.workflow_runs | sort_by(.created_at) | last | .conclusion) // "none"' <<<"$runs_resp")
             if [ "$run_status" != "completed" ]; then
               # CI run is alive (queued/in_progress/waiting/requested/pending) or
-              # not-yet-registered — keep waiting, bounded by the adaptive ceiling.
-              if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
-                echo "::error::Timed out after ${elapsed}s (ceiling $((MAX_ATTEMPTS * INTERVAL_S))s) while the ci.yml run for $SHA was still '$run_status' — blocking deploy (fail-closed). CI exceeded the adaptive ceiling; see ADR-072."
+              # not-yet-registered — keep waiting, bounded by the WALL-CLOCK ceiling.
+              # Keying on `elapsed` (not attempt count) guarantees this diagnostic
+              # fires before the timeout-minutes hard-kill even when per-iteration
+              # gh-api latency stretches each loop iteration past INTERVAL_S
+              # (#5795 review P3).
+              if [ "$elapsed" -ge "$CEILING_S" ]; then
+                echo "::error::Timed out after ${elapsed}s (ceiling ${CEILING_S}s) while the ci.yml run for $SHA was still '$run_status' — blocking deploy (fail-closed). CI exceeded the adaptive ceiling; see ADR-072."
                 exit 1
               fi
               echo "attempt $attempt: ci.yml run status=$run_status (alive) — waiting (elapsed_s=$elapsed)"

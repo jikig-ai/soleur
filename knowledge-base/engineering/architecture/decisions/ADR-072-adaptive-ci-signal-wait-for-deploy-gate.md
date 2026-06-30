@@ -48,11 +48,15 @@ Replace the fixed-window timeout with an **adaptive wait on CI-run liveness**, i
    ordinary loop iterations, not a new unbounded inner loop) to absorb
    run-completed→check-run eventual-consistency lag, proceeding **only** on a re-observed
    `test=success` and fail-closing once the grace is spent.
-4. **Raised adaptive ceiling.** `MAX_ATTEMPTS=300 × INTERVAL_S=10` = 3000s (50m) hard ceiling,
-   **bounded by ci.yml-run liveness** (we only approach it while CI is provably alive), with the
-   job `timeout-minutes` raised to 55 in lockstep (`timeout-minutes×60 >
-   (MAX_ATTEMPTS+RECONCILE_ATTEMPTS)×INTERVAL_S + INTERVAL_S`). Sized above the observed p100
-   CI-under-contention duration (~28m, measured 2026-06-30 over the last 50 main ci.yml runs).
+4. **Raised adaptive ceiling, keyed on wall-clock.** `CEILING_S=3000s` (50m) hard ceiling,
+   **bounded by ci.yml-run liveness** (we only approach it while CI is provably alive). The
+   in-bash ceiling tests `elapsed >= CEILING_S` (real wall-clock), **not** an attempt count, so
+   the diagnostic `::error::` is guaranteed to fire before the job `timeout-minutes` hard-kill
+   regardless of per-iteration `gh api` latency (an attempt-count ceiling can be out-raced when
+   API latency under contention stretches each iteration past `INTERVAL_S` — #5795 review P3).
+   `MAX_ATTEMPTS=300` is the loop's iteration backstop; `timeout-minutes` is raised to 60 (3600s),
+   ≥20% headroom over `CEILING_S`. Sized above the observed p100 CI-under-contention duration
+   (~28m, measured 2026-06-30 over the last 50 main ci.yml runs).
 5. **Migrate gated on await-ci (Phase B).** `migrate.needs` gains `await-ci` and its `if` leads
    with `always() &&` so migrations only apply for a CI-green SHA and never run ahead of a
    fail-closed gate.
@@ -126,10 +130,24 @@ dropped):
    misleading "released!" Slack/email on release-job success independent of `await-ci`;
    `notify-gated` provides the compensating "gated — not live" push. Fully gating the
    announcement on deploy-success touches the shared `reusable-release.yml` and is deferred.
-7. **The inline ceiling-constant anti-regression comment is load-bearing.** The ADR is the
-   rationale; the comment at the `MAX_ATTEMPTS`/`timeout-minutes` constants is what a future
-   maintainer actually sees — it states the ceiling is bounded by CI liveness, not fixed
-   latency, and must not be lowered without re-reading this ADR.
+7. **The in-bash ceiling is keyed on wall-clock `elapsed`, not attempt count, and the inline
+   ceiling-constant anti-regression comment is load-bearing.** An attempt-count ceiling
+   (`attempt >= MAX_ATTEMPTS`) can be out-raced by `gh api` latency under contention, letting the
+   GitHub `timeout-minutes` hard-kill fire first — a bare job-kill with no diagnostic, the exact
+   silent-skip symptom #5795 is about (#5795 review P3, two independent reviewers concurred). The
+   ceiling therefore tests `elapsed >= CEILING_S`, and `timeout-minutes` carries ≥20% wall-clock
+   headroom over `CEILING_S`. The ADR is the rationale; the comment at the `CEILING_S`/
+   `MAX_ATTEMPTS`/`timeout-minutes` constants is what a future maintainer actually sees — it
+   states the ceiling is wall-clock-bounded by CI liveness, not fixed latency, and must not be
+   lowered without re-reading this ADR.
+
+8. **`migrate.if`'s leading `always()` widens its run condition on a failed `release` that still
+   emitted a non-empty `version`** (previously `needs: release` without `always()` auto-skipped
+   migrate on any release failure). This is fail-safe: on the push path `migrate` is still
+   backstopped by `needs.await-ci.result == 'success'`, and `deploy` is independently gated by
+   `needs.release.outputs.docker_pushed == 'true'`, so no deploy occurs on an un-built image — the
+   only residual is a `migrate`-without-`deploy`, inside the expand/contract window named in
+   Consequence #5.
 
 Cross-reference: ADR-068 (raised-ceiling named-trade-off ADR precedent); ADR-011 (the
 fail-closed-gate discipline this extends).
