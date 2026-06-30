@@ -27,8 +27,11 @@ set -euo pipefail
 ROADMAP_FILE="${ROADMAP_FILE:-knowledge-base/product/roadmap.md}"
 
 # Labels that mark an issue as codeable (an agent can build it via /soleur:go).
-# Everything else (recruitment, interviews, research, ops) is an operator action.
-CODEABLE_LABELS='"domain/engineering","type/bug","type/feature","type/refactor","type/chore"'
+# Deliberately narrow: anything else (recruitment, interviews, research, marketing,
+# ops, chores) classifies as an operator action. Under-classifying to OPERATOR is
+# the safe failure for an advisory tool — it only ever NAMES the item, never wrongly
+# tells the founder to /soleur:go a non-codeable task.
+CODEABLE_LABELS='"domain/engineering","type/bug","type/feature","type/refactor"'
 
 # extract_phase_counts: read roadmap markdown on stdin, emit "N|open|closed"
 # for each `| Phase N (...) |` row in the `## Current State` table that carries
@@ -130,8 +133,50 @@ main() {
       echo "  /soleur:trigger-cron cron/roadmap-review.manual-trigger"
       return 1
       ;;
+    next)
+      # Advisory, read-only: report the next action for the first incomplete phase.
+      local ms rows phase mstitle issues action num title
+      if ! ms="$(_milestones_json 2>/dev/null)"; then
+        echo "roadmap-reconcile: ERROR — could not fetch GitHub milestones (gh auth?)." >&2
+        return 2
+      fi
+      rows="$(extract_phase_counts < "$ROADMAP_FILE" | sort -t'|' -k1,1n)"
+      phase="$(printf '%s\n' "$rows" | awk -F'|' '$2 > 0 { print $1; exit }')"
+      if [[ -z "$phase" ]]; then
+        echo "roadmap-next: all phases complete — no pending phase."
+        return 0
+      fi
+      mstitle="$(jq -r --arg n "$phase" \
+        '[ .[] | select(.title | test("^Phase " + $n + "[:( ]")) ] | first | .title // empty' \
+        <<< "$ms")"
+      if [[ -z "$mstitle" ]]; then
+        echo "roadmap-next: Phase $phase has no GitHub milestone — run validate to reconcile." >&2
+        return 1
+      fi
+      issues="$(gh issue list --milestone "$mstitle" --state open \
+        --json number,title,labels 2>/dev/null)" || issues='[]'
+      action="$(pick_next_action <(printf '%s' "$issues"))"
+      num="$(printf '%s' "$action" | cut -d'|' -f2)"
+      title="$(printf '%s' "$action" | cut -d'|' -f3)"
+      case "${action%%|*}" in
+        CODEABLE)
+          echo "roadmap-next: Phase $phase — next codeable item:"
+          echo "  $num $title"
+          echo "  Build it: /soleur:go $num"
+          ;;
+        OPERATOR)
+          echo "roadmap-next: Phase $phase — next item is operator-driven (not codeable):"
+          echo "  $num $title"
+          echo "  This needs you (recruitment / interviews / ops), not an agent build."
+          ;;
+        *)
+          echo "roadmap-next: Phase $phase milestone ($mstitle) has no open issues — no actionable next item."
+          ;;
+      esac
+      return 0
+      ;;
     *)
-      echo "usage: roadmap-reconcile.sh [validate]" >&2
+      echo "usage: roadmap-reconcile.sh [validate|next]" >&2
       return 64
       ;;
   esac
