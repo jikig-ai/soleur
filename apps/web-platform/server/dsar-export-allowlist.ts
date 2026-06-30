@@ -427,7 +427,7 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "NEVER auth.uid()), lease_generation, acquired_at, heartbeat_at. No " +
     "user-provided content and no personal-profile data. Art. 17 erasure is " +
     "satisfied by ON DELETE CASCADE from public.workspaces (no anonymise RPC " +
-    "needed — the row is ephemeral with zero audit lineage; proven by the AC5 " +
+    "needed — the row has zero audit lineage; proven by the AC5 " +
     "cascade integration test). No DSAR export surface.",
 };
 
