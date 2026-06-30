@@ -2436,6 +2436,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           controllerSignal: controller.signal,
           deps: ccDeps,
         }),
+        // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
+        // cc-soleur-go Concierge router (the eval-covered workflow-routing path).
+        // The legacy domain-leader runner (agent-runner.ts) does NOT opt in.
+        enablePhaseSurfaceHint: true,
       }),
     });
   } catch (err) {
