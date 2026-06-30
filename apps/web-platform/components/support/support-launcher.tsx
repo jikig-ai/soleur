@@ -5,7 +5,7 @@
 // (so the thread is retained across close/reopen). The floating bubble hides
 // while the panel is open; the panel's X / Escape / backdrop close it.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { SupportPanel } from "./support-panel";
 import { useSupportChat } from "./use-support-chat";
@@ -14,6 +14,18 @@ export function SupportLauncher() {
   const enabled = useOptionalFeatureFlag("support");
   const [open, setOpen] = useState(false);
   const { messages, send } = useSupportChat();
+  const bubbleRef = useRef<HTMLButtonElement>(null);
+  const wasOpenRef = useRef(false);
+
+  // The bubble unmounts while the panel is open, so the panel's own
+  // focus-return lands on <body>. When the panel closes, return focus to the
+  // re-mounted bubble (runs after the panel's cleanup, so it wins).
+  useEffect(() => {
+    if (wasOpenRef.current && !open) {
+      bubbleRef.current?.focus();
+    }
+    wasOpenRef.current = open;
+  }, [open]);
 
   if (!enabled) return null;
 
@@ -21,6 +33,7 @@ export function SupportLauncher() {
     <>
       {!open && (
         <button
+          ref={bubbleRef}
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open support"
