@@ -73,6 +73,7 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   digestIssueExistsForDate,
+  SCHEDULED_DIGEST_TITLE_PREFIX,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
   DeployInProgressError,
@@ -531,7 +532,7 @@ export async function cronCommunityMonitorHandler({
               try {
                 await ensureScheduledAuditIssue({
                   label: SENTRY_MONITOR_SLUG,
-                  titlePrefix: "[Scheduled] Community Monitor -",
+                  titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX,
                   cronName: "cron-community-monitor",
                   runStartedAt,
                   spawnResult: spawnResult ?? makeThrewSpawnResult("cron-community-monitor"),

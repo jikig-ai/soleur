@@ -1181,6 +1181,31 @@ describe("isRealScheduledDigest", () => {
       ),
     ).toBe(false);
   });
+
+  it("EXCLUDES a coincidental-date issue whose title merely ENDS in the date (positive-anchor)", () => {
+    // A human/triage issue like `Investigate community drop 2026-06-30` ends in
+    // today's date but is NOT the canonical digest title. The old
+    // endsWith(date) check misclassified it as a real digest → would suppress
+    // the genuine digest. The positive title-shape anchor closes that gap.
+    expect(
+      isRealScheduledDigest(
+        { title: `Investigate community drop ${CM_DATE}`, body: "looks low" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
+
+  it("EXCLUDES an LLM-drifted `- FAILED - <date>` title (positive-anchor)", () => {
+    // A drifted title that both ends in the date AND carries `- FAILED` would
+    // have slipped past endsWith(date) (the dead /-FAILED$/ belt only matched a
+    // trailing FAILED). Only the exact canonical title counts now.
+    expect(
+      isRealScheduledDigest(
+        { title: `${CM_PREFIX} FAILED - ${CM_DATE}`, body: "## Platform Status" },
+        CM_DATE,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("digestIssueExistsForDate", () => {

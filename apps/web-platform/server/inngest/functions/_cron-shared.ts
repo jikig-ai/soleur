@@ -717,25 +717,37 @@ export async function verifyScheduledIssueCreated(args: {
 // verify-throw fallback. The octokit is injectable purely for unit tests.
 // ---------------------------------------------------------------------------
 
+// Single-sourced contract strings (#5751 review). The stub-exclusion predicate
+// (isRealScheduledDigest) and the producers that MINT these shapes must move
+// together — independent drift silently breaks the zero-digest guard (a digest
+// whose title/body no longer matches gets misclassified, suppressing the real
+// one). The community-monitor handler passes SCHEDULED_DIGEST_TITLE_PREFIX as
+// its ensureScheduledAuditIssue `titlePrefix`; ensureScheduledAuditIssue mints
+// the audit body from AUDIT_SELF_REPORT_BODY_PREFIX.
+export const SCHEDULED_DIGEST_TITLE_PREFIX = "[Scheduled] Community Monitor -";
+export const AUDIT_SELF_REPORT_BODY_PREFIX = "Automated FAILED self-report";
+
 /**
  * Pure predicate: is `issue` a REAL scheduled digest for `date` (YYYY-MM-DD)?
- * Excludes the no-platform `… - FAILED` title (no date suffix) and the
- * handler-level audit fallback, which files the BYTE-IDENTICAL `${prefix} ${date}`
- * title with a hardcoded `Automated FAILED self-report` body.
+ * Positive title-shape anchor: ONLY the exact canonical digest title for `date`
+ * counts. This excludes a coincidental-date issue (e.g. `Investigate community
+ * drop <date>`) and an LLM-drifted `… - FAILED - <date>` title — both of which
+ * an `endsWith(date)` check would misclassify as a real digest and suppress the
+ * genuine one. The handler-level audit fallback files the BYTE-IDENTICAL
+ * `${SCHEDULED_DIGEST_TITLE_PREFIX} ${date}` title, so it is excluded by body.
  */
 export function isRealScheduledDigest(
   issue: { title?: string | null; body?: string | null },
   date: string,
 ): boolean {
-  const title = issue.title ?? "";
-  // Today's dated issue only. The no-platform `[Scheduled] … - FAILED` title
-  // has no date suffix → excluded here.
-  if (!title.endsWith(date)) return false;
-  // Defensive belt: an explicit `- FAILED` suffix is never a real digest.
-  if (/-\s*FAILED$/i.test(title)) return false;
-  // Exclude the audit stub by body so a prior FAILED self-report does NOT
-  // suppress a same-day real digest.
-  if ((issue.body ?? "").startsWith("Automated FAILED self-report")) return false;
+  const title = (issue.title ?? "").trim();
+  // Positive anchor: ONLY the exact canonical digest title for THIS date counts.
+  // Excludes coincidental-date issues and the no-platform `- FAILED` title.
+  // Fail-OPEN on title drift: a slightly-different title → no dedup → a duplicate
+  // (paper-cut), never zero-digest.
+  if (title !== `${SCHEDULED_DIGEST_TITLE_PREFIX} ${date}`) return false;
+  // Audit fallback files the BYTE-IDENTICAL title → exclude it by body.
+  if ((issue.body ?? "").startsWith(AUDIT_SELF_REPORT_BODY_PREFIX)) return false;
   return true;
 }
 
@@ -749,7 +761,7 @@ export async function digestIssueExistsForDate(args: {
   try {
     const client = octokit ?? (await createProbeOctokit());
     // Explicit sort:created desc + per_page:10 so today's issue is guaranteed on
-    // page 1 (matches ensureScheduledAuditIssue's dedup read shape — :1091-1101).
+    // page 1 (matches ensureScheduledAuditIssue's dedup read shape).
     const res = await client.request("GET /repos/{owner}/{repo}/issues", {
       owner: REPO_OWNER,
       repo: REPO_NAME,
@@ -1186,7 +1198,7 @@ export async function ensureScheduledAuditIssue(args: {
   // failure is triageable without SSH (app stdout is not shipped to Better
   // Stack). The tails are already token-redacted by the eval substrate.
   const body =
-    `Automated FAILED self-report from \`${cronName}\`.\n\n` +
+    `${AUDIT_SELF_REPORT_BODY_PREFIX} from \`${cronName}\`.\n\n` +
     `This run terminated WITHOUT producing a \`${label}\` ` +
     `audit issue via the prompt (mid-eval crash / upstream API error / ` +
     `max-turns kill). The handler-level fallback (#4960) filed this issue so ` +

@@ -87,8 +87,16 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
 import { cronCommunityMonitorHandler } from "@/server/inngest/functions/cron-community-monitor";
 
 const TITLE_PREFIX = "[Scheduled] Community Monitor -";
-const TODAY = new Date().toISOString().slice(0, 10);
-const YESTERDAY = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+// Test Rec 1 (#5751 review) — pin the clock. The dedup read derives its date
+// from runStartedAt (the handler's `new Date()` at invoke time) while these
+// fixtures derive TODAY at module-load; a real-clock UTC-midnight crossing
+// mid-run would desync them (flake). Freeze BOTH onto one fixed UTC instant so
+// TODAY === the handler's runStartedAt.slice(0,10) deterministically.
+const FROZEN = new Date("2026-06-30T12:00:00.000Z");
+const TODAY = FROZEN.toISOString().slice(0, 10);
+const YESTERDAY = new Date(FROZEN.getTime() - 86_400_000)
+  .toISOString()
+  .slice(0, 10);
 
 const okSpawn = {
   ok: true, exitCode: 0, signal: null, abortedByTimeout: false,
@@ -118,12 +126,24 @@ const invoke = (step: ReturnType<typeof makeStep>) =>
   } as HandlerArg);
 
 const heartbeatUrls = () => fetchSpy.mock.calls.map((c) => String(c[0] as string));
+// Mirror the production predicate (isRealScheduledDigest): the EXACT canonical
+// digest title for TODAY, minus the FAILED audit stub (byte-identical title,
+// hardcoded body). A loose endsWith(TODAY) here would count a coincidental-date
+// issue and mis-score the invariant.
 const realDigestCount = () =>
   store.filter(
-    (i) => i.title.endsWith(TODAY) && !i.body.startsWith("Automated FAILED self-report"),
+    (i) =>
+      i.title === `${TITLE_PREFIX} ${TODAY}` &&
+      !i.body.startsWith("Automated FAILED self-report"),
   ).length;
 
 beforeEach(() => {
+  // Freeze ONLY Date onto the same instant TODAY/YESTERDAY were derived from, so
+  // the handler's runStartedAt resolves to TODAY. `toFake: ["Date"]` leaves
+  // setTimeout real (the heartbeat 5xx-retry backoff and existing call-count
+  // assertions are unaffected — this suite's fetch always resolves 202).
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FROZEN);
   store = [];
   fakeRequest.mockClear();
   setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
@@ -148,6 +168,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -157,6 +178,30 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
   it("two serialized same-date invocations file EXACTLY ONE digest (invariant via fake store)", async () => {
     await invoke(makeStep()); // first: no existing digest → spawns + files
     await invoke(makeStep()); // second: sees the first via fresh LIST → short-circuits
+
+    expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
+    expect(realDigestCount()).toBe(1);
+    // Test Rec 2 (#5751 review) — root-cause guard: the dedup read MUST use the
+    // fresh LIST route. A future regression back to `--search '… in:title'`
+    // (the H-C stale-index miss) would not call this route → fail here.
+    expect(
+      fakeRequest.mock.calls.some(
+        (c) => c[0] === "GET /repos/{owner}/{repo}/issues",
+      ),
+    ).toBe(true);
+  });
+
+  it("a coincidental-date issue (title merely ends in today's date) does NOT suppress the digest", async () => {
+    // `Investigate community drop <today>` ends in the date but is NOT the
+    // canonical digest title. The positive-anchor predicate must let the genuine
+    // digest through (the old endsWith(date) check would have suppressed it).
+    store.push({
+      title: `Investigate community drop ${TODAY}`,
+      body: "Followers dropped — please look.",
+      created_at: new Date().toISOString(),
+    });
+
+    await invoke(makeStep());
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);
