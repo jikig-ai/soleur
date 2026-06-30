@@ -64,6 +64,23 @@ brainstorm/plan/spec on `feat-*` branches — which would have **buried the livi
 documents** the later phases depend on. For an incomplete epic, skip auto-archival;
 the plan/spec stay active until the final phase ships.
 
+## Also: editing `.c4` sources requires regenerating the committed `model.likec4.json`
+
+The plan's Phase-0 C4 gate said "run `c4-code-syntax` + `c4-render` tests" — both
+are **vitest** suites, and both passed. But there is a separate **bash** suite,
+`plugins/soleur/test/c4-model-freshness.test.sh`, that asserts the committed
+precomputed render `knowledge-base/engineering/architecture/diagrams/model.likec4.json`
+matches a fresh render of the `.c4` sources. Editing `model.c4`/`views.c4` without
+running `bash scripts/regenerate-c4-model.sh` (then committing the regenerated JSON)
+leaves it stale → that bash suite fails, and it is **NOT** in the vitest `c4-*` set,
+so a touched-file vitest run is green-blind to it. It surfaced only at the
+**full-suite exit gate** (`scripts/test-all.sh`: 128/129 suites passed). Prevention:
+any `.c4` edit's checklist is *edit → `likec4 validate` → `bash scripts/regenerate-c4-model.sh`
+→ commit BOTH the `.c4` files AND `model.likec4.json` → run `test-all.sh` (not just the
+vitest c4-* subset)*. The merge conflict with a sibling C4 edit (eval-harness's
+`evalharness` element) also requires a post-merge regen, since the render must reflect
+the merged source.
+
 ## Session Errors
 
 - **Bare-repo-root `ls` of the worktree-relative plan path returned exit 2** — Recovery: `cd` into `.worktrees/<branch>/` first. — Prevention: in a `core.bare=true` repo, resolve plan paths against the worktree, not the bare root (already covered by `hr-when-in-a-worktree-never-read-from-bare`).
@@ -71,6 +88,7 @@ the plan/spec stay active until the final phase ships.
 - **Guessed wrong ADR-067 filename** (`cron-heartbeat` vs actual `adopt-swr-client-cache`) — Recovery: `ls ADR-067*`. — Prevention: `ls` the numbered-prefix glob before `Read`-ing a sequential artifact by a guessed slug.
 - **likec4-export element-id grep returned 0** — ids are fully-qualified (`platform.infra.X`). Recovery: grep the qualified name. — Prevention: when verifying a likec4 export, grep the fully-qualified element id, and confirm `likec4 validate` is clean + no "Could not resolve" diagnostics (export exits 0 even on unresolved refs).
 - **Pre-existing plan drift (Redis→Phase-3 ×8, argv contradiction) surfaced only at review** — Recovery: grep-sweep + reconcile inline. — Prevention: this learning (grep-sweep the moved-substrate phase labels at Phase-0 /work, before review).
+- **Stale `model.likec4.json` failed `c4-model-freshness.test.sh` at the ship full-suite gate** — I edited `model.c4`/`views.c4` + resolved a sibling merge but never ran `regenerate-c4-model.sh`, so the committed render was stale; the vitest c4-* suite (which I ran green) does not cover it. Recovery: `bash scripts/regenerate-c4-model.sh` + commit. — Prevention: see the §"editing `.c4` sources" checklist above; treat `model.likec4.json` regen as mandatory on every `.c4` edit AND after any C4 merge-conflict resolution.
 
 ## Tags
 category: workflow-patterns
