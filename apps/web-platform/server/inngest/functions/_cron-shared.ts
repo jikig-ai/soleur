@@ -726,9 +726,14 @@ export async function verifyScheduledIssueCreated(args: {
 // the audit body from AUDIT_SELF_REPORT_BODY_PREFIX.
 //
 // #5786 — the matcher is now per-cron parametrized. Each of the 7 dedup-sweep
-// crons passes its OWN `titlePrefix` (= its ensureScheduledAuditIssue
-// titlePrefix), single-sourced from the handler. Community-monitor passes
-// SCHEDULED_DIGEST_TITLE_PREFIX explicitly (byte-identical to the old behavior).
+// crons passes its OWN `titlePrefix`, a per-cron string literal that MUST stay
+// byte-identical to that handler's three co-located copies (the prompt digest
+// title, the `dedup-digest-check` titlePrefix, and the `ensureScheduledAuditIssue`
+// titlePrefix). These are NOT single-sourced via a shared const — keep them in
+// lockstep on any rename. Drift is fail-OPEN (a mismatch makes the anchor miss →
+// a duplicate digest, never a missed/zero digest), so it is a maintenance nit,
+// not a zero-digest hazard. Community-monitor passes SCHEDULED_DIGEST_TITLE_PREFIX
+// explicitly (byte-identical to the old behavior).
 // `titleSuffix` is "" for the 6 always-create crons + community-monitor, and
 // " (heartbeat)" for campaign-calendar (its STEP 2.5 producer digest carries a
 // trailing ` (heartbeat)` suffix that the exact anchor must accept; its bare

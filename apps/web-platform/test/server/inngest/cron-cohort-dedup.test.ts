@@ -36,8 +36,22 @@ interface StoredIssue { title: string; body: string; created_at: string }
 let store: StoredIssue[];
 
 const fakeRequest = vi.fn(
-  async (route: string, params: { per_page?: number }) => {
+  async (
+    route: string,
+    params: { per_page?: number; state?: string; labels?: string },
+  ) => {
     if (route === "GET /repos/{owner}/{repo}/issues") {
+      // The dedup LIST read MUST query `state: "all"` — a regression to the
+      // stale `state: "open"` (the #5751 root cause; roadmap-review's old
+      // `--search` form) would miss campaign-calendar's create-and-close
+      // heartbeat digest and re-introduce the double-file. Fail loudly here so
+      // the behavioral cohort test — not just the cron-shared param unit test —
+      // guards the `--state all` contract.
+      if (params.state !== "all") {
+        throw new Error(
+          `dedup LIST read must use state:"all", got ${JSON.stringify(params.state)}`,
+        );
+      }
       const sorted = [...store].sort((a, b) =>
         a.created_at < b.created_at ? 1 : -1,
       );
