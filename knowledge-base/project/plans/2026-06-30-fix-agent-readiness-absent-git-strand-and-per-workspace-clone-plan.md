@@ -1,5 +1,5 @@
 ---
-title: "fix: agent-readiness absent-.git strand heal/block + observable backstop + per-workspace ready-clone (Ref #5733)"
+title: "fix: in-process dispatch-time repo re-clone (D0) + absent-.git strand heal/block + observable backstop (Ref #5733)"
 date: 2026-06-30
 issue: 5733
 branch: feat-one-shot-5733-founder-resolve-multiworkspace-clone
@@ -10,66 +10,88 @@ type: bug
 status: draft
 ---
 
-# fix: agent-readiness absent-`.git` strand — heal/block + observable backstop + per-workspace ready-clone (Ref #5733)
+# fix: in-process dispatch-time repo re-clone (D0) + absent-`.git` strand heal/block + observable backstop (Ref #5733)
 
 ## Enhancement Summary
 
-**Deepened on:** 2026-06-30
+**Deepened on:** 2026-06-30 (re-deepened after operator course-correction — the
+fix must actually RE-LAND the repo, not just honest-block).
 **Hard gates:** 4.6 User-Brand (PASS, single-user incident), 4.7 Observability
 (PASS, 5 fields, no-ssh), 4.8 PAT-shape (PASS), 4.9 UI-wireframe (PASS — no UI
 surface).
 
 ### Key Improvements
-1. **Prod-verified root-cause reclassification** (Research Reconciliation): the
-   loud founder-ambiguity Sentry issue (1901 lifetime, **0/24h, stopped 06-29**) is
-   a separate, already-repo-scoped, non-`repo_last_synced_at`-writing webhook path
-   — NOT the freeze cause. The freeze cause is the absent-`.git` strand being
-   unhealed + unobservable. Prevents a wrong-layer re-fix.
-2. **D2 call-site ordering analysis** (Deepen Findings, load-bearing): traced
-   heal/gate ordering across cold (post-heal, unconditional → THE fix), warm
-   (gate skipped for absent), reconcile (pre-heal, non-spawn → must NOT emit). Phase
-   2 + AC5 + tasks scoped accordingly.
-3. **D1 cross-consumer blast-radius** (5+ consumers) → recommend reducing D1 to
-   the regression test only (YAGNI; D2 already honest-blocks).
+1. **D0 — the actual unblock (operator-mandated).** Observability + honest-block
+   alone leaves the operator stranded forever. D0 adds an **in-process,
+   dispatch-time guaranteed re-clone** into the agent's OWN `workspacePath`
+   (same process → same filesystem the agent reads), keyed on the workspace's own
+   `(github_installation_id, repo_url)` (founder/membership-independent), acting on
+   **disk reality not the `repo_status='ready'` DB flag**, with **LOUD failure**
+   (a distinct `repo_clone_failed` Sentry event + `repo_error` write + honest-block)
+   — never a benign-skip, never swallowed.
+2. **Prod-forensic root cause (2× live passes):** reconcile-on-push FIRES and
+   selects 754ee124 on every push (45 events/48h, latest today 14:44, op
+   `ownerless-reconcile`) yet `ensureWorkspaceRepoCloned` produces ZERO telemetry,
+   the `.git` stays absent, `repo_status='ready'`/`repo_error=null`, and the
+   operator reports **`/api/repo/setup` reconnect has NEVER landed the repo**. So
+   the clone path itself is broken for this workspace — either (a) it writes to a
+   different process/container/`WORKSPACES_ROOT` mount than the agent reads, or (b)
+   it silently fails while the DB shows ready. D0's in-process + loud design is
+   robust to BOTH.
+3. **The owner-canary drift (#5591):** the workspace's `owner` member rows are
+   workspace-IDs (754ee124 self + 52af49c2/chatte), not resolvable user accounts —
+   so any heal that resolves a *founder user* to clone on-behalf-of finds nobody.
+   D0 clones from the workspace's OWN install column, never founder resolution.
 
 ### New Considerations Discovered
-- The per-installation founder collapse the argument framed does **not exist** in
-  the ready-clone path (it resolves per-active-workspace-id) — deliverable 1
-  reframed from "fix founder collapse" to "lock per-workspace invariant + tighten".
-- `754ee124` is NOT solo (4 members, 2 owners; jean co-owns both) — the fix is
-  workspace-shape-agnostic.
+- The loud founder-ambiguity Sentry issue (1901 lifetime, **stopped 06-29**) is a
+  separate already-fixed webhook path — NOT the freeze cause (Research Reconciliation).
+- `754ee124` is NOT solo (4 members, 2 owners) and its real-user accounts are
+  `member`-role — so a membership-resolved install can come back NULL on a member
+  dispatch (a benign-skip path D0 must close).
 
 ## Overview
 
 Workspace `754ee124` (→ `jikig-ai/soleur`) strands `/soleur:go` at Step 0.0: the
 agent dispatches into `/workspaces/754ee124` whose on-disk `.git` is **ABSENT**
-(no repo on disk at all — NOT the corrupt/`.git`-present class the just-merged
-77e77c3 fix targeted), the agent's in-bwrap `git rev-parse` reports no work tree,
-and the agent self-stops with the honest "your workspace isn't ready" message —
-**emitting ZERO server-side Sentry events** (prod-confirmed: 0 events for
-`754ee124` / `agent_readiness_self_stop`). `repo_last_synced_at` is frozen at
-2026-06-29 because the only writer is the agent's own in-workspace `git pull/push`
-(`session-sync.ts`), which never runs when the repo never lands.
+(no repo on disk — NOT the corrupt/`.git`-present class the just-merged 77e77c3 fix
+targeted), the agent's in-bwrap `git rev-parse` reports no work tree, and the agent
+self-stops with the honest "your workspace isn't ready" message — **emitting ZERO
+server-side Sentry events**. `repo_last_synced_at` is frozen at 2026-06-29 because
+the only writer is the agent's own in-workspace `git pull/push`
+(`session-sync.ts`), which never runs when the repo never lands. Live forensics +
+the operator confirm **every re-clone mechanism (reconcile-on-push AND
+`/api/repo/setup` reconnect) has failed to land the repo on the agent's disk.**
 
-This plan delivers three server-side TypeScript fixes (no DDL):
+This plan delivers four server-side TypeScript fixes (no DDL):
 
-1. **Absent-`.git` is a strand, not "ready."** Harden the shared
-   `evaluateAgentReadiness` gate (added in 77e77c3) so an **absent** (and
-   **dir-invalid**) `.git` at the post-self-heal dispatch gate emits
-   `agent_readiness_self_stop` and **honest-blocks** (RepoNotReadyError) instead
-   of greenlighting a doomed agent spawn.
-2. **The in-sandbox backstop must catch the empty-output form.** Fix
-   `isInSandboxRevParseStrand` (C2 detector) to recognise the **stderr-suppressed
-   empty output** that `go.md` Step 0.0 actually produces
-   (`git rev-parse --is-inside-work-tree 2>/dev/null || true` → empty stdout,
-   suppressed stderr), so the strand is queryable for ANY on-disk shape.
-3. **Per-workspace ready-clone — regression LOCK (test-only).** The ready-clone
-   path already resolves repo/install/CWD per-active-workspace-id (NOT a
-   per-installation founder — see Research Reconciliation); add a regression test
-   proving two connected workspaces sharing one installation each resolve + clone
-   independently. (The originally-scoped `ensureWorkspaceRepoCloned` benign-skip
-   behaviour change was DROPPED after deepen review — D2 already covers the outcome
-   and the change had a 5-consumer blast radius. See Phase 3 / Deepen Findings.)
+0. **D0 (PRIMARY — the actual unblock).** **HARDEN the EXISTING in-process cold
+   self-heal** (`cc-dispatcher.ts:1987` already runs `ensureWorkspaceRepoCloned`
+   in-process, before `query()`, into the agent's own `workspacePath` — this is the
+   right SITE; do NOT add a second clone path). The gap is that its install comes
+   from the *dispatching user's* membership-resolved path which returns **NULL for a
+   `member`-role user** → silent benign-skip. D0 fixes that site to: if `.git` is
+   absent at `workspacePathForWorkspaceId(activeWorkspaceId)`, clone using the
+   workspace's own
+   `(github_installation_id, repo_url)` (server-derived, founder/membership-
+   independent) and a credential helper (`gitWithInstallationAuth`, token via
+   `GIT_ASKPASS` env, never in URL/stderr per `session-sync.ts`/ensure-workspace-repo
+   precedent). Do NOT trust `repo_status='ready'` over the on-disk reality; do NOT
+   benign-skip. On ANY clone failure (non-zero exit / stderr), emit a **distinct
+   loud `repo_clone_failed`** Sentry event (sanitized — no token), write
+   `repo_error`, and honest-block — never swallow, never mark ready. This lands the
+   repo where the agent reads it regardless of divergence (a) or silent-failure (b);
+   if it genuinely can't clone, the next attempt surfaces the real error.
+1. **D2 (now the FALLBACK).** Harden `evaluateAgentReadiness` so an **absent**
+   (and **dir-invalid**) `.git` — i.e. D0's clone genuinely failed — emits
+   `agent_readiness_self_stop` and **honest-blocks** instead of greenlighting a
+   doomed agent spawn.
+2. **D3.** Fix `isInSandboxRevParseStrand` (C2 detector) to recognise the
+   **stderr-suppressed empty output** that `go.md` Step 0.0 produces, so the strand
+   is queryable for ANY on-disk shape.
+3. **D1.** Per-workspace clone regression test — now load-bearing as the
+   **founder/membership-INDEPENDENCE** proof (a member/co-owner/canary-drifted
+   workspace still clones from its own columns), not merely a lock.
 
 **Brand-survival threshold: single-user incident.** A single user whose repo
 silently fails to land is told to "reconnect" (an action that doesn't fix it) and
@@ -118,22 +140,52 @@ verified present). This plan is the **gate + observability** layer that Bug 2's
 self-heal does NOT cover: the dispatch gate that runs AFTER the self-heal and the
 in-sandbox backstop.
 
-## Root Cause (traced to call sites)
+## Root Cause — Phase-0 forensic findings (2× live prod passes)
 
-`repo_last_synced_at` advances ONLY via `session-sync.ts` after the agent's
-in-workspace `git pull/push` (per-workspace-id, `workspace-repo-mirror.ts:63`).
-`cron-workspace-sync-health.ts:232` (the only periodic re-clone) scans
-`repo_status='ready' AND github_installation_id IS NULL` — so a **connected**
-workspace (non-null install, like both affected rows) has **no periodic re-clone
-backstop**; it relies on (a) a push webhook reconcile, or (b) a **cold** dispatch
-self-heal. When `754ee124`'s `.git` is reclaimed (sandbox/host) and the
-`ensureWorkspaceRepoCloned` self-heal fails or benign-skips, the repo stays absent.
-At that point the cold-path dispatch gate (`cc-dispatcher.ts:2010`) calls
-`evaluateAgentReadiness`, which returns `"ready"` for the `absent` shape
-(deliverable-2 gap) and spawns the agent. The agent runs `go.md` Step 0.0 with
-suppressed stderr, strands, and the C2 backstop misses the empty output
-(deliverable-3 gap) → **silent forever**. No agent sync → `repo_last_synced_at`
-frozen.
+**The re-clone never lands on the agent's filesystem; the DB stays a false `ready`.**
+
+- **Reconcile fires + selects 754ee124 on every push, but no clone telemetry.**
+  Sentry `WEB-PLATFORM-B` "owner-less workspace reconciled" — 423 lifetime, **45 in
+  48h, latest today 2026-06-30T14:44**, tags `inngest.fn_id=workspace-reconcile-on-push`,
+  `workspaceId=754ee124`, `installationId=122213433`, `fullName=jikig-ai/soleur`,
+  real `headSha`. Code-confirmed: the owner-less branch is a non-paging warn
+  (`workspace-reconcile-on-push.ts:340`) with **no short-circuit** — execution
+  reaches the clone gate at `:378`. Yet `feature=ensure-workspace-repo` (ops
+  `clone`/`corrupt-worktree-block`/`gitdir-pointer-rm`/`validate-repo-url`) has
+  **ZERO events**. A successful clone is silent (pino only); a failed clone emits
+  `op:clone`. Zero events ⇒ the reconcile clone either succeeded on a filesystem
+  the agent does not read, or the gate found the worker's `.git` valid (sync path).
+- **`repo_status='ready'`, `repo_error=null`** for 754ee124 (and 52af49c2/chatte),
+  `repo_last_synced_at` frozen 2026-06-29 — a false `ready` that no failure path
+  flips (reconcile's F4 team-posture never writes `error`).
+- **Owner-canary drift (#5591):** the `owner` member rows for 754ee124 are
+  workspace-IDs (754ee124 self + 52af49c2/chatte), not real user accounts; the only
+  real-user IDs are `member`-role. Founder/owner resolution finds nobody.
+- **Operator fact:** `/api/repo/setup` reconnect (wipe-and-reclone) has **NEVER**
+  landed the repo. ⇒ the clone path itself is broken for this workspace —
+  either **(a)** it writes to a different process/container/`WORKSPACES_ROOT` mount
+  than the agent reads, or **(b)** it silently fails while the DB shows ready.
+
+**Why prior in-process self-heals don't save it:** the cold self-heal
+(`graftReadyButGitAbsent`) and warm (`cc-reprovision`) clone using the *dispatching
+user's* membership-resolved install (`resolveInstallationId`/`resolveEffective…`),
+which can return **NULL for a `member`-role user** → `ensureWorkspaceRepoCloned`
+benign-skips at `ensure-workspace-repo.ts:152` (`installationId===null → return "ok"`,
+silent, no clone). And the post-heal gate (`cc-dispatcher.ts:2010`,
+`evaluateAgentReadiness`) returns `"ready"` for the resulting `absent` shape
+(deliverable-2 gap) → doomed spawn → `go.md` Step 0.0 strands → C2 misses the empty
+output (deliverable-3 gap) → **silent forever**.
+
+**D0 closes this at the only place guaranteed same-FS-as-agent:** an in-process
+clone into the agent's own `workspacePath`, keyed on the workspace's own columns
+(never the user's membership-resolved install, never founder), loud on failure.
+
+> **Phase-0 /work verification (NOT a blocker; design is robust to both):** confirm
+> whether the Inngest reconcile worker and the WS-dispatch share one `/workspaces`
+> (single replica/mount) or diverge (multi-replica / per-replica local disk). A
+> follow-up read-only forensic (`server_name` variance across the 754ee124 reconcile
+> events; `kb_sync_history` ok/error rows) is in flight; record its verdict but do
+> not gate D0 on it — D0's in-process placement lands the repo either way.
 
 ## Implementation Phases (TDD — failing tests FIRST per `cq-write-failing-tests-before`)
 
@@ -142,8 +194,58 @@ frozen.
    paths (`vitest.config.ts` `include:` → `test/**/*.test.ts`). All new tests live
    directly under `test/`.
 2. Typecheck baseline green: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+3. Read the precedents D0 reuses: `ensure-workspace-repo.ts:148-356` (the existing
+   in-process clone — `gitWithInstallationAuth`, `--depth 1`, `--`-guard,
+   github-https allowlist, atomic `.git`-last rename), `session-sync.ts`
+   credential helper, and the workspace-install service-read path
+   (`resolve_workspace_installation_id` RPC — confirm whether it returns the
+   install for a `member`-role caller, not only owners; if owner-only, D0 reads the
+   install via the service-role workspaces column instead).
 
-### Phase 1 — Deliverable 3 (C2 detector): RED → GREEN
+### Phase 1 — Deliverable D0 (PRIMARY — in-process dispatch-time re-clone): RED → GREEN
+The reliable lander. Place it in `cc-dispatcher`'s cold factory, in the SAME
+process that constructs the agent sandbox (so the clone target == the agent's read
+path by construction: both are `workspacePathForWorkspaceId(activeWorkspaceId)` =
+`<WORKSPACES_ROOT>/<id>`).
+- **RED:** `test/dispatch-inprocess-reclone.test.ts` — with an injected clone seam +
+  a temp workspace whose `.git` is absent and a connected workspace row
+  (`github_installation_id` + `repo_url` on the workspace's OWN row):
+  - asserts the clone is invoked with the workspace's OWN install + repo_url (NOT
+    the dispatching user's membership-resolved install) and targets exactly
+    `workspacePath`;
+  - asserts that when `resolveInstallationId` (the user/membership path) returns
+    NULL but the workspace's own column is non-null, the clone STILL runs (closes
+    the member-null benign-skip);
+  - asserts that `repo_status='ready'` does NOT short-circuit the clone when `.git`
+    is absent on disk (disk reality wins);
+  - asserts that on clone FAILURE a distinct `repo_clone_failed` event fires (with
+    a SANITIZED reason — assert the token never appears) AND `repo_error` is written
+    AND the dispatch honest-blocks (RepoNotReadyError) — never returns ready;
+  - asserts an **id-shape guard**: `activeWorkspaceId` must match the UUID shape
+    before it is interpolated into the clone path (no path traversal / injection).
+- **GREEN (harden the EXISTING site — do NOT add a second clone call):** the cold
+  path ALREADY calls `ensureWorkspaceRepoCloned` in-process at `cc-dispatcher.ts:1987`
+  (and `resolveRepoReadinessWithSelfHeal`/`graftReadyButGitAbsent` before it). D0
+  modifies THAT path — it must not introduce a duplicate clone. Changes:
+  1. resolve the install from the **workspace's own `github_installation_id`**
+     (server-derived service read) when the user/membership resolution is null, so a
+     connected workspace always has a non-null install to clone with;
+  2. promote the silent `op:clone` `reportSilentFallback` to (or add alongside it)
+     a **distinct loud `repo_clone_failed`** event so a real clone failure is a
+     first-class queryable signal (today a *success* is silent and a *failure* shares
+     the generic `op:clone` — D0 needs a dedicated failure op for the discoverability
+     query + alert);
+  3. on failure, write `repo_error` via `set_repo_status(error, <sanitized reason>)`
+     so the DB stops lying `ready` and the gate reads an honest reason next dispatch.
+  Token handling unchanged from precedent (env `GIT_ASKPASS`, never URL/argv/stderr;
+  `--`-guard; github-https allowlist). NO new migration.
+- **Warm/reconcile parity (in-scope for D0):** apply the same "clone from the
+  workspace's own install column, never the membership-null" rule to `cc-reprovision`
+  (warm) so a warm-turn member dispatch also lands the repo. (Reconcile already
+  passes the push-event install; D0 does not change it, but un-blinds its outcome —
+  see Observability.)
+
+### Phase 2 — Deliverable D3 (C2 detector): RED → GREEN
 - **RED:** extend `test/` coverage for `isInSandboxRevParseStrand` (new file
   `test/in-sandbox-revparse-strand.test.ts`, or extend an existing tool-labels
   test): assert that the **exact go.md Step 0.0 command**
@@ -177,7 +279,7 @@ frozen.
   → false-NEGATIVE/missed emit, never a false block — D2 + host confirm protect
   the user).
 
-### Phase 2 — Deliverable 2 (absent-`.git` strand gate): RED → GREEN
+### Phase 3 — Deliverable D2 (absent-`.git` strand gate, FALLBACK when D0 fails): RED → GREEN
 - **RED:** new `test/agent-readiness-absent-git.test.ts`: with an injected probe
   + a temp workspace whose `.git` is **absent**, assert `evaluateAgentReadiness`
   returns `"block"` AND `reportAgentReadinessSelfStop` fired with
@@ -209,51 +311,44 @@ frozen.
   and reconcile (`workspace-reconcile-on-push.ts:372`) call sites already map
   `"block"` → honest RepoNotReadyError / "failed" / skip.
 
-### Phase 3 — Deliverable 1 (per-workspace clone invariant): TEST-ONLY
-**Reduced to test-only — BOTH reviewers (simplicity + architecture) converged:**
-the `ensure-workspace-repo.ts` benign-skip→`"failed"` behaviour change is dropped.
-It is redundant with D2 (a connected+absent workspace that benign-skips already
-hits the D2 cold gate → `kind==absent` → honest-block + emit, no code change to
-`ensure-workspace-repo.ts` needed) AND carries a 5-consumer blast radius for a
-rare corrupt-DB edge (the url passed the connect-time allowlist). The per-workspace
-clone path is already correct (Research Reconciliation); D1 is a regression LOCK,
-not a fix.
-- **RED:** new `test/ready-clone-per-workspace.test.ts`: two workspace ids sharing
-  ONE installation id but DIFFERENT repo_urls. **Must exercise the REAL
-  workspace-id keying** in at least one resolver (do NOT stub all three of
-  `resolveInstallationId` / `getCurrentRepoUrl` / `fetchUserWorkspacePath` — that
-  tests mock wiring, a tautology, and should be dropped if it cannot drive real
-  resolution). Assert each workspace resolves its OWN repo_url + CWD and invokes
-  `ensureWorkspaceRepoCloned(workspacePath=<id>, repoUrl=<own>)` independently — no
-  founder collapse, no `>1`. One installation, two ids, two repo_urls is enough —
-  no elaborate multi-installation fixtures.
-- **No `ensure-workspace-repo.ts` edit.** (If the team later wants
-  defense-in-depth layer-attribution there, the minimal form is a one-line
-  `return existsSync(join(workspacePath, ".git")) ? "ok" : "failed";` at the
-  malformed-url branch — NOT the two-part `connected AND absent` conditional, since
-  by line 252 `connected` is already guaranteed. Out of scope for this PR.)
+### Phase 4 — Deliverable D1 (founder/membership-INDEPENDENT clone): TEST-ONLY
+Now load-bearing as the **founder-independence proof** for D0 (not merely a lock).
+The `ensure-workspace-repo.ts` benign-skip→`"failed"` behaviour change stays DROPPED
+(D0 + D2 cover the outcome; 5-consumer blast radius).
+- **RED:** `test/ready-clone-per-workspace.test.ts`: (a) two workspace ids sharing
+  ONE installation id but DIFFERENT repo_urls each resolve their OWN repo_url + CWD
+  and clone independently (no collapse, no `>1`); (b) the **founder-independence**
+  case: a workspace whose `owner` member rows are workspace-IDs (the #5591 canary
+  drift) AND whose dispatching user is `member`-role STILL clones — because D0
+  resolves the install from the workspace's OWN `github_installation_id` column, not
+  from owner/founder resolution or the membership-null user path. **Must exercise
+  REAL workspace-id keying** in at least one resolver (not all-three-stubbed, a
+  tautology). One installation, two ids is enough.
 
-### Phase 4 — Full-suite + typecheck gate
+### Phase 5 — Full-suite + typecheck gate
 - `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
-- `cd apps/web-platform && ./node_modules/.bin/vitest run test/in-sandbox-revparse-strand.test.ts test/agent-readiness-absent-git.test.ts test/ready-clone-per-workspace.test.ts test/ensure-workspace-repo.test.ts test/tool-labels.test.ts test/cc-dispatcher-self-heal-observability.test.ts`
+- `cd apps/web-platform && ./node_modules/.bin/vitest run test/dispatch-inprocess-reclone.test.ts test/in-sandbox-revparse-strand.test.ts test/agent-readiness-absent-git.test.ts test/ready-clone-per-workspace.test.ts test/ensure-workspace-repo.test.ts test/tool-labels.test.ts test/cc-dispatcher-self-heal-observability.test.ts test/cc-reprovision.test.ts`
 - Then the broader affected suites (`cc-dispatcher*`, `repo-readiness*`,
   `cc-reprovision*`, `workspace-reconcile*`) to catch the orphan/exhaustiveness
   suites the targeted run misses.
 
 ## Files to Edit
+- `apps/web-platform/server/cc-dispatcher.ts` — **D0 (primary):** in-process guaranteed re-clone before `query()` (cold path) keyed on the workspace's own install column, loud `repo_clone_failed` on failure + `repo_error` write + honest-block; id-shape guard. Also pass D2's `phase:"post-heal"` at the gate (`:2010`).
+- `apps/web-platform/server/ensure-workspace-repo.ts` — **D0:** thread the workspace's-own-install fallback so a `member`-null user install does not benign-skip a CONNECTED workspace (resolve the install from the workspace column when the passed `installationId` is null); add the distinct `repo_clone_failed` loud-failure emit (today `op:clone` is generic + a *success* is silent).
+- `apps/web-platform/server/cc-reprovision.ts` — **D0:** warm-turn parity — clone from the workspace's own install column (not the membership-null user path); pass D2 `phase`.
+- `apps/web-platform/server/repo-readiness-self-heal.ts` — **D0:** `graftReadyButGitAbsent` resolves the install from the workspace's own column when the threaded install is null (closes the member-null silent benign-skip on the cold/warm heal).
 - `apps/web-platform/server/tool-labels.ts` — D3: collapse `isInSandboxRevParseStrand` to the no-`true` negation (verdict replacement) + anchor the command guard.
 - `apps/web-platform/server/git-worktree-validity.ts` — D2: `evaluateAgentReadiness` absent/dir-invalid → emit + block; add `phase: "post-heal" | "pre-heal"` to `AgentReadinessContext` so the absent emit fires only on a terminal (post-heal) verdict.
-- `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` — pass `phase:"pre-heal"` so reconcile-absent does NOT emit a false-positive self-stop (architecture P1).
-- `apps/web-platform/server/cc-dispatcher.ts` — pass `phase:"post-heal"` at the cold gate (`:2010`).
-- `apps/web-platform/server/cc-reprovision.ts` — pass `phase` at the warm gate (`:145`); warm never reaches it for absent, so either value is correct — use `post-heal` for consistency.
-- `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md` — amend the dispatch-readiness consequence (§ line 552) to record: gate fires for `absent`/`dir-invalid` (not only `dir-valid`), the per-path heal ordering (cold post-heal emits; reconcile pre-heal heals-without-emit; warm gate-skipped for absent), + the in-sandbox empty-output backstop.
-- (D1 behavior change to `ensure-workspace-repo.ts` DROPPED — see Phase 3.)
+- `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` — pass `phase:"pre-heal"` (reconcile-absent heals without a false-positive self-stop). (Reconcile clone unchanged; its outcome is now un-blinded via the D0 `repo_clone_failed` emit inside `ensureWorkspaceRepoCloned`.)
+- `apps/web-platform/server/repo-resolver-divergence.ts` (or a sibling emit module) — add the `repo_clone_failed` reporter (distinct op/issue-group; sanitized reason; ADR-029 pseudonymization).
+- `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md` — amend the dispatch-readiness consequence (§ line 552): add D0 (in-process re-clone from the workspace's own install column is the authoritative same-FS lander), gate fires for `absent`/`dir-invalid`, per-path heal ordering, in-sandbox empty-output backstop.
 
 ## Files to Create
-- `apps/web-platform/test/in-sandbox-revparse-strand.test.ts`
-- `apps/web-platform/test/agent-readiness-absent-git.test.ts`
-- `apps/web-platform/test/ready-clone-per-workspace.test.ts`
-- (`apps/web-platform/test/ensure-workspace-repo.test.ts` runs in Phase 4 as an unchanged regression suite — NOT modified, since the D1 behaviour change was dropped.)
+- `apps/web-platform/test/dispatch-inprocess-reclone.test.ts` — D0.
+- `apps/web-platform/test/in-sandbox-revparse-strand.test.ts` — D3.
+- `apps/web-platform/test/agent-readiness-absent-git.test.ts` — D2.
+- `apps/web-platform/test/ready-clone-per-workspace.test.ts` — D1.
+- (`apps/web-platform/test/ensure-workspace-repo.test.ts` extended for the D0 install-from-workspace-column + loud-failure behaviour; runs in Phase 5.)
 
 No new migration (all columns exist; `repo_error` shipped in mig 110/113). No new
 infrastructure.
@@ -261,46 +356,55 @@ infrastructure.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] AC1: `isInSandboxRevParseStrand("…rev-parse --is-inside-work-tree…", "")` returns `true`; the healthy compound output `"false\ntrue"` returns `false`; bare-repo `"true\nfalse"` returns `false`. (vitest)
-- [ ] AC2: `evaluateAgentReadiness` returns `"block"` and fires `reportAgentReadinessSelfStop({gitKind:"absent", gitRevParseValid:false, source:"host-pre-heal"})` for an absent `.git` (connected+dbReady); same for `dir-invalid`; `dir-valid`+`worktree` still returns `"ready"`; `inconclusive`×2 still fails-open `"ready"`. (vitest)
-- [ ] AC3: two connected workspaces sharing one installation id with distinct repo_urls each resolve their OWN repo_url + CWD and each invoke `ensureWorkspaceRepoCloned` independently (no `>1`/collapse) — exercising REAL workspace-id resolution, not all-three-stubbed mock wiring. (vitest)
-- [ ] AC4: (D1 behavior change DROPPED — no `ensure-workspace-repo.ts` assertion; D2 covers the connected+absent outcome at the cold gate.)
-- [ ] AC5: **cold** (`phase:post-heal`)-absent emits `agent_readiness_self_stop` + maps `"block"` → honest RepoNotReadyError (no spawn); **reconcile** (`phase:pre-heal`)-absent does NOT emit a self-stop and the workspace is re-cloned via `!isReadyGitWorkTree`; **warm**-absent routes to heal (never reaches the gate). (vitest, 3 call-site assertions — the reconcile no-emit assertion is the architecture-P1 soak-signal-pollution guard.)
+- [ ] **AC0a (D0 — lands the repo):** for a connected workspace (own `github_installation_id` + `repo_url`) with `.git` ABSENT, the cold dispatch performs an in-process clone into exactly `workspacePath`; on success `.git` is present at the agent's read path before `query()` constructs. (vitest, injected clone seam)
+- [ ] **AC0b (D0 — founder/membership independence):** when `resolveInstallationId` (user/membership) returns NULL but the workspace's own install column is non-null, the clone STILL runs (no benign-skip). (vitest)
+- [ ] **AC0c (D0 — disk reality over DB):** `repo_status='ready'` does NOT short-circuit the clone when `.git` is absent on disk. (vitest)
+- [ ] **AC0d (D0 — LOUD failure, no swallow):** on clone failure a distinct `repo_clone_failed` Sentry event fires with a SANITIZED reason (assert the installation token NEVER appears in the event), `repo_error` is written, and the dispatch honest-blocks (RepoNotReadyError) — never returns ready. (vitest)
+- [ ] **AC0e (D0 — id-shape guard):** a non-UUID `activeWorkspaceId` is rejected before path interpolation (no traversal). (vitest)
+- [ ] AC1: `isInSandboxRevParseStrand("…rev-parse --is-inside-work-tree…", "")` returns `true`; healthy `"false\ntrue"` → `false`; bare-repo `"true\nfalse"` → `false`; a non-probe command embedding the tokens with empty output → `false`. (vitest)
+- [ ] AC2: `evaluateAgentReadiness` returns `"block"` + fires `reportAgentReadinessSelfStop({gitKind:"absent",…,source:"host-pre-heal"})` for absent (post-heal/cold); same for `dir-invalid`; `dir-valid`+`worktree`→`"ready"`; `inconclusive`×2→`"ready"`. (vitest)
+- [ ] AC3: two connected workspaces, one installation, distinct repo_urls each resolve their OWN repo_url + CWD and clone independently (no collapse) — REAL workspace-id resolution, not all-stubbed; PLUS the founder-independence case (canary-drifted owner rows + member dispatcher still clones from the workspace's own column). (vitest)
+- [ ] AC5: **cold** (`phase:post-heal`)-absent (after D0's clone genuinely failed) emits `agent_readiness_self_stop` + honest RepoNotReadyError; **reconcile** (`phase:pre-heal`)-absent does NOT emit a self-stop (heals via `!isReadyGitWorkTree`); **warm**-absent routes to heal. (vitest, 3 call-site assertions)
 - [ ] AC6: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
-- [ ] AC7: targeted + affected vitest suites pass (Phase 4 list).
-- [ ] AC8: ADR-044 dispatch-readiness consequence amended to cover absent/dir-invalid + empty-output backstop.
+- [ ] AC7: targeted + affected vitest suites pass (Phase 5 list).
+- [ ] AC8: ADR-044 dispatch-readiness consequence amended (D0 in-process re-clone + absent/dir-invalid gate + empty-output backstop).
 - [ ] AC9: PR body uses **`Ref #5733`** (NOT `Closes`) — closure is gated on the post-deploy soak below.
 
 ### Post-merge (operator / automated)
-- [ ] AC10: After deploy, the next dispatch into a connected+absent workspace produces a queryable `agent_readiness_self_stop` event (`source:host-pre-heal` OR `source:in-sandbox-backstop`, `gitKind:absent`). Verify via Sentry issue search (no SSH). Soak: see Follow-Through Enrollment.
+- [ ] AC10a (D0 lands the repo — the operator-facing success): after deploy, a dispatch into 754ee124 lands `.git` and `repo_last_synced_at` advances past 2026-06-29 (PostgREST read, no SSH); OR a `repo_clone_failed` Sentry event names the real clone error (no more silent strand). Soak: Follow-Through Enrollment.
+- [ ] AC10b: a genuine absent-`.git` strand (D0 clone failed) is queryable as `agent_readiness_self_stop` (`gitKind:absent`) / `repo_clone_failed`. Verify via Sentry (no SSH).
+- [ ] AC10c (/work Phase-0): record the FS-divergence verdict (single vs multi-replica `/workspaces`); if multi-replica, file a follow-up for a same-container periodic backstop (D0's in-process dispatch heal already covers the interactive path).
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "agent_readiness_self_stop Sentry events (gitKind:absent | source:in-sandbox-backstop) — strand is now observable"
-  cadence: per dispatch into an absent/invalid-.git workspace
-  alert_target: "Sentry issue (query-only discoverability, no page — auto-heals or honest-blocks)"
-  configured_in: "server/repo-resolver-divergence.ts (reportAgentReadinessSelfStop); searchable via tags source/gitKind/gitRevParseValid"
+  what: "repo_last_synced_at advances for 754ee124 after deploy (the agent now lands the repo + syncs) — primary D0 success signal; plus repo_clone_failed / agent_readiness_self_stop Sentry events make every failure queryable"
+  cadence: per cold dispatch into an absent-.git connected workspace
+  alert_target: "Sentry issue repo_clone_failed (PAGES — a genuine clone failure is operator-actionable); agent_readiness_self_stop (query-only discoverability)"
+  configured_in: "server/repo-resolver-divergence.ts (reportAgentReadinessSelfStop + new repo_clone_failed reporter); searchable via tags op/gitKind/source"
 error_reporting:
-  destination: Sentry via reportSilentFallback (ADR-029 pseudonymization boundary)
-  fail_loud: true  # honest RepoNotReadyError to the user + Sentry event; never silent spawn
+  destination: Sentry via reportSilentFallback (ADR-029 pseudonymization boundary; token NEVER in the event — sanitized stderr only)
+  fail_loud: true  # D0 clone failure → distinct repo_clone_failed event + repo_error write + honest RepoNotReadyError; never silent, never marks ready
 failure_modes:
-  - mode: "absent .git at dispatch gate"
+  - mode: "D0 in-process clone fails (token/network/entitlement)"
+    detection: "cc-dispatcher D0 clone returns failed → distinct repo_clone_failed emit + set_repo_status(error)"
+    alert_route: "Sentry repo_clone_failed (paging) + repo_error read back by the gate"
+  - mode: "absent .git STILL at dispatch gate (D0 clone genuinely failed)"
     detection: "evaluateAgentReadiness probeGitWorktreeShape kind==absent → emit + block"
     alert_route: "agent_readiness_self_stop (gitKind:absent, source:host-pre-heal)"
   - mode: "in-sandbox Step 0.0 empty rev-parse output"
     detection: "isInSandboxRevParseStrand empty/no-true output"
     alert_route: "agent_readiness_self_stop (source:in-sandbox-backstop)"
-  - mode: "connected+absent clone cannot proceed (malformed url / clone fail)"
-    detection: "ensureWorkspaceRepoCloned returns failed → RepoNotReadyError"
-    alert_route: "ensure-workspace-repo Sentry op + honest user message"
+  - mode: "member-null install on a connected workspace (the prior silent benign-skip)"
+    detection: "D0 resolves install from the workspace's own column; if still null → connected-null-install-at-dispatch emit"
+    alert_route: "repo_resolver_divergence (connected-null-install-at-dispatch)"
 logs:
   where: Sentry (reportSilentFallback) + pino structured logs (createChildLogger)
   retention: existing Sentry/Better Stack retention (unchanged)
 discoverability_test:
-  command: "Sentry issue search: query='agent_readiness_self_stop gitKind:absent' statsPeriod=7d (REST API, no ssh)"
-  expected_output: ">=1 event after a real absent-.git dispatch post-deploy; 0 before deploy"
+  command: "PostgREST: GET /rest/v1/workspaces?id=eq.754ee124…&select=repo_last_synced_at,repo_status,repo_error (read-only, no ssh); AND Sentry search 'repo_clone_failed' statsPeriod=7d"
+  expected_output: "repo_last_synced_at advances past 2026-06-29 after a post-deploy dispatch (repo landed); OR a repo_clone_failed event names the real clone error (no more silent strand)"
 ```
 
 ### Soak Follow-Through Enrollment
@@ -325,12 +429,22 @@ is now queryable, not just healed):
 Amend **ADR-044** (`status: accepted`) — its dispatch-readiness consequence
 (§ "dispatch readiness MUST be (repo_status-ok AND physical `.git` present)",
 line 552) currently describes the `ready`-but-`.git`-gone re-clone (Bug 2). Extend
-the `## Decision` + `## Consequences` to record that the **shared dispatch
-readiness gate (`evaluateAgentReadiness`) treats `absent`/`dir-invalid` as a
-confirmed strand → honest-block + emit** (not only the `dir-valid`-corrupt slice),
-and that the **agent's in-sandbox Step 0.0 empty (`2>/dev/null`-suppressed) output
-is a strand signal** (the C2 backstop). This is an amendment, not a new ADR — the
-ownership model is unchanged.
+the `## Decision` + `## Consequences` to record:
+- **D0 (the authoritative lander):** the repo re-clone that the agent depends on
+  MUST run **in the same process that constructs the agent sandbox** (cc-dispatcher
+  cold path), cloning into the agent's own `workspacePath`, keyed on the
+  **workspace's own `github_installation_id`** (never the dispatching user's
+  membership-resolved install, never founder/owner resolution — the #5591
+  owner-canary drift makes founder resolution unusable). Out-of-process re-clones
+  (Inngest reconcile, cron) are best-effort backstops only — they are not
+  guaranteed to share the agent's filesystem.
+- The DB `repo_status` is NOT authoritative over on-disk reality: an absent `.git`
+  is re-cloned regardless of a stale `ready`; a genuine clone failure writes
+  `repo_error` and surfaces a distinct `repo_clone_failed` signal.
+- The shared gate (`evaluateAgentReadiness`) treats `absent`/`dir-invalid` as a
+  confirmed strand → honest-block + emit (fallback when D0's clone fails), and the
+  agent's in-sandbox Step 0.0 empty (`2>/dev/null`) output is a strand signal (C2).
+Amendment, not a new ADR — the ownership model is unchanged.
 
 ### C4 views
 Read all three model files (`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`)
@@ -350,17 +464,28 @@ time-gated criterion → handled by Follow-Through Enrollment, NOT a deferred is
 
 ## Domain Review
 
-**Domains relevant:** Engineering (CTO).
+**Domains relevant:** Engineering (CTO), Security (D0 is a new clone write-path with
+a private-repo installation token), Data-integrity (D0 writes `repo_error` / acts on
+the `repo_status` vs disk divergence).
 
 ### Engineering (CTO)
-**Status:** reviewed (plan-author sweep; deepen-plan domain agents run next per pipeline).
-**Assessment:** Server-side dispatch-readiness + observability hardening on a
-`single-user incident` brand-survival surface. Cross-cutting concerns: the gate
-change affects 3 call sites (cold/warm/reconcile) that already consume the
-`"block"` verdict — verify each. The C2 detector change risks false-positives on
-unrelated `rev-parse` commands — bounded by the `isWorkTreeProbe` command guard
-(deepen-plan to settle whether to tighten to the go.md compound shape). No new
-data egress; reuses ADR-029 pseudonymization. CPO sign-off required (threshold).
+**Status:** reviewed (plan-author sweep + architecture/simplicity agents; data-integrity + security agents run in this re-deepen).
+**Assessment:** D0 adds an in-process clone WRITE path at dispatch time on a
+`single-user incident` surface. Cross-cutting concerns the review agents must cover:
+(1) **Security** — the install token rides `GIT_ASKPASS` env (never URL/argv/stderr,
+per `ensure-workspace-repo.ts`/`git-auth.ts` precedent); the `repo_clone_failed`
+event must carry a SANITIZED reason (no token); `repo_url` is github-https-allowlisted
++ `--`-guarded; `activeWorkspaceId` is UUID-shape-guarded before path interpolation
+(no traversal); the workspace-install service read is keyed on a server-derived
+workspace id, never request-supplied. (2) **Data-integrity** — D0 writes
+`repo_error` + flips a false `ready` to `error` on failure; confirm this does not
+clobber a legitimate concurrent connect/disconnect (reuse the existing
+`set_repo_status` RPC + the clone's `.git`-sentinel atomic rename; no new lock).
+(3) reading the workspace's own `github_installation_id` requires service-role (the
+column is REVOKE'd from `authenticated`) — confirm the read path is allowlisted
+(mirror `resolve_workspace_installation_id`'s SECURITY DEFINER membership-check, or
+the service-role workspaces read used by reconcile). (4) D2 gate `phase`-scoping +
+C2 false-positive bound as before. CPO sign-off required (threshold).
 
 ### Product/UX Gate
 **Mechanical UI-surface override:** Files to Edit/Create contain NO
