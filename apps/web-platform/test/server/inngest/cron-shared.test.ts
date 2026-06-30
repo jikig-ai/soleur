@@ -167,6 +167,10 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
   it("cron-ux-audit is RESTORED — no longer Tier-2 deferred (#5199)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-ux-audit")).toBe(false);
   });
+
+  it("cron-architecture-diagram-sync is live — not Tier-2 deferred (#5631)", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-architecture-diagram-sync")).toBe(false);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {

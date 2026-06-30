@@ -52,30 +52,77 @@ jobs:
       contents: read
       checks: read          # commits/<sha>/check-runs API
       actions: read         # actions/workflows/ci.yml/runs API (fast no-CI-run detection)
-    timeout-minutes: 20      # hard ceiling > MAX_ATTEMPTS*INTERVAL (15m) > p100 CI (~8m)
+    # Hard backstop only — sized for ≥20% wall-clock headroom over the in-bash
+    # CEILING_S (3000s): 60m = 3600s. The in-bash ceiling is keyed on WALL-CLOCK
+    # `elapsed` (not attempt count), so it fires FIRST regardless of per-iteration
+    # gh-api latency and the diagnostic ::error:: always emits (a bare GitHub
+    # job-kill reproduces the "silent skip, no signal" symptom #5795 is about — an
+    # attempt-count ceiling could be out-raced by API latency stretching each
+    # iteration; #5795 review P3). Do NOT lower without re-reading ADR-072.
+    timeout-minutes: 60
     steps:
       - name: Wait for CI test check-run on this SHA
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          MAX_ATTEMPTS: "90"      # 90 * 10s = 900s = 15m. INDEPENDENT window sized to CI p100 (~8m); NOT governed by the deploy job's STATUS/HEALTH/IN_FLIGHT drift assertion.
+          # ADAPTIVE CEILING — do NOT lower CEILING_S, MAX_ATTEMPTS, or
+          # timeout-minutes without re-reading ADR-072. The ceiling is bounded by
+          # ci.yml-run LIVENESS, not a fixed CI latency: we only approach it while CI
+          # is provably alive (run status != completed). CEILING_S=3000s=50m is the
+          # WALL-CLOCK budget, sized above the observed p100 CI-under-contention
+          # duration (~28m, measured 2026-06-30 over the last 50 main ci.yml runs).
+          # The in-bash ceiling keys on `elapsed >= CEILING_S` (NOT attempt count) so
+          # it fires before the timeout-minutes hard-kill regardless of per-iteration
+          # gh-api latency (#5795 review P3 — an attempt-count ceiling could be
+          # out-raced by API latency). MAX_ATTEMPTS is the loop's iteration backstop;
+          # timeout-minutes (3600s) carries ≥20% headroom over CEILING_S.
+          CEILING_S: "3000"          # wall-clock adaptive ceiling = MAX_ATTEMPTS * INTERVAL_S
+          MAX_ATTEMPTS: "300"        # iteration backstop (300 * 10s = CEILING_S); the elapsed ceiling is primary
           INTERVAL_S: "10"
-          GRACE_ATTEMPTS: "6"     # 60s grace for a CI run to register before declaring "no CI for this SHA"
+          GRACE_ATTEMPTS: "6"        # 60s grace for a ci.yml run to register before declaring "no CI for this SHA"
+          RECONCILE_ATTEMPTS: "6"    # bounded post-ci-completion re-poll absorbing run-completed→test-check-run eventual-consistency lag (load-bearing for green builds; spec-flow P0)
         run: |
           set -euo pipefail
-          # FAIL-CLOSED. We do NOT trust a [skip ci] token in the commit message
-          # as a deploy authorizer — GitHub honors it only on the last line, but a
-          # grep over the whole message would match a substring in a PR body and
-          # wave a RED CI through. Instead: if NO ci.yml run ever registers for this
-          # SHA, fail-CLOSED after a 60s grace; deliberate skip-ci releases use the
-          # workflow_dispatch escape hatch. Brand-survival = single-user incident.
+          # FAIL-CLOSED, ADAPTIVE. The prod deploy gates on CI's synthetic `test`
+          # aggregator check-run for THIS SHA. GitHub does NOT create that check-run
+          # until `test`'s needs:[shards] reach a terminal state (ci.yml `test` is
+          # needs:[…] + if:always()), so under runner contention it is absent for
+          # many minutes while the ci.yml workflow RUN is already live. A FIXED poll
+          # window therefore times out on a healthy-but-queued build, and each
+          # consecutive squash-merge loses the same race so "next release self-heals"
+          # never fires — the #5795 incident (prod stalled ~2.5h).
+          #
+          # Instead we wait ADAPTIVELY on the real CI signal:
+          #   - exit 0 ONLY on the `test` check-run conclusion==success;
+          #   - keep waiting as long as the ci.yml RUN for this SHA is alive
+          #     (run status != completed — a BLOCKLIST over the full run-status enum
+          #     queued|in_progress|waiting|requested|pending, NOT an allowlist that
+          #     would dead-end on waiting/requested/pending);
+          #   - fail-CLOSED the instant `test` concludes non-success, or the ci.yml
+          #     run concludes without `test` reaching success after a BOUNDED
+          #     reconciliation grace, or no run registers after the 60s grace, or the
+          #     adaptive ceiling is hit while CI is still in_progress.
+          # The ci.yml RUN `.conclusion` is LIVENESS-ONLY — it MUST NEVER authorize
+          # exit 0 (only the `test` check-run conclusion==success may); a
+          # run.conclusion shortcut would fail-OPEN on a mis-selected run or a green
+          # run whose `test` aggregation was non-success. See ADR-072.
           status=missing; conclusion=none
-          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+          reconcile_used=0
+          warned_900=0
+          start_epoch=$(date +%s)
+          total_budget=$((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))
+          for attempt in $(seq 1 "$total_budget"); do
+            elapsed=$(( $(date +%s) - start_epoch ))
+            if [ "$elapsed" -gt 900 ] && [ "$warned_900" = "0" ]; then
+              echo "::warning::await-ci has waited past 900s (elapsed_s=$elapsed) for CI on $SHA — CI is under contention; the adaptive gate keeps waiting while the ci.yml run is alive (#5795)."
+              warned_900=1
+            fi
+            # ── TOP OF LOOP: read the `test` check-run verdict FIRST (AC2). ──
             # var-based (NOT piped-into-grep) to avoid set -e + pipe fragility;
             # stderr captured so a missing checks:read perm is diagnosable now.
             if ! resp=$(gh api "repos/$REPO/commits/$SHA/check-runs" 2>/tmp/gherr); then
-              echo "attempt $attempt: check-runs query failed: $(cat /tmp/gherr) — retrying"
+              echo "attempt $attempt: check-runs query failed: $(cat /tmp/gherr) — retrying (elapsed_s=$elapsed)"
               sleep "$INTERVAL_S"; continue
             fi
             # Most-recent NON-cancelled check-run named exactly "test" (excluding
@@ -83,7 +130,7 @@ jobs:
             sel='([.check_runs[]|select(.name=="test" and .conclusion!="cancelled")]|sort_by(.started_at)|last)//{}'
             status=$(jq -r "$sel|.status//\"missing\"" <<<"$resp")
             conclusion=$(jq -r "$sel|.conclusion//\"none\"" <<<"$resp")
-            echo "attempt $attempt: test status=$status conclusion=$conclusion"
+            echo "attempt $attempt: test status=$status conclusion=$conclusion elapsed_s=$elapsed"
             if [ "$status" = "completed" ]; then
               if [ "$conclusion" = "success" ]; then
                 echo "CI test passed for $SHA — deploy may proceed."
@@ -92,23 +139,88 @@ jobs:
               echo "::error::CI test concluded '$conclusion' for $SHA — blocking deploy (fail-closed)."
               exit 1
             fi
-            # Fast fail-closed: after grace, if ci.yml never triggered for this SHA,
-            # block now instead of burning 15m (latency optimization atop the timeout).
-            if [ "$status" = "missing" ] && [ "$attempt" -ge "$GRACE_ATTEMPTS" ]; then
-              runs=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA" --jq '.total_count' 2>/dev/null || echo "0")
-              if [ "$runs" = "0" ]; then
-                echo "::error::No ci.yml run for $SHA after grace — CI was skipped or never triggered. Blocking deploy (fail-closed). Use workflow_dispatch to force a release."
+            # ── `test` not yet completed: gate on ci.yml-RUN liveness. ──
+            # A transient gh api failure must RETRY (continue), never be parsed as a
+            # zero-run (a false fail-closed); only act on a SUCCESSFUL response. This
+            # replaces the prior `|| echo "0"` which conflated an API error with a
+            # true zero-run.
+            if ! runs_resp=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=20" 2>/tmp/gherr); then
+              echo "attempt $attempt: ci-runs query failed: $(cat /tmp/gherr) — retrying (elapsed_s=$elapsed)"
+              sleep "$INTERVAL_S"; continue
+            fi
+            run_count=$(jq -r '.total_count // 0' <<<"$runs_resp")
+            # Fast fail-closed: after grace, if NO ci.yml run ever registered for
+            # this SHA, block now instead of waiting out the ceiling. Deliberate
+            # skip-ci releases use the workflow_dispatch escape hatch.
+            if [ "$status" = "missing" ] && [ "$attempt" -ge "$GRACE_ATTEMPTS" ] && [ "$run_count" = "0" ]; then
+              echo "::error::No ci.yml run for $SHA after grace — CI was skipped or never triggered. Blocking deploy (fail-closed). Use workflow_dispatch to force a release."
+              exit 1
+            fi
+            # Guard the array before indexing (run_count==0 ⇒ null ⇒ "none"); select
+            # the most-recent push-run for this SHA (squash-merge mints a fresh SHA).
+            run_status=$(jq -r '(.workflow_runs | sort_by(.created_at) | last | .status) // "none"' <<<"$runs_resp")
+            run_conclusion=$(jq -r '(.workflow_runs | sort_by(.created_at) | last | .conclusion) // "none"' <<<"$runs_resp")
+            if [ "$run_status" != "completed" ]; then
+              # CI run is alive (queued/in_progress/waiting/requested/pending) or
+              # not-yet-registered — keep waiting, bounded by the WALL-CLOCK ceiling.
+              # Keying on `elapsed` (not attempt count) guarantees this diagnostic
+              # fires before the timeout-minutes hard-kill even when per-iteration
+              # gh-api latency stretches each loop iteration past INTERVAL_S
+              # (#5795 review P3).
+              if [ "$elapsed" -ge "$CEILING_S" ]; then
+                echo "::error::Timed out after ${elapsed}s (ceiling ${CEILING_S}s) while the ci.yml run for $SHA was still '$run_status' — blocking deploy (fail-closed). CI exceeded the adaptive ceiling; see ADR-072."
                 exit 1
               fi
+              echo "attempt $attempt: ci.yml run status=$run_status (alive) — waiting (elapsed_s=$elapsed)"
+              sleep "$INTERVAL_S"; continue
+            fi
+            # ── ci.yml run COMPLETED but `test` not yet success: reconciliation. ──
+            # Absorb run-completed→check-run eventual-consistency lag with a BOUNDED
+            # re-poll (RECONCILE_ATTEMPTS, consumed as ordinary loop iterations — NOT
+            # a new unbounded inner loop). We proceed ONLY when the NEXT top-of-loop
+            # read re-observes `test`=success; otherwise fail-closed once the grace is
+            # spent (covers ci cancelled/timed_out/skipped/action_required). The run
+            # `.conclusion` here is DIAGNOSTIC ONLY — it never authorizes exit 0.
+            reconcile_used=$((reconcile_used + 1))
+            echo "attempt $attempt: ci.yml run completed (conclusion=$run_conclusion) but test check-run status=$status — reconciling ${reconcile_used}/${RECONCILE_ATTEMPTS} (elapsed_s=$elapsed)"
+            if [ "$reconcile_used" -ge "$RECONCILE_ATTEMPTS" ]; then
+              echo "::error::ci.yml run for $SHA concluded '$run_conclusion' but the 'test' check-run never reached success after ${RECONCILE_ATTEMPTS} reconciliation polls — blocking deploy (fail-closed)."
+              exit 1
             fi
             sleep "$INTERVAL_S"
           done
-          echo "::error::Timed out after $((MAX_ATTEMPTS * INTERVAL_S))s waiting for CI test (last status=$status) — blocking deploy (fail-closed)."
+          echo "::error::Timed out after $((total_budget * INTERVAL_S))s waiting for CI test on $SHA (last test status=$status) — blocking deploy (fail-closed)."
           exit 1
 
   migrate:
-    needs: release
-    if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+    needs: [release, await-ci]
+    # Gated on await-ci so migrations only apply for a CI-green SHA and never run
+    # ahead of a fail-closed gate. A longer adaptive await-ci (ADR-072) would
+    # otherwise widen the window where the prod DB gets a NEW schema while prod
+    # still serves OLD code, and could apply migrations for a SHA whose CI later
+    # fail-closes.
+    #
+    # `if` MUST lead with `always() &&`: GitHub skips a job when any `needs` dep is
+    # SKIPPED *before* the `if` is evaluated, so without always() a
+    # workflow_dispatch run (where await-ci is skipped — it is a push-only job)
+    # would auto-skip migrate, the dispatch-tolerance clause would never run, and
+    # deploy (which tolerates migrate==skipped) would still ship NEW code on an
+    # UN-migrated schema — the more dangerous ordering. Mirrors the deploy job.
+    #
+    # Trade-off (NOT "no net cost"): this serializes migrate AFTER await-ci — it
+    # used to run concurrently with the wait, both off `release` — so under
+    # contention deploy-start ≈ await-ci + migrate_runtime instead of
+    # max(await-ci, migrate). migrate is short transactional DDL so the tail cost
+    # is small and the correctness gain is worth it. Residual window (named, not
+    # closed): a migrate that applies without a following deploy can still occur on
+    # a verify-doppler-secrets failure, leaving NEW schema with OLD prod code —
+    # acceptable under expand/contract forward-migration discipline.
+    if: >-
+      always() &&
+      needs.release.outputs.version != '' &&
+      (needs.await-ci.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
+      (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     # Holds the migrate-web-platform lock (cancel-in-progress: false), so an
     # unbounded hang serializes all releases. Cap above any legitimate apply;
@@ -818,3 +930,59 @@ jobs:
             exit 1
           fi
           echo "live-verify gate: non-blocking (result=${RESULT:-unknown})"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Fail-closed notification (#5795 / ADR-072). A fail-closed `await-ci` is
+  # otherwise PULL-ONLY — a red required job + an ::error:: annotation that
+  # nobody is paged on. Worse, the `release` job posts a MISLEADING
+  # "<component> v0.X.Y released!" Slack/email (reusable-release.yml) on
+  # release-job success, INDEPENDENT of await-ci, so a gated deploy looks shipped
+  # while prod is frozen. This job converts the pull-only fail-closed signal into
+  # an operator-visible PUSH notification on the existing release Slack channel.
+  # (Fully gating the "released!" announcement on deploy-success touches the
+  # shared reusable-release.yml — deferred to the option-3 issue.)
+  notify-gated:
+    needs: [release, await-ci]
+    if: always() && needs.await-ci.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post deploy-gated notification to Slack
+        # continue-on-error: a notification-channel hiccup must never be the thing
+        # that reddens the run — the red await-ci job is already the gating signal.
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          SHA: ${{ github.sha }}
+          VERSION: ${{ needs.release.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::No Slack webhook URL configured, skipping deploy-gated notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+          SHORT_SHA="${SHA:0:12}"
+          # VERSION may be empty if the release job did not mint a tag this run.
+          VER_LABEL="${VERSION:+v${VERSION} }"
+          # Slack mrkdwn bold is *single asterisk*; backticks are literal markdown
+          # code-spans (no command substitution intended). SHA/version/run-url are
+          # trusted GitHub contexts injected via env (no untrusted-input interp).
+          # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown, not command substitution
+          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\nCI did not go green for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. Inspect the await-ci job, then re-run the release once CI is green for this SHA.\n\n%s' \
+            "$VER_LABEL" "$SHORT_SHA" "$RUN_URL")
+          # shellcheck disable=SC2016  # $text is a jq variable, not a shell expansion
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+          # `|| echo 000` keeps a curl transport failure on the ::warning path —
+          # without it bash -e kills the step before the warning is emitted.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Deploy-gated Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Deploy-gated Slack notification failed (HTTP $HTTP_CODE)"
+          fi
