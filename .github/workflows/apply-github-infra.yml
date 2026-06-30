@@ -337,7 +337,11 @@ jobs:
             echo "::error::gh api rulesets/14145388 failed — App lacks Administration:Read or ruleset deleted. Response: ${RULESET_JSON}"
             exit 1
           }
-          ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[0].parameters.required_status_checks | length')
+          # Order-independent select (#5780): adding a sibling `merge_queue`
+          # rule in PR-2 can reorder `rules[]` so `rules[0]` is no longer the
+          # required_status_checks rule (→ null → the ^[0-9]+$ guard exit 1).
+          # Selecting by .type is stable regardless of rule order.
+          ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length')
           if [[ ! "$ACTUAL" =~ ^[0-9]+$ ]]; then
             echo "::error::Unexpected jq result for required_status_checks count: ${ACTUAL}."
             exit 1
