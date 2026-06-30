@@ -43,3 +43,31 @@ describe("setup-dom.ts cleanup surfaces", () => {
     expect(afterEachBlock).not.toContain("vi.restoreAllMocks()");
   });
 });
+
+// #5796 — the vi.waitFor floor wrapper lives in ONE shared helper
+// (test/helpers/install-vi-waitfor-floor.ts) called from BOTH setup files. The
+// node/unit project (test/**/*.test.ts) and the component project each exercise
+// vi.waitFor; installing in only one would leave the other's sites at the 1s
+// default. This guards the helper body (incl. the 10s floor value, which the
+// behavioral floor tests cannot cheaply assert) AND both call sites, so a silent
+// removal or a divergence of the floor value fails fast.
+describe("vi.waitFor floor wrapper (#5796)", () => {
+  const helper = readFileSync(
+    resolve(__dirname, "helpers/install-vi-waitfor-floor.ts"),
+    "utf8",
+  );
+  const nodeSetup = readFileSync(resolve(__dirname, "setup-node.ts"), "utf8");
+  const domSetup = readFileSync(resolve(__dirname, "setup-dom.ts"), "utf8");
+
+  it("helper reassigns vi.waitFor with the 10s floor", () => {
+    expect(helper).toContain("vi.waitFor =");
+    expect(helper).toContain("10_000");
+  });
+
+  it.each([
+    ["setup-node.ts", nodeSetup],
+    ["setup-dom.ts", domSetup],
+  ])("%s installs the floor via installViWaitForFloor()", (_label, src) => {
+    expect(src).toContain("installViWaitForFloor()");
+  });
+});
