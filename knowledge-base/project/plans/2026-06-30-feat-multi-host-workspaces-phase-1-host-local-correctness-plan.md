@@ -203,13 +203,22 @@ return is inert in Phase 1 (no consumer reads it) but would mis-inform the Phase
 coordinator if wrong.
 
 **Residual (named, accepted):** in the narrow race window, if the reconnect's new
-session has **not yet re-subscribed** to `convId` (`newSession.conversationId` still
-`undefined` at :2843), the user-level guard suppresses all three teardowns for
-`convId` — leaving the cc-conversation / replay buffer / slot to the existing
-pg_cron sweep rather than the grace path. This matches today's completed-reconnect
+session has **not yet re-subscribed** to `convId`, the user-level guard suppresses
+all three teardowns for `convId` — leaving them to existing background reclaimers
+rather than the grace path. **Each deferred artifact has a named bound:** the
+concurrency slot → the pg_cron 120s sweep; the replay buffer → its independent
+~45s TTL sweep + ring/byte/map caps (`stream-replay-buffer.ts`); an orphaned
+cc-query → the stuck-active reaper. This matches today's completed-reconnect
 behaviour (any reconnect already cancels `convId`'s timer regardless of resume
-target), so it is **not a new leak class** — but it is the deliberate trade-off of
-user-level granularity, surfaced here rather than waved off.
+target), so it is **not a new leak class** — the deliberate trade-off of user-level
+granularity, surfaced here rather than waved off.
+
+**Cross-user isolation (by construction):** the guard reads `sessions.get(uid)` and
+the abort targets `(uid, convId)` for exactly the `uid` the grace-timer close-handler
+closure bound (the disconnecting user). No other user's session can be read,
+suppressed, or aborted — `sessions` and `activeSessions` are both user-keyed (the
+abort-turn decoy / cross-user tests pin the abort half; the guard half is the same
+`uid`).
 
 **If this leaks, the user's data/workflow is exposed via:** N/A for Phase 1 — no
 new data surface, no new store, no cross-tenant boundary added. The dev-Supabase

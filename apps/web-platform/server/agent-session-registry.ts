@@ -187,13 +187,23 @@ export function forEachSessionForConversation(
  * persistence + status-update logic via `classifyAbortReason` in
  * `abort-classifier.ts`.
  *
- * Returns the number of REGISTERED sessions matched and signalled on THIS
- * host (not necessarily still-live turns — a finishing-but-not-yet-
- * `unregisterSession`'d entry still counts; the safe direction). 0 ⇒ nothing
- * matched here — the turn finished locally OR lives on another host. The
- * Phase-3 coordinator reads this to decide whether to RPC-forward the abort
- * to the lease-holding host (ADR-068 §4, epic #5274); the full forward
- * rationale lives in ADR-068, not here. Harmless at `replicas = 1`.
+ * Returns the number of REGISTERED `activeSessions` entries matched and
+ * signalled on THIS host. Two scoping caveats are load-bearing for any future
+ * consumer (notably the Phase-3 coordinator-forward decision, ADR-068 §4):
+ *   - LEGACY LINEAGE ONLY. This counts only the `sendUserMessage` /
+ *     `activeSessions` lineage. A live cc-soleur-go turn (the dominant path,
+ *     #3270) lives in the cc registry (`activeQueries`, aborted via
+ *     `closeCcConversation`) and is NEVER registered in `activeSessions`, so it
+ *     returns 0 here. A complete "is this conversation live on this host?"
+ *     predicate must OR this with a cc-registry found-count — do NOT route a
+ *     forward decision on this count alone (the dual-lineage trap,
+ *     `2026-06-14-ws-lifecycle-hook-must-cover-both-legacy-and-cc-soleur-go-turn-boundaries.md`;
+ *     `runDisconnectGraceAbort` itself signals BOTH surfaces for this reason).
+ *   - REGISTERED, not live: a finishing-but-not-yet-`unregisterSession`'d entry
+ *     still counts (over-count ⇒ suppress an unneeded forward — the safe
+ *     direction), and a just-starting turn before `registerSession` returns 0.
+ * Harmless at `replicas = 1` (no consumer reads the return). The full forward
+ * rationale lives in ADR-068, not here.
  */
 export function abortSession(
   userId: string,

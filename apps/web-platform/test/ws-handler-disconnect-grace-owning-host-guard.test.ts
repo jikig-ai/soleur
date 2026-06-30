@@ -6,12 +6,13 @@
  *
  * `runDisconnectGraceAbort(uid, convId)` must NOT abort when a live local OPEN
  * socket for the user is registered — that is the state of a reconnect that has
- * run `sessions.set` (ws-handler.ts:2843) but not yet the timer-cancel
- * (ws-handler.ts:2893, three awaited DB calls later). Without the guard, a 30s
- * grace timer expiring inside that await window aborts a just-reconnected live
- * turn (the #5240 "my work vanished" regression) AT replicas=1. The guard only
- * ever SUPPRESSES an abort when a live OPEN socket exists; a missing or
- * non-OPEN (CLOSED/CLOSING) socket still aborts.
+ * run `sessions.set` (in the auth/connect handler) but not yet its
+ * `pendingDisconnects`-cancel loop (which sits behind three awaited
+ * workspace-bind DB calls). Without the guard, a 30s grace timer expiring inside
+ * that await window aborts a just-reconnected live turn (the #5240 "my work
+ * vanished" regression) AT replicas=1. The guard only ever SUPPRESSES an abort
+ * when a live OPEN socket exists; a missing or non-OPEN (CLOSED/CLOSING) socket
+ * still aborts.
  *
  * Mirrors the harness in `ws-handler-grace-abort-cc-parity.test.ts` (which
  * drives `runDisconnectGraceAbort` directly, bypassing the timer) and adds
@@ -94,8 +95,10 @@ describe("ws-handler runDisconnectGraceAbort — host-local owning-host guard (#
   });
 
   afterEach(() => {
-    // Never let a seeded entry leak into the cc-parity regression test (which
-    // relies on `sessions.get` being undefined → guard passes → abort fires).
+    // Intra-file hygiene: clear the seeded entry so the next test here (the
+    // "no local session" case) sees `sessions.get(UID)` undefined. vitest
+    // `isolate: true` already prevents cross-file bleed; this only matters
+    // between the three tests in this file.
     sessions.delete(UID);
     clearSpy.mockRestore();
   });
