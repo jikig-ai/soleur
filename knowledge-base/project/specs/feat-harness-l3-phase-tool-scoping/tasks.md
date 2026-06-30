@@ -11,8 +11,8 @@ deferred_followup: 5772
 
 ## Phase 0: Empirical probe (load-bearing assumption)
 
-- [ ] 0.1 Probe that a PostToolUse(`Skill`) hook's `additionalContext` actually injects into the agent's context (stub hook emitting a sentinel; mirror `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md` method). Record CC version + outcome.
-  - [ ] 0.1.1 If it does NOT inject → STOP, take the Stop/UserPromptSubmit-hybrid fallback, re-scope. Do not ship dark. (AC0)
+- [ ] 0.1a Probe parent injection: stub PostToolUse(`Skill`) hook emits a sentinel; `claude --print` calls a skill; confirm the sentinel reaches the model. Record CC version + outcome. If it does NOT inject → STOP, do not ship dark. (AC0)
+- [ ] 0.1b Probe **subagent** case (REQUIRED, deepen): a `Skill` call inside a Task subagent — does the parent-registered hook's additionalContext reach the subagent's context? If NO → fallback: deliver the phase pointer for subagent-run phases (plan/deepen) via the skill bodies; the hook still covers parent-run phases (work/review/ship). Record in PR body. (AC0)
 
 ## Phase 1: Registry
 
@@ -20,7 +20,8 @@ deferred_followup: 5772
 
 ## Phase 2: The hook
 
-- [ ] 2.1 Create `.claude/hooks/phase-surface-hint.sh` — PostToolUse, reads `tool_input.skill`, derives phase from the map, emits `{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:"<≤15-line hint>"}}`; unmapped/missing-map/jq-fail → emit nothing, exit 0. `set -uo pipefail`, ERR-trap discipline per `session-rules-loader.sh:196-200`, exit 0 on every path, no lock (static map).
+- [ ] 2.1 Create `.claude/hooks/phase-surface-hint.sh` — PostToolUse, reads `tool_input.skill`, derives phase from the map, emits `{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:"<≤15-line hint>"}}`; unmapped/missing-map/jq-fail → emit nothing, exit 0 (non-zero *silently drops* the hint). Mirror `pencil-collapse-guard.sh:27,108-111` + `skill-invocation-logger.sh:46` + `session-rules-loader.sh:22-29,195-200`.
+  - [ ] 2.1.1 SECURITY (deepen, `tool_input.skill` is model-controlled): P1-1 hint text = map-derived constant ONLY, skill name never in output; P1-2 phase lookup via `jq -r --arg s "$SKILL"` (never interpolate into the filter / eval / path); P1-3 envelope via `jq -n --arg hint` (never printf/concat).
 - [ ] 2.2 Wire in `.claude/settings.json` under `PostToolUse`, matcher `Skill`. (AC4)
 
 ## Phase 3: Measurement (thin)
@@ -35,7 +36,7 @@ deferred_followup: 5772
 
 ## Phase 5: Tests & verification
 
-- [ ] 5.1 `.claude/hooks/phase-surface-hint.test.sh` — mapped→hint, unmapped→empty/exit0, missing-map→empty/exit0, + map consistency (keys→real SKILL.md; values→`phase_to_surface` keys; 5 core phases present). (AC2, AC3)
+- [ ] 5.1 `.claude/hooks/phase-surface-hint.test.sh` — mirror `eval-harness/test/registry-completeness.test.sh` (PARITY/CHARSET/NEGATIVE). Behavior: mapped→hint, unmapped→empty/exit0, missing-map→empty/exit0. Consistency: keys→real SKILL.md; values→`phase_to_surface` keys; 5 core phases present. Adversarial (P2-1): crafted `tool_input.skill` executes no command + never appears in output. (AC2, AC3, AC0b)
 - [ ] 5.2 `bash scripts/test-all.sh scripts` green. (AC6)
 - [ ] 5.3 PR body: Phase 0 probe result (AC0) + reference #5772 (AC7).
 

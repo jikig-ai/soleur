@@ -20,6 +20,17 @@ PostToolUse hook injects a fail-open phase hint after every `Skill` call; an
 eval target measures whether it reduces wrong-tool selection. Web parity is
 **#5772** (deferred). Not a full per-phase allowlist framework.
 
+## Enhancement Summary
+
+**Deepened:** 2026-06-30. Agents: claude-code-guide (Claude Code hook semantics), security-sentinel, repo-research-analyst. All four deepen gates (4.6 User-Brand / 4.7 Observability / 4.8 PAT / 4.9 UI-wireframe) passed.
+
+**Key confirmations & changes:**
+1. **Mechanism CONFIRMED** — official Claude Code docs: a PostToolUse hook's `hookSpecificOutput.additionalContext` is injected as a system reminder the model reads as plain text (10,000-char cap; our hint ≪ cap). Matches `pencil-collapse-guard.sh:108-111`.
+2. **`exit 0` is doubly load-bearing** — a non-zero exit doesn't merely "not block": exit 2 = blocking error (stderr→Claude), any other non-zero = JSON output **silently skipped** (hint dropped). Fail-open requires exit 0 on every path.
+3. **Subagent caveat (Phase 0 probe widened)** — hooks DO fire for subagent tool calls (`agent_id`/`agent_type` populated on PostToolUse), but docs do NOT confirm parent-registered `additionalContext` reaches the *subagent's* context. The Phase 0 probe MUST test the subagent case; fallback if it doesn't reach: deliver the phase pointer via the skill bodies for subagent-run phases (plan/deepen).
+4. **Security guardrails (3×P1 + 1×P2)** — `tool_input.skill` is **model-controlled** (prompt-injectable in a research/WebFetch flow), sharper than AGENTS.md config-trust. Hint text MUST be map-derived constant ONLY; jq lookup via `--arg`; envelope via `jq -n --arg`; adversarial test added. Folded into Phase 2/5.
+5. **Shell-test-over-TS validated by precedent** — `eval-harness/test/registry-completeness.test.sh` is exactly a static-JSON-map consistency check (PARITY/CHARSET/**NEGATIVE**) in shell, auto-discovered by `scripts/test-all.sh:185`. Confirms the simplicity-review call to drop the dedicated TS test.
+
 ## Overview
 
 The issue's premise is **partly already solved** (Research Reconciliation):
@@ -77,7 +88,9 @@ full-surface.
 
 ### Phase 0 — Empirical probe (mirrors this repo's PermissionDenied probe precedent)
 
-0.1 **Verify PostToolUse(`Skill`) `additionalContext` is actually injected** into the agent's context (the load-bearing assumption). Probe like `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md` did: a stub PostToolUse(`Skill`) hook emitting a sentinel `additionalContext`, confirm it reaches the model. **If it does NOT inject** (SDK/CC version regression), fall back to a `Stop`/`UserPromptSubmit` hybrid and re-scope — do NOT ship a dark mechanism. Record the probe result in the PR body.
+0.1 **Verify PostToolUse(`Skill`) `additionalContext` injection** (the load-bearing assumption — docs CONFIRM PostToolUse additionalContext injects generally; the `Skill`-matcher + subagent specifics are LIKELY-not-CONFIRMED per claude-code-guide). Probe like `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md`: a stub PostToolUse(`Skill`) hook emitting a sentinel, run `claude --print` calling a skill, confirm the sentinel reaches the model. Two sub-checks:
+  - **0.1a (interactive/parent):** sentinel appears in the model's context after a `Skill` call in the main session.
+  - **0.1b (subagent — REQUIRED per deepen):** a `Skill` call made *inside a Task subagent* (as `one-shot` Steps 1-2 do) → does the parent-registered hook's additionalContext reach the **subagent's** context? Docs don't confirm this. If NO → fallback: deliver the phase pointer for subagent-run phases (plan/deepen) via the skill bodies themselves, not the hook; the hook still covers all parent-run phases (work/review/ship). Record both results in the PR body. **Do NOT ship dark** if 0.1a fails.
 
 ### Phase 1 — Registry
 
@@ -85,7 +98,12 @@ full-surface.
 
 ### Phase 2 — The hook
 
-2.1 Create `.claude/hooks/phase-surface-hint.sh` (PostToolUse). Reads `tool_input.skill` from stdin, looks up phase in `phase-surface-map.json`; if mapped, emits `{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:"<≤15-line phase hint>"}}`; if unmapped/missing-map/jq-fail → emit nothing, `exit 0`. Read-only (no lock — the map is static), `set -uo pipefail`, every external call inside a command-sub with `|| fallback`, **`exit 0` on every path** (never block tool dispatch). Mirror `session-rules-loader.sh` ERR-trap discipline (`:196-200`).
+2.1 Create `.claude/hooks/phase-surface-hint.sh` (PostToolUse). Reads `tool_input.skill` from stdin, looks up phase in `phase-surface-map.json`; if mapped, emits `{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:"<≤15-line phase hint>"}}`; if unmapped/missing-map/jq-fail → emit nothing, `exit 0`. Read-only (no lock — the map is static), `set -uo pipefail`, every external call inside a command-sub with `|| fallback`, **`exit 0` on every path** (a non-zero exit *silently drops* the hint per Q4 — not just "doesn't block"). Mirror precedent exactly: stdin extract `jq -r '.tool_input.skill // empty' 2>/dev/null` (`skill-invocation-logger.sh:46`); emit shape + `set -uo pipefail` + exit-0 discipline (`pencil-collapse-guard.sh:27,108-111`); ERR-trap/command-sub-exemption (`session-rules-loader.sh:22-29,195-200`).
+
+  **Security hardening (deepen, 3×P1 — `tool_input.skill` is model-controlled, NOT config-trust):**
+  - **P1-1** the emitted `additionalContext` is composed from **map-derived constant text ONLY** (`phase_to_surface[<phase>]`). The skill name is a lookup key and MUST NOT appear in the output string (else a prompt-injected model could smuggle attacker text into its own context via a crafted skill name).
+  - **P1-2** derive the phase via `jq -r --arg s "$SKILL" '.skill_to_phase[$s] // empty'` — **never** interpolate `$SKILL` into a jq filter string, never `eval`, never use it as a path component.
+  - **P1-3** build the envelope with `jq -n --arg hint "$HINT" '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$hint}}'` — **never** `printf`/string-concat (which can break the envelope or smuggle a sibling field).
 2.2 Wire in `.claude/settings.json` under `PostToolUse`, matcher `Skill`.
 
 ### Phase 3 — Measurement (thin: ~5 golden tasks)
@@ -98,7 +116,11 @@ full-surface.
 
 ### Phase 5 — Tests & verification
 
-5.1 `phase-surface-hint.test.sh`: mapped skill → hint emitted with that phase's surface; unmapped skill (`soleur:help`) → empty output, exit 0; missing/corrupt map → empty output, exit 0; **map consistency** (every `skill_to_phase` key resolves to a real SKILL.md; every `skill_to_phase` *value* is a `phase_to_surface` key; 5 core phases present). 5.2 `bash scripts/test-all.sh scripts` (existing glob runs the new `.test.sh`).
+5.1 `phase-surface-hint.test.sh` — mirror `eval-harness/test/registry-completeness.test.sh` (PARITY/CHARSET/**NEGATIVE** framework, shell not TS):
+  - **Behavior:** mapped skill → hint emitted naming that phase's surface; unmapped (`soleur:help`) → empty, exit 0; missing/corrupt map → empty, exit 0.
+  - **Map consistency:** every `skill_to_phase` key → real SKILL.md; every `skill_to_phase` *value* → a `phase_to_surface` key (dangling-phase, spec-flow #6); 5 core phases present. NEGATIVE: inject a bad entry, assert the verifier flags it.
+  - **Adversarial (deepen P2-1):** feed `{"tool_input":{"skill":"soleur:work\";injected\n$(touch /tmp/pwn)"}}` and assert (a) no command executed, (b) the crafted substring does NOT appear in stdout, (c) output is empty (unmapped→fail-open) or a single valid `hookSpecificOutput` object.
+  5.2 `bash scripts/test-all.sh scripts` (the `.claude/hooks/*.test.sh` glob at `test-all.sh:185` auto-discovers it).
 
 ## Files to Create
 
@@ -122,7 +144,8 @@ full-surface.
 
 ### Pre-merge (PR)
 
-- [ ] AC0 PostToolUse(`Skill`) `additionalContext` injection confirmed by the Phase 0 probe (result in PR body); fallback taken + re-scoped if not.
+- [ ] AC0 Phase 0 probe: 0.1a (parent injection) confirmed in PR body; 0.1b (subagent context) result recorded + fallback taken if it doesn't reach subagent context. Do not ship if 0.1a fails.
+- [ ] AC0b Adversarial test (P2-1) passes: a crafted `tool_input.skill` executes no command and never appears in the hook's output.
 - [ ] AC1 `.claude/phase-surface-map.json` exists; `jq -e '.skill_to_phase["soleur:work"]=="work"'` true.
 - [ ] AC2 `phase-surface-hint.test.sh` passes: mapped skill emits a hint naming that phase's surface; `soleur:help` emits nothing (exit 0); missing map emits nothing (exit 0).
 - [ ] AC3 Map consistency (in `phase-surface-hint.test.sh`): every `skill_to_phase` key → real SKILL.md; every `skill_to_phase` value → a `phase_to_surface` key; 5 core phases present.
