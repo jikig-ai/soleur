@@ -52,6 +52,7 @@
 import {
   redactToken,
   mintInstallationToken,
+  digestIssueExistsForDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -162,7 +163,7 @@ If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post 
 After your analysis, create a GitHub issue summarizing your findings.
 
 DEDUP RULE (BEFORE creating the review issue): run
-  gh issue list --label scheduled-roadmap-review --state open --search 'Weekly Roadmap Review in:title' --json number,title,createdAt
+  gh issue list --label scheduled-roadmap-review --state all --json number,title,createdAt
 If any results from within the last 6 days exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same week as the natural Monday 09:00 UTC cron.
 
 If no recent duplicate exists, create a new issue with:
@@ -214,6 +215,36 @@ export async function cronRoadmapReviewHandler({
     "run-started-at",
     async () => new Date().toISOString(),
   );
+
+  // #5786 — producer-side date-dedup (extends the #5751 community-monitor fix).
+  // If a real `[Scheduled] Weekly Roadmap Review - <date>` digest already exists
+  // for today, skip the eval and post a healthy OK heartbeat — do NOT fall
+  // through to verify-output, whose run-window (updated_at >= THIS runStartedAt)
+  // would exclude the earlier issue and false-RED the skip.
+  // concurrency:{scope:"fn",limit:1} (registration below) serializes the two
+  // invocations, so the second's FRESH LIST read sees the first's create. Date
+  // anchor is runStartedAt.slice(0,10) (replay-stable across the retries:1
+  // memoization). Fail-OPEN: a read error → spawn (a duplicate paper-cut beats a
+  // missed digest).
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      titlePrefix: "[Scheduled] Weekly Roadmap Review -",
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-roadmap-review",
+    }),
+  );
+  if (digestAlreadyExists) {
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: true,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-roadmap-review",
+        logger,
+      });
+    });
+    return { ok: true };
+  }
 
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).

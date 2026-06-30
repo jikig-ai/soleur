@@ -19,6 +19,7 @@ import {
   redactToken,
   mintInstallationToken,
   deferIfTier2Cron,
+  digestIssueExistsForDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -165,6 +166,48 @@ export async function cronCampaignCalendarHandler({
     "run-started-at",
     async () => new Date().toISOString(),
   );
+
+  // #5786 — producer-side date-dedup (extends the #5751 community-monitor fix).
+  // Campaign-calendar's producer digest carries a trailing ` (heartbeat)` suffix
+  // (STEP 2.5, minted only when NEW == 0), so the matcher anchors on
+  // `[Scheduled] Campaign Calendar - <date> (heartbeat)`.
+  //
+  // PARTIAL-DEDUP ASYMMETRY (intentional, fail-OPEN): unlike the 6 always-create
+  // crons, campaign-calendar mints the `(heartbeat)` digest ONLY on quiet
+  // (NEW == 0) days. On an overdue day (NEW > 0) invocation #1 files
+  // `[Content] Overdue: …` issues and NO `(heartbeat)` digest, so this check
+  // finds nothing → invocation #2 re-spawns. That is SAFE (the in-prompt STEP 2(b)
+  // per-item dedup bounds the duplicate-issue damage) but means the producer-side
+  // dedup only fires on NEW == 0 days — a structurally weaker guarantee than the
+  // cohort. Do NOT assume an exactly-one digest invariant here.
+  //
+  // The skip path MUST post a healthy OK heartbeat inline and return BEFORE
+  // reaching verify-output/finalizeOutputAwareHeartbeat, whose run-window
+  // (updated_at >= THIS runStartedAt) would exclude the earlier issue and
+  // false-RED the skip. concurrency:{scope:"fn",limit:1} serializes the two
+  // invocations so the second's FRESH LIST read sees the first's create. Date
+  // anchor is runStartedAt.slice(0,10) (replay-stable). Fail-OPEN: a read error
+  // → spawn (a duplicate paper-cut beats a missed digest).
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      titlePrefix: "[Scheduled] Campaign Calendar -",
+      titleSuffix: " (heartbeat)",
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-campaign-calendar",
+    }),
+  );
+  if (digestAlreadyExists) {
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: true,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-campaign-calendar",
+        logger,
+      });
+    });
+    return { ok: true };
+  }
 
   // --- Step 1: mint installation token (memoized across replays) ---
   const installationToken = await step.run(
