@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Merge queue (#5780). The queue dispatches `merge_group` against the
+  # gh-readonly-queue/main/* temp ref; every required-context producer here
+  # (`test`, `lockfile-sync`, `service-role-allowlist-gate`,
+  # `tc-document-sha-guard`) must run on it or the queue entry stalls pending
+  # forever. None of those jobs gate on `event_name == 'pull_request'`, so they
+  # run unconditionally on `merge_group`. `detect-changes` short-circuits
+  # non-PR events to docs=true (critical-css-gate runs — extra, not required);
+  # its event-shape refinement is optional polish, not load-bearing (P2-6).
+  merge_group:
   workflow_dispatch:
 
 permissions:

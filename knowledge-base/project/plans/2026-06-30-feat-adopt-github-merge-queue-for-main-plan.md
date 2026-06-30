@@ -329,11 +329,12 @@ required context still posts. Files (each a `Files to Edit` entry):
 - `.github/workflows/skill-security-scan-pr-trailer.yml` — `merge_group:` + base/head sha branch (P0-1; the missing producer) (PR-1)
 - `.github/workflows/apply-github-infra.yml` — verify `rules[0]` -> `select(.type==...)` fix (PR-1)
 - `scripts/create-ci-required-ruleset.sh` — add `merge_queue` to the DR skeleton OR guard-comment + README sync note (P1-3) (PR-2)
+- `.github/workflows/scheduled-terraform-drift.yml` — add `infra/github` to the matrix so the merge_queue rule is drift-detected on a schedule (CTO B-2, PR-2)
 - `knowledge-base/engineering/architecture/decisions/ADR-032-github-branch-protection-as-iac.md` — amend (PR-2)
 
 ## Files to Create
 
-- `.github/workflows/merge-queue-stall-check.yml` — scheduled (~30 min) queue-stall + ruleset-drift probe; files a `merge-queue-stall` issue on a stuck entry or merge_queue-rule drift (PR-1, observability P1). The active liveness signal — NOT conditional.
+- `.github/workflows/merge-queue-stall-check.yml` — scheduled (~30 min) queue-**stall** probe ONLY (GITHUB_TOKEN-only, no app secrets); files a `merge-queue-stall` issue on a stuck entry (PR-1, observability P1). The active liveness signal — NOT conditional. **(CTO B-3: the ruleset-drift sub-probe was moved OUT of this workflow to `scheduled-terraform-drift.yml`'s `infra/github` matrix in PR-2 — it needed elevated scope this no-app-secrets cron deliberately avoids.)**
 - (conditional, only if Phase 4 canary shows bot contexts don't post on merge_group)
   `.github/workflows/merge-queue-bot-synthetics.yml` — bot-AUTHORED-entry-filtered synthetic re-post (P1-3 guard). Created only on canary failure; default path creates nothing here.
 
@@ -529,11 +530,16 @@ confirms; flip to "accepted" after the canary passes.
   in a follow-up PR and re-verify.
 - [ ] CodeQL default setup posts `CodeQL` on the temp ref (confirmed by the Phase 0 hard
   gate; re-verify in the canary).
-- [ ] **Stall probe live:** `merge-queue-stall-check.yml` has run >=1 green cycle and
-  its drift sub-probe reports merge_queue-rule count == 1. Force a synthetic stall (e.g.
-  a deliberately-pending entry) once to confirm it files the `merge-queue-stall` issue.
-- [ ] `plan -> apply -> plan` (the next scheduled/triggered apply) shows **no
-  `merge_queue` drift** (provider round-trip clean).
+- [ ] **Stall probe live:** `merge-queue-stall-check.yml` has run >=1 green cycle
+  (`mergeQueue == null` → graceful no-op when nothing is queued). Force a synthetic stall
+  (e.g. a deliberately-pending entry) once to confirm it files the `merge-queue-stall`
+  issue. (CTO B-3: the drift sub-probe was removed from this workflow; merge_queue-rule
+  drift is now detected by `scheduled-terraform-drift.yml` with `infra/github` in its
+  matrix — see next AC. Stall detection and drift detection are deliberately separated.)
+- [ ] **Ruleset drift (CTO B-2):** `scheduled-terraform-drift.yml` `infra/github` plan is
+  clean — `plan -> apply -> plan` round-trip shows **no `merge_queue` drift**. `terraform
+  plan` here also catches a *silently-disabled* queue (rule removed without a matching
+  Terraform change → no entries → the stall probe cannot see it).
 - [ ] Flip ADR-032 amendment status `adopting -> accepted`.
 
 ## Soak / Follow-Through Enrollment

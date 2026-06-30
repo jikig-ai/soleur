@@ -33,6 +33,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Merge queue (#5780). `tenant-integration-required` is a required context →
+  # must report on the gh-readonly-queue/main/* temp ref or the queue stalls.
+  # The HEAVY dev-Supabase isolation suite is NOT re-run on merge_group: it
+  # already ran authoritatively on the PR pre-queue, re-running every candidate
+  # would burn the #5585 dev-Supabase rate budget, and secrets.* may be absent
+  # on a GITHUB_TOKEN-authored merge_group event. detect-changes emits
+  # tenant=false on merge_group and the always-run aggregator posts a PASS via
+  # the suite=skipped path (P1-4 / ADR-032 amendment).
+  merge_group:
   workflow_dispatch: {}
 
 concurrency:
@@ -68,6 +77,16 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -uo pipefail
+          if [[ "$EVENT_NAME" == "merge_group" ]]; then
+            # Merge-queue candidate (#5780): skip the heavy dev-Supabase suite
+            # (authoritative pre-queue PR run already passed; rate-budget #5585;
+            # secrets.* may be absent on a GITHUB_TOKEN merge_group event). The
+            # always-run aggregator posts tenant-integration-required via the
+            # detect=success + suite=skipped PASS branch, so the required context
+            # reports (never pending) without re-running the suite.
+            printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             # push to main / workflow_dispatch: always run (main is source of truth).
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
