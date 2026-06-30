@@ -312,3 +312,87 @@ export async function gitWithInstallationAuth(
     cleanupAskpassScript(scriptPath);
   }
 }
+
+/**
+ * Run `git` with a private SSH key — the transport for the git-data bare store
+ * over the private net (epic #5274 Phase 2, ADR-068 §1 amendment 2026-07-01).
+ *
+ * The SSH transport sibling of {@link gitWithInstallationAuth} (which is HTTPS +
+ * GitHub-App token). Used for the `git push git-data` replication push (carrying
+ * the `--push-option=lease-gen` fence options) and the git-data clone, both gated
+ * behind `isGitDataStoreEnabled()`. The web host reads the key from Doppler `prd`
+ * (`GIT_TRANSPORT_SSH_PRIVATE_KEY`) and passes the material in; the git-data host
+ * accepts it under a `git-shell`-restricted forced-command.
+ *
+ * Key handling mirrors the askpass discipline:
+ *   - the key NEVER appears in argv — it is delivered via `GIT_SSH_COMMAND -i`
+ *     pointing at a 0600 temp file, removed in `finally`;
+ *   - `StrictHostKeyChecking=accept-new` + a per-invocation throwaway
+ *     `UserKnownHostsFile` is the Phase-2 private-net trust floor (TOFU; the host
+ *     may be replaced during fence iteration, so cross-invocation host-key pinning
+ *     is deliberately NOT used — per-`workspace_id` mTLS is the Phase-3 control,
+ *     ADR-068 §6). `BatchMode=yes` so a host-key/auth problem fails deterministically
+ *     instead of hanging on a prompt.
+ *
+ * @param args  git subcommand + flags (helper resets are prepended automatically)
+ * @param privateKey  the OpenSSH-format private key material (from Doppler)
+ * @param opts  cwd + timeout passthrough
+ * @returns the stdout Buffer from the git invocation
+ */
+export async function gitWithPrivateKeyAuth(
+  args: string[],
+  privateKey: string,
+  opts: GitExecOptions = {},
+): Promise<Buffer> {
+  const dir = getAskpassDir();
+  const keyPath = join(dir, `.git-transport-${randomUUID()}.key`);
+  const knownHostsPath = join(dir, `.git-transport-${randomUUID()}.known_hosts`);
+
+  // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+  writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+    mode: 0o600,
+  });
+  writeFileSync(knownHostsPath, "", { mode: 0o600 });
+
+  try {
+    const sshCommand = [
+      "ssh",
+      "-i",
+      keyPath,
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      `UserKnownHostsFile=${knownHostsPath}`,
+      "-o",
+      "BatchMode=yes",
+    ].join(" ");
+
+    const fullArgs = [...HELPER_RESET, ...args];
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_SSH_COMMAND: sshCommand,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_TERMINAL_PROGRESS: "0",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+    };
+
+    const { stdout } = await execFileAsync("git", fullArgs, {
+      ...opts,
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
+  } finally {
+    for (const p of [keyPath, knownHostsPath]) {
+      try {
+        unlinkSync(p);
+      } catch {
+        // best-effort cleanup; a leaked 0600 temp key is bounded by the
+        // throwaway filename and the runtime user's $HOME.
+      }
+    }
+  }
+}
