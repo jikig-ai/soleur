@@ -520,8 +520,13 @@ logs:
   where: "GitHub Actions run logs for web-platform-release.yml (await-ci step + notify-gated job)"
   retention: "GitHub default (90 days)"
 discoverability_test:
-  command: "gh run view <release-run-id>   # whole-run view: shows await-ci elapsed-annotated polls + contention ::warning:: / fail-closed ::error:: and the notify-gated job result"
-  expected_output: "On a contention-delayed-but-recovered release: await-ci poll lines past 900s elapsed, then 'CI test passed … deploy may proceed.' On a true ceiling timeout / CI non-success: the await-ci ::error:: line + a green notify-gated job that posted the gated notification. NO ssh."
+  command: gh api repos/jikig-ai/soleur/actions/workflows/web-platform-release.yml --jq .state
+  expected_output: active
+  # Pre-merge runnable probe (no ssh, deterministic): confirms the release workflow under change is
+  # registered + active so its await-ci/notify-gated observability surface exists. The richer
+  # post-merge observation — `gh run view <release-run-id>` showing await-ci elapsed-annotated polls
+  # past 900s + contention ::warning:: / fail-closed ::error:: + the notify-gated job result — is the
+  # read-only live self-heal verification (AC16), run against the next real CI-under-contention release.
 ```
 
 ## Risks & Mitigations
