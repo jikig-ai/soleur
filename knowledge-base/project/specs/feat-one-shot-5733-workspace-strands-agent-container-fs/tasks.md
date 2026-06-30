@@ -8,6 +8,17 @@ threshold: single-user incident (requires_cpo_signoff: true)
 > Supabase + Sentry evidence selects the branch (H2/H3/H1). Phase 1a (data) + Phase 1b
 > (observability) are committed regardless of branch. DROP the reconcile auto-self-heal.
 
+## STATUS (2026-06-30, post-implementation) — see `phase-0-evidence.md` for the decision of record
+Phase 0 live evidence REFUTED the plan's premise (754 is the operator's SOLO workspace; canary PRESENT, in fact 2 legitimate owners; current_workspace_id correct). H1/H3 refuted; **H2** (gitdir-pointer strand) is the only survivor.
+- [x] **Phase 0** — evidence recorded; branch = H2 + reconcile multi-owner code bug.
+- [x] **B: reconcile multi-owner attribution** (`.maybeSingle()` → tolerate N owners; warn only on ZERO; info breadcrumb on ≥2). Committed `2a9a09f17`.
+- [x] **Phase 1b: agent-readiness-self-stop observability** (`probeGitWorktreeShape` + `reportAgentReadinessSelfStop`, distinct issue group). Committed `bd0e06685`.
+- [x] **Phase 2 (H2): gitdir-pointer heal** (file-pointer → unlink + self-contained re-clone; dispatcher + ensure-workspace-repo). Committed `bd0e06685`. (H3/H1 N/A — refuted.)
+- [x] **ADR-044 amendment** (rev-parse-equivalent readiness + keying-divergence boundary + multi-owner supersedes #4520 note).
+- [x] **Phase 1a (canary restore): DROPPED** — multi-owner is by design (founder-confirmed); the prod data is correct; no write, no operator-ack.
+- [ ] Follow-ups (not this PR): dedicated multi-owner ADR + RPC reconcile; #5591/#5673 duplicate-creation origin.
+- [ ] Phase 3: reproduce `/soleur:go` post-deploy (the new event now carries the `.git` shape if it still strands).
+
 ## Phase 0 — Live exec-path verification (BLOCKING)
 - [ ] 0.0 Read `workspace-resolver.ts:365-450`; record the exact membership predicate (role? attestation_id? org_id?).
 - [ ] 0.1 Supabase (read): `workspaces` (org_id, repo_url, repo_status, install_id) for 754ee124 + 52af49c2; `organizations.owner_user_id` via the org join (NULL? == operator?); ALL `workspace_members` rows for 754ee124 (classify operator topology a/b/c); `user_session_state.current_workspace_id`.

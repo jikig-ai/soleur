@@ -1130,3 +1130,54 @@ positively-fingerprinted empty-corrupt `.git`; honest-blocks populated-broken/EA
 never destroying commits). Recovery is push-triggered. This supersedes the
 "readiness is a filesystem-existence check" note (Amendment 2026-06-17b context). The owner-less /
 duplicate-workspace anomaly that produced the corrupt state is tracked separately in #5591.
+
+## Amendment 2026-06-30 — readiness is `git rev-parse`-equivalent, not lstat-structural; keying-divergence boundary; strand observability (#5733)
+
+Investigation of #5733 (operator `/soleur:go` strands on `not a git repository`
+after #5716/#5584/#5730) refuted the issue's separate-container hypothesis (one
+container, one `/mnt/data/workspaces` volume; the agent is an in-process bubblewrap
+sandbox) and isolated three load-bearing corrections:
+
+1. **`isValidGitWorkTree` (lstat-structural) is INSUFFICIENT as the readiness
+   invariant.** It returns `true` for a `.git` FILE (a `gitdir:` pointer;
+   `git-worktree-validity.ts:60`). The agent's Bash tool runs `git rev-parse
+   --is-inside-work-tree` INSIDE a bubblewrap sandbox whose mount set is frozen
+   per `query()` with `denyRead:["/workspaces"]`. A `.git` FILE whose gitdir
+   target resolves under `/workspaces` is therefore unreadable in-sandbox → the
+   agent's `rev-parse` fails and `/soleur:go` Step 0.0 self-stops, even though the
+   host-side lstat gate passed. **A personal workspace root is never a legitimate
+   linked-worktree/submodule, so a `.git` FILE there is an anomalous stale
+   pointer.** Dispatch + reconcile readiness now detect it (`probeGitWorktreeShape`,
+   kind `file-pointer`) and re-clone a SELF-CONTAINED `.git` (unlink the single
+   pointer file under the workspace lock — NOT a widening of the empty-corrupt
+   recursive-rm fingerprint — then clone from origin HEAD).
+
+2. **Keying-divergence trust boundary (root architectural cause).** The two
+   writers/readers of the `/workspaces/<id>` volume key the path by DIFFERENT
+   identifiers: reconcile-on-push heals `<id>` by `(installation_id, repo_url)`
+   (independent of any session claim); the agent resolves its cwd from the user's
+   ACTIVE workspace (`user_session_state.current_workspace_id` →
+   membership-verified → fail-closed to solo). These keys can point at different
+   dirs. For the operator's solo case they coincide (`current_workspace_id ==
+   userId == workspace_id`), so the strand was purely the `.git`-shape blind spot
+   above, not a resolution divergence.
+
+3. **The prompt-driven readiness self-stop MUST emit a server-side signal.** The
+   self-stop is the agent reasoning over `/soleur:go` Step 0.0 prompt text — it
+   produces NO server Sentry event, the deepest reason all three prior server-side
+   fixes left "zero events on the agent surface." A distinct
+   `agent-readiness-self-stop` event (own Sentry issue group) now fires at the
+   dispatch readiness gate carrying the resolved id + path + `.git` shape, BEFORE
+   the heal.
+
+**Owner model note (supersedes #4520, dedicated ADR to follow).** #5733 also found
+the "owner-less reconciled ×28" headline was a FALSE positive: the reconcile
+owner-attribution used `.maybeSingle()`, which ERRORS on a workspace with ≥2
+`workspace_members(role='owner')` rows. Per the founder, **workspaces support N
+co-owners by design** — this supersedes the single-owner-strict model asserted in
+migration `075` (#4520). The reconcile attribution now tolerates N owners
+(deterministic self-row/earliest pick; "owner-less" warns only on genuinely zero
+owners). Reconciling the single-owner ownership RPCs (`transfer_workspace_ownership`,
+the `update_workspace_member_role` owner-promotion block) to the multi-owner model
+is tracked as a follow-up; this ADR records the direction, the dedicated ADR
+captures the supersession.
