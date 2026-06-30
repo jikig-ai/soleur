@@ -56,8 +56,8 @@ Deepened 2026-06-30 (8 review lenses). Mechanism: host `rev-parse` confirm for
       `:354` excluded (AC6).
 
 ## Phase 6 — Verify
-- [ ] 6.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] 6.2 `cd apps/web-platform && ./node_modules/.bin/vitest run` (real runner) (AC10).
+- [x] 6.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] 6.2 `cd apps/web-platform && ./node_modules/.bin/vitest run` (real runner) (AC10).
 
 ## Post-merge (operator / automatable)
 - [ ] P1 Confirm 754ee124's actual on-disk shape on the live prod surface (AC11).
