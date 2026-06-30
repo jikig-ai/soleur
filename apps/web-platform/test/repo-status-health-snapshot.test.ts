@@ -4,33 +4,57 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock Supabase before importing the route
 // ---------------------------------------------------------------------------
 
-const mockSelect = vi.fn();
-const mockEq = vi.fn();
-const mockSingle = vi.fn();
-const mockMaybeSingle = vi.fn();
-
-const { mockResolveActiveWorkspacePath, mockExistsSync } = vi.hoisted(() => ({
+// ADR-044 PR-2 (#5462): the repo-connection columns are authoritative on the
+// ACTIVE `workspaces` row. The route reads them via
+// `workspaces.select(...).eq("id", activeWorkspaceId).maybeSingle()`
+// (`mockWorkspaceMaybeSingle`) and `health_snapshot` via
+// `users.select("health_snapshot").eq("id", user.id).maybeSingle()`
+// (`mockUserMaybeSingle`), both in a Promise.all. The active id is resolved via
+// the mocked `resolveCurrentWorkspaceId` (defaults to the caller's own id).
+const {
+  mockResolveActiveWorkspacePath,
+  mockResolveCurrentWorkspaceId,
+  mockExistsSync,
+  mockWorkspaceMaybeSingle,
+  mockUserMaybeSingle,
+  mockConvMaybeSingle,
+} = vi.hoisted(() => ({
   mockResolveActiveWorkspacePath: vi.fn(),
+  mockResolveCurrentWorkspaceId: vi.fn(),
   mockExistsSync: vi.fn((_p?: unknown) => false),
+  mockWorkspaceMaybeSingle: vi.fn(),
+  mockUserMaybeSingle: vi.fn(),
+  mockConvMaybeSingle: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => {
-  // Chain builder for conversations query (select → eq → eq → eq → order → limit → maybeSingle)
+  // conversations: select → eq → eq → eq → order → limit → maybeSingle
   const convChain = {
     select: vi.fn(() => convChain),
     eq: vi.fn(() => convChain),
     order: vi.fn(() => convChain),
     limit: vi.fn(() => convChain),
-    maybeSingle: mockMaybeSingle,
+    maybeSingle: mockConvMaybeSingle,
+  };
+  // workspaces: select → eq("id", …) → maybeSingle (repo cols)
+  const wsChain = {
+    select: vi.fn(() => wsChain),
+    eq: vi.fn(() => wsChain),
+    maybeSingle: mockWorkspaceMaybeSingle,
+  };
+  // users: select("health_snapshot") → eq("id", …) → maybeSingle
+  const userChain = {
+    select: vi.fn(() => userChain),
+    eq: vi.fn(() => userChain),
+    maybeSingle: mockUserMaybeSingle,
   };
 
   const mockFrom = vi.fn((table: string) => {
     if (table === "conversations") return convChain;
-    // Default: users table chain
-    return { select: mockSelect };
+    if (table === "workspaces") return wsChain;
+    if (table === "users") return userChain;
+    throw new Error(`unexpected service-role table ${table}`);
   });
-  mockSelect.mockReturnValue({ eq: mockEq });
-  mockEq.mockReturnValue({ single: mockSingle });
 
   return {
     createClient: vi.fn(async () => ({
@@ -47,9 +71,12 @@ vi.mock("@/lib/supabase/server", () => {
 });
 
 // #5005 — `hasKnowledgeBase` is computed from the resolver's ACTIVE workspace
-// path, not the caller's own `users.workspace_path` column.
+// path, not the caller's own `users.workspace_path` column. ADR-044 PR-2: the
+// repo cols are read from the active `workspaces` row keyed on
+// `resolveCurrentWorkspaceId` (defaults to the caller's own id here).
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspacePath: mockResolveActiveWorkspacePath,
+  resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
 
 vi.mock("fs", async () => {
@@ -66,6 +93,8 @@ describe("GET /api/repo/status — health_snapshot", () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(false);
     mockResolveActiveWorkspacePath.mockResolvedValue("/workspaces/user-123");
+    // Active workspace defaults to the caller's own id (solo).
+    mockResolveCurrentWorkspaceId.mockResolvedValue("user-123");
   });
 
   it("includes healthSnapshot and syncConversationId in response when stored", async () => {
@@ -80,19 +109,24 @@ describe("GET /api/repo/status — health_snapshot", () => {
       kbExists: false,
     };
 
-    mockSingle.mockResolvedValue({
+    // Repo cols live on the active `workspaces` row (ADR-044 PR-2).
+    mockWorkspaceMaybeSingle.mockResolvedValue({
       data: {
         repo_url: "https://github.com/user/repo",
         repo_status: "ready",
         repo_last_synced_at: "2026-04-10T00:00:00.000Z",
         repo_error: null,
-        health_snapshot: snapshot,
       },
+      error: null,
+    });
+    // health_snapshot stays on `users`.
+    mockUserMaybeSingle.mockResolvedValue({
+      data: { health_snapshot: snapshot },
       error: null,
     });
 
     // Active sync conversation exists
-    mockMaybeSingle.mockResolvedValue({
+    mockConvMaybeSingle.mockResolvedValue({
       data: { id: "conv-abc" },
       error: null,
     });
@@ -107,22 +141,31 @@ describe("GET /api/repo/status — health_snapshot", () => {
     expect(body.healthSnapshot).toEqual(snapshot);
     expect(body.syncConversationId).toBe("conv-abc");
     expect(body.status).toBe("ready");
+    expect(body.repoUrl).toBe("https://github.com/user/repo");
+    expect(body.lastSyncedAt).toBe("2026-04-10T00:00:00.000Z");
+    expect(mockResolveCurrentWorkspaceId).toHaveBeenCalledWith(
+      "user-123",
+      expect.anything(),
+    );
   });
 
   it("returns syncConversationId as null when no active sync conversation (#1816)", async () => {
-    mockSingle.mockResolvedValue({
+    mockWorkspaceMaybeSingle.mockResolvedValue({
       data: {
         repo_url: "https://github.com/user/repo",
         repo_status: "ready",
         repo_last_synced_at: "2026-04-10T00:00:00.000Z",
         repo_error: null,
-        health_snapshot: null,
       },
+      error: null,
+    });
+    mockUserMaybeSingle.mockResolvedValue({
+      data: { health_snapshot: null },
       error: null,
     });
 
     // No active sync conversation
-    mockMaybeSingle.mockResolvedValue({
+    mockConvMaybeSingle.mockResolvedValue({
       data: null,
       error: null,
     });
@@ -148,17 +191,20 @@ describe("GET /api/repo/status — health_snapshot", () => {
       String(p) === `${ACTIVE_PATH}/knowledge-base`,
     );
 
-    mockSingle.mockResolvedValue({
+    mockWorkspaceMaybeSingle.mockResolvedValue({
       data: {
         repo_url: "https://github.com/user/repo",
         repo_status: "ready",
         repo_last_synced_at: null,
         repo_error: null,
-        health_snapshot: null,
       },
       error: null,
     });
-    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
+    mockUserMaybeSingle.mockResolvedValue({
+      data: { health_snapshot: null },
+      error: null,
+    });
+    mockConvMaybeSingle.mockResolvedValue({ data: null, error: null });
 
     const { GET } = await import("@/app/api/repo/status/route");
     const res = await GET();

@@ -31,6 +31,41 @@ npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3
 npx promptfoo view
 ```
 
+## Projection-regen (run on any source-block edit)
+
+The skill-arm prompts are mechanical projections of the production classifier blocks, not
+hand-copies. After editing the `/go` routing table (`plugins/soleur/commands/go.md`) or the
+ticket-triage rubric (`plugins/soleur/agents/support/ticket-triage.md`), regenerate the prompts:
+
+```bash
+cd plugins/soleur/skills/eval-harness
+node scripts/gen-skill-prompt.cjs --all       # rewrites prompts/go-skill.txt + prompts/triage-skill.txt
+bash test/extract-block.test.sh               # AC4: generated projection == committed (no API)
+```
+
+## Gate mode — validation-gated block edits (reproduce)
+
+```bash
+cd plugins/soleur/skills/eval-harness
+
+# Is a file a gated classifier source? (lookup-only, no API)
+node scripts/eval-gate.cjs --check ../../commands/go.md
+
+# What would a gate run cost? (skill-arm-only estimate, no API)
+node scripts/eval-gate.cjs --dry-run --target go-routing --repeat 5
+
+# Gate an edit (SPENDS): current block on disk vs the candidate edit; the targeted case must pass
+# and the corpus must not regress. Append the synthesized golden task to the corpus only on accept.
+node scripts/eval-gate.cjs --target go-routing \
+  --candidate-file /path/to/edited-go.md \
+  --target-task '{"vars":{"input":"...","golden_label":"fix"}}' \
+  --repeat 5 --append-on-accept
+```
+
+The verdict math is the pure [scripts/verdict.cjs](./scripts/verdict.cjs) (`computeVerdict`); the gate
+fails closed (non-zero exit + NOT accept on any error). See [SKILL.md](./SKILL.md) §"Gate mode" and
+ADR-069 for the decision and the projection precondition.
+
 > **Use `validate config`, never bare `validate` or `validate target`** — the latter two spend API
 > credits. `validate config` is config-only and free.
 >
@@ -109,6 +144,16 @@ The generic asserts and `models.generated.json` are reused unchanged — no new 
 unless the target's output is not a single-token label (prose-output surfaces need an LLM-judge
 assert, deferred out of v1).
 
+**Multi-label surface? Gate its single-token output slice first.** A classifier that emits a
+*set* (e.g. `pdr-*` passive-domain-routing → which leaders to spawn) is multi-label and would
+need a set-membership assert. Before building one, check whether the surface also has a
+single-token output factor — a count, tier, or breadth — that captures most of the regression
+risk. `pdr`'s breadth factor is exactly the `lane-inference` enum (`procedural`/`single-domain`/
+`cross-domain`), so gating lane-inference covers the verifiable slice with zero new code and
+defers only the irreducible set factor. Half-covering a multi-label surface with a single-label
+harness ships false confidence — defer it whole instead. See
+`knowledge-base/project/learnings/2026-06-29-multi-label-classifier-gateable-core-is-its-single-token-output-slice.md`.
+
 ## Files
 
 | Path | Role |
@@ -116,6 +161,11 @@ assert, deferred out of v1).
 | [promptfooconfig.go-routing.yaml](./promptfooconfig.go-routing.yaml) | `/go` routing target config |
 | [promptfooconfig.ticket-triage.yaml](./promptfooconfig.ticket-triage.yaml) | ticket-triage target config |
 | [scripts/gen-models.sh](./scripts/gen-models.sh) | single-sources the 3 model IDs → `models.generated.json` |
+| [scripts/extract-block.cjs](./scripts/extract-block.cjs) | extracts a gated source block between sentinels (the projection seam) |
+| [scripts/gen-skill-prompt.cjs](./scripts/gen-skill-prompt.cjs) | projects a block into a skill-arm prompt (regenerate on source edit) |
+| [scripts/verdict.cjs](./scripts/verdict.cjs) | pure `computeVerdict` (no I/O) — the accept/reject seam |
+| [scripts/eval-gate.cjs](./scripts/eval-gate.cjs) | gate orchestrator (`--check`, `--dry-run`, real run, `--append-on-accept`) |
+| [gated-skills.json](./gated-skills.json) | registry of gated source blocks (source_file, markers, target, projected prompt) |
 | [scripts/parse-label.cjs](./scripts/parse-label.cjs) | shared label parser |
 | [scripts/measure-classification.cjs](./scripts/measure-classification.cjs) | MEASUREMENT assert (always passes, records the rate) |
 | [scripts/gate-classification.cjs](./scripts/gate-classification.cjs) | GATE assert (fails on out-of-enum label) |
@@ -123,3 +173,4 @@ assert, deferred out of v1).
 | [prompts/](./prompts/go-skill.txt) | skill + baseline arm templates per target |
 | [tasks/go-routing.jsonl](./tasks/go-routing.jsonl) · [tasks/ticket-triage.jsonl](./tasks/ticket-triage.jsonl) | synthesized golden tasks |
 | [test/](./test/gen-models.test.sh) | deterministic `.test.sh` unit tests (no live LLM) |
+| [test/registry-completeness.test.sh](./test/registry-completeness.test.sh) | parity gate: `eval-gate:block` source markers ↔ `gated-skills.json` `block_id`s (DEDUP + set-equality + charset) |

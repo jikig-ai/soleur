@@ -157,10 +157,125 @@ assert "server ExecStart sets --poll-interval 60" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE 'inngest start .*--poll-interval 60'"
 assert "server ExecStart sets --sdk-url loopback app route (port 3000)" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url http://127.0.0.1:3000/api/inngest'"
-# Regression guard: the signing-key strip + event-key must survive the edit
-# (the systemd `$$` escape must not be accidentally unescaped — Sharp Edge).
-assert "server ExecStart keeps signing-key strip + event-key" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_SIGNING_KEY#signkey-prod-' && printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_EVENT_KEY'"
+# Regression guard: the signing-key strip survives the edit as an ENV export (#5560 —
+# inngest reads INNGEST_SIGNING_KEY from env; the `signkey-prod-` strip is preserved so
+# the self-hosted server gets the bare hex). The systemd `$$` escape must not be
+# accidentally unescaped (Sharp Edge). INNGEST_EVENT_KEY is no longer on the ExecStart
+# at all (read from the doppler env by name) — asserted absent by the #5560 security
+# invariant below.
+assert "server ExecStart re-exports the stripped signing-key (env-delivered, #5560)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"'"
+# --- #5547 Gap 2: REDIS_READY-gated durable/SQLite-fail-safe ExecStart ---
+# The durable backend flags (#5450) moved OUT of the single-quoted server-unit
+# heredoc into a REDIS_READY-gated BACKEND_FLAGS fragment that is substituted
+# into the written unit (the heredoc carries a literal @@BACKEND_FLAGS@@
+# sentinel). This keeps inngest-server AVAILABLE on a SQLite-only ExecStart when
+# Redis is unprovisioned instead of crash-looping on 127.0.0.1:6379 (the ~3.5h
+# #5542 outage). The asserts below therefore scope the durable-flag checks to
+# the fragment ASSIGNMENT line, not SERVER_UNIT_BLOCK (AC8 reconcile).
+echo ""
+echo "--- #5547 Gap 2: REDIS_READY-gated durable/SQLite ExecStart fragment ---"
+
+# AC2 — REDIS_READY is assigned AFTER the /etc/default/inngest-server env-file
+# materialization (the Redis unit reads it for the Doppler-injected password —
+# the load-bearing ordering dependency) AND BEFORE the server-unit cat> (so the
+# substitution can branch the ExecStart on it).
+ENV_FILE_LINE=$(grep -nE 'cat > /etc/default/inngest-server <<DOPPLEREOF' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+REDIS_READY_LINE=$(grep -nE '^[[:space:]]*REDIS_READY=' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+SERVER_CAT_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+TOTAL=$((TOTAL + 1))
+if [[ -n "$ENV_FILE_LINE" && -n "$REDIS_READY_LINE" && -n "$SERVER_CAT_LINE" \
+      && "$ENV_FILE_LINE" -lt "$REDIS_READY_LINE" && "$REDIS_READY_LINE" -lt "$SERVER_CAT_LINE" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: REDIS_READY assigned after env-file materialization, before server-unit cat> (#5547 AC2)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ordering env-file($ENV_FILE_LINE) < REDIS_READY($REDIS_READY_LINE) < server-cat($SERVER_CAT_LINE) (#5547 AC2)"
+fi
+
+# AC3 — the heredoc carries BOTH the @@BACKEND_ENV@@ and @@BACKEND_FLAGS@@ sentinels
+# on the inngest start line, --sqlite-dir /var/lib/inngest is in the SHARED prefix
+# (present in BOTH branches), and a (non-sed) substitution strips each sentinel so
+# none survives in the written unit (#5547 AC3 + #5560 env-delivery).
+ENV_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE '@@BACKEND_ENV@@exec /usr/local/bin/inngest start' || true)
+FLAGS_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE 'inngest start .*@@BACKEND_FLAGS@@' || true)
+SQLITE_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cF -- '--sqlite-dir /var/lib/inngest' || true)
+ENV_SUBST=$(grep -cE '@@BACKEND_ENV@@/' "$BOOTSTRAP_SH" || true)
+FLAGS_SUBST=$(grep -cE '@@BACKEND_FLAGS@@/' "$BOOTSTRAP_SH" || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$ENV_SENTINEL_IN_HEREDOC" -ge 1 && "$FLAGS_SENTINEL_IN_HEREDOC" -ge 1 && "$SQLITE_IN_HEREDOC" -ge 1 && "$ENV_SUBST" -ge 1 && "$FLAGS_SUBST" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: heredoc carries @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels + --sqlite-dir shared prefix; both substitutions strip them (#5547 AC3 / #5560)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: AC3 (env_sentinel=$ENV_SENTINEL_IN_HEREDOC flags_sentinel=$FLAGS_SENTINEL_IN_HEREDOC sqlite_shared=$SQLITE_IN_HEREDOC env_subst=$ENV_SUBST flags_subst=$FLAGS_SUBST)"
+fi
+
+# Durable env + flags (#5450/#5560 build-time guard, reconciled to the env-delivery
+# shape — AC8). Secrets are delivered via the ENVIRONMENT, never argv: the durable
+# BACKEND_ENV exports INNGEST_REDIS_URI from the password (loopback :6379, NEVER the
+# pooler :6543); the durable BACKEND_FLAGS carries ONLY the non-secret
+# --postgres-max-open-conns sentinel (NO --postgres-uri/--redis-uri flags).
+DURABLE_ENV=$(grep -E "^[[:space:]]*BACKEND_ENV='export INNGEST_REDIS_URI=" "$BOOTSTRAP_SH" | head -1 || true)
+DURABLE_FLAGS=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
+TOTAL=$((TOTAL + 1))
+if printf '%s\n' "$DURABLE_ENV" | grep -qF -- 'export INNGEST_REDIS_URI="redis://:' \
+   && printf '%s\n' "$DURABLE_ENV" | grep -qF -- '@127.0.0.1:6379' \
+   && ! printf '%s\n' "$DURABLE_ENV" | grep -qF ':6543' \
+   && printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--postgres-max-open-conns [0-9]+' \
+   && ! printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--(postgres|redis)-uri'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: durable backend delivers INNGEST_REDIS_URI via env (loopback :6379, never :6543); BACKEND_FLAGS is sentinel-only, no secret flags (#5450/#5560)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: durable env/flags shape (env: $DURABLE_ENV | flags: $DURABLE_FLAGS)"
+fi
+
+# AC4 — the durable env fragment preserves the LITERAL $${INNGEST_REDIS_PASSWORD}
+# Doppler token, and the ExecStart re-exports the stripped $${INNGEST_SIGNING_KEY}
+# (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
+# single-quoted so the $$ is matched literally (never the shell PID). #5560: the
+# postgres URI + event key are read from the env by name with NO bootstrap token.
+EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | head -1 || true)
+TOTAL=$((TOTAL + 1))
+if printf '%s\n' "$DURABLE_ENV" | grep -qF '$${INNGEST_REDIS_PASSWORD}' \
+   && printf '%s\n' "$EXECSTART_LINE" | grep -qF '$${INNGEST_SIGNING_KEY#signkey-prod-}'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: durable env preserves literal \$\${INNGEST_REDIS_PASSWORD}; ExecStart re-exports stripped \$\${INNGEST_SIGNING_KEY} (#5560 AC4)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: must preserve literal \$\${INNGEST_REDIS_PASSWORD} (env: $DURABLE_ENV) + \$\${INNGEST_SIGNING_KEY} re-export (execstart: $EXECSTART_LINE)"
+fi
+
+# #5560 SECURITY INVARIANT (negative): the ExecStart template carries NO secret on
+# argv — no --signing-key/--event-key flags, and no --postgres-uri/--redis-uri flags
+# (those are env-delivered). The only $${...} on the ExecStart line is the signing-key
+# re-export (an env export, not an argv flag).
+TOTAL=$((TOTAL + 1))
+if printf '%s\n' "$EXECSTART_LINE" | grep -qF 'exec /usr/local/bin/inngest start' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--signing-key|--event-key' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--(postgres|redis)-uri'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: ExecStart passes NO secret on argv (no --signing-key/--event-key/--postgres-uri/--redis-uri); uses exec (#5560 security invariant)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ExecStart must carry no secret flags + use exec (line: $EXECSTART_LINE)"
+fi
+
+# SQLite-only fail-safe: an EMPTY BACKEND_FLAGS + an `unset INNGEST_POSTGRES_URI`
+# BACKEND_ENV are assigned when Redis is not ready, so the written ExecStart omits
+# the durable sentinel AND inngest does not pick up INNGEST_POSTGRES_URI from the
+# doppler env (the unset is load-bearing — #5560). inngest stays available on SQLite
+# (verify_inngest_health then SKIPs the durable gate).
+TOTAL=$((TOTAL + 1))
+if grep -qE "^[[:space:]]*BACKEND_FLAGS=(''|\"\")[[:space:]]*\$" "$BOOTSTRAP_SH" \
+   && grep -qE "^[[:space:]]*BACKEND_ENV='unset INNGEST_POSTGRES_URI; '" "$BOOTSTRAP_SH"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: SQLite-only fail-safe assigns empty BACKEND_FLAGS + 'unset INNGEST_POSTGRES_URI' BACKEND_ENV when REDIS_READY=0 (#5547 AC3 / #5560)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: fail-safe must set empty BACKEND_FLAGS AND unset INNGEST_POSTGRES_URI (#5547/#5560)"
+fi
 
 # AC2: an ExecStart change must take effect on redeploy. Two guarantees:
 #   (a) reconcile-always — the server unit write lives OUTSIDE the
@@ -184,6 +299,54 @@ assert "bootstrap restarts inngest-server.service (new ExecStart loads on redepl
 # which would vacuously pass on any comment line merely mentioning "resume".
 assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
   "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
+
+# --- Durable backend assets (#5450) ---
+echo ""
+echo "--- Durable backend: Redis assets + secrets (#5450) ---"
+REDIS_CONF="$SCRIPT_DIR/inngest-redis.conf"
+REDIS_SERVICE="$SCRIPT_DIR/inngest-redis.service"
+REDIS_BOOTSTRAP="$SCRIPT_DIR/inngest-redis-bootstrap.sh"
+assert "inngest-redis.conf exists"        "[[ -f '$REDIS_CONF' ]]"
+assert "inngest-redis.service exists"     "[[ -f '$REDIS_SERVICE' ]]"
+assert "inngest-redis-bootstrap.sh exists + executable" "[[ -x '$REDIS_BOOTSTRAP' ]]"
+# redis.conf required durability settings (AC).
+assert "redis.conf appendonly yes"        "grep -qE '^appendonly yes' '$REDIS_CONF'"
+assert "redis.conf appendfsync everysec"  "grep -qE '^appendfsync everysec' '$REDIS_CONF'"
+assert "redis.conf maxmemory-policy noeviction" "grep -qE '^maxmemory-policy noeviction' '$REDIS_CONF'"
+assert "redis.conf bounds maxmemory"      "grep -qE '^maxmemory [0-9]' '$REDIS_CONF'"
+assert "redis.conf bounds AOF rewrite"    "grep -qE '^auto-aof-rewrite-percentage' '$REDIS_CONF' && grep -qE '^auto-aof-rewrite-min-size' '$REDIS_CONF'"
+assert "redis.conf dir on /mnt/data"      "grep -qE '^dir /mnt/data/redis' '$REDIS_CONF'"
+assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CONF'"
+# The unit MUST pin to the persistent mount (architecture P1-2) + inject the
+# password via doppler (never a literal in the file).
+assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
+assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
+assert "redis.service runs under doppler run prd" "grep -qE 'doppler run --project soleur --config prd' '$REDIS_SERVICE'"
+# #5450 F1 regression guard: the conf MUST live under /mnt/data/redis, NOT
+# /etc/redis — on the existing-host deploy the bootstrap runs inside
+# webhook.service's ProtectSystem=strict namespace where /etc is read-only and
+# only ReadWritePaths (incl. /mnt/data) are writable. A conf install to
+# /etc/redis fails-closed at cutover. Lock both the unit's read path and the
+# bootstrap's write path to /mnt/data/redis.
+assert "redis.service reads conf from /mnt/data/redis (not /etc/redis)" \
+  "grep -qF '/mnt/data/redis/inngest-redis.conf' '$REDIS_SERVICE' && ! grep -qF '/etc/redis' '$REDIS_SERVICE'"
+assert "redis-bootstrap installs conf under /mnt/data (never /etc/redis)" \
+  "grep -qF '\$REDIS_DATA_DIR/inngest-redis.conf' '$REDIS_BOOTSTRAP' && ! grep -qE 'install .* /etc/redis' '$REDIS_BOOTSTRAP'"
+assert "inngest-bootstrap does not write the conf into /etc/redis (namespace trap)" \
+  "! grep -qE 'install .* /etc/redis|mkdir -p /etc/redis' '$BOOTSTRAP_SH'"
+# Secrets: random_password (not operator-mint) + doppler_secret.
+assert "random_password.inngest_redis_password_prd" "grep -qE 'resource \"random_password\" \"inngest_redis_password_prd\"' '$INNGEST_TF'"
+assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+= \"INNGEST_REDIS_PASSWORD\"' '$INNGEST_TF'"
+# inngest-bootstrap runs the redis bootstrap (the REDIS_READY probe) BEFORE the
+# inngest-server restart (the ExecStart is branched on REDIS_READY). Anchor on
+# the INVOCATION line (`if /usr/local/bin/inngest-redis-bootstrap.sh; then`), not
+# the `install …` line — after the #5547 reorder the install line still ends in
+# `inngest-redis-bootstrap.sh` and a `$`-anchored `tail -1` could pick it; the
+# invocation is the line whose ordering vs the restart actually matters.
+REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
+  "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""

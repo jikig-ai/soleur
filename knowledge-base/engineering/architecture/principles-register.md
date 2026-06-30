@@ -2,6 +2,8 @@
 
 Queryable index of architectural principles. Each principle links to its canonical source — rationale and full context live there. This register enables structured references in ADRs and automated compliance checking during PR review.
 
+> **Sibling registers:** [`domain-model.md`](./domain-model.md) (domain entities + business-rule invariants), [`nfr-register.md`](./nfr-register.md) (non-functional requirements). Use this register for *how we build*; use `domain-model.md` for *what the product's entities are and the rules that govern them* (e.g. `AP-015`'s workspace owner-canary principle maps to `domain-model.md` rules `BR-WS-3`/`BR-WS-4`).
+
 ## Principles
 
 | ID | Title | Canonical Source | Enforcement | Related NFRs |

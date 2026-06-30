@@ -61,9 +61,29 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 export const CACHE_HIT_FLOOR_PCT = 98.0;
 export const DEDUP_TABLE_ROW_CEIL = 100_000;
 
+// WAL-concentration ceiling (#5736). When the single largest statement's share
+// of total WAL (max_wal_pct from migration 114) exceeds this, ONE statement is
+// dominating the prod Disk-IO budget — the exact class of the webhook dedup
+// INSERT that was 63% of WAL yet shipped green. Surfaced as its own Sentry
+// capture (op=wal-concentration), INDEPENDENT of the budget verdict, so a single
+// write hogging WAL pages without a dashboard (hr-no-dashboard-eyeball). 40 is a
+// conservative floor: a healthy app spreads WAL across many statements, so a
+// single statement past 40% is already an outlier worth a human look.
+export const WAL_CONCENTRATION_PCT_CEIL = 40;
+
 // =============================================================================
 // Types
 // =============================================================================
+
+// One row of pg_stat_statements ranked by WAL (migration 114). `query` is the
+// normalized statement text (literals → $1, no row values) truncated to ~120
+// chars; `wal_bytes` is the cumulative WAL this statement has emitted.
+export interface WalStatement {
+  query: string;
+  calls: number;
+  wal_bytes: number;
+  pct_of_wal: number;
+}
 
 export interface DiskIoSignal {
   // numeric from pg; null if pg_stat_database has no rows for the current DB.
@@ -74,6 +94,13 @@ export interface DiskIoSignal {
   // the issue body to point the operator at the write driver, never a verdict
   // input (the verdict gates on cache_hit_pct + dedup_table_rows).
   top_write_churn: Array<{ table: string; writes: number }>;
+  // top-5 statements by pg_stat_statements.wal_bytes (migration 114). Optional:
+  // a pre-114 RPC (or a DB without pg_stat_statements) omits it → treated as
+  // "no WAL signal", never a false alert.
+  top_wal_statements?: WalStatement[] | null;
+  // the single largest statement's share of total WAL (max(wal_bytes)/sum*100).
+  // Optional for the same back-compat reason as top_wal_statements.
+  max_wal_pct?: number | null;
   sampled_at: string;
 }
 
@@ -81,6 +108,15 @@ export interface DiskIoVerdict {
   tripped: boolean;
   reasons: string[];
   detail: string;
+}
+
+// WAL-concentration is evaluated SEPARATELY from the budget verdict: it does not
+// flip the heartbeat (that stays ok = !tripped), it emits its own Sentry capture.
+export interface WalConcentrationVerdict {
+  concentrated: boolean;
+  maxPct: number | null;
+  detail: string;
+  topStatement: WalStatement | null;
 }
 
 // =============================================================================
@@ -121,6 +157,26 @@ export function evaluateDiskIoSignal(signal: DiskIoSignal): DiskIoVerdict {
     ? reasons.join("; ")
     : `cache_hit_pct=${signal.cache_hit_pct}, dedup_rows=${JSON.stringify(dedupRows)} — all within thresholds`;
   return { tripped, reasons, detail };
+}
+
+// WAL-concentration lens (#5736, pure — unit-tested without a live DB). A single
+// statement past WAL_CONCENTRATION_PCT_CEIL of total WAL is the write-amplification
+// class our review lenses missed. A null/undefined max_wal_pct (pre-114 RPC, or no
+// pg_stat_statements) is NOT concentration — only a real number over the ceiling
+// concentrates. Guard null explicitly: Number(null) === 0 would otherwise read as
+// "0% concentration" (harmless here) but Number(undefined) === NaN must not throw.
+export function evaluateWalConcentration(signal: DiskIoSignal): WalConcentrationVerdict {
+  const raw = signal.max_wal_pct == null ? NaN : Number(signal.max_wal_pct);
+  const maxPct = Number.isFinite(raw) ? raw : null;
+  const topStatement = (signal.top_wal_statements ?? [])[0] ?? null;
+  const concentrated = maxPct != null && maxPct > WAL_CONCENTRATION_PCT_CEIL;
+  const detail = concentrated
+    ? `max_wal_pct=${maxPct} > ceil ${WAL_CONCENTRATION_PCT_CEIL} — one statement dominates prod WAL` +
+      (topStatement
+        ? ` (top: "${topStatement.query}" — ${topStatement.calls} calls, ${topStatement.pct_of_wal}% of WAL)`
+        : "")
+    : `max_wal_pct=${maxPct ?? "n/a"} within ceil ${WAL_CONCENTRATION_PCT_CEIL}`;
+  return { concentrated, maxPct, detail, topStatement };
 }
 
 // =============================================================================
@@ -169,6 +225,36 @@ export async function cronSupabaseDiskIoHandler({
         detail: `disk-io signal RPC unavailable: ${signalResult.error}`,
       };
   const signal = signalResult.ok ? signalResult.signal : null;
+
+  // Step 1.5: WAL-concentration early-warning (#5736), INDEPENDENT of the budget
+  // verdict above. A single statement dominating prod WAL is the write-amplification
+  // class our review lenses missed (the webhook dedup INSERT that was 63% of WAL);
+  // surface it as its own Sentry capture (op=wal-concentration) so it pages without
+  // a dashboard (hr-no-dashboard-eyeball-pull-data-yourself). The emit lives inside
+  // step.run (ADR-033 I1: all outbound IO inside a step) and does NOT change the
+  // heartbeat — WAL concentration is a write-cost signal, not a budget breach.
+  if (signal) {
+    const wal = evaluateWalConcentration(signal);
+    if (wal.concentrated) {
+      await step.run("wal-concentration-alert", async () => {
+        reportSilentFallback(new Error(`WAL concentration: ${wal.detail}`), {
+          feature: "cron-supabase-disk-io",
+          op: "wal-concentration",
+          message: "A single statement dominates prod WAL writes (#5736 class)",
+          extra: {
+            fn: "cron-supabase-disk-io",
+            maxWalPct: wal.maxPct,
+            ceil: WAL_CONCENTRATION_PCT_CEIL,
+            topStatement: wal.topStatement,
+          },
+        });
+      });
+      logger.warn(
+        { fn: "cron-supabase-disk-io", maxWalPct: wal.maxPct },
+        "WAL concentration over ceiling",
+      );
+    }
+  }
 
   // Step 2: issue handling — file/comment on trip, auto-close on recovery.
   await step.run("issue-handling", async () => {

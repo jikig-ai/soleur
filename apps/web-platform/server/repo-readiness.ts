@@ -8,11 +8,14 @@
 // emit) lives in `cc-dispatcher.ts`. Keeping the decision pure lets the AC7
 // unit test drive every branch DB-free.
 //
-// Source-of-truth split (see plan Reconciliation): `repo_status` is read from
-// `workspaces` (the ADR-044 source of truth, correct for shared workspaces),
-// but the error REASON comes from `users.repo_error` — `workspaces.repo_error`
-// is never written (`workspace-repo-mirror.ts:6`). The at-rest reason is
-// already sanitized at the write boundary (`/api/repo/setup` →
+// Source-of-truth: both `repo_status` AND the error REASON are read from
+// `workspaces` (the ADR-044 source of truth, correct for shared workspaces).
+// As of migration 110 the gate reads `workspaces.repo_error`, and as of
+// migration 113 `set_repo_status` WRITES the reason to `workspaces.repo_error`
+// (keyed on the membership-checked `p_workspace_id`) — the dropped
+// `users.repo_error` split-write is gone, so a member-triggered heal failure
+// surfaces the correct reason on that member's next dispatch. The at-rest
+// reason is already sanitized at the write boundary (`/api/repo/setup` →
 // `sanitizeGitStderr`); the gate unwraps it through the SHARED
 // `parseErrorPayload` so there is no inline re-derivation and no leak surface.
 // ---------------------------------------------------------------------------

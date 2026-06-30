@@ -12,11 +12,23 @@
 // enters the fan-out loop). That exact state froze the founder's own KB for
 // ~5 weeks before anyone noticed, because nothing was loud.
 //
-// This cron makes that class loud: a daily read-only scan that reports each
-// `repo_status='ready' AND github_installation_id IS NULL` workspace to Sentry
-// via reportSilentFallback. It mutates nothing (a state flip to 'error' would
-// 409 the /api/kb/tree read and BLANK the user's tree — strictly worse than a
-// stale-but-visible tree), so there is no migration and no UI change.
+// This cron makes that class loud AND self-heals the recoverable subset (#5675):
+// arm-1 is a daily scan of `repo_status='ready' AND github_installation_id IS
+// NULL` workspaces that, for each SOLO finding, resolves the installation the
+// owner is ENTITLEMENT-SCOPED to reach for that repo (the connect-path
+// resolveReachableInstallationIds → resolveOwningInstallationForRepoDetailed
+// pair) and BACKFILLS github_installation_id via the canonical
+// writeRepoColsToWorkspace boundary — so the workspace becomes reachable by the
+// push reconcile and the standing Sentry signal clears on the next scan. Team
+// workspaces (never auto-detect their install — see detect-installation) and
+// genuinely-unresolvable findings keep the existing folded reportSilentFallback
+// signal (it stays VISIBLE — Sentry folds the recurring occurrences into one
+// issue, no daily flood). A degraded GitHub probe no-ops as transient and
+// self-recovers next fire. It NEVER flips `repo_status` (a state flip to 'error'
+// would 409 the /api/kb/tree read and BLANK the user's tree — strictly worse
+// than a stale-but-visible tree), carrying forward only that narrow ADR-044
+// sub-rule. No migration, no UI change; the only write is the entitlement-scoped
+// solo-only credential backfill.
 //
 // ADR-033 invariants: I1 (all IO inside step.run), I2 (no claude/BYOK),
 // I5 (deterministic step.run return shapes), I6 (emits no Inngest events).
@@ -24,7 +36,37 @@
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { getDefaultBranchHeadCommitAt } from "@/server/github-app";
+import {
+  resolveReachableInstallationIds,
+  resolveOwningInstallationForRepoDetailed,
+} from "@/server/reachable-installations";
+import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
+import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import { postSentryHeartbeat, type HandlerArgs } from "./_cron-shared";
+// #5689 item 2 — immediate re-sync after backfill. `moduleLogger` (the pino
+// module logger) is required by syncWorkspace's typed `Logger` param; arm-1's
+// loose HandlerArgs `logger` is not assignable (mirrors reconcile-on-push).
+import { promises as fs } from "node:fs";
+import moduleLogger from "@/server/logger";
+import { syncWorkspace } from "@/server/workspace-sync";
+import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
+import {
+  ERROR_CLASS_WORKSPACE_NOT_READY,
+  appendKbSyncRowForWorkspace,
+} from "@/server/session-sync";
+
+// Duplicated from workspace-reconcile-on-push.ts (private local there; taste:
+// duplication over coupling for a 6-line fs probe). Readiness = filesystem
+// existence (ADR-044). A reconciled `ready` row whose dir is absent skips the
+// sync without touching git.
+async function workspaceDirExists(path: string): Promise<boolean> {
+  try {
+    const st = await fs.stat(path);
+    return st.isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 const SENTRY_MONITOR_SLUG = "cron-workspace-sync-health";
 const SENTRY_FEATURE = "workspace-sync-health";
@@ -49,6 +91,131 @@ interface ScanResult {
   error: string | null;
 }
 
+// PR-2b Shape B (#5437) shared Step-A query for arms 2 & 3. PURE: it does ONLY
+// the authoritative-readiness query against `workspaces` and returns the rows +
+// error — it owns NO step boundary, NO reportSilentFallback, NO projection, and
+// NO early-return policy. Each arm keeps those itself (own op-slug, own
+// {reported:0}/{wentQuiet:0} shape, own readyIds/repoUrlById projection) so the
+// arms stay independently observable and their step-return contracts are local.
+//
+// INTENTIONAL team-workspace drop (data-integrity): this returns ALL ready
+// workspaces incl. TEAM rows (team workspaces have a fresh-uuid id). Step B's
+// `.in("id", readyIds)` against `users` matches nothing for a team id (a team
+// uuid is never a users.id), so team workspaces are silently dropped from arms
+// 2 & 3 — INTENTIONAL: kb_sync_history is users-keyed (mig 017); team sync-health
+// is out of scope for these arms (arm 1 still reports team workspaces, with a
+// null install). `workspaces.repo_status` has no index (seq scan; negligible at
+// current scale — the future optimization is a partial index
+// `workspaces_repo_status_ready_idx WHERE repo_status='ready'`, NOT added here
+// to keep this PR migration-free).
+type ReadyWorkspaceRow = { id: string; repo_url: string | null };
+// Minimal structural shape of the service-role client this helper needs — the
+// `.from(table).select(cols).eq(col,val)` thenable. Mirrors the injected-client
+// pattern in resolve-installation-id-for-workspace.ts (no full SupabaseClient
+// type dependency, no `any`).
+type ReadyScanChain = {
+  select: (cols: string) => ReadyScanChain;
+  eq: (col: string, val: string) => ReadyScanChain;
+  then: (
+    resolve: (v: {
+      data: ReadyWorkspaceRow[] | null;
+      error: { message: string } | null;
+    }) => unknown,
+  ) => Promise<unknown>;
+};
+async function scanReadyWorkspaces(service: {
+  from: (table: string) => unknown;
+}): Promise<{
+  rows: ReadyWorkspaceRow[];
+  error: { message: string } | null;
+}> {
+  const { data, error } = await (service.from("workspaces") as ReadyScanChain)
+    .select("id, repo_url")
+    .eq("repo_status", "ready");
+  return { rows: data ?? [], error };
+}
+
+// Parse `owner/repo` from a canonical `https://host/owner/repo(.git)` URL.
+// Returns null on a falsy owner|repo (malformed/legacy row). Shared by arm-1's
+// reconcile decision and arm-3's went-quiet probe so the two cannot drift.
+function parseOwnerRepo(repoUrl: string): [string, string] | null {
+  const slug = repoUrl
+    .replace(/^https?:\/\/[^/]+\//i, "")
+    .replace(/\.git$/i, "");
+  const [owner, repo] = slug.split("/");
+  if (!owner || !repo) return null;
+  return [owner, repo];
+}
+
+// Arm-1 reconcile decision (#5675). A 3-outcome union (simplicity review):
+//   reconciled → backfill the resolved install via writeRepoColsToWorkspace.
+//   skip       → keep the visible folded reportSilentFallback signal (ALL skip
+//                reasons stay visible — a ready+NULL-install workspace is stuck
+//                regardless of why it is unresolvable, including a malformed
+//                repo_url; the caller emits op:ready-null-installation carrying
+//                the reason).
+//   transient  → degraded GitHub probe; no write, no signal, self-recovers.
+type Arm1SkipReason =
+  | "team-workspace-never-auto-detect"
+  | "malformed-repo-url"
+  | "needs-reauth";
+type Arm1Outcome =
+  | { kind: "reconciled"; installId: number }
+  | { kind: "skip"; reason: Arm1SkipReason }
+  | { kind: "transient" };
+
+// Minimal service shape `decideArm1Reconcile` needs to call
+// resolveReachableInstallationIds (the PostgREST `.from(...)` chain) — avoids a
+// full SupabaseClient dependency here. The caller passes the same client to
+// writeRepoColsToWorkspace separately (its own structural ServiceClientLike).
+type Arm1Service = { from: (table: string) => unknown };
+
+// Decide arm-1's action for ONE finding. Entitlement-scoped + solo-only:
+// resolution is keyed on the OWNER's user_id (== the solo workspace id, ADR-038
+// N2) + github_username, so an install the owner cannot reach is never resolved
+// and therefore can never be bound (the cross-tenant over-grant guard). Pure
+// decision: it performs NO write and NO signal — the caller does, inside the
+// per-workspace step.run boundary, so the outcome stays a deterministic value.
+async function decideArm1Reconcile(
+  service: Arm1Service,
+  finding: { workspaceId: string; repoUrl: string | null },
+  ownerLogin: string | null,
+  isSolo: boolean,
+): Promise<Arm1Outcome> {
+  // 1. Team / no-resolvable-owner: NEVER auto-detect a team install.
+  if (!isSolo) {
+    return { kind: "skip", reason: "team-workspace-never-auto-detect" };
+  }
+  // 2. owner/repo from repo_url. A malformed/legacy row is still a stuck
+  //    ready+NULL-install workspace, so it keeps the visible signal (the caller
+  //    emits op:ready-null-installation for every skip reason).
+  if (!finding.repoUrl) return { kind: "skip", reason: "malformed-repo-url" };
+  const parsed = parseOwnerRepo(finding.repoUrl);
+  if (!parsed) return { kind: "skip", reason: "malformed-repo-url" };
+  const [owner, repo] = parsed;
+  // 3. Entitlement-scoped reachable installs (owner user_id == solo workspace id).
+  const reachable = await resolveReachableInstallationIds(
+    service,
+    finding.workspaceId,
+    ownerLogin,
+  );
+  if (reachable.length === 0) return { kind: "skip", reason: "needs-reauth" };
+  // 4. Which reachable install OWNS this repo (the push-webhook install).
+  const owning = await resolveOwningInstallationForRepoDetailed(
+    reachable,
+    owner,
+    repo,
+  );
+  if (owning.installId !== null) {
+    return { kind: "reconciled", installId: owning.installId };
+  }
+  // null: all-degraded sweep is transient (retry); a conclusive non-owning
+  // answer means the owner is genuinely not entitled → needs-reauth.
+  return owning.allDegraded
+    ? { kind: "transient" }
+    : { kind: "skip", reason: "needs-reauth" };
+}
+
 export async function cronWorkspaceSyncHealthHandler({
   step,
   logger,
@@ -57,6 +224,10 @@ export async function cronWorkspaceSyncHealthHandler({
   const scan = await step.run("scan-ready-null-installation", async (): Promise<ScanResult> => {
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
+    // `workspaces.repo_status` has no index (seq scan; negligible at current
+    // scale; the future optimization is a partial index
+    // `workspaces_repo_status_ready_idx WHERE repo_status='ready'` — NOT added
+    // here to keep this PR migration-free). Same applies to arms 2/3's Step-A.
     const { data, error } = await service
       .from("workspaces")
       .select("id, repo_url")
@@ -78,42 +249,215 @@ export async function cronWorkspaceSyncHealthHandler({
     };
   });
 
-  // Step 2: report each unreachable workspace. Each is a workspace the user
-  // believes is connected ('ready') but that the reconcile can never select.
+  // Step 2: reconcile each unreachable workspace (#5675). Each is a workspace
+  // the user believes is connected ('ready') but that the reconcile can never
+  // select. For a SOLO finding we resolve the owner's entitlement-scoped owning
+  // install and backfill it; team/unresolvable findings keep the visible folded
+  // signal; a degraded probe no-ops. NEVER flips repo_status.
   if (scan.ok && scan.findings.length > 0) {
-    await step.run("report-unreachable-workspaces", async () => {
-      for (const f of scan.findings) {
-        reportSilentFallback(
-          new Error("ready workspace has NULL github_installation_id — unreachable by reconcile"),
-          {
+    // Owner identity for solo classification + entitlement resolution. Solo
+    // workspaces satisfy workspaces.id == users.id (ADR-038 N2); a finding id
+    // that is NOT a users.id is a team workspace. github_username stays a users
+    // read (ADR-044 deliberately did not relocate it). On a lookup error we fall
+    // back to null → every finding is treated as non-solo (skip + keep the
+    // visible signal) — fail-safe, never a wrong write.
+    const ownerById = await step.run(
+      "scan-arm1-owners",
+      async (): Promise<Record<string, string | null> | null> => {
+        const { createServiceClient } = await import("@/lib/supabase/service");
+        const service = createServiceClient();
+        const ids = scan.findings.map((f) => f.workspaceId);
+        const { data, error } = await service
+          .from("users")
+          .select("id, github_username")
+          .in("id", ids);
+        if (error) {
+          reportSilentFallback(error, {
             feature: SENTRY_FEATURE,
-            op: "ready-null-installation",
-            extra: { workspaceId: f.workspaceId, repoUrl: f.repoUrl },
+            op: "scan-arm1-owners",
             message:
-              "Workspace is repo_status=ready but github_installation_id is NULL — KB sync can never run; needs GitHub App re-authorization",
-          },
+              "Arm-1 owner lookup failed — treating all findings as non-solo (skip + keep signal)",
+          });
+          return null;
+        }
+        const rows =
+          (data as { id: string; github_username: string | null }[] | null) ??
+          [];
+        return Object.fromEntries(
+          rows.map((r) => [r.id, r.github_username]),
         );
-      }
-      return { reported: scan.findings.length };
-    });
+      },
+    );
+
+    let reconciled = 0;
+    let skipped = 0;
+    let transient = 0;
+    let synced = 0;
+    for (const f of scan.findings) {
+      // Per-workspace step boundary (ADR-033 I5): each backfill memoizes
+      // independently so a mid-loop throw does not re-probe/re-write others.
+      const outcome = await step.run(
+        `reconcile-${f.workspaceId}`,
+        async (): Promise<Arm1Outcome & { synced?: boolean }> => {
+          const { createServiceClient } = await import(
+            "@/lib/supabase/service"
+          );
+          const service = createServiceClient();
+          const isSolo = ownerById !== null && f.workspaceId in ownerById;
+          const ownerLogin = ownerById?.[f.workspaceId] ?? null;
+          const decision = await decideArm1Reconcile(
+            service,
+            f,
+            ownerLogin,
+            isSolo,
+          );
+          let didSync: boolean | undefined;
+          if (decision.kind === "reconciled") {
+            // Canonical write boundary (keyed on the finding's own id; inherits
+            // the 0-row/error Sentry mirror — this also satisfies the
+            // backfill-failure observability path).
+            await writeRepoColsToWorkspace(service, f.workspaceId, {
+              github_installation_id: decision.installId,
+            });
+            // #5689 item 2 — immediate re-sync. The backfill above COMMITS FIRST
+            // (re-entrancy: the row leaves arm-1's ready+NULL-install scan, so a
+            // failed sync is never re-backfilled and arm-1 does NOT re-sync it —
+            // push + arm-2 stale-sync-failed own the failure loudness). syncWorkspace
+            // pulls the live default-branch HEAD; solo invariant f.workspaceId ===
+            // users.id (ADR-038 N2) → userId and the workspace-keyed audit writer
+            // both take f.workspaceId. Truthful `reconcile_backfill` trigger (never
+            // webhook_push); op "manual" = the system-resync convention (no op-union
+            // widening). No Inngest event — ADR-033 I6 preserved.
+            const workspacePath = workspacePathForWorkspaceId(f.workspaceId);
+            const completedAt = Date.now();
+            const auditBase = {
+              at: new Date(completedAt).toISOString(),
+              trigger: "reconcile_backfill" as const,
+              sync_completed_at: completedAt,
+              workspace_id: f.workspaceId,
+            };
+            if (!(await workspaceDirExists(workspacePath))) {
+              await appendKbSyncRowForWorkspace(service, f.workspaceId, {
+                ...auditBase,
+                ok: false,
+                error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
+              });
+              didSync = false;
+            } else {
+              const syncResult = await syncWorkspace(
+                decision.installId,
+                workspacePath,
+                moduleLogger,
+                { userId: f.workspaceId, op: "manual" },
+              );
+              if (syncResult.ok) {
+                await appendKbSyncRowForWorkspace(service, f.workspaceId, {
+                  ...auditBase,
+                  ok: true,
+                  ...(syncResult.recovered ? { recovered: true } : {}),
+                });
+                didSync = true;
+              } else {
+                reportSilentFallback(syncResult.error, {
+                  feature: SENTRY_FEATURE,
+                  op: "reconcile-backfill-sync",
+                  extra: { workspaceId: f.workspaceId },
+                  message: "Immediate re-sync after backfill failed",
+                });
+                await appendKbSyncRowForWorkspace(service, f.workspaceId, {
+                  ...auditBase,
+                  ok: false,
+                  error_class: syncResult.errorClass,
+                });
+                didSync = false;
+              }
+            }
+          } else if (decision.kind === "skip") {
+            // Keep the existing folded signal (op unchanged) for EVERY skip
+            // reason — a ready+NULL-install workspace is stuck regardless of why
+            // it is unresolvable (team / needs-reauth / malformed). It stays
+            // visible as one standing issue; carry the reason for discriminability.
+            reportSilentFallback(
+              new Error(
+                "ready workspace has NULL github_installation_id — unreachable by reconcile",
+              ),
+              {
+                feature: SENTRY_FEATURE,
+                op: "ready-null-installation",
+                extra: {
+                  workspaceId: f.workspaceId,
+                  repoUrl: f.repoUrl,
+                  reason: decision.reason,
+                },
+                message:
+                  "Workspace is repo_status=ready but github_installation_id is NULL and not auto-resolvable — KB sync can never run; needs GitHub App re-authorization",
+              },
+            );
+          }
+          return { ...decision, synced: didSync };
+        },
+      );
+      if (outcome.kind === "reconciled") {
+        reconciled++;
+        if (outcome.synced) synced++;
+      } else if (outcome.kind === "transient") transient++;
+      else skipped++;
+    }
+    logger.info(
+      { fn: "cron-workspace-sync-health", reconciled, skipped, transient, synced },
+      "Arm-1 reconcile complete",
+    );
   }
 
   // Step 2b (item 2, #4712): ready + INSTALLED workspaces whose owner's LATEST
   // kb_sync_history row is ok:false — a persistent recorded sync failure that
   // item-1's NULL-install scan can never catch (those write zero rows). This
   // class IS installed, so the webhook reaches it, but the sync keeps failing
-  // and the user just sees a stale tree. kb_sync_history lives on `users` only
-  // (ADR-044 mirrored repo cols — not history — to workspaces), so this scan
-  // targets `users`, unlike the workspaces scan above. Read-only; reports
-  // in-place and deliberately does NOT widen the function's ScanResult return.
+  // and the user just sees a stale tree.
+  //
+  // PR-2b Shape B (#5437): READINESS is now read from the authoritative
+  // `workspaces.repo_status` (mig 108 source of truth, written by #5466), NOT the
+  // STALE `users.repo_status`. Step A scans `workspaces` for repo_status='ready'
+  // (mirrors arm 1's idiom); Step B fetches `kb_sync_history` from `users` by the
+  // same ids (`.in("id", ids)`) — that column lives on `users` only (mig 017) and
+  // ADR-044 deliberately did NOT relocate it; the solo workspaces.id == users.id
+  // (ADR-038/053 N2). The INSTALL is resolved per-row from the user's solo
+  // `workspaces` row via resolveInstallationIdForWorkspace (#5470). This fixes a
+  // BIDIRECTIONAL latent bug: newly-connected users (no `users.repo_status` write
+  // but `workspaces.repo_status='ready'`) are now CAUGHT (Direction A), and
+  // stale-`users.repo_status`-ready users whose live workspace is NOT ready are
+  // now correctly DROPPED (Direction B). Read-only; reports in-place and
+  // deliberately does NOT widen the function's ScanResult return.
   await step.run("scan-stale-sync-failed", async (): Promise<{ reported: number }> => {
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
+    // Step A: authoritative readiness from workspaces (solo id == users.id) via
+    // the shared PURE helper. The reportSilentFallback (own op-slug) + the
+    // {reported:0} early-return policy stay HERE in the arm, not in the helper.
+    const { rows: wsRows, error: wsError } = await scanReadyWorkspaces(service);
+    if (wsError) {
+      reportSilentFallback(wsError, {
+        feature: SENTRY_FEATURE,
+        op: "scan-stale",
+        message: "Stale-sync-failed scan failed",
+      });
+      return { reported: 0 };
+    }
+    const readyIds = wsRows.map((w) => w.id);
+    // Step-scoped early return MUST return the step's shape ({reported:0}) — it
+    // returns from THIS callback, never bubbling to the handler (a bare bubble
+    // would skip the separate sentry-heartbeat step and false-alarm a missed
+    // checkin). Mirrors the "Heartbeat isolation is STRUCTURAL" contract.
+    if (readyIds.length === 0) return { reported: 0 };
+    // Step B: kb_sync_history lives on users only — fetch by the same ids. Reuse
+    // the scan-stale op slug on error (no new slug — op-contract continuity).
+    // Cardinality: internal-only/solo-workspace scale keeps `readyIds` small; if
+    // ready-workspace cardinality crosses ~few-hundred, chunk this `.in()`
+    // (PostgREST URL-length ceiling ~200-400 ids).
     const { data, error } = await service
       .from("users")
       .select("id, kb_sync_history")
-      .eq("repo_status", "ready")
-      .not("github_installation_id", "is", null);
+      .in("id", readyIds);
     if (error) {
       reportSilentFallback(error, {
         feature: SENTRY_FEATURE,
@@ -136,6 +480,14 @@ export async function cronWorkspaceSyncHealthHandler({
         "ok" in latest &&
         (latest as { ok: unknown }).ok === false
       ) {
+        // Resolve the install from the user's solo workspace. A null result
+        // (not connected) is the dropped install predicate's per-row
+        // equivalent — skip, do not report. Newly-connected users (whose legacy
+        // `users` install column is NULL but whose `workspaces` row is
+        // populated) are now CAUGHT here, where the old `users` predicate
+        // false-negatively excluded them (#5470 Test Scenario 6).
+        const install = await resolveInstallationIdForWorkspace(r.id, service);
+        if (install === null) continue;
         reportSilentFallback(
           new Error("ready+installed workspace's latest KB sync failed"),
           {
@@ -162,8 +514,17 @@ export async function cronWorkspaceSyncHealthHandler({
   // out-of-band: GitHub's default-branch HEAD commit date vs. the last ok:true
   // sync. Fire only when BOTH (a) the repo pushed since the last sync (+slack,
   // cross-clock) AND (b) the last sync is older than N days — clause (a)
-  // suppresses the idle-repo false positive. Scans `users` (mirrors arm 2 → the
-  // two arms partition by latest-row ok-polarity; never double-report).
+  // suppresses the idle-repo false positive.
+  //
+  // PR-2b Shape B (#5437): like arm 2, readiness AND repo_url now come from the
+  // authoritative `workspaces` row (Step A: scan repo_status='ready' → {id,
+  // repo_url}), not the STALE `users.repo_url`/`users.repo_status`. Step B fetches
+  // `kb_sync_history` from `users` by the same ids. The arm-2/arm-3 partition is
+  // POLARITY-based (latest-row ok:false vs ok:true), enforced PER-ROW below — it
+  // does NOT depend on the two arms scanning an identical row-set, so each running
+  // its own workspaces scan at its own step boundary is harmless (idempotent
+  // loud-reporter, daily cadence; "never double-report" rests on the polarity
+  // check, not a shared population).
   //
   // DEFAULT BRANCH is the correct probe target (not "any branch"): the reconcile
   // only ever syncs the default branch — webhook-push-reconcilable.ts drops
@@ -187,11 +548,33 @@ export async function cronWorkspaceSyncHealthHandler({
     try {
       const { createServiceClient } = await import("@/lib/supabase/service");
       const service = createServiceClient();
+      // Step A: authoritative readiness + repo_url from workspaces via the shared
+      // PURE helper. The reportSilentFallback (own op-slug), the {wentQuiet:0}
+      // early-return, and the repoUrlById projection all stay HERE in the arm.
+      // Build the Map DIRECTLY from wsRows (not via a derived ids index) so it
+      // can't drift if anyone later filters ids.
+      const { rows: wsRows, error: wsError } = await scanReadyWorkspaces(service);
+      if (wsError) {
+        reportSilentFallback(wsError, {
+          feature: SENTRY_FEATURE,
+          op: "scan-went-quiet",
+          message: "Went-quiet scan failed",
+        });
+        return { wentQuiet: 0 };
+      }
+      const repoUrlById = new Map(wsRows.map((w) => [w.id, w.repo_url]));
+      const readyIds = [...repoUrlById.keys()];
+      // Step-scoped early return (returns the step's {wentQuiet:0} shape, never
+      // bubbles to the handler → sentry-heartbeat still fires).
+      if (readyIds.length === 0) return { wentQuiet: 0 };
+      // Step B: kb_sync_history lives on users only — fetch by the same ids.
+      // Cardinality: internal-only/solo-workspace scale keeps `readyIds` small;
+      // if ready-workspace cardinality crosses ~few-hundred, chunk this `.in()`
+      // (PostgREST URL-length ceiling ~200-400 ids).
       const { data, error } = await service
         .from("users")
-        .select("id, repo_url, github_installation_id, kb_sync_history")
-        .eq("repo_status", "ready")
-        .not("github_installation_id", "is", null);
+        .select("id, kb_sync_history")
+        .in("id", readyIds);
       if (error) {
         reportSilentFallback(error, {
           feature: SENTRY_FEATURE,
@@ -204,8 +587,6 @@ export async function cronWorkspaceSyncHealthHandler({
         (data as
           | {
               id: string;
-              repo_url: string | null;
-              github_installation_id: number | null;
               kb_sync_history: unknown;
             }[]
           | null) ?? [];
@@ -213,8 +594,11 @@ export async function cronWorkspaceSyncHealthHandler({
       const maxGapMs = KB_WENT_QUIET_MAX_GAP_DAYS * 24 * 60 * 60 * 1000;
       let wentQuiet = 0;
       for (const r of rows) {
-        // Need both a reachable installation and a repo to probe.
-        if (!r.repo_url || !r.github_installation_id) continue;
+        // Need a repo to probe; repo_url comes from the workspaces Step-A Map
+        // (PR-2b — no longer a users column). The install is resolved per-row
+        // below (from the user's solo workspace) just before the GitHub probe.
+        const repoUrl = repoUrlById.get(r.id) ?? null;
+        if (!repoUrl) continue;
         // Latest row only — `at(-1).ok === true` is the went-quiet gate AND the
         // mutual-exclusion boundary with arm 2 (which fires on `ok === false`).
         // The `'ok' in latest` guard excludes legacy {date,count} rows.
@@ -234,22 +618,26 @@ export async function cronWorkspaceSyncHealthHandler({
         if (Number.isNaN(lastOkSyncAt)) continue;
         if (now - lastOkSyncAt <= maxGapMs) continue; // fresh — clause (b) fails
 
-        // owner/repo from the user's own repo_url (NOT _cron-shared constants,
-        // which point at Soleur's own repo). Mirrors workspace-reconcile-on-push's
-        // repoSlug. repo_url is canonical `https://github.com/owner/repo` at write
-        // time (normalizeRepoUrl), so a falsy owner/repo here is a near-impossible
-        // legacy/malformed row — skipping it silently is benign (the helper
-        // encodeURIComponent-guards the segments regardless).
-        const slug = r.repo_url
-          .replace(/^https?:\/\/[^/]+\//i, "")
-          .replace(/\.git$/i, "");
-        const [owner, repo] = slug.split("/");
-        if (!owner || !repo) continue;
+        // owner/repo from the workspace's repo_url (Step-A Map, NOT _cron-shared
+        // constants, which point at Soleur's own repo). Mirrors workspace-reconcile-
+        // on-push's repoSlug. repo_url is canonical `https://github.com/owner/repo`
+        // at write time (normalizeRepoUrl), so a falsy owner/repo here is a
+        // near-impossible legacy/malformed row — skipping it silently is benign
+        // (the helper encodeURIComponent-guards the segments regardless).
+        const parsed = parseOwnerRepo(repoUrl);
+        if (!parsed) continue;
+        const [owner, repo] = parsed;
+
+        // Resolve the install from the user's solo workspace (replaces the
+        // dropped `users` install select+predicate, #5470). Null → not
+        // connected → skip, exactly as the old predicate filtered it out.
+        const install = await resolveInstallationIdForWorkspace(r.id, service);
+        if (install === null) continue;
 
         let headCommitAt: number | null;
         try {
           headCommitAt = await getDefaultBranchHeadCommitAt(
-            r.github_installation_id,
+            install,
             owner,
             repo,
           );

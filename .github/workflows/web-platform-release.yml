@@ -110,6 +110,10 @@ jobs:
     needs: release
     if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
+    # Holds the migrate-web-platform lock (cancel-in-progress: false), so an
+    # unbounded hang serializes all releases. Cap above any legitimate apply;
+    # DDL is transactional, so a timeout-kill rolls the in-flight migration back.
+    timeout-minutes: 30
     concurrency:
       group: migrate-web-platform
       cancel-in-progress: false
@@ -131,6 +135,12 @@ jobs:
     needs: migrate
     if: needs.migrate.result == 'success'
     runs-on: ubuntu-latest
+    # Hard cap the job: this job holds the `verify-migrations-web-platform`
+    # concurrency lock (cancel-in-progress: false), so a wedged step serializes
+    # ALL web-platform releases behind it. Without an explicit cap it inherits
+    # the 6h GitHub default — the #5559 deploy hung ~3h on `Install psql` and
+    # blocked every subsequent release until manually cancelled.
+    timeout-minutes: 15
     concurrency:
       group: verify-migrations-web-platform
       cancel-in-progress: false
@@ -142,9 +152,22 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Install psql
+        # Step-level cap + retry so a transient apt mirror/lock stall fails fast
+        # (and the job/concurrency lock releases) instead of hanging for hours.
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends postgresql-client
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && \
+               sudo apt-get install -y -qq --no-install-recommends postgresql-client; then
+              exit 0
+            fi
+            echo "apt attempt ${attempt} failed; retrying in 5s" >&2
+            sleep 5
+          done
+          echo "::error::Install psql failed after 3 attempts" >&2
+          exit 1
       - name: Run verify files
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
@@ -239,6 +262,10 @@ jobs:
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
     # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
     runs-on: ubuntu-latest
+    # Holds the verify-secrets-web-platform lock (cancel-in-progress: false);
+    # cap so a hung doppler/network call can't serialize releases. This job is a
+    # fast secrets-existence check — 10 min is generous headroom.
+    timeout-minutes: 10
     concurrency:
       group: verify-secrets-web-platform
       cancel-in-progress: false
@@ -272,6 +299,13 @@ jobs:
        (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
+    # Holds the deploy-web-platform lock (cancel-in-progress: false). The job
+    # already self-bounds via the STATUS+HEALTH poll loops below (30m + 30m
+    # sequential ceiling) plus the image build; this 90m cap is the backstop for
+    # a hang BEFORE those loops (e.g. a buildx wedge per post-mortems/
+    # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
+    # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
+    timeout-minutes: 90
     concurrency:
       group: deploy-web-platform
       cancel-in-progress: false
@@ -291,20 +325,27 @@ jobs:
     # bump (claude-code/playwright/node) forces a one-time FULL image re-pull on
     # the prod server, which a 900s ceiling cannot fit — see the v0.116.1 buildx
     # full-repull PIR (post-mortems/v0116-1-buildx-driver-full-repull-deploy-timeout).
+    # Ceiling raised 1800s→4800s (#5669 / ADR-068): the cron drain in ci-deploy.sh
+    # can wait up to CRON_DRAIN_TIMEOUT=4200s (MAX per-function maxTurnDurationMs)
+    # for an in-flight cron before swapping, so the deploy wall-clock must exceed
+    # drain + swap overhead (worst-case deploy ~80min). Trade-off named in ADR-068:
+    # IN_FLIGHT_CEILING_S also gates the pre-rerun stale-lock probe below, so a
+    # wedged prior deploy now reads as "alive" for ~80min and hung-deploy failure
+    # surfaces ~80min slower.
     # All four windows move together (asserted at runtime + by ci-deploy-wrapper.test.sh):
-    #   STATUS: 360 * 5s = 1800   HEALTH: 180 * 10s = 1800   IN_FLIGHT_CEILING_S: 1800   wrapper: 1800s
+    #   STATUS: 960 * 5s = 4800   HEALTH: 480 * 10s = 4800   IN_FLIGHT_CEILING_S: 4800   wrapper: 4800s
     env:
-      STATUS_POLL_MAX_ATTEMPTS: 360
+      STATUS_POLL_MAX_ATTEMPTS: 960
       STATUS_POLL_INTERVAL_S: 5
-      HEALTH_POLL_MAX_ATTEMPTS: 180
+      HEALTH_POLL_MAX_ATTEMPTS: 480
       HEALTH_POLL_INTERVAL_S: 10
       # IN_FLIGHT_CEILING_S MUST equal the wall-clock cap in
-      # apps/web-platform/infra/ci-deploy-wrapper.sh (timeout ... 1800s ...)
+      # apps/web-platform/infra/ci-deploy-wrapper.sh (timeout ... 4800s ...)
       # so the server-side hard-kill fires exactly when the workflow gives
       # up polling (#3704). Drift produces either a perpetual "running"
       # state (workflow gives up before kill) or wasted polling cycles
       # (kill fires before workflow times out).
-      IN_FLIGHT_CEILING_S: 1800
+      IN_FLIGHT_CEILING_S: 4800
     steps:
       - name: Pre-rerun lock probe
         # #3408: short-circuit if the prior deploy is still in flight, so a
@@ -527,3 +568,253 @@ jobs:
           done
           echo "::error::Deploy verification failed after $((HEALTH_POLL_MAX_ATTEMPTS * HEALTH_POLL_INTERVAL_S))s — expected version $VERSION with supabase connected"
           exit 1
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # BLOCKING live-verify gate (#5463 — flipped from report-only 2026-06-18 after
+  # the first real PASS, run 27786435514, satisfied wg-dark-launch-deploy-gates).
+  # Runs the post-deploy harness (apps/web-platform/scripts/live-verify/run.ts)
+  # on a deterministic, host-isolated ubuntu-latest runner AFTER the deploy job's
+  # "Verify deploy health and version" step (ordered via `needs: [deploy]`).
+  #
+  # WHAT "BLOCKING" MEANS HERE: the job is still post-deploy (needs:[deploy]), so a
+  # FAIL CANNOT roll back the already-shipped image (ADR-064 §Substrate). "Blocking"
+  # = a genuine FAIL fails THIS job → the release run goes red and the all-green
+  # status breaks, surfacing a bad deploy loudly instead of recording a green run
+  # over a broken WS/auth/persist path. Enforced by the final "Enforce live-verify
+  # gate" step on the BLOCK signal computed in the emit step:
+  #   BLOCK=1 ONLY for FAIL (the #5391/#5436 persist regression) or an unverifiable
+  #           TRIGGERED run (no-result-line — "empty fails closed").
+  #   BLOCK=0 for PASS, SKIPPED, the deliberate environmental CANT-RUNs (rate-limited
+  #           / session-rejected / session-not-acked), and pre-harness INFRA failures
+  #           (setup-failed / gate-diff-failed — these fire on EVERY push, including
+  #           non-trigger-path releases, so they must never gate prod).
+  # The harness step KEEPS `continue-on-error: true` on purpose: run.ts exits 1 on
+  # BOTH FAIL and CANT-RUN, so the raw exit cannot distinguish them — the classified
+  # BLOCK signal does, and is the sole blocking authority.
+  #
+  # Substrate = GitHub Actions, NOT Inngest (CTO ruling 2026-06-17; ADR-064
+  # §Substrate "Inngest re-home considered and rejected"): a blocking deploy-gate
+  # needs a deterministic, synchronous, host-isolated exit-code signal.
+  live-verify:
+    needs: [deploy]
+    if: always() && needs.deploy.result == 'success' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # The trigger-paths gate runs FIRST (it needs only `gh` + the committed
+      # trigger-paths.txt). The bun/doppler/playwright setup + harness below are
+      # gated on `triggered == '1'`, so a SKIP release (most merges — no
+      # realtime/WS/auth/DOM-timing surface changed) never pays the ~10min
+      # `playwright install --with-deps chromium`, and a triggering release does
+      # not let that install compete with the harness for the 15-min budget (#5497).
+      - name: Changed-file trigger gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # GH compare API (NOT `git diff`): actions/checkout is fetch-depth:1, so
+          # `before..sha` errors on the zero-SHA / shallow graph. compare needs no
+          # local history. A compare failure is CANT-RUN, never a silent SKIP.
+          if ! files=$(gh api "repos/${REPO}/compare/${BEFORE_SHA}...${AFTER_SHA}" --jq '.files[].filename' 2>/tmp/gate.err); then
+            echo "::warning::live-verify trigger-gate compare API failed: $(tr '\n' ' ' </tmp/gate.err)"
+            {
+              echo "triggered=0"
+              echo "gate_failed=1"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          patterns=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+            apps/web-platform/scripts/live-verify/trigger-paths.txt)
+          if printf '%s\n' "$files" | grep -qE -f <(printf '%s\n' "$patterns"); then
+            triggered=1
+          else
+            triggered=0
+          fi
+          {
+            echo "triggered=$triggered"
+            echo "gate_failed=0"
+          } >> "$GITHUB_OUTPUT"
+      - name: Install Doppler CLI
+        if: steps.gate.outputs.triggered == '1'
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - name: Install bun
+        if: steps.gate.outputs.triggered == '1'
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+      - name: Install web-platform deps
+        if: steps.gate.outputs.triggered == '1'
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+      - name: Install Playwright chromium (+ OS deps)
+        if: steps.gate.outputs.triggered == '1'
+        working-directory: apps/web-platform
+        # Use the @playwright/test version bun just installed (package.json pins
+        # 1.58.2). --with-deps installs the OS shared libs ubuntu-latest lacks; a
+        # bare install would leave chromium.launch() failing on missing libs
+        # (spurious CANT-RUN). The harness's optional system-browser override
+        # env vars are deliberately left unset here so run.ts uses the bundled
+        # chromium that ubuntu-latest installs cleanly.
+        run: npx playwright install --with-deps chromium
+      - name: Run live-verify harness (report-only)
+        id: harness
+        if: steps.gate.outputs.triggered == '1'
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          # `set +e` so a non-zero harness exit (run.ts exits 1 on FAIL/CANT-RUN)
+          # cannot abort the step before the RESULT extraction + $GITHUB_OUTPUT
+          # write. "Failure cannot fail the job" (topology + continue-on-error) is
+          # a DISTINCT invariant from "failure still produces a recording" (this).
+          set +e
+          cd apps/web-platform
+          # Redact the harness's merged stdout+stderr BEFORE it reaches the run
+          # log / the extracted tail (#5487 review, user-impact FINDING 3): a raw
+          # `2>&1 | tee` writes an unhandled Playwright/bun/doppler stderr stack —
+          # which could embed a captured secret — verbatim into the Actions run
+          # log (visible to any Actions-read principal). redact-stdin.ts is
+          # idempotent on run.ts's own already-redacted RESULT line.
+          doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 \
+            | bun run scripts/live-verify/redact-stdin.ts \
+            | tee /tmp/live-verify.out
+          rc=${PIPESTATUS[0]}   # bun's exit code (first pipe stage), NOT redact/tee
+          set -e
+          RESULT_LINE=$(grep -E '^RESULT: ' /tmp/live-verify.out | tail -1)
+          if [ -z "$RESULT_LINE" ]; then
+            # Harness crashed before emitting its own redacted RESULT line. The raw
+            # tail may carry live secrets → scrub through the redact module before
+            # embedding. Distinct failure classes (Doppler-auth, OOM, chromium
+            # hard-crash) collapse to empty stdout, so embed the exit code to keep
+            # them distinguishable.
+            TAIL=$(tail -8 /tmp/live-verify.out \
+              | bun run scripts/live-verify/redact-stdin.ts 2>/dev/null | tr '\n' ' ')
+            RESULT_LINE="RESULT: CANT-RUN:no-result-line:exit=${rc} — ${TAIL}"
+          fi
+          {
+            echo "rc=${rc}"
+            echo "result_line<<__LV_EOF__"
+            echo "${RESULT_LINE}"
+            echo "__LV_EOF__"
+          } >> "$GITHUB_OUTPUT"
+      - name: Emit result to Sentry + compute block signal
+        id: emit
+        if: always()
+        env:
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          TRIGGERED: ${{ steps.gate.outputs.triggered }}
+          GATE_FAILED: ${{ steps.gate.outputs.gate_failed }}
+          RESULT_LINE: ${{ steps.harness.outputs.result_line }}
+          HARNESS_OUTCOME: ${{ steps.harness.outcome }}
+          RC: ${{ steps.harness.outputs.rc }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # Compose the tri-state result + Sentry level. Order matters: setup
+          # failure (gate never ran) → CANT-RUN; gate-diff failure → CANT-RUN;
+          # no triggering paths → SKIPPED; harness ran → PASS/FAIL/CANT-RUN.
+          # Every job run emits EXACTLY ONE queryable event (the #5463 soak needs
+          # a denominator — "ran and skipped" must be distinguishable from "never
+          # ran").
+          # BLOCK is the #5463 flip authority (1 = fail the job → redden the
+          # release; 0 = record-only). Default 0; set to 1 ONLY for a genuine FAIL
+          # or an unverifiable TRIGGERED run (no-result-line — "empty fails closed").
+          # PASS/SKIPPED, the environmental CANT-RUNs, and the pre-harness infra
+          # failures (setup-failed / gate-diff-failed, which fire on every push)
+          # stay BLOCK=0 so they never gate prod. See the job-header comment.
+          BLOCK=0
+          if [ -z "${TRIGGERED:-}" ] && [ -z "${GATE_FAILED:-}" ]; then
+            RESULT="CANT-RUN:setup-failed"; LEVEL="error"
+            MSG="RESULT: ${RESULT} (job setup failed before the trigger gate)"
+          elif [ "${GATE_FAILED:-0}" = "1" ]; then
+            RESULT="CANT-RUN:gate-diff-failed"; LEVEL="error"
+            MSG="RESULT: ${RESULT} (changed-file compare API failed)"
+          elif [ "${TRIGGERED:-0}" = "0" ]; then
+            RESULT="SKIPPED"; LEVEL="info"
+            MSG="RESULT: SKIPPED:no-triggering-paths"
+          elif [ -z "${RESULT_LINE:-}" ]; then
+            RESULT="CANT-RUN:no-result-line"; LEVEL="error"; BLOCK=1
+            MSG="RESULT: ${RESULT}:outcome=${HARNESS_OUTCOME:-unknown}:exit=${RC:-unknown}"
+          else
+            MSG="${RESULT_LINE}"
+            case "${RESULT_LINE}" in
+              "RESULT: PASS"*) RESULT="PASS"; LEVEL="info" ;;
+              "RESULT: FAIL"*) RESULT="FAIL"; LEVEL="error"; BLOCK=1 ;;
+              *no-result-line*) RESULT="CANT-RUN"; LEVEL="error"; BLOCK=1 ;;
+              *gate-diff-failed*) RESULT="CANT-RUN"; LEVEL="error" ;;
+              "RESULT: CANT-RUN"*) RESULT="CANT-RUN"; LEVEL="warning" ;;
+              *) RESULT="CANT-RUN"; LEVEL="warning" ;;
+            esac
+          fi
+          echo "live-verify: result=${RESULT} level=${LEVEL} block=${BLOCK}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "result=${RESULT}"
+            echo "level=${LEVEL}"
+            echo "block=${BLOCK}"
+          } >> "$GITHUB_OUTPUT"
+          # Parse the public client DSN: https://<public_key>@<host>/<project_id>.
+          # The POST host MUST carry the DSN's own region segment
+          # (…ingest.<region>.sentry.io) — never default to a cluster, or the
+          # event silently 4xx's into the wrong region.
+          DSN="${NEXT_PUBLIC_SENTRY_DSN:-}"
+          if [ -z "$DSN" ]; then
+            echo "::error::live-verify: NEXT_PUBLIC_SENTRY_DSN unset — ${RESULT} event NOT emitted"
+            echo "live-verify: Sentry DSN unset — event NOT emitted (result=${RESULT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          PUBLIC_KEY=$(printf '%s' "$DSN" | sed -E 's#^https?://([^@:]+)(:[^@]*)?@.*#\1#')
+          HOST=$(printf '%s' "$DSN" | sed -E 's#^https?://[^@]+@([^/]+)/.*#\1#')
+          PROJECT_ID=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
+          if [ -z "$PUBLIC_KEY" ] || [ -z "$HOST" ] || [ -z "$PROJECT_ID" ]; then
+            echo "::error::live-verify: could not parse NEXT_PUBLIC_SENTRY_DSN — ${RESULT} event NOT emitted"
+            echo "live-verify: Sentry DSN unparseable — event NOT emitted (result=${RESULT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          STORE_URL="https://${HOST}/api/${PROJECT_ID}/store/"
+          PAYLOAD=$(jq -nc --arg msg "$MSG" --arg level "$LEVEL" --arg result "$RESULT" \
+            --arg sha "${GITHUB_SHA:-}" \
+            '{message:$msg, level:$level, platform:"other",
+              tags:{gate:"live-verify", component:"web-platform", result:$result},
+              extra:{sha:$sha}}')
+          ok=0; code="000"
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST "$STORE_URL" \
+              -H "Content-Type: application/json" \
+              -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=live-verify-gha/1.0, sentry_key=${PUBLIC_KEY}" \
+              --data "$PAYLOAD" 2>/dev/null || echo "000")
+            if [ "$code" = "200" ] || [ "$code" = "202" ]; then ok=1; break; fi
+            echo "live-verify: Sentry POST attempt ${attempt} → HTTP ${code}"
+            sleep 3
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::live-verify: Sentry event POST failed after 3 attempts (last HTTP ${code}) for result=${RESULT}"
+            echo "live-verify: Sentry POST FAILED (result=${RESULT}, last HTTP ${code}) — observability degraded, deploy NOT affected" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "live-verify: Sentry event emitted (result=${RESULT}, level=${LEVEL})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Enforce live-verify gate (blocking — #5463)
+        if: always()
+        env:
+          RESULT: ${{ steps.emit.outputs.result }}
+          BLOCK: ${{ steps.emit.outputs.block }}
+        run: |
+          set -uo pipefail
+          # The report-only→blocking flip (#5463), unblocked by the first real PASS
+          # on 2026-06-18 (run 27786435514) per wg-dark-launch-deploy-gates. This is
+          # the SOLE blocking authority; BLOCK is classified in the emit step (1 only
+          # for FAIL or no-result-line). Post-deploy job → reddening the release run
+          # signals a bad deploy loudly; it does NOT roll back the already-shipped
+          # image (ADR-064 §Substrate). Sentry emit is observability and never blocks
+          # (a Sentry outage must not gate prod), so the gate keys on BLOCK, not on
+          # whether the event POSTed.
+          if [ "${BLOCK:-0}" = "1" ]; then
+            echo "::error::live-verify gate BLOCKED the release: result=${RESULT:-unknown}. Inspect the 'Run live-verify harness' step output and the gate=live-verify Sentry event."
+            exit 1
+          fi
+          echo "live-verify gate: non-blocking (result=${RESULT:-unknown})"

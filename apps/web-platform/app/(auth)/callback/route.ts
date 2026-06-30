@@ -7,6 +7,7 @@ import {
   isKnownProviderErrorCode,
 } from "@/lib/auth/provider-error-classifier";
 import { provisionWorkspace } from "@/server/workspace";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { safeReturnTo } from "@/lib/safe-return-to";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
@@ -251,13 +252,33 @@ export async function GET(request: NextRequest) {
           onErrorReturn: true,
         });
         const serviceClient = createServiceClient();
-        const { data: repoUser } = await serviceClient
-          .from("users")
-          .select("repo_status, setup_key_skipped_at")
-          .eq("id", user.id)
-          .single();
+        // ADR-044 PR-2 (#5462): `repo_status` is AUTHORITATIVE on the active
+        // `workspaces` row (it goes stale on `users` for post-cutover
+        // connects/disconnects). `setup_key_skipped_at` is NOT relocated — it
+        // stays on `users`. Read each from its source. Resolve the active
+        // workspace (claim → solo fallback, never a sibling).
+        const activeWorkspaceId = await resolveCurrentWorkspaceId(
+          user.id,
+          serviceClient,
+        );
+        const [skipRes, repoStatusRes] = await Promise.all([
+          serviceClient
+            .from("users")
+            .select("setup_key_skipped_at")
+            .eq("id", user.id)
+            .single(),
+          serviceClient
+            .from("workspaces")
+            .select("repo_status")
+            .eq("id", activeWorkspaceId)
+            .maybeSingle(),
+        ]);
         const setupKeySkippedAt =
-          (repoUser?.setup_key_skipped_at as string | null | undefined) ?? null;
+          (skipRes.data?.setup_key_skipped_at as string | null | undefined) ??
+          null;
+        const repoStatus =
+          (repoStatusRes.data?.repo_status as string | null | undefined) ??
+          null;
 
         if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
           // Invite outranks onboarding (#4715): a keyless invitee can't
@@ -280,7 +301,7 @@ export async function GET(request: NextRequest) {
           redirectPath = nextParam ?? "/dashboard";
         } else {
           redirectPath =
-            !repoUser || repoUser.repo_status === "not_connected"
+            repoStatus == null || repoStatus === "not_connected"
               ? "/connect-repo"
               : (nextParam ?? "/dashboard");
         }
@@ -351,14 +372,18 @@ async function ensureWorkspaceProvisioned(
     // Workspace identifier === userId per migration 053 §1.1.7 N2 invariant
     // (the workspace_members backfill makes workspaces.id = owner_user_id;
     // the handle_new_user trigger preserves this for new signups).
-    const workspacePath = await provisionWorkspace(userId);
+    // provisionWorkspace's on-disk side effect (ensureDir/scaffold/git init) is
+    // preserved; its return (the path) is no longer written — workspace_path is
+    // derived now (workspacePathForWorkspaceId), ADR-044 PR-2b. The dropped key
+    // relies on its DB-side `text NOT NULL DEFAULT ''` to satisfy NOT NULL on this
+    // trigger-failure INSERT path (mig 001); PR-2b-proper drops the column entirely.
+    await provisionWorkspace(userId);
     const { error: insertError } = await serviceClient
       .from("users")
       .upsert(
         {
           id: userId,
           email,
-          workspace_path: workspacePath,
           workspace_status: "ready",
         },
         { onConflict: "id", ignoreDuplicates: true },
@@ -379,10 +404,12 @@ async function ensureWorkspaceProvisioned(
 
   if (existing.workspace_status !== "ready") {
     try {
-      const workspacePath = await provisionWorkspace(userId);
+      // provisionWorkspace call kept for its on-disk side effect; return discarded
+      // (workspace_path is derived now, ADR-044 PR-2b).
+      await provisionWorkspace(userId);
       await serviceClient
         .from("users")
-        .update({ workspace_path: workspacePath, workspace_status: "ready" })
+        .update({ workspace_status: "ready" })
         .eq("id", userId);
     } catch (err) {
       Sentry.withIsolationScope(() => {

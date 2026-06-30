@@ -6,6 +6,7 @@ import {
   clearUserWorkspace,
   getUserWorkspace,
   abortAllWorkspaceMemberSessions,
+  abortAllSessionsForWorkspace,
 } from "@/server/agent-session-registry";
 import type { AgentSession } from "@/server/review-gate";
 import { classifyAbortReason } from "@/server/abort-classifier";
@@ -112,5 +113,52 @@ describe("abortAllWorkspaceMemberSessions", () => {
   it("setUserWorkspace ignores empty/undefined values (defensive)", () => {
     setUserWorkspace(HARRY, "");
     expect(getUserWorkspace(HARRY)).toBeUndefined();
+  });
+});
+
+describe("abortAllSessionsForWorkspace (ADR-044 PR-2 — shared team-dir teardown)", () => {
+  beforeEach(() => {
+    __test_only__.clear();
+  });
+
+  it("aborts EVERY member's session bound to the workspace (not just the caller)", () => {
+    // The distinction from abortAllWorkspaceMemberSessions: a disconnect tears
+    // down the SHARED clone, so BOTH members in the team workspace must abort —
+    // a per-caller abort (the sibling fn) would leave JEAN mid-write → ENOENT.
+    const harry = makeSession();
+    const jean = makeSession();
+    registerSession(HARRY, "conv-1", harry);
+    setUserWorkspace(HARRY, JIKIGAI);
+    registerSession(JEAN, "conv-2", jean);
+    setUserWorkspace(JEAN, JIKIGAI);
+
+    abortAllSessionsForWorkspace(JIKIGAI);
+
+    expect(harry.abort.signal.aborted).toBe(true);
+    expect(jean.abort.signal.aborted).toBe(true);
+  });
+
+  it("leaves sessions bound to a DIFFERENT workspace untouched", () => {
+    const teamSession = makeSession();
+    const personalSession = makeSession();
+    registerSession(HARRY, "conv-1", teamSession);
+    setUserWorkspace(HARRY, JIKIGAI);
+    registerSession(JEAN, "conv-2", personalSession);
+    setUserWorkspace(JEAN, PERSONAL);
+
+    abortAllSessionsForWorkspace(JIKIGAI);
+
+    expect(teamSession.abort.signal.aborted).toBe(true);
+    expect(personalSession.abort.signal.aborted).toBe(false);
+  });
+
+  it("no-op when no session is bound to the workspace (e.g. solo with no live turn)", () => {
+    const session = makeSession();
+    registerSession(JEAN, "conv-2", session);
+    setUserWorkspace(JEAN, PERSONAL);
+
+    abortAllSessionsForWorkspace(JIKIGAI);
+
+    expect(session.abort.signal.aborted).toBe(false);
   });
 });

@@ -22,6 +22,16 @@ function __resetCache() {
 async function fetchGithubStats() {
   if (cached) return cached;
 
+  // Hermetic-build hatch (SOLEUR_DOCS_OFFLINE=1): skip the live GitHub fetch
+  // and return the deterministic null fallback so a transient GitHub API
+  // failure in CI cannot fail a test-spawned build via the throw-in-CI branch
+  // below. See _data/github.js for the full rationale; the deploy build never
+  // sets it, preserving fail-loud behavior.
+  if (process.env.SOLEUR_DOCS_OFFLINE === "1") {
+    cached = { stars: null, forks: null, openIssues: null, contributors: null };
+    return cached;
+  }
+
   const headers = { Accept: "application/vnd.github+json" };
   if (process.env.GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;

@@ -178,6 +178,7 @@ const ORIGINAL_ENV = {
   INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
   INNGEST_DEV: process.env.INNGEST_DEV,
   RESEND_API_KEY: process.env.RESEND_API_KEY,
+  RESEND_RECEIVING_API_KEY: process.env.RESEND_RECEIVING_API_KEY,
   GITHUB_APP_ID: process.env.GITHUB_APP_ID,
   GITHUB_APP_PRIVATE_KEY: process.env.GITHUB_APP_PRIVATE_KEY,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -276,6 +277,7 @@ beforeEach(() => {
     "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   process.env.INNGEST_DEV = "1";
   process.env.RESEND_API_KEY = "re_test_key";
+  process.env.RESEND_RECEIVING_API_KEY = "re_test_receiving_key";
   process.env.GITHUB_APP_ID = "12345";
   process.env.GITHUB_APP_PRIVATE_KEY =
     "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----";
@@ -724,6 +726,9 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(opts.env?.ANTHROPIC_API_KEY).toBe("sk-ant-test-key");
     // RESEND_API_KEY NEVER propagated to spawn (CWE-526 allowlist)
     expect(opts.env?.RESEND_API_KEY).toBeUndefined();
+    // RESEND_RECEIVING_API_KEY (the #5468 receiving-scoped key) is likewise
+    // denylist-by-omission — assert it never leaks into the bug-fixer sandbox.
+    expect(opts.env?.RESEND_RECEIVING_API_KEY).toBeUndefined();
   });
 });
 
@@ -999,12 +1004,13 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
     expect(noFixWarn).toBeDefined();
   });
 
-  it("claude-eval aborted by 50-min timeout → ?status=ok (monitor stays green; chronic-timeout still surfaces as non-paging telemetry)", async () => {
-    // A timeout is the same liveness class as a non-zero exit: the pipeline
-    // fired and ran to a heartbeat without an infrastructure fault, so the
-    // monitor must read ok. The chronic-timeout signal is preserved as a
-    // separate non-paging reportSilentFallback breadcrumb (op=claude-eval-timeout),
-    // NOT as a cron-monitor status=error page. (H2 in the same plan.)
+  it("claude-eval aborted by 50-min timeout → ?status=error (FATAL class — monitor flips red; #5674 classify-fatal)", async () => {
+    // #5674 reclassifies the AbortController timeout as a FATAL class (folded
+    // into resolveBestEffortEvalOk): a chronically-timing-out fixer that ships
+    // nothing is an infrastructure-shaped failure the operator must see, so the
+    // monitor now flips RED and routine_runs records the reason. This supersedes
+    // the prior "timeout stays green" policy (the old claude-eval-timeout
+    // breadcrumb is folded into the single op=claude-eval-fatal signal).
     vi.useFakeTimers();
     try {
       const p3Issues = [
@@ -1052,18 +1058,20 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
 
       const result = await resultPromise;
 
-      expect(result.ok).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(result.errorSummary).toMatch(/timeout/i);
       const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
       const sentryCall = fetchMock.mock.calls.find(([url]) =>
         typeof url === "string" && url.includes("/cron/scheduled-bug-fixer/"),
       );
       expect(sentryCall).toBeDefined();
-      expect(sentryCall![0] as string).toContain("status=ok");
-      // Chronic-timeout telemetry preserved (non-paging breadcrumb).
-      const timeoutReport = reportSilentFallbackSpy.mock.calls.find(
-        ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-timeout",
+      expect(sentryCall![0] as string).toContain("status=error");
+      // FATAL-class signal — the timeout reports under the single fatal op.
+      const fatalReport = reportSilentFallbackSpy.mock.calls.find(
+        ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-fatal",
       );
-      expect(timeoutReport).toBeDefined();
+      expect(fatalReport).toBeDefined();
+      expect((fatalReport![1] as { extra?: { fatalClass?: string } }).extra?.fatalClass).toBe("timeout");
     } finally {
       vi.useRealTimers();
     }

@@ -186,30 +186,52 @@ export function forEachSessionForConversation(
  * abort branch can read `controller.signal.reason` and route the
  * persistence + status-update logic via `classifyAbortReason` in
  * `abort-classifier.ts`.
+ *
+ * Returns the number of REGISTERED `activeSessions` entries matched and
+ * signalled on THIS host. Two scoping caveats are load-bearing for any future
+ * consumer (notably the Phase-3 coordinator-forward decision, ADR-068 §4):
+ *   - LEGACY LINEAGE ONLY. This counts only the `sendUserMessage` /
+ *     `activeSessions` lineage. A live cc-soleur-go turn (the dominant path,
+ *     #3270) lives in the cc registry (`activeQueries`, aborted via
+ *     `closeCcConversation`) and is NEVER registered in `activeSessions`, so it
+ *     returns 0 here. A complete "is this conversation live on this host?"
+ *     predicate must OR this with a cc-registry found-count — do NOT route a
+ *     forward decision on this count alone (the dual-lineage trap,
+ *     `2026-06-14-ws-lifecycle-hook-must-cover-both-legacy-and-cc-soleur-go-turn-boundaries.md`;
+ *     `runDisconnectGraceAbort` itself signals BOTH surfaces for this reason).
+ *   - REGISTERED, not live: a finishing-but-not-yet-`unregisterSession`'d entry
+ *     still counts (over-count ⇒ suppress an unneeded forward — the safe
+ *     direction), and a just-starting turn before `registerSession` returns 0.
+ * Harmless at `replicas = 1` (no consumer reads the return). The full forward
+ * rationale lives in ADR-068, not here.
  */
 export function abortSession(
   userId: string,
   conversationId: string,
   reason?: AbortKind,
   leaderId?: string,
-): void {
+): number {
   const kind: AbortKind = reason ?? "disconnected";
 
   if (leaderId) {
     const session = activeSessions.get(sessionKey(userId, conversationId, leaderId));
     if (session) {
       session.abort.abort(new SessionAbortError(kind));
+      return 1;
     }
-    return;
+    return 0;
   }
 
   // Broadcast: abort every session for this (userId, conversationId).
   const prefix = `${userId}:${conversationId}`;
+  let aborted = 0;
   for (const [key, session] of activeSessions) {
     if (key === prefix || key.startsWith(`${prefix}:`)) {
       session.abort.abort(new SessionAbortError(kind));
+      aborted += 1;
     }
   }
+  return aborted;
 }
 
 /** Abort every session for a user. Called during account deletion. */
@@ -350,6 +372,29 @@ export function abortAllWorkspaceMemberSessions(
   const prefix = `${userId}:`;
   for (const [key, session] of activeSessions) {
     if (key.startsWith(prefix)) {
+      session.abort.abort(new SessionAbortError("workspace_membership_revoked"));
+    }
+  }
+}
+
+/**
+ * Abort EVERY active session bound to `workspaceId`, regardless of which member
+ * owns it. Called from `repo/disconnect` (ADR-044 PR-2 / P0-6) BEFORE tearing
+ * down a SHARED team workspace dir: the `rm` removes the clone for all members,
+ * so any member mid-agent-turn in that dir must be aborted first or it hits
+ * ENOENT mid-write.
+ *
+ * Distinct from `abortAllWorkspaceMemberSessions`, which is scoped to a SINGLE
+ * member's own sessions (the member-removal flow must not touch other members).
+ * Here the whole shared clone is disappearing, so every session bound to it must
+ * stop — keyed on the per-user workspace binding (`userWorkspaces`), matching the
+ * sibling function's binding semantics. Reuses the `workspace_membership_revoked`
+ * abort kind (the client-observable effect — an interrupted turn — is identical).
+ */
+export function abortAllSessionsForWorkspace(workspaceId: string): void {
+  for (const [key, session] of activeSessions) {
+    const sessionUserId = key.split(":")[0];
+    if (userWorkspaces.get(sessionUserId) === workspaceId) {
       session.abort.abort(new SessionAbortError("workspace_membership_revoked"));
     }
   }

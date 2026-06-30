@@ -674,6 +674,11 @@ fi
 - `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
 - `apps/web-platform/infra/push-infra-config.sh`
 - `apps/web-platform/infra/cat-infra-config-state.sh`
+- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492 — webhook-delivered cutover script; registered so a body-only edit re-deploys)
+- `apps/web-platform/infra/inngest-rearm-reminders.sh` (#5492)
+- `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
+- `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
+- `apps/web-platform/infra/inngest-inventory.sh` (#5509 — cutover full-state inventory op)
 
 **Detection:**
 
@@ -692,8 +697,13 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/infra-config-install.sh"
   "apps/web-platform/infra/push-infra-config.sh"
   "apps/web-platform/infra/cat-infra-config-state.sh"
+  "apps/web-platform/infra/inngest-enumerate-reminders.sh"
+  "apps/web-platform/infra/inngest-rearm-reminders.sh"
+  "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
+  "apps/web-platform/infra/cat-inngest-verify-state.sh"
+  "apps/web-platform/infra/inngest-inventory.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -985,6 +995,71 @@ done
 
 **Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late); this gate moved enforcement from honor-system to mechanical. The `playwright-attempt:` precondition (2026-06-10) closes a second bypass: PR #5082's CF-token-widen was classified "operator-only, MFA-gated" and filed as `deferred-automation` WITHOUT any browser attempt — a real attempt later reached the editable token form (the gate was the one-time login, not MFA), proving the assertion-without-attempt was the actual defect. See `knowledge-base/project/learnings/workflow-patterns/2026-06-10-playwright-attempt-evidence-before-operator-only.md`.
 
+### Soak-Gated Follow-Through Enrollment Gate (mandatory)
+
+Blocks PR-ready when the PR (or its linked plan/spec) declares a **post-deploy soak / time-gated close criterion** for a tracker issue, but that tracker is NOT enrolled in the follow-through sweeper (`follow-through` label + a valid `<!-- soleur:followthrough script=... earliest=... -->` directive whose `script=` exists under [scripts/followthroughs/](../../../../scripts/followthroughs/)). Without enrollment the soak relies on human memory to revisit — the exact rot the sweeper exists to prevent (see [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md)).
+
+This is the soak-class counterpart to Phase 7 Step 3.5's `⏳`-marked test-plan scan: Step 3.5 fires only on explicit `⏳` items, so a soak declared in PR/plan **prose** ("stays at 0 for 7 days post-deploy", "adopting → accepted after the AC8 soak") slips past it. This gate detects the prose form and requires enrollment BEFORE merge.
+
+Emit rule-application telemetry (records the gate fired):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-pm-class-followthrough-for-operator-dogfood applied \
+  '`/ship` Phase 5.5 blocks PR-ready on an unenrolled soak-gated follow-up'
+```
+
+**Detection.** Capture the PR body (strip fenced code blocks, fail-closed on an unbalanced fence — reuse the Undeferred Operator-Step Gate's awk), concatenate the linked plan/spec (Shared Plan-File Resolution shape from preflight), then scan the combined text for a soak signal. Bash ERE has no `(?i)` — use `grep -iE`.
+
+```bash
+COMBINED=$(mktemp); trap 'rm -f "$COMBINED"' EXIT INT TERM
+gh pr view --json body --jq .body | awk '
+  /^```/ { in_fence = !in_fence; next } !in_fence { print }
+  END { if (in_fence) exit 2 }' > "$COMBINED" \
+  || gh pr view --json body --jq .body > "$COMBINED"   # fail-closed: unstripped
+PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$COMBINED" | head -1 || true)
+[[ -n "$PLAN" && -f "$PLAN" ]] && cat "$PLAN" >> "$COMBINED"
+
+# Soak signal: post-deploy time-gated close criteria expressed in prose.
+SOAK_RE='soak|stays? (at )?(~?0|zero)|[0-9]+[- ]day[s]?( post-deploy| soak)|post-deploy (soak|verif|observ)|adopting[[:space:]]*(→|->|to)[[:space:]]*accepted|status[[:space:]]+flip'
+SOAK_HIT=$(grep -niE "$SOAK_RE" "$COMBINED" | head -5 || true)
+```
+
+If `$SOAK_HIT` is empty → **SKIP** silently (no soak-gated close criterion). If a soak signal fires, extract every tracker ref and verify enrollment:
+
+```bash
+REFS=$(grep -oiE '(Ref|Tracks|Closes|Fixes) #[0-9]+' "$COMBINED" | grep -oE '[0-9]+' | sort -u)
+UNENROLLED=()
+for n in $REFS; do
+  state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
+  [ "$state" = "OPEN" ] || continue   # closed/absent trackers need no soak enrollment
+  labels=$(gh issue view "$n" --json labels --jq '[.labels[].name]|join(",")' 2>/dev/null || echo "")
+  body=$(gh issue view "$n" --json body --jq .body 2>/dev/null || echo "")
+  enrolled=0
+  if [[ ",$labels," == *",follow-through,"* ]] \
+     && printf '%s' "$body" | grep -q '<!-- soleur:followthrough' \
+     && printf '%s' "$body" | grep -qE 'earliest='; then
+    spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+    [[ -n "$spath" && -f "$spath" ]] && enrolled=1
+  fi
+  [ "$enrolled" = 1 ] || UNENROLLED+=("$n")
+done
+```
+
+**Rule.** A soak signal fired AND `${#UNENROLLED[@]} > 0` → gate triggers. (Closed trackers, and OPEN trackers already enrolled with an on-disk verification script, pass silently.)
+
+**If not triggered:** Skip silently.
+
+**If triggered:** Halt and present the structured 3-option prompt. The operator chooses one per unenrolled tracker:
+
+1. **Enroll now.** Scaffold a verification script from [followthrough-stub-template.sh](references/followthrough-stub-template.sh) into scripts/followthroughs/&lt;short-name&gt;-&lt;issue&gt;.sh (fill the soak probe — for a Sentry-rate soak, mirror [reconcile-ff-only-sentry-4977.sh](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh): exit 0 when the rate is 0, exit 2 on API failure), add the `follow-through` label + the `<!-- soleur:followthrough script=... earliest=<deploy+Nd> secrets=... -->` directive to the tracker body, land the script in this PR (or a sibling chore PR), then re-run detection. Wire any new secret into `.github/workflows/scheduled-followthrough-sweeper.yml`.
+2. **Cite existing enrollment.** If the tracker is already enrolled via a sibling PR/issue, point at it; re-run detection.
+3. **Override with operator-attestation** (rare — the close criterion is genuinely not mechanically verifiable, e.g. a qualitative judgment). Append `<!-- gate-override: soak-followthrough-enrollment -->` + a one-sentence justification to the PR body, then proceed.
+
+**Headless mode.** Abort with the structured error. No auto-scaffold / auto-override in headless — the probe authorship + verifiable-vs-qualitative judgment require an interactive run.
+
+**Why:** On 2026-06-29 two PRs shipped soak-gated closures in prose with no sweeper enrollment — PR #5675 (#5689 soak) and PR #5671 (#5673 AC8 `op:founder-ambiguous` soak, enrolled retroactively via PR #5724). Both declared the soak in prose, so Phase 7 Step 3.5's `⏳`-only scan never fired and the trackers were left to rot open on human memory. This gate moves soak-class follow-through enrollment from honor-system to a mechanical block-before-ready, reusing the existing follow-through substrate. See `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
 ## Phase 6.4: Unpushed-Commits Gate
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
@@ -1033,21 +1108,25 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
-Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body for unintentional auto-close-keyword + #N references. GitHub's parser is markdown-blind: matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days by this trap — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
+Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
+- **Markdown-blind:** matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
+- **Negation-blind + commit-message surface:** GitHub's parser ignores negation, so `Does not close #N` still closes #N. And on a **squash merge** (this repo's default) the squash commit is built from the **branch commit messages**, which the parser reads on merge — so a keyword in a commit body auto-closes even when the PR body is clean. That gap closed #5463 twice (a negated body in #5519, then a negated commit message `Does not close #5463` in #5564). ALWAYS scan commit messages, not just the PR body.
 
-Write the proposed `PR_TITLE` and `PR_BODY` to temp files, then run the shared scanner:
+Write the proposed `PR_TITLE`, `PR_BODY`, and the branch commit messages (`git log origin/main..HEAD --format=%B`) to temp files, then run the shared scanner:
 
 ```bash
-TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp)
+TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
+git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
 T_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_TITLE")
 B_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_BODY")
+C_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_COMMITS")
 ```
 
-If `T_MATCHES` OR `B_MATCHES` is non-empty:
+If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
 
-1. Display every match with line context: `printf 'In title:\n%s\nIn body:\n%s\n' "${T_MATCHES:-(none)}" "${B_MATCHES:-(none)}"`.
+1. Display every match with line context: `printf 'In title:\n%s\nIn body:\n%s\nIn commits:\n%s\n' "${T_MATCHES:-(none)}" "${B_MATCHES:-(none)}" "${C_MATCHES:-(none)}"`. A commit-message trap is fixed by rewording the commit (`git commit --amend` / `git rebase -i`), not by editing the PR body.
 2. Compare each match against the intended `ISSUE_NUMBER` set from the detection step above. Any match where the issue number is in `ISSUE_NUMBER` AND the match line is the canonical `Closes #N` body line (one keyword, one number, on its own line, no surrounding prose) is intentional — keep it. Any other match is a candidate trap.
 3. **Headless mode:** If unintentional matches remain after the comparison, abort with an error listing every match — do NOT silently create the PR. The operator must either edit the body to remove the trap OR (when the match IS intentional, e.g., `Closes #N` was filtered out by step 2's heuristic incorrectly) add a `<!-- auto-close-scanner: confirm -->` marker to the body and re-run.
 4. **Interactive mode:** Use AskUserQuestion to surface every unintentional match and offer (a) edit the body to remove the trap, (b) add the `<!-- auto-close-scanner: confirm -->` marker (intentional), or (c) abort and let the operator edit manually.
@@ -1461,6 +1540,8 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological c
 5. **Retry the transient race.** A busy `main` returns `Base branch was modified. Review and try the merge again.` between the check read and the merge call; loop with a short backoff until it lands: `for i in $(seq 1 20); do gh pr merge <N> --squash --admin && break; sleep 18; done`.
 
 Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
+
+**Expected side effect: the post-merge `web-platform-release` run goes RED with `deploy: skipped`.** An admin-merge lands the squash commit *before* its merge-commit CI can run, so the release workflow's `await-ci` job (which polls for CI's `test` green on that exact SHA, then gates the prod `deploy` on `needs.await-ci.result == 'success'`) times out → fails → the `deploy` job is **skipped** → the release run concludes `failure`. This is NOT a deploy failure and NOT a silent-outage class under `wg-after-a-pr-merges-to-main-verify-all`: for the zero-conflict-surface changes this hatch is scoped to (test/docs/skill/additive), there is **nothing runtime to cut over** — prod keeps running the prior commit, which is byte-identical at runtime. Confirm three things and move on: (1) the merge-commit `CI` workflow concludes `success` (main HEAD is verified green), (2) the skipped job is `deploy` (not a failed build/migrate), (3) `/health` is 200. Do not re-run or "fix" the red release. See `knowledge-base/project/learnings/best-practices/2026-06-29-admin-merge-skips-deploy-via-await-ci-gate.md` (PR #5707).
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 

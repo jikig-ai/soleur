@@ -28,7 +28,10 @@ interface UpdateCall {
 }
 const updateCalls: UpdateCall[] = [];
 
-let usersSelectResult: { data: unknown; error: unknown } = {
+// #5470: the install is resolved from the user's solo WORKSPACE row via the
+// service-role resolver (resolveInstallationIdForWorkspace → from("workspaces")),
+// no longer from users.github_installation_id. Keyed id=founderId (solo).
+let workspaceInstallResult: { data: unknown; error: unknown } = {
   data: { github_installation_id: 99 },
   error: null,
 };
@@ -72,8 +75,8 @@ function buildSupabaseClient() {
       return chain;
     },
     maybeSingle() {
-      if (currentTable === "users") {
-        return Promise.resolve(usersSelectResult);
+      if (currentTable === "workspaces") {
+        return Promise.resolve(workspaceInstallResult);
       }
       if (currentTable === "action_sends") {
         return Promise.resolve(actionSendsSelectResult);
@@ -288,7 +291,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateCalls.length = 0;
   toolInvocations.length = 0;
-  usersSelectResult = {
+  workspaceInstallResult = {
     data: { github_installation_id: 99 },
     error: null,
   };
@@ -777,8 +780,8 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(createGitHubAppClientSpy).toHaveBeenCalledWith(99, "founder-123");
   });
 
-  it("PR-A I1 inherited: founder without github_installation_id deadletters with github_installation_unauthorized", async () => {
-    usersSelectResult = {
+  it("PR-A I1 inherited: founder whose solo workspace has no install deadletters with github_installation_unauthorized", async () => {
+    workspaceInstallResult = {
       data: { github_installation_id: null },
       error: null,
     };

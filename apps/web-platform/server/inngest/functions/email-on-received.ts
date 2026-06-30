@@ -68,6 +68,20 @@ import { summarizeEmail, type MailClass } from "@/server/email-triage/summarize"
  */
 export const EMAIL_TRIAGE_DAILY_LLM_CEILING = 200;
 
+/**
+ * Degraded-finalize sentinel (#5468). When a body fetch or the summarizer
+ * throws on the FINAL Inngest attempt, the row lands degraded (mail_class
+ * 'other') with THIS fixed summary instead of stranding at a permanent NULL.
+ *
+ * The prefix is the single source of truth: it is load-bearing in TWO places —
+ * the finalize value below AND the daily-LLM-ceiling exclusion `LIKE` (a
+ * degraded row cost zero Anthropic spend, so it must NOT inflate the cap). The
+ * ceiling query builds its pattern from `${PREFIX}%` so the two can never drift.
+ */
+const EMAIL_TRIAGE_DEGRADED_SUMMARY_PREFIX = "fetch/summarize failed";
+export const EMAIL_TRIAGE_DEGRADED_SUMMARY =
+  `${EMAIL_TRIAGE_DEGRADED_SUMMARY_PREFIX} — verify against the Proton original`;
+
 /** Statutory ping coalescing bucket — see sendTriageNotification. */
 const STATUTORY_COALESCE_MS = 10 * 60 * 1000;
 
@@ -94,13 +108,29 @@ interface HandlerArgs {
     warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
+  // Inngest's zero-indexed retry attempt + (optional) max attempt count, off
+  // BaseContext (the handler arg) — NOT onFunctionRun ctx, which is
+  // InitialRunInfo and lacks `attempt` (learning 2026-06-16). Optional so the
+  // legacy/eager test shape (neither passed) reads attempt=0/maxAttempts=1 →
+  // isFinalAttempt=true, identical to the pre-degraded-tail behavior. Shape
+  // copied verbatim from _cron-shared.ts:107-108.
+  attempt?: number;
+  maxAttempts?: number;
 }
 
 type FusedOutcome =
   | { kind: "deferred" }
   | { kind: "bodyStatutory"; statutoryClass: string; ruleId: string }
   | { kind: "legalReview"; summary: string }
-  | { kind: "summarized"; summary: string; mailClass: MailClass };
+  | { kind: "summarized"; summary: string; mailClass: MailClass }
+  // #5468: a body-fetch or summarizer egress drop on the FINAL attempt. The row
+  // degrades to mail_class 'other' + the fixed sentinel summary instead of
+  // stranding at NULL. `bodyUnavailable` distinguishes the two sub-causes for
+  // the notify grade: a body-FETCH failure (true) means the body never arrived
+  // so matchStatutoryBody could not run — a possibly-body-only DSAR → notify
+  // statutory-grade; a summarizer-only failure (false) means the body WAS
+  // fetched and the deterministic statutory pass already ran clean → ordinary.
+  | { kind: "fetchFailed"; bodyUnavailable: boolean };
 
 /** One-time-set finalize UPDATE (NULL → value once; WORM trigger enforces). */
 async function applyFinalize(
@@ -139,6 +169,52 @@ async function applyFinalize(
     // Code only — never row values (TR3).
     throw new Error(`email_triage finalize failed: ${error.code ?? "unknown"}`);
   }
+}
+
+/**
+ * Degraded finalize (#5468, AC7). Writes mail_class='other' + the degraded
+ * sentinel ONLY while BOTH one-time-set class columns are still NULL.
+ *
+ * `statutory_class` and `mail_class` are INDEPENDENT one-time-set columns
+ * (mig 102:189-203): a concurrent statutory finalize sets statutory_class
+ * WITHOUT raising P0001 against this mail_class write, so applyFinalize's
+ * P0001 re-select does NOT cover this race. The `.is(...null)` WHERE guard
+ * makes a degraded write a no-op (zero rows) when a sibling already classed
+ * the row FIRST — `written:false` then signals "a sibling won; suppress the
+ * notify".
+ *
+ * The guard serializes only the statutory-finalize-FIRST ordering. In the
+ * reverse ordering (degraded write commits first, then a sibling statutory
+ * finalize lands its disjoint `statutory_class` write — which the WORM trigger
+ * permits, NULL→value), the row ends BENIGNLY co-classed `mail_class='other'`
+ * AND `statutory_class='dsar'`: the statutory signal is never lost, the row is
+ * retained under the `statutory_class IS NOT NULL` carve-out, and the statutory
+ * run still pings statutory-grade. A degraded `summary` sitting beside a correct
+ * `statutory_class` is the only artifact — acceptable at single-user threshold.
+ * Returns whether the degraded row was actually written.
+ */
+async function applyDegradedFinalize(
+  sb: ServiceClient,
+  itemId: string,
+): Promise<{ written: boolean }> {
+  const { data, error } = await sb
+    .from("email_triage_items")
+    .update({
+      mail_class: "other",
+      summary: EMAIL_TRIAGE_DEGRADED_SUMMARY,
+    })
+    .eq("id", itemId)
+    .is("statutory_class", null)
+    .is("mail_class", null)
+    .select("id");
+  if (error) {
+    // Code only — never row values (TR3).
+    throw new Error(
+      `email_triage degraded finalize failed: ${error.code ?? "unknown"}`,
+    );
+  }
+  const rows = (data as { id: string }[] | null) ?? [];
+  return { written: rows.length > 0 };
 }
 
 /**
@@ -217,8 +293,19 @@ export function resetOwnerValidationMemo(): void {
 export async function emailOnReceivedHandler({
   event,
   step,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<Record<string, unknown>> {
   const data = event.data;
+
+  // Final-attempt gate for the degraded-finalize tail (#5468). With retries: 1
+  // (below) maxAttempts is statically 2, so attempts 0 and 1 → final is index 1.
+  // Predicate copied verbatim from cron-stale-deferred-scope-outs.ts:358. The
+  // `?? 1` fail-safe collapses to always-final if a fire ever omits maxAttempts
+  // — that degrades to "degrade on first failure" (over-eager), never to
+  // masking a recoverable transient by writing a degraded row AND swallowing
+  // the retry (the genuinely dangerous direction).
+  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
 
   const ownerId = process.env.EMAIL_TRIAGE_OWNER_USER_ID;
   if (!ownerId) {
@@ -292,6 +379,11 @@ export async function emailOnReceivedHandler({
       .from("email_triage_items")
       .insert({
         user_id: ownerId,
+        // mig 111: workspace grain. The owner is validated just above as the
+        // solo/residual workspace owner (workspace_id = user_id = ownerId AND
+        // role='owner'), so the owning workspace IS ownerId. Reads are gated on
+        // workspace-owner membership; the notification recipient is unchanged.
+        workspace_id: ownerId,
         claim_key: claimKey,
         message_id: data.messageId,
         resend_email_id: data.resendEmailId,
@@ -442,6 +534,11 @@ export async function emailOnReceivedHandler({
       .not("summary", "is", null)
       .neq("mail_class", "probe")
       .not("summary", "like", "deferred — volume cap%")
+      // #5468: degraded-finalize sentinel rows carry a non-NULL summary but
+      // cost zero Anthropic spend — exclude them or they falsely inflate the
+      // cap and defer real mail. Pattern derived from the sentinel prefix so
+      // the exclusion can never drift from the finalize value (AC8).
+      .not("summary", "like", `${EMAIL_TRIAGE_DEGRADED_SUMMARY_PREFIX}%`)
       .gte("created_at", startOfDay.toISOString());
     if (countErr) {
       throw new Error(`llm ceiling count failed: ${countErr.code ?? "unknown"}`);
@@ -456,7 +553,30 @@ export async function emailOnReceivedHandler({
       return { kind: "deferred" };
     }
 
-    const { text, html } = await fetchReceivedEmail(data.resendEmailId);
+    // Body fetch — INDEPENDENT catch (not the whole step) so the deterministic
+    // statutory body pass below always wins on a summarizer-only failure (AC5).
+    // A body-FETCH failure means the body never arrived: matchStatutoryBody
+    // could not run, so a possibly-body-only DSAR was never scanned →
+    // bodyUnavailable:true drives a statutory-grade notify downstream.
+    let text: string | null;
+    let html: string | null;
+    try {
+      ({ text, html } = await fetchReceivedEmail(data.resendEmailId));
+    } catch (err) {
+      // Non-final attempt: re-throw the WHOLE step so Inngest retries — never
+      // run-and-no-op a degraded write (Inngest memoizes step results across
+      // retries; an emptied step would replay on the next attempt and mask
+      // recovery — learning 2026-06-12).
+      if (!isFinalAttempt) throw err;
+      reportSilentFallback(err, {
+        feature: "email-triage",
+        op: "fetch-summarize-degraded",
+        message:
+          "inbound body fetch failed on final attempt — degraded finalize",
+        extra: { itemId },
+      });
+      return { kind: "fetchFailed", bodyUnavailable: true };
+    }
     // Use the text part only when it carries actual content — an
     // empty/whitespace-only text part must not bypass HTML normalization
     // (an HTML-only DSAR with text:"" would otherwise skip the body pass).
@@ -486,11 +606,27 @@ export async function emailOnReceivedHandler({
       };
     }
 
-    const { summary, mailClass } = await summarizeEmail({
-      subject: data.subject,
-      sender: data.sender ?? "",
-      bodyText,
-    });
+    // Summarizer (LLM) — INDEPENDENT catch. The body WAS fetched and the
+    // deterministic statutory pass already ran clean (no bodyRule above), so a
+    // summarizer-only degrade notifies ORDINARY (bodyUnavailable:false).
+    let summary: string;
+    let mailClass: MailClass;
+    try {
+      ({ summary, mailClass } = await summarizeEmail({
+        subject: data.subject,
+        sender: data.sender ?? "",
+        bodyText,
+      }));
+    } catch (err) {
+      if (!isFinalAttempt) throw err;
+      reportSilentFallback(err, {
+        feature: "email-triage",
+        op: "fetch-summarize-degraded",
+        message: "summarizer failed on final attempt — degraded finalize",
+        extra: { itemId },
+      });
+      return { kind: "fetchFailed", bodyUnavailable: false };
+    }
     // THE BODY MUST NEVER BE A STEP RETURN VALUE: Inngest checkpoints
     // step.run returns in its run store — returning bodyText here would
     // persist the raw third-party email body and defeat the structural
@@ -499,44 +635,63 @@ export async function emailOnReceivedHandler({
   });
 
   // ---- (5) finalize-row ------------------------------------------------------
-  await step.run("finalize-row", async () => {
-    const sb = createServiceClient();
-    switch (fused.kind) {
-      case "bodyStatutory":
-        await applyFinalize(sb, itemId, {
-          statutory_class: fused.statutoryClass,
-          rule_id: fused.ruleId,
-        });
-        break;
-      case "deferred":
-        await applyFinalize(sb, itemId, {
-          mail_class: "other",
-          summary: "deferred — volume cap",
-        });
-        break;
-      case "legalReview":
-        await applyFinalize(sb, itemId, {
-          mail_class: "legal-review",
-          summary: fused.summary,
-        });
-        break;
-      case "summarized":
-        await applyFinalize(sb, itemId, {
-          mail_class: fused.mailClass,
-          summary: fused.summary,
-        });
-        break;
-    }
-    return { finalized: fused.kind };
-  });
+  const finalize = await step.run(
+    "finalize-row",
+    async (): Promise<{ finalized: FusedOutcome["kind"]; degradedWritten: boolean }> => {
+      const sb = createServiceClient();
+      switch (fused.kind) {
+        case "bodyStatutory":
+          await applyFinalize(sb, itemId, {
+            statutory_class: fused.statutoryClass,
+            rule_id: fused.ruleId,
+          });
+          return { finalized: fused.kind, degradedWritten: false };
+        case "deferred":
+          await applyFinalize(sb, itemId, {
+            mail_class: "other",
+            summary: "deferred — volume cap",
+          });
+          return { finalized: fused.kind, degradedWritten: false };
+        case "legalReview":
+          await applyFinalize(sb, itemId, {
+            mail_class: "legal-review",
+            summary: fused.summary,
+          });
+          return { finalized: fused.kind, degradedWritten: false };
+        case "summarized":
+          await applyFinalize(sb, itemId, {
+            mail_class: fused.mailClass,
+            summary: fused.summary,
+          });
+          return { finalized: fused.kind, degradedWritten: false };
+        case "fetchFailed": {
+          // Race-guarded degraded write (AC7): a no-op (zero rows) means a
+          // sibling statutory finalize already classed the row — the winner
+          // pinged statutory-grade, so the notify below must be suppressed.
+          const { written } = await applyDegradedFinalize(sb, itemId);
+          return { finalized: fused.kind, degradedWritten: written };
+        }
+      }
+    },
+  );
 
   // ---- (6) notify — LAST and separate ----------------------------------------
+  // Degraded race-loss: a sibling statutory finalize won the disjoint-column
+  // race (degraded write hit zero rows). The winner already notified
+  // statutory-grade — suppress the duplicate degraded ping entirely (AC7).
+  if (fused.kind === "fetchFailed" && !finalize.degradedWritten) {
+    return { triaged: fused.kind, degradedRaceLost: true };
+  }
   await step.run("notify", () =>
     sendTriageNotification({
       ownerId,
       itemId,
       subject: data.subject,
-      statutory: fused.kind === "bodyStatutory",
+      // A body-fetch failure could not rule out a body-only DSAR
+      // (matchStatutoryBody never ran) → statutory-grade ping (Phase 3 P1).
+      statutory:
+        fused.kind === "bodyStatutory" ||
+        (fused.kind === "fetchFailed" && fused.bodyUnavailable),
     }),
   );
 
@@ -548,6 +703,9 @@ export const emailOnReceived = inngest.createFunction(
     id: "email-on-received",
     // Transient SDK/network only; bounds the accepted re-run of the one LLM
     // call inside the fused step (cfo-on-payment-failed.ts:260 precedent).
+    // retries: 1 ⇒ maxAttempts = 2 (attempts 0 and 1; final is index 1). The
+    // #5468 degraded-finalize tail keys off this: a fetch/summarizer throw
+    // re-throws on attempt 0 (Inngest retries) and degrades only on attempt 1.
     retries: 1,
     // ops@ is an open ingress — anyone on the internet controls event
     // volume, and each non-statutory event costs a body fetch + an

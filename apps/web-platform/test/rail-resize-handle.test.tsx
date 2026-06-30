@@ -11,6 +11,8 @@ import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>> = {}) {
   const onWidthChange = vi.fn();
   const onCommit = vi.fn();
+  const onCollapse = vi.fn();
+  const onResizeStart = vi.fn();
   render(
     <RailResizeHandle
       width={224}
@@ -18,14 +20,37 @@ function setup(overrides: Partial<React.ComponentProps<typeof RailResizeHandle>>
       max={480}
       onWidthChange={onWidthChange}
       onCommit={onCommit}
+      onCollapse={onCollapse}
+      onResizeStart={onResizeStart}
       {...overrides}
     />,
   );
-  return { onWidthChange, onCommit, handle: screen.getByTestId("kb-rail-resize-handle") };
+  return {
+    onWidthChange,
+    onCommit,
+    onCollapse,
+    onResizeStart,
+    handle: screen.getByTestId("kb-rail-resize-handle"),
+  };
 }
 
 describe("RailResizeHandle", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("renders the vertical-bar grip", () => {
+    setup();
+    expect(screen.getByTestId("kb-rail-resize-grip")).toBeInTheDocument();
+  });
+
+  it("defaults the accessible name to the KB literal (AC5)", () => {
+    const { handle } = setup();
+    expect(handle).toHaveAttribute("aria-label", "Resize knowledge base sidebar");
+  });
+
+  it("accepts an ariaLabel override for non-KB rails (AC5)", () => {
+    const { handle } = setup({ ariaLabel: "Resize sidebar" });
+    expect(handle).toHaveAttribute("aria-label", "Resize sidebar");
+  });
 
   it("renders a11y separator semantics", () => {
     const { handle } = setup();
@@ -74,5 +99,71 @@ describe("RailResizeHandle", () => {
     const { handle, onCommit } = setup({ width: 224 });
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
     expect(onCommit).toHaveBeenLastCalledWith(224);
+  });
+
+  // onResizeStart fires once per drag, on the first genuine move only — this is
+  // what lets a collapsed rail un-collapse the instant a real resize begins.
+
+  it("fires onResizeStart once on the first genuine pointer move", () => {
+    const { handle, onResizeStart } = setup();
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    // Not fired on bare pointerdown (so a double-click never trips it).
+    expect(onResizeStart).not.toHaveBeenCalled();
+    fireEvent.pointerMove(handle, { clientX: 140, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 180, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 180, pointerId: 1 });
+    expect(onResizeStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire onResizeStart for a no-movement click (double-click path)", () => {
+    const { handle, onResizeStart } = setup();
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 100, pointerId: 1 }); // no movement
+    fireEvent.doubleClick(handle);
+    expect(onResizeStart).not.toHaveBeenCalled();
+  });
+
+  // Double-click the rail resizer toggles collapse — it is the SOLE collapse/
+  // expand affordance now that the dedicated ▢ button was removed.
+
+  it("toggles collapse on double-click (AC5)", () => {
+    const { handle, onCollapse } = setup();
+    fireEvent.doubleClick(handle);
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("a resize drag does not collapse the rail (AC6) — a drag emits no dblclick", () => {
+    // A real resize drag moves the pointer past the browser's click threshold,
+    // so it never produces the dblclick that collapse listens for. We model that
+    // by driving the full drag gesture WITHOUT a doubleClick event and asserting
+    // collapse never fires.
+    const { handle, onCollapse } = setup();
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 200, pointerId: 1 }); // 100px drag
+    fireEvent.pointerUp(handle, { clientX: 200, pointerId: 1 });
+    expect(onCollapse).not.toHaveBeenCalled();
+  });
+
+  it("does not commit a no-op width when the rail did not actually move (AC6)", () => {
+    const { handle, onCommit } = setup();
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 100, pointerId: 1 }); // no movement
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not throw on double-click when onCollapse is not provided", () => {
+    const onWidthChange = vi.fn();
+    const onCommit = vi.fn();
+    render(
+      <RailResizeHandle
+        width={224}
+        min={224}
+        max={480}
+        onWidthChange={onWidthChange}
+        onCommit={onCommit}
+      />,
+    );
+    const handle = screen.getByTestId("kb-rail-resize-handle");
+    expect(() => fireEvent.doubleClick(handle)).not.toThrow();
   });
 });

@@ -3,6 +3,7 @@ import { DeleteAccountDialog } from "./delete-account-dialog";
 import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
 import { RenameWorkspaceAction } from "./rename-workspace-action";
 import { WorkspaceLogoSettings } from "./workspace-logo-settings";
+import { KeyboardShortcutsToggle } from "./keyboard-shortcuts-toggle";
 import type { WorkspaceIdentity } from "@/server/workspace-identity-resolver";
 
 interface SettingsContentProps {
@@ -120,6 +121,11 @@ export function SettingsContent({
           />
         </div>
       </section>
+
+      {/* Preferences Section — device-local UI prefs. Self-gates on the
+          command-palette flag: renders the whole section (heading + card) only
+          when the flag is on, so an off flag leaves no empty card. */}
+      <KeyboardShortcutsToggle />
 
       {/* Privacy Section */}
       <section>

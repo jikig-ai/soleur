@@ -77,6 +77,16 @@ on:
       - "apps/web-platform/infra/infra-config-install.sh"
       - "apps/web-platform/infra/push-infra-config.sh"
       - "apps/web-platform/infra/cat-infra-config-state.sh"
+      # #5505 — the 4 inngest cutover scripts are webhook-delivered AND registered in
+      # server.tf's deploy_pipeline_fix triggers_replace hash, so a body-only edit to
+      # any of them must fire this apply. Without these, the inngest-only #5504 merge
+      # did NOT auto-deploy and the fix needed a manual workflow_dispatch. Kept in sync
+      # with TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts (#5505 parity test).
+      - "apps/web-platform/infra/inngest-enumerate-reminders.sh"
+      - "apps/web-platform/infra/inngest-rearm-reminders.sh"
+      - "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
+      - "apps/web-platform/infra/cat-inngest-verify-state.sh"
+      - "apps/web-platform/infra/inngest-inventory.sh"
       - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
@@ -99,7 +109,12 @@ concurrency:
   # last-writer-wins-clobbering web-platform/terraform.tfstate. Both workflows
   # now SSH-apply apparmor_bwrap_profile (this one pulls it transitively via
   # deploy_pipeline_fix's depends_on; the other lists it in its SSH -target set),
-  # so they overlap on the same R2 object. GHA does NOT error on divergent group
+  # so they overlap on the same R2 object. As of #5515 deploy_pipeline_fix's
+  # depends_on has TWO elements — it now transitively pulls BOTH apparmor_bwrap_profile
+  # AND infra_config_handler_bootstrap into this run — but the overlap surface with
+  # apply-web-platform-infra.yml is UNCHANGED: that workflow SSH-`-target`s only
+  # apparmor_bwrap_profile (not the bridge), so the new edge is never traversed by it.
+  # GHA does NOT error on divergent group
   # strings — they silently fail to serialize — so do not "rename for clarity".
   group: terraform-apply-web-platform-host
   # cancel-in-progress: false — cancelling a half-applied unlocked run is the

@@ -541,6 +541,147 @@ resource "sentry_issue_alert" "workspace_sync_health" {
   }
 }
 
+# server/repo-resolver-divergence.ts: emits `feature=repo-resolver-divergence`
+# breadcrumbs via reportSilentFallback for the dual-resolver divergence class
+# (ADR-044). The divergence file shipped the QUERYABLE signal but called the
+# NOTIFICATION rule a fast-follow — this rule is that fast-follow. The
+# dispatch-time op `connected-null-install-at-dispatch` (added this PR) is the
+# member cold-dispatch into a genuinely-connected workspace whose credential
+# read `resolve_workspace_installation_id` returned NULL — previously a SILENT
+# repo-less agent spawn (the "no git repository" Concierge incident). Without
+# this rule the events sit in Sentry un-notified
+# (hr-no-dashboard-eyeball-pull-data-yourself).
+#
+# feature-ONLY filter (no `op` IS_IN): the `repo-resolver-divergence` feature tag
+# is dedicated and EVERY op (non-member-claim-reset / self-heal-failed /
+# connected-null-install-at-dispatch) is operator-actionable. Op-scoping would
+# risk silently darking a future op (the failure mode test/sentry-repo-resolver
+# -divergence-alert-op-contract.test.ts pins against). Feature-only future-proofs
+# new ops.
+#
+# `action_match="any"` + first_seen/reappeared/regression lifecycle conditions:
+# Sentry folds repeated fires of the same fingerprint into one issue and re-pages
+# only on regression after the operator resolves it (anti-fatigue). Distinct
+# `frequency=20` avoids Sentry POST-time exact-duplicate dedup (taken by
+# siblings: 5,10,11,12,13,14,15,16,17,18,19,30,60,61,62); not evaluated by
+# lifecycle-condition rules but must be unique.
+resource "sentry_issue_alert" "repo_resolver_divergence" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "repo-resolver-divergence"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 20
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "repo-resolver-divergence"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── GitHub-webhook founder-ambiguous alert (#5437) — APPLY-CREATED ────────────
+# ADR-044 R8 asserts the founder-ambiguous standing-state MUST PAGE. The
+# non-push webhook resolver (server/resolve-founder-for-installation.ts) now
+# reads the NON-UNIQUE `workspaces.github_installation_id` (the mig-052 UNIQUE
+# was dropped), so >1 solo workspaces sharing one installation is genuinely
+# reachable. The route (app/api/webhooks/github/route.ts, `op=founder-ambiguous`
+# branch) FAILS CLOSED: it drops the event with a 404 (GitHub does not retry
+# 4xx) and never picks a founder — strictly safer than misattributing an
+# action/installation-token to the WRONG founder (the brand-survival hazard).
+# But the drop is a STANDING state: every subsequent webhook for that install
+# also drops until the duplicate solo row is removed, and the HTTP monitor
+# treats 404 as expected. This rule is the missing NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself) — the `Sentry.captureException`
+# already fires with `feature=github-webhook` + `op=founder-ambiguous` tags; no
+# app change needed.
+#
+# 2-tag AND filter (`filter_match="all"`, feature + op tagged_event) — mirrors
+# chat_message_save_failure's shape. Scoped to `op=founder-ambiguous` (NOT
+# feature-only): the `github-webhook` feature tag also carries the routine
+# no-founder 404 (`op` absent), the inngest-send-push failure
+# (`op=inngest-send-push`), and the db-error mirror (`op=founder-resolve`,
+# already paged by the workspace-resolver family). A feature-only filter would
+# over-page on the expected no-founder 404. This rule fires ONLY on the
+# standing-state ambiguity.
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue (e.g. removes the duplicate solo row, then a later
+# install drift re-introduces it). Distinct `frequency=19` avoids Sentry
+# POST-time exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,18,30,60,61,
+# 62; keyed on action-shape + frequency + match — must be unique).
+resource "sentry_issue_alert" "github_webhook_founder_ambiguous" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "github-webhook-founder-ambiguous"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 19
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "github-webhook"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "founder-ambiguous"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors chat_message_save_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the
+  # active founder. The event carries only installationId + deliveryId + count
+  # tags/extra — NO cross-tenant content — so the fallthrough does not
+  # over-disclose. Revisit recipient pinning (target_type="Member") before the
+  # first non-founder Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── KB sync silent-failure alert (#4918, re-pointed #5005) — APPLY-CREATED ─────
 # Pages on the first occurrence of an unexpected (uncaught) failure on the
 # manual KB-sync path. PIR #4913 (generate-link-tenant-mint-regression-
@@ -823,6 +964,84 @@ resource "sentry_issue_alert" "kb_sync_protected_fallback_failed" {
   # paging the solo founder. These events carry only hashed userId + op tags —
   # no cross-tenant content — so the fallthrough does not over-disclose. Revisit
   # recipient pinning (target_type="Member") before the first non-founder seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Disk-IO WAL-concentration alert (#5736) — APPLY-CREATED, NOT import-only ────
+# server/inngest/functions/cron-supabase-disk-io.ts: the 6-hourly disk-IO monitor
+# now reads the per-statement WAL signal (migration 114: top_wal_statements +
+# max_wal_pct from extensions.pg_stat_statements) and emits ONE Sentry capture
+# tagged feature=cron-supabase-disk-io / op=wal-concentration when a single
+# statement's share of total WAL exceeds WAL_CONCENTRATION_PCT_CEIL (40). This is
+# the continuous backstop for the #5736 class — a webhook dedup INSERT that was
+# 63% of prod WAL yet shipped through review + green CI because no lens checked
+# write frequency × per-write WAL. This rule is the NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself): without it the capture sits in
+# Sentry un-paged. The signal already exists (reportSilentFallback →
+# captureException); no app change beyond the emit.
+#
+# 2-tag AND filter (`filter_match="all"`, feature + op tagged_event) — mirrors
+# github_webhook_founder_ambiguous's EQUAL/EQUAL shape. Scoped to
+# `op=wal-concentration` (NOT feature-only): `feature=cron-supabase-disk-io` also
+# carries the read-signal failure op (`op=read-signal`) which is paged via the
+# cron's own heartbeat monitor (scheduled-supabase-disk-io); a feature-only
+# filter here would double-page that. This rule fires ONLY on WAL concentration.
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue (e.g. fixes the dominating statement, then a later
+# regression re-introduces it). Distinct `frequency=21` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,18,19,20,30,60,61,62;
+# keyed on action_match+filter_match+frequency+actions-shape, NOT conditions —
+# must be unique). Cross-artifact op/feature contract pinned by
+# test/sentry-disk-io-wal-concentration-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "disk_io_wal_concentration" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "disk-io-wal-concentration"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 21
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cron-supabase-disk-io"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "wal-concentration"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the
+  # solo founder. The event carries only the normalized (literal-stripped) query
+  # text + WAL percentages — no row values / cross-tenant content — so the
+  # fallthrough does not over-disclose. Revisit recipient pinning
+  # (target_type="Member") before the first non-founder Sentry seat.
   actions_v2 = [
     {
       notify_email = {

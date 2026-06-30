@@ -29,6 +29,16 @@ trap 'rm -f "$PAYLOAD_FILE"' EXIT
 # hooks.json is passed pre-encoded via HOOKS_JSON_B64 because it is rendered
 # from a Terraform template (hooks.json.tmpl) with secrets interpolated —
 # the on-disk file is the template, not the rendered output.
+#
+# #5450/#5492 — the four inngest cutover scripts (inngest-enumerate-reminders.sh,
+# inngest-rearm-reminders.sh, inngest-wiped-volume-verify.sh,
+# cat-inngest-verify-state.sh) are delivered by this push (payload below +
+# infra-config-apply FILE_MAP + infra-config-install DEST_SPEC). They ARE
+# registered in deploy_pipeline_fix's per-file triggers_replace hash (server.tf)
+# + the ship DEPLOY_PIPELINE_FIX_TRIGGERS array/regex + the gate test, so a
+# body-only edit to any one re-fires the apply and reaches /usr/local/bin
+# (#5492: an earlier "transient, don't register" decision blocked the enumerate
+# fix from deploying — no hashed file had changed).
 cat > "$PAYLOAD_FILE" <<PAYLOAD
 {
   "ci_deploy_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/ci-deploy.sh")",
@@ -37,7 +47,12 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "cat_deploy_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-deploy-state.sh")",
   "canary_bundle_claim_check_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/canary-bundle-claim-check.sh")",
   "hooks_json_b64": "${HOOKS_JSON_B64}",
-  "cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")"
+  "cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")",
+  "inngest_enumerate_reminders_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-enumerate-reminders.sh")",
+  "inngest_rearm_reminders_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-rearm-reminders.sh")",
+  "inngest_wiped_volume_verify_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-wiped-volume-verify.sh")",
+  "cat_inngest_verify_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-inngest-verify-state.sh")",
+  "inngest_inventory_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-inventory.sh")"
 }
 PAYLOAD
 

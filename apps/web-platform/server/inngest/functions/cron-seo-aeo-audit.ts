@@ -56,6 +56,8 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  finalizeOutputAwareHeartbeat,
+  DeployInProgressError,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -64,6 +66,7 @@ import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
@@ -156,6 +159,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronSeoAeoAuditHandler({
   step,
   logger,
+  attempt,
+  maxAttempts,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
   // this cron needs per-construct Bash-allowlist refinement or non-GitHub
@@ -206,6 +211,8 @@ export async function cronSeoAeoAuditHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
+    // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare, no heartbeat.
+    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -230,116 +237,168 @@ export async function cronSeoAeoAuditHandler({
   // re-creates a fresh ephemeralRoot from setup-workspace's memoization
   // (or the existsSync guard at the top of spawnClaudeEval rebuilds it).
   try {
-    // --- Step 3: claude-eval (30-min AbortController) ---
-    const spawnResult = await step.run(
-      "claude-eval",
-      async (): Promise<SpawnResult> => {
-        return spawnClaudeEval({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          flags: CLAUDE_CODE_FLAGS,
-          prompt: SEO_AEO_AUDIT_PROMPT,
-          maxTurnDurationMs: MAX_TURN_DURATION_MS,
-          cronName: "cron-seo-aeo-audit",
-          buildSpawnEnv,
-          logger,
-        });
-      },
-    );
-
-    if (spawnResult.abortedByTimeout) {
-      reportSilentFallback(
-        new Error(
-          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-        ),
-        {
-          feature: "cron-seo-aeo-audit",
-          op: "claude-eval-timeout",
-          message: "claude-eval aborted by AbortController",
-          extra: {
-            fn: "cron-seo-aeo-audit",
-            durationMs: spawnResult.durationMs,
-            maxMs: MAX_TURN_DURATION_MS,
-          },
+    // #5728 — flag pattern. The body (claude-eval → verify-output →
+    // safe-commit-pr) runs in an inner try whose throw sets `threw`; the single
+    // terminal heartbeat is posted (or skipped-for-retry) by
+    // finalizeOutputAwareHeartbeat below — NOT from a second catch-site (which,
+    // under retries:1 memoization, would replay a stale `ok` while posting a
+    // conflicting `error`). A throw before the heartbeat previously propagated
+    // out → the heartbeat step never ran → silent `missed`. spawnResult is
+    // hoisted so the silence-hole audit issue can read it even when a later
+    // step threw.
+    let heartbeatOk = false;
+    let threw = false;
+    let spawnResult: SpawnResult | null = null;
+    try {
+      // --- Step 3: claude-eval (30-min AbortController) ---
+      spawnResult = await step.run(
+        "claude-eval",
+        async (): Promise<SpawnResult> => {
+          return spawnClaudeEval({
+            spawnCwd: spawnCwd!,
+            installationToken,
+            flags: CLAUDE_CODE_FLAGS,
+            prompt: SEO_AEO_AUDIT_PROMPT,
+            maxTurnDurationMs: MAX_TURN_DURATION_MS,
+            cronName: "cron-seo-aeo-audit",
+            buildSpawnEnv,
+            logger,
+          });
         },
       );
-    }
 
-    // --- Step 4: output-aware heartbeat. This cron is an always-create
-    //     producer — it files a `[Scheduled] SEO/AEO Audit - <today>` summary
-    //     issue every run — so a clean exit that produced no
-    //     `scheduled-seo-aeo-audit` issue in the run window turns the monitor RED
-    //     (and emits `scheduled-output-missing`) instead of false-green on
-    //     claude's exit code. Mirrors the 3 producers wired by PR #4714 (#4730).
-    //     Infra faults still page via the early-return status=error heartbeats. ---
-    const heartbeatOk = await step.run("verify-output", async () =>
-      resolveOutputAwareOk({
-        spawnOk: spawnResult.ok,
-        label: SENTRY_MONITOR_SLUG,
-        runStartedAt,
-        cronName: "cron-seo-aeo-audit",
-        stderrTail: spawnResult.stderrTail,
-        exitCode: spawnResult.exitCode,
-        stdoutTail: spawnResult.stdoutTail,
-      }),
-    );
-    // --- Step 4.5: deterministic persistence (#5091). Gated on the
-    //     issue-verified output rather than the spawn exit code:
-    //     exit-0-with-no-issue is unverified (possibly mid-edit) work that
-    //     must not auto-merge, while issue-created + non-zero exit is the
-    //     documented healthy #4747 case whose diff must not be discarded.
-    //     (Caveat: resolveOutputAwareOk falls back to the spawn exit code
-    //     when its GitHub verify-read THROWS — a tri-state gate is tracked
-    //     in #5139.) abortedByTimeout also skips —
-    //     a 30-min hard kill can land mid-edit, and the timeout is already
-    //     loud via the reportSilentFallback above. Guard aborts / persistence
-    //     failures self-report inside the helper (Sentry + issue comment).
-    if (heartbeatOk && !spawnResult.abortedByTimeout) {
-      await step.run("safe-commit-pr", async () =>
-        safeCommitAndPr({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          cronName: "cron-seo-aeo-audit",
-          commitMessage: "fix(seo): weekly SEO/AEO audit fixes",
-          allowedPaths: SEO_AEO_ALLOWED_PATHS,
+      if (spawnResult.abortedByTimeout) {
+        reportSilentFallback(
+          new Error(
+            `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
+          ),
+          {
+            feature: "cron-seo-aeo-audit",
+            op: "claude-eval-timeout",
+            message: "claude-eval aborted by AbortController",
+            extra: {
+              fn: "cron-seo-aeo-audit",
+              durationMs: spawnResult.durationMs,
+              maxMs: MAX_TURN_DURATION_MS,
+            },
+          },
+        );
+      }
+
+      // --- Step 4: output-aware heartbeat. This cron is an always-create
+      //     producer — it files a `[Scheduled] SEO/AEO Audit - <today>` summary
+      //     issue every run — so a clean exit that produced no
+      //     `scheduled-seo-aeo-audit` issue in the run window turns the monitor RED
+      //     (and emits `scheduled-output-missing`) instead of false-green on
+      //     claude's exit code. Mirrors the 3 producers wired by PR #4714 (#4730).
+      //     Infra faults still page via the early-return status=error heartbeats. ---
+      heartbeatOk = await step.run("verify-output", async () =>
+        resolveOutputAwareOk({
+          spawnOk: spawnResult!.ok,
+          label: SENTRY_MONITOR_SLUG,
           runStartedAt,
-          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
-          logger,
+          cronName: "cron-seo-aeo-audit",
+          stderrTail: spawnResult!.stderrTail,
+          exitCode: spawnResult!.exitCode,
+          stdoutTail: spawnResult!.stdoutTail,
         }),
       );
-    }
-    await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-seo-aeo-audit", logger });
-    });
-
-    // --- Step 5: silence-hole fallback (#4960, generalized #4978). When the
-    //     output-aware check found NO scheduled-seo-aeo-audit issue in the run
-    //     window, the prompt's create-issue step never ran (mid-eval crash /
-    //     API 500 / max-turns kill). Self-report a FAILED audit issue so the run
-    //     is never silent. Wrapped so a create failure cannot crash the
-    //     finally/teardown — reported to Sentry instead; the watchdog still
-    //     catches the absence after threshold (defense-in-depth). ---
-    if (!heartbeatOk) {
-      await step.run("ensure-audit-issue", async () => {
-        try {
-          await ensureScheduledAuditIssue({
-            label: SENTRY_MONITOR_SLUG,
-            titlePrefix: "[Scheduled] SEO/AEO Audit -",
-            cronName: "cron-seo-aeo-audit",
-            runStartedAt,
-            spawnResult,
+      // --- Step 4.5: deterministic persistence (#5091). Gated on the
+      //     issue-verified output rather than the spawn exit code:
+      //     exit-0-with-no-issue is unverified (possibly mid-edit) work that
+      //     must not auto-merge, while issue-created + non-zero exit is the
+      //     documented healthy #4747 case whose diff must not be discarded.
+      //     (Caveat: resolveOutputAwareOk falls back to the spawn exit code
+      //     when its GitHub verify-read THROWS — a tri-state gate is tracked
+      //     in #5139.) abortedByTimeout also skips —
+      //     a 30-min hard kill can land mid-edit, and the timeout is already
+      //     loud via the reportSilentFallback above. Guard aborts / persistence
+      //     failures self-report inside the helper (Sentry + issue comment).
+      if (heartbeatOk && !spawnResult.abortedByTimeout) {
+        await step.run("safe-commit-pr", async () =>
+          safeCommitAndPr({
+            spawnCwd: spawnCwd!,
             installationToken,
-          });
-        } catch (err) {
-          reportSilentFallback(err, {
-            feature: "cron-seo-aeo-audit",
-            op: "ensure-audit-issue-failed",
-            message:
-              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
-            extra: { fn: "cron-seo-aeo-audit", runStartedAt },
-          });
-        }
+            cronName: "cron-seo-aeo-audit",
+            commitMessage: "fix(seo): weekly SEO/AEO audit fixes",
+            allowedPaths: SEO_AEO_ALLOWED_PATHS,
+            runStartedAt,
+            scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+            logger,
+          }),
+        );
+      }
+    } catch (err) {
+      // #5728 G1 — a deploy-in-progress defer is benign (ADR-068/#5686): rethrow
+      // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
+      // is a real failure — flag it; finalizeOutputAwareHeartbeat decides
+      // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step
+      // (safe-commit-pr) stays GREEN — heartbeatOk is already true and the
+      // persistence failure self-reports here.
+      if (err instanceof DeployInProgressError) throw err;
+      threw = true;
+      const e = err as Error;
+      const redactedMsg = redactToken(e.message ?? "", installationToken);
+      const redacted = new Error(redactedMsg);
+      redacted.name = e.name;
+      reportSilentFallback(redacted, {
+        feature: "cron-seo-aeo-audit",
+        op: "handler-body-threw",
+        message:
+          "cron-seo-aeo-audit body threw before the terminal heartbeat",
+        extra: {
+          fn: "cron-seo-aeo-audit",
+          attempt: attempt ?? 0,
+          producedOutput: heartbeatOk,
+        },
       });
+    }
+
+    // --- Single authoritative terminal heartbeat (memoization-safe,
+    //     final-attempt gated). On a genuine non-final failure the helper skips
+    //     the whole heartbeat step and returns retry:true (we rethrow to trigger
+    //     the Inngest retry, filing NO premature FAILED issue). On the post path,
+    //     the Step-5 silence-hole fallback (#4960/#4978) files a FAILED audit
+    //     issue when red, ordered BEFORE the heartbeat so the heartbeat stays the
+    //     genuine last step. ---
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      step,
+      heartbeatOk,
+      threw,
+      attempt,
+      maxAttempts,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-seo-aeo-audit",
+      logger,
+      onBeforeHeartbeat: heartbeatOk
+        ? undefined
+        : async () => {
+            await step.run("ensure-audit-issue", async () => {
+              try {
+                await ensureScheduledAuditIssue({
+                  label: SENTRY_MONITOR_SLUG,
+                  titlePrefix: "[Scheduled] SEO/AEO Audit -",
+                  cronName: "cron-seo-aeo-audit",
+                  runStartedAt,
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-seo-aeo-audit"),
+                  installationToken,
+                });
+              } catch (err) {
+                reportSilentFallback(err, {
+                  feature: "cron-seo-aeo-audit",
+                  op: "ensure-audit-issue-failed",
+                  message:
+                    "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+                  extra: { fn: "cron-seo-aeo-audit", runStartedAt },
+                });
+              }
+            });
+          },
+    });
+    if (retry) {
+      throw new Error(
+        "cron-seo-aeo-audit failed on a non-final attempt; retrying",
+      );
     }
 
     return { ok: heartbeatOk };

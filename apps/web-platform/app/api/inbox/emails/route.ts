@@ -9,9 +9,11 @@ import { withUserRateLimit } from "@/server/with-user-rate-limit";
  *
  * Auth: `withUserRateLimit` (401s unauthenticated callers at the wrapper) +
  * user-context Supabase client. NEVER `createServiceClient` here — the
- * service role silently bypasses the owner-SELECT RLS on
- * `email_triage_items`. The explicit `.eq("user_id", ...)` below is
- * belt-and-suspenders on top of RLS, not a substitute for it.
+ * service role silently bypasses the workspace-owner-SELECT RLS on
+ * `email_triage_items`. mig 111: reads are gated SOLELY by RLS
+ * (is_email_triage_workspace_owner — any Owner of the row's workspace). We do
+ * NOT add an `.eq("user_id", ...)` filter: it would re-narrow below RLS to the
+ * single stamping owner and hide the shared inbox from co-Owners.
  *
  * Filters (mirrored exactly by the `email_triage_list` agent tool in
  * `server/email-triage-tools.ts` — keep both in lockstep):
@@ -81,7 +83,6 @@ async function getHandler(req: Request, user: User) {
     let query = supabase
       .from("email_triage_items")
       .select(LIST_COLUMNS)
-      .eq("user_id", user.id)
       .or("mail_class.not.is.null,statutory_class.not.is.null");
     if (!includeProbes) {
       query = query.or("mail_class.is.null,mail_class.neq.probe");
@@ -101,7 +102,6 @@ async function getHandler(req: Request, user: User) {
   const pinnedQuery = supabase
     .from("email_triage_items")
     .select(LIST_COLUMNS)
-    .eq("user_id", user.id)
     .not("statutory_class", "is", null)
     .eq("status", "new")
     .order("received_at", { ascending: false });
@@ -110,7 +110,6 @@ async function getHandler(req: Request, user: User) {
   let restQuery = supabase
     .from("email_triage_items")
     .select(LIST_COLUMNS)
-    .eq("user_id", user.id)
     .or("mail_class.not.is.null,statutory_class.not.is.null")
     // Exclude the pinned shape (NOT (statutory AND new), De Morgan) so the
     // merge never duplicates a row.

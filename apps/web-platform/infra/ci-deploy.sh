@@ -67,6 +67,30 @@ readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
+# Cron drain (#5669 / ADR-068)
+# -----------------------------------------------------------------------------
+# Every prod swap stops the container (`docker stop --time=12 soleur-web-platform`
+# below), killing any in-flight cron `claude` child — the
+# _cron-claude-eval-substrate.ts:706 "spawn cwd … no longer exists" symptom. The
+# drain gate (in the swap block) waits for any live claude child to finish before
+# the stop, and writes a host-mounted lease so NEW cron runs defer meanwhile.
+#
+# CRON_DRAIN_TIMEOUT = MAX of every per-function maxTurnDurationMs
+# (cron-growth-audit = 70min/4200s; ci-deploy.test.sh asserts ≥ that max). Env-
+# overridable pure timing knobs (ADR-062 PROD_MEMORY_CAP precedent — NOT Doppler
+# secrets). The wrapper wall-clock (ci-deploy-wrapper.sh `timeout`) and the three
+# web-platform-release.yml poll windows are raised in lockstep to 4800s ≥
+# CRON_DRAIN_TIMEOUT + overhead (ci-deploy-wrapper.test.sh Test 6 enforces parity).
+CRON_DRAIN_TIMEOUT="${CRON_DRAIN_TIMEOUT:-4200}"
+CRON_DRAIN_POLL="${CRON_DRAIN_POLL:-10}"
+CRON_DRAIN_PROBE_TIMEOUT="${CRON_DRAIN_PROBE_TIMEOUT:-10}"
+# Lease basename MUST match _cron-shared.ts DEPLOY_LEASE_BASENAME; host
+# /mnt/data/workspaces == container /workspaces (-v mount at the docker run).
+# Test harness overrides both paths to a tmpdir.
+CRON_DEPLOY_LEASE_FILE="${CRON_DEPLOY_LEASE_FILE:-/mnt/data/workspaces/.deploy-lease}"
+CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.json}"
+
+# -----------------------------------------------------------------------------
 # Deploy state observability (#2185)
 # -----------------------------------------------------------------------------
 # adnanh/webhook returns success-http-response-code (202) the moment ci-deploy.sh
@@ -175,6 +199,60 @@ trap 'trap - TERM INT; final_write_state 124 "timeout"; pkill -TERM -P $$ 2>/dev
 # via journalctl -u webhook, not the HTTP response.
 trap 'echo "DEPLOY_ERROR: ci-deploy.sh failed at line $LINENO (exit $?)" >&2' ERR
 
+# --- Cron drain helpers (#5669 / ADR-068) ------------------------------------
+#
+# cron_in_flight: pool-agnostic in-flight detection. claude-eval runs in the
+# cron-platform pool (limit:1) AND the agent-runtime pool (limit:50,
+# github-on-event.ts / cfo-on-payment-failed.ts) AND cc-soleur-go endpoints —
+# all as `claude` children INSIDE the prod container — so detection must match
+# ANY in-container claude child, NOT an Inngest-pool-scoped runs query (which
+# would miss agent-runtime children and let the stop kill them). `docker exec`
+# enters the container PID namespace where the child is a descendant of PID 1.
+# Wrapped in its own `timeout` so a hung `docker exec` cannot extend the drain
+# past the wall-clock (G5). Returns 0 (true) when a claude child is live.
+cron_in_flight() {
+  timeout "${CRON_DRAIN_PROBE_TIMEOUT}" \
+    docker exec soleur-web-platform pgrep -f "claude" >/dev/null 2>&1
+}
+
+# report_cron_drain_timeout: loud, no-SSH page for the ONLY path that kills a
+# cron. The load-bearing signal is the cron-drain state file (surfaced as
+# cron_drain_timed_out=true over /hooks/deploy-status by cat-deploy-state.sh) +
+# a journald WARN (→ Better Stack). Sentry is best-effort + env-guarded (mirrors
+# container-restart-monitor.sh sentry_event). Fail-open: never aborts the deploy
+# under `set -e` (callers add `|| true`).
+report_cron_drain_timeout() {
+  local waited="$1"
+  logger -t "$LOG_TAG" "CRON_DRAIN_TIMEOUT: waited ${waited}s, claude still in flight — stopping container (in-flight cron will be killed; retries:1)"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg w "$waited" \
+      '{message: ("ci-deploy cron drain timed out after " + $w + "s — in-flight cron killed by container swap"),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "ci-deploy", op: "cron-drain-timeout"},
+        extra: {cron_drain_wait_secs: ($w | tonumber)}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "CRON_DRAIN: Sentry POST failed (timeout event)"
+  fi
+}
+
+# write_cron_drain_state: persist the drain outcome for the no-SSH deploy-status
+# webhook (cat-deploy-state.sh cron_drain_json reads this; safe sentinels -1 /
+# false when the file is absent because a deploy never reached the drain). Always
+# returns 0 so a state-write failure never converts into a deploy failure.
+write_cron_drain_state() {
+  local wait_secs="$1" timed_out="$2" tmp
+  tmp="$(mktemp "${CRON_DRAIN_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  printf '{"cron_drain_wait_secs":%d,"cron_drain_timed_out":%s}\n' \
+    "$wait_secs" "$timed_out" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$CRON_DRAIN_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  return 0
+}
+
 # Resolve env file: download secrets from Doppler to a temp file (chmod 600).
 # Cleaned up automatically via EXIT trap after resolve_env_file. Exits on any failure -- no fallback.
 resolve_env_file() {
@@ -261,21 +339,58 @@ verify_inngest_health() {
     return 1
   fi
 
-  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159): /health proves only
-  # process liveness. A standalone inngest restart de-plans cron triggers; they
-  # re-arm async (web-platform redeploy → modified:true sync, or the server's
-  # --poll-interval self-heal). Best-effort poll /v1/functions for a re-armed
-  # cron trigger; if none appears, log an advisory and STILL succeed (the Sentry
-  # cron monitors are the real safety net). Dependency-free substring check (jq
-  # is not a host dependency): match the cron-trigger KEY form `"cron":` (the
-  # value form `"cron":"<expr>"` always contains it), NOT a bare `"cron"` — every
-  # function slug is `cron-*`, so bare `"cron"` would false-pass on the slug
-  # alone even with zero planned cron triggers.
+  # Durable-backend HARD gate (#5450). Phase-0 verdict 0.3: inngest FAILS CLOSED
+  # on an *unreachable* backend (so /health=200 above already proves a configured
+  # backend is reachable — inngest won't serve otherwise). The residual silent
+  # risk is *flags-absent*: a templating/image regression that drops the backend
+  # flags → inngest defaults to in-memory Redis (non-durable) WHILE /health=200.
+  # This gate is a CONSISTENCY assertion: when the durable backend is configured the
+  # queue MUST also have inngest-redis active, or the deploy fails loud. It is
+  # transparent to pre-migration / rollback states (sentinel absent → skip), so a
+  # `--sqlite-dir`-only rollback still passes. Reads only the CONFIGURED ExecStart
+  # ($VAR form — no secret value) + unit activeness; never logs the connection string.
+  # Detection sentinel (#5560): the durable backend is detected by the NON-SECRET
+  # --postgres-max-open-conns flag, NOT --postgres-uri/--redis-uri — those are now
+  # delivered via the doppler-run ENVIRONMENT (never argv) so they no longer appear
+  # in the ExecStart. inngest-bootstrap.sh writes --postgres-max-open-conns ONLY in
+  # the durable branch (present iff durable). Build-time flag presence is separately
+  # drift-guarded in inngest.test.sh; parser token-parity in inngest-inventory.test.sh.
+  local exec_start=""
+  exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
+  if [[ "$exec_start" == *'--postgres-max-open-conns'* ]]; then
+    if ! systemctl is-active --quiet inngest-redis.service; then
+      logger -t "$LOG_TAG" "INNGEST_DURABLE: FAIL — durable backend configured but inngest-redis.service is not active; armed reminders would not persist"
+      return 1
+    fi
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: ok — durable backend (--postgres-max-open-conns sentinel) configured and inngest-redis.service active"
+  else
+    # #5547 Gap 2/3: SQLite-only fail-safe ExecStart (Redis was not ready this
+    # deploy → inngest-bootstrap wrote the empty BACKEND_FLAGS form). This is NOT
+    # a failure — the server is available on the non-durable backend, so do NOT
+    # return 1 (that would block a legitimate SQLite-only rollback). This
+    # `logger -t "$LOG_TAG"` advisory is the AUTHORITATIVE no-SSH carrier for the
+    # degraded state: LOG_TAG=ci-deploy is in Vector Source 4's tag allowlist →
+    # Better Stack Logs. (The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is
+    # NOT a carrier on this 0-exit path — ci-deploy reads $BOOTSTRAP_STDERR only
+    # on a non-zero bootstrap exit.)
+    logger -t "$LOG_TAG" "INNGEST_DURABLE: advisory — inngest-server running SQLite-only (non-durable); durable Redis was not ready this deploy (#5547). Server is available; armed reminders will NOT survive a host rebuild until a deploy with Redis ready."
+  fi
+
+  # Cron-plan probe (#4650 / AC9, ADVISORY post-#5159, #5520): /health proves
+  # only process liveness. A standalone inngest restart de-plans cron triggers;
+  # they re-arm async (web-platform redeploy → modified:true sync, or the
+  # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
+  # re-armed cron trigger; if none appears, log an advisory and STILL succeed
+  # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
+  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
+  # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
+  # minified GQL response (jq is not a host dependency).
   local functions_body=""
   for i in $(seq 1 "$cron_max_attempts"); do
-    functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
+    functions_body=$(curl -sf --max-time 5 -X POST -H "Content-Type: application/json" -d '{"query":"{ functions { triggers { type value } } }"}' http://127.0.0.1:8288/v0/gql 2>/dev/null) || true
 
-    if [[ "$functions_body" == *'"cron":'* ]]; then
+    if [[ "$functions_body" == *'"type":"CRON"'* ]]; then
       logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$cron_max_attempts)"
       return 0
     fi
@@ -681,6 +796,49 @@ case "$COMPONENT" in
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
+
+      # --- Cron drain gate (#5669 / ADR-068) --------------------------------
+      # Tear the canary down FIRST (free its CANARY_MEMORY_CAP) so the drain
+      # wait does NOT hold canary + old-prod + cron resident (~6.9GB) for up to
+      # ~70min on the 8GB host (platform-strategist memory-dwell fix). The canary
+      # has already validated the image (health + sandbox above) and fires no
+      # crons, so removing it now is safe.
+      { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+      { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+
+      # Write the deploy lease so NEW cron runs defer (the substrate reads
+      # /workspaces/.deploy-lease == this host-mounted path) — closes the
+      # start-race where a fresh claude launches into the about-to-die container
+      # while the loop drains the current one.
+      mkdir -p "$(dirname "$CRON_DEPLOY_LEASE_FILE")" 2>/dev/null || true
+      # Symlink guard (#5669 review): the lease lives in the 1001-owned,
+      # container-writable /mnt/data/workspaces (claude runs arbitrary model-driven
+      # code as uid 1001 there). A compromised cron child could plant a symlink at
+      # the lease path; `: >` runs as root and would FOLLOW it, truncating an
+      # arbitrary root-owned file. Unlink any symlink first — `rm -f` unlinks the
+      # link itself without following.
+      [[ -L "$CRON_DEPLOY_LEASE_FILE" ]] && rm -f "$CRON_DEPLOY_LEASE_FILE"
+      : > "$CRON_DEPLOY_LEASE_FILE" 2>/dev/null \
+        || logger -t "$LOG_TAG" "CRON_DRAIN: could not write lease $CRON_DEPLOY_LEASE_FILE"
+
+      # Drain: wait for any in-flight claude child to finish before the stop,
+      # bounded by CRON_DRAIN_TIMEOUT (= MAX per-function maxTurnDurationMs). The
+      # `|| true` guards keep a nonzero helper from aborting the deploy (set -e).
+      drain_start=$(date +%s)
+      cron_drain_timed_out=false
+      while cron_in_flight; do
+        waited=$(( $(date +%s) - drain_start ))
+        if (( waited >= CRON_DRAIN_TIMEOUT )); then
+          cron_drain_timed_out=true
+          report_cron_drain_timeout "$waited" || true
+          break
+        fi
+        sleep "$CRON_DRAIN_POLL"
+      done
+      CRON_DRAIN_WAIT_SECS=$(( $(date +%s) - drain_start ))
+      write_cron_drain_state "$CRON_DRAIN_WAIT_SECS" "$cron_drain_timed_out" || true
+      logger -t "$LOG_TAG" "CRON_DRAIN: waited ${CRON_DRAIN_WAIT_SECS}s (timed_out=${cron_drain_timed_out}) before prod stop"
+
       { docker stop --time=12 soleur-web-platform 2>/dev/null || true; }
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
@@ -724,8 +882,14 @@ case "$COMPONENT" in
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
         "$IMAGE:$TAG"; then
-        { docker stop soleur-web-platform-canary 2>/dev/null || true; }
-        { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        # Canary was already stopped+removed before the cron drain gate above
+        # (memory-dwell fix), so no teardown is needed here on the success path.
+
+        # Clear the deploy lease so the new container's crons resume immediately
+        # (#5669 / ADR-068). Best-effort: the substrate's TTL fail-open is the
+        # real backstop if a crash skips this clear, but clearing now avoids
+        # deferring the next cron fire.
+        rm -f "$CRON_DEPLOY_LEASE_FILE" 2>/dev/null || true
 
         # Inngest health sanity check (informational, #4538).
         # Non-blocking: does NOT gate deploy success.
@@ -853,6 +1017,23 @@ case "$COMPONENT" in
     # replaced.
     rm -f /tmp/vector.toml
     docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
+    # Durable Redis assets (#5450) — stage to /tmp like /vector.toml above. The
+    # existing-host deploy runs inngest-bootstrap.sh DIRECTLY on the host (the
+    # Alpine extract container has no systemctl), so it bypasses the OCI image
+    # ENTRYPOINT that stages these on the fresh-host cloud-init path
+    # (cloud-init.yml mirrors this same docker-cp block). Without these lines the
+    # bootstrap's `[[ -f /tmp/inngest-redis.conf && ... ]]` guard is always false
+    # → Redis never installs → the durable ExecStart crash-loops on 127.0.0.1:6379
+    # (#5547 Gap 1, the ~3.5h #5542 outage symptom). `rm -f` FIRST so a stale
+    # prior-deploy asset can't survive a silent cp failure (same defense as the
+    # /tmp/vector.toml rm above). `2>/dev/null || true` keeps a pre-#5450 rollback
+    # image (no /inngest-redis.* baked) functional — the bootstrap's Gap-2
+    # fail-safe then keeps inngest on the SQLite-only ExecStart.
+    rm -f /tmp/inngest-redis.conf /tmp/inngest-redis.service /tmp/inngest-redis-bootstrap.sh
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.conf" /tmp/inngest-redis.conf 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis.service" /tmp/inngest-redis.service 2>/dev/null || true
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-redis-bootstrap.sh" /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+    chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     # Read ENV vars baked into the image at build time (see
     # .github/workflows/build-inngest-bootstrap-image.yml — ENV
     # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...
@@ -934,8 +1115,26 @@ case "$COMPONENT" in
       exit 1
     fi
 
-    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
-    final_write_state 0 "success"
+    # #5547 Gap 3: distinguish a degraded-durability deploy (SQLite-only
+    # fail-safe — Redis not ready) from a healthy durable one so
+    # /hooks/deploy-status .reason surfaces it without SSH. The bootstrap exits 0
+    # in both cases (the server stays available). The AUTHORITATIVE signal is the
+    # WRITTEN ExecStart lacking the --postgres-max-open-conns durable sentinel
+    # (re-derived below; #5560 — the postgres/redis URIs are env-delivered now, so
+    # the non-secret --postgres-max-open-conns flag is the durable marker on argv).
+    # The bootstrap-stderr INNGEST_DURABLE_DEGRADED marker is only a SECONDARY
+    # cross-check OR'd in here: the legacy stderr-tail→reason path (line ~957)
+    # fires only on a NON-zero bootstrap exit, so on this 0-exit success path the
+    # marker is not the load-bearing carrier — the ExecStart re-derivation is.
+    inngest_exec_start=$(systemctl show -p ExecStart inngest-server.service 2>/dev/null || true)
+    if [[ "$inngest_exec_start" != *'--postgres-max-open-conns'* ]] \
+       || grep -q 'INNGEST_DURABLE_DEGRADED' "$BOOTSTRAP_STDERR" 2>/dev/null; then
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed (degraded durability — SQLite-only; durable Redis not ready, #5547)"
+      final_write_state 0 "success_degraded_durability"
+    else
+      logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+      final_write_state 0 "success"
+    fi
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"

@@ -26,8 +26,11 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
 // workspaces matching the (installation_id, repo_url) query.
 let WORKSPACE_ROWS: { id: string }[] = [];
 let WORKSPACE_QUERY_ERROR: { message: string } | null = null;
-// workspace_id -> owner user_id
+// workspace_id -> owner user_id (single-owner convenience; back-compat).
 const OWNERS = new Map<string, string>();
+// #5733 — workspaces support N co-owners by design. workspace_id -> ordered
+// owner rows (created_at ascending). When set, overrides OWNERS for that ws.
+const OWNER_ROWS = new Map<string, { user_id: string; created_at: string }[]>();
 // captured (col, val) of the repo_url filter on the workspaces query
 const repoUrlFilterSpy = vi.fn();
 
@@ -49,15 +52,43 @@ const serviceFrom = vi.fn((table: string) => {
   }
   if (table === "workspace_members") {
     let wsId = "";
+    // Resolve the ordered owner rows for the captured workspace_id. OWNER_ROWS
+    // (multi-owner) takes precedence; else a single OWNERS entry becomes a
+    // one-row array; else empty (genuinely owner-less).
+    const rowsFor = (): { user_id: string; created_at: string }[] => {
+      if (OWNER_ROWS.has(wsId)) return OWNER_ROWS.get(wsId)!;
+      const single = OWNERS.get(wsId);
+      return single
+        ? [{ user_id: single, created_at: "2026-01-01T00:00:00.000Z" }]
+        : [];
+    };
     const chain = {
       select: () => chain,
       eq: (col: string, val: string) => {
         if (col === "workspace_id") wsId = val;
         return chain;
       },
+      // #5733 — owner attribution now selects ALL owner rows (ordered), no
+      // `.maybeSingle()`. The awaited chain yields `{ data: rows[], error }`.
+      order: () => chain,
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({ data: rowsFor(), error: null }).then(resolve),
+      // Retained for any residual single-owner caller (none after #5733).
+      // FIDELITY: PostgREST `.maybeSingle()` ERRORS when >1 row matches — the
+      // exact prod condition #5733 reproduces (a workspace with 2 legitimate
+      // owners). This is what made the pre-fix code false-report "owner-less".
       maybeSingle: async () => {
-        const owner = OWNERS.get(wsId);
-        return { data: owner ? { user_id: owner } : null, error: null };
+        const rows = rowsFor();
+        if (rows.length > 1) {
+          return {
+            data: null,
+            error: {
+              code: "PGRST116",
+              message: "JSON object requested, multiple (or no) rows returned",
+            },
+          };
+        }
+        return { data: rows[0] ? { user_id: rows[0].user_id } : null, error: null };
       },
     } as Record<string, unknown>;
     return chain;
@@ -71,6 +102,28 @@ vi.mock("@/lib/supabase/service", () => ({
 
 const syncWorkspaceSpy = vi.fn();
 vi.mock("@/server/kb-route-helpers", () => ({ syncWorkspace: syncWorkspaceSpy }));
+
+// --- validity-aware readiness gate + re-clone (this fix) -------------------
+// Readiness now gates on git work-tree VALIDITY (isValidGitWorkTree), not mere
+// dir existence. The default implementation reads EXISTING_DIRS so the legacy
+// valid-path fixtures (which add the dir to EXISTING_DIRS) keep their meaning:
+// "dir present" ⇒ "valid .git". The reclone cases below override per-call.
+// #5733 — reconcile readiness now gates on isReadyGitWorkTree (lstat-valid AND
+// not a stale gitdir-pointer FILE). The default spy keeps "dir present ⇒ ready"
+// so the legacy valid-path fixtures (which add the dir to EXISTING_DIRS) retain
+// their meaning; reclone cases override per-call.
+const isReadyGitWorkTreeSpy = vi.fn();
+vi.mock("@/server/git-worktree-validity", () => ({
+  isReadyGitWorkTree: (p: string) => isReadyGitWorkTreeSpy(p),
+}));
+// The corrupt/absent-.git re-clone primitive. Returns "ok" | "failed".
+const ensureWorkspaceRepoClonedSpy = vi.fn();
+vi.mock("@/server/ensure-workspace-repo", () => ({
+  ensureWorkspaceRepoCloned: (args: unknown) => ensureWorkspaceRepoClonedSpy(args),
+}));
+// Sentry breadcrumb capture (best-effort transaction-trace context).
+const addBreadcrumbSpy = vi.fn();
+vi.mock("@sentry/nextjs", () => ({ addBreadcrumb: (b: unknown) => addBreadcrumbSpy(b) }));
 
 // kb_sync_history appends keyed by owner userId (owner-attributed path).
 const APPENDS = new Map<string, Record<string, unknown>[]>();
@@ -167,13 +220,12 @@ function wsPath(id: string) {
 function makeEvent(overrides: Partial<ReturnType<typeof baseData>> = {}) {
   return {
     name: "platform/workspace.reconcile.requested" as const,
-    v: "2" as const,
+    v: "3" as const,
     data: { ...baseData(), ...overrides },
   };
 }
 function baseData() {
   return {
-    founderId: "founder-A",
     installationId: 42,
     deliveryId: "delivery-1",
     defaultBranch: "main",
@@ -188,6 +240,7 @@ beforeEach(() => {
   WORKSPACE_ROWS = [];
   WORKSPACE_QUERY_ERROR = null;
   OWNERS.clear();
+  OWNER_ROWS.clear();
   APPENDS.clear();
   WS_APPENDS.clear();
   EXISTING_DIRS.clear();
@@ -202,6 +255,14 @@ beforeEach(() => {
   loggerInfoSpy.mockReset();
   loggerWarnSpy.mockReset();
   loggerErrorSpy.mockReset();
+  // Default: a workspace whose dir is provisioned (in EXISTING_DIRS) reads as a
+  // VALID .git, so the legacy valid-path fixtures take the existing sync path.
+  // Reclone cases override per-call with mockReturnValueOnce/mockReturnValue.
+  isReadyGitWorkTreeSpy.mockReset();
+  isReadyGitWorkTreeSpy.mockImplementation((p: string) => EXISTING_DIRS.has(p));
+  ensureWorkspaceRepoClonedSpy.mockReset();
+  ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
+  addBreadcrumbSpy.mockReset();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -440,14 +501,16 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
   });
 });
 
-describe("reconcile — workspace dir not provisioned", () => {
-  it("skips the workspace, appends {workspace_not_ready}, returns no-workspace-synced", async () => {
+describe("reconcile — workspace dir not provisioned (now reclone-not-recovered)", () => {
+  it("routes an invalid/absent .git to ensureWorkspaceRepoCloned (no skip-not-ready); a non-heal writes {workspace_not_ready}", async () => {
     WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
     OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
-    // EXISTING_DIRS intentionally empty → dir missing.
+    // EXISTING_DIRS intentionally empty → isValidGitWorkTree false on both probes.
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
+    // Re-clone primitive is invoked instead of the removed skip-not-ready gate.
+    expect(ensureWorkspaceRepoClonedSpy).toHaveBeenCalledTimes(1);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("55555555-5555-4555-8555-555555555555")!.at(-1)).toEqual(
@@ -458,7 +521,9 @@ describe("reconcile — workspace dir not provisioned", () => {
         workspace_id: "77777777-7777-4777-8777-777777777777",
       }),
     );
-    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+    // The removed gate's paging signal must NOT fire on the reclone path
+    // (data-integrity P2): no skip-not-ready reportSilentFallback here.
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "skip-not-ready" }),
     );
@@ -619,12 +684,13 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("AC-T4 (AC4 / skip-not-ready): owner-less + dir not provisioned → workspace-keyed workspace_not_ready row", async () => {
+  it("AC-T4 (AC4): owner-less + invalid/absent .git not recovered → workspace-keyed workspace_not_ready row (no skip-not-ready)", async () => {
     WORKSPACE_ROWS = [{ id: "99999999-9999-4999-8999-999999999999" }];
-    // EXISTING_DIRS intentionally empty → dir missing.
+    // EXISTING_DIRS intentionally empty → isValidGitWorkTree false on both probes.
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
+    expect(ensureWorkspaceRepoClonedSpy).toHaveBeenCalledTimes(1);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
@@ -635,12 +701,12 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
         workspace_id: "99999999-9999-4999-8999-999999999999",
       }),
     );
-    // skip-not-ready still mirrors its own (non-owner-drift) signal.
-    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+    // The removed gate's paging signal must NOT fire (data-integrity P2).
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "skip-not-ready" }),
     );
-    // …and the owner-drift warn fires exactly once for this workspace.
+    // …and the owner-drift warn still fires exactly once for this workspace.
     expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
     expect(mirrorWarnWithDebounceSpy.mock.calls[0]![2]).toBe("99999999-9999-4999-8999-999999999999");
   });
@@ -658,6 +724,201 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(appendKbSyncRowForWorkspaceSpy).not.toHaveBeenCalled();
     // No owner-drift warn on the healthy owner-attributed path.
     expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconcile — multi-owner attribution (#5733: N co-owners by design)", () => {
+  // The soleur-prod shape: a SOLO workspace whose id == its self-owner's
+  // user_id, plus a legitimate second co-owner. The former `.maybeSingle()`
+  // owner lookup ERRORED on the two rows → ownerId=null → a FALSE "owner-less
+  // workspace reconciled" warn every push. Now: select ALL owner rows, pick the
+  // self-row deterministically, and NEVER false-warn owner-less when owners exist.
+  const WS = "754ee124-706a-4f21-a4f4-e828257b0380"; // self-owner: user_id == ws.id
+  const CO_OWNER = "52af49c2-d68e-477b-ba76-129e41807c7c";
+
+  it("two legitimate owners → NO false owner-less warn; attribution to the self-row owner", async () => {
+    WORKSPACE_ROWS = [{ id: WS }];
+    // Co-owner created BEFORE the self-row — proves self-row preference is by
+    // identity, not by created_at ordering.
+    OWNER_ROWS.set(WS, [
+      { user_id: CO_OWNER, created_at: "2026-06-02T07:47:27.126Z" },
+      { user_id: WS, created_at: "2026-05-21T18:00:35.683Z" },
+    ]);
+    EXISTING_DIRS.add(wsPath(WS));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    // The FALSE owner-less warn must NOT fire (the #5733 "28×" regression).
+    expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+    // Owner-keyed audit attributed to the SELF-row owner (ws.id), not the co-owner.
+    expect(appendKbSyncRowSpy).toHaveBeenCalledTimes(1);
+    expect(appendKbSyncRowSpy.mock.calls[0]![0]).toBe(WS);
+    expect(appendKbSyncRowForWorkspaceSpy).not.toHaveBeenCalled();
+    // A distinct, non-paging info breadcrumb records the by-design multi-owner state.
+    expect(addBreadcrumbSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "multiple-owners-reconcile",
+        level: "info",
+        data: expect.objectContaining({ workspaceId: WS, ownerCount: 2 }),
+      }),
+    );
+  });
+
+  it("no self-row among multiple owners → earliest-created owner wins (deterministic)", async () => {
+    const TEAM = "33333333-3333-4333-8333-333333333333";
+    const OWNER_EARLY = "11111111-1111-4111-8111-111111111111";
+    const OWNER_LATE = "22222222-2222-4222-8222-222222222222";
+    WORKSPACE_ROWS = [{ id: TEAM }];
+    OWNER_ROWS.set(TEAM, [
+      { user_id: OWNER_EARLY, created_at: "2026-01-01T00:00:00.000Z" },
+      { user_id: OWNER_LATE, created_at: "2026-02-01T00:00:00.000Z" },
+    ]);
+    EXISTING_DIRS.add(wsPath(TEAM));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+    expect(appendKbSyncRowSpy.mock.calls[0]![0]).toBe(OWNER_EARLY);
+  });
+
+  it("genuinely ZERO owner rows still emits exactly one owner-less drift warn", async () => {
+    const WS_NONE = "99999999-9999-4999-8999-999999999999";
+    WORKSPACE_ROWS = [{ id: WS_NONE }];
+    // No OWNERS / OWNER_ROWS entry → owners == [] → genuine drift.
+    EXISTING_DIRS.add(wsPath(WS_NONE));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounceSpy.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ op: "ownerless-reconcile" }),
+    );
+    // The multiple-owners breadcrumb must NOT fire for a zero-owner workspace.
+    expect(addBreadcrumbSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "multiple-owners-reconcile" }),
+    );
+  });
+});
+
+describe("reconcile — validity-aware readiness gate + re-clone (the fix)", () => {
+  const WS = "77777777-7777-4777-8777-777777777777";
+  const OWNER = "55555555-5555-4555-8555-555555555555";
+  const TARGET_REPO = normalizeRepoUrl("https://github.com/acme-co/widget");
+
+  function reclonedBreadcrumb(recovered: boolean) {
+    return expect.objectContaining({
+      category: "workspace-reconcile-push",
+      data: expect.objectContaining({ op: "corrupt-worktree-reclone", recovered, workspaceId: WS }),
+    });
+  }
+
+  it("case 1 — VALID .git takes the existing sync path; NO reclone, NO reclone breadcrumb", async () => {
+    WORKSPACE_ROWS = [{ id: WS }];
+    OWNERS.set(WS, OWNER);
+    EXISTING_DIRS.add(wsPath(WS)); // default mock ⇒ isValidGitWorkTree true
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(ensureWorkspaceRepoClonedSpy).not.toHaveBeenCalled();
+    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
+    expect(APPENDS.get(OWNER)!.at(-1)).toEqual(expect.objectContaining({ ok: true }));
+    // The reclone breadcrumb fires ONLY on the invalid/absent branch.
+    expect(addBreadcrumbSpy).not.toHaveBeenCalled();
+  });
+
+  it("case 2 — invalid/absent .git is re-cloned (also covers the concurrent-racer re-probe); audit ok+recovered, breadcrumb recovered:true", async () => {
+    // false on the OUTER gate, true on the post-ensure re-probe. The false→true
+    // pair ALSO exercises the concurrent-racer path: ensureWorkspaceRepoCloned
+    // early-returns "ok" when a racer grafted a valid .git between the gate and
+    // the function entry; the re-probe sees "ok" && valid ⇒ recovered:true,
+    // the correct result regardless of which caller grafted (data-integrity).
+    WORKSPACE_ROWS = [{ id: WS }];
+    OWNERS.set(WS, OWNER);
+    isReadyGitWorkTreeSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(ensureWorkspaceRepoClonedSpy).toHaveBeenCalledTimes(1);
+    expect(ensureWorkspaceRepoClonedSpy).toHaveBeenCalledWith({
+      userId: OWNER,
+      workspacePath: wsPath(WS),
+      installationId: 42,
+      repoUrl: TARGET_REPO,
+    });
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(APPENDS.get(OWNER)!.at(-1)).toEqual(
+      expect.objectContaining({ trigger: "webhook_push", ok: true, recovered: true, workspace_id: WS }),
+    );
+    expect(addBreadcrumbSpy).toHaveBeenCalledWith(reclonedBreadcrumb(true));
+  });
+
+  it("case 3 — populated-but-broken honest-block ('failed') is NOT claimed as recovered; audit workspace_not_ready, breadcrumb recovered:false", async () => {
+    WORKSPACE_ROWS = [{ id: WS }];
+    OWNERS.set(WS, OWNER);
+    isReadyGitWorkTreeSpy.mockReturnValue(false); // false on both probes
+    ensureWorkspaceRepoClonedSpy.mockResolvedValue("failed");
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(APPENDS.get(OWNER)!.at(-1)).toEqual(
+      expect.objectContaining({ ok: false, error_class: "workspace_not_ready", workspace_id: WS }),
+    );
+    expect(addBreadcrumbSpy).toHaveBeenCalledWith(reclonedBreadcrumb(false));
+    // No double-page at the reconcile call site (the inner mirror already paged).
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("case 4 — benign 'ok' that did NOT heal (proxy guard): re-probe still false ⇒ recovered:false, workspace_not_ready", async () => {
+    WORKSPACE_ROWS = [{ id: WS }];
+    OWNERS.set(WS, OWNER);
+    isReadyGitWorkTreeSpy.mockReturnValue(false); // re-probe stays false
+    ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok"); // benign skip, healed nothing
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(APPENDS.get(OWNER)!.at(-1)).toEqual(
+      expect.objectContaining({ ok: false, error_class: "workspace_not_ready", workspace_id: WS }),
+    );
+    // Proves we assert the validity INVARIANT, not the "ok" proxy.
+    expect(addBreadcrumbSpy).toHaveBeenCalledWith(reclonedBreadcrumb(false));
+  });
+
+  it("case 5 — owner-less workspace: ensureWorkspaceRepoCloned userId falls back to ws.id; audit via workspace-keyed path", async () => {
+    const WL = "99999999-9999-4999-8999-999999999999"; // no OWNERS entry ⇒ ownerId null
+    WORKSPACE_ROWS = [{ id: WL }];
+    isReadyGitWorkTreeSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(ensureWorkspaceRepoClonedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: WL, workspacePath: wsPath(WL), installationId: 42, repoUrl: TARGET_REPO }),
+    );
+    // Owner-keyed path must NOT fire; the recovery lands on the workspace-keyed path.
+    expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
+    expect(WS_APPENDS.get(WL)!.at(-1)).toEqual(
+      expect.objectContaining({ ok: true, recovered: true, workspace_id: WL }),
+    );
   });
 });
 

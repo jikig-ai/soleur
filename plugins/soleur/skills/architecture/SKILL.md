@@ -113,6 +113,8 @@ Create a new ADR with the next sequential number.
 
 8. **Write the ADR body** with the gathered context. If a diagram was requested (rich branch only), update the consolidated LikeC4 model using [likec4-reference.md](./references/likec4-reference.md) (see the `diagram` sub-command) and embed the relevant view with a ` ```likec4-view ` block.
 
+8.5. **Domain-model register check.** If this ADR records or changes a **business rule** — an entity invariant, an ownership/access model, or a relationship encoded in a migration constraint / RLS policy / resolver-guard — update the affected row(s) in [`knowledge-base/engineering/architecture/domain-model.md`](../../../../knowledge-base/engineering/architecture/domain-model.md) in the same change: add or amend the rule with a citation back to this ADR. Rule IDs are immutable — supersede (mark + link the successor row), never reuse. If the ADR is purely a technology/process decision with no entity-invariant impact, skip silently.
+
 9. **Announce:** "Created ADR-<NNN>: <title> at `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md`"
 
 ---
@@ -183,6 +185,14 @@ complete LikeC4 DSL syntax before editing any model.
 
 ### Project layout
 
+> **`.c4` edits are not gated for this workflow.** The `c4-edit` runtime flag
+> (commit `3c8849655`) gates ONLY direct end-user edits in the in-browser webapp
+> editor (`PUT /api/kb/c4`, default OFF). It does **not** gate a workflow: Concierge
+> and the Claude Code plugin terminal are equally-trusted agent contexts that edit
+> the `.c4` files on the filesystem (Edit/Write) and commit them via this skill —
+> they never route through the webapp endpoint. Edit `.c4` directly; do not defer a
+> model change to "ask the Concierge."
+
 The model lives as a LikeC4 project under
 `knowledge-base/engineering/architecture/diagrams/`:
 
@@ -196,7 +206,9 @@ The model lives as a LikeC4 project under
 1. **Gather context.** Read to understand the system:
    - `knowledge-base/project/README.md` and `knowledge-base/project/components/`
    - Existing ADRs in `knowledge-base/engineering/architecture/decisions/`
-   - The current `.c4` project in the diagrams dir (do not duplicate elements that already exist)
+   - The current `.c4` project in the diagrams dir — **READ all three files in full** (`model.c4`, `views.c4`, `spec.c4`), never a single keyword grep (do not duplicate elements that already exist).
+
+   **External-actor / external-system completeness sweep (do this before concluding "nothing to add").** For the change at hand, enumerate every (a) external human actor (who sends/receives the data — correspondents, reviewers, recipients), (b) external system/vendor (inbound webhook, outbound API, third-party store), (c) container/data-store touched, and (d) actor↔surface access relationship that changes. For each, confirm it is already modeled; if not, add it (element + `#external` tag if outside the platform boundary + the relationship edges + the `views.c4` `include` line so it RENDERS). A `grep` for the feature's own noun returning zero is NOT evidence of absence — the gap is usually an external actor/vendor named by role/vendor, not the feature (e.g. an inbound-email "Correspondent" actor + a "Resend" system for an email feature). Also fix any element **description** the change falsifies (e.g. a "Solo founder" actor when the change adds multi-Owner sharing). See `knowledge-base/project/learnings/2026-06-18-c4-impact-requires-reading-all-diagrams-and-enumerating-external-actors.md`.
 
 2. **Edit the consolidated model** (`spec.c4` / `model.c4`), following
    [likec4-reference.md](./references/likec4-reference.md). Key rules:
@@ -233,7 +245,11 @@ The model lives as a LikeC4 project under
 ## Sub-commands: add-container, add-component, add-relationship
 
 Incremental edits to the consolidated model. Each is a focused patch to the
-`.c4` files (no Mermaid). After any patch, run `render` to validate.
+`.c4` files (no Mermaid). After any patch, run `render` (see below) to
+**validate** the source. You do NOT need to hand-regenerate `model.likec4.json`:
+the `c4-model-regenerate` pre-commit hook re-renders and re-stages it from the
+edited `.c4` sources on commit (run the repo-root `regenerate-c4-model.sh` —
+see `render` below — only when committing outside that hook).
 
 - **add-container `<id>`** / **add-component `<id>`** — add an element inside the
   correct parent in `model.c4` (`container` / `database` / `component` kind),
@@ -251,20 +267,37 @@ Gather the label/technology/description from `$ARGUMENTS` or via AskUserQuestion
 Validate the LikeC4 project and rebuild the precomputed model the web viewer
 renders. The Knowledge Base viewer does NOT run the `likec4` toolchain at
 runtime (it would pull vite/esbuild into production deps); it reads the
-committed, layouted `model.likec4.json`. Regenerate it after ANY `.c4` change.
+committed, layouted `model.likec4.json`.
+
+**You normally do not run this by hand.** Regeneration of `model.likec4.json`
+is **automatic on commit** via the `c4-model-regenerate` pre-commit hook
+(`lefthook.yml`): any staged `.c4` change re-renders and re-stages the artifact,
+and a CI freshness test (`plugins/soleur/test/c4-model-freshness.test.sh`) is the
+merge-gating backstop if the hook is bypassed. Use `render` only to **validate**
+or for an **ad-hoc/out-of-hook** regen:
 
 ```bash
+# Canonical regen (pinned, off-tree-validated, idempotent) — same primitive the
+# pre-commit hook runs:
+bash scripts/regenerate-c4-model.sh
+
+# Or validate only (line-numbered diagnostics) without rewriting the artifact:
 cd knowledge-base/engineering/architecture/diagrams
-npx -y likec4@latest validate .
-# Rebuild the committed layouted model the web viewer reads:
-npx -y likec4@latest export json -o model.likec4.json .
+npx -y likec4@1.50.0 validate .
 ```
 
+The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile`
++ `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
+`c4-likec4-version-pin.test.ts`. Never pin to a floating tag (the unpinned
+`likec4` / a moving release) — a CLI/client schema skew silently corrupts the
+rendered diagram. `regenerate-c4-model.sh` renders
+off-tree and refuses to publish an empty/invalid model, so a broken `.c4` can
+never clobber the good committed artifact.
+
 On success, report element / relationship / view counts (read the
-`elements` / `relations` / `views` key counts from `model.likec4.json`) and
-remind the operator to commit the regenerated `model.likec4.json` alongside the
-`.c4` edits. On failure, surface the line-numbered diagnostics and fix the
-`.c4` source before continuing.
+`elements` / `relations` / `views` key counts from `model.likec4.json`). On
+failure, surface the line-numbered diagnostics and fix the `.c4` source before
+continuing.
 
 ---
 

@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // PR-A (#4124) — Sentinel: `installationId` MUST be server-resolved
-// inside `agent-on-spawn-requested` from `users.github_installation_id`
-// keyed by the SERVER-DERIVED `founderId`. The event payload type
-// EXPLICITLY OMITS `installationId`; this test enforces the runtime
-// counterpart as belt-and-suspenders against the TypeScript guard.
+// inside `agent-on-spawn-requested` keyed by the SERVER-DERIVED `founderId`.
+// Post-#5470 (ADR-044) the source of truth is the workspaces install credential
+// resolved via `resolveInstallationIdForWorkspace(founderId, …)` — NOT an inline
+// `users.github_installation_id` read (the final `it` enforces that swap). The
+// event payload type EXPLICITLY OMITS `installationId`; this test enforces the
+// runtime counterpart as belt-and-suspenders against the TypeScript guard.
 //
 // Two-layer enforcement (plan AC2):
 //   (a) TypeScript: `AgentSpawnRequestedEvent['data']` has no
@@ -98,8 +100,14 @@ describe("installation-id source-of-truth sentinel", () => {
     expect(fnSrc).toMatch(/persistTurnCostAwaitable\s*\(/);
   });
 
-  it("the function reads users.github_installation_id (the source-of-truth column)", () => {
-    expect(fnSrc).toMatch(/github_installation_id/);
-    expect(fnSrc).toMatch(/from\(["']users["']\)/);
+  it("resolves the install via the service-role workspaces resolver, keyed on the server-derived founderId (#5470 / ADR-044)", () => {
+    // Post-#5470: the install is no longer read from users.github_installation_id
+    // inline; it is resolved from the user's solo workspace via the service-role
+    // resolver (workspaces is the post-ADR-044 source of truth). The key is still
+    // the SERVER-DERIVED founderId — never a client-supplied id.
+    expect(fnSrc).toMatch(/resolveInstallationIdForWorkspace\s*\(/);
+    expect(fnSrc).toMatch(/resolveInstallationIdForWorkspace\s*\(\s*founderId\b/);
+    // And it no longer reads the install credential from the users table inline.
+    expect(fnSrc).not.toMatch(/from\(["']users["']\)/);
   });
 });

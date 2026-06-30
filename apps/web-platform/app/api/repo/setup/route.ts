@@ -5,8 +5,8 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
-import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
-import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
+import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import {
   resolveReachableInstallationIds,
   resolveOwningInstallationForRepo,
@@ -17,6 +17,7 @@ import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { triggerHeadlessSync } from "@/server/auto-sync-trigger";
+import { evaluateRepoConnect } from "@/server/repo-connect-guard";
 
 /**
  * POST /api/repo/setup
@@ -39,35 +40,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // ADR-044 PR-2a (confused-deputy honesty): repo setup still provisions the
-  // SOLO workspace on disk (`provisionWorkspaceWithRepo(user.id, …)` below — team
-  // on-disk provisioning is #4560/Phase-5). If a TEAM workspace is active, the
-  // legacy path would SILENTLY clone into the caller's PERSONAL solo workspace
-  // (the user believes they connected the team's repo but connected their own).
-  // Refuse explicitly until #4560 lands real team provisioning. Resolved
-  // server-side from session state (never request input) → IDOR-safe; a strict
-  // no-op for solo (activeWorkspaceId === user.id).
-  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
-  if (activeWorkspaceId !== user.id) {
+  // ADR-044 PR-2 team write-cutover (#5462): resolve the target workspace id
+  // server-side via the MEMBERSHIP-VERIFIED resolver. `resolveActiveWorkspace`
+  // returns the active workspace id ONLY for a membership-verified team or the
+  // caller's own solo id (IDOR-safe — derived from session claim, never request
+  // input). At a WRITE/provisioning boundary a db-error must FAIL-CLOSED (503),
+  // never silently fall back to the caller's solo workspace and provision there
+  // under a team claim (the `resolveCurrentWorkspaceId` fail-to-solo posture is
+  // unsafe here). A removed/non-member of a stale team claim is reset to their
+  // OWN solo id (`resetFromClaim`) and the whole request proceeds against it.
+  const activeResolution = await resolveActiveWorkspace(user.id, supabase);
+  if (!activeResolution.ok) {
     return NextResponse.json(
-      {
-        error:
-          "Connecting a repository to a team workspace isn't supported yet. Switch to your personal workspace to connect a repository.",
-      },
-      { status: 422 },
+      { error: "Could not resolve your active workspace. Please retry." },
+      { status: 503 },
+    );
+  }
+  const activeWorkspaceId = activeResolution.workspaceId;
+  if (activeResolution.resetFromClaim) {
+    logger.info(
+      { userId: user.id, staleClaim: activeResolution.resetFromClaim },
+      "repo setup: stale team claim reset to caller's solo workspace",
     );
   }
 
-  // ADR-044 PR-1 owner-gate (confused-deputy): only the OWNER of the workspace
-  // this handler mutates may connect a repo to it. `p_workspace_id` MUST equal
-  // the id the handler mutates — in PR-1 setup writes the solo `users` row + the
-  // solo workspace mirror keyed on `user.id`, so `p_workspace_id = user.id` and
-  // the gate is a NO-OP for solo users by construction (a solo user always owns
-  // workspace_id=user.id). Load-bearing in PR-2 when connect-writes relocate to
-  // `workspaces.*`. `is_workspace_owner` is SECURITY DEFINER (mig 098), GRANT
-  // authenticated — reuse the workspace/logo/route.ts shape.
+  // ADR-044 owner-gate (confused-deputy): only the OWNER of the workspace this
+  // handler mutates may connect a repo to it. `p_workspace_id` MUST equal the id
+  // the handler actually mutates — now the RESOLVED active id (team or solo), so
+  // the gate is load-bearing for team workspaces (a non-owner member connecting
+  // to a team workspace gets 403) and remains a no-op for solo (a solo user owns
+  // workspace_id=user.id). `is_workspace_owner` is SECURITY DEFINER (mig 098),
+  // GRANT authenticated.
   const ownerRes = await supabase.rpc("is_workspace_owner", {
-    p_workspace_id: user.id,
+    p_workspace_id: activeWorkspaceId,
     p_user_id: user.id,
   });
   if (ownerRes.error) {
@@ -109,10 +114,12 @@ export async function POST(request: Request) {
 
   const serviceClient = createServiceClient();
 
-  // Get user's installation ID
+  // Email + GitHub login stay on `users` (not relocated by ADR-044). The stored
+  // install id is read from the active `workspaces` row in the degraded-fallback
+  // below (ADR-044 PR-2 — it moved off `users`).
   const { data: userData } = await serviceClient
     .from("users")
-    .select("github_installation_id, email, github_username")
+    .select("email, github_username")
     .eq("id", user.id)
     .single();
 
@@ -155,9 +162,18 @@ export async function POST(request: Request) {
   }
 
   // Degraded-probe fallback: owning resolution was inconclusive, but a stored
-  // install exists — use it.
-  if (installationId == null && userData?.github_installation_id) {
-    installationId = userData.github_installation_id;
+  // install exists on the active workspace — use it. ADR-044 PR-2: read it from
+  // `workspaces.<activeWorkspaceId>` (was `users.github_installation_id`). The
+  // column is REVOKE'd from `authenticated`, but `service_role` reads it directly.
+  if (installationId == null) {
+    const { data: wsRow } = await serviceClient
+      .from("workspaces")
+      .select("github_installation_id")
+      .eq("id", activeWorkspaceId)
+      .maybeSingle();
+    if (wsRow?.github_installation_id != null) {
+      installationId = wsRow.github_installation_id as number;
+    }
   }
 
   if (installationId == null) {
@@ -167,6 +183,57 @@ export async function POST(request: Request) {
     );
   }
 
+  // ADR-044 amendment — application-enforced scoped solo-uniqueness. BEFORE the
+  // cloning flip, decide whether this connect proceeds, is redirected to a
+  // SWITCH (the owning solo is the caller's OWN + ready), or is DECLINED (a
+  // different user's solo already owns this (install, repo) — the condition that
+  // makes the non-push webhook founder resolver fail-closed: WEB-PLATFORM-3M).
+  // Running before the cloning-flip lock below means a declined/switched connect
+  // leaves zero partial provisioning to roll back. `installationId` is server-
+  // derived and non-null here; `repoUrl` is normalized above; `serviceClient` is held above.
+  const connectOutcome = await evaluateRepoConnect({
+    installationId,
+    repoUrl,
+    userId: user.id,
+    activeWorkspaceId,
+    serviceClient,
+  });
+  if (connectOutcome.outcome === "switch") {
+    // The caller already has their OWN (ready) workspace for this repo. Surface
+    // the caller's-own id so the UI can offer "switch to that workspace". 409 is
+    // overloaded with "Setup already in progress" below — callers branch on
+    // `outcome`/`code`, never the bare status.
+    return NextResponse.json(
+      {
+        outcome: "switch",
+        code: connectOutcome.code,
+        existingWorkspaceId: connectOutcome.existingWorkspaceId,
+        canRequestJoin: connectOutcome.canRequestJoin,
+        error: "You already have a workspace connected to this repository.",
+      },
+      { status: 409 },
+    );
+  }
+  if (connectOutcome.outcome === "decline") {
+    // Fixed, non-disclosing baseline — byte-identical across every decline
+    // sub-case (different-user owner / ambiguous / db-error). NEVER carries a
+    // workspace/user reference (no information disclosure / IDOR).
+    return NextResponse.json(
+      {
+        outcome: "decline",
+        code: connectOutcome.code,
+        canRequestJoin: connectOutcome.canRequestJoin,
+        error: "This repository can't be connected.",
+      },
+      { status: 409 },
+    );
+  }
+  // outcome === "ok" → fall through to the existing cloning flip. The
+  // RepoConnectOutcome union is closed (ok|switch|decline), so TS guarantees only
+  // "ok" reaches here today. FAIL-CLOSED CONTRACT: any future outcome variant MUST
+  // be handled in an explicit branch ABOVE this line — never let a new variant
+  // fall through to provisioning by default.
+
   // Optimistic lock: only transition to "cloning" if not already cloning.
   // Prevents race condition from double-click or concurrent requests.
   // Stamp `repo_last_synced_at = now()` on the cloning flip so the dispatch
@@ -175,23 +242,33 @@ export async function POST(request: Request) {
   // sync would read as instantly-stale and a cold dispatch could start a second
   // concurrent clone, and a process-killed clone would leave a NULL clock that
   // the staleness escape can never recover (permanent `cloning` strand).
+  // ADR-044 PR-2: the optimistic "cloning" lock + repo write are AUTHORITATIVE on
+  // `workspaces` keyed on the resolved active id (was `users` keyed on user.id).
+  // The contended row is the SHARED workspace, so two concurrent connects on the
+  // same team workspace serialize correctly (on per-caller `users` rows they would
+  // both win the lock). `workspaces.repo_status` has the same CHECK enum (mig 079)
+  // and `service_role` keeps its default grant, so the service-client lock write
+  // is unaffected by the column-level REVOKE. The installation grant is written
+  // here too so the workspaces-only credential read (resolve_workspace_installation_id)
+  // sees the in-progress connection.
   const cloningAt = new Date().toISOString();
   const { data: lockResult, error: updateError } = await serviceClient
-    .from("users")
+    .from("workspaces")
     .update({
       repo_url: repoUrl,
+      github_installation_id: installationId,
       repo_status: "cloning",
       repo_error: null,
       repo_last_synced_at: cloningAt,
     })
-    .eq("id", user.id)
+    .eq("id", activeWorkspaceId)
     .neq("repo_status", "cloning")
     .select("id")
     .maybeSingle();
 
   if (updateError) {
     logger.error(
-      { err: updateError, userId: user.id },
+      { err: updateError, userId: user.id, workspaceId: activeWorkspaceId },
       "Failed to update repo status to cloning",
     );
     return NextResponse.json(
@@ -207,26 +284,21 @@ export async function POST(request: Request) {
     );
   }
 
-  // ADR-044: mirror the connecting repo + installation to the solo workspace
-  // so the workspaces-only read path sees the in-progress connection.
-  await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
-    repo_url: repoUrl,
-    github_installation_id: installationId,
-    repo_status: "cloning",
-    repo_last_synced_at: cloningAt,
-  });
-
   // Kick off clone in the background (don't await)
   const userName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "Soleur User";
   const userEmail = userData?.email ?? user.email ?? "";
 
   const isStartFresh = body.source === "start_fresh";
 
-  // Solo provisioning: `user.id` is the workspace_id (N2 invariant —
-  // migration 053 §1.1.7). Team-invite repo-setup flows (Phase 5) will
-  // resolve the target workspace_id first.
+  // ADR-044 PR-2: provision the RESOLVED active workspace on disk
+  // (`/workspaces/<activeWorkspaceId>` — team or solo). The id is captured in the
+  // background-callback closure below and NEVER re-resolved: the session claim can
+  // drift between request return and clone completion, so re-resolving could write
+  // `repo_status:ready` to a different workspace than the one provisioned
+  // (identity-pinned write). For a solo connect this equals `user.id` (N2).
+  const isSoloWorkspace = activeWorkspaceId === user.id;
   provisionWorkspaceWithRepo(
-    user.id,
+    activeWorkspaceId,
     repoUrl,
     installationId,
     userName,
@@ -251,33 +323,43 @@ export async function POST(request: Request) {
         }
       }
 
-      const { error } = await serviceClient
-        .from("users")
-        .update({
-          workspace_path: workspacePath,
-          workspace_status: "ready",
-          repo_status: "ready",
-          repo_last_synced_at: new Date().toISOString(),
-          health_snapshot: healthSnapshot,
-        })
-        .eq("id", user.id);
-
-      if (error) {
-        logger.error(
-          { err: error, userId: user.id },
-          "Failed to update user after successful clone",
-        );
-        return;
-      }
-
-      // ADR-044: mirror the ready repo state to the solo workspace.
-      await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+      // ADR-044 PR-2 — AUTHORITATIVE repo-connection write to the active
+      // workspace (was the `users` row). The helper `.select("id")`s so a 0-row
+      // no-op (workspace deleted mid-clone; current_workspace_id ON DELETE SET
+      // NULL) is Sentry-mirrored instead of silently lost.
+      await writeRepoColsToWorkspace(serviceClient, activeWorkspaceId, {
         repo_status: "ready",
         repo_last_synced_at: new Date().toISOString(),
       });
 
+      // The provisioning/readiness columns (`workspace_status`, `health_snapshot`)
+      // are NOT relocated by ADR-044 — they stay on the OWNER's `users` row. Only
+      // write them for a SOLO connect: for a team workspace the caller's `users`
+      // row is their PERSONAL solo readiness, and the team's readiness is governed
+      // by the org owner's existing `users.workspace_status` (already "ready" from
+      // onboarding). `workspace_path` is intentionally NOT written — it is derived
+      // from the workspace id (`workspacePathForWorkspaceId`) and set immutably at
+      // onboarding, so re-writing it here is redundant and trips the PR-2b
+      // zero-`users.*`-write exit criterion.
+      if (isSoloWorkspace) {
+        const { error } = await serviceClient
+          .from("users")
+          .update({
+            workspace_status: "ready",
+            health_snapshot: healthSnapshot,
+          })
+          .eq("id", user.id);
+
+        if (error) {
+          logger.error(
+            { err: error, userId: user.id },
+            "Failed to update user readiness after successful clone",
+          );
+        }
+      }
+
       logger.info(
-        { userId: user.id, repoUrl, category: healthSnapshot?.category },
+        { userId: user.id, workspaceId: activeWorkspaceId, repoUrl, category: healthSnapshot?.category },
         "Repo setup completed",
       );
 
@@ -300,7 +382,10 @@ export async function POST(request: Request) {
           return startAgentSession(...args);
         },
         serviceClient,
-        resolveWorkspaceId: resolveCurrentWorkspaceId,
+        // P0-4: pin the headless sync to the CAPTURED active id, not a re-resolve.
+        // If the user switched workspaces mid-clone, a re-resolve would target the
+        // now-active workspace instead of the one we just cloned.
+        resolveWorkspaceId: async () => activeWorkspaceId,
       });
     })
     .catch(async (err) => {
@@ -326,21 +411,13 @@ export async function POST(request: Request) {
         message: sanitizeGitStderr(rawMessage).slice(0, 2000),
         timestamp: new Date().toISOString(),
       });
-      await serviceClient
-        .from("users")
-        .update({ repo_status: "error", repo_error: payload })
-        .eq("id", user.id)
-        .then(({ error }) => {
-          if (error) {
-            logger.error(
-              { err: error, userId: user.id },
-              "Failed to update repo status to error",
-            );
-          }
-        });
-      // ADR-044: mirror the error status to the solo workspace.
-      await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+      // ADR-044 PR-2 — write the error status + sanitized reason to the active
+      // workspace (was `users`). `repo_error` is now a `workspaces` column (mig
+      // 110, in the non-credential `authenticated` GRANT). The helper Sentry-mirrors
+      // a db error or 0-row no-op.
+      await writeRepoColsToWorkspace(serviceClient, activeWorkspaceId, {
         repo_status: "error",
+        repo_error: payload,
       });
     });
 

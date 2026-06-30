@@ -99,22 +99,67 @@ export async function resolveReachableInstallationIds(
 }
 
 /**
- * From the user's reachable install set, return the install that has access to
- * `owner/repo` (the first whose GET /repos/{owner}/{repo} returns "ok").
+ * Outcome of an owning-install probe sweep. `installId` is the first reachable
+ * install whose `GET /repos/{owner}/{repo}` returned "ok", else null.
+ *
+ * `allDegraded` distinguishes the two ways `installId` can be null:
+ *   - `false` — the sweep saw at least one CONCLUSIVE non-owning answer
+ *     (404 not_found / 403/401 access_revoked). The owner genuinely cannot
+ *     reach this repo via any reachable install → "needs re-auth".
+ *   - `true`  — reachableIds was non-empty AND every probe returned "degraded"
+ *     (5xx / network / token-gen). The sweep was INCONCLUSIVE (transient) →
+ *     caller should no-op and retry, not surface a re-auth signal.
+ * (An empty `reachableIds` returns `{ installId: null, allDegraded: false }`;
+ * the caller handles "no reachable install" before probing.)
+ */
+export interface OwningInstallationResult {
+  installId: number | null;
+  allDegraded: boolean;
+}
+
+/**
+ * From the user's reachable install set, resolve the install that owns
+ * `owner/repo`, returning the discriminated {@link OwningInstallationResult} so
+ * a transient all-degraded sweep is distinguishable from a conclusive absence.
+ * Probes sequentially and short-circuits on the first "ok".
+ */
+export async function resolveOwningInstallationForRepoDetailed(
+  reachableIds: number[],
+  owner: string,
+  repo: string,
+): Promise<OwningInstallationResult> {
+  let sawConclusive = false;
+  for (const id of reachableIds) {
+    const status = await checkRepoAccess(id, owner, repo);
+    if (status === "ok") return { installId: id, allDegraded: false };
+    // "degraded" (5xx/network/token-gen) is inconclusive — keep probing other
+    // installs; only "ok" is an affirmative owning-install signal. A
+    // not_found / access_revoked is a conclusive "this install can't own it".
+    if (status !== "degraded") sawConclusive = true;
+  }
+  return {
+    installId: null,
+    allDegraded: reachableIds.length > 0 && !sawConclusive,
+  };
+}
+
+/**
+ * Back-compat thin wrapper: returns just the owning install id (or null),
+ * collapsing the transient/conclusive distinction. Existing callers
+ * (`repo/setup`) only need the id; the cron uses the *Detailed variant.
  * Returns null when no reachable install can see the repo — the caller then
  * surfaces "not installed" / "no access" WITHOUT falling back to an arbitrary
- * install. Probes sequentially and short-circuits on the first match.
+ * install.
  */
 export async function resolveOwningInstallationForRepo(
   reachableIds: number[],
   owner: string,
   repo: string,
 ): Promise<number | null> {
-  for (const id of reachableIds) {
-    const status = await checkRepoAccess(id, owner, repo);
-    if (status === "ok") return id;
-    // "degraded" (5xx/network/token-gen) is inconclusive — keep probing other
-    // installs; only "ok" is an affirmative owning-install signal.
-  }
-  return null;
+  const { installId } = await resolveOwningInstallationForRepoDetailed(
+    reachableIds,
+    owner,
+    repo,
+  );
+  return installId;
 }

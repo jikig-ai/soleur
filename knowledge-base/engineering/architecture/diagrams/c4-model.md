@@ -22,6 +22,8 @@ context
 - Zero-trust access via Cloudflare Tunnel — server invisible to port scanners (ADR-008)
 - Stripe in test mode — subscription billing via checkout sessions and webhooks
 - Plausible Analytics for privacy-focused tracking (no cookies, GDPR-compliant)
+- Operator email-triage inbox ingests inbound mail via a Resend webhook (svix-verified); statutory/operational triage notifications go back out via Resend (ADR-066)
+- Durable server-side triggers (cron, one-shot, HTTP-armed reminders) run on self-hosted Inngest (ADR-030)
 
 ## Containers (C4 L2)
 
@@ -34,6 +36,7 @@ Click the **Soleur Platform** box in the diagram above to drill into this view.
 - Version derived from git tags at merge time, not committed files (ADR-017)
 - Stripe handles subscription checkout sessions and payment webhooks (test mode)
 - Plausible analytics embedded as JS snippet in the web dashboard (no cookies, GDPR-compliant)
+- Inngest durable trigger layer is self-hosted on Hetzner with a dedicated EU Supabase Postgres (config + run history) and Redis with AOF persistence that survives a host re-provision (ADR-030, #5450)
 
 ## Components (C4 L3)
 

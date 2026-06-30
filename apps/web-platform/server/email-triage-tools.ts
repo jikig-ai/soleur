@@ -143,12 +143,13 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         // Archived view: single capped query — archived rows are never
         // pinned (pinning requires status = 'new'). Lockstep with the route.
         if (args.status === "archived") {
-          // RLS on email_triage_items is owner-SELECT; the explicit user_id
-          // filter is belt-and-suspenders parity with the HTTP route.
+          // mig 111: reads gated SOLELY by the workspace-owner RLS
+          // (is_email_triage_workspace_owner). No `.eq("user_id", ...)` — it
+          // would re-narrow below RLS and hide the shared inbox from co-Owners.
+          // Lockstep with GET /api/inbox/emails.
           let query = tenant
             .from("email_triage_items")
             .select(LIST_COLUMNS)
-            .eq("user_id", userId)
             .or("mail_class.not.is.null,statutory_class.not.is.null");
           // NULL-safe probe exclusion: plain .neq would also drop
           // mail_class IS NULL statutory fast-path rows (SQL 3VL).
@@ -174,7 +175,6 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         const pinnedQuery = tenant
           .from("email_triage_items")
           .select(LIST_COLUMNS)
-          .eq("user_id", userId)
           .not("statutory_class", "is", null)
           .eq("status", "new")
           .order("received_at", { ascending: false });
@@ -182,7 +182,6 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         let restQuery = tenant
           .from("email_triage_items")
           .select(LIST_COLUMNS)
-          .eq("user_id", userId)
           .or("mail_class.not.is.null,statutory_class.not.is.null")
           .or("statutory_class.is.null,status.neq.new");
         // NULL-safe probe exclusion: plain .neq would also drop
@@ -231,7 +230,6 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
           .from("email_triage_items")
           .select("*")
           .eq("id", args.id)
-          .eq("user_id", userId)
           .maybeSingle();
 
         if (error) {
@@ -244,7 +242,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
           });
           return textResponse({ error: "Get failed", code: "get_failed" }, true);
         }
-        // Missing row and foreign row collapse (RLS + user_id filter) —
+        // Missing row and non-owned row collapse (workspace-owner RLS) —
         // no existence oracle, matching the status RPC's 42501 posture.
         if (!data) {
           return textResponse({ error: "Not found", code: "not_found" }, true);
@@ -369,7 +367,6 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
             .from("email_triage_items")
             .select("id, sender")
             .eq("id", args.messageId)
-            .eq("user_id", userId)
             .maybeSingle();
           if (lookupErr) {
             reportSilentFallback(lookupErr, {

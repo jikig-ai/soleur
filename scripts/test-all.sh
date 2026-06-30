@@ -121,6 +121,8 @@ if want_scripts; then
   run_suite "scripts/lint-agents-rule-budget-live" python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
   run_suite "scripts/lint-agents-rule-budget-unit" bash scripts/lint-agents-rule-budget.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
+  run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
+  run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
@@ -136,6 +138,7 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
+  run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
   # md->Slack-mrkdwn converter (scripts/md-to-mrkdwn.mjs). Runs under stock
   # ubuntu-latest node (no setup-node — same bare-`node` precedent as
   # secret-scan.yml). node --test ships in Node >=18.

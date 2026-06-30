@@ -328,21 +328,26 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # No setup-bun, no setup-node, no install — bash + python3 ship on
-    # ubuntu-latest by default, and the one `node --test` entry in the scripts
-    # group (scripts/md-to-mrkdwn.test.mjs) runs on the stock ubuntu-latest
-    # node — no version pin needed (same bare-`node` precedent as
+    # No setup-bun, no setup-node — bash + python3 + a stock node (with npm)
+    # ship on ubuntu-latest by default, and the one `node --test` entry in the
+    # scripts group (scripts/md-to-mrkdwn.test.mjs) runs on the stock
+    # ubuntu-latest node — no version pin needed (same bare-`node` precedent as
     # secret-scan.yml; node --test ships in Node >=18). No `bun` in the
     # scripts group: verified at plan time `grep -l '^bun '
     # plugins/soleur/test/*.test.sh` returned zero matches. If a future
-    # .test.sh adds a `bun` invocation, add `setup-bun` here (still no
-    # install needed).
+    # .test.sh adds a `bun` invocation, add `setup-bun` here.
     #
-    # gitleaks is installed because plugins/soleur/skills/code-to-prd/test/
-    # (#2726) preflights `command -v gitleaks` and aborts exit 2 if absent.
-    # Version + SHA pinned identically to .github/workflows/secret-scan.yml —
-    # to upgrade, bump both files together. Variables are workflow-internal
-    # literals; no untrusted input is interpolated into the run: block.
+    # Two CLIs ARE installed for tests in this shard:
+    #  - gitleaks: plugins/soleur/skills/code-to-prd/test/ (#2726) preflights
+    #    `command -v gitleaks` and aborts exit 2 if absent. Version + SHA
+    #    pinned identically to .github/workflows/secret-scan.yml — to upgrade,
+    #    bump both files together.
+    #  - likec4@1.50.0: plugins/soleur/test/c4-model-freshness.test.sh renders
+    #    the .c4 sources and byte-diffs the committed model.likec4.json. The
+    #    version MUST match apps/web-platform/Dockerfile + package.json
+    #    (@likec4/core/@likec4/diagram), guarded by c4-likec4-version-pin.test.ts.
+    # Variables are workflow-internal literals; no untrusted input is
+    # interpolated into the run: blocks.
     env:
       GITLEAKS_VERSION: "8.24.2"
       GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
@@ -359,6 +364,12 @@ jobs:
           chmod +x gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
+
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
 
       - name: Run scripts-side tests (bash + python3)
         run: bash scripts/test-all.sh scripts

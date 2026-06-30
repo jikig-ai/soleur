@@ -9,6 +9,7 @@ import {
 } from "@/server/github-app";
 import { resolveReachableInstallationIds } from "@/server/reachable-installations";
 import { resolveGithubLogin } from "@/server/github-login";
+import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
 import logger from "@/server/logger";
 
 /**
@@ -75,10 +76,19 @@ export async function POST(request: Request) {
 
   const serviceClient = createServiceClient();
 
-  // If installation is already stored, just return repos
+  // ADR-044 Amendment 2026-06-17b: the install is read from the caller's solo
+  // `workspaces` row (NOT `users.github_installation_id`, ahead of PR-2b's
+  // column drop) via the service-role-safe resolver — the solo workspace
+  // carries the install (workspaces.id == users.id, ADR-038 N2), same value.
+  // `github_username` is NOT relocated by ADR-044, so it stays a `users` read.
+  const storedInstallationId = await resolveInstallationIdForWorkspace(
+    user.id,
+    serviceClient,
+  );
+
   const { data: userData } = await serviceClient
     .from("users")
-    .select("github_installation_id, github_username")
+    .select("github_username")
     .eq("id", user.id)
     .single();
 
@@ -89,7 +99,7 @@ export async function POST(request: Request) {
     userData?.github_username,
   );
 
-  if (userData?.github_installation_id) {
+  if (storedInstallationId) {
     // A stored personal install does not preclude a separate workspace org
     // install — aggregate repos across the full reachable set so org-owned
     // repos appear here too.
@@ -135,49 +145,31 @@ export async function POST(request: Request) {
       });
     }
 
-    // Store the installation ID (login-match path only).
-    const { error: updateError } = await serviceClient
-      .from("users")
-      .update({ github_installation_id: personalInstallationId })
-      .eq("id", user.id);
-
-    if (updateError) {
-      const isUniqueViolation =
-        typeof updateError === "object" &&
-        updateError !== null &&
-        "code" in updateError &&
-        (updateError as { code: string }).code === "23505";
-
-      if (isUniqueViolation) {
-        logger.info(
-          { userId: user.id, installationId: personalInstallationId, githubLogin },
-          "Installation already owned by workspace sibling — sharing via workspace membership",
-        );
-      } else {
-        logger.error(
-          { err: updateError, userId: user.id },
-          "Failed to store detected installation ID",
-        );
-        return NextResponse.json(
-          { error: "Failed to store installation" },
-          { status: 500 },
-        );
-      }
-    }
+    // ADR-044 PR-2: this auto-detect persists the caller's OWN login-matched
+    // personal install to their OWN SOLO workspace (`workspaces.id = user.id`) —
+    // the authoritative target (was `users.github_installation_id` + a solo
+    // mirror). A team workspace's install is bound separately via the owner-gated
+    // install/setup routes, never auto-detected, so this stays solo-keyed and
+    // needs no membership resolution.
+    //
+    // The former 23505 unique-violation tolerance branch is DELETED: it guarded
+    // the partial-UNIQUE on `users.github_installation_id` (mig 052). `workspaces`
+    // is intentionally NON-unique (ADR-044 fan-out, mig 079), so the violation can
+    // never fire on a `workspaces` write — the cross-tenant attribution invariant
+    // it served is now enforced by the webhook push-reconcile fan-out over
+    // (installation_id, normalizeRepoUrl(repo_url)). Best-effort: a failed write is
+    // Sentry-mirrored by the helper; the route still returns the repo list.
+    const { writeRepoColsToWorkspace } = await import(
+      "@/server/workspace-repo-mirror"
+    );
+    await writeRepoColsToWorkspace(serviceClient, user.id, {
+      github_installation_id: personalInstallationId,
+    });
 
     logger.info(
       { userId: user.id, installationId: personalInstallationId, githubLogin },
       "Auto-detected and registered GitHub App installation",
     );
-
-    // ADR-044: mirror the installation grant to the solo workspace so the
-    // workspaces-only credential read sees it.
-    const { mirrorRepoColsToSoloWorkspace } = await import(
-      "@/server/workspace-repo-mirror"
-    );
-    await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
-      github_installation_id: personalInstallationId,
-    });
   }
 
   // Aggregate repos across the full reachable set (personal + org-membership

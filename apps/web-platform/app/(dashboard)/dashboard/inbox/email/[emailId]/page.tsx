@@ -13,8 +13,10 @@
 // The catalog citation is deliberately plain text (the catalog is a repo
 // doc, not a served route).
 
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { reportSilentFallback } from "@/server/observability";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { triagePillClass, triagePillLabel } from "@/lib/email-triage-display";
 import {
@@ -50,18 +52,30 @@ export default async function EmailTriageDetailPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  // Belt-and-suspenders `.eq("user_id", ...)` — RLS owner-SELECT is the
-  // primary gate (precedent: audit/page.tsx). A malformed uuid segment
-  // errors the query, leaving data null → notFound, same as a missing row.
-  const { data } = await supabase
+  // mig 111: workspace-shared reads. RLS (is_email_triage_workspace_owner)
+  // is the gate — any Owner of the row's workspace may read. We do NOT add an
+  // `.eq("user_id", ...)` filter: that would re-narrow below RLS to the single
+  // stamping owner and 404 every co-Owner (the exact bug this fixes).
+  // Capture `error` so a real query failure (RLS misconfig, malformed uuid, DB
+  // timeout) is mirrored to Sentry instead of collapsing into an indistinct 404.
+  const { data, error } = await supabase
     .from("email_triage_items")
     .select(
       "id, message_id, sender, subject, summary, mail_class, statutory_class, rule_id, status, received_at",
     )
     .eq("id", emailId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
+  if (error) {
+    // No PII: extra carries ONLY emailId — never sender/subject/summary
+    // (attacker-controlled inbound content) and never a foreign user_id.
+    reportSilentFallback(error, {
+      feature: "email-triage",
+      op: "inbox-detail-lookup-error",
+      extra: { emailId },
+    });
+    notFound();
+  }
   if (!data) notFound();
   const item = data as unknown as EmailTriageDetailRow;
 
@@ -84,6 +98,15 @@ export default async function EmailTriageDetailPage({
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-8">
+      {/* Back link — a notification deep-link lands here cold (browser-back
+          returns to the mail client), so the inbox needs an explicit in-app
+          return path (#5512). */}
+      <Link
+        href="/dashboard/inbox"
+        className="mb-4 inline-flex items-center text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+      >
+        ← Inbox
+      </Link>
       <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6">
         <div className="mb-4 flex items-center justify-between gap-2">
           <span

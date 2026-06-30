@@ -9,6 +9,7 @@ const {
   mockScanProjectHealth,
   mockProvisionWorkspaceWithRepo,
   mockSupabaseUpdate,
+  mockSupabaseUserUpdate,
   mockSupabaseEq,
   mockSupabaseNeq,
   mockSupabaseSelect,
@@ -21,19 +22,24 @@ const {
   const mockSupabaseSelect = vi.fn();
   const mockSupabaseMaybeSingle = vi.fn();
   const mockSupabaseInsert = vi.fn();
+  // ADR-044 PR-2: the workspaces cloning-flip lock update.
   const mockSupabaseUpdate = vi.fn();
+  // The solo readiness write on `users`: .update({...}).eq("id", user.id).
+  const mockSupabaseUserUpdate = vi.fn();
 
-  // Chain: .update().eq().neq().select().maybeSingle()
+  // workspaces lock chain: .update().eq().neq().select().maybeSingle()
   mockSupabaseMaybeSingle.mockResolvedValue({
     data: { id: "user-123" },
     error: null,
   });
   mockSupabaseSelect.mockReturnValue({ maybeSingle: mockSupabaseMaybeSingle });
   mockSupabaseNeq.mockReturnValue({ select: mockSupabaseSelect });
-  // First .eq() in the lock chain returns the neq chain
-  // Subsequent .eq() calls (in the post-provision update) return { error: null }
   mockSupabaseEq.mockReturnValue({ neq: mockSupabaseNeq });
   mockSupabaseUpdate.mockReturnValue({ eq: mockSupabaseEq });
+  // users readiness chain: .update().eq() → { error: null }
+  mockSupabaseUserUpdate.mockReturnValue({
+    eq: vi.fn().mockResolvedValue({ error: null }),
+  });
   mockSupabaseInsert.mockResolvedValue({ error: null });
 
   return {
@@ -46,6 +52,7 @@ const {
     }),
     mockProvisionWorkspaceWithRepo: vi.fn().mockResolvedValue("/tmp/workspace"),
     mockSupabaseUpdate,
+    mockSupabaseUserUpdate,
     mockSupabaseEq,
     mockSupabaseNeq,
     mockSupabaseSelect,
@@ -57,6 +64,24 @@ const {
 
 vi.mock("@/server/byok-resolver", () => ({
   userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
+}));
+
+// ADR-044 PR-2: the active workspace id is resolved server-side via the
+// membership-verified resolver. Default to SOLO (== user-123) so these
+// health-scanner tests exercise the solo readiness-write split. The team /
+// db-error branches are covered in the install-resolution suite.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspace: vi.fn(async (userId: string) => ({
+    ok: true,
+    workspaceId: userId,
+  })),
+  resolveCurrentWorkspaceId: vi.fn(async (userId: string) => userId),
+}));
+
+// ADR-044 PR-2: the authoritative repo-connection write now targets the
+// `workspaces` row via writeRepoColsToWorkspace (was the solo-`users` mirror).
+vi.mock("@/server/workspace-repo-mirror", () => ({
+  writeRepoColsToWorkspace: vi.fn(async () => {}),
 }));
 
 // ---------------------------------------------------------------------------
@@ -76,55 +101,45 @@ vi.mock("@/lib/supabase/server", () => ({
         },
       }),
     },
-    // ADR-044 PR-1 owner-gate: default to owner.
+    // ADR-044 owner-gate: default to owner.
     rpc: vi.fn().mockResolvedValue({ data: true, error: null }),
-    // ADR-044 PR-2a: tenant read of user_session_state for the active-workspace
-    // guard (resolveCurrentWorkspaceId). No session row → solo (== user-123), so
-    // the team-workspace refusal is a no-op for these health-scanner tests.
-    from: vi.fn((table: string) => {
-      if (table === "user_session_state") {
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi
-                .fn()
-                .mockResolvedValue({ data: null, error: null }),
-            }),
-          }),
-        };
-      }
-      return {};
-    }),
   }),
   createServiceClient: vi.fn().mockReturnValue({
     from: vi.fn((table: string) => {
       if (table === "conversations") {
         return { insert: mockSupabaseInsert };
       }
-      if (table === "user_session_state") {
-        // resolveCurrentWorkspaceId (conversations.workspace_id resolution):
-        // no session row → falls back to userId.
+      if (table === "workspaces") {
+        // ADR-044 PR-2: the degraded install fallback reads
+        // workspaces.select(github_installation_id).eq(id).maybeSingle(); the
+        // cloning-flip lock is .update().eq().neq().select().maybeSingle().
         return {
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
               maybeSingle: vi
                 .fn()
-                .mockResolvedValue({ data: null, error: null }),
+                .mockResolvedValue({
+                  data: { github_installation_id: 42 },
+                  error: null,
+                }),
             }),
           }),
+          update: mockSupabaseUpdate,
         };
       }
-      // "users" table
+      // "users" table — ADR-044 PR-2 reads only email + github_username; the
+      // solo readiness write (.update({workspace_status, health_snapshot}))
+      // still targets users.
       return {
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
             single: vi.fn().mockResolvedValue({
-              data: { github_installation_id: 42, email: "test@example.com" },
+              data: { email: "test@example.com", github_username: "tester" },
               error: null,
             }),
           }),
         }),
-        update: mockSupabaseUpdate,
+        update: mockSupabaseUserUpdate,
       };
     }),
   }),
@@ -175,6 +190,13 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }));
 
+// Connect-time block guard defaults to "ok" here; its branch logic is covered by
+// test/repo-connect-guard.test.ts + test/setup-route-connect-block.test.ts.
+const mockEvaluateRepoConnect = vi.fn();
+vi.mock("@/server/repo-connect-guard", () => ({
+  evaluateRepoConnect: (...a: unknown[]) => mockEvaluateRepoConnect(...a),
+}));
+
 vi.mock("next/server", () => ({
   NextResponse: {
     json: (body: unknown, init?: { status?: number }) =>
@@ -222,7 +244,10 @@ describe("setup route — health scanner guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Reset the Supabase mock chain for the optimistic lock
+    mockEvaluateRepoConnect.mockResolvedValue({ outcome: "ok" });
+
+    // Reset the workspaces optimistic-lock chain:
+    // .update().eq().neq().select().maybeSingle()
     mockSupabaseMaybeSingle.mockResolvedValue({
       data: { id: "user-123" },
       error: null,
@@ -233,6 +258,11 @@ describe("setup route — health scanner guard", () => {
     mockSupabaseNeq.mockReturnValue({ select: mockSupabaseSelect });
     mockSupabaseEq.mockReturnValue({ neq: mockSupabaseNeq });
     mockSupabaseUpdate.mockReturnValue({ eq: mockSupabaseEq });
+
+    // Reset the solo readiness write on `users`: .update().eq() → { error: null }
+    mockSupabaseUserUpdate.mockReturnValue({
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    });
 
     // Reset provision mock
     mockProvisionWorkspaceWithRepo.mockResolvedValue("/tmp/workspace");
@@ -256,9 +286,6 @@ describe("setup route — health scanner guard", () => {
   // conversation insert + sync trigger on an effective key (fail-open).
   test("keyless user → no orphaned sync conversation is created", async () => {
     mockUserHasEffectiveByokKey.mockResolvedValue(false);
-    mockSupabaseEq
-      .mockReturnValueOnce({ neq: mockSupabaseNeq })
-      .mockResolvedValue({ error: null });
 
     const response = await POST(
       makeRequest({ repoUrl: "https://github.com/test/repo", source: "connect_existing" }),
@@ -275,9 +302,6 @@ describe("setup route — health scanner guard", () => {
 
   test("user with an effective key → sync conversation IS created", async () => {
     mockUserHasEffectiveByokKey.mockResolvedValue(true);
-    mockSupabaseEq
-      .mockReturnValueOnce({ neq: mockSupabaseNeq })
-      .mockResolvedValue({ error: null });
 
     const response = await POST(
       makeRequest({ repoUrl: "https://github.com/test/repo", source: "connect_existing" }),
@@ -289,13 +313,6 @@ describe("setup route — health scanner guard", () => {
   });
 
   test('does NOT call scanProjectHealth when source is "start_fresh"', async () => {
-    // The post-provision .then() handler needs the update chain to work for the DB update
-    // After provision, it calls .update({...}).eq("id", user.id)
-    // We need the second .eq() call (post-provision update) to resolve
-    mockSupabaseEq
-      .mockReturnValueOnce({ neq: mockSupabaseNeq }) // first call: optimistic lock chain
-      .mockResolvedValue({ error: null }); // second call: post-provision update
-
     const request = makeRequest({
       repoUrl: "https://github.com/test/repo",
       source: "start_fresh",
@@ -311,10 +328,6 @@ describe("setup route — health scanner guard", () => {
   });
 
   test('calls scanProjectHealth when source is "connect_existing"', async () => {
-    mockSupabaseEq
-      .mockReturnValueOnce({ neq: mockSupabaseNeq })
-      .mockResolvedValue({ error: null });
-
     const request = makeRequest({
       repoUrl: "https://github.com/test/repo",
       source: "connect_existing",
@@ -329,10 +342,6 @@ describe("setup route — health scanner guard", () => {
   });
 
   test("calls scanProjectHealth when source field is missing (backward compatible)", async () => {
-    mockSupabaseEq
-      .mockReturnValueOnce({ neq: mockSupabaseNeq })
-      .mockResolvedValue({ error: null });
-
     const request = makeRequest({
       repoUrl: "https://github.com/test/repo",
     });

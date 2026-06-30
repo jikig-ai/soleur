@@ -1,11 +1,26 @@
 ---
 adr: ADR-027
 title: Process-local state for runner sessions
-status: active
+status: superseded
+superseded-by: ADR-068
 date: 2026-05-11
 ---
 
 # ADR-027: Process-local state for runner sessions
+
+> **Superseded by [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (2026-06-30).**
+> ADR-027 (Decision §1) self-mandated supersession as the required gate for raising
+> replica count; ADR-068 — the multi-host `/workspaces` epic (#5274) — is that
+> superseding diff and carries the Bucket-A migration. **The `replicas = 1` invariant
+> below remains operationally in force** until the epic's GA phase (Phase 3) lands in
+> prod; ADR-068 is `adopting` until then. What ADR-068 changes is governance + the
+> migration shape: routing-truth → Postgres (#5338, already there); `_locks` → a
+> per-workspace Postgres write-lease; the 5 live-handle Maps (AbortControllers /
+> timers / SDK `Query` / Promise resolvers) stay **host-local by nature** with
+> cross-host control **routed** by a stateless coordinator — NOT serialized to Redis
+> (the original "externalize all 7 Maps" path is rejected as unbuildable; see ADR-068
+> Considered Options B). The replica runtime guard + `ci-deploy.sh` assertion below
+> stay enforced until Phase 3 relaxes them.
 
 ## Context
 

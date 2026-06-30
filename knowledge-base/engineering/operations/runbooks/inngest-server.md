@@ -63,19 +63,14 @@ After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server 
    ```
    gh api repos/jikig-ai/soleur/actions/workflows/build-inngest-bootstrap-image.yml/runs --jq '.workflow_runs[0]'
    ```
-   If no run exists, push a `vinngest-vX.Y.Z` tag (operator decides the X.Y.Z of the bootstrap image; current is `v1.0.0`):
+   If no run exists, release a bootstrap image — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) below for the canonical 4-step tag→build→deploy→verify flow.
+2. Deploy the published image (NO SSH — `deploy-inngest-image.yml` is
+   `workflow_dispatch`-only; it POSTs the deploy webhook → on-host `ci-deploy.sh`
+   `case "inngest")` runs the bootstrap):
    ```
-   git tag vinngest-v1.0.0 && git push origin vinngest-v1.0.0
+   gh workflow run deploy-inngest-image.yml -f tag=<TAG>   # e.g. tag=v1.1.16
    ```
-2. Fire the deploy webhook (replace `<TAG>` with the OCI tag, e.g. `v1.0.0`):
-   ```
-   doppler run -p soleur -c prd_terraform -- bash -c 'echo "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap <TAG>" | ssh -o StrictHostKeyChecking=accept-new deploy@$(terraform -chdir=apps/web-platform/infra output -raw server_ip)'
-   ```
-   The webhook spawns `ci-deploy.sh` which runs the OCI image's entrypoint `/inngest-bootstrap.sh` against the host's systemd via bind-mounts.
-3. Verify the service is active:
-   ```
-   ssh root@$(terraform -chdir=apps/web-platform/infra output -raw server_ip) systemctl status inngest-server.service inngest-heartbeat.timer
-   ```
+3. Verify via the deploy-status webhook (NO SSH) — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) step 4. Expect `{component:"inngest", tag:"<TAG>", reason:"success"}`.
 4. [§ Unpause heartbeat](#unpause-heartbeat) once you've confirmed the heartbeat timer is firing.
 
 ## Heartbeat-miss triage
@@ -103,9 +98,55 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
    ```
    should match what `doppler secrets get INNGEST_HEARTBEAT_URL -p soleur -c prd --plain` returns.
 
+## Session-pool pressure / exhaustion (`[ci/inngest-pool]`) — #5562
+
+The external watchdog (`.github/workflows/scheduled-inngest-health.yml`) runs a
+pool-utilization probe every 15 min: it reads `pg_stat_activity` on the dedicated
+inngest Supabase project (ref `pigsfuxruiopinouvjwy`) via the Management API and
+files a `[ci/inngest-pool]` issue + Sentry `error` when **inngest-attributable**
+client connections cross ~80% of inngest's CLIENT cap (10, `--postgres-max-open-conns`)
+— `pool_pressure`, the leading indicator — or `EMAXCONNSESSION` fires (`pool_exhausted`,
+the cliff). It counts ONLY inngest's own connections (role `postgres`, minus the
+pooler's Supavisor warm connections + the probe), NOT total `pg_stat_activity` (which
+is dominated by Supabase infra baseline and false-fires — #5563). These modes are
+**excluded from the auto-restart gate** — a restart re-opens all of inngest's
+pooler connections at once and DEEPENS exhaustion (#5558). **Do NOT restart
+inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
+
+1. **Read the alert** (no SSH) — `gh issue view "$(gh issue list --state open --search 'in:title \"[ci/inngest-pool]\"' --json number --jq '.[0].number')" --comments`. The body carries the inngest-attributable connection count vs the client cap; the full per-backend breakdown is in the run log (`Inngest client backends: …`).
+2. **Re-read the live pool** (no SSH, read-only) — confirm via the same filtered query the probe uses (per-backend breakdown; inngest = role `postgres` minus Supavisor + the probe):
+   ```
+   SUPA=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
+   curl -s --max-time 15 -X POST \
+     https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query \
+     -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
+     -d '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' | jq .
+   ```
+3. **Clear stale sessions** (no SSH, read-only client cap is the real fix) — if `idle` / `idle in transaction` sessions are climbing, terminate them via the same `/database/query` path (still no host login):
+   ```
+   curl -s --max-time 15 -X POST \
+     https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query \
+     -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
+     -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
+   ```
+   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). The probe's leading indicator tracks THIS client cap (`INNGEST_CLIENT_CAP=10` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach 10 (a stuck/looping function holding pooled connections), independent of the separate #5562 `default_pool_size` 30→15 revert (see `apps/web-platform/infra/inngest.tf`).
+4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
+
+### Last-resort (host login)
+
+Only after the three no-SSH steps above fail to resolve the pressure, inspect
+inngest-server's own connection count on the host:
+```
+ssh root@<host> 'journalctl -u inngest-server.service -n 50 | grep -i "conn\|pool\|EMAXCONN"'
+```
+A host-level restart is the WRONG lever here (it worsens `EMAXCONNSESSION`); the
+host login is for log inspection only, not remediation.
+
 ## Key rotation
 
 Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
+
+> **Secret delivery (#5560).** inngest-server reads `INNGEST_POSTGRES_URI`, `INNGEST_REDIS_URI`, `INNGEST_SIGNING_KEY`, and `INNGEST_EVENT_KEY` from the doppler-run **environment** (owner-only `/proc/<pid>/environ`), never the `inngest start` argv (world-readable `/proc/<pid>/cmdline`). A rotated value loads on the next inngest-server restart/redeploy **without** being re-exposed on argv. **Ordering matters:** when rotating because a value leaked, deploy the env-delivery build FIRST (verify `ps -eo args | grep inngest` shows no secret), THEN rotate — rotating while an old argv-form image is still running would re-leak the new value immediately. After rotation, NEVER roll back to a pre-#5560 (argv-form) image.
 
 **⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
 
@@ -137,13 +178,53 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
    inngest_cli_version = "vX.Y.Z"
    inngest_cli_sha256  = "<64-hex>"
    ```
-3. Tag + push to trigger the OCI image rebuild:
+3. Release the new bootstrap-image semver (N.N.N — separate from the embedded
+   inngest-cli version) via the canonical flow below
+   ([§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify)):
+   annotated tag → build → cloud-init pin bump → `workflow_dispatch` deploy →
+   verify. On deploy, `inngest-bootstrap.sh` detects the version mismatch,
+   pauses → drains → restarts → resumes (~5s downtime on loopback).
+
+## Bootstrap-image release (tag → build → deploy → verify)
+
+Releasing a new `soleur-inngest-bootstrap` image (changed `inngest-bootstrap.sh`,
+`inngest-redis.*`, or bumped `inngest_cli_version`) is a **4-step coordinated
+flow — the image build does NOT auto-deploy**. None of these steps use SSH
+(`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
+`knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
+
+1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag** on the commit carrying the change
+   (the repo forces annotated tags — a bare `git tag <name> <sha>` fails
+   `fatal: no tag message?`):
    ```
-   git tag vinngest-vN.N.N && git push origin vinngest-vN.N.N
+   git tag -a vinngest-v1.1.16 <main-sha> -m "inngest-bootstrap v1.1.16: <what>"
+   git push origin vinngest-v1.1.16
    ```
-   (where N.N.N is the bootstrap-image semver — separate from the embedded inngest-cli version.)
-4. Wait for the GHA workflow to complete + the image to land in GHCR.
-5. Fire the deploy webhook with the new image tag. `inngest-bootstrap.sh` detects the version mismatch, pauses → drains → restarts → resumes (~5s downtime on loopback).
+   Fires `build-inngest-bootstrap-image.yml` → builds + SHA-verifies + pushes the
+   image. It does NOT deploy.
+2. **Bump the cloud-init pin in lockstep** — `apps/web-platform/infra/cloud-init.yml`
+   (the 3 `soleur-inngest-bootstrap:vX.Y.Z` refs) → `v1.1.16` in a PR. AC6 of
+   `cloud-init-inngest-bootstrap.test.sh` asserts pin == the semver-max published
+   `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
+   fails AC6); pushing the tag without bumping turns `main` red until this PR merges.
+3. **Dispatch the deploy** (workflow_dispatch-only; the build never chains into it):
+   ```
+   gh workflow run deploy-inngest-image.yml -f tag=v1.1.16
+   ```
+4. **Verify via the deploy-status webhook (NO SSH)** — single authenticated GET:
+   ```
+   WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
+   CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
+   CSEC=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+   HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WS" | sed 's/.*= //')
+   curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
+     -H "CF-Access-Client-Id: ${CID}" -H "CF-Access-Client-Secret: ${CSEC}" \
+     "https://deploy.soleur.ai/hooks/deploy-status" | jq '{component, tag, reason, exit_code}'
+   ```
+   Expect `{component:"inngest", tag:"v1.1.16", reason:"success"}` (durable backend
+   live). `reason:"success_degraded_durability"` = the SQLite fail-safe fired
+   (Redis not ready, #5547). Use the literal host `deploy.soleur.ai` — do NOT
+   interpolate `$(doppler secrets get APP_DOMAIN_BASE …)` (reads empty / races).
 
 ## FR5 flag flip
 
@@ -203,6 +284,201 @@ ssh root@<host> 'systemctl stop inngest-server.service && \
 Stopping inngest-server before VACUUM is required (SQLite write lock). Downtime ~5s for typical store sizes; longer for stores >1GB.
 
 **Automation deferred:** the operator runs this manually for now. If event volume increases to where monthly manual cleanup becomes a chore, file a follow-up issue to wire a weekly systemd timer alongside `inngest-heartbeat.timer`.
+
+## Durable backend (Supabase Postgres + self-hosted Redis) — #5450
+
+> Migrating Inngest off bundled SQLite + in-memory Redis (ephemeral root disk) onto
+> **Supabase Postgres** (`--postgres-uri`, dedicated EU project, session pooler :5432) +
+> **self-hosted Redis** (`--redis-uri`, AOF on `/mnt/data`). Closes the silent-loss gap where a
+> host re-provision drops every HTTP-armed `event-scheduled-reminder`. Executes the Postgres
+> migration ADR-030 deferred. Plan: `knowledge-base/project/plans/2026-06-17-feat-inngest-durable-backend-supabase-postgres-plan.md`.
+
+### Host-rebuild durability matrix (per mechanism)
+
+"Dies with session?" (process restart) is distinct from "Survives host re-provision?" (fresh root disk).
+The bug is the **host-rebuild** column, not the session column.
+
+| Mechanism | Re-arms on web redeploy? | Survives process restart? | Survives host re-provision (pre-migration) | Survives host re-provision (post-migration) |
+|---|---|---|---|---|
+| `cron-*` (recurring) | Yes (registered every deploy) | Yes | Yes (re-armed on next deploy) | Yes |
+| `oneshot-*` (first-arm) | n/a | Yes | Yes (boot-arm re-arms, ADR-046 I4) | Yes |
+| `oneshot-*` (conditional re-arm, diverged ts) | n/a | Yes | **No — silent loss** | Yes (durable queue) |
+| `event-scheduled-reminder` (HTTP-armed future `ts`) | No | Yes (queue in Redis) | **No — silent loss** | **Yes (durable Redis AOF)** |
+
+### Phase 0 spike verdicts (2026-06-17, inngest v1.19.4, local docker harness — the Phase 1 gate)
+
+CLI semantics (`inngest start --help`): `--postgres-uri` = "configuration and history persistence
+(defaults to SQLite)"; `--redis-uri` = "external **queue and run state** (defaults to self-contained
+**in-memory Redis** with periodic snapshot backups)". The armed-event **queue lives in Redis**, not Postgres.
+
+- **0.2 FR1 durability boundary — durable Redis is MANDATORY.** Wiped-volume restart (recreate the
+  inngest container = fresh root disk; Postgres + external-Redis volumes persist):
+  - Postgres-only (default in-memory Redis): armed future-`ts` event **LOST** (did not fire).
+  - Postgres + external durable Redis (AOF, `appendfsync everysec`): armed event **SURVIVED**, fired at its `ts`.
+  - → Configure **both** Postgres and durable Redis (since #5560 both are delivered via the doppler-run **environment** — `INNGEST_POSTGRES_URI` + a constructed `INNGEST_REDIS_URI` — NOT on argv; see § Secret delivery). Postgres alone does NOT persist the queue.
+- **0.3 Fail-closed vs silent fallback — Inngest FAILS CLOSED.** With a reachable-but-refused backend
+  it exits non-zero (`failed to connect … connection refused`); `/health` never returns 200; **no**
+  silent degrade to a healthy SQLite state. → The existing `/health` 200 gate already catches an
+  *unreachable* backend. The residual silent-non-durable risk is **sentinel-absent** (ExecStart drops the
+  durable config → defaults to SQLite **while** `/health`=200). The hard gate therefore asserts: (a) the
+  running inngest cmdline contains the non-secret `--postgres-max-open-conns` durable sentinel (**#5560**:
+  the postgres/redis URIs + signing/event keys are delivered via the doppler-run **environment**, never
+  argv — `/proc/<pid>/cmdline` is world-readable, so detection keys on the sentinel, not `--postgres-uri`),
+  (b) `inngest-redis` unit active + Redis ping, (c) Postgres reachable — NOT a "fail-open post-start assertion".
+- **0.4 Cutover-recovery — enumeration is FEASIBLE; no app-side ledger required.** The server's GraphQL
+  (`/v0/gql` `eventsV2(filter:{from!,until,eventNames,query,includeInternalEvents})`) returns received
+  events by time window, including future-dated `reminder.scheduled`. Cutover recovery = quiesce arming →
+  enumerate the OLD server's future-dated, not-yet-fired `reminder.scheduled` events → re-arm on the new
+  Postgres+Redis server (cross-ref `runs` to exclude already-fired → avoid double-posting a comment).
+  Dual-run-drain (run old SQLite server until armed reminders fire) is the simpler fallback. **No
+  `scheduled_reminders` Supabase migration / boot reconciler is needed** (removes that conditional Phase-1 scope).
+- **0.5 Pooler mode — session :5432 only (LIVE-confirmed).** Inngest uses sqlc prepared statements;
+  Supabase **transaction pooler :6543 breaks them** (PgBouncer transaction mode). Use **Supavisor
+  session pooler :5432**. **Live-verified 2026-06-17**: inngest v1.19.4 connected to the dedicated EU
+  project (`soleur-inngest-prd`, ref `pigsfuxruiopinouvjwy`, `aws-0-eu-west-1.pooler.supabase.com:5432`,
+  user `postgres.<ref>`) and **ran its migrations** cleanly (`ran database migrations db=postgres`).
+  The dedicated project IS the isolation boundary, so the connection uses the project's `postgres` role
+  via the pooler (verified) rather than a custom role (custom-role-via-Supavisor routing is the
+  unverified part; a dedicated role inside an already-isolated project adds pooler-auth risk for
+  marginal benefit — so the planned `inngest-supabase-bootstrap.sql` role bootstrap is intentionally
+  dropped). `INNGEST_POSTGRES_URI` is set out-of-band in Doppler prd (see inngest.tf).
+
+### Availability coupling (permanent, post-migration)
+
+Post-cutover Inngest **cannot start** without Supabase + Redis reachable (the in-memory fallback is
+gone — proven fail-closed in 0.3). Pre-migration it survived a Supabase outage on local SQLite; it no
+longer will. Knowingly traded for durability + PITR + ADR-030 closure. The dedicated Inngest Supabase
+project + co-located Redis keep the blast radius off the main app's project.
+
+### Cutover procedure (Phase 2 — low-traffic window, rollback-ready)
+
+**Before any cutover, consult:** [Destructive datastore migration safety pattern](../../../project/learnings/best-practices/2026-06-18-destructive-datastore-migration-backup-inventory-after-diff.md) — every destructive datastore migration takes (a) a recovery backup, (b) a full inventory BEFORE, (c) an after-inventory + diff. Steps 0.5 and 5 below are this runbook's instance of that pattern.
+
+The KEYSTONE risk (plan §Sharp Edges): armed `reminder.scheduled` events live ONLY in Inngest state —
+there is no app-side reminder store. A fresh-Postgres cutover loses them unless they are enumerated and
+re-armed. Run these steps in order, **starting with Step 0** (the secret-provisioning precondition —
+`INNGEST_REDIS_PASSWORD` is not created at merge time); the connection string is set out-of-band in
+Doppler prd (`INNGEST_POSTGRES_URI`, see inngest.tf) and must be **URL-safe** (the provisioned value is
+hex — no percent-encoding needed; if rotated to a password with reserved chars, URL-encode before
+setting).
+
+0. **Provision the Redis secret** (one-time precondition — `INNGEST_REDIS_PASSWORD` is NOT created at
+   merge time; the `apply-web-platform-infra.yml` allow-list now reconciles it on the next infra merge,
+   but for an immediate cutover run, apply it explicitly here). `INNGEST_POSTGRES_URI` is already present
+   (set out-of-band, see inngest.tf). From the repo root:
+   ```bash
+   export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID  -p soleur -c prd_terraform --plain)
+   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+   terraform -chdir=apps/web-platform/infra init -input=false
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform -chdir=apps/web-platform/infra apply \
+       -target=random_password.inngest_redis_password_prd \
+       -target=doppler_secret.inngest_redis_password_prd
+   # Confirm the secret now exists (read-only, no SSH):
+   doppler secrets get INNGEST_REDIS_PASSWORD -p soleur -c prd --plain   # → 48-char URL-safe value
+   ```
+   If the value is already present (a prior auto-apply or manual run minted it), this is a clean no-op —
+   proceed to step 0.5.
+0.5. **Pre-cutover safety gates (MANDATORY — #5509).** Before quiescing, capture a recovery point and a
+   full-state baseline so this destructive cutover is reversible and verifiable (no SSH):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=backup      # Hetzner server snapshot (full root disk incl. /var/lib/inngest); logs the image id
+   gh workflow run cutover-inngest.yml --field op=inventory   # BEFORE baseline: {functions, event_names, armed_reminder_ids}
+   ```
+   Record the backup **image id** (the run logs `DELETE /v1/images/<id>` to free it after the cutover is
+   confirmed) and save the BEFORE inventory block from the run log — both feed step 5's correctness check.
+   Do NOT proceed to quiesce until the `op=backup` snapshot action reports `success`.
+1. **Quiesce arming** (no reminder armed into the doomed old SQLite mid-cutover):
+   ```bash
+   doppler secrets set INNGEST_CUTOVER_QUIESCE=1 -p soleur -c prd --no-interactive
+   # POST /api/internal/schedule-reminder now returns 503 + Retry-After: 120.
+   ```
+2. **Reminder survival — DEFAULT: dual-run-drain; FALLBACK: no-SSH enumerate + re-arm.** Armed
+   `reminder.scheduled` events live ONLY in Inngest state (verdict 0.4 — no app-side ledger). A
+   fresh-Postgres cutover drops any still-armed reminder unless it is allowed to fire first OR is
+   enumerated and re-armed. There is **no operator shell step** here — both paths are no-SSH.
+   - **DEFAULT — dual-run-drain (simplest, no re-arm risk):** with arming quiesced (step 1), let the
+     OLD SQLite server keep running until its already-armed reminders fire on their own. When the
+     soonest pending fire-time has passed, proceed to deploy (step 4). No enumeration, no re-arm, no
+     double-fire window. Best when only a few near-term reminders are armed.
+   - **FALLBACK — capture + re-arm (when draining is not viable):** when too many reminders are armed
+     or they fire too far out to wait, **persist the still-armed set ON-HOST BEFORE the deploy** — a
+     post-deploy `op=rearm` self-enumerate would query the NEW (empty) Postgres+Redis backend and
+     silently lose every reminder (#5542):
+     ```bash
+     gh workflow run cutover-inngest.yml --field op=enumerate   # OPTIONAL visibility: logs count + reminder_ids
+     gh workflow run cutover-inngest.yml --field op=capture     # MANDATORY: persists records on-host pre-deploy
+     ```
+     `op=capture` drives `/hooks/inngest-rearm-reminders` with `mode=capture`: the host script queries
+     the OLD server's `eventsV2`, reconstructs the FULL re-armable payload from each event's `raw`
+     envelope (the legacy `id name receivedAt` query was payload-incomplete), drops already-fired events
+     via the `runs` cross-ref, paginates to exhaustion, and writes the records to
+     `/var/lib/inngest/cutover-capture.json` — under the `--sqlite-dir` volume, which survives the
+     cutover's systemd restart (a config change, not a host re-provision). Records stay on-host
+     (P2-sec-a) — only counts + `reminder_id`s surface in the run log. Then re-arm AFTER the deploy +
+     quiesce-clear in step 6 (`op=rearm`), which **consumes the capture file** (NOT a post-deploy
+     self-enumerate) and deletes it on full success. The re-arm routes back through `schedule-reminder`,
+     which recomputes the Inngest dedup `id`/`ts` so an event that ALSO survived in state dedups instead
+     of double-firing.
+3. **Drain in-flight runs** — confirm zero `Running` status for ~60s (or accept-and-document that
+   in-flight runs are abandoned; the reminder `post-comment`/`run-check` steps are not idempotent on
+   replay, so a re-arm of an already-fired reminder would double-post).
+4. **Deploy** via the release pipeline (no SSH): `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.1.14`.
+   The deploy arg is the OCI **image tag** `v1.1.14` (space-separated, matching the CLI-version-bump
+   step) — NOT `vinngest-v1.1.14`: the build workflow strips the `vinngest-` GIT-tag prefix and publishes
+   the image as `v1.1.14` (GHCR has `v1.1.14`; `vinngest-v1.1.14` does not exist and would fail to pull).
+   The `verify_inngest_health` HARD gate fails the deploy if `--postgres-uri` is set but `--redis-uri`
+   is absent OR `inngest-redis.service` is inactive.
+5. **Verify durability.**
+   - **DEFAULT (non-destructive):** the deploy's own `verify_inngest_health` HARD gate (step 4) already
+     asserts `--postgres-uri` ⇒ `--redis-uri` present + `inngest-redis` active + `/health` 200 +
+     `/v1/functions` ≥1 cron. Combined with the spike-0.2 evidence (a wiped-volume restart survived on
+     durable Redis), this is sufficient proof for a normal cutover — no extra step needed.
+   - **OPT-IN (destructive, end-to-end proof):** to exercise the real wiped-volume invariant in prod
+     shape with no remote shell:
+     ```bash
+     gh workflow run cutover-inngest.yml --field op=verify-wiped-volume   # async; polls verify-status
+     ```
+     This drives `/hooks/inngest-wiped-volume-verify`, which **aborts loudly unless the armed set is
+     empty** (the real safety gate — it will NOT wipe with a real reminder pending), arms an
+     unregistered-`named-check` throwaway that fires a run but posts **zero** comments, wipes
+     `/var/lib/inngest`, restarts, and asserts `/health` + `/v1/functions` + the throwaway fired. Only
+     run it once the armed set is drained/re-armed.
+   - **Correctness diff (MANDATORY — #5509):** re-run `op=inventory` (the AFTER baseline) and diff it
+     against the BEFORE block from step 0.5:
+     ```bash
+     gh workflow run cutover-inngest.yml --field op=inventory   # AFTER baseline
+     ```
+     Expected: `functions` identical (re-registered every deploy by construction) and `event_names`
+     identical. `armed_reminder_ids` MUST be re-present after re-arm (FALLBACK path, step 6) OR
+     empty-by-design (DEFAULT dual-run-drain, where the armed set fired on the old server pre-cutover).
+     Any unexplained drop in `functions`/`event_names`, or a missing `armed_reminder_id` after re-arm,
+     is a cutover defect — restore from the step 0.5 backup image before clearing quiesce.
+6. **Re-open arming + re-arm recovered work** (no remote shell):
+   ```bash
+   doppler secrets set INNGEST_CUTOVER_QUIESCE= -p soleur -c prd --no-interactive  # clears the flag
+   # FALLBACK path only: re-arm from the on-host capture persisted in step 2 (op=capture).
+   gh workflow run cutover-inngest.yml --field op=rearm
+   ```
+   Run `op=rearm` ONLY after the quiesce flag is cleared — the host script aborts loud (does not
+   silently drop) if it gets a 503 because quiesce is still set. `op=rearm` (mode `rearm-from-capture`)
+   consumes `/var/lib/inngest/cutover-capture.json` from step 2 and deletes it on FULL success; a
+   missing/corrupt capture is FATAL (non-200), never a silent self-enumerate of the empty new backend.
+   - **Retry window (re-arm is replay-on-full-set).** On a partial failure the capture is RETAINED and a
+     re-run re-POSTs the entire set; `schedule-reminder` recomputes the dedup `id`/`ts` so a
+     still-pending reminder dedups instead of double-arming — but a reminder that *fires* between attempts
+     is non-idempotent (it double-posts its comment, same hazard as step 3). So retry `op=rearm` promptly
+     and only while quiesce is cleared; do not let hours pass between a partial re-arm and its retry.
+   - **Aborted cutover leaves a landmine.** If you run `op=capture` then ABORT before `op=rearm`, the
+     capture file persists on-host. A steady-state `op=rearm` (mode `rearm`, the default) deliberately
+     IGNORES it (self-enumerates the live backend), so it will not hijack a routine re-arm — but it is
+     stale clutter. After an aborted cutover, re-run the cutover from `op=capture` (which overwrites it),
+     or let the next successful cutover `op=rearm` consume it.
+7. **Rollback tripwire** — reverting ExecStart to `--sqlite-dir` is data-safe ONLY before any *real*
+   (non-throwaway) reminder is armed against Postgres. After that the stale SQLite is missing those
+   reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed
+   cutover, wipe the old `/var/lib/inngest` SQLite so an accidental SQLite boot cannot replay dead
+   reminders.
 
 ## Concurrency conventions
 

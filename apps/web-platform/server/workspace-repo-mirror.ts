@@ -1,70 +1,104 @@
 import { reportSilentFallback } from "@/server/observability";
 
 /**
- * The ADR-044 "moved" repo columns — relocated from `users` to `workspaces`.
- * Non-moved connect-flow columns (`workspace_path`, `workspace_status`,
- * `repo_error`, `health_snapshot`) stay on `users` and are NOT mirrored.
+ * The ADR-044 repo-connection columns — authoritative on `workspaces` as of the
+ * PR-2 write-cutover (#5462). `repo_error` joined the set (migration 110 adds the
+ * column + extends the non-credential GRANT). The provisioning/readiness columns
+ * (`workspace_path`, `workspace_status`, `health_snapshot`) are NOT relocated by
+ * ADR-044 and stay on `users` (written by the connect routes only for the SOLO
+ * owner case).
  */
-export type MirroredRepoCols = Partial<{
+export type WorkspaceRepoCols = Partial<{
   repo_url: string | null;
   github_installation_id: number | null;
   repo_status: string;
   repo_last_synced_at: string | null;
+  repo_error: string | null;
 }>;
 
 interface ServiceClientLike {
   from: (table: string) => {
-    update: (patch: MirroredRepoCols) => {
-      eq: (col: string, val: string) => PromiseLike<{ error: unknown }>;
+    update: (patch: WorkspaceRepoCols) => {
+      eq: (
+        col: string,
+        val: string,
+      ) => {
+        select: (
+          cols: string,
+        ) => PromiseLike<{ data: Array<{ id: string }> | null; error: unknown }>;
+      };
     };
   };
 }
 
 /**
- * Dual-write the moved repo columns to the user's SOLO workspace
- * (`workspaces.id == user_id`, ADR-038 N2) so the workspaces-only read path
- * (`getCurrentRepoUrl` / `resolveInstallationId`) stays consistent with the
- * legacy `users` write during the ADR-044 soak. Without this, a fresh
- * connect/disconnect would write `users` while the read path checks
- * `workspaces`, showing a stale/absent repo.
+ * Write the authoritative repo-connection columns to the `workspaces` row keyed
+ * on the **caller-supplied resolved workspace id** (team OR solo — NOT a
+ * hardcoded `userId`). This is the PR-2 inversion of the former
+ * `mirrorRepoColsToSoloWorkspace`: `workspaces` is now the source of truth, so
+ * this is the authoritative write, not a best-effort mirror.
  *
- * Connect/disconnect flows are SOLO-ONLY today (team-invite repo flows are
- * deferred to #4560 / Phase 5 — they will resolve the target workspace
- * first), so the solo workspace id equals the user id.
+ * The caller MUST pass an id resolved server-side via the membership-verified
+ * `resolveActiveWorkspace` (IDOR-safe, never `req.body`); a write to an
+ * unverified id would cross the user→workspace tenant boundary.
  *
- * Service-role write: members cannot UPDATE `workspaces` directly (no
- * UPDATE RLS policy) and `github_installation_id` is REVOKE'd from the
- * `authenticated` grant; the caller passes a service client.
+ * Members cannot UPDATE `workspaces` directly (no UPDATE RLS policy) and
+ * `github_installation_id` is REVOKE'd from the `authenticated` grant, so the
+ * caller passes a service client.
  *
- * Best-effort by default — failure is Sentry-mirrored but does not throw,
- * because on a CONNECT the `users` write stays authoritative and a missed
- * mirror only makes the workspaces-only read path show "not connected" (a
- * safe-fail the next connect/sync re-mirrors).
+ * The UPDATE `.select("id")`s so a **0-row match** is detected: a
+ * `.eq("id", workspaceId)` that matches no row returns `{error:null}` — a SILENT
+ * no-op (the workspace can be deleted between request return and a background
+ * callback; `current_workspace_id` is `ON DELETE SET NULL`, mig 079). A 0-row
+ * write is treated as a failure class (`cq-silent-fallback-must-mirror-to-sentry`).
  *
- * Pass `{ throwOnError: true }` on the DISCONNECT / credential-clear path:
- * there the read path is workspaces-only, so a silently-failed mirror would
- * leave `github_installation_id` (a live GitHub App grant) and `repo_url`
- * readable AFTER the user "disconnected" — the agent could still act under
- * the supposedly-revoked grant, and the `repo_url && installationId === null`
- * revalidation guard cannot catch it (both stay non-null). Failing closed
- * lets the route surface a 500 so the (idempotent) disconnect is retried.
+ * Best-effort by default — failure is Sentry-mirrored but does not throw.
+ * Pass `{ throwOnError: true }` on the DISCONNECT / credential-clear path and on
+ * the connect cloning-flip: there a silently-failed write would leave
+ * `github_installation_id` (a live GitHub App grant) + `repo_url` readable on the
+ * workspaces-only read path AFTER the user "disconnected", or report a connect as
+ * succeeded when it never persisted. Failing closed lets the route surface a 500
+ * so the (idempotent) operation is retried.
  */
-export async function mirrorRepoColsToSoloWorkspace(
+export async function writeRepoColsToWorkspace(
   service: ServiceClientLike,
-  userId: string,
-  patch: MirroredRepoCols,
+  workspaceId: string,
+  patch: WorkspaceRepoCols,
   opts?: { throwOnError?: boolean },
 ): Promise<void> {
-  const { error } = await service.from("workspaces").update(patch).eq("id", userId);
+  const { data, error } = await service
+    .from("workspaces")
+    .update(patch)
+    .eq("id", workspaceId)
+    .select("id");
+
   if (error) {
     reportSilentFallback(error, {
-      feature: "workspace-repo-mirror",
-      op: "mirror-to-solo-workspace",
-      extra: { userId, cols: Object.keys(patch) },
-      message: "Failed to mirror repo columns to the solo workspace",
+      feature: "workspace-repo-write",
+      op: "write-to-workspace",
+      extra: { workspaceId, cols: Object.keys(patch) },
+      message: "Failed to write repo columns to the active workspace",
     });
     if (opts?.throwOnError) {
       throw error instanceof Error ? error : new Error(String(error));
+    }
+    return;
+  }
+
+  if (!data || data.length === 0) {
+    // 0-row no-op: the target workspace row is gone (deleted mid-flight) or the
+    // id never existed. The write silently affected nothing — surface it.
+    const zeroRow = new Error(
+      `writeRepoColsToWorkspace matched 0 rows for workspace ${workspaceId}`,
+    );
+    reportSilentFallback(zeroRow, {
+      feature: "workspace-repo-write",
+      op: "write-to-workspace.zero-rows",
+      extra: { workspaceId, cols: Object.keys(patch) },
+      message: "Repo-column write to the active workspace matched 0 rows",
+    });
+    if (opts?.throwOnError) {
+      throw zeroRow;
     }
   }
 }

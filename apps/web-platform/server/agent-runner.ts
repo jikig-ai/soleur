@@ -60,10 +60,14 @@ import { buildEmailTriageTools } from "./email-triage-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
+import { buildWorkstreamTools } from "./workstream/workstream-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
 import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
-import { resolveActiveWorkspacePath } from "./workspace-resolver";
+import {
+  resolveActiveWorkspace,
+  resolveActiveWorkspacePath,
+} from "./workspace-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -937,6 +941,11 @@ export async function startAgentSession(
   const existing = getSession(userId, conversationId, leaderId);
   if (existing) existing.abort.abort(new SessionAbortError("superseded"));
 
+  // This controller is the legacy/registry abort surface: it rides inside
+  // `activeSessions` via `registerSession` below, so `abortSession`'s broadcast
+  // reaches it (the host-local abort surface — epic #5274 Phase 1 audit). The
+  // cc-soleur-go lineage has its own controller (`cc-dispatcher.ts`, reached by
+  // `closeCcConversation`), not this one.
   const controller = new AbortController();
   const session: AgentSession = {
     abort: controller,
@@ -1060,7 +1069,22 @@ export async function startAgentSession(
     // this converges the leader half). `resolveActiveWorkspacePath` fails closed
     // to the SOLO workspace (never a sibling) and always returns a path, so the
     // provisioning guard above keys only on the `users` row existing.
-    const workspacePath = await resolveActiveWorkspacePath(userId, sessionTenant);
+    // ADR-044 PR-B (resolve-id-first, #5435 fix): resolve the ACTIVE workspace
+    // id ONCE here, then thread that ONE membership-verified id into BOTH the
+    // on-disk path AND the post-session sync write (`updateLastSynced`). A
+    // db-error on the membership probe fails closed (do NOT dispatch into an
+    // unverified team, do NOT mis-key the sync to solo) — surface a retryable
+    // error rather than guessing. `resetFromClaim` is non-blocking (own solo id).
+    const activeWorkspace = await resolveActiveWorkspace(userId, sessionTenant);
+    if (!activeWorkspace.ok) {
+      throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
+    }
+    const activeWorkspaceId = activeWorkspace.workspaceId;
+    const workspacePath = await resolveActiveWorkspacePath(
+      userId,
+      sessionTenant,
+      activeWorkspaceId,
+    );
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
@@ -1163,7 +1187,7 @@ export async function startAgentSession(
     // `users.repo_status` would skip the pull for an invited member whose ACTIVE
     // (shared) workspace is connected — the exact #4543 divergence the converged
     // `workspacePath` above fixes, re-created one branch away.
-    await syncPull(userId, workspacePath);
+    await syncPull(userId, workspacePath, supabase(), activeWorkspaceId);
 
     // Create vision.md on first message if it doesn't exist (fire-and-forget).
     // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
@@ -1483,8 +1507,9 @@ recipient, and suppression is permanent (no un-suppress).`;
     // pair workspace A's installation with workspace B's repo_url — both
     // workspaces the SAME user belongs to (not cross-tenant). The window is
     // sub-ms and the switcher reloads the page (restarting this context), so
-    // it is not fixed here; when #4560 makes mid-run switches plausible,
-    // resolve the workspace ONCE and thread it into both via their existing
+    // it is not fixed here; when #5462 gives workspaces distinct repo
+    // connections (making A-install/B-repo pairing reachable), resolve the
+    // workspace ONCE and thread it into both via their existing
     // `workspaceId` override params so installation + repo share one snapshot.
     const repoUrl = await getCurrentRepoUrl(userId);
 
@@ -1684,6 +1709,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const routineTools = buildRoutineTools({ userId });
     platformTools.push(...routineTools.tools);
     platformToolNames.push(...routineTools.toolNames);
+
+    // Workstream board tools (feat-workstream-kanban-tab): agent-user READ
+    // parity for the kanban board — registered unconditionally.
+    // workstream_issues_list is read-only (auto-approve) and calls the shared
+    // getWorkstreamIssues() accessor (the active workspace's real connected-repo
+    // issues — the same feed the dashboard route serves).
+    const workstreamTools = buildWorkstreamTools({ userId });
+    platformTools.push(...workstreamTools.tools);
+    platformToolNames.push(...workstreamTools.toolNames);
 
     // Auth revocation status tool (#4440 follow-up to #4418): registered
     // unconditionally — agents need self-diagnosis on every authenticated
@@ -2258,7 +2292,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // self-guards (`hasRemote` + `hasLocalCommits` + active installation),
           // so no legacy `repo_status` gate (which would silently drop an
           // invited member's leader edits to a connected shared workspace).
-          await syncPush(userId, workspacePath);
+          await syncPush(userId, workspacePath, supabase(), activeWorkspaceId);
 
           // Notify client that this leader finished streaming. The finally block
           // below emits the same event as a fallback for exception paths; guard

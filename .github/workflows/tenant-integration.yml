@@ -14,37 +14,32 @@
 # inputs are interpolated in any run: block; only secrets.*, runner.os,
 # github.ref (concurrency group only), and hashFiles() are referenced.
 #
-# Triggers (path-filtered): push to main + PRs touching the tenant-
-# isolation tests, server/, or supabase/migrations/. Manual re-runs
-# available via workflow_dispatch (post-merge only — feature-branch
-# dispatch requires the workflow to exist on the default branch first).
-# The path filter is load-bearing — without it the job would run on
-# every PR (~95% of which don't touch the tested surfaces) and burn
-# dev-Supabase rate budget.
+# Triggers (#5585): the workflow ALWAYS triggers on push-to-main + every PR
+# (no workflow-level `paths:` filter). Path detection moved into the
+# `detect-changes` job so the always-run `tenant-integration-required` gate
+# job reports a required-check context on EVERY PR — a path-filtered workflow
+# never reports a context for filtered-out PRs, which would leave a required
+# check "Expected — Waiting" forever. The rate-budget invariant is preserved:
+# the heavy `tenant-integration` job is gated on detect-changes.outputs.tenant,
+# so the Doppler/dev-Supabase work still runs only on the ~5% of PRs that touch
+# the isolation surface. Mirrors ci.yml's detect-changes + `test` aggregator.
 #
-# Refs: #3869 item 6, #3244 (umbrella), #3883 (PR-D).
+# Refs: #3869 item 6, #3244 (umbrella), #3883 (PR-D), #5585 (required-check shim).
 
 name: Tenant integration (dev-Supabase)
 
-# NOTE: `push` and `pull_request` paths are duplicated by design —
-# GitHub Actions does not support YAML anchors inside `on:`. Keep
-# the two lists in lock-step when editing.
 on:
   push:
     branches: [main]
-    paths:
-      - 'apps/web-platform/test/server/**.tenant-isolation.test.ts'
-      - 'apps/web-platform/server/**'
-      - 'apps/web-platform/supabase/migrations/**'
   pull_request:
     branches: [main]
-    paths:
-      - 'apps/web-platform/test/server/**.tenant-isolation.test.ts'
-      - 'apps/web-platform/server/**'
-      - 'apps/web-platform/supabase/migrations/**'
   workflow_dispatch: {}
 
 concurrency:
+  # cancel-in-progress: false (intentional, #5585 R3): a superseded run
+  # cancelled mid-flight would conclude `cancelled` and fail the gate on the
+  # head SHA until a re-run; keeping false avoids that edge at the cost of a
+  # second full suite on rapid pushes to an isolation-touching PR (rare).
   group: tenant-integration-${{ github.ref }}
   cancel-in-progress: false
 
@@ -52,7 +47,62 @@ permissions:
   contents: read
 
 jobs:
+  # detect-changes: decides whether the heavy suite runs (#5585). Cheap —
+  # one checkout + one git diff, NO Doppler/dev-Supabase access. Mirrors
+  # ci.yml's detect-changes (single boolean output). BASE_REF is only set on
+  # pull_request; non-PR events (push to main / workflow_dispatch) short-circuit
+  # to tenant=true (main is the source of truth). BASE_REF is passed via env: +
+  # quoted "$BASE_REF" per workflow-injection guidance.
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tenant: ${{ steps.filter.outputs.tenant }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # push to main / workflow_dispatch: always run (main is source of truth).
+            printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A git/checkout error (missing origin/$BASE_REF, etc.) must FAIL the
+          # job — never silently emit tenant=false. The gate job treats a
+          # detect-changes failure as fail-closed (see tenant-integration-required).
+          if ! CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD"); then
+            echo "::error::git diff against origin/${BASE_REF} failed; failing detect-changes closed." >&2
+            exit 1
+          fi
+          # Anchors must cover the ISOLATION SURFACE the suite verifies, not just
+          # the former on.paths (#5585 review, user-impact P1): the suite imports
+          # @/lib/supabase/tenant and exercises the RLS-bypassing service-role
+          # client (lib/supabase/service.ts), so lib/supabase/ + middleware.ts
+          # (per-request tenant scoping) + test/helpers/ (shared isolation
+          # fixtures) are part of the surface — a regression there must run the
+          # suite, not skip to an authoritative GREEN. Anti-bypass: the workflow
+          # file AND the extracted verdict script are anchored (gate logic now
+          # lives in both), mirroring ci.yml's (ci|deploy-docs).yml self-trigger.
+          # SCOPE BOUNDARY: app/api/**/route.ts is deliberately NOT anchored —
+          # anchoring all routes would run the heavy dev-Supabase suite on most
+          # PRs, defeating the rate-budget purpose that is the reason for #5585.
+          # Route-level isolation relies on the anchored lib/supabase/ clients +
+          # DB RLS policies (migrations, anchored). See ADR-032 amendment.
+          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$)'; then
+            printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
   tenant-integration:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.tenant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -124,8 +174,8 @@ jobs:
             # bash `tr` is byte-oriented and cannot match multi-byte
             # sequences. Mirrors scheduled-realtime-probe.yml's
             # strip_log_injection function (tr + sed two-stage).
-            env_safe=$(printf '%s' "$env_name" | tr -d '\r\n\f\v\x7f\x85' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g')
+            env_safe=$(printf '%s' "$env_name" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')
             echo "::error::dev_scheduled config resolves to environment=${env_safe} (expected: dev). Token rotated to wrong scope; reset before running tenant-integration."
             exit 1
           fi
@@ -256,3 +306,26 @@ jobs:
           doppler run -p soleur -c dev_scheduled -- \
             env TENANT_INTEGRATION_TEST=1 \
             npm run test:ci -- test/server/ --project unit --reporter=verbose
+
+  # Always-run aggregator gate (#5585). This job — NOT the heavy
+  # `tenant-integration` job — is the required status check registered in the
+  # "CI Required" ruleset (infra/github/ruleset-ci-required.tf). It runs on
+  # every PR (if: always()) so a context is always reported, and asserts the
+  # verdict INSIDE a run: step (never a job-level if:, which would report no
+  # context and reopen the path-filter gap). Fail-closed allow-list: passes
+  # only when detect-changes succeeded AND the suite is success|skipped. The
+  # verdict lives in scripts/tenant-integration-gate-verdict.sh so its five
+  # branches are unit-tested (tests/scripts/test-tenant-integration-gate-verdict.sh).
+  # Results are read via env: + quoted "$VAR" per workflow-injection guidance.
+  tenant-integration-required:
+    needs: [detect-changes, tenant-integration]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Aggregate gate verdict (fail-closed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          SUITE_RESULT: ${{ needs.tenant-integration.result }}
+        run: bash scripts/tenant-integration-gate-verdict.sh "$DETECT_RESULT" "$SUITE_RESULT"

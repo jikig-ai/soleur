@@ -165,7 +165,7 @@ test_reject_dest_symlink() {
 # table (caller-supplied values that disagree are rejected, #4827 hardening).
 # The sudoers dest is intentionally absent (root-managed, not helper-writable).
 test_all_managed_dests_accepted() {
-  echo "TEST: install — every FILE_MAP dest is allowlisted (7, sudoers excluded)"
+  echo "TEST: install — every FILE_MAP dest is allowlisted (11, sudoers excluded)"
   setup
   local specs=(
     "/usr/local/bin/ci-deploy.sh|755|root:root"
@@ -175,6 +175,11 @@ test_all_managed_dests_accepted() {
     "/usr/local/bin/canary-bundle-claim-check.sh|755|root:root"
     "/etc/webhook/hooks.json|640|root:deploy"
     "/usr/local/bin/cat-infra-config-state.sh|755|root:root"
+    "/usr/local/bin/inngest-enumerate-reminders.sh|755|root:root"
+    "/usr/local/bin/inngest-rearm-reminders.sh|755|root:root"
+    "/usr/local/bin/inngest-wiped-volume-verify.sh|755|root:root"
+    "/usr/local/bin/cat-inngest-verify-state.sh|755|root:root"
+    "/usr/local/bin/inngest-inventory.sh|755|root:root"
   )
   local accepted=0 entry d mode owner rc
   for entry in "${specs[@]}"; do
@@ -183,7 +188,7 @@ test_all_managed_dests_accepted() {
     printf 'payload-%s' "$(basename "$d")" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
   done
-  assert_eq "all 7 managed dests accepted" "7" "$accepted"
+  assert_eq "all 12 managed dests accepted" "12" "$accepted"
   teardown
 }
 
@@ -246,8 +251,8 @@ test_dest_spec_filemap_lockstep() {
   filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
   # DEST_SPEC keys look like: ["/dest/path"]="mode owner"
   dest_spec_count=$(grep -cE '^\s*\["/' "$HELPER")
-  assert_eq "FILE_MAP has 7 managed dests" "7" "$filemap_count"
-  assert_eq "DEST_SPEC has 7 managed dests" "7" "$dest_spec_count"
+  assert_eq "FILE_MAP has 12 managed dests" "12" "$filemap_count"
+  assert_eq "DEST_SPEC has 12 managed dests" "12" "$dest_spec_count"
   assert_eq "DEST_SPEC and FILE_MAP cardinality match" "$filemap_count" "$dest_spec_count"
   # The sudoers dest must be in NEITHER (root-managed).
   if grep -q '/etc/sudoers.d/deploy-inngest-bootstrap' "$HELPER"; then

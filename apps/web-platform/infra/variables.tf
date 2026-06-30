@@ -154,6 +154,18 @@ variable "resend_api_key" {
   sensitive   = true
 }
 
+variable "resend_receiving_api_key" {
+  description = "Resend receiving/full-access API key for inbound-mail body fetch (RESEND_RECEIVING_API_KEY). Distinct from the send-scoped resend_api_key — least-privilege per #5480. Operator-minted at resend.com/api-keys; value from Doppler prd_terraform via TF_VAR_resend_receiving_api_key. No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+}
+
+variable "supabase_access_token" {
+  description = "Supabase account-scoped Management-API PAT (sbp_…) used by scheduled-inngest-health.yml to read pg_stat_activity on the dedicated inngest project (ref pigsfuxruiopinouvjwy) for connection-pool monitoring (#5562). Out-of-band-minted at supabase.com/dashboard/account/tokens; value from Doppler prd_terraform via TF_VAR_supabase_access_token. Published to a GH Actions secret via github_actions_secret.supabase_access_token (inngest.tf), NOT operator gh secret set. No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+}
+
 # --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
 # 3 new variables (down from plan's 7). Inngest signing/event keys are
 # TF-generated via random_id (see inngest.tf); no operator mint required.

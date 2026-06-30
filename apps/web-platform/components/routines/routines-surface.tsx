@@ -11,8 +11,10 @@
 // delegating_principal are never surfaced (PR-1 PII posture).
 
 import { useCallback, useEffect, useState } from "react";
+import useSWR from "swr";
 
 import { ChatSurface } from "@/components/chat/chat-surface";
+import { swrKeys } from "@/lib/swr-config";
 
 // Delay before the single post-trigger reconciliation refetch that swaps the
 // optimistic "running" row for the real terminal routine_runs row.
@@ -43,6 +45,17 @@ interface RecentRun extends RunSummary {
   // actor_class is a coarse enum (system | human | agent).
   run_id: string | null;
   actor_class: string;
+}
+
+// ADR-067: shared fetcher for the routines list — RoutinesTab and the Recent
+// Runs tab's routine-dropdown options key the SAME swrKeys.routinesList(), so
+// switching tabs reuses one cached fetch (free dedup) and the Routines tab
+// renders instantly on return.
+async function fetchRoutines(): Promise<RoutineItem[]> {
+  const res = await fetch("/api/dashboard/routines");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { routines: RoutineItem[] };
+  return json.routines;
 }
 
 function humanizeFnId(fnId: string): string {
@@ -240,27 +253,23 @@ function DraftRoutineTab() {
 }
 
 function RoutinesTab() {
-  const [routines, setRoutines] = useState<RoutineItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [confirming, setConfirming] = useState<RoutineItem | null>(null);
   const [detail, setDetail] = useState<RoutineItem | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await fetch("/api/dashboard/routines");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as { routines: RoutineItem[] };
-      setRoutines(json.routines);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "load failed");
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // ADR-067: cached so returning to the Routines tab renders instantly; the
+  // loading gate is `data === undefined` (GAP F), so background revalidation
+  // never re-shows the "Loading…" line.
+  const {
+    data: routines,
+    error: loadError,
+    mutate,
+  } = useSWR(swrKeys.routinesList(), fetchRoutines);
+  const error = loadError
+    ? loadError instanceof Error
+      ? loadError.message
+      : "load failed"
+    : null;
 
   const runNow = useCallback(
     async (item: RoutineItem, confirmed: boolean) => {
@@ -275,41 +284,44 @@ function RoutinesTab() {
           setConfirming(item); // protected — show confirm modal
           return;
         }
-        // 202 (or any non-409): optimistic "Running", then reconcile against
-        // DB truth. The optimistic row has no terminal state of its own — the
-        // cron writes its routine_runs row when it finishes — so without this
-        // refetch the row would read "running" forever until a page reload.
-        setRoutines((rs) =>
-          rs
-            ? rs.map((r) =>
-                r.fnId === item.fnId
-                  ? {
-                      ...r,
-                      lastRun: {
-                        status: "running",
-                        trigger_source: "manual",
-                        started_at: new Date().toISOString(),
-                        ended_at: null,
-                        duration_ms: null,
-                        error_summary: null,
-                      },
-                    }
-                  : r,
-              )
-            : rs,
+        // 202 (or any non-409): optimistic "Running" written into the cache
+        // (no revalidate), then reconcile against DB truth. The optimistic row
+        // has no terminal state of its own — the cron writes its routine_runs
+        // row when it finishes — so without the reconcile it would read
+        // "running" forever until a page reload.
+        void mutate(
+          (rs) =>
+            rs
+              ? rs.map((r) =>
+                  r.fnId === item.fnId
+                    ? {
+                        ...r,
+                        lastRun: {
+                          status: "running",
+                          trigger_source: "manual",
+                          started_at: new Date().toISOString(),
+                          ended_at: null,
+                          duration_ms: null,
+                          error_summary: null,
+                        },
+                      }
+                    : r,
+                )
+              : rs,
+          { revalidate: false },
         );
         setConfirming(null);
-        // One delayed reconciliation refetch (not a polling loop — a single
-        // bounded GET) to replace the optimistic "running" with the real
+        // One delayed reconciliation revalidation (not a polling loop — a single
+        // bounded refetch) to replace the optimistic "running" with the real
         // terminal row once the run has had a moment to complete.
         setTimeout(() => {
-          void load();
+          void mutate();
         }, RECONCILE_DELAY_MS);
       } finally {
         setBusy((b) => ({ ...b, [item.fnId]: false }));
       }
     },
-    [load],
+    [mutate],
   );
 
   if (error)
@@ -523,23 +535,14 @@ const TRIGGER_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
 
 // The Recent Runs tab: full filter bar + the shared run-log view.
 function RecentRunsTab() {
-  const [routineOptions, setRoutineOptions] = useState<RoutineItem[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch("/api/dashboard/routines");
-        if (!res.ok) return;
-        const json = (await res.json()) as { routines: RoutineItem[] };
-        if (!cancelled) setRoutineOptions(json.routines);
-      } catch {
-        /* dropdown options are best-effort; the log still loads without them */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // ADR-067: dropdown options share swrKeys.routinesList() with RoutinesTab, so
+  // the routines fetch is reused across both tabs (dropdown options are
+  // best-effort — the log still loads without them). The run LOG itself stays
+  // on its own keyset-paginated fetch (see RunLogView scope-cut note).
+  const { data: routineOptions = [] } = useSWR(
+    swrKeys.routinesList(),
+    fetchRoutines,
+  );
   return <RunLogView showFilters routineOptions={routineOptions} />;
 }
 
@@ -547,6 +550,14 @@ function RecentRunsTab() {
 // (fixedRoutineId, no filters) both render this — ONE table + ONE detail-panel
 // path. Filters map to the route's validated query params; `since` is derived
 // from the range preset client-side.
+//
+// ADR-067 scope-cut (plan Phase 5, permitted): this keeps its own cursor-keyset
+// pagination (accumulate-pages-across-"Load more") rather than migrating to
+// useSWRInfinite. Recent Runs is a secondary sub-tab, not a top-level nav view,
+// and useSWRInfinite would have to re-encode the reset-on-filter-change +
+// per-filter cursor reset for low cache benefit. The instant-tab-content win is
+// delivered by the Routines list (RoutinesTab, on SWR). Migrating Recent Runs to
+// useSWRInfinite is tracked in the conversations/TR3 follow-up's sibling note.
 function RunLogView({
   showFilters,
   routineOptions,

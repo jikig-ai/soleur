@@ -49,3 +49,20 @@ Brand-survival threshold for PR-H: `single-user incident`. The webhook + Inngest
 - Operator owns the GitHub App creation step at `https://github.com/settings/apps/new` (single manual gate per `hr-never-label-any-step-as-manual-without`; deferred-automation issue tracks future Terraform-provider availability).
 - `audit_github_token_use` ledger gives Art. 5(2) accountability for every installation-token use; the `record_github_token_use` `SECURITY DEFINER` RPC is the sole write path.
 - Webhook secret is `random_id`-derived in Terraform (rotation = `terraform apply -replace=random_id.github_webhook_secret`); the 4 operator-supplied App secrets carry `lifecycle.ignore_changes = [value]` to keep ad-hoc dashboard rotations from causing Terraform plan churn.
+
+## Amendment 2026-06-30 — drop-before-dedup reorder (WAL reduction)
+
+The Decision above states the route "mirrors the Stripe webhook's 8-step ordering exactly (verify-FIRST, dedup-SECOND … send-FOURTH)." That ordering claim is **superseded for the dedup step only**.
+
+**What changed.** The `processed_github_events` dedup `INSERT` no longer runs second (immediately after signature verify, before parse + drop-filters). It now runs **drop-before-dedup**: inside a `claimDedupRow()` closure invoked immediately before EACH dispatch site (push-reconcile + non-push `inngest.send`), AFTER every drop-filter. Deliveries that drop (`workflow_run` non-failure, no installation, non-reconcilable push, no founder / ambiguous / db-error, unmapped event, no grant) return their existing 200/4xx and write NO dedup row.
+
+**Why.** Per `pg_stat_statements.wal_bytes` on production project `ifsccnjhymdmidffkzhl`, the dedup-first `INSERT` was **63% of the database's total WAL** — the dominant Supabase Disk-IO-budget consumer (the warning that prompted this work). The GitHub stream is dominated by a guaranteed no-op (`workflow_run` with `conclusion !== 'failure'`); dedup-first wrote (and migration 094 later auto-deleted) a useless row for every one. WAL is per-write, not per-retained-row, so the only lever is to stop writing rows that never gated a dispatch. Stripe has no equivalent high-frequency no-op (every Stripe event type is actioned; ~1 row/day), so dedup-first costs Stripe nothing — the divergence is a deliberate, measured response to GitHub's **volume + actioned-ratio**, NOT "Stripe doesn't dispatch" (Stripe's `invoice.payment_failed` branch also dispatches to Inngest and relies on dedup-first).
+
+**Stripe idioms preserved.** Two load-bearing parity properties are kept verbatim in `claimDedupRow()` / the dispatch try-catches:
+
+1. `PG_UNIQUE_VIOLATION (23505) → 200 {received:true}` replay short-circuit — concurrency-safe via the `delivery_id` unique constraint, the serialization point for concurrent redeliveries.
+2. `releaseDedupRow()` on dispatch failure (both push and non-push paths) so a transient `inngest.send` failure is re-driven by GitHub's redelivery rather than silently swallowed.
+
+The surviving invariant is "INSERT strictly before side-effect dispatch." Do NOT "restore Stripe ordering parity" by moving the INSERT back to second — that re-introduces the 63%-WAL regression. See plan `knowledge-base/project/plans/2026-06-30-fix-webhook-dedup-drop-before-insert-plan.md` and the route header at `apps/web-platform/app/api/webhooks/github/route.ts`.
+
+**Behavioral note.** One intentional behavioral change falls out of the reorder: a no-grant (`isGranted` = false) non-push event no longer writes a dedup row, so if the founder later grants the scope, a GitHub redelivery of that `delivery_id` WILL dispatch. This is strictly more correct — the signal is delivered once consent exists — and is never a double-dispatch, since the no-grant path never dispatched in the first place.

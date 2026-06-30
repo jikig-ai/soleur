@@ -37,6 +37,13 @@ vi.mock("@/server/byok-resolver", () => ({
 }));
 
 vi.mock("@/server/workspace", () => ({ provisionWorkspace: vi.fn() }));
+// ADR-044 PR-2 (#5462): the callback resolves the active workspace before
+// reading repo_status from `workspaces`. Stub the resolver to the test user id
+// (solo workspace id === user id per the N2 invariant) so the WORKSPACES read
+// targets a row our service-client mock recognizes.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: vi.fn(async () => USER_ID),
+}));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
@@ -65,15 +72,36 @@ function makeRequest(): NextRequest {
   });
 }
 
-// Single users row covering BOTH service-client reads: ensureWorkspaceProvisioned
-// (workspace_status, tc_accepted_version) and the key-gate (repo_status,
-// setup_key_skipped_at). The mock ignores selected columns and returns the row.
+// Covers all three service-client reads from a single fixture row:
+//   - ensureWorkspaceProvisioned: users.select(workspace_status,
+//     tc_accepted_version).eq().single()
+//   - key-gate skip flag: users.select(setup_key_skipped_at).eq().single()
+//   - key-gate repo status (ADR-044 PR-2 #5462): repo_status is now AUTHORITATIVE
+//     on the active `workspaces` row, read via workspaces.select(repo_status)
+//     .eq().maybeSingle(). The fixture's `repo_status` is fed through that read.
+// The `users` reads ignore the selected columns and return the whole row; the
+// `workspaces` read returns only { repo_status }.
 function stubUsersRow(row: Record<string, unknown>) {
-  mockServiceFrom.mockImplementation(() => ({
-    select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: row, error: null }) }) }),
-    update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-    upsert: () => Promise.resolve({ error: null }),
-  }));
+  mockServiceFrom.mockImplementation((table: string) => {
+    if (table === "workspaces") {
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve({
+                data: { repo_status: row.repo_status ?? null },
+                error: null,
+              }),
+          }),
+        }),
+      };
+    }
+    return {
+      select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: row, error: null }) }) }),
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      upsert: () => Promise.resolve({ error: null }),
+    };
+  });
 }
 
 function pathOf(res: Response): string {
