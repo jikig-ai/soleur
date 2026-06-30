@@ -64,3 +64,5 @@ The Decision above states the route "mirrors the Stripe webhook's 8-step orderin
 2. `releaseDedupRow()` on dispatch failure (both push and non-push paths) so a transient `inngest.send` failure is re-driven by GitHub's redelivery rather than silently swallowed.
 
 The surviving invariant is "INSERT strictly before side-effect dispatch." Do NOT "restore Stripe ordering parity" by moving the INSERT back to second — that re-introduces the 63%-WAL regression. See plan `knowledge-base/project/plans/2026-06-30-fix-webhook-dedup-drop-before-insert-plan.md` and the route header at `apps/web-platform/app/api/webhooks/github/route.ts`.
+
+**Behavioral note.** One intentional behavioral change falls out of the reorder: a no-grant (`isGranted` = false) non-push event no longer writes a dedup row, so if the founder later grants the scope, a GitHub redelivery of that `delivery_id` WILL dispatch. This is strictly more correct — the signal is delivered once consent exists — and is never a double-dispatch, since the no-grant path never dispatched in the first place.

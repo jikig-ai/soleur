@@ -389,7 +389,10 @@ describe("GitHub webhook — founder attribution (ADR-044 amendment)", () => {
     // Unmapped → no dispatch, no grant check.
     expect(mockSendWithRetry).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
-    // Not a 404-drop: the dedup row is NOT released (unmapped-event 200 ignore).
+    // Drop-before-dedup: the unmapped-event 200-ignore is a NEW pre-dispatch
+    // drop under this reorder (dedup-first code WOULD have inserted) — no row
+    // is written, so nothing is released either.
+    expect(mockInsert).not.toHaveBeenCalled();
     expect(mockDeleteEq).not.toHaveBeenCalled();
   });
 });

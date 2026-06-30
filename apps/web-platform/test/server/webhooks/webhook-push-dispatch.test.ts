@@ -164,6 +164,11 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     expect(mockIsGranted).not.toHaveBeenCalled();
     // Drop-before-dedup: a dispatching push DOES write its dedup row, immediately before send.
     expect(mockInsert).toHaveBeenCalledWith({ delivery_id: "delivery-push-1" });
+    // INSERT-strictly-before-dispatch invariant (push): the dedup claim must
+    // precede inngest.send. Fails loud if a future reorder moves it after.
+    expect(mockInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInngestSend.mock.invocationCallOrder[0],
+    );
   });
 
   it("Case 1b: reconcilable push missing repository.full_name fails closed (no dispatch, P0-2)", async () => {
@@ -263,6 +268,19 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     const req = makePushRequest({});
     const res = await POST(req);
     expect(res.status).toBe(200);
+    expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("Case 11: reconcilable push with non-23505 dedup insert error → 500, no dispatch", async () => {
+    // The shared claimDedupRow() closure returns 500 {error:"DB error"} on a
+    // non-conflict insert error; GitHub retries 5xx. No dispatch, nothing to
+    // release (the INSERT itself failed). Mirrors the non-push branch covered
+    // in github-route.test.ts.
+    mockInsert.mockResolvedValueOnce({ error: { code: "08006", message: "conn lost" } });
+    const req = makePushRequest({});
+    const res = await POST(req);
+    expect(res.status).toBe(500);
     expect(mockInngestSend).not.toHaveBeenCalled();
     expect(mockDeleteEq).not.toHaveBeenCalled();
   });

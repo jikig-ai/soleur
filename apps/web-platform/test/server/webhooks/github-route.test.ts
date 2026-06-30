@@ -315,6 +315,11 @@ describe("POST /api/webhooks/github — payload & routing", () => {
     expect(mockInngestSend).toHaveBeenCalledWith(
       expect.objectContaining({ name: "engineering.ci_failed" }),
     );
+    // INSERT-strictly-before-dispatch invariant (non-push): the dedup claim
+    // must precede inngest.send. Fails loud if a future reorder moves it after.
+    expect(mockInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInngestSend.mock.invocationCallOrder[0],
+    );
   });
 
   it("returns 200 with NO dedup row when payload has no installation.id (drop)", async () => {
@@ -407,6 +412,10 @@ describe("POST /api/webhooks/github — repo-scoped founder resolution (BUG 1)",
     // Unmapped event → no dispatch, no isGranted (falls through actionClass).
     expect(mockInngestSend).not.toHaveBeenCalled();
     expect(mockIsGranted).not.toHaveBeenCalled();
+    // Drop-before-dedup: the unmapped-event 200-ignore is a NEW pre-dispatch
+    // drop under this reorder (dedup-first code WOULD have inserted here) —
+    // no processed_github_events row is written.
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   // AC4c: a db-error from the repo-scoped resolver returns 500 (re-drivable).
