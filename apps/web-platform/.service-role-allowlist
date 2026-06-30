@@ -101,6 +101,12 @@ apps/web-platform/server/account-delete.ts
 apps/web-platform/server/concurrency.ts
 apps/web-platform/server/notifications.ts
 
+# Worktree write-lease RPC client (epic #5274 Phase 2, ADR-068 §2). Process-
+# scoped infra coordination keyed to workspace_id+worktree_id+host_id; the
+# acquire/touch/release functions are SECURITY DEFINER + service-role-only
+# (migration 116). No founder identity — same posture as concurrency.ts.
+apps/web-platform/server/worktree-write-lease.ts
+
 # Shared per-turn cost writer (PR #3626). Service-role required for the
 # atomic `increment_conversation_cost` + `write_byok_audit` RPCs which
 # are SECURITY DEFINER + service-role-only by migrations 017/037/042.
