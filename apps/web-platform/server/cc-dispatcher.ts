@@ -119,7 +119,10 @@ import {
 // 2026-06-19 — dispatch readiness gates on worktree VALIDITY (not mere `.git`
 // presence) so a corrupt/partial `.git` routes to recovery instead of a silent
 // repo-less spawn.
-import { isValidGitWorkTree } from "./git-worktree-validity";
+import {
+  isReadyGitWorkTree,
+  probeGitWorktreeShape,
+} from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
 // the agent, so a Concierge session never starts against a not-ready workspace.
@@ -138,7 +141,10 @@ import { resolveActiveWorkspace } from "./workspace-resolver";
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
 import { WorkspaceNotReadyError } from "./workspace-not-ready";
-import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
+import {
+  reportRepoResolverDivergence,
+  reportAgentReadinessSelfStop,
+} from "./repo-resolver-divergence";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1788,9 +1794,48 @@ export const realSdkQueryFactory: QueryFactory = async (
     // structural validity probe stays SYNCHRONOUS and is evaluated AFTER the
     // `!repoReadiness.ok` short-circuit so `getFreshTenantClient` stays OFF the
     // common valid-`.git` hot path (AC7).
-    const needsSelfHeal =
-      !repoReadiness.ok ||
-      !isValidGitWorkTree(workspacePath);
+    // #5733 Phase 1b + D — gitdir-POINTER strand detection + observability. A
+    // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
+    // strands the agent's IN-BWRAP `git rev-parse` (its `gitdir:` target is
+    // unreadable under the sandbox `denyRead:["/workspaces"]`). The prompt-driven
+    // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
+    // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
+    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
+    // the readiness decision and the observability emit — no re-lstat. The common
+    // dir-valid case pays this single cheap probe; it is not free, but adds no
+    // subprocess and no DB/JWT.
+    const gitShape = probeGitWorktreeShape(workspacePath);
+    // Readiness derived from the SAME probe: a self-contained valid dir OR a
+    // non-escaping in-workspace pointer (readable in-sandbox) is ready.
+    const gitReady =
+      gitShape.kind === "dir-valid" ||
+      (gitShape.kind === "file-pointer" &&
+        gitShape.gitdirEscapesWorkspace === false);
+    // #5733 Phase 1b — emit the agent-readiness self-stop for ANY connected,
+    // DB-ready workspace whose on-disk `.git` is NOT rev-parse-ready (escaping
+    // pointer / corrupt dir / absent). The agent self-stops on its in-bwrap `git
+    // rev-parse` for ALL of these, and Phase 0 could not confirm WHICH shape prod
+    // has — so the one queryable event must cover them all (`gitKind`
+    // distinguishes). Excludes a legitimately repo-less workspace (no `repoUrl`)
+    // and a cloning/error status (the honest RepoNotReadyError owns those). Fires
+    // BEFORE the heal so the strand is queryable on this very dispatch.
+    if (repoReadiness.ok && repoUrl && !gitReady) {
+      reportAgentReadinessSelfStop({
+        userId: args.userId,
+        activeWorkspaceId,
+        // lstat-validity (the FILE-pointer trap) — derived from the same probe.
+        gitValid:
+          gitShape.kind === "dir-valid" || gitShape.kind === "file-pointer",
+        gitKind: gitShape.kind,
+        gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
+      });
+    }
+    // `gitReady` treats an escaping pointer / corrupt dir as NOT ready, so it
+    // falls through to the self-heal. `gitDirValid` (the seam consumed by
+    // resolveRepoReadinessWithSelfHeal) uses the same `isReadyGitWorkTree`
+    // predicate, else the readiness module's fast-path (`:199`) short-circuits on
+    // lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
+    const needsSelfHeal = !repoReadiness.ok || !gitReady;
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
@@ -1833,10 +1878,12 @@ export const realSdkQueryFactory: QueryFactory = async (
             // TRUE PRESENCE — used only by the null-install divergence gates
             // (a corrupt `.git` is NOT absent; F1).
             gitDirExists: (p) => existsSync(path.join(p, ".git")),
-            // STRUCTURAL VALIDITY (2026-06-19) — the fast-path/recovery gate. A
-            // `.git` present-but-corrupt is `false` here, routing it to the
-            // corrupt-worktree graft instead of fast-pathing a repo-less spawn.
-            gitDirValid: (p) => isValidGitWorkTree(p),
+            // READINESS-grade validity (#5733) — the fast-path/recovery gate. A
+            // `.git` present-but-corrupt OR a stale gitdir-pointer FILE is
+            // `false` here, routing it to the corrupt-worktree graft (which now
+            // re-clones a self-contained `.git` over a pointer) instead of
+            // fast-pathing a repo-less / strand-bound spawn.
+            gitDirValid: (p) => isReadyGitWorkTree(p),
             // Dispatch-time divergence emit. The readiness module recognizes a
             // connected-but-null-install workspace (`connected-null-install-at-
             // dispatch`) OR a corrupt on-disk `.git` (`corrupt-worktree-at-

@@ -28,8 +28,16 @@
 // operation.
 // ---------------------------------------------------------------------------
 
-import { lstatSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import {
+  lstatSync,
+  existsSync,
+  readFileSync,
+  openSync,
+  fstatSync,
+  closeSync,
+  constants,
+} from "node:fs";
+import { join, isAbsolute, resolve, sep } from "node:path";
 
 /**
  * SYNC structural validity of `<workspacePath>/.git` — the hot-path gate.
@@ -64,6 +72,116 @@ export function isValidGitWorkTree(workspacePath: string): boolean {
   return (
     existsSync(join(gitPath, "HEAD")) && existsSync(join(gitPath, "objects"))
   );
+}
+
+/**
+ * Structural shape of `<workspacePath>/.git` (#5733). A SYNC, read-only
+ * classification used by the dispatch readiness gate + the agent-readiness
+ * observability mirror. The load-bearing case is `"file-pointer"`: a `.git`
+ * FILE that `isValidGitWorkTree` passes (line 60) but the agent's IN-BWRAP `git
+ * rev-parse --is-inside-work-tree` strands on — especially when the `gitdir:`
+ * target resolves OUTSIDE the workspace (e.g. under `/workspaces`, which the
+ * agent sandbox `denyRead`s). A personal workspace root is NEVER a legitimate
+ * linked-worktree/submodule, so a `.git` FILE there is an anomalous stale
+ * pointer. `gitdirEscapesWorkspace` enriches the signal (a target inside the
+ * workspace would still be readable in-sandbox).
+ *
+ * Cost: 1 `lstat` + (for a FILE only) 1 small `readFileSync`. No subprocess.
+ */
+export interface GitWorktreeShape {
+  kind: "absent" | "file-pointer" | "dir-valid" | "dir-invalid" | "other";
+  /** The raw `gitdir:` target string, for a file-pointer (best-effort). */
+  gitdirTarget?: string;
+  /** True when the gitdir target resolves OUTSIDE `workspacePath`. */
+  gitdirEscapesWorkspace?: boolean;
+}
+
+export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
+  const gitPath = join(workspacePath, ".git");
+  // Open ONCE and stat+read on the SAME file descriptor — no lstat-then-readFile
+  // TOCTOU (CodeQL js/file-system-race). `O_NOFOLLOW` preserves the no-follow
+  // semantics of `isValidGitWorkTree`'s lstat: a `.git` SYMLINK fails to open
+  // (ELOOP) and is classified `"other"`, never followed.
+  let fd: number;
+  try {
+    fd = openSync(gitPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    // ENOENT → genuinely absent; ELOOP (symlink) / EACCES / other → an
+    // unusable plain `.git`, conservatively bucketed `"other"` (not ready,
+    // never destructively healed).
+    return (err as NodeJS.ErrnoException).code === "ENOENT"
+      ? { kind: "absent" }
+      : { kind: "other" };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (st.isFile()) {
+      let gitdirTarget: string | undefined;
+      let gitdirEscapesWorkspace: boolean | undefined;
+      try {
+        const body = readFileSync(fd, "utf8"); // reads from the open fd — same file
+        const m = body.match(/^gitdir:\s*(.+?)\s*$/m);
+        gitdirTarget = m?.[1];
+        if (gitdirTarget) {
+          const resolved = isAbsolute(gitdirTarget)
+            ? resolve(gitdirTarget)
+            : resolve(workspacePath, gitdirTarget);
+          const root = resolve(workspacePath);
+          gitdirEscapesWorkspace =
+            resolved !== root && !resolved.startsWith(root + sep);
+        }
+      } catch {
+        // Unreadable pointer body — still a file-pointer (escapes unknown).
+      }
+      return { kind: "file-pointer", gitdirTarget, gitdirEscapesWorkspace };
+    }
+    if (st.isDirectory()) {
+      return {
+        kind: isValidGitWorkTree(workspacePath) ? "dir-valid" : "dir-invalid",
+      };
+    }
+    return { kind: "other" }; // socket / fifo / etc. — never the file-pointer path
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * A `.git` FILE pointer that STRANDS the agent's in-bwrap `git rev-parse`
+ * (#5733). The strand is specific: only a pointer whose `gitdir:` target
+ * resolves OUTSIDE the workspace (e.g. under `/workspaces`, which the agent
+ * sandbox `denyRead`s) is unreadable in-sandbox and fails `rev-parse`. A pointer
+ * whose target stays INSIDE the workspace is readable in-sandbox and works — it
+ * does NOT strand, so it is left untouched (never destructively re-cloned). An
+ * unreadable pointer body (`gitdirEscapesWorkspace === undefined`) is treated as
+ * stranding — a workspace-root `.git` FILE we cannot classify is anomalous and a
+ * personal workspace root is never a legitimate linked worktree. This is the
+ * predicate the destructive heal gates on, so it is deliberately narrow.
+ */
+export function isStrandingFilePointer(shape: GitWorktreeShape): boolean {
+  return shape.kind === "file-pointer" && shape.gitdirEscapesWorkspace !== false;
+}
+
+/**
+ * READINESS-grade validity (#5733). `isValidGitWorkTree` is the STRUCTURAL
+ * fast-path gate, but it returns `true` for a `.git` FILE pointer — and an
+ * ESCAPING pointer strands the agent's in-bwrap `git rev-parse`. The dispatch +
+ * reconcile readiness gates use THIS: ready = a self-contained valid dir OR a
+ * NON-escaping in-workspace pointer (readable in-sandbox). A stranding (escaping
+ * / unclassifiable) pointer is NOT ready, so it routes into
+ * `ensureWorkspaceRepoCloned` (which unlinks the stale pointer + re-clones a
+ * self-contained `.git`) rather than fast-pathing a doomed agent spawn. This is
+ * `rev-parse`-AWARE structural readiness — it closes the dominant rev-parse
+ * strand case (the escaping pointer); it does not itself run `rev-parse`. Cost:
+ * a single `probeGitWorktreeShape` (sync lstat(s); the small pointer-body read
+ * happens only when `.git` is actually a FILE) — no subprocess, no double-probe.
+ */
+export function isReadyGitWorkTree(workspacePath: string): boolean {
+  const shape = probeGitWorktreeShape(workspacePath);
+  if (shape.kind === "dir-valid") return true;
+  // A non-escaping in-workspace pointer is functional in-sandbox → ready.
+  if (shape.kind === "file-pointer") return shape.gitdirEscapesWorkspace === false;
+  return false; // absent / dir-invalid / other (symlink) → not ready
 }
 
 /**
