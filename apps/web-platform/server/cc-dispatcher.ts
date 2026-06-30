@@ -123,6 +123,7 @@ import {
   isReadyGitWorkTree,
   probeGitWorktreeShape,
   evaluateAgentReadiness,
+  isLstatValidKind,
 } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
@@ -1806,8 +1807,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
-    // the readiness decision and the observability emit — no re-lstat. The common
-    // dir-valid case pays this single cheap probe.
+    // the SYNC readiness decision and the observability emit here — no re-lstat on
+    // the sync path. The common dir-valid case pays this single cheap probe here;
+    // the additive host `rev-parse` confirm below (#5733 deliverable A) then
+    // re-probes ONLY that dir-valid slice the lstat verdict greenlights but the
+    // agent can still strand on (detailed in the note immediately following).
     // #5733 deliverable A (2026-06-30 — SUPERSEDES the 2026-06-19 "adds no
     // subprocess" zero-await guarantee for the connected cold path): after this
     // sync lstat routing, `evaluateAgentReadiness` (below, post-heal) runs ONE
@@ -1834,8 +1838,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         userId: args.userId,
         activeWorkspaceId,
         // lstat-validity (the FILE-pointer trap) — derived from the same probe.
-        gitValid:
-          gitShape.kind === "dir-valid" || gitShape.kind === "file-pointer",
+        gitValid: isLstatValidKind(gitShape.kind),
         gitKind: gitShape.kind,
         gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
       });
@@ -1846,6 +1849,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // predicate, else the readiness module's fast-path (`:199`) short-circuits on
     // lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
     const needsSelfHeal = !repoReadiness.ok || !gitReady;
+    // #5733 (review P3) — the readiness used to SCOPE the host `rev-parse` confirm
+    // below. It must reflect the POST-heal state: a heal-from-not-ready dispatch
+    // (repoReadiness.ok=false → self-heal lands the repo → healed.ok=true) would,
+    // if scoped on the PRE-heal `repoReadiness.ok=false`, short-circuit
+    // `evaluateAgentReadiness` to "ready" and SKIP the dir-valid confirm. Seeded to
+    // the pre-heal value (used as-is when no heal runs) and lifted to the post-heal
+    // `repoReadiness.ok || healed.ok` inside the heal block (where `healed` scopes).
+    let confirmDbReady = repoReadiness.ok;
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
@@ -1950,6 +1961,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       // healed.ok === true → the self-heal landed `.git` (or the row was already
       // recoverable into ready). Dispatch proceeds; the `ensureWorkspaceRepoCloned`
       // below now no-ops because `.git` is present.
+      // Post-heal readiness: a heal-from-not-ready is now connected+ready, so the
+      // dir-valid host confirm below must run (not be short-circuited away).
+      confirmDbReady = repoReadiness.ok || healed.ok;
     }
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
@@ -1997,7 +2011,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         userId: args.userId,
         activeWorkspaceId,
         connected: Boolean(repoUrl),
-        dbReady: repoReadiness.ok,
+        dbReady: confirmDbReady, // POST-heal (review P3) — see confirmDbReady note above
       })) === "block"
     ) {
       throw new RepoNotReadyError(
@@ -3409,8 +3423,7 @@ export async function dispatchSoleurGo(
             // `<root>/<activeWorkspaceId>` by construction (ADR-044) → basename is
             // the workspace id, pre-hashed inside reportAgentReadinessSelfStop.
             activeWorkspaceId: path.basename(workspacePath),
-            gitValid:
-              shape.kind === "dir-valid" || shape.kind === "file-pointer",
+            gitValid: isLstatValidKind(shape.kind),
             // The agent's OWN rev-parse said not-a-work-tree (the authoritative
             // in-sandbox verdict). NEVER the subprocess stderr / raw path.
             gitRevParseValid: false,
@@ -3420,11 +3433,18 @@ export async function dispatchSoleurGo(
           });
         }
       } catch (err) {
-        reportSilentFallback(err, {
-          feature: "cc-dispatcher",
-          op: "agent-readiness-backstop",
-          extra: { userId, conversationId },
-        });
+        // Pass a SANITIZED error, never raw `err` (security #5733): a path-bearing
+        // fs error message could carry the raw workspacePath (== userId for a solo
+        // workspace) into Sentry. The error NAME is enough to triage the backstop's
+        // own failure; the `extra` keeps userId (pseudonymized at the boundary).
+        reportSilentFallback(
+          err instanceof Error ? err.name : "agent-readiness-backstop-error",
+          {
+            feature: "cc-dispatcher",
+            op: "agent-readiness-backstop",
+            extra: { userId, conversationId },
+          },
+        );
       }
 
       // feat-concierge-stream-commands — stream the Bash command's
