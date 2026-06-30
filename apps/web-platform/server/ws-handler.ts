@@ -765,10 +765,18 @@ export async function refreshSubscriptionStatus(
     // Non-deterministic which over-cap session gets closed — all of them
     // will on their next refresh tick, converging within one interval.
     const newCap = effectiveCap(session.planTier, session.concurrencyOverride);
+    // Freshness-filter the count so crashed-but-unreaped slots don't trigger a
+    // false eviction. Mirrors the acquire-RPC self-reap (093:79-81) and the
+    // sibling slot probes (:526 divergence, :2013 sibling-slot). Load-bearing
+    // for the migration-114 throttle (#5738): the slots sweep moved */15 → hourly,
+    // so stale rows linger up to ~1h; without this filter a downgraded user with
+    // a stale slot would be falsely evicted on the next refresh tick.
+    const liveCutoff = new Date(Date.now() - 120_000).toISOString();
     const { count, error: countErr } = await tenant
       .from("user_concurrency_slots")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .gte("last_heartbeat_at", liveCutoff);
     if (!countErr && typeof count === "number" && count > newCap) {
       const convId = session.conversationId ?? session.pending?.id;
       log.info(

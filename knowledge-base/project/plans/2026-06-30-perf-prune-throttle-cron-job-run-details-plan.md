@@ -223,24 +223,24 @@ back to `*/15 * * * *` (its state from migration 038), and
 
 ### Pre-merge (PR)
 
-- [ ] **Phase 0 fix:** `ws-handler.ts:768-772` cap-drift evict count includes
+- [x] **Phase 0 fix:** `ws-handler.ts:768-772` cap-drift evict count includes
   `.gte("last_heartbeat_at", liveCutoff)` with a 120 s (`120_000` ms) cutoff;
   `git grep -n 'last_heartbeat_at' apps/web-platform/server/ws-handler.ts` shows
   all three slot-count sites (`:522`, `:768-area`, `:2004`) now freshness-filter.
-- [ ] `114_prune_cron_job_run_details.sql` exists with **two** statements (throttle
+- [x] `114_prune_cron_job_run_details.sql` exists with **two** statements (throttle
   + retention schedule; no one-time purge); the throttle uses `0 * * * *`, and the
   slots DELETE body + `120 seconds` interval are **functionally identical** to
   migration 038's body (038's is a multi-line heredoc — match behavior, not bytes).
-- [ ] The retention DELETE uses `COALESCE(end_time, start_time) < now() - interval '7 days'`
+- [x] The retention DELETE uses `COALESCE(end_time, start_time) < now() - interval '7 days'`
   (≥7-day retention preserved per AC).
-- [ ] Idempotent `DO … unschedule guard → schedule … EXCEPTION WHEN duplicate_object`
+- [x] Idempotent `DO … unschedule guard → schedule … EXCEPTION WHEN duplicate_object`
   shape matches migration 103 (closest precedent).
-- [ ] `114_…down.sql` restores `*/15 * * * *` for the slots sweep and unschedules
+- [x] `114_…down.sql` restores `*/15 * * * *` for the slots sweep and unschedules
   `cron_job_run_details_retention`. (The Phase 0 ws-handler fix is a strict
   improvement and is not reverted by the down migration.)
-- [ ] Header comment cites issue #5738, the investigation learning, the 96→24
+- [x] Header comment cites issue #5738, the investigation learning, the 96→24
   delta, and the R1 safety rationale (acquire self-reap + Phase 0 fix).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is green (Phase 0
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is green (Phase 0
   edits `ws-handler.ts`).
 
 ### Post-merge (operator/automated — via Supabase MCP `execute_sql`, read-only verify; no SSH)
