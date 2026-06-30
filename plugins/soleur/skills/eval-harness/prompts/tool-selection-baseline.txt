@@ -10,9 +10,10 @@ competitive-analysis, frontend-design, ux-audit, gdpr-gate, legal-audit,
 legal-generate, provision-github, provision-cloudflare, provision-doppler, schedule.
 
 Given the situation below, which ONE skill should fire next? Respond with ONLY
-the single skill token (one of: brainstorm, plan, deepen-plan, work, review, qa,
-ship, preflight, merge-pr, compound). No explanation, no punctuation, no extra
-words.
+the single skill token (one of: brainstorm, brainstorm-techniques, plan,
+deepen-plan, plan-review, spec-templates, work, atdd-developer, test-fix-loop,
+resolve-todo-parallel, qa, review, resolve-pr-parallel, ship, preflight,
+merge-pr, postmerge, changelog). No explanation, no punctuation, no extra words.
 
 Situation: {{input}}
 Next skill:

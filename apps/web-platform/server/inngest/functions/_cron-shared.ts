@@ -724,28 +724,51 @@ export async function verifyScheduledIssueCreated(args: {
 // one). The community-monitor handler passes SCHEDULED_DIGEST_TITLE_PREFIX as
 // its ensureScheduledAuditIssue `titlePrefix`; ensureScheduledAuditIssue mints
 // the audit body from AUDIT_SELF_REPORT_BODY_PREFIX.
+//
+// #5786 — the matcher is now per-cron parametrized. Each of the 7 dedup-sweep
+// crons passes its OWN `titlePrefix`, a per-cron string literal that MUST stay
+// byte-identical to that handler's three co-located copies (the prompt digest
+// title, the `dedup-digest-check` titlePrefix, and the `ensureScheduledAuditIssue`
+// titlePrefix). These are NOT single-sourced via a shared const — keep them in
+// lockstep on any rename. Drift is fail-OPEN (a mismatch makes the anchor miss →
+// a duplicate digest, never a missed/zero digest), so it is a maintenance nit,
+// not a zero-digest hazard. Community-monitor passes SCHEDULED_DIGEST_TITLE_PREFIX
+// explicitly (byte-identical to the old behavior).
+// `titleSuffix` is "" for the 6 always-create crons + community-monitor, and
+// " (heartbeat)" for campaign-calendar (its STEP 2.5 producer digest carries a
+// trailing ` (heartbeat)` suffix that the exact anchor must accept; its bare
+// FAILED-audit fallback title — no suffix — is correctly rejected by the
+// title check, so the body-exclusion arm is redundant-but-harmless there).
 export const SCHEDULED_DIGEST_TITLE_PREFIX = "[Scheduled] Community Monitor -";
 export const AUDIT_SELF_REPORT_BODY_PREFIX = "Automated FAILED self-report";
 
 /**
  * Pure predicate: is `issue` a REAL scheduled digest for `date` (YYYY-MM-DD)?
  * Positive title-shape anchor: ONLY the exact canonical digest title for `date`
- * counts. This excludes a coincidental-date issue (e.g. `Investigate community
- * drop <date>`) and an LLM-drifted `… - FAILED - <date>` title — both of which
- * an `endsWith(date)` check would misclassify as a real digest and suppress the
- * genuine one. The handler-level audit fallback files the BYTE-IDENTICAL
- * `${SCHEDULED_DIGEST_TITLE_PREFIX} ${date}` title, so it is excluded by body.
+ * (`${titlePrefix} ${date}${titleSuffix}`) counts. This excludes a
+ * coincidental-date issue (e.g. `Investigate community drop <date>`) and an
+ * LLM-drifted `… - FAILED - <date>` title — both of which an `endsWith(date)`
+ * check would misclassify as a real digest and suppress the genuine one. The
+ * handler-level audit fallback files the BYTE-IDENTICAL `${titlePrefix} ${date}`
+ * title (no suffix), so it is excluded by body.
+ *
+ * @param titlePrefix per-cron canonical prefix (= its ensureScheduledAuditIssue
+ *   titlePrefix); pass SCHEDULED_DIGEST_TITLE_PREFIX for community-monitor.
+ * @param titleSuffix "" for the always-create crons + community-monitor;
+ *   " (heartbeat)" for campaign-calendar's suffixed producer digest.
  */
 export function isRealScheduledDigest(
   issue: { title?: string | null; body?: string | null },
   date: string,
+  titlePrefix: string,
+  titleSuffix = "",
 ): boolean {
   const title = (issue.title ?? "").trim();
   // Positive anchor: ONLY the exact canonical digest title for THIS date counts.
   // Excludes coincidental-date issues and the no-platform `- FAILED` title.
   // Fail-OPEN on title drift: a slightly-different title → no dedup → a duplicate
   // (paper-cut), never zero-digest.
-  if (title !== `${SCHEDULED_DIGEST_TITLE_PREFIX} ${date}`) return false;
+  if (title !== `${titlePrefix} ${date}${titleSuffix}`) return false;
   // Audit fallback files the BYTE-IDENTICAL title → exclude it by body.
   if ((issue.body ?? "").startsWith(AUDIT_SELF_REPORT_BODY_PREFIX)) return false;
   return true;
@@ -755,9 +778,11 @@ export async function digestIssueExistsForDate(args: {
   label: string;
   date: string;
   cronName: string;
+  titlePrefix: string;
+  titleSuffix?: string;
   octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
 }): Promise<boolean> {
-  const { label, date, cronName, octokit } = args;
+  const { label, date, cronName, titlePrefix, titleSuffix = "", octokit } = args;
   try {
     const client = octokit ?? (await createProbeOctokit());
     // Explicit sort:created desc + per_page:10 so today's issue is guaranteed on
@@ -773,7 +798,7 @@ export async function digestIssueExistsForDate(args: {
       headers: { "X-GitHub-Api-Version": "2022-11-28" },
     });
     const issues = res.data as Array<{ title?: string | null; body?: string | null }>;
-    return issues.some((i) => isRealScheduledDigest(i, date));
+    return issues.some((i) => isRealScheduledDigest(i, date, titlePrefix, titleSuffix));
   } catch (err) {
     // Fail-OPEN: a transient GitHub error must not become a missed digest.
     reportSilentFallback(err, {

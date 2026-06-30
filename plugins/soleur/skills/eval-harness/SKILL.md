@@ -107,7 +107,7 @@ cd plugins/soleur/skills/eval-harness
 bash scripts/gen-models.sh                                            # refresh model IDs from the registry
 npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3      # ~126 API calls (7 tasks)
 npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3   # ~108 API calls (6 tasks)
-npx promptfoo eval -c promptfooconfig.tool-selection.yaml --repeat 5  # ~150 API calls (5 tasks) — manual only
+npx promptfoo eval -c promptfooconfig.tool-selection.yaml --repeat 5  # ~450 API calls (15 tasks) — manual only
 ```
 
 **`tool-selection`** is a **manual measurement-only** target (#5768 AC(c)): it

@@ -1,0 +1,67 @@
+name: Merge queue CLA synthetics
+
+# Merge queue (#5780). `main` is gated by TWO rulesets: "CI Required" (16
+# contexts, all wired for merge_group elsewhere in this PR) AND "CLA Required"
+# (`cla-check` + `cla-evidence`, see scripts/required-checks.txt). The CLA
+# producers — cla.yml + cla-evidence.yml — are pull_request_target/issue_comment
+# driven (contributor-assistant action + an R2 evidence sidecar), so they cannot
+# run on a `merge_group` event (there is no PR/comment object on the temp ref).
+# Without this workflow, `cla-check`/`cla-evidence` never report on the
+# gh-readonly-queue/main/* candidate → the queue STALLS on the first PR.
+#
+# WHY a synthetic green is sound (NOT a CLA bypass) — CTO ruling, #5780:
+#   - A PR can only reach a `merge_group` event by passing the queue ENTRY gate,
+#     which requires the REAL `cla-check`/`cla-evidence` jobs green on the PR head
+#     ("Once a pull request has passed all required branch protection checks, a
+#     user with write access can add the pull request to the queue" — GitHub
+#     docs). If the CLA were unsigned, both contexts are RED on the head → the PR
+#     cannot be queued → this workflow never fires. The synthetic can ONLY ever
+#     fire for PRs whose real CLA was verified.
+#   - The legal artifact is created at SIGN time, not merge-group time:
+#     cla-evidence.yml writes the content-addressed, Object-Lock R2 record on the
+#     contributor's signature event. This workflow does NOT replace/regenerate it
+#     — it only re-reports the CI-gate signal on a throwaway octopus ref. CLA is
+#     an author-property, invariant under the octopus merge (unlike test/e2e,
+#     which must re-run to catch semantic merge conflicts).
+#   This is strictly safer than bot-pr-with-synthetic-checks/action.yml, which
+#   greens these two contexts for bot PRs that never ran the real CLA flow.
+#
+# AUTH — GITHUB_TOKEN is MANDATORY here, do NOT "harden" to an app token: the
+# CLA Required ruleset matches Check Runs from integration_id 15368 (the
+# github-actions App = GITHUB_TOKEN). An external app token posts under a
+# different integration_id and FAILS the ruleset match → silently re-breaks the
+# queue. `checks: write` is the only scope needed; no checkout (zero PR-code
+# execution surface on the temp ref), no contents/pull-requests/R2 access.
+
+on:
+  merge_group:
+
+permissions:
+  checks: write
+
+jobs:
+  cla-synthetics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+    steps:
+      - name: Re-post cla-check + cla-evidence on the merge-queue candidate
+        run: |
+          set -eo pipefail
+          summary="cla-check/cla-evidence passed on the PR head before queue admission (entry gate); re-reported on the merge group. The legal evidence record was written to R2 Object Lock at CLA sign time. See #5780."
+          # Post each independently and fail loud — leaving cla-check green while
+          # cla-evidence is missing still stalls the queue. Checks API (NOT
+          # Statuses API): the ruleset requires Check Runs from integration_id
+          # 15368 (GITHUB_TOKEN). Mirrors bot-pr-with-synthetic-checks/action.yml.
+          for check in cla-check cla-evidence; do
+            gh api "repos/${REPO}/check-runs" \
+              -f name="$check" \
+              -f head_sha="$HEAD_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=CLA verified at queue entry" \
+              -f "output[summary]=${summary}"
+          done

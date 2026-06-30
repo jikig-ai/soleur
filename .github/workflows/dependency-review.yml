@@ -1,6 +1,14 @@
 name: Dependency Review
 
-on: [pull_request]
+# Merge queue (#5780). `dependency-review` is a required context → must report
+# on the gh-readonly-queue/main/* temp ref or the queue stalls. CRITICAL (P0-2):
+# actions/dependency-review-action ERRORS ("Can't find base/head commits") on a
+# merge_group event unless given explicit base-ref/head-ref — an erroring
+# required context reports FAILING and blocks the queue as hard as a stall. The
+# merge_group step below supplies them from merge_group.{base_sha,head_sha}.
+on:
+  pull_request: {}
+  merge_group: {}
 
 permissions:
   contents: read
@@ -11,7 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Dependency Review
+      - name: Dependency Review (pull_request)
+        if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           retry-on-snapshot-warnings: true
@@ -20,6 +29,24 @@ jobs:
           license-check: true
           vulnerability-check: true
           comment-summary-in-pr: on-failure
+          deny-packages: |
+            pkg:pypi/litellm
+            pkg:npm/event-stream
+      # On merge_group the action cannot auto-derive the commit pair from the
+      # event payload, so base-ref/head-ref are passed explicitly (GitHub-
+      # controlled SHAs). comment-summary-in-pr is omitted — there is no PR to
+      # comment on for a queue candidate.
+      - name: Dependency Review (merge_group)
+        if: github.event_name == 'merge_group'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          base-ref: ${{ github.event.merge_group.base_sha }}
+          head-ref: ${{ github.event.merge_group.head_sha }}
+          retry-on-snapshot-warnings: true
+          fail-on-severity: high
+          fail-on-scopes: runtime
+          license-check: true
+          vulnerability-check: true
           deny-packages: |
             pkg:pypi/litellm
             pkg:npm/event-stream
