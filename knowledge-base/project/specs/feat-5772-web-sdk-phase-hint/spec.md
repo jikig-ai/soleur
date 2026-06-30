@@ -44,6 +44,18 @@ none of it.
   which exists. Tracked on #5772.
 - N2. Tuning the `work→review` hint regression (work-phase surface foregrounds `qa`, competing
   with `review`) — affects the shipped CLI hint too; separate `phase-surface-map.json` tuning.
+  **CLOSED 2026-07-01 (no change): not safely tunable at the current fixture size.** The
+  "drop `qa` from work" fix is contradicted by the eval's own golden data — `qa` is a
+  *legitimate* work-phase outcome (`tool-selection.jsonl:7`, a UI change needing the headless
+  browser gate). The work phase genuinely fans out to three next-skills (`review` line 6, `qa`
+  line 7, `test-fix-loop` line 8), so the "competition" is inherent situational ambiguity that
+  the situation text disambiguates, not surface noise. The fixture has exactly one work→review
+  and one work→qa case, so `--repeat 5` across the model grid cannot statistically resolve a
+  subtle reorder/heuristic tweak (single-case noise). Any tuning touches THREE coupled surfaces
+  in lockstep (`.claude/phase-surface-map.json`, the bundled `phase-surface-map.ts`, and the
+  eval prompt `tool-selection-skill.txt:10`). Re-open only after expanding the work-phase golden
+  tasks (several review-cases + qa-cases) so the eval can resolve the tradeoff. See
+  `knowledge-base/project/learnings/2026-07-01-phase-surface-work-phase-tuning-is-fixture-limited.md`.
 - N3. Any change to the `canUseTool` deny-by-default security floor.
 
 ## Functional Requirements
