@@ -25,10 +25,6 @@ describe("setup-dom.ts cleanup surfaces", () => {
     // #5113 — contention-tolerant RTL wait ceiling; deleting it silently
     // reintroduces the 1s-default starvation flake class.
     ["asyncUtilTimeout config", "asyncUtilTimeout: 10_000"],
-    // #5796 — vitest `vi.waitFor` default-floor wrapper (1s → 10s). Distinct
-    // mechanism from asyncUtilTimeout above; deleting it re-arms the
-    // vi.waitFor.timeout flake across every component-project call site.
-    ["vi.waitFor floor wrapper", "vi.waitFor ="],
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
@@ -48,19 +44,30 @@ describe("setup-dom.ts cleanup surfaces", () => {
   });
 });
 
-// #5796 — the `vi.waitFor` floor wrapper must live in BOTH setup files. The
-// node/unit project (test/**/*.test.ts) runs under setup-node.ts and holds 18
-// vi.waitFor sites (cc-dispatcher.test.ts, is-template-authorized.test.ts); a
-// setup-dom-only fix would leave them at the 1s default. This guards the second
-// install site — deleting the setup-node.ts wrapper fails here.
-describe("setup-node.ts vi.waitFor floor wrapper", () => {
-  const nodeSource = readFileSync(resolve(__dirname, "setup-node.ts"), "utf8");
+// #5796 — the vi.waitFor floor wrapper lives in ONE shared helper
+// (test/helpers/install-vi-waitfor-floor.ts) called from BOTH setup files. The
+// node/unit project (test/**/*.test.ts) and the component project each exercise
+// vi.waitFor; installing in only one would leave the other's sites at the 1s
+// default. This guards the helper body (incl. the 10s floor value, which the
+// behavioral floor tests cannot cheaply assert) AND both call sites, so a silent
+// removal or a divergence of the floor value fails fast.
+describe("vi.waitFor floor wrapper (#5796)", () => {
+  const helper = readFileSync(
+    resolve(__dirname, "helpers/install-vi-waitfor-floor.ts"),
+    "utf8",
+  );
+  const nodeSetup = readFileSync(resolve(__dirname, "setup-node.ts"), "utf8");
+  const domSetup = readFileSync(resolve(__dirname, "setup-dom.ts"), "utf8");
 
-  it("retains the vi.waitFor floor wrapper", () => {
-    expect(nodeSource).toContain("vi.waitFor =");
+  it("helper reassigns vi.waitFor with the 10s floor", () => {
+    expect(helper).toContain("vi.waitFor =");
+    expect(helper).toContain("10_000");
   });
 
-  it("imports vi from vitest (required for the wrapper)", () => {
-    expect(nodeSource).toMatch(/import\s*\{[^}]*\bvi\b[^}]*\}\s*from\s*"vitest"/);
+  it.each([
+    ["setup-node.ts", nodeSetup],
+    ["setup-dom.ts", domSetup],
+  ])("%s installs the floor via installViWaitForFloor()", (_label, src) => {
+    expect(src).toContain("installViWaitForFloor()");
   });
 });

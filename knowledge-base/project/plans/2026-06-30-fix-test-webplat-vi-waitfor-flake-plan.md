@@ -199,6 +199,19 @@ positive settle anchor first (`await screen.findBy…(...)` for the pre-state) p
 `live-repo-badge.test.tsx:188` pattern (vacuous-absence-wait class, #5234). This is not a
 separate deliverable; do it inline only where a bare absence-wait is touched.
 
+> **APPLIED (direction (c) — root-caused, not just hardened).** During verification the
+> `live-repo-badge.test.tsx` J5 dismiss-wait flaked ~10% even with explicit 10s timeouts
+> (so the floor-raise could not fix it). Traced to a **component** race, not a timeout:
+> `LiveRepoBadge`'s re-arm effect fired `setDismissed(false)` on the initial mount
+> (`undefined→true`), and React running that passive effect *after* the dismiss click
+> undid the dismissal. Fixed at the component (`components/dashboard/live-repo-badge.tsx`):
+> gate the re-arm on a genuine `false→true` transition via a `prevValue` ref (behavior-
+> preserving — the mount reset was a no-op on already-false `dismissed`). Also de-fragiled
+> the J5 test: phase-driven mutable response (read at `.json()` time) instead of an
+> order-fragile `mockResolvedValueOnce` queue, and delta-based call-count gates. Result:
+> 25/25 deterministic (was ~10% red), full file green ×6. This expands the PR scope to one
+> production component file — covered by the existing (now deterministic) J5 test.
+
 ### Phase 2 — Reduce component-project worker contention (evidence-gated, descopable)
 
 > **DECISION (applied): DESCOPED.** Phase 0 spike confirmed Approach A is viable in
