@@ -83,7 +83,6 @@ FX="$(make_fixture main)"
 
 # --- AC3 + AC6b: positive/negative + regex-escaping --------------------------
 ERR_OUT="$( cd "$FX" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type err components server 2>&1 )"
-ERR_RC=$?
 
 if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/leak.tsx'; then
   ok "AC3: value import of server/** via @/server alias is flagged"
