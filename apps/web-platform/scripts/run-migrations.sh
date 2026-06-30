@@ -18,13 +18,15 @@ set -euo pipefail
 # the unknown-arg branch below — keep this constraint in mind when adding
 # future flags.
 bootstrap_mode="auto"  # auto = legacy bootstrap fires when table empty
+verify_mode="false"
 for arg in "$@"; do
   case "$arg" in
     --bootstrap=skip) bootstrap_mode="skip" ;;
     --bootstrap=auto) bootstrap_mode="auto" ;;
+    --verify) verify_mode="true" ;;
     --help|-h)
       cat <<'USAGE'
-Usage: run-migrations.sh [--bootstrap=skip|auto]
+Usage: run-migrations.sh [--bootstrap=skip|auto] [--verify]
 
 Applies SQL files from supabase/migrations/ in filename order, tracking state
 in public._schema_migrations.
@@ -37,6 +39,12 @@ Options:
                      provisioning of a fresh Supabase project where 001-010
                      have NOT been applied. All migrations apply in order.
                      Equivalent: BOOTSTRAP_MIGRATIONS=0 bash run-migrations.sh.
+  --verify           Read-only drift check: compare disk migration files against
+                     _schema_migrations. Exits 0 if clean, 1 on any drift.
+                     Detects migrations applied out-of-band (on disk and below
+                     the tracking high watermark but absent from the table) and
+                     tracking rows whose file no longer exists on disk.
+                     Does not apply, bootstrap, or modify the tracking table.
   --help, -h         Print this message and exit.
 
 Environment:
@@ -90,6 +98,66 @@ fi
 run_sql() {
   psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1 -tAq -c "$1"
 }
+
+# --verify mode: read-only drift check (issue #3370).
+# Compares the _schema_migrations tracking table against disk files.
+# Detects two drift classes:
+#   1. Disk file is below the high watermark but absent from the tracking
+#      table — indicates an out-of-band apply (e.g. dashboard SQL editor).
+#   2. Tracking row whose file no longer exists on disk — orphaned entry.
+# Exits 0 on clean state, 1 on any drift. Never writes to the DB.
+if [[ "$verify_mode" == "true" ]]; then
+  table_exists=$(run_sql "SELECT to_regclass('public._schema_migrations') IS NOT NULL;" 2>/dev/null || echo "f")
+  if [[ "$table_exists" != "t" ]]; then
+    echo "::error::verify: _schema_migrations table does not exist — project is uninitialised."
+    exit 1
+  fi
+
+  tracked_list=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;")
+  high_watermark=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename DESC LIMIT 1;")
+
+  # Collect forward migration filenames from disk in sorted order.
+  disk_files=()
+  for f in "$MIGRATIONS_DIR"/*.sql; do
+    [[ -e "$f" ]] || continue
+    fname="$(basename "$f")"
+    case "$fname" in
+      *.down.sql) continue ;;
+      *[!a-zA-Z0-9._-]*) echo "::warning::verify: skipping malformed filename: $fname"; continue ;;
+    esac
+    disk_files+=("$fname")
+  done
+
+  drift=0
+
+  if [[ -n "$high_watermark" ]]; then
+    for fname in "${disk_files[@]}"; do
+      # Only files at or before the high watermark must be tracked.
+      # Files beyond it are pending and their absence is expected.
+      [[ "$fname" > "$high_watermark" ]] && break
+      if ! printf '%s\n' "$tracked_list" | grep -qxF "$fname"; then
+        echo "::error::verify: $fname is on disk below high watermark ($high_watermark) but absent from _schema_migrations — likely applied out-of-band without tracking."
+        drift=1
+      fi
+    done
+  fi
+
+  while IFS= read -r tracked; do
+    [[ -z "$tracked" ]] && continue
+    if [[ ! -f "$MIGRATIONS_DIR/$tracked" ]]; then
+      echo "::error::verify: $tracked is tracked in _schema_migrations but does not exist on disk."
+      drift=1
+    fi
+  done <<< "$tracked_list"
+
+  if [[ "$drift" -eq 1 ]]; then
+    echo "::error::verify: migration tracking drift detected. Run the reconcile procedure in knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md."
+    exit 1
+  fi
+
+  echo "Migration verify complete: no drift detected (high watermark: ${high_watermark:-none})."
+  exit 0
+fi
 
 # Create tracking table if it does not exist
 run_sql "CREATE TABLE IF NOT EXISTS public._schema_migrations (
