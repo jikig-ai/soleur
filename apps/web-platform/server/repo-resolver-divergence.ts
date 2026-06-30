@@ -125,28 +125,64 @@ export function reportRepoResolverDivergence(args: {
  * sibling field. `extra` carries NO `installationId`/`repoUrl` (credential-grant
  * identifiers) and NO raw `gitdirTarget` (only the `gitKind` + escape boolean).
  */
+/** Where the self-stop was observed. `host-pre-heal` is the server-side
+ *  dispatch readiness gate (lstat shape OR the #5733 host `rev-parse` confirm);
+ *  `in-sandbox-backstop` is the agent's OWN in-bwrap Step 0.0 `rev-parse` result
+ *  (deliverable C2) — robust to shapes the host confirm is blind to (escaping
+ *  pointer, object-store residual). Folded into the dedupe fingerprint so the two
+ *  surfaces are counted independently for the same workspace+kind, AND promoted to
+ *  a searchable Sentry `source:` tag (the `source:in-sandbox-backstop` query the
+ *  plan advertises — `extra` alone is not queryable). */
+export type AgentReadinessSelfStopSource = "host-pre-heal" | "in-sandbox-backstop";
+
 export function reportAgentReadinessSelfStop(args: {
   userId: string;
   activeWorkspaceId: string;
   /** lstat-structural validity (`isValidGitWorkTree`) — true for the FILE-pointer
-   *  trap, which is exactly why the strand was previously silent. */
+   *  trap AND for the dir-valid-that-rev-parse-rejects trap, which is exactly why
+   *  the strand was previously silent. */
   gitValid: boolean;
   /** Structural `.git` shape kind (`probeGitWorktreeShape`) — distinguishes a
    *  file-pointer strand from a dir-invalid / absent strand in the one event. */
   gitKind: string;
   /** For a file-pointer: did the gitdir target escape the workspace (denyRead)? */
   gitdirEscapesWorkspace?: boolean;
+  /**
+   * #5733 deliverable A/C: the AUTHORITATIVE `git rev-parse --is-inside-work-tree`
+   * verdict (host confirm OR the agent's in-sandbox result). Omitted on the
+   * pure-lstat pre-heal emit (where no rev-parse ran). When present and `false`
+   * alongside `gitValid=true`, the event itself shows the proxy-vs-invariant
+   * divergence (lstat said ready; `git` itself disagrees). NEVER carries the
+   * subprocess stderr/path (the raw path == raw userId for a solo workspace).
+   */
+  gitRevParseValid?: boolean;
+  /** Observation surface (defaults to `host-pre-heal`). */
+  source?: AgentReadinessSelfStopSource;
 }): void {
-  // Dedupe by (op, userId, workspace, .git kind) — a recurring strand for one
-  // workspace emits once per process, but a SHAPE CHANGE (e.g. pointer → absent
-  // after a partial heal) re-fires. Process-local; a fresh process re-emits once.
-  const fingerprint = `agent-readiness-self-stop:${args.userId}:${args.activeWorkspaceId}:${args.gitKind}`;
+  const source: AgentReadinessSelfStopSource = args.source ?? "host-pre-heal";
+  // Dedupe by (op, userId, workspace, .git kind, source) — a recurring strand for
+  // one workspace emits once per process, but a SHAPE CHANGE (e.g. pointer →
+  // absent after a partial heal) OR a DIFFERENT surface (host vs in-sandbox
+  // backstop) re-fires. Process-local; a fresh process re-emits once.
+  const fingerprint = `agent-readiness-self-stop:${args.userId}:${args.activeWorkspaceId}:${args.gitKind}:${source}`;
   if (seenFingerprints.has(fingerprint)) return;
   seenFingerprints.add(fingerprint);
 
   reportSilentFallback(new Error("agent_readiness_self_stop"), {
     feature: "agent-readiness-self-stop",
     op: "agent-readiness-self-stop",
+    // PROMOTED to searchable Sentry tags — `extra` is NOT queryable, and the plan
+    // advertises `source:in-sandbox-backstop` + `gitKind:` discoverability queries
+    // that only work as tags. All three are low-cardinality enums/booleans with NO
+    // PII (never the hashed/raw ids, never the gitdirTarget/path). Kept in `extra`
+    // below too (structured context) — the tags are what make them queryable.
+    tags: {
+      source,
+      gitKind: args.gitKind,
+      ...(args.gitRevParseValid === undefined
+        ? {}
+        : { gitRevParseValid: String(args.gitRevParseValid) }),
+    },
     extra: {
       userId: args.userId, // → userIdHash at the emit boundary (never raw)
       // Pre-hashed: for a solo workspace this equals the raw userId, which the
@@ -154,9 +190,39 @@ export function reportAgentReadinessSelfStop(args: {
       activeWorkspaceIdHash: hashUserId(args.activeWorkspaceId),
       gitValid: args.gitValid,
       gitKind: args.gitKind,
+      source,
+      ...(args.gitRevParseValid === undefined
+        ? {}
+        : { gitRevParseValid: args.gitRevParseValid }),
       ...(args.gitdirEscapesWorkspace === undefined
         ? {}
         : { gitdirEscapesWorkspace: args.gitdirEscapesWorkspace }),
+    },
+  });
+}
+
+/**
+ * #5733 deliverable A — low-signal breadcrumb for a host `rev-parse` confirm that
+ * came back INCONCLUSIVE twice (spawn-error / timeout / EACCES). The readiness
+ * gate FAILS-OPEN on this (spawns rather than honest-blocking a healthy repo), so
+ * this is a DISTINCT op/issue-group from `agent_readiness_self_stop` — it must NOT
+ * inflate the strand discoverability count. Same pseudonymization bar: only the
+ * hashed workspace id, NEVER the probe stderr/path.
+ */
+export function reportAgentReadinessProbeInconclusive(args: {
+  userId: string;
+  activeWorkspaceId: string;
+}): void {
+  const fingerprint = `agent-readiness-probe-inconclusive:${args.userId}:${args.activeWorkspaceId}`;
+  if (seenFingerprints.has(fingerprint)) return;
+  seenFingerprints.add(fingerprint);
+
+  reportSilentFallback(new Error("agent_readiness_probe_inconclusive"), {
+    feature: "agent-readiness-self-stop",
+    op: "agent-readiness-probe-inconclusive",
+    extra: {
+      userId: args.userId, // → userIdHash at the emit boundary (never raw)
+      activeWorkspaceIdHash: hashUserId(args.activeWorkspaceId),
     },
   });
 }

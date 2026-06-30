@@ -78,12 +78,10 @@ resource "doppler_secret" "kb_drift_ingest_url" {
   name    = "KB_DRIFT_INGEST_URL"
   # app.soleur.ai is the canonical Next.js app host. The apex soleur.ai is the
   # Cloudflare static marketing site and returns 405 Not Allowed for POST.
+  # NO ignore_changes — TF must enforce the app.soleur.ai host; a drifted value
+  # pointing at the apex silently breaks the walker cron with HTTP 405 (#4210).
   value      = "https://app.soleur.ai/api/internal/kb-drift-ingest"
   visibility = "masked"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
 }
 
 # Doppler service token minted in-band by Terraform. The workplace-scope

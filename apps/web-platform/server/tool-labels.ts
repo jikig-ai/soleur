@@ -17,6 +17,34 @@ import {
   SUSPECTED_LEAK_SHAPE as SHARED_SUSPECTED_LEAK_SHAPE,
 } from "@/lib/sandbox-path-patterns";
 
+/**
+ * #5733 deliverable C2 — the agent-context observability backstop predicate.
+ * Decides whether an in-sandbox Bash tool RESULT is the agent's `/soleur:go`
+ * Step 0.0 `git rev-parse --is-inside-work-tree` reporting NOT-a-work-tree (the
+ * strand). This is the GUARANTEED strand signal: it fires from the agent's REAL
+ * in-bwrap context, so it surfaces the strand for shapes the host `rev-parse`
+ * confirm is blind to (the escaping pointer — host git is not sandboxed — and
+ * object-store corruption, which passes host rev-parse).
+ *
+ * Deliberately conservative (it must NOT false-positive a healthy probe, which
+ * prints exactly `"true"`): fires ONLY when the command is the rev-parse work-tree
+ * probe AND the output carries a clear failure signal (git's `not a git
+ * repository` fatal, a `fatal:` line, or a bare `false`). Pure — the dispatcher
+ * owns the emit + pseudonymization.
+ */
+export function isInSandboxRevParseStrand(
+  command: string,
+  output: string,
+): boolean {
+  const isWorkTreeProbe =
+    /\bgit\b[\s\S]*\brev-parse\b[\s\S]*--is-inside-work-tree\b/.test(command);
+  if (!isWorkTreeProbe) return false;
+  if (/not a git repository/i.test(output)) return true;
+  const trimmed = output.trim().toLowerCase();
+  if (trimmed === "true") return false; // the healthy fast path — never a strand
+  return /^fatal:/im.test(output) || trimmed === "false";
+}
+
 /** Fallback labels when input is unavailable or unrecognized */
 const FALLBACK_LABELS: Record<string, string> = {
   Read: "Reading file...",
