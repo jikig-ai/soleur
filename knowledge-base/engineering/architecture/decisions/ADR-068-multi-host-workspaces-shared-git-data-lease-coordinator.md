@@ -243,6 +243,35 @@ Redis tier exists at Hetzner.
   Redis), C (Ceph/k8s/NFS), and D (sticky-cookie affinity) are recorded with
   load-bearing rejection rationale.
 
+## C4 impact
+
+This ADR's Phase-0 deliverable IS a C4 change. Edited
+`knowledge-base/engineering/architecture/diagrams/model.c4` and `views.c4`
+(spec.c4 unchanged — the new elements are existing kinds). `likec4 validate`
+is clean and all four new elements render in the Container view.
+
+**New `infra` elements (`model.c4`), all included in `view containers of platform` (`views.c4`):**
+
+| C4 id | Kind | Phase it ships | Role |
+|---|---|---|---|
+| `coordinator` | container | 3 (GA path) | Stateless lease-keyed router + control-op forwarder; N replicas behind the one tunnel |
+| `gitDataStore` | database | 2 (GA path) | Shared bare repos (objects/refs) over the private net; writer-side CAS fence (reject `gen < max`) |
+| `scheduler` | container | 4a (post-GA) | Nomad — placement / health-reschedule / rolling deploy |
+| `sessionStore` | database | 4a (post-GA) | Self-hosted EU Redis — ADR-059 replay buffer; DISTINCT from the loopback Inngest Redis |
+
+**New relationships (`model.c4`):** `tunnel -> coordinator` (replaces the former
+`tunnel -> api` ingress shape); `coordinator -> claude` (lease-keyed placement);
+`coordinator -> supabase` (reads the worktree lease); `api -> sessionStore`;
+`claude -> sessionStore`; `claude -> gitDataStore`; `scheduler -> hetzner`. The
+`hetzner` description widens from single host → Nomad-client cluster (spread
+placement).
+
+The `## Diagram` below is a **runtime reconnect-path** sketch; its node labels map
+to the C4 ids as `coord→coordinator`, `pg→supabase` (the `worktree_write_lease`
+table), `gitdata→gitDataStore`, `redis→sessionStore`, `hostA/hostB→hetzner`
+cluster nodes, `wtA/wtB→host-local NVMe worktrees`. `scheduler` (Nomad) is a
+placement-time element and is intentionally absent from this request-path flow.
+
 ## Diagram
 
 ```mermaid
@@ -254,7 +283,7 @@ flowchart TB
   coord -. forward on not-found .-> hostB["Host B"]
   hostA -->|per-user worktree on local NVMe| wtA[(NVMe worktree A)]
   hostB -->|per-user worktree on local NVMe| wtB[(NVMe worktree B)]
-  hostA -->|"bare objects/refs (per-workspace cred/mTLS)"| gitdata[(git-data host<br/>writer-side CAS fence: reject gen < max)]
+  hostA -->|"bare objects/refs (per-workspace cred/mTLS)"| gitdata[(git-data host<br/>writer-side CAS fence: reject gen &lt; max)]
   hostB --> gitdata
   hostA -. "Phase 4a: replay buffer (per-workspace ns, TLS)" .-> redis[(session-Redis — EU, dedicated)]
   hostB -. Phase 4a .-> redis

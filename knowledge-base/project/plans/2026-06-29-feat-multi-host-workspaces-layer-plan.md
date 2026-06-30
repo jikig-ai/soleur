@@ -73,18 +73,19 @@ single most important correction this plan makes.
 
 | Spec/brainstorm claim | Codebase reality (file:line) | Plan response |
 |---|---|---|
-| "Externalize the 7 process-local Maps to Redis" | Only **1 of 7** needs cross-host visibility AND is serializable: `userWorkspaces` (registry:46) — and it is **already** Postgres-backed via #5338 lazy-rehydrate. `activeTurnConversations` (registry:57) is serializable but read **only by the turn-owning host** during the grace window (Kieran) → host-local, no cross-host value. The other 5 hold **live handles** that cannot be serialized: `activeSessions` = AbortController + Promise resolvers (registry:34); `_locks` = Promise-chain mutex (workspace-permission-lock.ts:44); `pendingDisconnects` = `NodeJS.Timeout` (ws-handler.ts:345); `_ccBashGates` = AgentSession w/ resolvers (cc-dispatcher.ts:1178); `activeQueries` = Timers + live SDK `Query` + input queue (soleur-go-runner.ts:1727). The WS `sessions` map (defined `session-registry.ts:6`) holds the live socket — host-local by definition. | **No state externalization in Phase 1.** Live handles stay host-local *by nature* (a turn's AbortController/SDK-Query executes in the owning host's process; only that host can abort it). The cross-host control problem is solved by **affinity + a coordinator** (Phase 3) that routes control ops (abort, gate-resolve, grace) to the owning host — NOT by serializing handles, and NOT by a separate Phase-1 control-plane module. Redis enters in **Phase 3**, scoped to the genuinely-hot shared structure (the ADR-059 replay buffer), once a reconnect can land on another host. (Panel: DHH + Kieran + Simplicity.) |
-| "Add a distributed concurrency counter" | Concurrency slots are **already** Postgres-backed (`concurrency.ts:77-129`, RPC `acquire/touch/release_conversation_slot`, table `user_concurrency_slots`). | Drop from scope — already multi-host-safe. Only the in-process **rate-limiters** (`start-session-rate-limit.ts:56`, `rate-limiter.ts:44`) are process-local; they are serializable timestamp windows, optionally externalized in 1a. |
+| "Externalize the 7 process-local Maps to Redis" | Only **1 of 7** needs cross-host visibility AND is serializable: `userWorkspaces` (registry:46) — and it is **already** Postgres-backed via #5338 lazy-rehydrate. `activeTurnConversations` (registry:57) is serializable but read **only by the turn-owning host** during the grace window (Kieran) → host-local, no cross-host value. The other 5 hold **live handles** that cannot be serialized: `activeSessions` = AbortController + Promise resolvers (registry:34); `_locks` = Promise-chain mutex (workspace-permission-lock.ts:44); `pendingDisconnects` = `NodeJS.Timeout` (ws-handler.ts:345); `_ccBashGates` = AgentSession w/ resolvers (cc-dispatcher.ts:1178); `activeQueries` = Timers + live SDK `Query` + input queue (soleur-go-runner.ts:1727). The WS `sessions` map (defined `session-registry.ts:6`) holds the live socket — host-local by definition. | **No state externalization in Phase 1.** Live handles stay host-local *by nature* (a turn's AbortController/SDK-Query executes in the owning host's process; only that host can abort it). The cross-host control problem is solved by **affinity + a coordinator** (Phase 3) that routes control ops (abort, gate-resolve, grace) to the owning host — NOT by serializing handles, and NOT by a separate Phase-1 control-plane module. Redis enters in **Phase 4a** (deepen re-map — affinity keeps the buffer host-local-sufficient through Phase 3), scoped to the genuinely-hot shared structure (the ADR-059 replay buffer), once a host *death* can land a reconnect on another host. (Panel: DHH + Kieran + Simplicity.) |
+| "Add a distributed concurrency counter" | Concurrency slots are **already** Postgres-backed (`concurrency.ts:77-129`, RPC `acquire/touch/release_conversation_slot`, table `user_concurrency_slots`). | Drop from scope — already multi-host-safe. Only the in-process **rate-limiters** (`start-session-rate-limit.ts:56`, `rate-limiter.ts:44`) are process-local; they are serializable timestamp windows, optionally externalized alongside the buffer in Phase 4a. |
 | "Managed Redis (EU)" | Hetzner has **no** managed Redis. A self-hosted Redis already exists but is **loopback-only** (`infra/inngest-redis.conf:13` `bind 127.0.0.1`), serving **only** Inngest; the Node app has no Redis client dep. | Self-host a **dedicated, network-reachable** Redis on a Hetzner CAX node (TLS+auth, EU, no new sub-processor) per the IaC section. Must NOT be conflated with the loopback Inngest Redis (distinct node, port-binding, password var). |
-| Stream-replay buffer "move to Redis" (ADR-059 follow-up) | The buffer is **fully serializable** (`stream-replay-buffer.ts:130-317` — strings/numbers/Frame arrays); counters intentionally **outlive** `clear()` so a resumed cursor never rewinds (honest refetch). | Movable to Redis in 1a, but counter-outlives-clear semantics must be preserved exactly. |
-| Ingress routing | **Cloudflare Tunnel is the only ingress** (`tunnel -> api` in model.c4); no load balancer. Client connects to `/ws` at `window.location.host` (`ws-client.ts:722`); affinity today is implicit (one host). | Routing (Step 3) = keep ONE tunnel → a **coordinator that proxies to the lease-holder** over the private net (IaC recommendation (c)). Not CF sticky cookies (pin to a dead host on crash). |
+| Stream-replay buffer "move to Redis" (ADR-059 follow-up) | The buffer is **fully serializable** (`stream-replay-buffer.ts:130-317` — strings/numbers/Frame arrays); counters intentionally **outlive** `clear()` so a resumed cursor never rewinds (honest refetch). | Movable to Redis in Phase 4a, but counter-outlives-clear semantics must be preserved exactly. |
+| Ingress routing | **Cloudflare Tunnel is the only ingress** (`tunnel -> api` in model.c4); no load balancer. Client connects to `/ws` at `window.location.host` (`ws-client.ts:722`); affinity today is implicit (one host). | Routing (Phase 3) = keep ONE tunnel → a **coordinator that proxies to the lease-holder** over the private net (IaC recommendation (c)). Not CF sticky cookies (pin to a dead host on crash). |
 
 ## Implementation Phases
 
 > Each phase below is its own PR (and likely its own `/soleur:plan`). Order de-risks
 > by deferring every new substrate (Redis, shared store, Nomad) to the phase that
 > actually needs it — plan-review (DHH/Kieran/Simplicity) collapsed the original
-> 4-phase shape, killing a premature Phase-1 control-plane and deferring Redis to Phase 3.
+> 4-phase shape, killing a premature Phase-1 control-plane and deferring Redis to Phase 4a
+> (the deepen pass re-mapped it from the plan-review's initial Phase 3 — affinity covers Phase 3).
 
 ### Phase 0 — ADR-068 + C4 (this epic's lifecycle, not deferred)
 - [x] Author **ADR-068** "Multi-host `/workspaces` via shared git-data + per-user worktrees + lease-routed coordinator (rejecting Ceph/k8s)" via `/soleur:architecture` — `status: adopting`. Records: affinity-via-lease + coordinator-forwarded control (coordinator is **stateless** — N replicas behind one tunnel); live-handle state stays host-local; writer-side CAS fencing; self-host EU Redis; **GA gates at Phase 3 (OQ3 resolved by operator 2026-06-30)**.
@@ -108,7 +109,7 @@ single most important correction this plan makes.
 - [ ] **Fencing = writer-side CAS, NOT a pre-check (data-integrity — the real gap):** a separate generation check before the ref write is TOCTOU (a GC-paused holder reads gen=N still-current, gets reclaimed to N+1, resumes, writes — check passed, write corrupts). The **git-data host** holds the per-`(workspace,worktree)` monotonic max generation and **atomically rejects any write with `gen < max` (compare-and-write under a per-ref lock)** — the resource server enforces the token (Kleppmann), not the client. A pre-check RPC is insufficient.
 - [ ] One-time cutover: drain sessions, rsync `objects/refs` to the shared store. GitHub remains the durable rehydration source (`ensure-workspace-repo.ts` self-heal, #5546).
 
-### Phase 3 — 2nd host + coordinator routing + Redis (concurrent multi-host)
+### Phase 3 — 2nd host + coordinator routing (concurrent multi-host; GA line — OQ3)
 - [ ] Add a 2nd `hcloud_server` + `hcloud_placement_group type=spread` (no Nomad yet — DHH: the Postgres lease is the placement authority, the coordinator is the router).
 - [ ] **Coordinator** routes a session to the host holding/acquiring the workspace lease (keyed by the Postgres lease; consistent-hash as placement hint) AND **forwards control ops** (abort `registry:200-211`, gate-resolve `cc-dispatcher.ts:1296-1388`, grace) to the owning host — this is the cross-host seam that replaces the deferred Phase-1 control-plane. Edit the single tunnel's `service` target → coordinator (IaC option c).
 - [ ] **Affinity (TR2 cross-host fix, Kieran):** a reconnect routes back to the lease-holding host, keeping grace cancel host-local — avoids the TOCTOU poll a cross-host check would introduce. (Affinity keeps the replay buffer host-local-sufficient in Phase 3 — Redis-backing the buffer is deferred to Phase 4a, where a host *death* sends a reconnect to a different host.)
@@ -131,7 +132,7 @@ single most important correction this plan makes.
 - `apps/web-platform/supabase/migrations/114_worktree_write_lease.sql` (+ `.down.sql`) (Phase 2; includes `lease_generation` fencing column)
 - `apps/web-platform/infra/git-data.tf` (Phase 2)
 - `apps/web-platform/server/session-coordinator.ts` — lease-keyed routing + cross-host control forwarding (Phase 3; subsumes the dropped control-plane module)
-- `apps/web-platform/server/session-store.ts` — typed Redis adapter, scoped to the replay buffer (Phase 3)
+- `apps/web-platform/server/session-store.ts` — typed Redis adapter, scoped to the replay buffer (Phase 4a)
 - `apps/web-platform/infra/network.tf` (Phase 2; `hcloud_network` + subnet for the private git-data path)
 - coordinator service def (Phase 3); `nomad.tf` / Nomad jobspec (Phase 4a)
 - `apps/web-platform/server/inngest/functions/cron-worktree-lease-reclaim.ts` — pure-TS stale-lease reclaim sweep (mirror `cron-workspace-sync-health.ts`, ADR-033; NOT GH Actions) + Sentry cron monitor (Phase 4a)
@@ -145,11 +146,11 @@ single most important correction this plan makes.
 - `apps/web-platform/server/cc-dispatcher.ts` (`_ccBashGates` :1178,:1296-1388) — Phase 3 control-forward
 - `apps/web-platform/server/soleur-go-runner.ts` (`activeQueries` :1727,:2017,:2654) — Phase 3/4a
 - `apps/web-platform/server/workspace-permission-lock.ts` (`_locks` :44) — Phase 2/3
-- `apps/web-platform/server/stream-replay-buffer.ts` (:130-317) — Phase 3 (Redis-back, keep counter-outlives-clear)
+- `apps/web-platform/server/stream-replay-buffer.ts` (:130-317) — Phase 4a (Redis-back, keep counter-outlives-clear)
 - `apps/web-platform/lib/ws-client.ts` (reconnect/route awareness :722) — Phase 3
 - `apps/web-platform/infra/server.tf`, `firewall.tf`, `variables.tf`, `tunnel.tf` — Phase 2/3
-- `apps/web-platform/package.json` (Node Redis client dep) — Phase 3
-- `knowledge-base/engineering/architecture/decisions/ADR-027-*.md` (amend), `model.c4`, `views.c4` — Phase 0
+- `apps/web-platform/package.json` (Node Redis client dep) — Phase 4a
+- `knowledge-base/engineering/architecture/decisions/ADR-027-*.md` (supersede — `superseded-by: ADR-068`, not amend), `model.c4`, `views.c4` — Phase 0
 
 ## User-Brand Impact
 
@@ -280,8 +281,12 @@ install via cloud-init + idempotent bootstrap (mirroring `inngest-redis-bootstra
 + #5560):** do NOT declare `session_redis_password` as a no-default TF variable (that
 would trip the `apply-web-platform-infra.yml` auto-apply fail-closed and force a
 PR-A/PR-B split). Instead generate it **in-band**: `random_password` → `doppler_secret`
-(masked, `lifecycle.ignore_changes=[value]`) → injected to the daemon at runtime via
-`doppler run … --requirepass "$VAR"` (env, never argv). No operator mint, no split.
+(masked, `lifecycle.ignore_changes=[value]`) → delivered to the daemon as the env var
+`$SESSION_REDIS_PASSWORD`, which the bootstrap writes into the Redis **conf file's
+`requirepass` directive** (the argv-safe path the loopback Inngest Redis already uses —
+`inngest-redis.conf`). Do **NOT** pass it as a `redis-server --requirepass "$VAR"` CLI
+flag: that re-exposes the secret on `/proc/<pid>/cmdline` / `ps`, the exact #5560
+argv-leak class. No operator mint, no split.
 **tfstate caveat:** `random_password.result` + the `tls`-generated Redis key land in
 `terraform.tfstate` plaintext (R2, Cloudflare-managed encryption only, no client KMS);
 treat tfstate as secret-bearing — R2 credential scope is the control.
@@ -353,7 +358,7 @@ discoverability_test:
 - **Create ADR-068** "Multi-host `/workspaces` via shared git-data + per-user
   worktrees + lease-routed coordinator (rejecting Ceph/k8s)" (`status: adopting`).
   Records: affinity-via-Postgres-lease + coordinator-forwarded control; rejection of
-  Ceph/k8s and shared-NFS for the live tree; self-hosted EU Redis (Phase 3, replay
+  Ceph/k8s and shared-NFS for the live tree; self-hosted EU Redis (Phase 4a, replay
   buffer scope) over managed; `lease_generation` fencing.
 - **Supersede ADR-027** (`superseded-by: ADR-068` — ADR-027 self-mandates supersession
   for any multi-replica diff, not an amend): records that live-handle state stays
@@ -432,8 +437,9 @@ The **Container view** (`view containers of platform`) changes:
   4.6. (This plan's is filled; threshold = single-user incident.)
 - Each per-step PR MUST run `/soleur:gdpr-gate` when its concrete migration/schema
   surface materializes — the epic-level carry-forward is not a substitute.
-- Step 1 dev verification must use a **dev** Redis + **dev** Supabase, never prod
-  (`hr-dev-prd-distinct-supabase-projects`).
+- Dev verification for any phase must use **dev** substrates — never prod
+  (`hr-dev-prd-distinct-supabase-projects`): the Phase-2 lease migration against dev
+  Supabase, and (Phase 4a) a **dev** Redis, never prod.
 
 ## Open Questions (carry to deepen-plan / per-step plans)
 1. Shared git-data SPOF: Garage (#5723) from the start vs GitHub-rehydration +

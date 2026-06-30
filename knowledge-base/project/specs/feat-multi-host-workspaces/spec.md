@@ -4,7 +4,7 @@ date: 2026-06-29
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: draft
-closes: 5274
+issue: 5274
 related: [5240, 5273, 5275, 5338, 5546]
 branch: feat-multi-host-workspaces
 pr: 5710
@@ -12,6 +12,16 @@ brainstorm: knowledge-base/project/brainstorms/2026-06-29-multi-host-workspaces-
 ---
 
 # Spec: Multi-host `/workspaces` layer for a cluster backend
+
+> **Superseded framing (read the plan first).** This is the brainstorm-era input.
+> Its **FR1/FR3 "managed Redis" + "migrate the 7 ADR-027 Maps"** premise and its
+> **"Step 1–4" numbering** are **corrected** by the plan's `## Research
+> Reconciliation` and **ADR-068 (Option B, rejected)**: only 1 of 7 Maps is
+> serializable/cross-host (already Postgres-backed via #5338), the store is
+> **self-hosted EU Redis** (not managed), Redis is scoped to the ADR-059 replay
+> buffer and lands in **Phase 4a** (not Step 1), and the phases are **0/1/2/3/4a/4b**
+> (Phase 3 is the GA line — OQ3 resolved 2026-06-30). Treat the FRs/TRs/Goals below
+> as intent; the plan + ADR-068 are authoritative for mechanism and sequencing.
 
 ## Problem Statement
 
