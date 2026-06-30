@@ -18,10 +18,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { sanitizeGitStderr } from "@/server/git-auth";
 import type { ReprovisionOutcome } from "@/server/ensure-workspace-repo";
 
-/** Client/operator-facing reason persisted on a solo/owner clone failure. */
+/** Client/operator-facing reason persisted on a solo/owner clone failure. A
+ *  STATIC constant with NO dynamic input (no path/token/url), so — like
+ *  `failConnectionUnresolved`'s message — it needs no `sanitizeGitStderr`. The
+ *  rich, sanitized git stderr lives in the `repo_clone_failed` Sentry event
+ *  (emitted inside `ensureWorkspaceRepoCloned`), never in this DB status write. */
 const CLONE_FAILED_REASON =
   "automatic repository clone failed; please reconnect";
 
@@ -60,7 +63,10 @@ export async function consumeDispatchCloneOutcome(
   args: DispatchCloneConsumeArgs,
   seams: DispatchCloneConsumeSeams,
 ): Promise<"proceed" | "block"> {
-  if (args.outcome === "ok") return "proceed";
+  // Block ONLY on the EXPLICIT `"failed"` signal. `"ok"` (and any non-`"failed"`
+  // value) proceeds — the `:2010` host-confirm gate is the authoritative backstop
+  // and a benign skip must never honest-block.
+  if (args.outcome !== "failed") return "proceed";
 
   const gitDirPresent =
     seams.gitDirPresent ?? ((p: string) => existsSync(join(p, ".git")));
@@ -73,7 +79,7 @@ export async function consumeDispatchCloneOutcome(
   // `.git` genuinely absent after a failed clone → honest-block. F4: flip the
   // shared status ONLY on the solo/owner path.
   if (args.activeWorkspaceId === args.userId) {
-    await seams.setRepoStatus("error", sanitizeGitStderr(CLONE_FAILED_REASON));
+    await seams.setRepoStatus("error", CLONE_FAILED_REASON);
   }
   return "block";
 }

@@ -284,12 +284,18 @@ export async function ensureWorkspaceRepoCloned(
     // (cold/warm/reconcile). The reason is sanitized at the reporter's write
     // boundary (no token — askpass env; no absolute path / repo URL). The
     // workspace id is `basename(workspacePath)` (`<root>/<uuid>`), pre-hashed in
-    // the reporter (== raw userId for a solo workspace).
-    reportRepoCloneFailed({
-      userId,
-      activeWorkspaceId: basename(workspacePath),
-      reason: err instanceof Error ? err.message : String(err),
-    });
+    // the reporter (== raw userId for a solo workspace). DEFENSIVE: a telemetry
+    // failure must NEVER escape this catch and convert a graceful `"failed"`
+    // clone outcome into an uncaught exception that crashes the dispatch.
+    try {
+      reportRepoCloneFailed({
+        userId,
+        activeWorkspaceId: basename(workspacePath),
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    } catch {
+      // swallow — the op:clone mirror above already recorded the failure.
+    }
     // The ONLY non-benign outcome: a genuine clone failure (token expired /
     // network / repo gone). This is the post-recovery-failure signal the cc
     // reconnect path threads to the honest "workspace reclaimed" message.
