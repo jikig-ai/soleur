@@ -10,6 +10,31 @@ import { configure } from "@testing-library/react";
 // 1s), same tradeoff as isolate:true ("acceptable for a reliable suite").
 configure({ asyncUtilTimeout: 10_000 });
 
+// #5796 — raise vitest's `vi.waitFor` default timeout floor (1000ms) to 10_000ms,
+// mirroring the #5113 `asyncUtilTimeout` fix above for RTL. These are TWO
+// INDEPENDENT mechanisms: vitest's `vi.waitFor` does NOT read RTL's
+// `configure({ asyncUtilTimeout })` and has no global config knob of its own, so
+// the ~47 `vi.waitFor` sites stayed at the 1s default after #5113. Under
+// full-suite forked-worker CPU contention a 1s wait is exceeded before the
+// condition settles, which is the proven CI-red flake (live-repo-badge.test.tsx
+// vi.waitFor.timeout). Wrapping the singleton here lifts the default across every
+// call site — existing and future — so a new bare `vi.waitFor` cannot re-arm the
+// flake. Explicit per-site timeouts still win (object form spreads over the
+// injected default; number form replaces it). Passing waits are unaffected (they
+// resolve when the condition is met); only genuinely-failing waits get slower
+// (10s vs 1s) — same tradeoff as the RTL ceiling above and isolate:true.
+const _origDomWaitFor = vi.waitFor.bind(vi);
+vi.waitFor = ((
+  callback: Parameters<typeof _origDomWaitFor>[0],
+  options?: Parameters<typeof _origDomWaitFor>[1],
+) => {
+  const opts =
+    typeof options === "number"
+      ? { timeout: options }
+      : { timeout: 10_000, ...(options ?? {}) };
+  return _origDomWaitFor(callback, opts);
+}) as typeof vi.waitFor;
+
 // Pristine `fetch` captured at setup-file load. Several test files assign
 // `global.fetch = vi.fn(...)` directly; `vi.unstubAllGlobals()` does NOT
 // undo raw property writes — only `vi.stubGlobal(...)` stubs. We restore

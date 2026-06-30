@@ -25,6 +25,10 @@ describe("setup-dom.ts cleanup surfaces", () => {
     // #5113 — contention-tolerant RTL wait ceiling; deleting it silently
     // reintroduces the 1s-default starvation flake class.
     ["asyncUtilTimeout config", "asyncUtilTimeout: 10_000"],
+    // #5796 — vitest `vi.waitFor` default-floor wrapper (1s → 10s). Distinct
+    // mechanism from asyncUtilTimeout above; deleting it re-arms the
+    // vi.waitFor.timeout flake across every component-project call site.
+    ["vi.waitFor floor wrapper", "vi.waitFor ="],
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
@@ -41,5 +45,22 @@ describe("setup-dom.ts cleanup surfaces", () => {
     const afterEachBlock =
       source.match(/afterEach\s*\([\s\S]*?\n\}\);/)?.[0] ?? "";
     expect(afterEachBlock).not.toContain("vi.restoreAllMocks()");
+  });
+});
+
+// #5796 — the `vi.waitFor` floor wrapper must live in BOTH setup files. The
+// node/unit project (test/**/*.test.ts) runs under setup-node.ts and holds 18
+// vi.waitFor sites (cc-dispatcher.test.ts, is-template-authorized.test.ts); a
+// setup-dom-only fix would leave them at the 1s default. This guards the second
+// install site — deleting the setup-node.ts wrapper fails here.
+describe("setup-node.ts vi.waitFor floor wrapper", () => {
+  const nodeSource = readFileSync(resolve(__dirname, "setup-node.ts"), "utf8");
+
+  it("retains the vi.waitFor floor wrapper", () => {
+    expect(nodeSource).toContain("vi.waitFor =");
+  });
+
+  it("imports vi from vitest (required for the wrapper)", () => {
+    expect(nodeSource).toMatch(/import\s*\{[^}]*\bvi\b[^}]*\}\s*from\s*"vitest"/);
   });
 });
