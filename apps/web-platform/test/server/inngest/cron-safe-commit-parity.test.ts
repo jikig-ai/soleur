@@ -42,6 +42,7 @@ const MIGRATED_PROMPT = [
   "cron-growth-audit.ts",
   "cron-community-monitor.ts",
   "cron-competitive-analysis.ts",
+  "cron-architecture-diagram-sync.ts",
 ];
 
 // Pure-TS data-refresh pipelines migrated by #5111. No claude spawn → no

@@ -904,9 +904,10 @@ cleanup_merged_worktrees() {
   fi
   release_lock fetch-prune
 
-  # Find stale branches using two complementary detection methods:
+  # Find stale branches using three complementary detection methods:
   # 1. [gone] tracking: remote branch was deleted (e.g., GitHub auto-delete after PR merge)
   # 2. Merged to main: branch is fully merged but remote still exists (e.g., auto-delete disabled)
+  # 3. GH-merged: squash-merged branches in the GitHub auto-delete propagation window
   local gone_branches
   gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1 || true)
 
@@ -918,9 +919,25 @@ cleanup_merged_worktrees() {
     | grep -v -E '^(main|master)$' \
     || true)
 
-  # Combine both lists, deduplicate
+  # Squash-merged branches produce a new commit on main with a different SHA, so
+  # they appear in neither [gone] nor --merged main during the auto-delete propagation
+  # window. Query GitHub directly as the authoritative source of truth.
+  local gh_merged_branches=""
+  local _wt_branch
+  while IFS= read -r _line; do
+    if [[ "$_line" == "branch refs/heads/"* ]]; then
+      _wt_branch="${_line#branch refs/heads/}"
+      [[ "$_wt_branch" == "main" || "$_wt_branch" == "master" ]] && continue
+      if printf '%s\n' "$gone_branches" "$merged_branches" | grep -qxF "$_wt_branch"; then continue; fi
+      local _merged_count
+      _merged_count=$(gh pr list --head "$_wt_branch" --state merged --limit 1 --json number --jq 'length' 2>/dev/null || echo "0")
+      [[ "$_merged_count" == "1" ]] && gh_merged_branches+="${_wt_branch}"$'\n'
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null)
+
+  # Combine all three lists, deduplicate
   local all_stale_branches
-  all_stale_branches=$(printf '%s\n%s' "$gone_branches" "$merged_branches" | sort -u | sed '/^$/d' || true)
+  all_stale_branches=$(printf '%s\n%s\n%s' "$gone_branches" "$merged_branches" "$gh_merged_branches" | sort -u | sed '/^$/d' || true)
 
   if [[ -z "$all_stale_branches" ]]; then
     [[ "$verbose" == "true" ]] && echo -e "${GREEN}No merged branches to clean up${NC}"
