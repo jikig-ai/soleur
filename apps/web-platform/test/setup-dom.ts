@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { configure } from "@testing-library/react";
+import { installViWaitForFloor } from "./helpers/install-vi-waitfor-floor";
 
 // #5113 — align RTL's async-util ceiling (findBy*/waitFor, default 1000ms)
 // with the #4128 contention philosophy (testTimeout 16s; see the suite-size
@@ -9,6 +10,12 @@ import { configure } from "@testing-library/react";
 // the condition is met); only genuinely-failing waits get slower (10s vs
 // 1s), same tradeoff as isolate:true ("acceptable for a reliable suite").
 configure({ asyncUtilTimeout: 10_000 });
+
+// #5796 — raise vitest's `vi.waitFor` default timeout floor (1s → 10s) for the
+// component project. Distinct mechanism from the RTL `asyncUtilTimeout` above;
+// see ./helpers/install-vi-waitfor-floor.ts for the full rationale. Must also be
+// installed in setup-node.ts (vi.waitFor is exercised in both projects).
+installViWaitForFloor();
 
 // Pristine `fetch` captured at setup-file load. Several test files assign
 // `global.fetch = vi.fn(...)` directly; `vi.unstubAllGlobals()` does NOT
