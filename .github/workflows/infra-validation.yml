@@ -205,6 +205,9 @@ jobs:
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
 
+      - name: Run inngest-rls lockdown SQL shape guards
+        run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:

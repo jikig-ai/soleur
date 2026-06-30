@@ -20,6 +20,7 @@ export type CommandGroup =
   | "Ask an agent"
   | "Knowledge Base"
   | "Workflows"
+  | "Settings"
   | "General";
 
 export type ShortcutContext = {
@@ -112,7 +113,7 @@ export function writeShortcutsEnabled(enabled: boolean): void {
   }
 }
 
-import { NAV_ITEMS, ADMIN_NAV_ITEMS, SECONDARY_NAV_ITEMS } from "./nav-items";
+import { NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEMS } from "./nav-items";
 
 /**
  * The static command registry (navigation + hero actions). Routine and KB-doc
@@ -120,7 +121,10 @@ import { NAV_ITEMS, ADMIN_NAV_ITEMS, SECONDARY_NAV_ITEMS } from "./nav-items";
  * component — they are not part of this synchronous static set.
  */
 export function buildCommands(ctx: ShortcutContext): Command[] {
-  const nav: Command[] = [...NAV_ITEMS, ...SECONDARY_NAV_ITEMS, ...(ctx.isAdmin ? ADMIN_NAV_ITEMS : [])].map(
+  // Primary nav + admin stay in the root "Navigation" group. Settings
+  // destinations get their OWN "Settings" group, surfaced behind the palette's
+  // Settings drill-in sub-page (not flat in the root) — see command-palette.tsx.
+  const nav: Command[] = [...NAV_ITEMS, ...(ctx.isAdmin ? ADMIN_NAV_ITEMS : [])].map(
     (item) => ({
       id: `nav:${item.href}`,
       label: item.label,
@@ -128,6 +132,13 @@ export function buildCommands(ctx: ShortcutContext): Command[] {
       run: () => ({ kind: "navigate" as const, href: item.href }),
     }),
   );
+
+  const settings: Command[] = SETTINGS_NAV_ITEMS.map((item) => ({
+    id: `settings:${item.href}`,
+    label: item.label,
+    group: "Settings" as const,
+    run: () => ({ kind: "navigate" as const, href: item.href }),
+  }));
 
   const actions: Command[] = [
     {
@@ -153,7 +164,7 @@ export function buildCommands(ctx: ShortcutContext): Command[] {
     },
   ];
 
-  return [...nav, ...actions];
+  return [...nav, ...settings, ...actions];
 }
 
 // ---------------------------------------------------------------------------

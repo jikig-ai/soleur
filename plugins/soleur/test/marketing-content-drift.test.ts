@@ -65,10 +65,16 @@ let buildStderr = "";
 beforeAll(async () => {
   // Build the Eleventy site once for tests 3-5. Argv array (no shell metacharacters).
   buildAttempted = true;
+  // SOLEUR_DOCS_OFFLINE=1 makes the build hermetic — the _data/github.js,
+  // githubStats.js, and communityStats.js loaders skip their live GitHub/Discord
+  // fetches and return deterministic fallbacks, so a transient GitHub API
+  // failure in CI cannot flake this full-site build. These drift-guards assert
+  // on local prose/markup, not live release data.
   const proc = Bun.spawn(["npm", "run", "docs:build"], {
     cwd: REPO_ROOT,
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env, SOLEUR_DOCS_OFFLINE: "1" },
   });
   const exitCode = await proc.exited;
   if (exitCode !== 0) {

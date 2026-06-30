@@ -56,6 +56,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
+  resolveBestEffortEvalOk,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -578,6 +579,7 @@ export async function cronBugFixerHandler({
   prNumber: number | null;
   autoMergeQueued: boolean;
   ok: boolean;
+  errorSummary?: string;
 }> {
   // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
   // this cron needs per-construct Bash-allowlist refinement or non-GitHub
@@ -738,52 +740,39 @@ export async function cronBugFixerHandler({
       },
     );
 
-    if (spawnResult.abortedByTimeout) {
+    // #5674 — classify-fatal heartbeat (NOT flip-all). A non-zero claude exit
+    // (no fix landed, or aborted by the 50-min budget) is usually the NORMAL
+    // best-effort outcome for an autonomous fixer — bug-fixer has the highest
+    // benign-non-zero frequency in the fleet, so its benign path MUST stay green
+    // (the #4730/#4727 decoupling; H1 in
+    // knowledge-base/project/plans/2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin-plan.md).
+    // But resolveBestEffortEvalOk inspects the captured tail: a non-zero exit
+    // matching a FATAL class (credit exhausted, auth/401 revoked, spawn fault,
+    // AbortController timeout) now flips the monitor RED and records the scrubbed
+    // reason in routine_runs — the 2026-06-29 credit incident was silently green
+    // under the old unconditional-green policy. The abortedByTimeout infra-fault
+    // is folded into the fatal class (single signal, no double-report with the
+    // old separate claude-eval-timeout breadcrumb). decision.ok threads into BOTH
+    // heartbeat/return sites below (no-PR early return AND the final one) so the
+    // fatal flip holds on every exit path. See ADR-033 (classify-fatal invariant).
+    //
+    // A benign non-zero is still surfaced as a WARNING-level Sentry event
+    // (warnSilentFallback, op=claude-eval-nonzero-nofix, tagged with
+    // selectedIssue) — queryable off-host, NON-paging — so a chronically-broken
+    // -but-live fixer is diff-able week over week (a bare pino logger.warn would
+    // be invisible without SSH).
+    const decision = resolveBestEffortEvalOk(spawnResult);
+    if (!decision.ok) {
       reportSilentFallback(
-        new Error(
-          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-        ),
+        new Error(decision.errorSummary ?? "claude-eval fatal failure"),
         {
           feature: "cron-bug-fixer",
-          op: "claude-eval-timeout",
-          message: "claude-eval aborted by AbortController",
-          extra: {
-            fn: "cron-bug-fixer",
-            durationMs: spawnResult.durationMs,
-            maxMs: MAX_TURN_DURATION_MS,
-          },
+          op: "claude-eval-fatal",
+          message:
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+          extra: { fn: "cron-bug-fixer", selectedIssue, ...decision.sentryExtra },
         },
       );
-    }
-
-    // A non-zero claude exit (no fix landed, or aborted by the 50-min budget)
-    // is the NORMAL best-effort outcome for an autonomous fixer — surface it
-    // as observability, but do NOT page the cron monitor. The monitor's
-    // liveness contract is "the pipeline fired and ran end-to-end without an
-    // INFRASTRUCTURE fault" (token mint, clone, parse), not "claude shipped a
-    // PR today". Those infra faults keep their strict status=error
-    // early-returns above (parse-event-data, setup-workspace). Decoupling the
-    // heartbeat from spawnResult.ok is the fix for the scheduled-bug-fixer
-    // error-check-in incident (H1 — see
-    // knowledge-base/project/plans/2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin-plan.md).
-    //
-    // We emit a WARNING-level Sentry event (warnSilentFallback) rather than a
-    // bare logger.warn so the signal is queryable off-host: a bare pino
-    // logger.warn only adds a Sentry breadcrumb (flushed solely on a later
-    // captureException, which a clean ok:true run never produces) and lands in
-    // a Docker json-file stream that Vector does not tail — i.e. invisible
-    // without SSH. The warning event (op=claude-eval-nonzero-nofix, tagged with
-    // selectedIssue) does NOT page (no monitor status change, no issue-alert
-    // rule) but makes a chronically-broken-but-live fixer — e.g. the same
-    // issue selected and never fixed for N days running — diff-able week over
-    // week. This closes the observability gap a green monitor would otherwise
-    // hide. The two infra-fault paths that DO still surface independently:
-    // the 50-min timeout (op=claude-eval-timeout, above) and a claude spawn
-    // failure (op=child_process.spawn, emitted inside the substrate's
-    // child.on("error"); exitCode === -1) — so the else-if below intentionally
-    // skips the timeout case to avoid a duplicate signal.
-    if (spawnResult.abortedByTimeout) {
-      // already surfaced by the claude-eval-timeout reportSilentFallback above
     } else if (!spawnResult.ok) {
       warnSilentFallback(
         new Error("claude-eval exited non-zero — no fix landed this run"),
@@ -791,13 +780,8 @@ export async function cronBugFixerHandler({
           feature: "cron-bug-fixer",
           op: "claude-eval-nonzero-nofix",
           message:
-            "claude-eval exited non-zero (no fix landed); cron monitor stays green (liveness, not success)",
-          extra: {
-            fn: "cron-bug-fixer",
-            selectedIssue,
-            exitCode: spawnResult.exitCode,
-            durationMs: spawnResult.durationMs,
-          },
+            "claude-eval exited non-zero (benign no-fix); cron monitor stays green (liveness, not success)",
+          extra: { fn: "cron-bug-fixer", selectedIssue, ...decision.sentryExtra },
         },
       );
     }
@@ -813,16 +797,18 @@ export async function cronBugFixerHandler({
         { fn: "cron-bug-fixer", selectedIssue },
         "No bot-fix PR detected after claude-eval",
       );
-      // Clean run that produced no PR is the normal best-effort outcome →
-      // healthy liveness check-in (the no-fix exit is already logged above).
+      // No PR is the normal best-effort outcome → green liveness UNLESS the
+      // claude exit was a FATAL class (decision.ok:false), in which case the
+      // monitor flips red and routine_runs records the scrubbed reason (#5674).
       await step.run("sentry-heartbeat", async () => {
-        await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
+        await postSentryHeartbeat({ ok: decision.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
       });
       return {
         selectedIssue,
         prNumber: null,
         autoMergeQueued: false,
-        ok: true,
+        ok: decision.ok,
+        errorSummary: decision.errorSummary,
       };
     }
 
@@ -852,19 +838,19 @@ export async function cronBugFixerHandler({
     }
 
     // --- Step 9: sentry-heartbeat (final POST) ---
-    // The pipeline reached the end without an infrastructure fault → healthy,
-    // regardless of claude's exit code or whether a PR was detected (those are
-    // best-effort outcomes, logged above, never a liveness failure). Infra
-    // faults page via the early-return status=error heartbeats above.
+    // classify-fatal: green on a clean/benign run (even one that opened a PR
+    // despite a non-zero exit), red on a FATAL-class claude exit (decision.ok).
+    // Infra faults page via the early-return status=error heartbeats above.
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
+      await postSentryHeartbeat({ ok: decision.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
     });
 
     return {
       selectedIssue,
       prNumber: detectedPr.number,
       autoMergeQueued: gateResult.queued,
-      ok: true,
+      ok: decision.ok,
+      errorSummary: decision.errorSummary,
     };
   } finally {
     // Best-effort teardown (idempotent rm -rf with force:true). The

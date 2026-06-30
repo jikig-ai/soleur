@@ -2,12 +2,17 @@
  * Tenant isolation — session-sync.ts (PR-C §2.1, #3244).
  *
  * Asserts founder A's runtime JWT cannot read or mutate founder B's
- * `users` row through the 4 sites in `server/session-sync.ts`:
+ * repo/sync state. Two RLS surfaces are covered:
  *
- *   - `:187` getInstallationId → SELECT github_installation_id
- *   - `:236` recordKbSyncHistory → SELECT kb_sync_history
- *   - `:254` recordKbSyncHistory → UPDATE kb_sync_history
- *   - `:270` updateLastSynced → UPDATE repo_last_synced_at
+ *   - `users` (`auth.uid() = id`): `kb_sync_history` SELECT/UPDATE and
+ *     `repo_last_synced_at` UPDATE — these columns survive on `users`.
+ *   - `workspaces.github_installation_id` via the membership-scoped
+ *     `resolve_workspace_installation_id(p_workspace_id)` DEFINER RPC.
+ *     ADR-044 PR-2b (mig 112) dropped `users.github_installation_id` and
+ *     relocated the credential to `workspaces`, where it is REVOKE'd from
+ *     `authenticated` (mig 079) — a tenant `select("github_installation_id")`
+ *     yields `42501`, not an isolation deny, so the cross-tenant check goes
+ *     through the RPC and asserts NULL (membership deny == not-connected).
  *
  * RLS-policy on `users` is `auth.uid() = id` — a cross-tenant probe
  * MUST return zero rows (SELECT) and affect zero rows (UPDATE) under
@@ -99,18 +104,32 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(user.id).toBeTruthy();
       }
 
-      // Seed users.github_installation_id + kb_sync_history for both.
-      // The `users` row itself is created by the `on auth.users insert`
-      // trigger (migration 002); we only set the fields the SUT reads.
+      // Seed users.kb_sync_history for both. The `users` row itself is
+      // created by the `on auth.users insert` trigger (migration 002); we
+      // only set the fields the SUT reads. `github_installation_id` was
+      // dropped from `users` by mig 112 (ADR-044) — it is seeded on the
+      // `workspaces` row below instead.
       for (const user of [userA, userB]) {
         const { error } = await service
           .from("users")
           .update({
-            github_installation_id: parseInt(user.id.slice(0, 8), 16),
             kb_sync_history: [{ date: "2026-01-01", count: 1 }],
           })
           .eq("id", user.id);
         expect(error, `seed users for ${user.email}`).toBeNull();
+      }
+
+      // Seed workspaces.github_installation_id for both. The mig-053
+      // `handle_new_user` trigger pre-creates `workspaces(id = users.id)`,
+      // so this is an UPDATE (an INSERT would PK-collide).
+      for (const user of [userA, userB]) {
+        const { error } = await service
+          .from("workspaces")
+          .update({
+            github_installation_id: parseInt(user.id.slice(0, 8), 16),
+          })
+          .eq("id", user.id);
+        expect(error, `seed workspaces for ${user.email}`).toBeNull();
       }
 
       // Mint runtime JWTs via the SUT.
@@ -149,23 +168,25 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       }
     }, 30_000);
 
-    test("baseline: A reads own github_installation_id (mirrors `:187` site)", async () => {
-      const { data, error } = await aClient
-        .from("users")
-        .select("github_installation_id")
-        .eq("id", userA.id)
-        .maybeSingle();
+    test("baseline: A reads own github_installation_id via workspaces RPC", async () => {
+      const { data, error } = await aClient.rpc(
+        "resolve_workspace_installation_id",
+        { p_workspace_id: userA.id },
+      );
       expect(error).toBeNull();
-      expect(data?.github_installation_id).toBeTruthy();
+      // The RPC returns the seeded bigint for the caller's own workspace.
+      expect(Number(data)).toBe(parseInt(userA.id.slice(0, 8), 16));
     });
 
-    test("`:187` getInstallationId — A cannot read B's github_installation_id", async () => {
-      const { data, error } = await aClient
-        .from("users")
-        .select("github_installation_id")
-        .eq("id", userB.id);
+    test("getInstallationId — A cannot read B's github_installation_id (membership deny → NULL)", async () => {
+      const { data, error } = await aClient.rpc(
+        "resolve_workspace_installation_id",
+        { p_workspace_id: userB.id },
+      );
+      // Membership-scoped DEFINER RPC returns NULL for a non-member caller
+      // (deny == not-connected by design, mig 079). No 42501, no row leak.
       expect(error).toBeNull();
-      expect(data).toEqual([]);
+      expect(data).toBeNull();
     });
 
     test("`:236` recordKbSyncHistory SELECT — A cannot read B's kb_sync_history", async () => {
@@ -231,7 +252,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // expected path. Accept either shape for methodology hygiene.
       const { data: readByB, error: readError } = await bClient
         .from("users")
-        .select("github_installation_id, kb_sync_history, repo_last_synced_at")
+        .select("kb_sync_history, repo_last_synced_at")
         .eq("id", userA.id);
       if (readError) {
         expect(readError.code).toBe("42501");

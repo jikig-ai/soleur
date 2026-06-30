@@ -102,19 +102,37 @@ export interface RepoSelfHealSeams {
   ensureWorkspaceRepoCloned: (
     args: EnsureWorkspaceRepoArgs,
   ) => Promise<ReprovisionOutcome>;
-  /** `existsSync(<workspacePath>/.git)` — injected so the decision is fs-free in test. */
+  /**
+   * `existsSync(<workspacePath>/.git)` — TRUE PRESENCE (not validity). Injected
+   * so the decision is fs-free in test. Used ONLY where true absence is the
+   * load-bearing signal: the null-install divergence gates (a corrupt `.git` is
+   * NOT absent, so it must not trip `connected-null-install-at-dispatch` — F1).
+   */
   gitDirExists: (workspacePath: string) => boolean;
+  /**
+   * SYNC structural VALIDITY of `<workspacePath>/.git` (2026-06-19, corrupt-
+   * worktree fix). Production wires `isValidGitWorkTree`. A `.git` that exists
+   * but is not a valid work tree (partial clone / failed atomic-rename) is
+   * `false` here while `gitDirExists` is `true` — the gap that routes a corrupt
+   * workspace to the corrupt-worktree graft instead of fast-pathing a repo-less
+   * spawn. The fast-path gate keys on THIS, not presence.
+   */
+  gitDirValid: (workspacePath: string) => boolean;
   /**
    * Emit a dispatch-time `repo_resolver_divergence` Sentry breadcrumb. Injected
    * (required) so this module stays DB/Sentry/IO-free in unit tests (AC4) — the
    * production wiring in cc-dispatcher routes it to `reportRepoResolverDivergence`.
-   * Fires when a genuinely-connected workspace resolves a NULL install at
-   * dispatch (the previously-dark path this PR makes observable).
+   * Fires when a genuinely-connected workspace resolves a NULL install
+   * (`connected-null-install-at-dispatch`) OR has a corrupt on-disk `.git`
+   * (`corrupt-worktree-at-dispatch`, with `recovered` set after the re-clone
+   * resolves) at dispatch — the previously-dark paths this lineage makes
+   * observable.
    */
   reportDivergence: (
     op: RepoResolverDivergenceOp,
     userId: string,
     workspaceId: string,
+    recovered?: boolean,
   ) => void;
 }
 
@@ -161,20 +179,35 @@ export async function resolveRepoReadinessWithSelfHeal(
   // graft below (Bug 2). All other `{ ok:true }` shapes return unchanged.
   if (decision.ok) {
     const gitAbsent = seams.gitDirExists(args.workspacePath) === false;
-    // DIVERGENCE (this PR) — a genuinely-connected workspace (`repoUrl` present,
+    // DIVERGENCE (#5580) — a genuinely-connected workspace (`repoUrl` present,
     // the non-credential honest signal that a connection EXISTS) whose
     // credential read `resolve_workspace_installation_id` returned NULL
-    // (membership-deny / transient RPC blip), with `.git` absent. We have NO
-    // install to clone with, so we MUST NOT fast-path into a repo-less agent
-    // spawn (the bug). Fail honestly + emit the dispatch-time divergence op.
+    // (membership-deny / transient RPC blip), with `.git` TRULY ABSENT. We have
+    // NO install to clone with, so we MUST NOT fast-path into a repo-less agent
+    // spawn. Fail honestly + emit the dispatch-time divergence op. Keyed on
+    // `gitAbsent` (true absence) NOT validity — a corrupt `.git` + null install
+    // must NOT trip this op (F1); it is handled by the not-connected fall-through
+    // / honest block below.
     if (args.installationId === null && !!args.repoUrl && gitAbsent) {
       return failConnectionUnresolved(args, seams);
     }
-    if (!hasConnection || !gitAbsent) {
+    // FAST PATH — not connected, OR a VALID on-disk work tree (the common case).
+    // Keyed on VALIDITY (2026-06-19): a `.git` that exists but is corrupt is NOT
+    // valid, so it falls through to recovery instead of fast-pathing a repo-less
+    // spawn. A valid `.git` touches only `gitDirExists` + `gitDirValid` (both
+    // sync, no DB/JWT) — AC7 zero-await preserved.
+    if (!hasConnection || seams.gitDirValid(args.workspacePath)) {
       return decision;
     }
-    // ready + connected + `.git` ABSENT → lock-free graft (no claimCloneLock).
-    return graftReadyButGitAbsent(args, seams);
+    // hasConnection && NOT valid:
+    if (gitAbsent) {
+      // `.git` cleanly absent → Bug-2 lock-free graft (unchanged, no emit).
+      return graftReadyButGitAbsent(args, seams);
+    }
+    // `.git` EXISTS but is INVALID (corrupt/partial) → corrupt-worktree recovery
+    // (2026-06-19). emit + remove-the-empty-corrupt-`.git`-under-lock + re-clone
+    // (the removal authorization + lock live in `ensureWorkspaceRepoCloned`).
+    return graftCorruptWorktree(args, seams);
   }
 
   // error/stale-cloning that cannot recover (no install / no repoUrl / `.git`
@@ -253,6 +286,61 @@ async function graftReadyButGitAbsent(
   if (outcome === "ok") return { ok: true };
 
   return failHonestly(args, seams);
+}
+
+/**
+ * Corrupt-worktree recovery (2026-06-19) — a connected (install NON-null) DB-
+ * `ready` workspace whose on-disk `.git` EXISTS but is not a valid work tree
+ * (`gitDirValid` false, `gitDirExists` true). `ensureWorkspaceRepoCloned` removes
+ * a positively-fingerprinted empty-corrupt `.git` UNDER THE WORKSPACE LOCK and
+ * re-clones; a populated-but-broken / EACCES / gitdir-FILE `.git` is NOT removed
+ * and returns "failed" (honest-block, never destroy).
+ *
+ * Emits `corrupt-worktree-at-dispatch` carrying `recovered` so a self-healed
+ * re-clone (true) is triageable apart from an unrecovered honest-block (false).
+ *
+ * F4 (membership-write posture): on FAILURE this path does NOT call
+ * `setRepoStatus(error)` — a removed/transient MEMBER dispatching into a corrupt
+ * TEAM workspace must not flip its `repo_status` to `error` for the Owners (the
+ * same hazard `failConnectionUnresolved` avoids). Emit-only + honest block.
+ */
+async function graftCorruptWorktree(
+  args: RepoSelfHealArgs,
+  seams: RepoSelfHealSeams,
+): Promise<RepoReadiness> {
+  const outcome = await seams.ensureWorkspaceRepoCloned({
+    userId: args.userId,
+    workspacePath: args.workspacePath,
+    installationId: args.installationId,
+    repoUrl: args.repoUrl,
+  });
+
+  if (outcome === "ok") {
+    // Self-healed: the corrupt `.git` was removed + re-cloned into a valid tree.
+    seams.reportDivergence(
+      "corrupt-worktree-at-dispatch",
+      args.userId,
+      args.workspaceId,
+      true,
+    );
+    return { ok: true };
+  }
+
+  // Unrecovered (populated-broken / EACCES / clone failed) → paging emit + honest
+  // block. ZERO `workspaces` writes (F4): emit-only, never `setRepoStatus`.
+  seams.reportDivergence(
+    "corrupt-worktree-at-dispatch",
+    args.userId,
+    args.workspaceId,
+    false,
+  );
+  const reason = sanitizeGitStderr(SELF_HEAL_FAILED_REASON);
+  return {
+    ok: false,
+    code: "error",
+    message: repoErrorMsg(reason),
+    errorCode: "repo_setup_failed",
+  };
 }
 
 /**

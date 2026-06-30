@@ -1,0 +1,48 @@
+{
+  "_comment": "L3 per-phase tool/skill scoping registry (#5768). Read by .claude/hooks/phase-surface-hint.sh (PostToolUse, matcher Skill). skill_to_phase maps a Skill-tool invocation to a workflow phase; phase_to_surface holds the additive, fail-open hint surface for that phase. Any skill absent from skill_to_phase yields no hint (full surface). Consistency asserted by .claude/hooks/phase-surface-hint.test.sh. See ADR-070.",
+  "skill_to_phase": {
+    "soleur:brainstorm": "brainstorm",
+    "soleur:brainstorm-techniques": "brainstorm",
+    "soleur:plan": "plan",
+    "soleur:deepen-plan": "plan",
+    "soleur:plan-review": "plan",
+    "soleur:work": "work",
+    "soleur:atdd-developer": "work",
+    "soleur:test-fix-loop": "work",
+    "soleur:resolve-todo-parallel": "work",
+    "soleur:review": "review",
+    "soleur:qa": "review",
+    "soleur:resolve-pr-parallel": "review",
+    "soleur:ship": "ship",
+    "soleur:preflight": "ship",
+    "soleur:merge-pr": "ship",
+    "soleur:postmerge": "ship"
+  },
+  "phase_to_surface": {
+    "brainstorm": {
+      "relevant_skills": ["soleur:brainstorm", "soleur:brainstorm-techniques", "soleur:plan"],
+      "relevant_agents": ["cto", "cpo", "repo-research-analyst", "learnings-researcher"],
+      "not_live_note": "implementation/ship skills (work, review, ship, merge-pr) are not relevant yet — decide WHAT before HOW."
+    },
+    "plan": {
+      "relevant_skills": ["soleur:plan", "soleur:deepen-plan", "soleur:plan-review", "soleur:spec-templates"],
+      "relevant_agents": ["architecture-strategist", "code-simplicity-reviewer", "spec-flow-analyzer", "repo-research-analyst"],
+      "not_live_note": "deploy/ship/merge skills are not relevant yet — produce the plan + tasks before implementing."
+    },
+    "work": {
+      "relevant_skills": ["soleur:work", "soleur:atdd-developer", "soleur:test-fix-loop", "soleur:resolve-todo-parallel", "soleur:qa"],
+      "relevant_agents": ["code-simplicity-reviewer", "security-sentinel"],
+      "not_live_note": "ship/merge skills come after review — finish implementation + tests first."
+    },
+    "review": {
+      "relevant_skills": ["soleur:review", "soleur:qa", "soleur:resolve-pr-parallel"],
+      "relevant_agents": ["architecture-strategist", "security-sentinel", "code-quality-analyst"],
+      "not_live_note": "ship/merge skills run after review findings are resolved."
+    },
+    "ship": {
+      "relevant_skills": ["soleur:ship", "soleur:preflight", "soleur:merge-pr", "soleur:postmerge", "soleur:changelog"],
+      "relevant_agents": [],
+      "not_live_note": "this is the terminal phase — commit, push, PR, merge, verify deploy."
+    }
+  }
+}

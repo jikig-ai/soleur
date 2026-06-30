@@ -33,6 +33,7 @@ Phase 0.5 Processing Instructions: when `USER_BRAND_CRITICAL=true`, expand the r
 
 Lanes describe **Phase 0.5 domain-leader breadth** (single source of truth; downstream skills reference this section by heading).
 
+<!-- eval-gate:block:lane-inference:start -->
 | Lane | Phase 0.5 effect | Triggers (case-insensitive token scan) |
 |---|---|---|
 | `single-domain` | Spawn one leader (highest-relevance per Assessment Questions). On tie, fall back to **config declaration order** in this file's domain table (first match wins). | No `cross-domain` trigger AND no `procedural` trigger. |
@@ -40,6 +41,7 @@ Lanes describe **Phase 0.5 domain-leader breadth** (single source of truth; down
 | `procedural` | Spawn zero leaders. | `scaffold`, `lockfile`, `format-only`, `rename-only`, `dep-bump`, `version-bump`, `lint-fix` AND no `cross-domain` trigger. |
 
 **Fail-closed default** when keyword inference returns no signal AND operator selects nothing resolvable: `cross-domain`. Cost asymmetry — false-positive fan-out is recoverable; missed user-impact gate is shipped breach.
+<!-- eval-gate:block:lane-inference:end -->
 
 **USER_BRAND_CRITICAL × lane composition.** When `USER_BRAND_CRITICAL=true` is set by Phase 0.1, the override at the top of this file (CPO + CLO + CTO mandatory triad) wins. Lane is then forced to `cross-domain`; the `cross-domain` fail-closed-expand clause is a no-op because the triad already provides ≥2 leaders. If relevance scoring would later drop one of the triad, the triad still fires (the override is unconditional); expansion only re-adds non-triad leaders.
 

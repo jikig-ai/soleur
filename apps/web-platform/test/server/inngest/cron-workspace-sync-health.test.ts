@@ -35,8 +35,12 @@ let READY_WORKSPACE_QUERY_ERROR: { message: string } | null = null;
 // is the backfilled-solo default source for the per-row workspaces install resolver.
 let USERS_ROWS: {
   id: string;
-  kb_sync_history: unknown;
+  kb_sync_history?: unknown;
   github_installation_id?: number | null;
+  // #5675: arm-1's solo classification + entitlement resolution reads
+  // github_username via the same users `.in("id", ids)` chain (select cols are
+  // ignored by the mock, so an arm-1 owner row just needs this field present).
+  github_username?: string | null;
 }[] = [];
 let USERS_QUERY_ERROR: { message: string } | null = null;
 // #5470: per-row install is resolved from the user's solo WORKSPACE via
@@ -155,12 +159,89 @@ vi.mock("@/server/github-app", () => ({
     getDefaultBranchHeadCommitAtSpy(...(args as [number, string, string])),
 }));
 
+// #5675: arm-1 reconcile resolves the owner's entitlement-scoped installs via
+// the connect-path resolvers (mocked here so no real github-app/network IO runs)
+// and backfills via writeRepoColsToWorkspace (spied to assert AC1/AC5 args).
+const resolveReachableSpy = vi.fn(
+  async (
+    _service: unknown,
+    _userId: string,
+    _login: string | null,
+  ): Promise<number[]> => [],
+);
+const resolveOwningDetailedSpy = vi.fn(
+  async (
+    _ids: number[],
+    _owner: string,
+    _repo: string,
+  ): Promise<{ installId: number | null; allDegraded: boolean }> => ({
+    installId: null,
+    allDegraded: false,
+  }),
+);
+vi.mock("@/server/reachable-installations", () => ({
+  resolveReachableInstallationIds: (...a: unknown[]) =>
+    resolveReachableSpy(...(a as [unknown, string, string | null])),
+  resolveOwningInstallationForRepoDetailed: (...a: unknown[]) =>
+    resolveOwningDetailedSpy(...(a as [number[], string, string])),
+}));
+
+const writeRepoColsSpy = vi.fn(async (): Promise<void> => {});
+vi.mock("@/server/workspace-repo-mirror", () => ({
+  writeRepoColsToWorkspace: (...a: unknown[]) =>
+    writeRepoColsSpy(...(a as [])),
+}));
+
+// #5689 item 2 — immediate re-sync after backfill. arm-1 calls syncWorkspace
+// (live default-branch HEAD pull) + writes a reconcile_backfill audit row.
+type SyncResult =
+  | { ok: true; recovered?: boolean }
+  | { ok: false; error: unknown; errorClass: string };
+const syncWorkspaceSpy = vi.fn(async (): Promise<SyncResult> => ({ ok: true }));
+vi.mock("@/server/workspace-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/workspace-sync")>();
+  return { ...actual, syncWorkspace: (...a: unknown[]) => syncWorkspaceSpy(...(a as [])) };
+});
+vi.mock("@/server/workspace-resolver", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/workspace-resolver")>();
+  return {
+    ...actual,
+    workspacePathForWorkspaceId: (id: string) => `/workspaces/${id}`,
+  };
+});
+const appendKbSyncRowForWorkspaceSpy = vi.fn(async (): Promise<void> => {});
+vi.mock("@/server/session-sync", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/session-sync")>();
+  return {
+    ...actual,
+    appendKbSyncRowForWorkspace: (...a: unknown[]) =>
+      appendKbSyncRowForWorkspaceSpy(...(a as [])),
+  };
+});
+// @/server/logger is NOT mocked — syncWorkspace is mocked, so the module logger
+// arg is never exercised, and a wholesale mock would drop named exports
+// (createChildLogger) that sibling real modules need transitively.
+// node:fs — control workspaceDirExists per test (default: dir present).
+const fsStatSpy = vi.fn(async () => ({ isDirectory: () => true }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    promises: { ...actual.promises, stat: (...a: unknown[]) => fsStatSpy(...(a as [])) },
+  };
+});
+
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
 
 function makeStep() {
   const calls: { name: string }[] = [];
+  // sendEvent spy: arm-1 must NEVER emit an Inngest event (ADR-033 I6). Present
+  // so a regression that calls step.sendEvent is caught by assertion, not a throw.
+  const sendEvent = vi.fn(async () => {});
   return {
     calls,
+    sendEvent,
     async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
       const result = await cb();
       calls.push({ name });
@@ -186,6 +267,19 @@ beforeEach(() => {
   postSentryHeartbeatSpy.mockClear();
   getDefaultBranchHeadCommitAtSpy.mockReset();
   getDefaultBranchHeadCommitAtSpy.mockResolvedValue(null);
+  resolveReachableSpy.mockReset();
+  resolveReachableSpy.mockResolvedValue([]);
+  resolveOwningDetailedSpy.mockReset();
+  resolveOwningDetailedSpy.mockResolvedValue({ installId: null, allDegraded: false });
+  writeRepoColsSpy.mockReset();
+  writeRepoColsSpy.mockResolvedValue(undefined);
+  syncWorkspaceSpy.mockReset();
+  syncWorkspaceSpy.mockResolvedValue({ ok: true });
+  appendKbSyncRowForWorkspaceSpy.mockReset();
+  appendKbSyncRowForWorkspaceSpy.mockResolvedValue(undefined);
+  fsStatSpy.mockReset();
+  fsStatSpy.mockResolvedValue({ isDirectory: () => true });
+  logger.info.mockClear();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -742,5 +836,313 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     );
     expect(result).toEqual({ ok: true, findings: [], error: null });
     expect(postSentryHeartbeatSpy).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+  });
+});
+
+// #5675: arm-1 is no longer a pure reporter — for a ready+NULL-install SOLO
+// workspace it backfills github_installation_id, resolving the install via the
+// entitlement-scoped connect-path resolvers (solo only; team installs are never
+// auto-detected). Unresolvable / team findings keep the visible folded signal;
+// a degraded probe no-ops as transient.
+describe("cron-workspace-sync-health — arm-1 reconcile (#5675)", () => {
+  it("AC1: solo + owner-entitled + owning install resolves → backfills via writeRepoColsToWorkspace, keeps no signal", async () => {
+    WORKSPACE_ROWS = [{ id: "solo-1", repo_url: "https://github.com/alice/repo" }];
+    USERS_ROWS = [{ id: "solo-1", github_username: "alice" }];
+    resolveReachableSpy.mockResolvedValue([501]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // Entitlement-scoped: keyed on the owner's user_id (== solo workspace id) + github_username.
+    expect(resolveReachableSpy).toHaveBeenCalledWith(expect.anything(), "solo-1", "alice");
+    expect(resolveOwningDetailedSpy).toHaveBeenCalledWith([501], "alice", "repo");
+    // Backfill via the canonical write boundary, keyed on the finding's own id.
+    expect(writeRepoColsSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "solo-1",
+      { github_installation_id: 501 },
+    );
+    // Reconciled → the workspace becomes reachable; no standing signal emitted.
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    // AC5: ran inside a per-workspace step.run boundary (replay determinism).
+    expect(step.calls).toContainEqual({ name: "reconcile-solo-1" });
+  });
+
+  it("AC2 (negative, load-bearing): solo org repo whose owner is reachable but does NOT own the repo → skip(needs-reauth), NO write", async () => {
+    // The cross-tenant over-grant guard: the owner has SOME reachable install
+    // (e.g. their personal account) but it does not own this org repo, so we must
+    // never bind an install the owner is not entitled to for THIS repo.
+    WORKSPACE_ROWS = [{ id: "solo-2", repo_url: "https://github.com/bigorg/repo" }];
+    USERS_ROWS = [{ id: "solo-2", github_username: "bob" }];
+    resolveReachableSpy.mockResolvedValue([777]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: null, allDegraded: false });
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "workspace-sync-health",
+        op: "ready-null-installation",
+        extra: expect.objectContaining({ workspaceId: "solo-2", reason: "needs-reauth" }),
+      }),
+    );
+  });
+
+  it("AC3: team workspace (finding id is not a users.id) → skip(team-workspace-never-auto-detect), NO write, NO resolver call", async () => {
+    WORKSPACE_ROWS = [{ id: "team-uuid", repo_url: "https://github.com/org/repo" }];
+    USERS_ROWS = []; // no users row for this id → not solo
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(resolveReachableSpy).not.toHaveBeenCalled();
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        op: "ready-null-installation",
+        extra: expect.objectContaining({
+          workspaceId: "team-uuid",
+          reason: "team-workspace-never-auto-detect",
+        }),
+      }),
+    );
+  });
+
+  it("AC4: empty reachable → skip(needs-reauth), owning probe NOT called, signal kept", async () => {
+    WORKSPACE_ROWS = [{ id: "solo-3", repo_url: "https://github.com/alice/repo" }];
+    USERS_ROWS = [{ id: "solo-3", github_username: "alice" }];
+    resolveReachableSpy.mockResolvedValue([]);
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(resolveOwningDetailedSpy).not.toHaveBeenCalled();
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        op: "ready-null-installation",
+        extra: expect.objectContaining({ workspaceId: "solo-3", reason: "needs-reauth" }),
+      }),
+    );
+  });
+
+  it("AC4: all-degraded owning probe → transient, NO write, NO signal", async () => {
+    WORKSPACE_ROWS = [{ id: "solo-4", repo_url: "https://github.com/alice/repo" }];
+    USERS_ROWS = [{ id: "solo-4", github_username: "alice" }];
+    resolveReachableSpy.mockResolvedValue([777]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: null, allDegraded: true });
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+    // transient is fail-safe-silent: no write AND no signal (self-recovers next fire).
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC4: malformed repo_url (null) on a solo finding → skip(malformed-repo-url), NO write, NO resolver call, but KEEPS the visible signal (still a stuck workspace)", async () => {
+    WORKSPACE_ROWS = [{ id: "solo-mal", repo_url: null }];
+    USERS_ROWS = [{ id: "solo-mal", github_username: "alice" }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    // No repo to parse → no entitlement resolution, no write …
+    expect(resolveReachableSpy).not.toHaveBeenCalled();
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+    // … but a ready+NULL-install solo workspace is still stuck, so the standing
+    // signal stays visible (this would have been silently dropped if malformed
+    // suppressed the signal — the data-integrity review's L2 regression guard).
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        op: "ready-null-installation",
+        extra: expect.objectContaining({
+          workspaceId: "solo-mal",
+          reason: "malformed-repo-url",
+        }),
+      }),
+    );
+  });
+
+  it("AC6: arm-1 top-level return is unchanged ScanResult; logs deterministic {reconciled,skipped,transient}", async () => {
+    WORKSPACE_ROWS = [
+      { id: "solo-1", repo_url: "https://github.com/alice/repo" }, // reconciled
+      { id: "team-uuid", repo_url: "https://github.com/org/repo" }, // skip (team)
+    ];
+    USERS_ROWS = [{ id: "solo-1", github_username: "alice" }];
+    resolveReachableSpy.mockResolvedValue([501]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+    const handler = await importHandler();
+    const result = await handler({ step: makeStep(), logger });
+
+    // Handler return contract is unchanged (item-1 ScanResult).
+    expect(result).toEqual({
+      ok: true,
+      findings: [
+        { workspaceId: "solo-1", repoUrl: "https://github.com/alice/repo" },
+        { workspaceId: "team-uuid", repoUrl: "https://github.com/org/repo" },
+      ],
+      error: null,
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: "cron-workspace-sync-health",
+        reconciled: 1,
+        skipped: 1,
+        transient: 0,
+      }),
+      expect.any(String),
+    );
+  });
+
+  it("AC6: a workspace backfilled by arm-1 does not spuriously fire arm-2 (stale) or arm-3 (went-quiet) in the same invocation", async () => {
+    // Exercise the actual intra-fire overlap (L3 hardening): solo-1 is BOTH an
+    // arm-1 finding (ready+NULL-install) AND present in arms-2/3's ready scan
+    // with an EMPTY kb_sync_history (a freshly-reconciled workspace has never
+    // synced). arm-1 backfills it; arms 2/3 re-scan and must skip it because the
+    // empty-history gate fires before any stale/went-quiet report — even though
+    // the install now resolves non-null. Proves non-coupling at the row level,
+    // not merely "arms 2/3 scanned an empty set".
+    WORKSPACE_ROWS = [{ id: "solo-1", repo_url: "https://github.com/alice/repo" }];
+    READY_WORKSPACE_ROWS = [{ id: "solo-1", repo_url: "https://github.com/alice/repo" }];
+    USERS_ROWS = [{ id: "solo-1", github_username: "alice", kb_sync_history: [] }];
+    resolveReachableSpy.mockResolvedValue([501]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(Date.now());
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(writeRepoColsSpy).toHaveBeenCalledTimes(1);
+    // arms 2/3 skip on empty history before any probe → no spurious fire.
+    expect(getDefaultBranchHeadCommitAtSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "stale-sync-failed" }),
+    );
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "went-quiet" }),
+    );
+  });
+});
+
+describe("cron-workspace-sync-health — arm-1 immediate re-sync after backfill (#5689 item 2)", () => {
+  const SOLO = { id: "solo-1", repo_url: "https://github.com/alice/repo" };
+  function reconcilable() {
+    WORKSPACE_ROWS = [SOLO];
+    USERS_ROWS = [{ id: "solo-1", github_username: "alice" }];
+    resolveReachableSpy.mockResolvedValue([501]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+  }
+
+  it("3.1: reconciled solo → backfills, then syncs live HEAD and writes a reconcile_backfill ok:true audit row; emits NO Inngest event (I6)", async () => {
+    reconcilable();
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // backfill first, then sync (op:"manual" — system-resync convention, no op-union widening).
+    expect(writeRepoColsSpy).toHaveBeenCalledWith(expect.anything(), "solo-1", {
+      github_installation_id: 501,
+    });
+    expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+      501,
+      "/workspaces/solo-1",
+      expect.anything(),
+      { userId: "solo-1", op: "manual" },
+    );
+    // truthful, workspace-keyed audit row (solo: workspaceId === users.id, ADR-038 N2).
+    expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "solo-1",
+      expect.objectContaining({
+        trigger: "reconcile_backfill",
+        ok: true,
+        workspace_id: "solo-1",
+      }),
+    );
+    // I6: arm-1 emits no Inngest event.
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    // Reconciled + synced → no standing failure signal.
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("3.2: reconciled solo with a missing workspace dir → workspace_not_ready audit row, does NOT sync, does not throw", async () => {
+    reconcilable();
+    fsStatSpy.mockRejectedValueOnce(new Error("ENOENT")); // dir absent
+    const handler = await importHandler();
+    await expect(handler({ step: makeStep(), logger })).resolves.toBeDefined();
+
+    expect(writeRepoColsSpy).toHaveBeenCalled(); // backfill still commits
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled(); // guard short-circuits the sync
+    expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "solo-1",
+      expect.objectContaining({
+        trigger: "reconcile_backfill",
+        ok: false,
+        error_class: "workspace_not_ready",
+      }),
+    );
+  });
+
+  it("3.3 (re-entrancy): a workspace already backfilled (no longer in the ready+NULL-install scan) is NOT re-synced on a later fire", async () => {
+    // The backfill commits BEFORE the sync, so the row leaves arm-1's
+    // `repo_status='ready' AND github_installation_id IS NULL` scan predicate.
+    // A later fire sees no findings → no re-sync (and no re-backfill).
+    WORKSPACE_ROWS = []; // post-backfill state: row no longer matches the scan
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC4: a failed in-arm sync mirrors to Sentry (op:reconcile-backfill-sync) + ok:false audit row, and the cron continues to the next finding", async () => {
+    WORKSPACE_ROWS = [
+      { id: "solo-1", repo_url: "https://github.com/alice/repo" },
+      { id: "solo-2", repo_url: "https://github.com/alice/other" },
+    ];
+    USERS_ROWS = [
+      { id: "solo-1", github_username: "alice" },
+      { id: "solo-2", github_username: "alice" },
+    ];
+    resolveReachableSpy.mockResolvedValue([501]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+    syncWorkspaceSpy.mockResolvedValueOnce({
+      ok: false,
+      error: new Error("non-fast-forward"),
+      errorClass: "sync_failed",
+    });
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    // first finding failed → mirrored + ok:false audit row.
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "workspace-sync-health",
+        op: "reconcile-backfill-sync",
+        extra: expect.objectContaining({ workspaceId: "solo-1" }),
+      }),
+    );
+    expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "solo-1",
+      expect.objectContaining({
+        trigger: "reconcile_backfill",
+        ok: false,
+        error_class: "sync_failed",
+      }),
+    );
+    // cron continued: the second finding still synced (default ok:true).
+    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(2);
+    expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "solo-2",
+      expect.objectContaining({ trigger: "reconcile_backfill", ok: true }),
+    );
   });
 });
