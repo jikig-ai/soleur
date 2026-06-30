@@ -101,7 +101,9 @@ while IFS= read -r agent; do
   found="$(find "$AGENTS_DIR" -name "$agent.md" -print -quit 2>/dev/null || true)"
   [[ -n "$found" ]] || fail "relevant_agent '$agent' has no agent file under $AGENTS_DIR"
 done < <(jq -r '.phase_to_surface[].relevant_agents[]?' "$MAP")
-pass "relevant_agents checked ($m references)"
+# Minimum-cardinality guard (foot-gun b): a data-derived loop that yields zero
+# iterations must not pass vacuously. Mirrors the skill_to_phase loop above.
+[[ "$m" -ge 1 ]] && pass "relevant_agents checked ($m references)" || fail "relevant_agents loop iterated zero times (cardinality guard)"
 
 # --- CONSISTENCY: 5 core phases present ---
 for phase in brainstorm plan work review ship; do
