@@ -19,6 +19,15 @@ let cached;
 export default async function () {
   if (cached) return cached;
 
+  // Hermetic-build hatch (SOLEUR_DOCS_OFFLINE=1): skip the live Discord fetch
+  // so a test-spawned build is fully network-free and deterministic. Discord is
+  // a soft dep (never throws), but the fetch adds latency + non-determinism to
+  // the build-in-beforeAll drift-guard tests. See _data/github.js for rationale.
+  if (process.env.SOLEUR_DOCS_OFFLINE === "1") {
+    cached = { discord: null };
+    return cached;
+  }
+
   let discord = null;
   if (DISCORD_INVITE_CODE) {
     const controller = new AbortController();
