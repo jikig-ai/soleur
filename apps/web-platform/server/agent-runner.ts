@@ -941,6 +941,11 @@ export async function startAgentSession(
   const existing = getSession(userId, conversationId, leaderId);
   if (existing) existing.abort.abort(new SessionAbortError("superseded"));
 
+  // This controller is the legacy/registry abort surface: it rides inside
+  // `activeSessions` via `registerSession` below, so `abortSession`'s broadcast
+  // reaches it (the host-local abort surface — epic #5274 Phase 1 audit). The
+  // cc-soleur-go lineage has its own controller (`cc-dispatcher.ts`, reached by
+  // `closeCcConversation`), not this one.
   const controller = new AbortController();
   const session: AgentSession = {
     abort: controller,
