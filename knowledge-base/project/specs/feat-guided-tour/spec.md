@@ -69,9 +69,9 @@ first-run-hero-active && no other overlay active` (sign-out modal, mobile drawer
 support panel). Lands on `/dashboard`. Existing first-run naming/hero takes
 precedence (tour defers).
 
-### FR7: Persistence (`/api/tour/complete` + migration 115)
-`users.tour_completed_at timestamptz NULL` via migration `115_tour_completed_state.sql`
-(+ `.down.sql`); MUST be the only `115_*` (adr-ordinals gate). Client UPDATE on
+### FR7: Persistence (`/api/tour/complete` + migration 116)
+`users.tour_completed_at timestamptz NULL` via migration `116_tour_completed_state.sql`
+(+ `.down.sql`); MUST be the only `116_*` (adr-ordinals gate). Client UPDATE on
 `public.users` is REVOKED (migration 006) → completion persists via a **service-role**
 `POST /api/tour/complete` route (sets `tour_completed_at = now()` for the auth user).
 Finish AND Skip/Escape both persist. Read path: extend the existing `use-onboarding`
@@ -117,7 +117,7 @@ via `lib/analytics-client.ts` `track()` (fail-soft).
 - [ ] Scroll-lock released + no `inert` left on finish/skip/unmount/flag-off mid-tour.
 - [ ] `grep -rnE '#[0-9a-fA-F]{3,6}' apps/web-platform/components/tour/` returns nothing.
 - [ ] `tsc --noEmit` clean; `vitest run test/components/tour/` green; full suite green.
-- [ ] Migration 115 applies on dev; `tour_completed_at` column present; `/api/tour/complete`
+- [ ] Migration 116 applies on dev; `tour_completed_at` column present; `/api/tour/complete`
       sets it for the auth user (service role).
 
 ### Post-merge (operator)
@@ -128,8 +128,8 @@ via `lib/analytics-client.ts` `track()` (fail-soft).
 - `apps/web-platform/components/tour/guided-tour.tsx`
 - `apps/web-platform/components/tour/tour-steps.ts`
 - `apps/web-platform/app/api/tour/complete/route.ts`
-- `apps/web-platform/supabase/migrations/115_tour_completed_state.sql`
-- `apps/web-platform/supabase/migrations/115_tour_completed_state.down.sql`
+- `apps/web-platform/supabase/migrations/116_tour_completed_state.sql`
+- `apps/web-platform/supabase/migrations/116_tour_completed_state.down.sql`
 - tests under `apps/web-platform/test/components/tour/`
 
 ## Files to Edit
