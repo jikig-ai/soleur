@@ -22,6 +22,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,8 +96,11 @@ function realWorkspace({ git }: { git: "valid" | "corrupt" | "none" }): string {
     const gitDir = join(dir, ".git");
     mkdirSync(gitDir);
     if (git === "valid") {
-      writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
-      mkdirSync(join(gitDir, "objects"));
+      // A REAL `git init` repo (HEAD+objects) so isValidGitWorkTree passes AND the
+      // #5733 host `git rev-parse --is-inside-work-tree` confirm deterministically
+      // returns "worktree" → the warm gate short-circuits "ok" (a synthetic
+      // HEAD+objects-but-no-refs `.git` would be git-version-dependent).
+      execFileSync("git", ["-C", dir, "init", "-q"]);
     }
   }
   return dir;
@@ -132,8 +136,11 @@ describe("reprovisionWorkspaceOnDispatch — genuine unmocked `.git` validity di
     // ensureWorkspaceRepoCloned here.
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
     expect(mockResolveInstallationId).not.toHaveBeenCalled();
-    expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
     expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
+    // #5733 — the lstat-ready branch now resolves repoUrl to SCOPE the host
+    // `rev-parse` confirm to connected workspaces, so getCurrentRepoUrl IS called;
+    // the real confirm returned "worktree" so the turn still short-circuits "ok".
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledTimes(1);
   });
 
   it("(b) real tmpdir WITHOUT `.git` → not valid → falls through to clone", async () => {

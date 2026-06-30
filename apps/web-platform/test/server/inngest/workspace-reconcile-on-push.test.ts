@@ -113,8 +113,32 @@ vi.mock("@/server/kb-route-helpers", () => ({ syncWorkspace: syncWorkspaceSpy })
 // so the legacy valid-path fixtures (which add the dir to EXISTING_DIRS) retain
 // their meaning; reclone cases override per-call.
 const isReadyGitWorkTreeSpy = vi.fn();
+// #5733 — the shared host-confirm gate (default "ready" so the existing lstat
+// branch still owns clone-vs-sync) + the unrecovered-branch shape probe.
+const evaluateAgentReadinessSpy = vi.fn(
+  async (_p: string, _ctx: unknown): Promise<"ready" | "block"> => "ready",
+);
+const probeGitWorktreeShapeSpy = vi.fn(
+  (_p: string): { kind: string; gitdirEscapesWorkspace?: boolean } => ({
+    kind: "absent",
+  }),
+);
 vi.mock("@/server/git-worktree-validity", () => ({
   isReadyGitWorkTree: (p: string) => isReadyGitWorkTreeSpy(p),
+  evaluateAgentReadiness: (p: string, ctx: unknown) =>
+    evaluateAgentReadinessSpy(p, ctx),
+  probeGitWorktreeShape: (p: string) => probeGitWorktreeShapeSpy(p),
+  // FIX 8 — the shared lstat-valid-kind predicate (real impl; deterministic).
+  isLstatValidKind: (kind: string) =>
+    kind === "dir-valid" || kind === "file-pointer",
+}));
+// #5733 — spy the agent-readiness self-stop so the benign-skip emit is asserted
+// directly WITHOUT routing through the shared reportSilentFallback spy (keeping
+// every existing reportSilentFallback assertion in this file untouched).
+const reportAgentReadinessSelfStopSpy = vi.fn();
+vi.mock("@/server/repo-resolver-divergence", () => ({
+  reportAgentReadinessSelfStop: (args: unknown) =>
+    reportAgentReadinessSelfStopSpy(args),
 }));
 // The corrupt/absent-.git re-clone primitive. Returns "ok" | "failed".
 const ensureWorkspaceRepoClonedSpy = vi.fn();
@@ -260,6 +284,13 @@ beforeEach(() => {
   // Reclone cases override per-call with mockReturnValueOnce/mockReturnValue.
   isReadyGitWorkTreeSpy.mockReset();
   isReadyGitWorkTreeSpy.mockImplementation((p: string) => EXISTING_DIRS.has(p));
+  // #5733 — default the shared host-confirm gate to "ready" (existing lstat branch
+  // owns clone-vs-sync); the unrecovered-branch shape probe defaults to "absent".
+  evaluateAgentReadinessSpy.mockReset();
+  evaluateAgentReadinessSpy.mockResolvedValue("ready");
+  probeGitWorktreeShapeSpy.mockReset();
+  probeGitWorktreeShapeSpy.mockReturnValue({ kind: "absent" });
+  reportAgentReadinessSelfStopSpy.mockReset();
   ensureWorkspaceRepoClonedSpy.mockReset();
   ensureWorkspaceRepoClonedSpy.mockResolvedValue("ok");
   addBreadcrumbSpy.mockReset();
@@ -527,6 +558,43 @@ describe("reconcile — workspace dir not provisioned (now reclone-not-recovered
       expect.anything(),
       expect.objectContaining({ op: "skip-not-ready" }),
     );
+  });
+
+  // #5733 — un-blind the RECONCILE benign-skip (the 26×-dark surface): a clone
+  // that returns "ok" WITHOUT healing leaves the workspace not-ready, and the
+  // handler now emits the agent-readiness self-stop so the strand is queryable on
+  // the path that actually fired (host pre-heal emit OR the benign-skip emit).
+  it("#5733: a benign-skip that did NOT heal emits the agent-readiness self-stop", async () => {
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    // EXISTING_DIRS empty → isReadyGitWorkTree false → enters the heal branch.
+    // ensureWorkspaceRepoCloned returns "ok" (default) but does NOT heal (dir stays
+    // absent) → recovered=false → unrecovered branch fires the self-stop.
+    probeGitWorktreeShapeSpy.mockReturnValue({ kind: "absent" });
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(reportAgentReadinessSelfStopSpy).toHaveBeenCalledTimes(1);
+    expect(reportAgentReadinessSelfStopSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeWorkspaceId: "77777777-7777-4777-8777-777777777777",
+        gitKind: "absent",
+        source: "host-pre-heal",
+      }),
+    );
+  });
+
+  // #5733 AC8 — exactly ONE host `rev-parse` confirm per reconcile event (single
+  // workspace per invocation): the verdict is computed once and reused for both the
+  // gate decision and the `recovered` re-probe.
+  it("#5733 AC8: evaluateAgentReadiness is called exactly once per event (verdict reused for the recovered re-probe)", async () => {
+    WORKSPACE_ROWS = [{ id: "77777777-7777-4777-8777-777777777777" }];
+    OWNERS.set("77777777-7777-4777-8777-777777777777", "55555555-5555-4555-8555-555555555555");
+    // Unrecovered path (EXISTING_DIRS empty): the top-of-handler verdict is reused
+    // for the `recovered` decision — no second host `rev-parse` spawn.
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+    expect(evaluateAgentReadinessSpy).toHaveBeenCalledTimes(1);
   });
 });
 

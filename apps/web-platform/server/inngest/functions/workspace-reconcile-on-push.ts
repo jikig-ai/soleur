@@ -25,7 +25,13 @@ import {
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
-import { isReadyGitWorkTree } from "@/server/git-worktree-validity";
+import {
+  isReadyGitWorkTree,
+  evaluateAgentReadiness,
+  probeGitWorktreeShape,
+  isLstatValidKind,
+} from "@/server/git-worktree-validity";
+import { reportAgentReadinessSelfStop } from "@/server/repo-resolver-divergence";
 import { ensureWorkspaceRepoCloned } from "@/server/ensure-workspace-repo";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
@@ -354,7 +360,22 @@ export async function workspaceReconcileOnPushHandler({
       // 2026-06-29). A VALID .git takes the existing pull/reset sync path. An INVALID
       // or ABSENT .git is re-cloned via the validity+corrupt-aware ensure path — the
       // permanent-trap that a dir-existence-only readiness check could never recover.
-      if (!isReadyGitWorkTree(workspacePath)) {
+      // #5733 deliverable A — compute the shared host `rev-parse` confirm ONCE per
+      // event (AC8: one rev-parse spawn per reconcile invocation, single
+      // workspace). `evaluateAgentReadiness` runs the host confirm ONLY for a
+      // `dir-valid` shape and emits the self-stop internally on a confirmed
+      // `"not-a-worktree"` — the SAME shared helper the cold + warm gates use, so
+      // the emit + heal-route is structural (the cold-only-emit drift was the
+      // 26×-dark incident on THIS reconcile surface). A `dir-valid` `.git` the host
+      // rev-parse rejects is lstat-READY, so it would otherwise skip the heal
+      // branch entirely and take the sync path into a strand.
+      const agentReady = await evaluateAgentReadiness(workspacePath, {
+        userId: breadcrumbUserId,
+        activeWorkspaceId: ws.id,
+        connected: Boolean(targetRepoUrl),
+        dbReady: true,
+      });
+      if (!isReadyGitWorkTree(workspacePath) || agentReady === "block") {
         const outcome = await ensureWorkspaceRepoCloned({
           userId: breadcrumbUserId,
           workspacePath,
@@ -364,8 +385,15 @@ export async function workspaceReconcileOnPushHandler({
 
         // Assert the INVARIANT, not the "ok" proxy: ensureWorkspaceRepoCloned returns
         // "ok" for a benign skip (e.g. a repo_url that fails its github-https allowlist)
-        // WITHOUT having healed anything. Re-probe validity to decide recovered.
-        const recovered = outcome === "ok" && isReadyGitWorkTree(workspacePath);
+        // WITHOUT having healed anything. Recovered requires BOTH lstat readiness AND
+        // the host rev-parse confirm (#5733): a populated-corrupt `dir-valid` that
+        // ensureWorkspaceRepoCloned no-op'd reads `isReadyGitWorkTree=true` but
+        // `agentReady` stays `"block"`, so it is correctly NOT recovered (the
+        // self-stop already fired inside evaluateAgentReadiness above).
+        const recovered =
+          outcome === "ok" &&
+          isReadyGitWorkTree(workspacePath) &&
+          agentReady === "ready";
 
         // Best-effort transaction-trace context (task-mandated). NOTE: a breadcrumb is
         // only transmitted when a captureException/Message fires on the same Sentry scope;
@@ -382,6 +410,26 @@ export async function workspaceReconcileOnPushHandler({
 
         const at = Date.now();
         if (!recovered) {
+          // #5733 — un-blind the RECONCILE benign-skip (the 26×-dark surface): a
+          // clone that returned "ok" WITHOUT healing (repo_url failed the
+          // github-https allowlist, EACCES, gitdir-FILE) leaves the workspace
+          // not-ready but previously wrote ONLY a kb_sync_history row — no Sentry
+          // event, so the strand was unqueryable on the path that actually fired.
+          // Emit the agent-readiness self-stop from THIS gate too. Deduped by
+          // (userId, workspace, gitKind, source): a `dir-valid` corruption already
+          // emitted inside evaluateAgentReadiness above (same gitKind+source) →
+          // collapsed; a non-dir-valid benign-skip (absent / escaping pointer) has
+          // a distinct gitKind → emits here. `gitRevParseValid` omitted (no host
+          // confirm ran for these shapes). NEVER the subprocess stderr/raw path.
+          const unrecoveredShape = probeGitWorktreeShape(workspacePath);
+          reportAgentReadinessSelfStop({
+            userId: breadcrumbUserId,
+            activeWorkspaceId: ws.id,
+            gitValid: isLstatValidKind(unrecoveredShape.kind),
+            gitKind: unrecoveredShape.kind,
+            gitdirEscapesWorkspace: unrecoveredShape.gitdirEscapesWorkspace,
+            source: "host-pre-heal",
+          });
           // Honest-block (populated-broken / EACCES / gitdir-FILE), clone failure, or a
           // benign skip that did not heal. ensureWorkspaceRepoCloned already mirrored the
           // genuine failures to Sentry via reportSilentFallback (op: corrupt-worktree-block

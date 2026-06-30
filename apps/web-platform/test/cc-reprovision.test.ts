@@ -23,6 +23,7 @@ const {
   mockGetFreshTenantClient,
   mockResolveActiveWorkspace,
   mockIsReadyGitWorkTree,
+  mockEvaluateAgentReadiness,
 } = vi.hoisted(() => ({
   mockFetchUserWorkspacePath: vi.fn(),
   mockResolveInstallationId: vi.fn(),
@@ -33,6 +34,10 @@ const {
   mockGetFreshTenantClient: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
   mockIsReadyGitWorkTree: vi.fn(),
+  // #5733 — the shared host-confirm gate. Default "ready" so the lstat-ready
+  // branch still short-circuits "ok" (existing behavior); a focused test overrides
+  // it to "block" to exercise the warm honest-"failed" path.
+  mockEvaluateAgentReadiness: vi.fn(async () => "ready"),
 }));
 
 vi.mock("@/server/kb-document-resolver", () => ({
@@ -70,6 +75,7 @@ vi.mock("@/server/workspace-resolver", () => ({
 // proceed to the validity-aware clone, preserving the pre-#5715 tests).
 vi.mock("@/server/git-worktree-validity", () => ({
   isReadyGitWorkTree: mockIsReadyGitWorkTree,
+  evaluateAgentReadiness: mockEvaluateAgentReadiness,
 }));
 
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
@@ -172,17 +178,33 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
   // #5715 / ADR-044 AC2/AC4 — a VALID `.git` work tree short-circuits before the
   // heavy install/repo resolves + clone. One membership-verified resolve feeds the
   // validity probe; a VALID `.git` is NEVER re-cloned (safety invariant).
-  it("AC2/AC4: `.git` VALID → early-return 'ok', NO install/repo resolve, NO clone", async () => {
+  it("AC2/AC4: `.git` VALID + host confirm ready → 'ok', NO install resolve, NO clone", async () => {
     mockIsReadyGitWorkTree.mockReturnValue(true);
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
     // The workspace path WAS resolved (it is what we probe) ...
     expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
     expect(mockIsReadyGitWorkTree).toHaveBeenCalledTimes(1);
     expect(mockIsReadyGitWorkTree).toHaveBeenCalledWith(WS);
-    // ... but the heavier resolves + the clone are skipped entirely.
+    // #5733 — the lstat-READY branch now runs the shared host `rev-parse` confirm
+    // (a `dir-valid` `.git` can still fail the agent's in-bwrap rev-parse). The
+    // `repoUrl` read scopes the confirm to connected workspaces, so getCurrentRepoUrl
+    // IS now called here; the confirm returned "ready" so the turn short-circuits "ok".
+    expect(mockGetCurrentRepoUrl).toHaveBeenCalledTimes(1);
+    expect(mockEvaluateAgentReadiness).toHaveBeenCalledTimes(1);
+    // ... but the install resolve + the clone are still skipped entirely.
     expect(mockResolveInstallationId).not.toHaveBeenCalled();
-    expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
     expect(mockResolveEffectiveInstallationId).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+  });
+
+  // #5733 — the WARM gate honest-block: a lstat-READY `dir-valid` `.git` whose host
+  // `git rev-parse` confirms NOT-a-work-tree returns "failed" (no spawn), not "ok".
+  it("#5733: `.git` lstat-READY but host confirm BLOCKS → 'failed' (no spawn, no clone)", async () => {
+    mockIsReadyGitWorkTree.mockReturnValue(true);
+    mockEvaluateAgentReadiness.mockResolvedValueOnce("block");
+    await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("failed");
+    expect(mockEvaluateAgentReadiness).toHaveBeenCalledTimes(1);
+    // Honest-block: never re-cloned/destroyed a populated `.git`.
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
   });
 
