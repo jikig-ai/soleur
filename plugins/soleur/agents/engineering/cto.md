@@ -17,6 +17,7 @@ Identify technical risks, architecture impacts, and affected components.
 - If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - Identify affected components, services, and data models.
 - Flag security implications, scalability concerns, and breaking changes.
+- For any hot-path DB write (an `INSERT`/`UPDATE`/`DELETE` on a per-request / per-webhook-delivery / per-cron-tick path, or a new high-frequency table), carry a back-of-envelope write-frequency estimate (calls/day = write count × trigger) and flag its WAL / Disk-IO-budget cost at plan time — retention bounds row-count but NOT WAL (PR #5736: a per-delivery dedup INSERT was 63% of prod WAL).
 
 #### Capability Gaps
 
