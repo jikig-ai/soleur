@@ -50,10 +50,12 @@ if [[ -f "$FX/$FIXREL" ]]; then
 else
   fail "emit: fix-constraints.yml NOT written (run rc=$EMIT_RC)"
 fi
-if grep -q 'issue_comment' "$FX/$FIXREL" 2>/dev/null; then
-  pass "emit: emitted workflow is the issue_comment dispatcher"
+# Anchor on the trigger block, not a bare substring — the header comment also names
+# `issue_comment`, so a bare grep would stay green even if the `on:` trigger were stripped.
+if grep -qE '^[[:space:]]+issue_comment:' "$FX/$FIXREL" 2>/dev/null; then
+  pass "emit: emitted workflow is the issue_comment dispatcher (trigger block present)"
 else
-  fail "emit: emitted workflow missing the issue_comment trigger"
+  fail "emit: emitted workflow missing the issue_comment trigger block"
 fi
 # __TARGET_DIR__ must be substituted to the real target dir (no residual placeholder).
 if grep -q '__TARGET_DIR__' "$FX/$FIXREL" 2>/dev/null; then

@@ -74,7 +74,9 @@ jobs:
           ACTOR: ${{ github.event.comment.user.login }}
         run: |
           set -euo pipefail
-          p=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" -q .permission)
+          # `|| echo none`: an author-association-qualified commenter who is NOT a direct
+          # collaborator (e.g. an org MEMBER) 404s here — treat as not-authorized, not a red abort.
+          p=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" -q .permission 2>/dev/null || echo "none")
           if [ "$p" = admin ] || [ "$p" = write ]; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
@@ -101,7 +103,20 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR_NUMBER" --body "Fork PRs can't be auto-fixed (GITHUB_TOKEN is read-only on a fork head). A maintainer must run \`constraint-scaffold\` locally and push the fix."
+          gh pr comment "$PR_NUMBER" --body "Fork PRs can't be auto-fixed — the workflow's token is scoped to this repository and cannot push to a fork's branch. A maintainer must run \`constraint-scaffold\` locally and push the fix."
+
+      - name: Explain insufficient permission
+        # An author-association-qualified commenter (OWNER/MEMBER/COLLABORATOR) who nonetheless
+        # lacks write/admin gets no other feedback: every fix step gates on perm.ok=='true', and
+        # notify-on-skip only fires when the fix job was SKIPPED (a perm-fail leaves it 'success').
+        # Speak up here so the founder is never left silent — the exact deadlock #5791 kills.
+        if: always() && steps.perm.outputs.ok == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --body "You need write or admin access to run /soleur fix constraints. Ask a maintainer to run it (or to run \`constraint-scaffold\` locally)."
 
       - name: Configure git identity
         if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
@@ -116,6 +131,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
         run: gh pr checkout "$PR_NUMBER"
+
+      - name: Setup Bun                          # the gate's depcruise binary lives in node_modules
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Install dependencies               # so the agent + the verify step can run constraint-gates.sh
+        if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
 
       - name: Dispatch agent to fix the gate
         if: steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
@@ -189,8 +214,11 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Outcome comment
-        # Deterministic from step outputs: recovered / no-change / still-red. Never a false success.
-        if: always() && steps.perm.outputs.ok == 'true' && steps.pr.outputs.cross != 'true'
+        # Fires only when the gate was actually re-run (verify ran → outcome=='success'); the
+        # verify step uses `set +e` so it is 'success' whenever it executed. Deterministic from
+        # step outputs: recovered / push-rejected / no-change / still-red. Never a false success —
+        # the "Recovered" branch requires a non-empty pushed SHA, so a rejected push reports honestly.
+        if: steps.verify.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
@@ -199,8 +227,10 @@ jobs:
           PUSHED_SHA: ${{ steps.push.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ "$CHANGED" = 'true' ] && [ "$RC" = '0' ]; then
+          if [ "$CHANGED" = 'true' ] && [ "$RC" = '0' ] && [ -n "$PUSHED_SHA" ]; then
             body="Recovered: the constraint-gate is green again and the fix was pushed ($PUSHED_SHA)."
+          elif [ "$CHANGED" = 'true' ] && [ "$RC" = '0' ]; then
+            body="The gate is green again, but the push was rejected (branch protection or a race) — a maintainer needs to push the fix. See the run logs."
           elif [ "$CHANGED" = 'false' ]; then
             body="Ran, but made no edits — the gate may not be auto-fixable. See the failing rule in the run logs; a maintainer may need to act."
           else
@@ -208,19 +238,35 @@ jobs:
           fi
           gh pr comment "$PR_NUMBER" --body "$body"
 
-  # Every non-success path that is NOT an intended-silent case (unauthorized commenter,
-  # non-PR comment, non-matching command) must still give the founder feedback —
-  # otherwise a billing-cap / key-absent / transient window silently re-creates the
-  # exact #5791 deadlock. This always() job re-checks the same PR+command+author gate
-  # so it stays silent for the intended-silent paths.
+      - name: Report unexpected failure
+        # Last-resort feedback: a hard step error (agent infra failure, gh API error) makes the job
+        # fail BEFORE the verify step runs, so the Outcome comment above never posts. Fire only when
+        # verify did NOT run (else the Outcome comment already spoke) so the founder is never silent.
+        if: failure() && steps.verify.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --body "The recovery run hit an unexpected error before it could finish — see the workflow run logs. A maintainer can run \`constraint-scaffold\` locally."
+
+  # Fires when an AUTHORIZED commenter's command-shaped comment never reached the fix job —
+  # i.e. the fix job was SKIPPED: preflight gated it out (key-absent / billing-cap / transient),
+  # OR the command was a near-miss (trailing space/punctuation, leading text) that failed the
+  # exact-match preflight gate. Uses contains() (not exact ==) so a fat-fingered founder still
+  # gets a "use the exact command" nudge instead of silence — the privileged preflight/fix path
+  # keeps the strict exact-match. Gated on result=='skipped' (NOT '!= success') so it does NOT
+  # double-post when the fix job ran and reported its own outcome (recovered/push-rejected/
+  # still-red/insufficient-permission/unexpected-error). Re-checks PR+author so it stays silent
+  # for the intended-silent paths (non-PR, unauthorized, no command substring at all).
   notify-on-skip:
     needs: [preflight, fix]
     if: >-
       always() &&
       github.event.issue.pull_request &&
-      github.event.comment.body == '/soleur fix constraints' &&
+      contains(github.event.comment.body, 'soleur fix constraints') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
-      needs.fix.result != 'success'
+      needs.fix.result == 'skipped'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -231,4 +277,4 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR_NUMBER" --body "Auto-recovery is temporarily unavailable (API billing/transient, missing key, fork PR, or insufficient permission). Re-comment later, or a maintainer can run \`constraint-scaffold\` locally. See the workflow run for detail."
+          gh pr comment "$PR_NUMBER" --body "I couldn't run the recovery. Make sure your comment is exactly /soleur fix constraints on its own line. This can also happen if the API was temporarily unavailable (billing/transient) or the API key is missing. Re-comment the exact command, or a maintainer can run \`constraint-scaffold\` locally. See the workflow run for detail."
