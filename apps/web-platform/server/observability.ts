@@ -368,6 +368,13 @@ export function infoSilentFallback(
  *   key is the `workspace_id`, an in-process token, NOT a userId — a systemic
  *   owner-canary regression would otherwise emit one warn per owner-less
  *   workspace per push; see #4906).
+ *   Also `multiple-owners-reconcile` (info-level `Sentry.addBreadcrumb`, NOT a
+ *   warn/page — the honest by-design ≥2-owner signal that distinguishes a
+ *   legitimate team workspace from owner-canary drift; carries
+ *   `{ workspaceId, ownerCount }`; see #5734/#5591).
+ *   Also `owner-attribution-probe` (warn-level via `reportSilentFallback`,
+ *   emitted only on a transient owner-read DB error — NOT on zero owners;
+ *   reconcile falls back to the workspace-keyed audit; see #5734/#5591).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.
