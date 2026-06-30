@@ -93,3 +93,58 @@ export function reportRepoResolverDivergence(args: {
     },
   });
 }
+
+/**
+ * Emit a fingerprint-deduped `agent_readiness_self_stop` event (#5733 Phase 1b).
+ *
+ * The `/soleur:go` Step 0.0 readiness self-stop is PROMPT-DRIVEN — the agent
+ * reasons over prompt text and stops, emitting NO server-side Sentry event
+ * (the deepest reason all three prior server-side fixes left "zero events on
+ * the agent surface"). This makes the strand observable by emitting a
+ * server-side signal at the dispatch readiness gate the moment the gate detects
+ * a `.git` shape that WOULD strand the agent's in-bwrap `git rev-parse` (a stale
+ * gitdir-pointer FILE / structurally-invalid tree), BEFORE the self-heal runs —
+ * so the strand is queryable and H2 is confirmed retroactively on the same
+ * dispatch.
+ *
+ * DISTINCT `Error` message → its OWN Sentry issue group (NOT the shared
+ * `repo_resolver_divergence` group), so the discoverability query counts it
+ * independently. `userId` is pseudonymized to `userIdHash` at the
+ * `reportSilentFallback` boundary; `extra` carries NO `installationId`/`repoUrl`
+ * (credential-grant identifiers). `workspacePath` is the resolved on-disk path
+ * (the active-workspace id, already non-credential).
+ */
+export function reportAgentReadinessSelfStop(args: {
+  userId: string;
+  activeWorkspaceId: string;
+  workspacePath: string;
+  /** lstat-structural validity (`isValidGitWorkTree`) — true for the FILE-pointer
+   *  trap, which is exactly why the strand was previously silent. */
+  gitValid: boolean;
+  /** Structural `.git` shape kind (`probeGitWorktreeShape`). */
+  gitKind: string;
+  /** For a file-pointer: did the gitdir target escape the workspace (denyRead)? */
+  gitdirEscapesWorkspace?: boolean;
+}): void {
+  // Dedupe by (op, userId, workspace, .git kind) — a recurring strand for one
+  // workspace emits once per process, but a SHAPE CHANGE (e.g. pointer → absent
+  // after a partial heal) re-fires. Process-local; a fresh process re-emits once.
+  const fingerprint = `agent-readiness-self-stop:${args.userId}:${args.activeWorkspaceId}:${args.gitKind}`;
+  if (seenFingerprints.has(fingerprint)) return;
+  seenFingerprints.add(fingerprint);
+
+  reportSilentFallback(new Error("agent_readiness_self_stop"), {
+    feature: "agent-readiness-self-stop",
+    op: "agent-readiness-self-stop",
+    extra: {
+      userId: args.userId, // → userIdHash at the emit boundary (never raw)
+      activeWorkspaceId: args.activeWorkspaceId,
+      workspacePath: args.workspacePath,
+      gitValid: args.gitValid,
+      gitKind: args.gitKind,
+      ...(args.gitdirEscapesWorkspace === undefined
+        ? {}
+        : { gitdirEscapesWorkspace: args.gitdirEscapesWorkspace }),
+    },
+  });
+}

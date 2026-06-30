@@ -9,6 +9,7 @@ import { createChildLogger } from "@/server/logger";
 import {
   isValidGitWorkTree,
   isEmptyCorruptGitDir,
+  probeGitWorktreeShape,
 } from "@/server/git-worktree-validity";
 import { withWorkspacePermissionLock } from "@/server/workspace-permission-lock";
 
@@ -147,10 +148,53 @@ export async function ensureWorkspaceRepoCloned(
   const { userId, workspacePath, installationId, repoUrl } = args;
   if (installationId === null || !repoUrl) return "ok"; // not connected → nothing to ensure
 
-  // NEVER touch a VALID repo (Start-Fresh, already-cloned, a `.git`-FILE linked
-  // worktree, or a different origin the user is intentionally using). Validity —
-  // not mere presence — is the no-op gate (2026-06-19): a `.git` that exists but
-  // is corrupt must NOT mask the heal the way bare `existsSync` did.
+  // #5733 — stale gitdir-POINTER heal (BEFORE the validity no-op below). A `.git`
+  // FILE at a workspace ROOT is never a legitimate linked-worktree/submodule (a
+  // personal workspace is always a top-level clone), yet `isValidGitWorkTree`
+  // treats it as VALID (git-worktree-validity.ts:60) — so the no-op gate below
+  // would skip the heal and the agent would spawn into a tree whose IN-BWRAP
+  // `git rev-parse` strands (the gitdir target is unreadable under the sandbox's
+  // `denyRead:["/workspaces"]`). Remove the stale pointer FILE and fall through
+  // to a fresh self-contained clone from origin HEAD (authoritative). This is
+  // NOT a widening of the empty-corrupt rm fingerprint (which authorizes a
+  // RECURSIVE `.git` DIR removal of an object-bearing dir); a `.git` FILE is a
+  // single pointer with NO objects — nothing to lose. Guarded by the workspace
+  // lock + a re-check so a racer that already grafted a valid dir wins.
+  if (probeGitWorktreeShape(workspacePath).kind === "file-pointer") {
+    reportSilentFallback(new Error("workspace .git is a stale gitdir pointer"), {
+      feature: "ensure-workspace-repo",
+      op: "gitdir-pointer-reclone",
+      extra: { userId, hasInstallation: true },
+      message:
+        "personal workspace .git is a FILE pointer (would strand the agent's in-bwrap git rev-parse); removing the pointer and re-cloning a self-contained repo",
+    });
+    try {
+      await withWorkspacePermissionLock(workspacePath, async () => {
+        // Re-check under the lock — only unlink if it is STILL a file-pointer (a
+        // racer may have grafted a valid self-contained `.git` dir meanwhile).
+        if (probeGitWorktreeShape(workspacePath).kind === "file-pointer") {
+          await rm(join(workspacePath, ".git"), { force: true }); // single FILE, NOT recursive
+        }
+      });
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "ensure-workspace-repo",
+        op: "gitdir-pointer-rm",
+        extra: { userId, hasInstallation: true },
+        message:
+          "failed to remove stale gitdir pointer under lock; honest-blocking",
+      });
+      return "failed";
+    }
+    // Pointer removed (or a racer landed a valid `.git`) → fall through to the
+    // validity gate + clone below, which re-checks the now-absent/now-valid state.
+  }
+
+  // NEVER touch a VALID repo (Start-Fresh, already-cloned, or a different origin
+  // the user is intentionally using). Validity — not mere presence — is the
+  // no-op gate (2026-06-19): a `.git` that exists but is corrupt must NOT mask
+  // the heal the way bare `existsSync` did. (A `.git` FILE pointer was handled
+  // and removed just above, so it no longer reaches this `return "ok"`.)
   if (isValidGitWorkTree(workspacePath)) return "ok";
 
   // `.git` EXISTS but is INVALID. The destructive removal is authorized ONLY by

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   isValidGitWorkTree,
   isEmptyCorruptGitDir,
+  probeGitWorktreeShape,
 } from "@/server/git-worktree-validity";
 
 // Safety-critical probes (deepen-plan F2): `isEmptyCorruptGitDir` is the ONLY
@@ -97,6 +98,50 @@ describe("git-worktree-validity", () => {
     const p = await ws("absent");
     expect(isValidGitWorkTree(p)).toBe(false);
     expect(isEmptyCorruptGitDir(p)).toBe(false);
+  });
+
+  // #5733 — structural shape classification for the dispatch readiness gate +
+  // observability. A `.git` FILE pointer is the strand precondition: it passes
+  // isValidGitWorkTree (lstat) but the agent's in-bwrap `git rev-parse` fails,
+  // especially when the gitdir target is under /workspaces (sandbox denyRead).
+  describe("probeGitWorktreeShape (#5733)", () => {
+    it("dir with HEAD+objects → dir-valid", async () => {
+      const p = await ws("shape-valid");
+      await mkdir(join(p, ".git", "objects"), { recursive: true });
+      await writeFile(join(p, ".git", "HEAD"), "ref: refs/heads/main\n");
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "dir-valid" });
+    });
+
+    it("absent `.git` → absent", async () => {
+      const p = await ws("shape-absent");
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "absent" });
+    });
+
+    it("bare `mkdir .git` (no HEAD/objects) → dir-invalid", async () => {
+      const p = await ws("shape-bare");
+      await mkdir(join(p, ".git"), { recursive: true });
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "dir-invalid" });
+    });
+
+    it("`.git` FILE whose gitdir target ESCAPES the workspace (under /workspaces) → file-pointer, escapes=true (the strand)", async () => {
+      const p = await ws("shape-escape");
+      await writeFile(
+        join(p, ".git"),
+        "gitdir: /workspaces/other/.git/worktrees/x\n",
+      );
+      const shape = probeGitWorktreeShape(p);
+      expect(shape.kind).toBe("file-pointer");
+      expect(shape.gitdirTarget).toBe("/workspaces/other/.git/worktrees/x");
+      expect(shape.gitdirEscapesWorkspace).toBe(true);
+    });
+
+    it("`.git` FILE whose gitdir target stays INSIDE the workspace → file-pointer, escapes=false", async () => {
+      const p = await ws("shape-inside");
+      await writeFile(join(p, ".git"), "gitdir: ./.git-real\n");
+      const shape = probeGitWorktreeShape(p);
+      expect(shape.kind).toBe("file-pointer");
+      expect(shape.gitdirEscapesWorkspace).toBe(false);
+    });
   });
 
   it("`.git` symlink to a valid repo dir → treated by lstat as a non-dir/non-file link → not the empty fingerprint (never rm'd)", async () => {

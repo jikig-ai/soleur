@@ -119,7 +119,10 @@ import {
 // 2026-06-19 — dispatch readiness gates on worktree VALIDITY (not mere `.git`
 // presence) so a corrupt/partial `.git` routes to recovery instead of a silent
 // repo-less spawn.
-import { isValidGitWorkTree } from "./git-worktree-validity";
+import {
+  isValidGitWorkTree,
+  probeGitWorktreeShape,
+} from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
 // the agent, so a Concierge session never starts against a not-ready workspace.
@@ -138,7 +141,10 @@ import { resolveActiveWorkspace } from "./workspace-resolver";
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
 import { WorkspaceNotReadyError } from "./workspace-not-ready";
-import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
+import {
+  reportRepoResolverDivergence,
+  reportAgentReadinessSelfStop,
+} from "./repo-resolver-divergence";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
@@ -1788,9 +1794,34 @@ export const realSdkQueryFactory: QueryFactory = async (
     // structural validity probe stays SYNCHRONOUS and is evaluated AFTER the
     // `!repoReadiness.ok` short-circuit so `getFreshTenantClient` stays OFF the
     // common valid-`.git` hot path (AC7).
+    // #5733 Phase 1b + D — gitdir-POINTER strand detection + observability. A
+    // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
+    // strands the agent's IN-BWRAP `git rev-parse` (its `gitdir:` target is
+    // unreadable under the sandbox `denyRead:["/workspaces"]`). The prompt-driven
+    // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
+    // surface all three prior fixes missed. Emit a server-side
+    // `agent-readiness-self-stop` (own Sentry issue group) carrying the resolved
+    // id + path + `.git` shape BEFORE the heal (confirms H2 on this dispatch),
+    // and route the pointer into the self-heal (ensureWorkspaceRepoCloned now
+    // unlinks the stale pointer + re-clones a self-contained `.git`). The shape
+    // probe is cheap (lstat + maybe one small read) and evaluated AFTER the
+    // readiness short-circuit so the common valid-`.git`-dir hot path is unaffected.
+    const gitShape = probeGitWorktreeShape(workspacePath);
+    const gitFilePointerStrand = gitShape.kind === "file-pointer";
+    if (gitFilePointerStrand) {
+      reportAgentReadinessSelfStop({
+        userId: args.userId,
+        activeWorkspaceId,
+        workspacePath,
+        gitValid: isValidGitWorkTree(workspacePath),
+        gitKind: gitShape.kind,
+        gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
+      });
+    }
     const needsSelfHeal =
       !repoReadiness.ok ||
-      !isValidGitWorkTree(workspacePath);
+      !isValidGitWorkTree(workspacePath) ||
+      gitFilePointerStrand;
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {

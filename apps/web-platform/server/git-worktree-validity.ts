@@ -28,8 +28,8 @@
 // operation.
 // ---------------------------------------------------------------------------
 
-import { lstatSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, existsSync, readFileSync } from "node:fs";
+import { join, isAbsolute, resolve, sep } from "node:path";
 
 /**
  * SYNC structural validity of `<workspacePath>/.git` — the hot-path gate.
@@ -64,6 +64,62 @@ export function isValidGitWorkTree(workspacePath: string): boolean {
   return (
     existsSync(join(gitPath, "HEAD")) && existsSync(join(gitPath, "objects"))
   );
+}
+
+/**
+ * Structural shape of `<workspacePath>/.git` (#5733). A SYNC, read-only
+ * classification used by the dispatch readiness gate + the agent-readiness
+ * observability mirror. The load-bearing case is `"file-pointer"`: a `.git`
+ * FILE that `isValidGitWorkTree` passes (line 60) but the agent's IN-BWRAP `git
+ * rev-parse --is-inside-work-tree` strands on — especially when the `gitdir:`
+ * target resolves OUTSIDE the workspace (e.g. under `/workspaces`, which the
+ * agent sandbox `denyRead`s). A personal workspace root is NEVER a legitimate
+ * linked-worktree/submodule, so a `.git` FILE there is an anomalous stale
+ * pointer. `gitdirEscapesWorkspace` enriches the signal (a target inside the
+ * workspace would still be readable in-sandbox).
+ *
+ * Cost: 1 `lstat` + (for a FILE only) 1 small `readFileSync`. No subprocess.
+ */
+export interface GitWorktreeShape {
+  kind: "absent" | "file-pointer" | "dir-valid" | "dir-invalid" | "other";
+  /** The raw `gitdir:` target string, for a file-pointer (best-effort). */
+  gitdirTarget?: string;
+  /** True when the gitdir target resolves OUTSIDE `workspacePath`. */
+  gitdirEscapesWorkspace?: boolean;
+}
+
+export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
+  const gitPath = join(workspacePath, ".git");
+  let st;
+  try {
+    st = lstatSync(gitPath);
+  } catch {
+    return { kind: "absent" };
+  }
+  if (st.isFile()) {
+    let gitdirTarget: string | undefined;
+    let gitdirEscapesWorkspace: boolean | undefined;
+    try {
+      const body = readFileSync(gitPath, "utf8");
+      const m = body.match(/^gitdir:\s*(.+?)\s*$/m);
+      gitdirTarget = m?.[1];
+      if (gitdirTarget) {
+        const resolved = isAbsolute(gitdirTarget)
+          ? resolve(gitdirTarget)
+          : resolve(workspacePath, gitdirTarget);
+        const root = resolve(workspacePath);
+        gitdirEscapesWorkspace =
+          resolved !== root && !resolved.startsWith(root + sep);
+      }
+    } catch {
+      // Unreadable pointer body — still a file-pointer (escapes unknown).
+    }
+    return { kind: "file-pointer", gitdirTarget, gitdirEscapesWorkspace };
+  }
+  if (st.isDirectory()) {
+    return { kind: isValidGitWorkTree(workspacePath) ? "dir-valid" : "dir-invalid" };
+  }
+  return { kind: "other" }; // symlink / socket / etc. — never the file-pointer path
 }
 
 /**
