@@ -82,13 +82,16 @@ describe("createPhaseSurfaceHook", () => {
   });
 
   it("AC3(b/c/d): prototype-pollution keys, non-string, and injection payloads all fail-open and never echo", async () => {
+    // Defense-in-depth: Object.hasOwn is the primary gate and the `!surface`
+    // backstop independently fail-closes — this asserts the safe OUTCOME ({} for
+    // every crafted key), which is what the user is actually exposed to.
     for (const k of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
       expect(await call({ skill: k })).toEqual({});
     }
     expect(await call({ skill: ["__proto__"] as unknown })).toEqual({});
     expect(await call({ skill: {} as unknown })).toEqual({});
     // crafted skill embedding a phase keyword + a U+2028 line separator → unmapped → {} and never echoed
-    const crafted = "ship INJECT";
+    const crafted = "ship\u2028INJECT";
     const out = await call({ skill: crafted });
     expect(out).toEqual({});
     expect(JSON.stringify(out)).not.toContain("INJECT");
@@ -109,5 +112,15 @@ describe("createPhaseSurfaceHook", () => {
 
   it("AC1c/P2: Skill is in SAFE_TOOLS (so canUseTool approves it on the cc path and PostToolUse fires)", () => {
     expect(isSafeTool("Skill")).toBe(true);
+  });
+
+  it("M3: ship phase (empty relevant_agents) omits the agents line — covers a live production branch", async () => {
+    const out = (await call({ skill: "ship" })) as { hookSpecificOutput: { additionalContext: string } };
+    const ctx = out.hookSpecificOutput.additionalContext;
+    expect(ctx).toContain("[phase-scope] You are in the ship phase. ");
+    expect(ctx).toContain("Phase-relevant skills: soleur:ship, soleur:preflight, soleur:merge-pr, soleur:postmerge, soleur:changelog. ");
+    // ship's relevant_agents is [] → the "Phase-relevant agents:" line MUST be omitted (not emitted empty).
+    expect(ctx).not.toContain("Phase-relevant agents:");
+    expect(ctx).toContain("Not yet live: this is the terminal phase");
   });
 });

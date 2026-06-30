@@ -31,15 +31,17 @@ const SOLEUR_SKILL_PREFIX = "soleur:";
 function buildHint(skill: string): string | null {
   // Kill-switch (strict "1", read per-invocation — mirrors the shell `== "1"`).
   if (process.env.SOLEUR_DISABLE_PHASE_HINT === "1") return null;
-  if (typeof skill !== "string") return null;
+  // (`skill` is already narrowed to a string by the caller before this runs.)
 
   const key = skill.includes(":") ? skill : SOLEUR_SKILL_PREFIX + skill;
-  // The single security gate: own-property lookup rejects every inherited key
+  // Primary security gate: own-property lookup rejects every inherited key
   // (`__proto__`, `constructor`, `toString`) before reading the value.
   if (!Object.hasOwn(PHASE_SURFACE_MAP.skill_to_phase, key)) return null;
   const phase = PHASE_SURFACE_MAP.skill_to_phase[key];
 
-  // Plain null-check on the derived surface (mirrors the CLI hook's `$s == null`).
+  // Load-bearing fail-closed backstop (mirrors the CLI hook's `$s == null`): even
+  // if a crafted key ever slipped the gate above, an inherited/garbage `phase`
+  // is not an own key of phase_to_surface → `surface` is undefined → return null.
   const surface = phase ? PHASE_SURFACE_MAP.phase_to_surface[phase] : undefined;
   if (!surface) return null;
 
