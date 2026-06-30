@@ -4,6 +4,7 @@
 // vs support bubble (surface-1, left, with avatar + name + PREVIEW badge).
 // Mirrors components/chat/message-bubble.tsx token usage.
 
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { SupportAvatar } from "./support-avatar";
 import { SUPPORT_NAME } from "./support-persona";
 import type { SupportMessage as SupportMessageType } from "./use-support-chat";
@@ -34,7 +35,7 @@ export function SupportMessage({ message }: { message: SupportMessageType }) {
           </span>
         </div>
         <div className="w-fit max-w-[85%] rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm leading-relaxed text-soleur-text-primary">
-          {message.text}
+          <MarkdownRenderer content={message.text} />
         </div>
       </div>
     </div>
