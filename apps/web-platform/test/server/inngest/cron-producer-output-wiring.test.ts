@@ -63,9 +63,12 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // …captures a replay-stable run window…
       expect(src).toContain('"run-started-at"');
       expect(src).toContain("runStartedAt");
-      // …and feeds the RESOLVED result to the heartbeat. The pre-fix line was
-      // `postSentryHeartbeat({ ok: spawnResult.ok, ...})`; the success-path
-      // heartbeat must now read heartbeatOk.
+      // …and feeds the RESOLVED result to the heartbeat + the function return.
+      // The pre-fix line was `postSentryHeartbeat({ ok: spawnResult.ok, ...})`;
+      // post-#5728 the terminal heartbeat is no longer posted inline — it routes
+      // through finalizeOutputAwareHeartbeat (memoization-safe, final-attempt
+      // gated), so `heartbeatOk` is threaded into the helper and into the
+      // `return { ok: heartbeatOk }`.
       expect(src).toContain("ok: heartbeatOk");
       // The success path must NOT still pass the raw spawn result. (The
       // setup-failure early-exit legitimately passes `ok: false`, so we only
@@ -76,29 +79,42 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // assertion above.
       expect(src).not.toContain("ok: spawnResult.ok");
 
+      // #5728 — the terminal heartbeat routes through the shared
+      // finalizeOutputAwareHeartbeat helper (NOT a second inline postSentryHeartbeat
+      // call site, which would double-signal under retry memoization), and the
+      // handler body throw + setup-workspace catch BOTH rethrow a benign
+      // DeployInProgressError bare (no heartbeat — the ADR-068 fail-safe defer).
+      // A revert of just this wiring would otherwise pass the whole suite.
+      expect(src).toContain("finalizeOutputAwareHeartbeat(");
+      expect(src).toContain("instanceof DeployInProgressError");
+      expect(src).toContain('op: "handler-body-threw"');
+
       // #4773 — the diagnostic triple (exitCode + stderrTail + stdoutTail) must
       // be threaded from the SpawnResult into resolveOutputAwareOk, or the
       // scheduled-output-missing Sentry extra loses the only off-host-visible
       // failure reason (app stdout/stderr are not shipped to Better Stack). A
       // revert of just the threading would otherwise pass the whole suite — this
-      // is the same un-wiring-guard rationale as `ok: heartbeatOk` above.
-      expect(src).toContain("stderrTail: spawnResult.stderrTail");
-      expect(src).toContain("exitCode: spawnResult.exitCode");
-      expect(src).toContain("stdoutTail: spawnResult.stdoutTail");
+      // is the same un-wiring-guard rationale as `ok: heartbeatOk` above. The
+      // `!?` tolerates the post-#5728 `spawnResult!.X` non-null form (spawnResult
+      // is now hoisted as `SpawnResult | null` for the flag pattern).
+      expect(src).toMatch(/stderrTail: spawnResult!?\.stderrTail/);
+      expect(src).toMatch(/exitCode: spawnResult!?\.exitCode/);
+      expect(src).toMatch(/stdoutTail: spawnResult!?\.stdoutTail/);
 
       // #4960/#4978 — the handler-level silence-hole fallback. When the
       // output-aware check found no labeled issue in the run window (mid-eval
       // crash / API 500 / max-turns kill bypassed the prompt's create step),
       // the handler ITSELF files a FAILED audit issue via the shared
-      // ensureScheduledAuditIssue helper so the run is never silent. The step
-      // must be gated on `!heartbeatOk` and wrap the create so a fallback
-      // failure is reported to Sentry (op:"ensure-audit-issue-failed") rather
-      // than crashing the finally/teardown. A revert of just this wiring
-      // (leaving the shared helper + its unit tests green) would otherwise pass
-      // the whole suite — same un-wiring-guard rationale as above.
+      // ensureScheduledAuditIssue helper so the run is never silent. Post-#5728
+      // the gate moved into finalizeOutputAwareHeartbeat's `onBeforeHeartbeat`
+      // (run only on the post path, ordered before the single terminal heartbeat,
+      // and skipped entirely on a non-final-attempt retry), so the gating shape is
+      // `onBeforeHeartbeat: heartbeatOk ? undefined : …` rather than the old
+      // `if (!heartbeatOk)`. The create is still wrapped so a fallback failure is
+      // reported to Sentry (op:"ensure-audit-issue-failed") not crashing teardown.
       expect(src).toContain("ensureScheduledAuditIssue(");
       expect(src).toContain('"ensure-audit-issue"');
-      expect(src).toContain("if (!heartbeatOk)");
+      expect(src).toMatch(/onBeforeHeartbeat:\s*heartbeatOk\s*\?\s*undefined/);
       expect(src).toContain('op: "ensure-audit-issue-failed"');
     },
   );
@@ -113,10 +129,14 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // Best-effort, NOT a producer: must NOT adopt the output-aware resolver
       // (that would false-RED a healthy run that legitimately files nothing).
       expect(src).not.toContain("resolveOutputAwareOk");
-      // The success-path heartbeat is pure liveness (pipeline ran end-to-end
-      // without an INFRA fault) → ok:true regardless of claude's exit.
-      expect(src).toContain("postSentryHeartbeat({ ok: true");
-      // The non-zero exit IS surfaced — as a queryable, non-paging WARNING
+      // #5674 classify-fatal: the heartbeat is gated on decision.ok from
+      // resolveBestEffortEvalOk — GREEN on a clean/benign run, RED on a FATAL
+      // class (credit/auth/spawn/timeout). NOT an unconditional `ok: true`.
+      expect(src).toContain("resolveBestEffortEvalOk(spawnResult)");
+      expect(src).toContain("postSentryHeartbeat({ ok: decision.ok");
+      // A FATAL class reports + flips the monitor red.
+      expect(src).toContain('op: "claude-eval-fatal"');
+      // A BENIGN non-zero exit IS surfaced — as a queryable, non-paging WARNING
       // Sentry event (off-host-visible), not a bare logger.warn.
       expect(src).toContain("warnSilentFallback");
       expect(src).toContain('op: "claude-eval-nonzero-noop"');

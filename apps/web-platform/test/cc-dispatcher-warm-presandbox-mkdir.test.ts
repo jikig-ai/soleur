@@ -169,6 +169,8 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #5733 — reportAgentReadinessSelfStop pre-hashes the workspace id via hashUserId.
+  hashUserId: (s: string) => `hash-${s}`,
   mirrorWithDebounce: mockReportSilentFallback,
   __resetMirrorDebounceForTests: vi.fn(),
   MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,

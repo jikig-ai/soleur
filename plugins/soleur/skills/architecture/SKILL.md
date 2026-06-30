@@ -113,6 +113,8 @@ Create a new ADR with the next sequential number.
 
 8. **Write the ADR body** with the gathered context. If a diagram was requested (rich branch only), update the consolidated LikeC4 model using [likec4-reference.md](./references/likec4-reference.md) (see the `diagram` sub-command) and embed the relevant view with a ` ```likec4-view ` block.
 
+8.5. **Domain-model register check.** If this ADR records or changes a **business rule** — an entity invariant, an ownership/access model, or a relationship encoded in a migration constraint / RLS policy / resolver-guard — update the affected row(s) in [`knowledge-base/engineering/architecture/domain-model.md`](../../../../knowledge-base/engineering/architecture/domain-model.md) in the same change: add or amend the rule with a citation back to this ADR. Rule IDs are immutable — supersede (mark + link the successor row), never reuse. If the ADR is purely a technology/process decision with no entity-invariant impact, skip silently.
+
 9. **Announce:** "Created ADR-<NNN>: <title> at `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md`"
 
 ---

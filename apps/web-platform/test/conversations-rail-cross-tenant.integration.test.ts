@@ -119,12 +119,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // Both users share the same repo_url — the rail's filter is
       // user_id-only, so cross-tenant isolation MUST come from RLS +
       // filter:user_id=eq, not from a serendipitous repo_url mismatch.
+      // ADR-044 (mig 112) dropped users.repo_url; the canonical copy lives on
+      // the trigger-created `workspaces` row (UPDATE, not INSERT — the mig-053
+      // handle_new_user trigger pre-creates workspaces(id = user.id)).
       for (const user of [userA, userB]) {
         const { error } = await service
-          .from("users")
+          .from("workspaces")
           .update({ repo_url: SHARED_REPO_URL })
           .eq("id", user.id);
-        expect(error, `update users.repo_url for ${user.email}`).toBeNull();
+        expect(error, `update workspaces.repo_url for ${user.email}`).toBeNull();
       }
 
       // Sign in as user A to get a JWT for the rail-equivalent subscription.

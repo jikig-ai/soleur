@@ -193,6 +193,66 @@ describe("agent-session-registry · abortSession", () => {
   });
 });
 
+describe("agent-session-registry · abortSession found-count (Phase 1, multi-host #5274)", () => {
+  // `abortSession` is widened void → number: it returns the count of
+  // REGISTERED sessions matched + signalled ON THIS HOST. The count is the
+  // affordance the Phase-3 coordinator reads to decide whether to RPC-forward
+  // the abort (ADR-068 §4): 0 ⇒ not found here (finished OR lives remote),
+  // ≥1 ⇒ aborted locally. Harmless at replicas=1; load-bearing later.
+  beforeEach(() => {
+    registryTestOnly.clear();
+  });
+
+  it("broadcast returns the number of leader sessions aborted on this host", () => {
+    registerSession("alice", "conv1", makeSession(), "cpo");
+    registerSession("alice", "conv1", makeSession(), "cmo");
+
+    const aborted = abortSession("alice", "conv1", "user_requested_stop");
+
+    expect(aborted).toBe(2);
+  });
+
+  it("decoy under a different (uid,conv) is neither counted nor aborted (prefix-exclusion)", () => {
+    registerSession("alice", "conv1", makeSession(), "cpo");
+    registerSession("alice", "conv1", makeSession(), "cmo");
+    const decoy = makeSession();
+    registerSession("alice", "conv2", decoy); // same user, different conversation
+    const decoyUser = makeSession();
+    registerSession("bob", "conv1", decoyUser); // different user, same conv id
+
+    const aborted = abortSession("alice", "conv1", "user_requested_stop");
+
+    expect(aborted).toBe(2);
+    expect(decoy.abort.signal.aborted).toBe(false);
+    expect(decoyUser.abort.signal.aborted).toBe(false);
+  });
+
+  it("returns 0 when no session matches (finished locally OR lives on another host)", () => {
+    const aborted = abortSession("alice", "conv1", "disconnected");
+    expect(aborted).toBe(0);
+  });
+
+  it("leader-keyed branch returns 1 when present, 0 when absent", () => {
+    registerSession("alice", "conv1", makeSession(), "cmo");
+
+    expect(abortSession("alice", "conv1", "user_requested_stop", "cmo")).toBe(1);
+    expect(abortSession("alice", "conv1", "user_requested_stop", "cpo")).toBe(0);
+  });
+
+  it("legacy agent-runner abort is routed through activeSessions (AC5): a registerSession-backed AbortController is aborted + counted", () => {
+    // makeSession() wraps a real AbortController in an AgentSession — the exact
+    // shape agent-runner.ts builds at the registerSession() call site. Pinning
+    // the audit conclusion (task 1.3) as a test, not prose.
+    const session = makeSession();
+    registerSession("alice", "conv1", session);
+
+    const aborted = abortSession("alice", "conv1", "disconnected");
+
+    expect(session.abort.signal.aborted).toBe(true);
+    expect(aborted).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("classifyAbortReason", () => {
   it("classifies a typed SessionAbortError directly via .kind", () => {
     const err = new SessionAbortError("user_requested_stop");

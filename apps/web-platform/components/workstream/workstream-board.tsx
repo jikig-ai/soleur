@@ -40,7 +40,12 @@ import { NewIssueDialog } from "./new-issue-dialog";
 
 type IssuesResponse = { issues: WorkstreamIssue[] };
 
-const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns";
+// v2 key: the v1 key ("workstream:collapsed-columns") stored a now-defunct
+// semantics where columns could be force-collapsed irrespective of the
+// content-open-by-default rule; starting fresh avoids resurrecting any stale
+// per-column collapse from that era. Empty columns are never written here — only
+// the user's explicit collapse of a CONTENT column is persisted.
+const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns-v2";
 
 function readCollapsedColumns(): Set<WorkstreamStatus> {
   try {
@@ -69,8 +74,9 @@ export function WorkstreamBoard() {
     searchParams.get("issue"),
   );
 
-  // Collapsed columns (persisted in localStorage). SSR-safe: read in an effect,
-  // never during render.
+  // Per-column collapse choice (content columns only), persisted in localStorage.
+  // Content is OPEN by default — a status is in this set ONLY if the user
+  // explicitly collapsed it. SSR-safe: read in an effect, never during render.
   const [collapsed, setCollapsed] = useState<Set<WorkstreamStatus>>(
     () => new Set(),
   );
@@ -174,6 +180,10 @@ export function WorkstreamBoard() {
     }
   }, [pathname]);
 
+  // Toggle a content column's collapse choice and persist it. Empty columns are
+  // collapsed by IssueColumn regardless and never reach this handler (they render
+  // no toggle), so the persisted set only ever holds user-collapsed CONTENT
+  // columns.
   const toggleCollapse = useCallback((status: WorkstreamStatus) => {
     setCollapsed((prev) => {
       const next = new Set(prev);

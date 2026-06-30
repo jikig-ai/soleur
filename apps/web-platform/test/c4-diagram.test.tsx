@@ -13,6 +13,7 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
     "debug-mode": false,
     "c4-edit": c4Edit,
     "command-palette": false,
+    support: false,
   };
 }
 

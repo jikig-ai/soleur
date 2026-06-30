@@ -100,6 +100,35 @@ RATE_OUT=$(CI_DEPLOY_STATE="$TMP/ok.state" CONTAINER_NAME="soleur-absent-test-xy
 assert "restart_rate_per_hour reads the monitor's persisted rate (7)" \
   "[[ \$(printf '%s' '$RATE_OUT' | jq -r .restart_rate_per_hour) == '7' ]]"
 
+# --- #5669 cron-drain observability fields (ADR-068) ---
+# Absent drain-state file → safe sentinels (wait -1, timed_out false), so a
+# deploy that never reached the drain is distinguishable from a real 0-wait drain.
+CD_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" CRON_DRAIN_STATE_FILE="$TMP/no-drain.json" bash "$TARGET")
+assert "cron_drain_wait_secs sentinel -1 when no drain state file" \
+  "[[ \$(printf '%s' '$CD_ABSENT' | jq -r .cron_drain_wait_secs) == '-1' ]]"
+assert "cron_drain_timed_out sentinel false when no drain state file" \
+  "[[ \$(printf '%s' '$CD_ABSENT' | jq -r .cron_drain_timed_out) == 'false' ]]"
+assert "deploy exit_code preserved alongside cron_drain fields (not clobbered)" \
+  "[[ \$(printf '%s' '$CD_ABSENT' | jq -r .exit_code) == '0' ]]"
+
+# Present drain-state file → fields reflect the recorded drain outcome.
+echo '{"cron_drain_wait_secs":3000,"cron_drain_timed_out":true}' > "$TMP/drain.json"
+CD_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" CRON_DRAIN_STATE_FILE="$TMP/drain.json" bash "$TARGET")
+assert "cron_drain_wait_secs read from drain state file (3000)" \
+  "[[ \$(printf '%s' '$CD_PRESENT' | jq -r .cron_drain_wait_secs) == '3000' ]]"
+assert "cron_drain_timed_out read from drain state file (true)" \
+  "[[ \$(printf '%s' '$CD_PRESENT' | jq -r .cron_drain_timed_out) == 'true' ]]"
+
+# Malformed drain-state content → cron_drain_json's regex guards reject the bad
+# values and fall back to the safe sentinels (never emit a non-numeric wait or a
+# non-boolean timed_out into the webhook payload).
+echo '{"cron_drain_wait_secs":"not-a-number","cron_drain_timed_out":"maybe"}' > "$TMP/bad-drain.json"
+CD_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" CRON_DRAIN_STATE_FILE="$TMP/bad-drain.json" bash "$TARGET")
+assert "malformed cron_drain_wait_secs falls back to sentinel -1" \
+  "[[ \$(printf '%s' '$CD_BAD' | jq -r .cron_drain_wait_secs) == '-1' ]]"
+assert "malformed cron_drain_timed_out falls back to sentinel false" \
+  "[[ \$(printf '%s' '$CD_BAD' | jq -r .cron_drain_timed_out) == 'false' ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

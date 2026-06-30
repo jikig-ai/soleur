@@ -28,10 +28,10 @@ if [[ ! -f "$WRAPPER" ]]; then
 elif [[ ! -x "$WRAPPER" ]]; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: wrapper file is not executable (0755 expected)"
-elif ! grep -qF 'exec timeout --signal=TERM --kill-after=20s 1800s /usr/local/bin/ci-deploy.sh' "$WRAPPER"; then
+elif ! grep -qF 'exec timeout --signal=TERM --kill-after=20s 4800s /usr/local/bin/ci-deploy.sh' "$WRAPPER"; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: wrapper missing canonical exec line"
-  echo "        expected literal: exec timeout --signal=TERM --kill-after=20s 1800s /usr/local/bin/ci-deploy.sh"
+  echo "        expected literal: exec timeout --signal=TERM --kill-after=20s 4800s /usr/local/bin/ci-deploy.sh"
   echo "        file contents:"
   sed 's/^/          /' "$WRAPPER"
 else
