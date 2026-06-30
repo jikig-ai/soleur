@@ -40,12 +40,15 @@ create table if not exists public.worktree_write_lease (
   primary key (workspace_id, worktree_id)
 );
 
--- RLS: writes go through the service_role SECURITY DEFINER RPCs below ONLY —
--- no INSERT/UPDATE/DELETE policies on purpose (mirror 029:86-93; a `FOR ALL
--- USING` policy would apply to writes too). Revoke the table-level grants the
--- anon/authenticated API roles inherit; only the member SELECT policy is open.
+-- RLS (mirror 029:86-93 EXACTLY): enable RLS + a SELECT-ONLY policy. Writes are
+-- denied by the ABSENCE of any INSERT/UPDATE/DELETE policy (a `FOR ALL USING`
+-- would apply to writes — see rf-rls-for-all-using-applies-to-writes); they go
+-- through the service_role SECURITY DEFINER RPCs below. NOTE: do NOT add a
+-- table-level `revoke ... from authenticated` — that would strip the GRANT the
+-- member SELECT policy needs to be reachable (RLS filters rows; the role still
+-- needs the table SELECT grant). 029 revokes only the FUNCTIONS, not the table;
+-- anon is gated by RLS (no anon policy ⇒ no rows). Confirmed against 029:86-93.
 alter table public.worktree_write_lease enable row level security;
-revoke all on public.worktree_write_lease from anon, authenticated, public;
 
 -- Member read: a workspace member may observe their workspace's lease state.
 -- is_workspace_member is plpgsql (non-inlinable, 053:115-140) so the SECURITY

@@ -157,7 +157,7 @@ Mirror `029_plan_tier_and_concurrency_slots.sql:86-210` / `093_acquire_slot_work
 
 ### 2.2 — RLS
 - `alter table public.worktree_write_lease enable row level security;`
-- `revoke all on public.worktree_write_lease from anon, authenticated, public;` — **no write policies** (writes via the service_role SECURITY DEFINER RPCs only; mirror 029:86-93; `FOR ALL USING` would apply to writes — avoid).
+- **Mirror 029:86-93 EXACTLY: enable RLS + a SELECT-only policy + NO write policies (writes via service_role RPCs).** **Do NOT add a table-level `revoke … from authenticated`** — verified at /work against 029:86-93, which revokes only the FUNCTIONS, not the table. Revoking the table SELECT from `authenticated` would strip the GRANT the member SELECT policy needs to be *reachable* (RLS filters rows; the role still needs the table grant) → members couldn't read their lease. anon is gated by RLS (no anon policy ⇒ no rows). [Corrected from the task's "revoke all from anon/authenticated/public" paraphrase, which would have broken the policy.]
 - **SELECT policy** (mirror 059:227-229): `create policy worktree_write_lease_member_select on public.worktree_write_lease for select to authenticated using (public.is_workspace_member(workspace_id, auth.uid()));`. `is_workspace_member` is **plpgsql, non-inlinable** (Gap 6, 053:115-140) — do not reimplement as `sql STABLE`.
 - FK `references public.workspaces(id) on delete cascade` (Art.17 — see Research Reconciliation).
 
