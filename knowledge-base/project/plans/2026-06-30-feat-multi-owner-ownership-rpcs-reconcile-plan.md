@@ -14,6 +14,22 @@ status: draft
 
 # feat(workspace): reconcile single-owner ownership RPCs to the multi-owner-by-design model + dedicated ADR
 
+## Enhancement Summary
+
+**Deepened:** 2026-06-30 · **Agents (all 5 returned):** data-integrity-guardian, security-sentinel, architecture-strategist, code-simplicity-reviewer, verify-the-negative (Explore/sonnet).
+
+**Premise verification:** all 10 negative-verification claims CONFIRMED against the codebase (no `workspaces.owner_user_id` column; no single-owner constraint; mig 094 dropped the promotion block; at-least-one-owner guard at 094:227-233; only `transfer` writes `organizations.owner_user_id` among the RPCs; invite-route owner-gate fires before role; no existing single-owner verify sentinel; 117/ADR-072 free; `COMMENT ON FUNCTION public.` precedent in 20+ migrations).
+
+**Folded in:**
+1. **verify/117 grant-lock widened** (security, HIGH): invite-as-owner is the *canonical* grant path but `create_workspace_invitation` + `accept_workspace_invitation` have **no** verify sentinel today — both are forgeable-override `service_role`-only RPCs. Lock their grants in verify/117 + add the **3-arg `update_workspace_member_role` drop-check** (symmetry with verify/092 check 3).
+2. **Exact constraint-absence query** (data-integrity): check 1 targets a **partial UNIQUE index** + an **EXCLUDE constraint** (NOT a plain CHECK — row-local, can't enforce cross-row cardinality). Trigger-vector + message-text-proxy limits noted in the sentinel header.
+3. **Third `owner_user_id` writer surfaced** (architecture, MEDIUM): `anonymise_organization_membership` (mig 081) also re-points `owner_user_id` AND promotes the **oldest remaining MEMBER** to owner (not a preferred existing co-owner) — an N-owner wart. Added to ADR-072 inventory + carve-outs + the Phase-6 trigger.
+4. **Derived invariant + consumer contract** (architecture + data-integrity): ADR-072 states "`owner_user_id` references a *current* owner because every product-reachable writer maintains it"; names "a product-reachable owner-demote/remove-of-the-pointer-target route" as the explicit Phase-6 breakage trigger; records the **demote→remove strands the pointer with no repoint primitive** dead-end (transfer rejects an already-owner target, 092:104-107). Consumers MUST tolerate the pointer referencing a non-owner/non-member.
+5. **Phase 0 risk downgrade** (data-integrity): 092:193 + 094:278 already `COMMENT ON FUNCTION` these exact functions and apply green — apply-role risk near-zero. Capture the **verbatim** current COMMENT strings (092's is a multi-line adjacent-string concatenation with no inserted space) for `.down.sql`.
+6. **C4: one-line citation refresh** (architecture, MINOR): `model.c4:9` cites only ADR-038 for "MULTIPLE Owners" → refresh to `(ADR-038, ADR-072)`. Citation only, no topology edit; re-run c4 tests.
+7. **Simplicity trims:** verify check 4 (comment prose) kept but explicitly **secondary/droppable**; the 094 grant-lock lives in 117 while `transfer`'s lock stays in verify/092 (no duplication); default to **extending** an existing ownership test; **name** the negative-test fixture so the sentinel's non-no-op proof isn't skipped.
+8. **Framing** (architecture): ADR-072 resolves the pre-existing **ADR-038 (multi-owner) vs mig-075 (single-owner-strict) contradiction**, not merely "supersedes 075."
+
 > ✨ **Headline:** Promote the ADR-044 2026-06-30 *amendment* ("workspaces support N co-owners by design") into a **dedicated decision-of-record (ADR-072)** that ALSO pins the undefined `organizations.owner_user_id` meaning under N owners, and reconcile the **stale single-owner-strict assertions** that still live in the ownership-RPC migration corpus — so the recorded architecture stops lying about a model the running system already implements.
 
 ## Overview
@@ -43,7 +59,7 @@ Verified facts (HEAD of `apps/web-platform`):
 | "cannot demote the last owner" guard at **075:217-222** | Guard now at **mig 094:227-233** (`count(owner) <= 1`). Correct at-least-one-owner invariant for N owners. | **Keep verbatim.** verify/117 locks its *presence*. Re-confirmed in ADR-072 as the retained invariant. |
 | `transfer_workspace_ownership` lives at mig 075 | Current def is **migration 092** (4-arg `service_role`-only); 075's 3-arg form DROPped. | Target 092's COMMENT in mig 117. Preserve 092 `COALESCE` + `service_role`-only invariants — do NOT re-emit the body. |
 | Single-owner verify sentinels "if any assert single-owner" | **No** verify sentinel asserts single-owner (grep of `supabase/verify/` found none). | Nothing to remove. **Add** verify/117 to *lock* the multi-owner invariant. |
-| (not in issue) `organizations.owner_user_id` is the single-owner pointer | Single-valued FK (mig 053:51, `SET NULL` since 065). `transfer` dual-writes it (092:145-147); promotion + invite-as-owner do **not**. Consumers: `workspace-resolver.ts:298,504,515`, `dsar-export-allowlist.ts:218`, `dsar-export.ts:975`, `account-delete.ts:741`. | **ADR-072 DECIDES its meaning** under N owners (primary/billing/DSAR pointer). Any *data* backfill/junction = deferred follow-up issue, gated on the ADR. |
+| (not in issue) `organizations.owner_user_id` is the single-owner pointer | Single-valued FK (mig 053:51, `SET NULL` since 065). **Three writers:** `transfer` dual-writes (092:145-147); `anonymise_organization_membership` (mig 081:52-75) re-points + promotes oldest member; promotion + invite-as-owner do **not** touch it. Consumers: `workspace-resolver.ts:298,491-516`, `dsar-export.ts:975`, `account-delete.ts:708-741`. | **ADR-072 DECIDES its meaning** (primary/billing/DSAR pointer) + states the derived "references-a-current-owner" invariant + consumer-tolerance contract + the mig-081 promote-oldest wart. Any *data* backfill/junction = deferred follow-up (Phase 6), gated on the ADR. |
 | "business-rules register will document the rule — link when filed" | **Already filed:** `domain-model.md` BR-WS-3. | Update BR-WS-3 source cite → ADR-072. |
 
 **Premise Validation note:** #5756 is **OPEN**. Migration `075` exists but its function defs are **superseded by 092/094** (issue's line citations are 075-era). ADR-044 amendment + mig 058 invite/attestation flow exist + live. #5733 is **CONTEXT only** (its open work is the git-strand/owner-canary investigation — NOT a co-target). The premise "single-owner is still enforced" is **partially stale**; the plan reframes accordingly.
@@ -61,8 +77,9 @@ Verified facts (HEAD of `apps/web-platform`):
 ### Phase 0 — Preconditions
 - Confirm next migration index = **117** (`ls apps/web-platform/supabase/migrations/ | grep -oE '^[0-9]+' | sort -n | tail -1` → 116) and next ADR = **ADR-072** (`...decisions/ | grep -oE 'ADR-[0-9]+' | sort -u | tail -1` → ADR-071).
 - `git rev-parse origin/main:apps/web-platform/supabase/migrations/092_transfer_ownership_caller_override.sql` exists.
-- **`COMMENT ON FUNCTION` apply-role probe** (learning `2026-05-25-supabase-storage-objects-comment-on-policy-ownership.md`): `COMMENT ON FUNCTION` needs the apply role to OWN the function. Grep for precedent: `git grep -n 'COMMENT ON FUNCTION public' apps/web-platform/supabase/migrations/`. If precedent applies cleanly, proceed; if none, deepen-plan/preflight MUST validate apply-role ownership. **Fallback** = ADR-072 + inline migration prose comment, drop the structured `COMMENT ON FUNCTION`. Do NOT fall back to a `CREATE OR REPLACE` re-emit (would risk the 092/094 `COALESCE` + `service_role`-only FORWARD-REFERENCE invariants).
-- Read-only research the `organizations.owner_user_id` consumers (`workspace-resolver.ts:298,504,515`, `dsar-export-allowlist.ts:218`, `dsar-export.ts:975`, `account-delete.ts:741`) to ground the ADR's pointer-semantics decision. **No edits to these in this PR.**
+- **`COMMENT ON FUNCTION` apply-role — risk near-zero (deepen-verified).** Migrations **092:193** and **094:278** already `COMMENT ON FUNCTION` these exact two functions and apply green today; the apply role *created* them (092:48, 094:184) and no later `ALTER FUNCTION ... OWNER` exists — ownership is guaranteed. The probe stays as a cheap precondition (`git grep -n 'COMMENT ON FUNCTION public' apps/web-platform/supabase/migrations/` → 20+ hits), but the **fallback** (ADR-072 + inline migration prose, drop the structured `COMMENT ON FUNCTION`) is unlikely to be needed. Do NOT fall back to a `CREATE OR REPLACE` re-emit (would risk the 092/094 `COALESCE` + `service_role`-only FORWARD-REFERENCE invariants).
+- **Capture the verbatim current COMMENT strings** for `.down.sql`: read `obj_description` source at **092:193-198** and **094:278-283**. Note 092's COMMENT is a **multi-line adjacent-string-literal concatenation** (`'…organizations.'` + `'owner_user_id,…'` → `organizations.owner_user_id`, NO inserted space); the down need not split lines identically but MUST reproduce the same final string value. No apostrophes inside either comment → no escaping pitfalls.
+- Read-only research the `organizations.owner_user_id` consumers (`workspace-resolver.ts:298,491-516`, `dsar-export-allowlist.ts:218`, `dsar-export.ts:975`, `account-delete.ts:708-741`) AND the THREE writers — `transfer_workspace_ownership` (092:145-147), `anonymise_organization_membership` (**mig 081:52-75**, re-points + promotes oldest member), and (none in promotion/invite) — to ground the ADR's pointer-semantics decision. **No edits to these in this PR.**
 
 ### Phase 1 — ADR-072 (the headline deliverable)
 Author `knowledge-base/engineering/architecture/decisions/ADR-072-workspaces-support-n-co-owners.md` via `soleur:architecture` create (fires the ADR→register wiring). Recommended title: **"Multi-owner workspaces and the `organizations.owner_user_id` primary-owner pointer."** Frontmatter modelled on ADR-044 (`adr`, `title`, `status: accepted`, `date`, `amends: [ADR-038, ADR-044]`, `related: [5756, 5733, 4520]`, `related_plans`, `brand_survival_threshold: single-user incident`). Body:
@@ -72,10 +89,13 @@ Author `knowledge-base/engineering/architecture/decisions/ADR-072-workspaces-sup
   - **Sanctioned additive grant path** = invite-as-owner (live) + `update_workspace_member_role(p_new_role='owner')` (RPC primitive, `service_role`-only, no live route — defense-in-depth).
   - **`transfer_workspace_ownership`** = atomic **hand-off-and-step-down** (the *primary-pointer* transfer), NOT the only owner path.
   - **`organizations.owner_user_id`** = the **single primary/billing/DSAR owner pointer** (one of N co-owners), maintained by `transfer`; co-owners added via promotion/invite are full `workspace_members` owners but do NOT change the pointer. State this explicitly so the divergence is **intentional**, not accidental. (Whether to backfill / migrate to a junction is a **deferred** follow-up — see Alternatives.)
+  - **Three writers of `owner_user_id`** (the complete inventory — deepen-verified): (i) `transfer_workspace_ownership` (092:145-147) dual-writes it promote-before-demote; (ii) `anonymise_organization_membership` (**mig 081:52-75**, account-self-delete path) re-points it to the **oldest remaining MEMBER and promotes that member to owner** (`ORDER BY m.created_at ASC LIMIT 1`) — an N-owner **wart**: it can mint a brand-new owner on a workspace that already had co-owners instead of preferring an existing one; (iii) the promotion + invite-as-owner paths do NOT touch it. ADR-072 must enumerate all three and rule on the mig-081 promote-oldest-member behavior under N owners (acceptable for now / Phase-6 trigger).
+  - **Derived invariant (state it explicitly):** "`owner_user_id` references a *current* owner (or NULL for a true orphan) because every **product-reachable** writer maintains it." This holds today *only* because the one path that could strand it at a non-owner — `update_workspace_member_role` demote — is `service_role`-only with no live route. **Naming this makes the breakage trigger explicit:** exposing a product-reachable owner-demote / owner-removal-of-the-pointer-target route promotes the Phase-6 data reconciliation from deferred to required.
+  - **Consumer-side contract:** consumers (`workspace-resolver.ts`, `dsar-export.ts:975`, `account-delete.ts:741`) MUST tolerate `owner_user_id` referencing a non-owner / non-member and MUST NOT assume it is an active owner.
   - **At-least-one-owner invariant** (the retained mig-094 guard) — the ONLY ownership-cardinality rule.
-  - **Known limitations to record** (CTO carve-outs): `transfer` rejects a target already an owner (092:104-105) — a wart under multi-owner; `remove_workspace_member` rejects removing *any* owner (094:115-116) so the demote-allows-N-1 vs remove-blocks-all asymmetry is intentional.
-- **C4 note:** "No C4 model edit" WITH the enumeration citation (see Architecture Decision section).
-- **Supersession:** ADR-072 supersedes the single-owner-strict assertion of #4520 / mig 075.
+  - **Known limitations to record** (carve-outs): `transfer` rejects a target already an owner (092:104-107) — a multi-owner wart that also means **there is no RPC to re-point a stranded `owner_user_id` to a surviving co-owner** (the dead-end above); `remove_workspace_member` rejects removing *any* owner (094:115-118) so the demote-allows-N-1 vs remove-blocks-all asymmetry is intentional.
+- **C4 note:** one-line citation refresh on `model.c4:9` (ADR-038 → ADR-038, ADR-072); no structural/topology edit (see Architecture Decision section).
+- **Framing / Supersession:** ADR-072 **resolves the pre-existing ADR-038 (multi-owner) vs migration-075/#4520 (single-owner-strict) contradiction** — it is a clarification consistent with ADR-038, not a reversal — and supersedes the single-owner-strict assertion of #4520 / mig 075.
 
 ### Phase 2 — migration 117 (COMMENT-only; CONTRACT phase — before the test phase)
 `apps/web-platform/supabase/migrations/117_reconcile_ownership_rpc_comments_multi_owner.sql`:
@@ -83,37 +103,62 @@ Author `knowledge-base/engineering/architecture/decisions/ADR-072-workspaces-sup
 - `COMMENT ON FUNCTION public.transfer_workspace_ownership(uuid, uuid, text, uuid)` — replace "Single-owner strict: ..." with hand-off-and-step-down + primary-pointer wording; cite ADR-072 / #5756.
 - `COMMENT ON FUNCTION public.update_workspace_member_role(uuid, uuid, text, uuid)` — state `member→owner` promotion is permitted (additive co-owner primitive) and the retained guard is the at-least-one-owner invariant; cite ADR-072.
 - **No `CREATE OR REPLACE`, no grant change, no behavior change.**
-- `117_*.down.sql`: restore the prior COMMENT strings verbatim.
+- `117_*.down.sql`: restore the prior COMMENT strings **verbatim** (the values captured in Phase 0; reproduce 092's concatenated final value exactly). Header note: down + verify/117 are **version-paired** (rolling back 117 re-installs the "single-owner strict" COMMENT, which would red verify/117 check 4 if the sentinel stayed applied — fine because the Supabase pipeline is forward-only and down files are manual-rollback artifacts).
 
 ### Phase 3 — verify/117 sentinel (lock the DURABLE invariant)
-`apps/web-platform/supabase/verify/117_reconcile_ownership_rpc_comments_multi_owner.sql` (contract: each row returns `check_name` + `bad`; any `bad>0` fails CI). Per CTO: assert **signature + grant + guard presence**, not just comment prose (prose rots):
-1. **No single-owner-enforcing constraint** on `workspace_members` (no UNIQUE index / CHECK whose expression restricts owner rows to one-per-`workspace_id`) — query `pg_constraint`/`pg_index`; `bad=0` when none. (Assert constraint *absence*, NOT a live owner row-count — a solo workspace legitimately has count=1.)
-2. **At-least-one-owner guard present** in `update_workspace_member_role`: `pg_get_functiondef(...)` ILIKE `%cannot demote the last owner%` (the durable behavioral lock).
-3. **`service_role`-only grants intact**: both 4-arg RPCs are NOT EXECUTE-able by `authenticated` (mirrors verify/092 checks 1-2). The #4762 forge-vector regression lock.
-4. (Secondary) `transfer_workspace_ownership` 4-arg COMMENT NOT ILIKE `%single-owner strict%`.
+`apps/web-platform/supabase/verify/117_reconcile_ownership_rpc_comments_multi_owner.sql` (contract: each row returns `check_name` + `bad`; any `bad>0` fails CI). Assert **signature + grant + guard presence**, not just comment prose. **Sentinel header MUST note two known limits:** (a) a single-owner rule re-introduced via a *trigger* (not constraint/index) is invisible to check 1 — check 2 is the durable behavioral backstop; (b) check 2's ILIKE on the RAISE *message* is a proxy for the `count(*) <= 1` predicate — a future migration could keep the message while neutering the condition.
+1. **No single-owner-enforcing constraint** on `workspace_members`. A plain CHECK is row-local and *cannot* enforce cross-row cardinality — so target the realistic vectors: a **partial UNIQUE index** and an **EXCLUDE/UNIQUE constraint**. `bad=0` when none:
+   ```sql
+   SELECT 'no_single_owner_unique_index' AS check_name, count(*)::int AS bad
+   FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid
+   JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='public' AND c.relname='workspace_members'
+     AND i.indisunique
+     AND pg_get_expr(i.indpred,i.indrelid) ILIKE '%owner%'
+     AND pg_get_indexdef(i.indexrelid) ILIKE '%workspace_id%'
+   UNION ALL
+   SELECT 'no_single_owner_constraint', count(*)::int
+   FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid
+   JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='public' AND c.relname='workspace_members'
+     AND con.contype IN ('u','x')
+     AND pg_get_constraintdef(con.oid) ILIKE '%owner%';
+   ```
+2. **At-least-one-owner guard present**, pinned to the 4-arg signature so a stale overload cannot satisfy it: `pg_get_function_identity_arguments = 'p_workspace_id uuid, p_user_id uuid, p_new_role text, p_caller_user_id uuid'` AND `pg_get_functiondef(...) ILIKE '%cannot demote the last owner%'` → `bad=0`.
+3. **`service_role`-only grants intact** (the #4762 forge-vector lock) — `has_function_privilege('authenticated', '<sig>', 'EXECUTE')` must be false for **all four owner-granting RPCs**, because the no-forge guarantee rests on every one staying off `authenticated`:
+   - `update_workspace_member_role(uuid, uuid, text, uuid)` — **new coverage** (mig 094 has no existing verify sentinel).
+   - `create_workspace_invitation(uuid, text, text, text, text, uuid)` — **new coverage**; this is the canonical co-owner grant path and takes a forgeable `p_caller_user_id` (085:344).
+   - `accept_workspace_invitation(uuid, uuid)` — **new coverage**.
+   - `transfer_workspace_ownership(uuid, uuid, text, uuid)` — already locked by **verify/092**; OPTIONAL belt-and-suspenders re-assert here (don't duplicate if keeping the sentinel minimal).
+4. **3-arg drop-check** (symmetry with verify/092 check 3): the old `update_workspace_member_role(uuid, uuid, text)` overload (DROPped at 094:182) must NOT reappear — a recreated 3-arg `authenticated`-granted overload is the same forge-class the 4-arg grant-lock wouldn't catch.
+5. (Secondary, **droppable**) `transfer_workspace_ownership` 4-arg COMMENT NOT ILIKE `%single-owner strict%` — couples to migration 117's exact string; keep only as a low-value confirmation that the migration ran, or drop to decouple the sentinel from the migration.
 
 ### Phase 4 — test (prove the invariant; AFTER the contract migration)
-**Verify runner + path against `apps/web-platform/vitest.config.ts` include globs** (`test/**/*.test.ts`) before fixing the path; run `cd apps/web-platform && ./node_modules/.bin/vitest run <path>` (NOT `npm run -w`). Existing `transfer-ownership-wrapper.test.ts` is a **mocked** wrapper test; `workspace-invitations-accept.integration.test.ts` is an **integration** test against a live test DB. Pick per convention:
+First **`git grep -l "two owner\|role='owner'.*owner\|coexist" apps/web-platform/test/`** + read `workspace-invitations-accept.integration.test.ts` to confirm two-owner coexistence is not already characterized (avoid a duplicate). **Default: extend an existing ownership test, don't add a new file.** **Verify runner + path against `apps/web-platform/vitest.config.ts` include globs** (`test/**/*.test.ts`) before fixing the path; run `cd apps/web-platform && ./node_modules/.bin/vitest run <path>` (NOT `npm run -w`). Existing `transfer-ownership-wrapper.test.ts` is **mocked**; `workspace-invitations-accept.integration.test.ts` is **integration** (live test DB). Pick per convention:
 - **Preferred (integration):** seed workspace with owner A + member B; `update_workspace_member_role(p_new_role='owner')` for B; assert **two** `workspace_members(role='owner')` coexist (no raise); demote one of two → SUCCEEDS; demote the sole remaining owner → RAISES "cannot demote the last owner". Document expected `organizations.owner_user_id` behavior when the pointed-to owner is demoted while others remain (stays pinned / no change — per ADR-072 decision).
 - **Fallback (mocked wrapper):** assert `updateWorkspaceMemberRole({newRole:'owner'})` forwards `p_new_role:'owner'` + `p_caller_user_id` and does not reject 'owner' at the wrapper guard; the DB invariant is carried by verify/117.
+- **Sentinel negative proof (don't skip — names where it lives):** a sentinel that never returns `bad>0` is worthless. Prove verify/117 fires either (a) inline in the integration test by `CREATE UNIQUE INDEX ... WHERE role='owner'` inside a `BEGIN; ...; ROLLBACK;` and asserting check 1 returns `bad>0`, or (b) a committed fixture SQL under `apps/web-platform/test/fixtures/` that re-adds a constraint / flips a grant. Name the chosen location in Files to Create.
 
-### Phase 5 — cross-link the register + amendment
+### Phase 5 — cross-link the register + amendment + C4 citation
 - `knowledge-base/engineering/architecture/domain-model.md` BR-WS-3 source cite → add ADR-072.
 - `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md` 2026-06-30 "Owner model note" → replace "dedicated ADR to follow" with the concrete ADR-072 reference.
+- `knowledge-base/engineering/architecture/diagrams/model.c4:9` — refresh the `founder` actor's "MULTIPLE Owners" citation from `(ADR-038 team workspaces)` to also cite ADR-072 (citation text only — no element/relationship/topology change). Re-run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ### Phase 6 — deferred follow-up issue
-File a GitHub issue: "reconcile `organizations.owner_user_id` data under N co-owners (backfill or junction)" — gated on ADR-072's pointer-semantics decision; re-eval criteria = "if DSAR/billing correctness requires a non-pointer owner set." Label `domain/engineering`, `type/feature`. (A deferral without a tracking issue is invisible.)
+File a GitHub issue: "reconcile `organizations.owner_user_id` data under N co-owners (backfill or junction)" — gated on ADR-072's pointer-semantics decision. **Re-eval triggers (concrete):** (a) a product-reachable owner-demote or owner-removal-of-the-pointer-target route is exposed → the derived "pointer references a current owner" invariant breaks → reconciliation becomes **required**; (b) the mig-081 promote-oldest-member behavior produces a wrong primary owner that DSAR/billing/account-delete keying surfaces; (c) DSAR/billing correctness requires a non-pointer owner *set*. Label `domain/engineering`, `type/feature`. (A deferral without a tracking issue is invisible.)
 
 ## Files to Create
 - `knowledge-base/engineering/architecture/decisions/ADR-072-workspaces-support-n-co-owners.md`
 - `apps/web-platform/supabase/migrations/117_reconcile_ownership_rpc_comments_multi_owner.sql`
 - `apps/web-platform/supabase/migrations/117_reconcile_ownership_rpc_comments_multi_owner.down.sql`
 - `apps/web-platform/supabase/verify/117_reconcile_ownership_rpc_comments_multi_owner.sql`
-- A test under `apps/web-platform/test/server/` (name/shape per Phase 4) — or extend an existing ownership test.
+- A test under `apps/web-platform/test/server/` (name/shape per Phase 4) — **default: extend an existing ownership test** (`workspace-invitations-accept.integration.test.ts`) rather than a new file.
+- (If chosen per Phase 4) a negative-proof fixture under `apps/web-platform/test/fixtures/` — OR an inline `BEGIN;...ROLLBACK;` block in the test (name the choice).
 
 ## Files to Edit
 - `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md` — amendment links ADR-072.
 - `knowledge-base/engineering/architecture/domain-model.md` — BR-WS-3 source cite → ADR-072.
+- `knowledge-base/engineering/architecture/diagrams/model.c4` — line 9 `founder` actor citation `(ADR-038)` → `(ADR-038, ADR-072)` (citation text only, no topology change).
 
 ## Acceptance Criteria
 
@@ -121,10 +166,12 @@ File a GitHub issue: "reconcile `organizations.owner_user_id` data under N co-ow
 - [ ] `ADR-072-...md` exists, `status: accepted`; `## Decision` names: invite-as-owner grant path, `update_workspace_member_role` promotion primitive, `transfer` hand-off-and-step-down, the at-least-one-owner invariant, **and the `organizations.owner_user_id` primary-pointer meaning under N owners**.
 - [ ] Migration 117 contains **only** `COMMENT ON FUNCTION` statements: `grep -cE '^\s*(CREATE|ALTER|GRANT|REVOKE|DROP|UPDATE)' 117_*.sql` returns 0.
 - [ ] `117_*.down.sql` restores the prior COMMENT text (reversibility).
-- [ ] verify/117 returns `bad=0` for every sentinel on a freshly-migrated DB, and **fails** (`bad>0`) on a fixture that re-introduces a single-owner constraint, removes the last-owner guard, or flips a grant to `authenticated` (negative test).
+- [ ] verify/117 locks the `service_role`-only grant on ALL of `update_workspace_member_role` (4-arg), `create_workspace_invitation` (6-arg), `accept_workspace_invitation` (2-arg), AND asserts the 3-arg `update_workspace_member_role` overload does not exist.
+- [ ] verify/117 returns `bad=0` for every sentinel on a freshly-migrated DB, and **fails** (`bad>0`) on the named negative fixture/block that re-introduces a single-owner partial-unique-index, removes the last-owner guard, or flips a grant to `authenticated`.
 - [ ] Multi-owner test passes: two `owner` rows coexist; `member→owner` promotion does not raise; demoting the **last** owner raises.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; new test passes via `./node_modules/.bin/vitest run <path>`.
-- [ ] ADR-044 amendment + domain-model.md BR-WS-3 both cite ADR-072.
+- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; new test passes via `./node_modules/.bin/vitest run <path>`; `c4-code-syntax.test.ts` + `c4-render.test.ts` green after the model.c4 citation refresh.
+- [ ] ADR-044 amendment + domain-model.md BR-WS-3 + model.c4:9 all cite ADR-072.
+- [ ] ADR-072 enumerates all THREE `owner_user_id` writers (transfer, mig-081, none-in-promotion/invite), states the derived "references-a-current-owner" invariant + its Phase-6 breakage trigger, and records the demote→remove no-repoint dead-end.
 - [ ] Deferred `owner_user_id` follow-up issue filed (Phase 6) with re-eval criteria.
 - [ ] PR body uses `Closes #5756`.
 - [ ] CPO sign-off recorded (threshold = single-user incident).
@@ -138,12 +185,12 @@ File a GitHub issue: "reconcile `organizations.owner_user_id` data under N co-ow
 **Create ADR-072** — the dedicated decision-of-record superseding single-owner-strict (#4520 / mig 075) AND pinning `organizations.owner_user_id` semantics under N owners. In-scope Phase 1 deliverable, authored via `soleur:architecture`. Not deferred.
 
 ### C4 views
-**No C4 model edit.** Completeness enumeration (read against `model.c4` / `views.c4` / `spec.c4`):
-- **External human actors:** only `founder` (`model.c4:8-9`), whose description **already** says "Workspaces may have MULTIPLE Owners (ADR-038 team workspaces)." Already correct.
+**No structural/topology C4 edit; one-line citation refresh only** (architecture-strategist MINOR). Cardinality invariants ("at-least-one-owner") and column semantics ("primary pointer") are domain rules belonging in `domain-model.md` (BR-WS-3/BR-WS-4), not in a C4 actor description — putting them in `model.c4` would be a category error. Completeness enumeration (read against `model.c4` / `views.c4` / `spec.c4`):
+- **External human actors:** only `founder` (`model.c4:8-9`), whose description **already** says "Workspaces may have MULTIPLE Owners (ADR-038 team workspaces)." Structurally correct; but it cites only ADR-038 — refresh the citation to `(ADR-038, ADR-072)` for cross-link consistency with BR-WS-3 + the ADR-044 amendment (Phase 5). Citation text only; no element/relationship change.
 - **External systems / vendors:** none introduced.
 - **Containers / data-stores:** none added; `workspace_members` + `organizations` are existing tables; no schema change.
 - **Actor↔surface access relationships:** Owner-shared reads already modelled (`model.c4:272`); no access-topology change.
-"No C4 impact" is supported by the enumeration. (If deepen-plan's C4 check decides `founder`'s description should additionally name the at-least-one-owner invariant or the primary-pointer, that is a one-line `model.c4` description edit + `c4-code-syntax`/`c4-render` tests — current description is accurate, so none planned.)
+The only C4 change is the one-line citation refresh; re-run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ### Sequencing
 Decision is **already true** of the running system; ADR-072 ships `status: accepted` immediately — no soak gate.
@@ -177,7 +224,7 @@ discoverability_test:
   expected_output: "conclusion: success (verify-migrations green ⇒ verify/117 bad=0 across all sentinels)"
 ```
 
-Docs + DB-metadata + verify-sentinel change; no new runtime app code path emits at runtime. No `ssh ` in any discoverability command.
+Docs + DB-metadata + verify-sentinel change; no new runtime app code path emits at runtime. The discoverability command uses `gh`, not a remote shell.
 
 ## Domain Review
 
@@ -202,9 +249,9 @@ Touches `.sql` (sensitive surface) → considered. **No new processing activity:
 1. Two `owner` rows coexist for one workspace (no constraint raise).
 2. `update_workspace_member_role(p_new_role='owner')` promotes a member without raising "direct promotion not allowed".
 3. Demote an owner while ≥2 owners exist → succeeds; demote the **last** owner → raises "cannot demote the last owner".
-4. verify/117 → `bad=0` on a correct DB; `bad>0` on a fixture re-adding a single-owner constraint, dropping the last-owner guard, or flipping a grant to `authenticated`.
-5. `transfer_workspace_ownership` 4-arg + `update_workspace_member_role` 4-arg remain `service_role`-only.
-6. (documented, not necessarily code) `organizations.owner_user_id` behavior when the pointed-to owner is demoted while co-owners remain (per ADR-072: pointer unchanged / no silent re-point).
+4. verify/117 → `bad=0` on a correct DB; `bad>0` on the named negative fixture/block re-adding a single-owner partial-unique-index, dropping the last-owner guard, or flipping a grant to `authenticated`.
+5. `update_workspace_member_role` (4-arg), `create_workspace_invitation` (6-arg), `accept_workspace_invitation` (2-arg) all remain `service_role`-only (NOT `authenticated`-EXECUTE-able); the 3-arg `update_workspace_member_role` overload does not exist.
+6. (documented, not necessarily code) `organizations.owner_user_id` behavior when the pointed-to owner is demoted while co-owners remain (per ADR-072: pointer unchanged / no silent re-point); and the demote→remove no-repoint dead-end.
 
 ## Alternatives Considered
 
@@ -223,6 +270,8 @@ Touches `.sql` (sensitive surface) → considered. **No new processing activity:
 - **Sentinel must assert the invariant, not a proxy:** lock the at-least-one-owner *guard presence* + grant + constraint *absence* — NOT a live owner row-count (every solo workspace has count=1 → false-fail). Comment prose is the secondary, rot-prone check.
 - **Migration runs in a transaction** (Supabase per-file): `COMMENT ON FUNCTION` is transaction-safe; no `CONCURRENTLY`/`VACUUM`/`ALTER SYSTEM`.
 - **Test path must satisfy vitest include globs** (`test/**/*.test.ts`); use `./node_modules/.bin/vitest run`, never `npm run -w`; typecheck via `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- **`organizations.owner_user_id` divergence is deliberately documented, not fixed here** — do not let /work silently widen scope into a backfill; that is Phase 6.
+- **`organizations.owner_user_id` divergence is deliberately documented, not fixed here** — do not let /work silently widen scope into a backfill; that is Phase 6. The dead-end to record in the ADR: demote the pointer-owner (→ stale pointer) then remove them (→ fully orphaned), and `transfer` rejects an already-owner target, so **no RPC can re-point a stranded pointer** to a surviving co-owner.
+- **down.sql must reproduce 092's exact COMMENT value** — it is a multi-line adjacent-string-literal concatenation with NO inserted space between `'…organizations.'` and `'owner_user_id…'`. Capture the source value in Phase 0.
+- **Three `owner_user_id` writers, not one** — the headline "pin owner_user_id semantics" deliverable is incomplete unless ADR-072 enumerates `transfer` (092) AND `anonymise_organization_membership` (mig 081, promotes oldest member — a wart) AND the no-op promotion/invite paths.
 - **`Closes #5756`** in PR body only (not title).
 - A plan whose `## User-Brand Impact` section is empty/`TBD` fails `deepen-plan` Phase 4.6 — it is filled above.
