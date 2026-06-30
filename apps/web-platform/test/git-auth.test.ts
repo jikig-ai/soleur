@@ -391,7 +391,7 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
     );
     expect(out.toString()).toBe("ok");
 
-    const env = capturedCalls[0].opts?.env ?? {};
+    const env = capturedCalls[0].opts?.env ?? ({} as NodeJS.ProcessEnv);
     const sshCommand = env.GIT_SSH_COMMAND ?? "";
     // TOFU options for the private-net trust floor.
     expect(sshCommand).toMatch(/^ssh -i \S+ /);
