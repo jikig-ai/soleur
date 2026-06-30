@@ -16,9 +16,10 @@
 #   64  usage error (unknown argument)
 #   65  precondition failed (target is not a Next.js app)
 #   66  refuse-if-exists (a non-baseline artifact already present; no --force)
-#   67  dirty working tree (--refresh-baseline requires a clean tree)
+#   67  dirty working tree (baseline capture requires a clean tree)
 #   68  dependency-cruiser binary missing, or baseline capture failed
-#   69  git/merge-base error during --refresh-baseline
+#   69  git/merge-base error during baseline capture
+#   70  --refresh-baseline before generation (no .dependency-cruiser.cjs yet — run default mode first)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,14 +55,22 @@ detect_nextjs() {
 }
 detect_nextjs || die "target $TARGET_REL is not a Next.js app (need next.config.* + anchored \"next\": in package.json)" 65
 
-# --- Baseline capture (shared by both modes) ---------------------------------
-# Captures the current value-violations of the tree rooted at $1 into $BASELINE.
+# --- Baseline capture (shared) -----------------------------------------------
+# Captures the value-violations of the tree rooted at $1 into $BASELINE. Scans
+# only the client dirs (app/components) that actually exist plus server/, so a
+# single-client-dir app does not error on a missing dir.
 capture_baseline() {
   local app_root="$1"
   [[ -x "$DEPCRUISE" ]] || die "dependency-cruiser not found at $DEPCRUISE — run 'bun install' in $TARGET_REL first" 68
+  local scan_dirs=()
+  local d
+  for d in app components server; do
+    [[ -d "$app_root/$d" ]] && scan_dirs+=("$d")
+  done
+  [[ "${#scan_dirs[@]}" -gt 0 ]] || die "no app/components/server dirs under $app_root — cannot capture baseline" 68
   local tmp
   tmp="$(mktemp)"
-  if ! ( cd "$app_root" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type baseline app components server ) > "$tmp" 2>/dev/null; then
+  if ! ( cd "$app_root" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type baseline "${scan_dirs[@]}" ) > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
     die "baseline capture failed (dependency-cruiser config error?)" 68
   fi
@@ -69,21 +78,21 @@ capture_baseline() {
   log "captured baseline: $(grep -c '"rule"' "$BASELINE" 2>/dev/null || echo 0) known violation(s) -> ${BASELINE#$REPO_ROOT/}"
 }
 
-if [[ "$MODE" == "refresh" ]]; then
-  # Clean-tree guard — a dirty tree could bake an uncommitted same-PR violation
-  # into the baseline.
+# Capture the baseline against the origin/main merge-base in a detached worktree,
+# so a violation introduced in the SAME PR (branch-added) is NOT grandfathered —
+# only violations pre-existing on main land in the baseline. Used by BOTH modes:
+# first adoption (default) must not grandfather a same-PR leak any more than a
+# refresh does. Requires a clean tree (committed state == reviewable baseline).
+capture_baseline_mergebase() {
   if ! { git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet; }; then
-    die "working tree is dirty — commit or discard changes before --refresh-baseline" 67
+    die "working tree is dirty — commit or discard changes before capturing the baseline" 67
   fi
-  [[ -f "$CFG" ]] || die "no .dependency-cruiser.cjs at $TARGET_REL — run the default mode first to generate the gate" 65
-
   MB="$(git -C "$REPO_ROOT" merge-base origin/main HEAD 2>/dev/null)" \
     || die "could not compute merge-base with origin/main (is origin/main fetched?)" 69
   log "capturing baseline against origin/main merge-base ${MB:0:12} (same-PR violations excluded)"
 
   WT="$(mktemp -d)"
-  cleanup_wt() { git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true; rm -rf "$WT"; }
-  trap cleanup_wt EXIT
+  trap 'git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true; rm -rf "$WT"' EXIT
   git -C "$REPO_ROOT" worktree add --detach "$WT" "$MB" >/dev/null 2>&1 \
     || die "git worktree add at merge-base failed" 69
 
@@ -95,11 +104,29 @@ if [[ "$MODE" == "refresh" ]]; then
   cp "$CFG" "$WT_TARGET/.dependency-cruiser.cjs"
   ln -s "$TARGET/node_modules" "$WT_TARGET/node_modules"
   capture_baseline "$WT_TARGET"
+
+  # Clean up the worktree now (success path) so the caller can continue; clear the
+  # trap so a later die does not double-remove an already-gone worktree.
+  git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  rm -rf "$WT"
+  trap - EXIT
+}
+
+if [[ "$MODE" == "refresh" ]]; then
+  [[ -f "$CFG" ]] || die "no .dependency-cruiser.cjs at $TARGET_REL — run the default mode first to generate the gate" 70
+  capture_baseline_mergebase
   log "refresh complete — review the baseline diff before merging."
   exit 0
 fi
 
 # --- Default mode: emit artifacts (non-destructive) --------------------------
+# Clean-tree guard FIRST — the baseline is captured against the origin/main
+# merge-base (below), and we refuse to emit onto a dirty tree so the resulting
+# baseline + artifact diff is reviewable and deterministic.
+if ! { git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet; }; then
+  die "working tree is dirty — commit or discard changes before generating the gate" 67
+fi
+
 for f in "$CFG" "$RUNNER" "$WORKFLOW"; do
   [[ -e "$f" ]] && die "refuse-if-exists: ${f#$REPO_ROOT/} already present (no --force; re-baseline via --refresh-baseline)" 66
 done
@@ -121,8 +148,10 @@ sed "s|__TARGET_DIR__|$TARGET_REL|g" "$REF_DIR/constraint-gates-workflow.templat
 
 log "emitted: ${CFG#$REPO_ROOT/}, ${RUNNER#$REPO_ROOT/}, ${WORKFLOW#$REPO_ROOT/}"
 
-# Capture the initial baseline from the current tree.
-capture_baseline "$TARGET"
+# Capture the initial baseline against the origin/main merge-base — same path as
+# --refresh-baseline, so a leak introduced in the SAME PR that scaffolds the gate
+# is NOT grandfathered (only violations pre-existing on main are).
+capture_baseline_mergebase
 
 log "done. Verify green: (cd $TARGET_REL && bash scripts/constraint-gates.sh)"
 exit 0
