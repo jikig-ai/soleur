@@ -21,18 +21,20 @@ constants (ceiling, timeout) and ADR ordinal at write time — do not freeze pla
 - [ ] 2.1 Evaluate the `test` check-run verdict at the TOP of each loop iteration (success→exit 0; non-success→exit 1). [AC2, AC4]
 - [ ] 2.2 Replace the fixed-window "missing⇒timeout" with ci.yml-run liveness: query `actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=20`, select max-`created_at` run, keep waiting while `status != completed` (blocklist, NOT an allowlist of queued|in_progress). [AC1]
 - [ ] 2.3 Add the bounded post-completion reconciliation grace (`RECONCILE_ATTEMPTS`) for the ci-completed-but-`test`-check-run-lagging race. [AC3]
-- [ ] 2.4 Retry-guard the runs query (`if ! resp=$(gh api …)`) so a transient error `continue`s and never satisfies `total_count==0`; guard `jq '.workflow_runs[0]'` null via array-length first. [AC6]
-- [ ] 2.5 Reconcile stale re-run check-runs against the selected run's `run_started_at`; preserve the cancelled-shadow selector and the 60s grace + zero-run fast-fail.
-- [ ] 2.6 Raise `MAX_ATTEMPTS`/ceiling AND the job `timeout-minutes` together so `timeout-minutes*60 > MAX_ATTEMPTS*INTERVAL_S + INTERVAL_S`. [AC5]
+- [ ] 2.4 Retry-guard the runs query (`if ! resp=$(gh api …)`) so a transient error `continue`s and never satisfies `total_count==0` (replaces the current `|| echo "0"`); guard `jq '.workflow_runs[0]'` null via `total_count`/array-length first. [AC6]
+- [ ] 2.5 Preserve the existing cancelled-shadow check-run selector (`sort_by(.started_at)|last`) and the 60s grace + zero-run fast-fail. Select the run via `per_page=1` + `event=push`. (Do NOT add a stale-attempt timestamp-reconciliation branch — cut as YAGNI.)
+- [ ] 2.6 Raise `MAX_ATTEMPTS`/ceiling AND the job `timeout-minutes` together so `timeout-minutes*60 > (MAX_ATTEMPTS + RECONCILE_ATTEMPTS)*INTERVAL_S + INTERVAL_S`; no unbounded inner retry loop. Add an inline YAML comment at the ceiling constants ("do NOT lower without re-reading ADR-072"). [AC5]
 
-### Phase B — gate `migrate` on `await-ci`
-- [ ] 2.7 `migrate.needs: [release, await-ci]`; `migrate.if` AND-in `(needs.await-ci.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped'))`, preserving existing clauses; document the parallelism/correctness trade-off in the job comment. [AC7, AC8]
+### Phase B — gate `migrate` on `await-ci` (with `always()`)
+- [ ] 2.7 `migrate.needs: [release, await-ci]`; `migrate.if` MUST lead with `always() &&` then `needs.release.outputs.version != '' && (needs.await-ci.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)`. Document the corrected serialize-after-await-ci tail cost (NOT "no net cost") + the residual verify-doppler-secrets window in the job comment. [AC7]
+- [ ] 2.7b Verify no fail-open: on push fail-closed await-ci, migrate→skipped and deploy stays blocked by its own `needs.await-ci.result=='success'`; on dispatch, await-ci skipped is tolerated. [AC8]
 
-### Phase C — superseded-SHA guard in `deploy` (should-have; descopable)
-- [ ] 2.8 Add a read-only `deploy` step that skips the POST ONLY when `origin/main` has a strictly-newer `apps/web-platform/**` release SHA (any ambiguity → proceed); `git`/`gh` only, no prod write. OR record Phase C descoped to the option-3 issue in the PR body. [AC9]
+### Phase C — REJECTED (do NOT implement)
+- [ ] 2.8 (none) Superseded-SHA guard rejected by deepen-plan review; out-of-order risk named in PR body + folded into the option-3 issue (Task 5.2). [AC9]
 
-### Phase E — observability
-- [ ] 2.9 Add an elapsed-seconds field to every `await-ci` poll line + a `::warning::` when elapsed crosses the prior 900s threshold. [AC10]
+### Phase E — observability + fail-closed notification
+- [ ] 2.9 Add an elapsed-seconds field (NEW distinct token, e.g. `elapsed_s=`, absent elsewhere in the file) to every `await-ci` poll line + a `::warning::` ("past 900s") when elapsed crosses the prior 900s threshold. Verify AC against the EXTRACTED await-ci step body, not a file-wide grep. [AC10]
+- [ ] 2.10 Add a `notify-gated` job (`if: always() && needs.await-ci.result == 'failure'`) that posts "deploy gated — CI not green for <sha>, prod NOT updated" via the existing notification channel. [AC10b]
 
 ## Phase 3: Architecture record
 - [ ] 3.1 Create `ADR-072` (or next-free) via `/soleur:architecture` with `## Decision` / `## Alternatives Considered` (options 1/2/3) / `## Consequences` (held-runner trade-off, migrate-gating, deferred option-3, residual >ceiling cliff). [AC11]
