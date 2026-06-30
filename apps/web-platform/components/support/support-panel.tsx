@@ -5,6 +5,7 @@
 // Reduced-motion aware. Mobile: full-width bottom-anchored sheet.
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { SupportComposer } from "./support-composer";
 import { SupportConversation } from "./support-conversation";
 import { SUPPORT_NAME, SUPPORT_PANEL_SUBTITLE } from "./support-persona";
@@ -23,10 +24,26 @@ export function SupportPanel({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
+  const router = useRouter();
   const [entered, setEntered] = useState(false);
   useEffect(() => {
     onCloseRef.current = onClose;
   });
+
+  // Reply links render via MarkdownRenderer, which opens every anchor in a new
+  // tab (correct for the main chat's external links). For an INTERNAL app path
+  // (e.g. the knowledge-base link) that's wrong — intercept the click and do a
+  // same-tab client-side navigation, closing the panel so the user lands on it.
+  function handleReplyLinkClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey) return;
+    const anchor = (e.target as HTMLElement).closest("a");
+    const href = anchor?.getAttribute("href");
+    if (href && href.startsWith("/") && !href.startsWith("//")) {
+      e.preventDefault();
+      onClose();
+      router.push(href);
+    }
+  }
 
   useEffect(() => {
     if (!open) {
@@ -130,10 +147,14 @@ export function SupportPanel({
           </button>
         </header>
 
-        <SupportConversation
-          messages={messages}
-          onChipSelect={(label, chipKey) => onSend(label, chipKey)}
-        />
+        {/* display:contents keeps the flex layout while letting the click
+            handler intercept internal reply links (bubbles from descendants). */}
+        <div style={{ display: "contents" }} onClick={handleReplyLinkClick}>
+          <SupportConversation
+            messages={messages}
+            onChipSelect={(label, chipKey) => onSend(label, chipKey)}
+          />
+        </div>
 
         <SupportComposer onSend={(text) => onSend(text)} />
       </div>

@@ -8,6 +8,10 @@ vi.mock("@/components/feature-flags/provider", () => ({
     name === "support" ? flagState.support : false,
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+}));
+
 import { SupportLauncher } from "@/components/support/support-launcher";
 
 describe("SupportLauncher — flag gating", () => {
