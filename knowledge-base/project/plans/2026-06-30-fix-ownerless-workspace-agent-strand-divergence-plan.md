@@ -42,6 +42,29 @@ below are **superseded by the "Verification Plan (active)" section** added at th
 end; the original H2/H3/H1 branching + Phase 1a canary restore are retained ONLY
 as the historical pre-merge analysis that #5734 acted on.
 
+## Deepen-Plan Pass 2 (verification-only reconciliation, 2026-06-30)
+
+Re-run after the stale-premise discovery. Because the implementation is already
+merged (#5734), the per-section research/review fan-out was scoped to **gate +
+citation verification** rather than designing new code (ADR-053 tiering — no tier
+spend on already-merged code):
+
+- **Halt gates 4.6/4.7/4.8/4.9 — ALL PASS.** User-Brand Impact present (threshold
+  `single-user incident`); Observability section present with all 5 fields + no
+  SSH in `discoverability_test.command`; no PAT-shaped variable; no UI surface
+  (server-side only → 4.9 skip).
+- **Citations resolved LIVE.** SHA `190ab58a5` resolves and
+  `git merge-base --is-ancestor 190ab58a5 origin/main` ⇒ YES (attribution holds);
+  subject matches PR #5734. All three shipped-deliverable anchors exist
+  (`ensure-workspace-repo.ts` `isStrandingFilePointer`,
+  `repo-resolver-divergence.ts:128` `reportAgentReadinessSelfStop`,
+  `workspace-reconcile-on-push.ts:257` `.maybeSingle()` → select-all-owners). No
+  broken `knowledge-base/*.md` citations.
+- **No internal contradiction:** the pre-merge H2/H3/H1 Implementation Phases are
+  retained as historical analysis; the banner + `## Verification Plan (active)`
+  supersede them. Phase 1a "restore the owner canary" is explicitly REFUTED
+  (754ee124 has ≥2 legitimate co-owners — to be confirmed read-only at V2).
+
 ## Enhancement Summary (deepen-plan, 2026-06-30)
 
 **Sections enhanced:** Overview, Hypotheses, Research Reconciliation, Phases 0-3, Observability, Architecture Decision, User-Brand Impact, Acceptance Criteria, Files-to-Edit, Sharp Edges.
