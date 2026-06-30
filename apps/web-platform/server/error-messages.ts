@@ -12,6 +12,8 @@ export const ERR_WORKSPACE_NOT_PROVISIONED = "Workspace not provisioned";
 export const ERR_CONVERSATION_NOT_FOUND = "Conversation not found";
 export const ERR_NO_ACTIVE_SESSION = "No active session";
 export const ERR_REVIEW_GATE_NOT_FOUND = "Review gate not found or already resolved";
+export const ERR_WORKTREE_LEASE_UNAVAILABLE =
+  "Workspace is being written by another host";
 export const ERR_ATTACHMENT_NOT_FOUND = "Attachment not found";
 export const ERR_UNSUPPORTED_FILE_TYPE = "Unsupported file type";
 export const ERR_UPLOAD_FAILED = "Upload failed";

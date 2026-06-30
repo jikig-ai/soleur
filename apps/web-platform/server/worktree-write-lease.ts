@@ -16,6 +16,12 @@ import { reportSilentFallback } from "./observability";
  * PR B; this module provides only the lease primitives.
  */
 
+/** The single worktree id per workspace today — one tree per workspace
+ *  (inflight-checkpoint.ts:14, ensure-workspace-repo.ts:75). A stable opaque
+ *  constant; multi-worktree is Phase 3 (additive, non-breaking). Shared so the
+ *  two turn-boundary lineages key the lease identically (no drift). */
+export const WORKTREE_ID_PRIMARY = "primary";
+
 /** The lease a host currently holds: its infra `host_id` + the fencing
  *  generation token it presents to the git-data host's pre-receive CAS. */
 export interface WorktreeLease {

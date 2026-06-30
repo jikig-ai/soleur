@@ -37,6 +37,7 @@ import {
   ERR_CONVERSATION_NOT_FOUND,
   ERR_NO_ACTIVE_SESSION,
   ERR_REVIEW_GATE_NOT_FOUND,
+  ERR_WORKTREE_LEASE_UNAVAILABLE,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
@@ -67,7 +68,14 @@ import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
 import {
   resolveActiveWorkspace,
   resolveActiveWorkspacePath,
+  isGitDataStoreEnabled,
 } from "./workspace-resolver";
+import { resolveHostId } from "./host-identity";
+import {
+  acquireAndHoldWorktreeLease,
+  WORKTREE_ID_PRIMARY,
+  type WorktreeLeaseHandle,
+} from "./worktree-write-lease";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -954,6 +962,12 @@ export async function startAgentSession(
   };
   registerSession(userId, conversationId, session, leaderId);
 
+  // #5274 PR B — the worktree write-lease held for this session's lifetime, set
+  // once the active workspace resolves (below) when the git-data store is
+  // enabled, released in the finally. `null` while the lease path is gated off
+  // (the dominant prod state today) or before acquire.
+  let worktreeLeaseHandle: WorktreeLeaseHandle | null = null;
+
   // Guards for stream_end idempotency across success, exception, and abort
   // paths. Before #2843, stream_end only fired inside the `result` branch —
   // if the SDK iterator threw mid-stream (or `updateConversationStatus` after
@@ -1100,6 +1114,43 @@ export async function startAgentSession(
       feature: "agent-runner",
       userId,
     });
+
+    // #5274 PR B — acquire the workspace write-lease before any reprovision /
+    // syncPull / agent write touches the tree. GATED behind isGitDataStoreEnabled()
+    // (ADR-068 amendment): entirely inert at flag-off (no Postgres round-trip, no
+    // fail-closed dependency) until cutover. A null acquire means another host
+    // holds the lease live — fail-closed: this host must not write. Heartbeat loss
+    // mid-session aborts the in-flight write (onLost). Released in the finally.
+    if (isGitDataStoreEnabled()) {
+      const hostId = resolveHostId();
+      worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
+        activeWorkspaceId,
+        WORKTREE_ID_PRIMARY,
+        hostId,
+        () => {
+          reportSilentFallback(
+            new Error("worktree write-lease lost mid-session (reclaimed by another host)"),
+            {
+              feature: "worktree_lease",
+              op: "startAgentSession.heartbeat-lost",
+              extra: { userId, workspaceId: activeWorkspaceId },
+            },
+          );
+          controller.abort(new SessionAbortError("superseded"));
+        },
+      );
+      if (!worktreeLeaseHandle) {
+        reportSilentFallback(
+          new Error("worktree write-lease unavailable (held by another host)"),
+          {
+            feature: "worktree_lease",
+            op: "startAgentSession.acquire",
+            extra: { userId, workspaceId: activeWorkspaceId },
+          },
+        );
+        throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
+      }
+    }
 
     // Extract MCP server names from plugin.json for canUseTool allowlisting.
     // Uses explicit server-name matching (not blanket mcp__ prefix).
@@ -2630,6 +2681,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         );
       }
     }
+    // #5274 PR B — release the worktree write-lease (stops the heartbeat,
+    // unregisters from the SIGTERM drain, frees the row so a surviving host can
+    // reclaim immediately). Idempotent + no-op when the lease path was gated
+    // off or already lost mid-session. Never throws.
+    //
+    // The cast widens past a TS finally-block CFA limitation: every path through
+    // the try returns/throws, so TS narrows this `let` back to its pre-try `null`
+    // initializer here and loses the in-try assignment. At runtime the handle is
+    // set whenever the lease was acquired; the `?.` keeps the gated-off/null case
+    // a no-op.
+    await (worktreeLeaseHandle as WorktreeLeaseHandle | null)?.release();
+
     unregisterSession(userId, conversationId, leaderId);
   }
 }

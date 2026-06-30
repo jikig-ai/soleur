@@ -138,7 +138,14 @@ import {
 // `repo_status=error` workspace heals + re-evaluates instead of dead-ending at
 // the gate (short-circuit-guard-must-sit-after-the-recovery-it-gates).
 import { resolveRepoReadinessWithSelfHeal } from "./repo-readiness-self-heal";
-import { resolveActiveWorkspace } from "./workspace-resolver";
+import { resolveActiveWorkspace, isGitDataStoreEnabled } from "./workspace-resolver";
+import { resolveHostId } from "./host-identity";
+import {
+  acquireAndHoldWorktreeLease,
+  WORKTREE_ID_PRIMARY,
+  type WorktreeLeaseHandle,
+} from "./worktree-write-lease";
+import { ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -1249,6 +1256,42 @@ export function markConversationAcked(
   cell?.set(ackAtMs);
 }
 
+// ---------------------------------------------------------------------------
+// #5274 PR B — per-conversation worktree write-lease handle. The cc lineage
+// acquires in `realSdkQueryFactory` (cold Query) and releases in
+// `handleCcCloseQuery` (every close path) — two separate functions, so the
+// handle is stashed here keyed by (userId, conversationId), mirroring the
+// `_ccAutonomousAckPosture` registry. Empty when the lease path is gated off.
+// ---------------------------------------------------------------------------
+const _ccWorktreeLeases = new Map<string, WorktreeLeaseHandle>();
+
+function makeWorktreeLeaseKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+/** Stash the held lease for the conversation (call after a successful acquire
+ *  in the cold-Query factory). */
+function registerCcWorktreeLease(
+  userId: string,
+  conversationId: string,
+  handle: WorktreeLeaseHandle,
+): void {
+  _ccWorktreeLeases.set(makeWorktreeLeaseKey(userId, conversationId), handle);
+}
+
+/** Release + drop the conversation's lease (call from the close hook). No-op
+ *  when none is held (gated off, or already released). Never throws. */
+async function releaseCcWorktreeLease(
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  const key = makeWorktreeLeaseKey(userId, conversationId);
+  const handle = _ccWorktreeLeases.get(key);
+  if (!handle) return;
+  _ccWorktreeLeases.delete(key);
+  await handle.release();
+}
+
 function makeCcBashGateKey(
   userId: string,
   conversationId: string,
@@ -1440,6 +1483,11 @@ export function handleCcCloseQuery({
   reason?: "disconnected";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
+  // #5274 PR B — release the worktree write-lease held for this conversation
+  // (stops the heartbeat, unregisters from the SIGTERM drain, frees the row).
+  // Fire-and-forget: the close hook is synchronous and the release never throws.
+  // No-op when the lease path was gated off or already lost mid-session.
+  void releaseCcWorktreeLease(userId, conversationId);
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
       userId,
@@ -2221,6 +2269,47 @@ export const realSdkQueryFactory: QueryFactory = async (
     reviewGateResolvers: new Map(),
     sessionId: null,
   };
+
+  // #5274 PR B — acquire the workspace write-lease for the Query lifetime
+  // (cc-soleur-go holds ONE Query across many turns, so the lease is held for
+  // the whole conversation). Stashed per-conversation, released in
+  // `handleCcCloseQuery` (fires from EVERY close path). GATED behind
+  // isGitDataStoreEnabled() (ADR-068 amendment): entirely inert at flag-off. A
+  // null acquire = another host holds it live → fail-closed throw (this host
+  // must not write). Heartbeat loss aborts the in-flight Query via `controller`.
+  if (isGitDataStoreEnabled()) {
+    const hostId = resolveHostId();
+    const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
+      activeWorkspaceId,
+      WORKTREE_ID_PRIMARY,
+      hostId,
+      () => {
+        reportSilentFallback(
+          new Error("worktree write-lease lost mid-session (reclaimed by another host)"),
+          {
+            feature: "worktree_lease",
+            op: "realSdkQueryFactory.heartbeat-lost",
+            extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+          },
+        );
+        controller.abort(
+          new Error("Worktree write-lease lost (reclaimed by another host)"),
+        );
+      },
+    );
+    if (!worktreeLeaseHandle) {
+      reportSilentFallback(
+        new Error("worktree write-lease unavailable (held by another host)"),
+        {
+          feature: "worktree_lease",
+          op: "realSdkQueryFactory.acquire",
+          extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+        },
+      );
+      throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
+    }
+    registerCcWorktreeLease(args.userId, args.conversationId, worktreeLeaseHandle);
+  }
 
   // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` (above)
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
