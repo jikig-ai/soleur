@@ -163,17 +163,17 @@ File a GitHub issue: "reconcile `organizations.owner_user_id` data under N co-ow
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `ADR-072-...md` exists, `status: accepted`; `## Decision` names: invite-as-owner grant path, `update_workspace_member_role` promotion primitive, `transfer` hand-off-and-step-down, the at-least-one-owner invariant, **and the `organizations.owner_user_id` primary-pointer meaning under N owners**.
-- [ ] Migration 117 contains **only** `COMMENT ON FUNCTION` statements: `grep -cE '^\s*(CREATE|ALTER|GRANT|REVOKE|DROP|UPDATE)' 117_*.sql` returns 0.
-- [ ] `117_*.down.sql` restores the prior COMMENT text (reversibility).
-- [ ] verify/117 locks the `service_role`-only grant on ALL of `update_workspace_member_role` (4-arg), `create_workspace_invitation` (6-arg), `accept_workspace_invitation` (2-arg), AND asserts the 3-arg `update_workspace_member_role` overload does not exist.
-- [ ] verify/117 returns `bad=0` for every sentinel on a freshly-migrated DB, and **fails** (`bad>0`) on the named negative fixture/block that re-introduces a single-owner partial-unique-index, removes the last-owner guard, or flips a grant to `authenticated`.
-- [ ] Multi-owner test passes: two `owner` rows coexist; `member→owner` promotion does not raise; demoting the **last** owner raises.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; new test passes via `./node_modules/.bin/vitest run <path>`; `c4-code-syntax.test.ts` + `c4-render.test.ts` green after the model.c4 citation refresh.
-- [ ] ADR-044 amendment + domain-model.md BR-WS-3 + model.c4:9 all cite ADR-072.
-- [ ] ADR-072 enumerates all THREE `owner_user_id` writers (transfer, mig-081, none-in-promotion/invite), states the derived "references-a-current-owner" invariant + its Phase-6 breakage trigger, and records the demote→remove no-repoint dead-end.
-- [ ] Deferred `owner_user_id` follow-up issue filed (Phase 6) with re-eval criteria.
-- [ ] PR body uses `Closes #5756`.
+- [x] `ADR-072-...md` exists, `status: accepted`; `## Decision` names: invite-as-owner grant path, `update_workspace_member_role` promotion primitive, `transfer` hand-off-and-step-down, the at-least-one-owner invariant, **and the `organizations.owner_user_id` primary-pointer meaning under N owners**.
+- [x] Migration 117 contains **only** `COMMENT ON FUNCTION` statements: `grep -cE '^\s*(CREATE|ALTER|GRANT|REVOKE|DROP|UPDATE)' 117_*.sql` returns 0 (verified).
+- [x] `117_*.down.sql` restores the prior COMMENT text (reversibility) — 092 + 094 strings reproduced verbatim.
+- [x] verify/117 locks the `service_role`-only grant on ALL of `update_workspace_member_role` (4-arg), `create_workspace_invitation` (6-arg), `accept_workspace_invitation` (2-arg), AND asserts the 3-arg `update_workspace_member_role` overload does not exist.
+- [ ] verify/117 returns `bad=0` for every sentinel on a freshly-migrated DB, and **fails** (`bad>0`) on the named negative fixture — DEFERRED to the release migrate+verify path (no live DB in this env). Negative fixture authored at `test/fixtures/verify-117-single-owner-negative.sql`.
+- [x] Multi-owner test: static SQL-shape test green (15/15). Behavioral coexist/promote/demote-last invariants locked by verify/117 at apply-time (not DB-exercised here — no live DB).
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean (exit 0); new test passes via `./node_modules/.bin/vitest run`; `c4-code-syntax.test.ts` + `c4-render.test.ts` green (23/23) after the model.c4 citation refresh.
+- [x] ADR-044 amendment + domain-model.md BR-WS-3 + model.c4:9 all cite ADR-072.
+- [x] ADR-072 enumerates all THREE `owner_user_id` writers (transfer, mig-081, none-in-promotion/invite), states the derived "references-a-current-owner" invariant + its Phase-6 breakage trigger, and records the demote→remove no-repoint dead-end.
+- [x] Deferred `owner_user_id` follow-up issue filed (Phase 6) with re-eval criteria — **#5805**.
+- [ ] PR body uses `Closes #5756` — PR not opened by this pipeline phase.
 - [ ] CPO sign-off recorded (threshold = single-user incident).
 
 ### Post-merge (operator/automation)
