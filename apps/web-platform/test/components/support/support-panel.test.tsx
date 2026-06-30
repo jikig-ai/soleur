@@ -64,6 +64,9 @@ describe("SupportPanel — interface shell", () => {
     // The chip text now appears as a user bubble (and chips are gone).
     expect(within(dialog).getAllByText(chip.label).length).toBeGreaterThan(0);
     expect(within(dialog).getByText("Preview")).toBeTruthy();
+    // Reply renders as markdown: bold renders as <strong>, no literal "**".
+    expect(dialog.querySelector("strong")).toBeTruthy();
+    expect(dialog.textContent ?? "").not.toContain("**");
   });
 
   it("Escape closes the panel", () => {
