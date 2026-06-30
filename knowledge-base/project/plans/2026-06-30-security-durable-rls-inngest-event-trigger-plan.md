@@ -6,19 +6,24 @@ branch: feat-one-shot-durable-rls-inngest-prd
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-classification: ops-remediation (prod-write via Management API, auto-applied on merge + daily self-heal)
+status: rejected-alternative (2026-07-01 — event trigger declined at the CPO gate; shipped change was the cron daily→hourly tightening, see ⛔ banner + ADR-030 changelog 2026-07-01)
+classification: ops-remediation — REJECTED ALTERNATIVE (the event-trigger mechanism below was not built; the shipped remediation is the cron daily→hourly change in apply-inngest-rls.yml, auto-applied on merge + hourly self-heal, no new SQL artifact)
 project_ref: pigsfuxruiopinouvjwy
 project_name: soleur-inngest-prd
 advisor_rule: rls_disabled_in_public (lint 0013, ERROR/SECURITY) — recurrence prevention
 extends: knowledge-base/project/plans/2026-06-29-security-inngest-prd-enable-rls-lockdown-plan.md
-adr: ADR-030 (amend — extend invariant I8 / add I9)
+adr: ADR-030 (amended 2026-07-01 — I8 cadence daily→hourly; event-trigger alternative recorded as declined)
 ---
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
-<!-- Phase 2.8 reviewed: no new server / secret / vendor. This adds ONE idempotent SQL artifact
-     (0002_*.sql) applied to an EXISTING project via the EXISTING merge-triggered + daily
-     apply-inngest-rls.yml workflow using the EXISTING SUPABASE_ACCESS_TOKEN. No SSH, no psql by
-     hand, no dashboard clicks. See ## Infrastructure (IaC). -->
+<!-- REJECTED-ALTERNATIVE NOTE (2026-07-01): the Phase 2.8 review below was for the event-trigger
+     design, which was NOT adopted. As-shipped there is NO new 0002_*.sql artifact — only a one-line
+     cron-cadence change (daily→hourly) in the EXISTING apply-inngest-rls.yml. The original ack is
+     retained verbatim for the reasoning trail.
+     Phase 2.8 reviewed: no new server / secret / vendor. [Event-trigger design, declined:] would have
+     added ONE idempotent SQL artifact (0002_*.sql) applied to an EXISTING project via the EXISTING
+     merge-triggered apply-inngest-rls.yml workflow using the EXISTING SUPABASE_ACCESS_TOKEN. No SSH,
+     no psql by hand, no dashboard clicks. See ## Infrastructure (IaC). -->
 
 # security: durable RLS self-heal on `soleur-inngest-prd` via a `ddl_command_end` event trigger
 
