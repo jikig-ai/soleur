@@ -82,7 +82,7 @@ fixes for every per-step plan:
    self-heal, #5546).
 
 2. **The Postgres write-lease is the placement authority.** A per-`(workspace_id,
-   worktree_id)` lease row (migration 114) records `{host_id, lease_generation,
+   worktree_id)` lease row (migration 116) records `{host_id, lease_generation,
    acquired_at, heartbeat_at}`. Acquire/reclaim is **one atomic statement** under
    `pg_advisory_xact_lock` — `INSERT … ON CONFLICT DO UPDATE … WHERE heartbeat_at <
    now() - interval '120s' RETURNING`, with `lease_generation + 1` computed
@@ -100,6 +100,29 @@ fixes for every per-step plan:
    lock. The resource server enforces the token (Kleppmann), not the client. Fencing
    — not the heartbeat timeout — is the load-bearing invariant that makes reclaim
    safe.
+
+> **Amendment (CTO ruling, 2026-06-30, PR A review).** `lease_generation` is a
+> **globally-monotonic fencing token per `(workspace_id, worktree_id)` that
+> survives lock release** — this is a precondition of §3's `gen < max` reject.
+> The PR-A review caught that a literal 1:1 mirror of `acquire_conversation_slot`
+> made `release_worktree_lease` **DELETE** the row, so the next acquire reset
+> `gen` to the column default `1`; with §3's fence that inverts into a
+> workspace-level **write outage** (HOST_B reclaims → `gen=2`, releases, next
+> acquire `gen=1 < max=2` → every push rejected). Resolution: **`release`
+> TOMBSTONES the row** (retains it + its `lease_generation`, ages `heartbeat_at`
+> to `-infinity` so the next acquire takes over immediately via the expiry
+> disjunct), `host_id` kept so the acquire CASE is unchanged. The monotonic-token
+> responsibility stays at the **lock service** (the lease), and §3's fence remains
+> the unmodified dumb `reject gen < max` — no `(epoch, gen)` scheme needed. The
+> FK `ON DELETE CASCADE` is untouched (Art.17 erasure intact; the tombstone is
+> non-personal operational state bounded by worktree count). **Rejected:** (A1) a
+> per-resource sequence / side-counter table — breaks the single-atomic-statement
+> acquire and shares a hot object; (B) keep DELETE + amend the fence to tolerate
+> the epoch reset — pushes safety-critical state into the resource server (wrong
+> Kleppmann layer) and the crash path never releases, so the fence would need to
+> persist epoch boundaries independently anyway (strictly more state, zero
+> benefit). The slot precedent (029) was only ever a concurrency slot, never a
+> fence token, so DELETE-on-release was correct there and silently wrong here.
 
 4. **Live-handle state stays host-local; control is routed by a stateless
    coordinator.** The coordinator holds **no live handles** (the lease lives in

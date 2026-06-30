@@ -192,3 +192,18 @@ describe("#5111 — handler-side persistence (safeCommitAndPr migration)", () =>
     );
   });
 });
+
+// #5786 — producer-side date-dedup serialization anchor (AC6) + the suffix
+// invariant. The cohort behavioral test proves exactly-one-digest; this anchors
+// `{ scope: "fn", limit: 1 }` (the serializer a fake-store test can't exercise)
+// and the ` (heartbeat)` titleSuffix (cheap future-deletion insurance — dropping
+// it silently no-ops campaign-calendar's dedup with no RED monitor, fail-OPEN).
+describe("#5786 producer-side dedup — concurrency + suffix anchors (AC6)", () => {
+  it('registration concurrency contains { scope: "fn", limit: 1 }', () => {
+    expect(SUT_SOURCE).toContain('{ scope: "fn", limit: 1 }');
+  });
+
+  it('dedup call passes titleSuffix: " (heartbeat)" (campaign-calendar suffix variant)', () => {
+    expect(SUT_SOURCE).toContain('titleSuffix: " (heartbeat)"');
+  });
+});

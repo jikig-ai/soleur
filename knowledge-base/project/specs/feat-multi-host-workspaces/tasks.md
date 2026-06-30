@@ -26,6 +26,8 @@ status: epic — each phase is its own PR / /soleur:plan
 - [ ] 1.5 RED→GREEN: grace-guard unit test (reconnect-before-fire cancels); restart-survival integration test on **dev** Supabase
 
 ## Phase 2 — git-data / worktree split + lease + fencing
+
+> **Per-phase plan (2026-06-30):** `knowledge-base/project/plans/2026-06-30-feat-phase2-git-data-lease-fencing-plan.md` (branch `feat-5274-phase2-git-data-lease-fencing`). Corrections folded after research + 5 gates: integration-test harness ALREADY exists (do not invent — follow the convention); lease FK is `ON DELETE CASCADE` (ephemeral, data-integrity-APPROVED) diverging from the 059 RESTRICT norm; acquire needs the same-host CASE (self-lockout fix) + host-stable `host_id` + SIGTERM lease-release; fence is fail-closed on missing push-option; cutover needs a write-freeze + read-source flag (default volume, flip post-verify) + `fsck`/ref-set verify; +Art.17 erasure-reach to the git-data bare repo. CPO: APPROVED-WITH-CONDITIONS; strong default = split foundations vs cutover into two PRs.
 - [ ] 2.1 Migration 114 `worktree_write_lease` (+ `.down.sql`) — mirror `029_*.sql:101-210`/`093_*.sql:50-125`: `pg_advisory_xact_lock` + `INSERT…ON CONFLICT DO UPDATE…WHERE heartbeat_at<now()-120s RETURNING`, `gen+1` in-statement, server-side `now()`; `touch_worktree_lease` RPC returns row_count
 - [ ] 2.2 RLS: `revoke` from anon/authenticated/public; service_role SECURITY DEFINER RPCs only; SELECT gated `is_workspace_member` (059:71); `on delete cascade`; pin `search_path=public,pg_temp`
 - [ ] 2.3 Fencing = **writer-side CAS** (NOT pre-check): git-data host holds per-ref monotonic max, atomically rejects `gen<max` at the write (pre-check is TOCTOU across a GC pause)
