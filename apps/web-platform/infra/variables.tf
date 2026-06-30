@@ -59,6 +59,23 @@ variable "cf_api_token" {
   sensitive   = true
 }
 
+# --- Epic #5274 Phase 2 PR B (ADR-068) — git-data host -----------------------
+# No no-default operator-mint TF_VAR is added: the transport key is tls-generated
+# (tls_private_key.git_transport, git-data.tf) and the betterstack/doppler tokens
+# already exist (hr-tf-variable-no-operator-mint-default).
+
+variable "git_data_server_type" {
+  description = "Hetzner server type for the git-data host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). ARM64: git/sshd are ARM-native. Verify current Hetzner pricing before budget decisions."
+  type        = string
+  default     = "cax11"
+}
+
+variable "git_data_volume_size" {
+  description = "Size of the git-data bare-repo block volume in GB (Hetzner minimum is 10 GB). The bare repos + the per-(workspace,worktree) fence sidecar/lock live here — never tmpfs (reboot-durable fence)."
+  type        = number
+  default     = 10
+}
+
 variable "kb_drift_operator_founder_id" {
   description = "Operator founder Supabase users.id UUID — KB-drift ingest rows are attributed to this user. Sourced from Doppler prd_terraform (TF_VAR_kb_drift_operator_founder_id). No default: fail closed rather than mint a placeholder identity."
   type        = string
