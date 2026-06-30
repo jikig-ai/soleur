@@ -147,6 +147,11 @@ export async function reprovisionWorkspaceOnDispatch(
         activeWorkspaceId,
         connected: Boolean(repoUrl),
         dbReady: true, // a lstat-ready warm tree is not mid-clone
+        // #5733 D2 — this gate runs only INSIDE `if (isReadyGitWorkTree)`, so an
+        // absent/dir-invalid shape never reaches it (it routes straight to the
+        // re-clone below); post-heal is the correct terminal posture for the
+        // dir-valid-corrupt slice it DOES adjudicate.
+        phase: "post-heal",
       });
       return verdict === "block" ? "failed" : "ok";
     }

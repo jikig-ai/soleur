@@ -224,6 +224,7 @@ describe("evaluateAgentReadiness (#5733 AC3/AC4) — shared gate", () => {
     activeWorkspaceId: "754ee124",
     connected: true,
     dbReady: true,
+    phase: "post-heal" as const,
   };
   const probeOf =
     (...outcomes: GitRevParseOutcome[]): ((p: string) => Promise<GitRevParseOutcome>) => {
@@ -296,11 +297,25 @@ describe("evaluateAgentReadiness (#5733 AC3/AC4) — shared gate", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("a non-dir-valid shape (absent `.git`) → ready WITHOUT the host confirm (lstat verdict owns it)", async () => {
+  it("#5733 D2: a PRE-heal absent `.git` → ready WITHOUT the host confirm (the heal owns it; no false-strand)", async () => {
     const ws = join(dir, "absent");
     await mkdir(ws, { recursive: true });
     const probe = vi.fn(probeOf("not-a-worktree"));
-    expect(await evaluateAgentReadiness(ws, baseCtx, probe)).toBe("ready");
+    expect(
+      await evaluateAgentReadiness(ws, { ...baseCtx, phase: "pre-heal" }, probe),
+    ).toBe("ready");
     expect(probe).not.toHaveBeenCalled();
+    expect(mockSelfStop).not.toHaveBeenCalled();
+  });
+
+  it("#5733 D2: a POST-heal absent `.git` → block + self-stop (terminal strand), no host confirm", async () => {
+    const ws = join(dir, "absent-post");
+    await mkdir(ws, { recursive: true });
+    const probe = vi.fn(probeOf("not-a-worktree"));
+    expect(await evaluateAgentReadiness(ws, baseCtx, probe)).toBe("block");
+    expect(probe).not.toHaveBeenCalled();
+    expect(mockSelfStop).toHaveBeenCalledWith(
+      expect.objectContaining({ gitKind: "absent", source: "host-pre-heal" }),
+    );
   });
 });
