@@ -123,6 +123,11 @@ export async function reprovisionWorkspaceOnDispatch(
     // genuine re-clone failure). These are DISTINCT from the cold dispatch path's
     // `feature=repo-resolver-divergence op=corrupt-worktree-at-dispatch` breadcrumb
     // — a warm-path corruption is NOT visible under the cold divergence op.
+    // #5733 (review P3) — resolve the connected repoUrl ONCE (tenant mint + SELECT)
+    // and reuse it in BOTH branches below: the lstat-ready `dir-valid` host-confirm
+    // scoping AND the not-ready re-clone. The previous code resolved it once per
+    // branch — a divergent second read the cold gate already avoids.
+    const repoUrl = await getCurrentRepoUrl(userId, activeWorkspaceId);
     if (isReadyGitWorkTree(workspacePath)) {
       // #5733 deliverable A — a lstat-READY `dir-valid` `.git` can STILL fail the
       // agent's in-bwrap `git rev-parse` (broken config/refs/gitdir indirection),
@@ -137,19 +142,18 @@ export async function reprovisionWorkspaceOnDispatch(
       // corruption from a concurrent reconcile/pull, re-darkening this path). The
       // `repoUrl` read scopes the confirm to connected workspaces (a repo-less
       // Start-Fresh `git init` tree is a real work tree → "worktree" → "ok").
-      const connectedRepoUrl = await getCurrentRepoUrl(userId, activeWorkspaceId);
       const verdict = await evaluateAgentReadiness(workspacePath, {
         userId,
         activeWorkspaceId,
-        connected: Boolean(connectedRepoUrl),
+        connected: Boolean(repoUrl),
         dbReady: true, // a lstat-ready warm tree is not mid-clone
       });
       return verdict === "block" ? "failed" : "ok";
     }
-    const [storedInstallationId, repoUrl] = await Promise.all([
-      resolveInstallationId(userId, activeWorkspaceId),
-      getCurrentRepoUrl(userId, activeWorkspaceId),
-    ]);
+    const storedInstallationId = await resolveInstallationId(
+      userId,
+      activeWorkspaceId,
+    );
     // Promote to the entitled repo-owner install (same selection the cold
     // factory makes) so a cross-account org repo re-clones with the right
     // credential instead of 403-ing and surfacing a false "couldn't restore".
