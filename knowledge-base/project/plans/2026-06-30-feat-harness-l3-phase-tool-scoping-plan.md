@@ -144,14 +144,14 @@ full-surface.
 
 ### Pre-merge (PR)
 
-- [ ] AC0 Phase 0 probe: 0.1a (parent injection) confirmed in PR body; 0.1b (subagent context) result recorded + fallback taken if it doesn't reach subagent context. Do not ship if 0.1a fails.
-- [ ] AC0b Adversarial test (P2-1) passes: a crafted `tool_input.skill` executes no command and never appears in the hook's output.
-- [ ] AC1 `.claude/phase-surface-map.json` exists; `jq -e '.skill_to_phase["soleur:work"]=="work"'` true.
-- [ ] AC2 `phase-surface-hint.test.sh` passes: mapped skill emits a hint naming that phase's surface; `soleur:help` emits nothing (exit 0); missing map emits nothing (exit 0).
-- [ ] AC3 Map consistency (in `phase-surface-hint.test.sh`): every `skill_to_phase` key → real SKILL.md; every `skill_to_phase` value → a `phase_to_surface` key; 5 core phases present.
-- [ ] AC4 `phase-surface-hint.sh` wired as PostToolUse matcher `Skill` (`jq -e '.hooks.PostToolUse[]|select(.matcher=="Skill")'`).
-- [ ] AC5 ADR-070 exists and records the two-tier rule + allowedTools/disallowedTools finding + `settingSources:[]` reason + shared-registry-location decision + deferred-subset binding.
-- [ ] AC6 `bash scripts/test-all.sh scripts` green.
+- [x] AC0 Phase 0 probe: 0.1a (parent injection) confirmed in PR body; 0.1b (subagent context) result recorded + fallback taken if it doesn't reach subagent context. Do not ship if 0.1a fails.
+- [x] AC0b Adversarial test (P2-1) passes: a crafted `tool_input.skill` executes no command and never appears in the hook's output.
+- [x] AC1 `.claude/phase-surface-map.json` exists; `jq -e '.skill_to_phase["soleur:work"]=="work"'` true.
+- [x] AC2 `phase-surface-hint.test.sh` passes: mapped skill emits a hint naming that phase's surface; `soleur:help` emits nothing (exit 0); missing map emits nothing (exit 0).
+- [x] AC3 Map consistency (in `phase-surface-hint.test.sh`): every `skill_to_phase` key → real SKILL.md; every `skill_to_phase` value → a `phase_to_surface` key; 5 core phases present.
+- [x] AC4 `phase-surface-hint.sh` wired as PostToolUse matcher `Skill` (`jq -e '.hooks.PostToolUse[]|select(.matcher=="Skill")'`).
+- [x] AC5 ADR-070 exists and records the two-tier rule + allowedTools/disallowedTools finding + `settingSources:[]` reason + shared-registry-location decision + deferred-subset binding.
+- [x] AC6 `bash scripts/test-all.sh scripts` green.
 - [ ] AC7 Web-parity follow-up #5772 referenced in the PR body.
 
 ### Post-merge (operator)
