@@ -1,12 +1,20 @@
 [
   "brainstorm",
+  "brainstorm-techniques",
   "plan",
   "deepen-plan",
+  "plan-review",
+  "spec-templates",
   "work",
-  "review",
+  "atdd-developer",
+  "test-fix-loop",
+  "resolve-todo-parallel",
   "qa",
+  "review",
+  "resolve-pr-parallel",
   "ship",
   "preflight",
   "merge-pr",
-  "compound"
+  "postmerge",
+  "changelog"
 ]
