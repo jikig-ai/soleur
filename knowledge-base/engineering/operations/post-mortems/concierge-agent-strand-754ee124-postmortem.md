@@ -68,8 +68,35 @@ the unconfirmed on-disk `.git` shape), and promotion of `source`/`gitKind` to
 searchable Sentry tags. Never-destroy-populated invariant preserved (honest-block,
 no re-clone of populated dirs).
 
+## Update 2026-07-01 — corrected root cause + third fix (PR #5802)
+
+PR #5790 deployed but the operator **still stranded**. Live post-deploy forensics
+(Supabase + Sentry, read-only) corrected the diagnosis again:
+
+- **It is not a corrupt `.git` (H2) — the repo is ABSENT on disk.** `/workspaces/754ee124`
+  has no repo at all. The decisive operator fact: **reconnect (`/api/repo/setup`
+  wipe-and-reclone) has NEVER landed the repo** in any prior attempt.
+- **The cold dispatch path already clones in-process** at `cc-dispatcher.ts:1987` into
+  the agent's own `workspacePath`, but **its outcome was silently SWALLOWED** — which is
+  the root reason five fixes were undiagnosable (zero clone telemetry; `repo_status` a
+  false `ready`; `repo_last_synced_at` frozen because the agent never syncs when it
+  strands). In-process mount divergence is ruled out by code-trace (clone target == agent
+  bwrap cwd, same process); the remaining candidates are a silent benign-skip or a silent
+  clone failure (and the out-of-process Inngest reconcile worker may run on a divergent
+  replica — an infra-layer concern).
+
+**PR #5802 (third fix) makes the silent failure LOUD and the strand graceful** — it does
+not change the clone *mechanics*, so it surfaces the real cause rather than guaranteeing a
+repo-land: (D0) consume the previously-swallowed `:1987` clone outcome → distinct
+`repo_clone_failed` Sentry event (PII/token-sanitized) + F4-gated `repo_status→error` (CAS,
+solo/owner-only); (D2) `evaluateAgentReadiness` treats absent/dir-invalid `.git` as a
+strand → emit `agent_readiness_self_stop` + honest-block; (D3) C2 detector matches the
+stderr-suppressed empty-output `rev-parse`. After deploy, the operator's next attempt emits
+a NAMED signal (`repo_clone_failed` / `connected-null-install-at-dispatch` /
+`agent_readiness_self_stop(gitKind:absent)`) that finally reveals the exact cause.
+
 ## Action Items & Follow-ups
 
 | Issue | Action | Status |
 |---|---|---|
-| #5733 | Post-deploy operator-surface repro: retry `/soleur:go` on `754ee124`; confirm no strand + a queryable `agent_readiness_self_stop` (host pre-heal OR C2 backstop). PASS → close #5733; FAIL → capture the now-observable `.git` shape and open a data-driven follow-up. | open |
+| #5733 | Post-deploy (PR #5802): retry `/soleur:go` on `754ee124`. PASS (repo landed, no strand) → close #5733. If still stranded → read the now-NAMED signal (`repo_clone_failed` reason / `connected-null-install-at-dispatch` / `agent_readiness_self_stop` gitKind) to pinpoint the exact cause (null-install benign-skip vs genuine clone failure vs out-of-process reconcile-replica mount divergence) and open a targeted, data-driven follow-up fix. | open |
