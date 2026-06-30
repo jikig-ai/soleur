@@ -113,6 +113,20 @@ echo "TS6c: empty set -> explicit NONE (never silent)"
 OUT="$(pick_next_action <(printf '%s' '[]'))"
 assert_contains "$OUT" "NONE" "empty -> explicit NONE"
 
+echo "TS6d: non-engineering domain label overrides a codeable type label -> OPERATOR"
+# Real dogfood case: #2603 "Publish case study" is type/feature BUT domain/marketing.
+# A domain/* leader label (marketing/legal/ops/sales/finance/support/product) means the
+# work is operator-driven regardless of the type/* label — never tell the founder to build it.
+ISSUES_MKT='[{"number":2603,"title":"Publish first external case study","labels":[{"name":"type/feature"},{"name":"domain/marketing"}]}]'
+OUT="$(pick_next_action <(printf '%s' "$ISSUES_MKT"))"
+assert_contains "$OUT" "OPERATOR" "type/feature + domain/marketing -> OPERATOR (override)"
+assert_not_contains "$OUT" "CODEABLE" "marketing task not classified CODEABLE"
+
+echo "TS6e: engineering domain + type label still -> CODEABLE"
+ISSUES_ENG='[{"number":1500,"title":"refactor resolver","labels":[{"name":"type/feature"},{"name":"domain/engineering"}]}]'
+OUT="$(pick_next_action <(printf '%s' "$ISSUES_ENG"))"
+assert_contains "$OUT" "CODEABLE" "type/feature + domain/engineering -> CODEABLE"
+
 # --- TS7: ZERO file writes (brand-survival invariant) ---
 echo "TS7: module makes zero file writes"
 TMP_GIT="$(mktemp -d)"

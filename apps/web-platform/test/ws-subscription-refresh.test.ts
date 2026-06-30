@@ -15,21 +15,30 @@ const WS_CLOSED = 3;
 // Hoisted supabase mock — shared by every test, reconfigured per case.
 // `refreshSubscriptionStatus` now makes two DB calls per tick when status
 // is not 'unpaid': (a) SELECT on `users` terminated by `.single()`, and
-// (b) SELECT count on `user_concurrency_slots` terminated by `.eq()`
-// (head: true, count: 'exact' — thenable returns `{ count, error }`).
-const { mockSingle, mockEq, mockSelect, mockFrom, mockCount } = vi.hoisted(() => {
+// (b) SELECT count on `user_concurrency_slots` terminated by
+// `.gte("last_heartbeat_at", liveCutoff)` (head: true, count: 'exact' —
+// thenable returns `{ count, error }`). The count path freshness-filters
+// stale slots (migration 115 throttle safety, #5738) and resolves via `.gte()`.
+const { mockSingle, mockEq, mockSelect, mockFrom, mockCount, mockGte } = vi.hoisted(() => {
   const mockSingle = vi.fn();
   const mockCount = vi.fn();
-  const mockEq = vi.fn((_col: string, _val: unknown) => {
-    // Route the thenable case to mockCount. `.eq()` on the `users` path is
-    // immediately followed by `.single()` so `single` is still reachable.
-    const result = { single: mockSingle } as { single: typeof mockSingle; then?: unknown };
+  const mockGte = vi.fn((_col: string, _val: unknown) => {
+    // Terminal thenable for the freshness-filtered count path.
+    const result = {} as { then?: unknown };
     result.then = (resolve: (v: unknown) => unknown) => resolve(mockCount());
     return result;
   });
+  const mockEq = vi.fn((_col: string, _val: unknown) => {
+    // `.eq()` on the `users` path is immediately followed by `.single()`;
+    // on the count path it is followed by `.gte("last_heartbeat_at", …)`.
+    return { single: mockSingle, gte: mockGte } as {
+      single: typeof mockSingle;
+      gte: typeof mockGte;
+    };
+  });
   const mockSelect = vi.fn(() => ({ eq: mockEq }));
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
-  return { mockSingle, mockEq, mockSelect, mockFrom, mockCount };
+  return { mockSingle, mockEq, mockSelect, mockFrom, mockCount, mockGte };
 });
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -73,6 +82,7 @@ beforeEach(() => {
   // this with a specific count value.
   mockCount.mockReturnValue({ count: 0, error: null });
   mockEq.mockClear();
+  mockGte.mockClear();
   mockSelect.mockClear();
   mockFrom.mockClear();
 });
@@ -206,6 +216,34 @@ describe("ws-handler subscription refresh timer", () => {
 
     expect(session.planTier).toBe("solo");
     expect((session.ws.close as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+
+    if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshTimer);
+  });
+
+  test("cap-drift count freshness-filters stale slots via .gte(last_heartbeat_at)", async () => {
+    // The cap-drift evict count must EXCLUDE crashed-but-unreaped slots
+    // (last_heartbeat_at older than the 120 s threshold), mirroring the sibling
+    // slot probes (ws-handler.ts:526, :2013) and the acquire RPC self-reap
+    // (093:79-81). Without it, a downgraded user whose stale slots linger longer
+    // under the throttled hourly sweep (migration 115, #5738) is falsely evicted.
+    // RED before the ws-handler fix: .gte is never called on the count path.
+    mockSingle.mockResolvedValue({
+      data: { subscription_status: "active", plan_tier: "solo", concurrency_override: null },
+      error: null,
+    });
+    mockCount.mockReturnValue({ count: 1, error: null });
+
+    const session = makeSession({ subscriptionStatus: "active", planTier: "scale" });
+    wsHandler.startSubscriptionRefresh("user-fresh", session);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mockGte).toHaveBeenCalledWith("last_heartbeat_at", expect.any(String));
+    // The cutoff must be ~120 s in the past (matches the acquire RPC threshold),
+    // not an arbitrary timestamp — proves the filter uses the right window.
+    const [, cutoffIso] = mockGte.mock.calls[0] as [string, string];
+    const ageMs = Date.now() - Date.parse(cutoffIso);
+    expect(ageMs).toBeGreaterThanOrEqual(110_000);
+    expect(ageMs).toBeLessThanOrEqual(130_000);
 
     if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshTimer);
   });
