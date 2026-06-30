@@ -23,6 +23,7 @@ import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-ite
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { SupportLauncher } from "@/components/support/support-launcher";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
@@ -569,6 +570,9 @@ export default function DashboardLayout({
         command-palette flag is off (enabled=false). */}
     <CommandPalette />
     <HelpOverlay />
+    {/* feat-support-interface — flag-gated floating support launcher + slide-over.
+        No-op when the `support` flag is off (renders null internally). */}
+    <SupportLauncher />
     </ShortcutsProvider>
     </RailCollapsedProvider>
     </RailSlotProvider>
