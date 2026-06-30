@@ -253,8 +253,10 @@ This ADR is validated by:
   diff (`before_count: 5, after_count: 14, actions: ["update"]`) with
   no other changes.
 - **AC16 (post-apply):**
-  `gh api repos/jikig-ai/soleur/rulesets/14145388 | jq '.rules[0].parameters.required_status_checks | length'`
-  returns `14`.
+  `gh api repos/jikig-ai/soleur/rulesets/14145388 | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length'`
+  returned `14` at PR #3886 adoption (now `16`; the #5780 `merge_queue` sibling
+  makes positional `.rules[0]` unsafe — select-by-type is required, matching the
+  apply-verify probe).
 
 ## Sharp Edges (added 2026-05-25 via PR #4384)
 
@@ -353,3 +355,171 @@ Two boundaries are **deliberately left unanchored** and accepted:
 General rule for future path-filtered required checks: **the anchor set is part
 of the security contract, not just a cost optimization** — audit it against the
 verified surface, and document every accepted gap.
+
+## Amendment — 2026-06-30 (#5780): adopt a GitHub merge queue for `main`
+
+**Status of this sub-decision: adopting** (flip to `accepted` once the
+post-enablement canary below passes). The parent ADR remains `accepted`.
+
+> **2026-07-01 incident + correction (read first).** The first enablement
+> (PR #5800) DEADLOCKED `main`: the merge queue requires the `CodeQL` status
+> context (GHAS, integration_id 57789), but GitHub CodeQL **default setup does
+> not run on `merge_group`** (only `push`/`pull_request`), so every queue entry
+> stalled `AWAITING_CHECKS` on a CodeQL result that never posted. All 15 OTHER
+> required contexts DID report on the temp ref — PR-1's wiring was correct; the
+> sole gap was CodeQL-on-`merge_group`. Reverted via the kill-switch (remove the
+> `merge_queue` rule) within ~14 min. The parenthetical "(CodeQL is
+> default-setup)" in this amendment's original Phase-2 text was the load-bearing
+> wrong assumption — default setup is **structurally incompatible** with a
+> required-`CodeQL` merge queue. **Correction (roll-forward):** CodeQL was moved
+> to **advanced setup** — `.github/workflows/codeql.yml` with
+> `on: [push, pull_request, merge_group]`, languages
+> `actions`/`javascript-typescript`/`python`, `security-extended` suite (a
+> byte-faithful replacement of the disabled default setup) — so the `CodeQL`
+> context now posts on the temp ref. The queue is re-enabled only after the
+> advanced setup is verified to satisfy the required `CodeQL` context. PIR:
+> `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
+> Generalized lesson: a plan recovered from disk after a subagent crash carries
+> its "verify X before shipping" Phase-0 gates as UNVERIFIED claims — re-run the
+> empirical probes, do not inherit them as done.
+
+### Decision
+
+Adopt a **GitHub merge queue** for `main`, modeled in this same IaC root via the
+`integrations/github` provider's `merge_queue` rule block (a second rule sibling
+to `required_status_checks` inside `github_repository_ruleset.ci_required`). The
+block is supported on the locked provider **6.12.1** (schema re-probed at /work;
+all 7 fields present), so the queue is declarative IaC — no provider bump, no
+UI-only drift, no violation of `hr-all-infrastructure-provisioning-servers`.
+
+**Problem it solves.** The `CI Required` ruleset sets
+`strict_required_status_checks_policy = true` — a PR must be up-to-date with
+`main` before it can merge. On an active day `main` merges faster than a
+web-platform PR's CI converges (~8 min for the heavy jobs), so the PR is flipped
+`BEHIND`, CI restarts, and it can never converge by manual `update-branch`.
+Admin-merge (`gh pr merge --admin`) was the escape hatch but it *bypasses* the
+very up-to-date guarantee the strict policy exists to provide. The queue
+serializes merges and builds each candidate against the projected post-merge
+state, so "up-to-date" is satisfied **by construction** — keeping the
+strict-policy intent while removing the starvation and the need for routine
+admin-merge.
+
+### Chosen params + rationale
+
+Set only the value-bearing decisions in `merge_queue {}`; leave
+`max_entries_to_build` and `min_entries_to_merge_wait_minutes` at provider
+default (inert at `max/min_entries_to_merge = 1`):
+
+| Param | Value | Why |
+| --- | --- | --- |
+| `merge_method` | `SQUASH` | Matches the repo's existing `gh pr merge --squash`. |
+| `grouping_strategy` | `ALLGREEN` | Safe default; per-candidate bisection benefit is mostly latent at merge-one-at-a-time volume but costs nothing. |
+| `max_entries_to_merge` | `1` | Merge one candidate at a time (the no-batching decision for a bursty, low-volume repo). |
+| `min_entries_to_merge` | `1` | Merge as soon as a single candidate is green (low latency). |
+| `check_response_timeout_minutes` | `15` | **The one value that genuinely matters.** An under-set timeout *dequeues a green PR*, re-introducing the starvation we are fixing. 15 is a starting point premised on the ~8-min critical path; the `merge_group` build runs the FULL required suite, so re-derive from the observed slowest-required-check p95 (target `timeout >= 1.5x slowest`). |
+
+### The hard precondition — `merge_group` wiring (PR-1, #5784)
+
+The real work was not the Terraform block — it was the **`merge_group` wiring**,
+landed in the sequenced predecessor PR-1 (#5784). A merge queue dispatches a
+`merge_group` event against a temporary `gh-readonly-queue/main/*` ref. A
+required check whose workflow never fires on `merge_group` leaves the queue entry
+**permanently pending → the queue stalls forever** (the merge-queue analogue of
+the `[skip ci]` / path-filter deadlock). PR-1 added `merge_group:` to all 7
+producer workflows; the 8th producer, CodeQL, was originally left on default
+setup **(this was the bug — default setup never fires on `merge_group`; see the
+2026-07-01 incident note above)** and is now an advanced-setup workflow
+(`.github/workflows/codeql.yml`) carrying its own `on: merge_group` trigger.
+PR-1 also fixed the apply-verify `rules[0]` → `select(.type==…)` fragility, and
+added the observability + CLA-synthetic workflows.
+
+**Two-PR sequencing is load-bearing:** PR-1 (triggers + verify fix) merged
+**first** (2026-06-30); PR-2 (this `merge_queue` block) merges **second** and
+enables the queue. `merge_group` only ever fires *after* the queue is live on
+`main`, so enabling and verifying cannot happen in the same merge.
+
+### Generalized contract clause
+
+ADR-032's existing "verify runs-on-every-PR before requiring a check" clause
+(the §Negative / §Decision contract) **generalizes to "verify
+runs-on-every-`merge_group` before relying on the queue."** A required context
+that does not report on the queue's temp ref is the new permanent-pending
+failure mode. This clause is the merge-queue analogue of the original
+permanent-pending-gate risk and must be honored by any future required-check
+addition.
+
+### New failure mode + observability
+
+- **Permanent-pending queue stall** (a required check missing `merge_group`):
+  detected by the standing `merge-queue-stall-check.yml` probe (PR-1) — a
+  GH-Actions cron (~30 min) that queries `mergeQueue.entries`, computes
+  `now - enqueuedAt`, and files a `merge-queue-stall` issue on any entry past
+  `check_response_timeout_minutes + buffer`. This is the active liveness signal,
+  not operator-eyeballing.
+- **`merge_queue` rule drift** (block removed/mangled outside Terraform — the
+  provider has 6.x nested-block history): detected by `scheduled-terraform-drift.yml`'s
+  `infra/github` matrix entry (added in PR-2, CTO B-2). `terraform plan` here
+  also catches a *silently-disabled* queue (rule removed → no entries → the
+  stall probe is blind, so it cannot see this case on its own).
+- **Bot-PR synthetics** (CLA contexts can't run on `merge_group`): re-posted on
+  the temp ref by `merge-queue-cla-synthetics.yml` (PR-1). **Trust model:** the
+  synthetic is sound because (1) the queue *entry* gate already required the real
+  CLA contexts green on the PR head before admission, and (2) the legal evidence
+  record is written to R2 Object Lock at CLA *sign* time, not merge-group time —
+  so the synthetic is a CI-gate signal on a throwaway ref, never a substitute for
+  the evidence. `main` is gated by TWO rulesets (CI Required + CLA Required).
+
+### Kill switch + DR / clobber notes
+
+- **Kill switch:** remove the `merge_queue` block from `ruleset-ci-required.tf`
+  and re-apply — reverts to pre-queue behavior. This is `0 destroy` (a rule-block
+  removal, not a `required_check` removal), so the destroy-guard does NOT flag it
+  — intended: the kill-switch must not be `[ack-destroy]`-gated.
+- **Destroy-guard:** adding the `merge_queue` block is also `0 destroy` (no
+  `required_check` removed); PR-2's first plan is `0 to add, 1 to change,
+  0 to destroy` (in-place ruleset update). No regression fixture is added — the
+  existing filter is provably safe for a rule *addition*.
+- **DR-restore clobber (P1-3):** `scripts/create-ci-required-ruleset.sh` (the
+  documented from-scratch restore path) now restores the `merge_queue` rule too,
+  with a sync guard requiring its params to track the `.tf`. Omitting it would
+  silently disable the queue after a from-scratch DR restore until the next TF
+  apply.
+
+### Admin-merge after the queue
+
+A queue does **not** auto-remove admin bypass (`bypass_actors` is untouched;
+admins can still `--admin` past the queue). Admin-merge is now the
+**queue-bypass-of-last-resort**, not a routine workaround. Down-scoping
+`bypass_actors` is out of scope for this PR and tracked as a possible follow-up.
+
+### Vendor-tier note
+
+GitHub merge queue requires Team/Enterprise for *private* repos (free on public
+repos). `jikig-ai/soleur` is public, so the queue is available on the current
+plan tier; the `terraform apply` enables it without a plan upgrade.
+
+### Post-enablement canary (flip `adopting` → `accepted` when all pass)
+
+These are post-merge verifications — the queue only fires `merge_group` after
+the queue rule is re-applied:
+
+- **CodeQL advanced setup verified FIRST (the 2026-07-01 deadlock gate):** before
+  re-enabling the queue, confirm CodeQL default setup is disabled, that
+  `.github/workflows/codeql.yml` runs green on `pull_request`, and that a
+  `CodeQL` status context (integration_id 57789) posts and satisfies the required
+  check on a normal PR. Re-enabling the queue before this is the exact regression
+  that caused the incident.
+- `apply-github-infra.yml` ran green on the re-enable merge; summary shows the
+  required_status_checks count (16) via the `select(.type==…)` probe.
+- Discoverability:
+  `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[] | select(.type=="merge_queue")] | length'`
+  → `1` (App-auth token; asserts the rule is APPLIED, not that the queue drains).
+- **Canary human PR:** a trivial PR enters the queue (not direct-merge), all 18
+  required contexts (16 CI Required + 2 CLA Required: `cla-check`, `cla-evidence`)
+  report on the `merge_group` temp ref incl. `CodeQL`, and it merges without
+  stalling.
+- **Canary bot PR:** a `rule-metrics-aggregate.yml` bot PR flows through the
+  queue without stalling (CLA synthetics cover its CLA contexts).
+- **Stall probe live:** `merge-queue-stall-check.yml` has run ≥1 green cycle.
+- **Ruleset drift:** `scheduled-terraform-drift.yml` `infra/github` plan is clean
+  (`plan → apply → plan` shows no `merge_queue` drift).

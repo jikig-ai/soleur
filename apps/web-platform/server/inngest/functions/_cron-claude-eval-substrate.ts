@@ -244,6 +244,10 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   // validate scripts take a built `_site` arg, unreachable in the
   // node_modules-free clone). Pure issue-creator surface.
   "cron-seo-aeo-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // architecture-diagram-sync (cron-architecture-diagram-sync.ts): only
+  // `gh issue create` for the weekly summary; diagram edits persist handler-side
+  // via safeCommitAndPr (prompt forbids git/gh-pr verbs). Pure issue-creator surface.
+  "cron-architecture-diagram-sync": ISSUE_CREATOR_BASH_ALLOWLIST,
   // content-generator (cron-content-generator.ts): only `gh issue create`;
   // prompt explicitly forbids a local eleventy build. Skills delegate via Task
   // (no inline bash). Pure issue-creator surface.

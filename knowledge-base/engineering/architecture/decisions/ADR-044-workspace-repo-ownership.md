@@ -1187,8 +1187,11 @@ migration `075` (#4520). The reconcile attribution now tolerates N owners
 (deterministic self-row/earliest pick; "owner-less" warns only on genuinely zero
 owners). Reconciling the single-owner ownership RPCs (`transfer_workspace_ownership`,
 the `update_workspace_member_role` owner-promotion block) to the multi-owner model
-is tracked as a follow-up; this ADR records the direction, the dedicated ADR
-captures the supersession.
+is tracked as a follow-up; this ADR records the direction, and the dedicated
+decision-of-record is now **ADR-073** (multi-owner workspaces + the
+`organizations.owner_user_id` primary-owner pointer), which captures the
+supersession and additionally pins the `owner_user_id` pointer semantics under
+N owners.
 
 ## Amendment 2026-06-30 — dispatch readiness adds a host `git rev-parse` confirm for `dir-valid` worktrees (SUPERSEDES the 2026-06-19 zero-await trade-off for the connected cold path) + an agent-context observability backstop (#5733)
 
