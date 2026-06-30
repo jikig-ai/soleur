@@ -25,7 +25,7 @@ import {
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
-import { isValidGitWorkTree } from "@/server/git-worktree-validity";
+import { isReadyGitWorkTree } from "@/server/git-worktree-validity";
 import { ensureWorkspaceRepoCloned } from "@/server/ensure-workspace-repo";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
@@ -251,14 +251,44 @@ export async function workspaceReconcileOnPushHandler({
       const { createServiceClient } = await import("@/lib/supabase/service");
       const service = createServiceClient();
 
-      // Owner for kb_sync_history attribution (the workspace's owner row).
-      const { data: ownerRow } = await service
+      // Owner for kb_sync_history attribution. #5733 — workspaces support N
+      // co-owners by design (supersedes #4520 single-owner-strict;
+      // `transfer_workspace_ownership` also opens a transient 2-owner window).
+      // The former `.maybeSingle()` ERRORED on ≥2 owner rows → ownerId=null → a
+      // FALSE "owner-less workspace reconciled" warn EVERY push (the operator's
+      // soleur workspace: 2 legitimate owners). Select ALL owner rows and pick
+      // the attribution owner deterministically: the solo self-row
+      // (user_id == ws.id) when present, else the earliest-created owner.
+      // `ownerId` is used ONLY for kb_sync attribution + the breadcrumb here, so
+      // any stable pick is sound. "owner-less" now means GENUINELY zero rows.
+      const { data: ownerRows, error: ownerErr } = await service
         .from("workspace_members")
-        .select("user_id")
+        .select("user_id, created_at")
         .eq("workspace_id", ws.id)
         .eq("role", "owner")
-        .maybeSingle();
-      const ownerId = (ownerRow as { user_id?: string } | null)?.user_id ?? null;
+        // `user_id` is the deterministic tie-break: two co-owners inserted in the
+        // same transaction share `created_at = now()`, so without it `owners[0]`
+        // is order-undefined (the team-workspace-without-self-row branch).
+        .order("created_at", { ascending: true })
+        .order("user_id", { ascending: true });
+      if (ownerErr) {
+        // A real probe error is NOT "owner-less" — never emit the drift warn on
+        // a transient read failure (cq-silent-fallback-must-mirror-to-sentry).
+        // Fall back to the workspace-keyed audit (ownerId stays null) and
+        // surface the error under its own op so it is queryable.
+        reportSilentFallback(ownerErr, {
+          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+          op: "owner-attribution-probe",
+          extra: { workspaceId: ws.id, installationId, deliveryId },
+          message:
+            "Owner-attribution read failed — reconciling via workspace-keyed audit",
+        });
+      }
+      const owners = (ownerRows as { user_id: string }[] | null) ?? [];
+      const ownerId =
+        owners.find((o) => o.user_id === ws.id)?.user_id ??
+        owners[0]?.user_id ??
+        null;
 
       // #4906 — an owner-less workspace is an invariant drift (every solo
       // workspace should carry a workspace_members(role='owner') canary row,
@@ -276,8 +306,25 @@ export async function workspaceReconcileOnPushHandler({
           ? appendKbSyncRow(ownerId, row)
           : appendKbSyncRowForWorkspace(service, ws.id, row);
 
-      if (!ownerId) {
-        // Per-workspace 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
+      if (owners.length > 1) {
+        // ≥2 legitimate co-owners (multi-owner is BY DESIGN, #5733). Record the
+        // state with a distinct, non-paging info breadcrumb — NEVER the false
+        // "owner-less" warn the pre-fix `.maybeSingle()` error produced. This is
+        // the honest signal that distinguishes by-design multi-owner from drift.
+        Sentry.addBreadcrumb({
+          category: "workspace-reconcile-push",
+          message: "multiple-owners-reconcile",
+          level: "info",
+          data: {
+            op: "multiple-owners-reconcile",
+            workspaceId: ws.id,
+            ownerCount: owners.length,
+          },
+        });
+      }
+      if (!ownerId && !ownerErr) {
+        // GENUINELY zero owner rows (not a transient probe error). Per-workspace
+        // 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
         // keyed on ws.id). A SYSTEMIC owner-canary regression (a provisioning
         // bug dropping owner rows for a whole cohort) would otherwise emit one
         // warn per owner-less workspace PER PUSH — the same per-push alert-flood
@@ -307,7 +354,7 @@ export async function workspaceReconcileOnPushHandler({
       // 2026-06-29). A VALID .git takes the existing pull/reset sync path. An INVALID
       // or ABSENT .git is re-cloned via the validity+corrupt-aware ensure path — the
       // permanent-trap that a dir-existence-only readiness check could never recover.
-      if (!isValidGitWorkTree(workspacePath)) {
+      if (!isReadyGitWorkTree(workspacePath)) {
         const outcome = await ensureWorkspaceRepoCloned({
           userId: breadcrumbUserId,
           workspacePath,
@@ -318,7 +365,7 @@ export async function workspaceReconcileOnPushHandler({
         // Assert the INVARIANT, not the "ok" proxy: ensureWorkspaceRepoCloned returns
         // "ok" for a benign skip (e.g. a repo_url that fails its github-https allowlist)
         // WITHOUT having healed anything. Re-probe validity to decide recovered.
-        const recovered = outcome === "ok" && isValidGitWorkTree(workspacePath);
+        const recovered = outcome === "ok" && isReadyGitWorkTree(workspacePath);
 
         // Best-effort transaction-trace context (task-mandated). NOTE: a breadcrumb is
         // only transmitted when a captureException/Message fires on the same Sentry scope;

@@ -254,7 +254,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `heal-skill` | Fix skill documentation issues |
 | `plan` | Create structured implementation plans |
 | `plan-review` | Multi-agent plan review in parallel |
-| `product-roadmap` | Define and operationalize product roadmaps through CPO-grade workshop |
+| `product-roadmap` | Define and operationalize product roadmaps through CPO-grade workshop; `validate`/`next` sub-commands give a read-only roadmap-vs-milestone drift report and next-action advisory |
 | `qa` | Run functional QA before merge — browser flows and API verification |
 | `review` | Run comprehensive code review with specialized agents |
 
