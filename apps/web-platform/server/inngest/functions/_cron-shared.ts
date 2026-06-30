@@ -252,6 +252,21 @@ export async function mintInstallationToken(opts: {
 }
 
 const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
+// #5728 — bounded retry on the heartbeat POST. A transient 5xx / network drop /
+// timeout of the OK check-in previously left a silent `missed` (the 2026-06-13→
+// 06-21 H3 class). Retry only the RETRYABLE classes; a 4xx is a permanent
+// bad-slug/DSN error and retrying it only burns the margin. The TOTAL wall-clock
+// is hard-bounded (each attempt's per-call timeout is clamped to the remaining
+// budget) so the heartbeat can never push the run past the 60-min Sentry check-in
+// margin (re-creating H1). After the bounded attempts exhaust, fall through to
+// the terminal reportSilentFallback (durable trace; cq-silent-fallback-must-mirror-to-sentry).
+const SENTRY_HEARTBEAT_MAX_ATTEMPTS = 3;
+const SENTRY_HEARTBEAT_TOTAL_BUDGET_MS = 25_000;
+// Backoff applied BEFORE attempt i (index 0 = first attempt, never waited).
+const SENTRY_HEARTBEAT_BACKOFF_MS = [0, 250, 750];
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function postSentryHeartbeat(args: {
   ok: boolean;
@@ -291,20 +306,134 @@ export async function postSentryHeartbeat(args: {
   }
   const status = ok ? "ok" : "error";
   const url = `https://${domain}/api/${projectId}/cron/${sentryMonitorSlug}/${publicKey}/?status=${status}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
-      feature: "cron-sentry-heartbeat",
-      op: "fetch",
-      message: "Sentry Crons heartbeat POST failed",
-      extra: { fn: cronName, status, aborted: e.name === "TimeoutError" },
-    });
+
+  // Bounded-retry delivery (#5728). Retry on 5xx / network / timeout; NEVER on a
+  // 4xx (permanent). Total wall-clock is clamped by SENTRY_HEARTBEAT_TOTAL_BUDGET_MS.
+  const start = Date.now();
+  let lastError: Error | null = null;
+  let lastHttpStatus: number | null = null;
+
+  for (let attempt = 0; attempt < SENTRY_HEARTBEAT_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      // Index 0 is never slept on (guarded here), so the backoff lookup lives
+      // inside the retry branch — the "attempt 0 is immediate" invariant reads
+      // straight off the control flow.
+      const backoff = SENTRY_HEARTBEAT_BACKOFF_MS[attempt] ?? 750;
+      const remainingBeforeBackoff = SENTRY_HEARTBEAT_TOTAL_BUDGET_MS - (Date.now() - start);
+      if (remainingBeforeBackoff <= backoff) break; // no budget left to retry
+      await sleep(backoff);
+    }
+    const remaining = SENTRY_HEARTBEAT_TOTAL_BUDGET_MS - (Date.now() - start);
+    if (remaining <= 0) break;
+    const perAttemptTimeout = Math.min(SENTRY_HEARTBEAT_TIMEOUT_MS, remaining);
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        signal: AbortSignal.timeout(perAttemptTimeout),
+      });
+      if (resp.ok) return; // delivered
+      lastHttpStatus = resp.status;
+      lastError = null;
+      // 4xx is permanent (bad slug / DSN) — do not retry; fall through to fallback.
+      if (resp.status >= 400 && resp.status < 500) break;
+      // 5xx (and any other non-2xx) → retryable.
+    } catch (err) {
+      // Network failure / AbortSignal timeout → retryable.
+      lastError = err as Error;
+      lastHttpStatus = null;
+    }
   }
+
+  // All bounded attempts exhausted (or hit a non-retryable 4xx) — durable trace.
+  const fallbackError =
+    lastError ??
+    new Error(
+      `Sentry Crons heartbeat POST returned non-2xx (status ${lastHttpStatus ?? "unknown"})`,
+    );
+  reportSilentFallback(fallbackError, {
+    feature: "cron-sentry-heartbeat",
+    op: "fetch",
+    message: "Sentry Crons heartbeat POST failed after bounded retries",
+    extra: {
+      fn: cronName,
+      status,
+      httpStatus: lastHttpStatus,
+      aborted: lastError?.name === "TimeoutError",
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// #5728 — memoization-safe final-attempt heartbeat for the output-aware cohort.
+// ---------------------------------------------------------------------------
+// A throw inside a catch-less inner try (claude-eval → verify-output →
+// safe-commit-pr → sentry-heartbeat) previously propagated out of the function,
+// so the single end-of-run `sentry-heartbeat` step never ran → Sentry saw NO
+// check-in → `missed` (NOT `error`). This shared helper makes a throw produce a
+// loud terminal `?status=error` ("the cron RAN and failed"), distinct from
+// "never fired", while preserving retry-memoization correctness. It is the
+// vetted shape the output-aware producer cohort adopts (mirrors the inline
+// precedent in cron-stale-deferred-scope-outs.ts:358,397-433).
+//
+// Contract:
+//   - `heartbeatOk` is the output-aware verdict (issue present ⇒ green). An
+//     output-PRESENT run stays GREEN even if a trailing persistence step threw —
+//     the digest exists; the persistence failure self-reports separately. So the
+//     posted status is simply `heartbeatOk`.
+//   - `threw` is whether the guarded body threw. A genuine failure is
+//     `threw && !heartbeatOk`.
+//   - On a genuine failure on a NON-final attempt: SKIP the whole heartbeat
+//     step (a completed step.run is memoized across the Inngest retry, so an
+//     executed-but-silent step would replay and never emit the recovered `ok`)
+//     and return { retry: true } — the caller MUST rethrow to trigger the retry.
+//   - Otherwise post exactly ONE authoritative heartbeat as the genuine last
+//     step. `onBeforeHeartbeat` (optional) runs ONLY on this post path — used by
+//     producers that file a silence-hole fallback issue when red, ordered before
+//     the heartbeat so the heartbeat stays last and is never double-signalled.
+//
+// DeployInProgressError MUST be excluded by the caller BEFORE invoking this
+// helper (rethrow bare, no heartbeat — the ADR-068 fail-safe deploy defer).
+export async function finalizeOutputAwareHeartbeat(args: {
+  step: HandlerArgs["step"];
+  heartbeatOk: boolean;
+  threw: boolean;
+  attempt?: number;
+  maxAttempts?: number;
+  sentryMonitorSlug: string;
+  cronName: string;
+  logger: HandlerArgs["logger"];
+  onBeforeHeartbeat?: () => Promise<void>;
+}): Promise<{ retry: boolean }> {
+  const {
+    step,
+    heartbeatOk,
+    threw,
+    attempt,
+    maxAttempts,
+    sentryMonitorSlug,
+    cronName,
+    logger,
+    onBeforeHeartbeat,
+  } = args;
+  // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1. Callers
+  // passing neither read attempt=0/maxAttempts=1 → isFinalAttempt=true (legacy
+  // behavior). maxAttempts is OPTIONAL on Inngest's BaseContext, so a missing
+  // value collapses to always-final → every failed attempt posts error: degrades
+  // to OVER-paging (the original bug), never to masking a failure with false ok.
+  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
+  const failed = threw && !heartbeatOk;
+  if (failed && !isFinalAttempt) {
+    logger.warn(
+      { fn: cronName, attempt: attempt ?? 0, isFinalAttempt },
+      `${cronName} failed on a non-final attempt — skipping the heartbeat step (memoization-safe) and retrying`,
+    );
+    return { retry: true };
+  }
+  if (onBeforeHeartbeat) await onBeforeHeartbeat();
+  await step.run("sentry-heartbeat", async () => {
+    await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug, cronName, logger });
+  });
+  return { retry: false };
 }
 
 // ---------------------------------------------------------------------------
