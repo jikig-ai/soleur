@@ -26,8 +26,11 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
 // workspaces matching the (installation_id, repo_url) query.
 let WORKSPACE_ROWS: { id: string }[] = [];
 let WORKSPACE_QUERY_ERROR: { message: string } | null = null;
-// workspace_id -> owner user_id
+// workspace_id -> owner user_id (single-owner convenience; back-compat).
 const OWNERS = new Map<string, string>();
+// #5733 — workspaces support N co-owners by design. workspace_id -> ordered
+// owner rows (created_at ascending). When set, overrides OWNERS for that ws.
+const OWNER_ROWS = new Map<string, { user_id: string; created_at: string }[]>();
 // captured (col, val) of the repo_url filter on the workspaces query
 const repoUrlFilterSpy = vi.fn();
 
@@ -49,15 +52,43 @@ const serviceFrom = vi.fn((table: string) => {
   }
   if (table === "workspace_members") {
     let wsId = "";
+    // Resolve the ordered owner rows for the captured workspace_id. OWNER_ROWS
+    // (multi-owner) takes precedence; else a single OWNERS entry becomes a
+    // one-row array; else empty (genuinely owner-less).
+    const rowsFor = (): { user_id: string; created_at: string }[] => {
+      if (OWNER_ROWS.has(wsId)) return OWNER_ROWS.get(wsId)!;
+      const single = OWNERS.get(wsId);
+      return single
+        ? [{ user_id: single, created_at: "2026-01-01T00:00:00.000Z" }]
+        : [];
+    };
     const chain = {
       select: () => chain,
       eq: (col: string, val: string) => {
         if (col === "workspace_id") wsId = val;
         return chain;
       },
+      // #5733 — owner attribution now selects ALL owner rows (ordered), no
+      // `.maybeSingle()`. The awaited chain yields `{ data: rows[], error }`.
+      order: () => chain,
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({ data: rowsFor(), error: null }).then(resolve),
+      // Retained for any residual single-owner caller (none after #5733).
+      // FIDELITY: PostgREST `.maybeSingle()` ERRORS when >1 row matches — the
+      // exact prod condition #5733 reproduces (a workspace with 2 legitimate
+      // owners). This is what made the pre-fix code false-report "owner-less".
       maybeSingle: async () => {
-        const owner = OWNERS.get(wsId);
-        return { data: owner ? { user_id: owner } : null, error: null };
+        const rows = rowsFor();
+        if (rows.length > 1) {
+          return {
+            data: null,
+            error: {
+              code: "PGRST116",
+              message: "JSON object requested, multiple (or no) rows returned",
+            },
+          };
+        }
+        return { data: rows[0] ? { user_id: rows[0].user_id } : null, error: null };
       },
     } as Record<string, unknown>;
     return chain;
@@ -205,6 +236,7 @@ beforeEach(() => {
   WORKSPACE_ROWS = [];
   WORKSPACE_QUERY_ERROR = null;
   OWNERS.clear();
+  OWNER_ROWS.clear();
   APPENDS.clear();
   WS_APPENDS.clear();
   EXISTING_DIRS.clear();
@@ -688,6 +720,86 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(appendKbSyncRowForWorkspaceSpy).not.toHaveBeenCalled();
     // No owner-drift warn on the healthy owner-attributed path.
     expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconcile — multi-owner attribution (#5733: N co-owners by design)", () => {
+  // The soleur-prod shape: a SOLO workspace whose id == its self-owner's
+  // user_id, plus a legitimate second co-owner. The former `.maybeSingle()`
+  // owner lookup ERRORED on the two rows → ownerId=null → a FALSE "owner-less
+  // workspace reconciled" warn every push. Now: select ALL owner rows, pick the
+  // self-row deterministically, and NEVER false-warn owner-less when owners exist.
+  const WS = "754ee124-706a-4f21-a4f4-e828257b0380"; // self-owner: user_id == ws.id
+  const CO_OWNER = "52af49c2-d68e-477b-ba76-129e41807c7c";
+
+  it("two legitimate owners → NO false owner-less warn; attribution to the self-row owner", async () => {
+    WORKSPACE_ROWS = [{ id: WS }];
+    // Co-owner created BEFORE the self-row — proves self-row preference is by
+    // identity, not by created_at ordering.
+    OWNER_ROWS.set(WS, [
+      { user_id: CO_OWNER, created_at: "2026-06-02T07:47:27.126Z" },
+      { user_id: WS, created_at: "2026-05-21T18:00:35.683Z" },
+    ]);
+    EXISTING_DIRS.add(wsPath(WS));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    // The FALSE owner-less warn must NOT fire (the #5733 "28×" regression).
+    expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+    // Owner-keyed audit attributed to the SELF-row owner (ws.id), not the co-owner.
+    expect(appendKbSyncRowSpy).toHaveBeenCalledTimes(1);
+    expect(appendKbSyncRowSpy.mock.calls[0]![0]).toBe(WS);
+    expect(appendKbSyncRowForWorkspaceSpy).not.toHaveBeenCalled();
+    // A distinct, non-paging info breadcrumb records the by-design multi-owner state.
+    expect(addBreadcrumbSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "multiple-owners-reconcile",
+        level: "info",
+        data: expect.objectContaining({ workspaceId: WS, ownerCount: 2 }),
+      }),
+    );
+  });
+
+  it("no self-row among multiple owners → earliest-created owner wins (deterministic)", async () => {
+    const TEAM = "33333333-3333-4333-8333-333333333333";
+    const OWNER_EARLY = "11111111-1111-4111-8111-111111111111";
+    const OWNER_LATE = "22222222-2222-4222-8222-222222222222";
+    WORKSPACE_ROWS = [{ id: TEAM }];
+    OWNER_ROWS.set(TEAM, [
+      { user_id: OWNER_EARLY, created_at: "2026-01-01T00:00:00.000Z" },
+      { user_id: OWNER_LATE, created_at: "2026-02-01T00:00:00.000Z" },
+    ]);
+    EXISTING_DIRS.add(wsPath(TEAM));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+    expect(appendKbSyncRowSpy.mock.calls[0]![0]).toBe(OWNER_EARLY);
+  });
+
+  it("genuinely ZERO owner rows still emits exactly one owner-less drift warn", async () => {
+    const WS_NONE = "99999999-9999-4999-8999-999999999999";
+    WORKSPACE_ROWS = [{ id: WS_NONE }];
+    // No OWNERS / OWNER_ROWS entry → owners == [] → genuine drift.
+    EXISTING_DIRS.add(wsPath(WS_NONE));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounceSpy.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ op: "ownerless-reconcile" }),
+    );
+    // The multiple-owners breadcrumb must NOT fire for a zero-owner workspace.
+    expect(addBreadcrumbSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "multiple-owners-reconcile" }),
+    );
   });
 });
 
