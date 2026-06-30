@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { gitWithInstallationAuth } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
+import { reportRepoCloneFailed } from "@/server/repo-resolver-divergence";
 import { createChildLogger } from "@/server/logger";
 import {
   isValidGitWorkTree,
@@ -277,6 +278,17 @@ export async function ensureWorkspaceRepoCloned(
       op: "clone",
       extra: { userId, hasInstallation: true },
       message: "ensure-workspace-repo clone failed; Concierge proceeds degraded (no clone)",
+    });
+    // #5733 D0 — also emit the DISTINCT, queryable + paging `repo_clone_failed`
+    // event so the previously SWALLOWED clone failure is loud for EVERY caller
+    // (cold/warm/reconcile). The reason is sanitized at the reporter's write
+    // boundary (no token — askpass env; no absolute path / repo URL). The
+    // workspace id is `basename(workspacePath)` (`<root>/<uuid>`), pre-hashed in
+    // the reporter (== raw userId for a solo workspace).
+    reportRepoCloneFailed({
+      userId,
+      activeWorkspaceId: basename(workspacePath),
+      reason: err instanceof Error ? err.message : String(err),
     });
     // The ONLY non-benign outcome: a genuine clone failure (token expired /
     // network / repo gone). This is the post-recovery-failure signal the cc

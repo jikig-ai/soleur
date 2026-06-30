@@ -10,6 +10,7 @@ const {
   mockExistsSync,
   mockGraftRepoClone,
   mockReportSilentFallback,
+  mockReportRepoCloneFailed,
   mockLogInfo,
   mockIsValid,
   mockIsEmptyCorrupt,
@@ -19,6 +20,7 @@ const {
   mockExistsSync: vi.fn(),
   mockGraftRepoClone: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockReportRepoCloneFailed: vi.fn(),
   mockLogInfo: vi.fn(),
   mockIsValid: vi.fn(),
   mockIsEmptyCorrupt: vi.fn(),
@@ -52,6 +54,10 @@ vi.mock("@/server/workspace-permission-lock", () => ({
 vi.mock("@/server/git-auth", () => ({ gitWithInstallationAuth: vi.fn() }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
+}));
+// #5733 D0 — the loud repo_clone_failed reporter is wired into the clone catch.
+vi.mock("@/server/repo-resolver-divergence", () => ({
+  reportRepoCloneFailed: mockReportRepoCloneFailed,
 }));
 vi.mock("@/server/logger", () => ({
   createChildLogger: () => ({ info: mockLogInfo, warn: vi.fn(), error: vi.fn() }),
@@ -154,6 +160,19 @@ describe("ensureWorkspaceRepoCloned", () => {
     mockGraftRepoClone.mockRejectedValue(new Error("clone boom"));
     const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
     expect(out).toBe("failed");
+  });
+
+  it("#5733 D0: clone failure ALSO emits the loud repo_clone_failed reporter (every caller) with the basename-derived workspace id + the raw reason", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockGraftRepoClone.mockRejectedValue(new Error("clone boom /workspaces/ws-uuid/.t"));
+    const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(out).toBe("failed");
+    expect(mockReportRepoCloneFailed).toHaveBeenCalledTimes(1);
+    expect(mockReportRepoCloneFailed).toHaveBeenCalledWith({
+      userId: "u1",
+      activeWorkspaceId: "ws-uuid", // basename(WS) — sanitized/hashed inside the reporter
+      reason: "clone boom /workspaces/ws-uuid/.t",
+    });
   });
 
   it("not connected (repoUrl empty) → no-op", async () => {

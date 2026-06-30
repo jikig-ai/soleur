@@ -285,7 +285,50 @@ async function graftReadyButGitAbsent(
   // an RPC round-trip of no value.
   if (outcome === "ok") return { ok: true };
 
-  return failHonestly(args, seams);
+  // FAILURE — F4-gated honest block (#5733 D0 data-integrity P0/P1). Unlike the
+  // recoverable-error `failHonestly` (which won an explicit clone lock on an
+  // already-`error` row), this path was a FALSE `ready`, so an unconditional
+  // `set_repo_status(error)` would (a) let a removed/transient MEMBER flip a
+  // co-owned workspace's shared status for its Owners and (b) clobber a `ready`
+  // a concurrent winner (reconcile / `/api/repo/setup`) just landed.
+  return failReadyAbsentHonestly(args, seams);
+}
+
+/**
+ * #5733 D0 (data-integrity P0 F4 + P1 CAS) — the ready-but-`.git`-absent clone
+ * failed. Flip `repo_status→error` ONLY on the solo/owner path
+ * (`workspaceId===userId`) AND only after a post-clone `.git`-absence re-check
+ * (CAS): a member must not flip a co-owned workspace's shared status (mirrors
+ * `graftCorruptWorktree`'s emit-only TEAM posture), and a concurrent winner that
+ * landed `.git` must never be clobbered to `error`. Emit + honest-block on every
+ * path.
+ */
+async function failReadyAbsentHonestly(
+  args: RepoSelfHealArgs,
+  seams: RepoSelfHealSeams,
+): Promise<RepoReadiness> {
+  const reason = sanitizeGitStderr(SELF_HEAL_FAILED_REASON);
+  const soloOwner = args.workspaceId === args.userId;
+  const gitStillAbsent = seams.gitDirExists(args.workspacePath) === false;
+  if (soloOwner && gitStillAbsent) {
+    await seams.setRepoStatus(args.workspaceId, "error", reason);
+  }
+  reportSilentFallback(
+    new Error("dispatch repo self-heal clone failed (ready-but-absent)"),
+    {
+      feature: "cc-dispatcher",
+      op: "repo-readiness-self-heal",
+      extra: { userId: args.userId, workspaceId: args.workspaceId },
+      message:
+        "Concierge ready-but-.git-absent self-heal clone failed; honest-blocking (F4: the status flip is gated on solo/owner + a post-clone .git-absence CAS)",
+    },
+  );
+  return {
+    ok: false,
+    code: "error",
+    message: repoErrorMsg(reason),
+    errorCode: "repo_setup_failed",
+  };
 }
 
 /**
