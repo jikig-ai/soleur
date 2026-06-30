@@ -135,6 +135,10 @@ model {
         technology "Validation Gate"
         description "Validation-gates classifier-skill block edits (no-regression + target-passes)"
       }
+      constraintscaffold = component "constraint-scaffold skill" {
+        technology "Constraint Generator"
+        description "Generates the L1 dep-cruiser import-boundary gate (client→server-secret) into the product codebase CI"
+      }
     }
 
     infra = system "Infrastructure" {
@@ -305,4 +309,5 @@ model {
   compound -> kb "Writes learnings, promotes to constitution"
   architecture -> kb "Writes ADRs and diagrams"
   compound -> evalharness "Validates classifier-skill edits before applying"
+  constraintscaffold -> webapp "Generates L1 import-boundary gate (CI)"
 }
