@@ -23,13 +23,13 @@ PR body: `Ref #5733` (NOT Closes — soak-gated).
 
 ## Phase 2 — Deliverable 2 (absent/dir-invalid → emit + block) — TDD
 - [ ] 2.1 RED: `test/agent-readiness-absent-git.test.ts` — absent + dir-invalid → `"block"` + `reportAgentReadinessSelfStop({gitKind, gitRevParseValid:false, source:"host-pre-heal"})`; dir-valid+worktree → ready; inconclusive×2 → ready.
-- [ ] 2.2 GREEN: `server/git-worktree-validity.ts:401-433` — shape-aware routing; absent/dir-invalid → emit + block; preserve `!connected||!dbReady` and file-pointer behaviour.
-- [ ] 2.3 Verify cold (`cc-dispatcher.ts:2010`), warm (`cc-reprovision.ts:145`), reconcile (`workspace-reconcile-on-push.ts:372`) map block → honest RepoNotReadyError / skip (3 assertions).
+- [ ] 2.2 GREEN: `server/git-worktree-validity.ts:401-433` — shape-aware routing; absent/dir-invalid → emit + block; preserve `!connected||!dbReady` and file-pointer behaviour. Add `phase: "post-heal"|"pre-heal"` to `AgentReadinessContext`; emit the absent self-stop ONLY on `post-heal` (terminal). Reconcile passes `pre-heal` → no false-positive emit (architecture P1).
+- [ ] 2.2b Thread `phase` at call sites: `cc-dispatcher.ts:2010` = post-heal; `workspace-reconcile-on-push.ts:372` = pre-heal; `cc-reprovision.ts:145` = post-heal.
+- [ ] 2.3 Cold-absent emits + RepoNotReadyError (no spawn); reconcile-absent does NOT emit (heals via `!isReadyGitWorkTree`); warm-absent routes to heal (never reaches gate). 3 call-site assertions.
 
-## Phase 3 — Deliverable 1 (per-workspace clone hardening) — TDD
-- [ ] 3.1 RED: `test/ready-clone-per-workspace.test.ts` — two workspaces, one installation, distinct repo_urls → each resolves own repo_url+CWD, clones independently.
-- [ ] 3.2 RED: extend `test/ensure-workspace-repo.test.ts` — connected+absent+malformed-url → `"failed"`; not-connected malformed → `"ok"`.
-- [ ] 3.3 GREEN: `server/ensure-workspace-repo.ts:252-260` — scope benign-skip; return `"failed"` only when connected AND `.git` absent.
+## Phase 3 — Deliverable 1 (per-workspace clone invariant) — TEST-ONLY
+- [ ] 3.1 RED: `test/ready-clone-per-workspace.test.ts` — two workspaces, one installation, distinct repo_urls → each resolves own repo_url+CWD, clones independently. MUST exercise real workspace-id resolution (not all-three-stubbed tautology) or drop.
+- [ ] 3.2 (DROPPED — `ensure-workspace-repo.ts` benign-skip→failed behavior change cut; D2 covers the outcome; 5-consumer blast radius. Both reviewers converged.)
 
 ## Phase 4 — Docs + gates
 - [ ] 4.1 Amend ADR-044 dispatch-readiness consequence (§line 552) for absent/dir-invalid + empty-output backstop.

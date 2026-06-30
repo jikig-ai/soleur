@@ -12,6 +12,33 @@ status: draft
 
 # fix: agent-readiness absent-`.git` strand — heal/block + observable backstop + per-workspace ready-clone (Ref #5733)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-30
+**Hard gates:** 4.6 User-Brand (PASS, single-user incident), 4.7 Observability
+(PASS, 5 fields, no-ssh), 4.8 PAT-shape (PASS), 4.9 UI-wireframe (PASS — no UI
+surface).
+
+### Key Improvements
+1. **Prod-verified root-cause reclassification** (Research Reconciliation): the
+   loud founder-ambiguity Sentry issue (1901 lifetime, **0/24h, stopped 06-29**) is
+   a separate, already-repo-scoped, non-`repo_last_synced_at`-writing webhook path
+   — NOT the freeze cause. The freeze cause is the absent-`.git` strand being
+   unhealed + unobservable. Prevents a wrong-layer re-fix.
+2. **D2 call-site ordering analysis** (Deepen Findings, load-bearing): traced
+   heal/gate ordering across cold (post-heal, unconditional → THE fix), warm
+   (gate skipped for absent), reconcile (pre-heal, non-spawn → must NOT emit). Phase
+   2 + AC5 + tasks scoped accordingly.
+3. **D1 cross-consumer blast-radius** (5+ consumers) → recommend reducing D1 to
+   the regression test only (YAGNI; D2 already honest-blocks).
+
+### New Considerations Discovered
+- The per-installation founder collapse the argument framed does **not exist** in
+  the ready-clone path (it resolves per-active-workspace-id) — deliverable 1
+  reframed from "fix founder collapse" to "lock per-workspace invariant + tighten".
+- `754ee124` is NOT solo (4 members, 2 owners; jean co-owns both) — the fix is
+  workspace-shape-agnostic.
+
 ## Overview
 
 Workspace `754ee124` (→ `jikig-ai/soleur`) strands `/soleur:go` at Step 0.0: the
@@ -36,14 +63,13 @@ This plan delivers three server-side TypeScript fixes (no DDL):
    empty output** that `go.md` Step 0.0 actually produces
    (`git rev-parse --is-inside-work-tree 2>/dev/null || true` → empty stdout,
    suppressed stderr), so the strand is queryable for ANY on-disk shape.
-3. **Per-workspace ready-clone, locked in by regression test + benign-skip
-   tightening.** The ready-clone path already resolves repo/install/CWD
-   per-active-workspace-id (NOT a per-installation founder — see Research
-   Reconciliation); add a regression test proving two connected workspaces sharing
-   one installation each resolve + clone independently, and tighten the
-   `ensureWorkspaceRepoCloned` benign-skip so a `ready`-but-absent connected
-   workspace whose clone can't proceed surfaces honestly instead of returning
-   `"ok"`.
+3. **Per-workspace ready-clone — regression LOCK (test-only).** The ready-clone
+   path already resolves repo/install/CWD per-active-workspace-id (NOT a
+   per-installation founder — see Research Reconciliation); add a regression test
+   proving two connected workspaces sharing one installation each resolve + clone
+   independently. (The originally-scoped `ensureWorkspaceRepoCloned` benign-skip
+   behaviour change was DROPPED after deepen review — D2 already covers the outcome
+   and the change had a 5-consumer blast radius. See Phase 3 / Deepen Findings.)
 
 **Brand-survival threshold: single-user incident.** A single user whose repo
 silently fails to land is told to "reconnect" (an action that doesn't fix it) and
@@ -127,13 +153,29 @@ frozen.
   (`"true\nfalse"`) returns `false` (contains `true` → not a strand, matches
   go.md's "if neither prints true"). Keep the existing `not a git repository` /
   `fatal:` / `false` cases green.
-- **GREEN:** in `server/tool-labels.ts:35-46`, change the verdict so a work-tree
-  probe whose output contains **no standalone `true` token** is a strand
-  (covers empty, whitespace-only, `false`, `fatal:`, `not a git repository`).
-  Keep the `isWorkTreeProbe` command-regex guard (only fire when the command is
-  the rev-parse work-tree probe) to avoid false-positives on unrelated commands.
-  Note for deepen-plan: settle whether to additionally require the go.md Step 0.0
-  compound shape in the command regex to further bound false-positives.
+- **GREEN (verdict REPLACEMENT, net LOC down — simplicity review):** in
+  `server/tool-labels.ts:35-46`, **collapse** the four existing branches
+  (`not a git repository` / `=== true` / `^fatal:` / `=== false`) into a single
+  negation — they are all dead under it:
+  ```ts
+  if (!isWorkTreeProbe) return false;
+  return !/(^|\s)true(\s|$)/i.test(output);  // strand iff no standalone `true`
+  ```
+  Keep the `isWorkTreeProbe` command-regex guard. **Reviewer disagreement
+  resolved:** simplicity-review says keep the loose `--is-inside-work-tree` token
+  and reject pinning the compound string (brittle to go.md whitespace edits);
+  architecture-review notes the loose `[\s\S]*` guard lets a LARGER non-probe
+  command that merely *contains* the tokens but yields empty output false-positive
+  a strand **emit** (observability noise, not user-blocking). **Resolution:** keep
+  the negation + REJECT pinning the exact compound string, BUT tighten
+  `isWorkTreeProbe` so the command IS the probe (anchor: the rev-parse work-tree
+  probe is the command's operative content — e.g. each statement is a
+  `git … rev-parse … --is-inside-work-tree`/`--is-bare-repository`), not merely
+  contains the tokens inside an unrelated script. Add a NEGATIVE test: a larger
+  non-probe command embedding the tokens with empty output → NOT a strand.
+  Fail-direction on the strand side stays safe (a coincidental standalone `true`
+  → false-NEGATIVE/missed emit, never a false block — D2 + host confirm protect
+  the user).
 
 ### Phase 2 — Deliverable 2 (absent-`.git` strand gate): RED → GREEN
 - **RED:** new `test/agent-readiness-absent-git.test.ts`: with an injected probe
@@ -145,33 +187,51 @@ frozen.
 - **GREEN:** in `server/git-worktree-validity.ts:401-433`, replace the
   `kind !== "dir-valid" return "ready"` early-return with shape-aware routing:
   - `dir-valid` → run the host `rev-parse` confirm (unchanged).
-  - `absent` / `dir-invalid` → emit `reportAgentReadinessSelfStop({ gitKind, gitRevParseValid:false, source:"host-pre-heal" })` and return `"block"` (the self-heal already ran upstream and did not land the repo; honest-block is the safe outcome — NEVER spawn a doomed agent). Do NOT re-attempt a destructive heal here.
+  - `absent` / `dir-invalid` → emit `reportAgentReadinessSelfStop({ gitKind, gitRevParseValid:false, source:"host-pre-heal" })` and return `"block"`. **Rationale (architecture-review corrected):** ONLY on the COLD path has the self-heal already run before this gate (post-heal); absent-at-cold-gate is a true terminal strand → honest-block + emit. Do NOT re-attempt a destructive heal here.
   - `file-pointer` (escaping/in-workspace) → unchanged (`"ready"`; the lstat verdict + `ensureWorkspaceRepoCloned` own the pointer heal).
   - Preserve the `!connected || !dbReady → "ready"` guard.
-- Caller note: the cold (`cc-dispatcher.ts:2010`), warm (`cc-reprovision.ts:145`),
+- **Surface scoping (architecture P1 — LOAD-BEARING, prevents soak-signal
+  pollution):** the shared helper has caller-position-dependent heal ordering
+  (cold = post-heal; warm = gate only runs when `isReadyGitWorkTree`; reconcile =
+  PRE-heal, then heals via `||` regardless). An unconditional absent→emit would
+  fire a FALSE-POSITIVE `agent_readiness_self_stop` on EVERY push-reconcile of a
+  connected workspace whose `.git` is transiently absent **even when the next
+  line re-clones it successfully** — conflating "stranded forever" with "absent,
+  recovered normally" in the exact AC10/7-day-soak signal. **Implement** by
+  threading the heal-relationship into `AgentReadinessContext` (e.g.
+  `phase: "post-heal" | "pre-heal"`): emit the absent self-stop ONLY when the
+  verdict is terminal (`post-heal`, i.e. cold). On reconcile (`pre-heal`) the
+  absent shape returns `block` WITHOUT an emit (or simply is not consulted —
+  reconcile already routes absent to re-clone via `!isReadyGitWorkTree`); warm
+  never reaches the gate for absent. This replaces the incorrect "self-heal
+  already ran upstream" framing the first draft applied uniformly.
+- Caller note: the cold (`cc-dispatcher.ts:2010`), warm (`cc-reprovision.ts:130`),
   and reconcile (`workspace-reconcile-on-push.ts:372`) call sites already map
-  `"block"` → honest RepoNotReadyError / skip. Verify the absent-block flows
-  through each without a doomed spawn (3 call-site assertions).
+  `"block"` → honest RepoNotReadyError / "failed" / skip.
 
-### Phase 3 — Deliverable 1 (per-workspace clone hardening): RED → GREEN
-- **RED:** new `test/ready-clone-per-workspace.test.ts`: stub
-  `resolveInstallationId` / `getCurrentRepoUrl` / `fetchUserWorkspacePath` for two
-  workspace ids sharing ONE installation id but DIFFERENT repo_urls; assert each
-  dispatch resolves its OWN repo_url + CWD (no collapse, no `>1` failure), i.e.
-  `ensureWorkspaceRepoCloned` is invoked with `(workspacePath=<id>, repoUrl=<own>)`
-  per workspace. This locks the per-workspace invariant against future founder
-  regressions.
-- **RED:** extend `test/ensure-workspace-repo.test.ts`: a `connected`
-  (`installationId` non-null + `repoUrl` non-null) but **malformed-url** workspace
-  whose `.git` is absent currently returns `"ok"` (benign skip,
-  `ensure-workspace-repo.ts:252-260`) — assert the new behaviour returns
-  `"failed"` (honest) for the connected+absent+invalid-url case so the dispatch
-  gate honest-blocks instead of silently spawning. (A not-connected malformed url
-  stays `"ok"` — benign.)
-- **GREEN:** in `server/ensure-workspace-repo.ts`, scope the malformed-url
-  benign-skip: return `"failed"` only when the workspace is connected AND `.git`
-  is absent (a real recovery that cannot proceed); keep `"ok"` for the
-  not-connected / `.git`-present cases. Mirror the existing Sentry emit.
+### Phase 3 — Deliverable 1 (per-workspace clone invariant): TEST-ONLY
+**Reduced to test-only — BOTH reviewers (simplicity + architecture) converged:**
+the `ensure-workspace-repo.ts` benign-skip→`"failed"` behaviour change is dropped.
+It is redundant with D2 (a connected+absent workspace that benign-skips already
+hits the D2 cold gate → `kind==absent` → honest-block + emit, no code change to
+`ensure-workspace-repo.ts` needed) AND carries a 5-consumer blast radius for a
+rare corrupt-DB edge (the url passed the connect-time allowlist). The per-workspace
+clone path is already correct (Research Reconciliation); D1 is a regression LOCK,
+not a fix.
+- **RED:** new `test/ready-clone-per-workspace.test.ts`: two workspace ids sharing
+  ONE installation id but DIFFERENT repo_urls. **Must exercise the REAL
+  workspace-id keying** in at least one resolver (do NOT stub all three of
+  `resolveInstallationId` / `getCurrentRepoUrl` / `fetchUserWorkspacePath` — that
+  tests mock wiring, a tautology, and should be dropped if it cannot drive real
+  resolution). Assert each workspace resolves its OWN repo_url + CWD and invokes
+  `ensureWorkspaceRepoCloned(workspacePath=<id>, repoUrl=<own>)` independently — no
+  founder collapse, no `>1`. One installation, two ids, two repo_urls is enough —
+  no elaborate multi-installation fixtures.
+- **No `ensure-workspace-repo.ts` edit.** (If the team later wants
+  defense-in-depth layer-attribution there, the minimal form is a one-line
+  `return existsSync(join(workspacePath, ".git")) ? "ok" : "failed";` at the
+  malformed-url branch — NOT the two-part `connected AND absent` conditional, since
+  by line 252 `connected` is already guaranteed. Out of scope for this PR.)
 
 ### Phase 4 — Full-suite + typecheck gate
 - `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
@@ -181,16 +241,19 @@ frozen.
   suites the targeted run misses.
 
 ## Files to Edit
-- `apps/web-platform/server/tool-labels.ts` — D3: `isInSandboxRevParseStrand` empty-output match.
-- `apps/web-platform/server/git-worktree-validity.ts` — D2: `evaluateAgentReadiness` absent/dir-invalid → emit + block.
-- `apps/web-platform/server/ensure-workspace-repo.ts` — D1: tighten connected+absent malformed-url benign-skip → `"failed"`.
-- `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md` — amend the dispatch-readiness consequence (§ line 552) to state the gate fires for `absent`/`dir-invalid` (not only `dir-valid`) + the in-sandbox empty-output backstop.
+- `apps/web-platform/server/tool-labels.ts` — D3: collapse `isInSandboxRevParseStrand` to the no-`true` negation (verdict replacement) + anchor the command guard.
+- `apps/web-platform/server/git-worktree-validity.ts` — D2: `evaluateAgentReadiness` absent/dir-invalid → emit + block; add `phase: "post-heal" | "pre-heal"` to `AgentReadinessContext` so the absent emit fires only on a terminal (post-heal) verdict.
+- `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` — pass `phase:"pre-heal"` so reconcile-absent does NOT emit a false-positive self-stop (architecture P1).
+- `apps/web-platform/server/cc-dispatcher.ts` — pass `phase:"post-heal"` at the cold gate (`:2010`).
+- `apps/web-platform/server/cc-reprovision.ts` — pass `phase` at the warm gate (`:145`); warm never reaches it for absent, so either value is correct — use `post-heal` for consistency.
+- `knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md` — amend the dispatch-readiness consequence (§ line 552) to record: gate fires for `absent`/`dir-invalid` (not only `dir-valid`), the per-path heal ordering (cold post-heal emits; reconcile pre-heal heals-without-emit; warm gate-skipped for absent), + the in-sandbox empty-output backstop.
+- (D1 behavior change to `ensure-workspace-repo.ts` DROPPED — see Phase 3.)
 
 ## Files to Create
 - `apps/web-platform/test/in-sandbox-revparse-strand.test.ts`
 - `apps/web-platform/test/agent-readiness-absent-git.test.ts`
 - `apps/web-platform/test/ready-clone-per-workspace.test.ts`
-- (extend existing) `apps/web-platform/test/ensure-workspace-repo.test.ts`
+- (`apps/web-platform/test/ensure-workspace-repo.test.ts` runs in Phase 4 as an unchanged regression suite — NOT modified, since the D1 behaviour change was dropped.)
 
 No new migration (all columns exist; `repo_error` shipped in mig 110/113). No new
 infrastructure.
@@ -200,9 +263,9 @@ infrastructure.
 ### Pre-merge (PR)
 - [ ] AC1: `isInSandboxRevParseStrand("…rev-parse --is-inside-work-tree…", "")` returns `true`; the healthy compound output `"false\ntrue"` returns `false`; bare-repo `"true\nfalse"` returns `false`. (vitest)
 - [ ] AC2: `evaluateAgentReadiness` returns `"block"` and fires `reportAgentReadinessSelfStop({gitKind:"absent", gitRevParseValid:false, source:"host-pre-heal"})` for an absent `.git` (connected+dbReady); same for `dir-invalid`; `dir-valid`+`worktree` still returns `"ready"`; `inconclusive`×2 still fails-open `"ready"`. (vitest)
-- [ ] AC3: two connected workspaces sharing one installation id with distinct repo_urls each resolve their OWN repo_url + CWD and each invoke `ensureWorkspaceRepoCloned` independently (no `>1`/collapse). (vitest)
-- [ ] AC4: a connected + `.git`-absent + malformed-url workspace returns `"failed"` from `ensureWorkspaceRepoCloned`; a not-connected malformed url stays `"ok"`. (vitest)
-- [ ] AC5: cold / warm / reconcile call sites map an absent-`.git` `"block"` to honest RepoNotReadyError / skip (no agent spawn). (vitest, 3 call-site assertions)
+- [ ] AC3: two connected workspaces sharing one installation id with distinct repo_urls each resolve their OWN repo_url + CWD and each invoke `ensureWorkspaceRepoCloned` independently (no `>1`/collapse) — exercising REAL workspace-id resolution, not all-three-stubbed mock wiring. (vitest)
+- [ ] AC4: (D1 behavior change DROPPED — no `ensure-workspace-repo.ts` assertion; D2 covers the connected+absent outcome at the cold gate.)
+- [ ] AC5: **cold** (`phase:post-heal`)-absent emits `agent_readiness_self_stop` + maps `"block"` → honest RepoNotReadyError (no spawn); **reconcile** (`phase:pre-heal`)-absent does NOT emit a self-stop and the workspace is re-cloned via `!isReadyGitWorkTree`; **warm**-absent routes to heal (never reaches the gate). (vitest, 3 call-site assertions — the reconcile no-emit assertion is the architecture-P1 soak-signal-pollution guard.)
 - [ ] AC6: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
 - [ ] AC7: targeted + affected vitest suites pass (Phase 4 list).
 - [ ] AC8: ADR-044 dispatch-readiness consequence amended to cover absent/dir-invalid + empty-output backstop.
@@ -323,8 +386,55 @@ two-stage jq query at /work; record result).
 5. Inconclusive×2 → fail-open ready (no regression).
 6. go.md Step 0.0 empty output → in-sandbox backstop emits.
 7. Healthy compound `"false\ntrue"` → backstop does NOT fire.
-8. Two workspaces, one installation, distinct repo_urls → each clones its own repo.
-9. Connected + absent + malformed url → `"failed"` (honest); not-connected malformed → `"ok"`.
+8. Two workspaces, one installation, distinct repo_urls → each clones its own repo (real resolution, not all-stubbed).
+9. Reconcile-absent (`phase:pre-heal`) → re-cloned via `!isReadyGitWorkTree`, NO self-stop emit (soak-signal guard).
+10. D3 negative: a non-probe command embedding the rev-parse tokens with empty output → NOT a strand.
+
+## Deepen Findings (2026-06-30)
+
+### D2 call-site ordering — the load-bearing scoping (traced)
+`evaluateAgentReadiness` is the SHARED helper across 3 callers with DIFFERENT
+heal-ordering — the absent→`block`+emit change must be scoped accordingly:
+
+| Caller | Gate call shape | absent reaches gate? | Correct behaviour for absent |
+|---|---|---|---|
+| **Cold** `cc-dispatcher.ts:2010` | **unconditional, POST-heal** (`ensureWorkspaceRepoCloned` ran at :1987) | YES | absent = heal already failed → **emit + `block`** (honest RepoNotReadyError). THE load-bearing fix — today this returns `"ready"` → doomed spawn. |
+| **Warm** `cc-reprovision.ts:130` | gate called **only inside `if (isReadyGitWorkTree)`** | NO — absent routes straight to `ensureWorkspaceRepoCloned` heal | D2 is a **no-op** for warm-absent (no change needed; verify the test asserts warm-absent still heals, not blocks). |
+| **Reconcile** `workspace-reconcile-on-push.ts:372` | **unconditional, PRE-heal**, then heals via `if (!isReadyGitWorkTree \|\| block)` | YES | reconcile is a **non-spawn sync surface** that heals absent anyway → a self-stop emit here is a **pre-heal false-"strand"**. **Do NOT fire the absent self-stop on this path.** |
+
+**Refinement to Phase 2 (load-bearing):** make the absent/dir-invalid →
+`block`+emit a property of the **agent-dispatch surfaces only**. Two acceptable
+implementations (deepen/`work` to pick the simpler): (i) add an explicit
+`emitStrandOnAbsent: boolean` (or `surface: "dispatch" | "reconcile"`) param to
+`evaluateAgentReadiness`, default dispatch=emit, reconcile=no-emit; OR (ii) keep
+`evaluateAgentReadiness`'s NEW absent→block+emit, and have the **reconcile caller
+continue to route absent through its existing `!isReadyGitWorkTree` heal WITHOUT
+consulting the gate's verdict for absent** (i.e. reconcile only needs the gate for
+the `dir-valid`-corrupt confirm — its net-new coverage — and must not surface a
+strand for a shape it heals one line later). The cold path keeps the
+unconditional emit+block. Add a Phase-2 test asserting **reconcile-absent does NOT
+emit `agent_readiness_self_stop`** (it heals) while **cold-absent DOES**.
+
+### D1 cross-consumer blast radius (`hr-type-widening-cross-consumer-grep`)
+`ensureWorkspaceRepoCloned`'s return value is consumed by **5+ call sites**:
+`agent-runner.ts:1167` (legacy startAgentSession), `cc-dispatcher.ts:1987` (cold),
+`cc-reprovision.ts:165` (warm), `workspace-reconcile-on-push.ts:379` (reconcile),
+and `repo-readiness-self-heal.ts:250/276/311`. Flipping the connected+absent+
+malformed-url case from `"ok"` → `"failed"` propagates to ALL of them. **Decision
+for deepen/`work`:** because **D2 already honest-blocks absent at the cold gate**
+(the user-facing strand fix), D1's behaviour change is largely redundant — strongly
+consider **reducing D1 to the regression test only** (lock the per-workspace
+invariant) and DROPPING the `ensure-workspace-repo.ts` benign-skip→failed edit,
+unless the 5-consumer sweep proves every caller already treats `"failed"` for that
+narrow case correctly. The malformed-url case is also rare (the url passed the
+connect-time allowlist) — YAGNI favours test-only D1.
+
+### Precedent-diff (no novel pattern)
+The emit/block/fail-open shape mirrors the existing 77e77c3 `dir-valid`-corrupt
+path (same `reportAgentReadinessSelfStop` + `RepoNotReadyError` precedent at
+`cc-dispatcher.ts:2017`, `cc-reprovision.ts:144`, `workspace-reconcile-on-push.ts:386`).
+No new SQL/lock/atomic-write pattern. D3's empty-output detector reuses the
+existing `isWorkTreeProbe` command-guard precedent.
 
 ## Sharp Edges
 - A plan whose `## User-Brand Impact` section is empty/`TBD` fails `deepen-plan`
