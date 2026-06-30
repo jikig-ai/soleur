@@ -172,6 +172,19 @@ export function isStrandingFilePointer(shape: GitWorktreeShape): boolean {
 }
 
 /**
+ * The "lstat-valid `.git` kind" predicate (#5733): a `dir-valid` directory OR a
+ * `file-pointer` — exactly the two shapes `isValidGitWorkTree` (lstat) passes.
+ * Shared by every `reportAgentReadinessSelfStop({ gitValid })` call site
+ * (cc-dispatcher cold gate + C2 in-sandbox backstop, workspace-reconcile) so the
+ * proxy-validity decision is defined ONCE rather than re-spelled per emit. NOTE:
+ * lstat-valid is NOT readiness — an escaping `file-pointer` is lstat-valid yet
+ * strands the in-bwrap rev-parse; `isReadyGitWorkTree` owns the readiness verdict.
+ */
+export function isLstatValidKind(kind: GitWorktreeShape["kind"]): boolean {
+  return kind === "dir-valid" || kind === "file-pointer";
+}
+
+/**
  * READINESS-grade validity (#5733). `isValidGitWorkTree` is the STRUCTURAL
  * fast-path gate, but it returns `true` for a `.git` FILE pointer — and an
  * ESCAPING pointer strands the agent's in-bwrap `git rev-parse`. The dispatch +
@@ -256,8 +269,21 @@ export function isEmptyCorruptGitDir(workspacePath: string): boolean {
  * Build the hardened, ceiling-pinned env for the host `rev-parse` probe.
  * Returns `null` when the workspace parent cannot be symlink-resolved (the
  * discovery ceiling cannot be bounded safely → the caller treats it as
- * inconclusive and FAILS-OPEN). Exported so the env hardening (no install token,
- * no askpass, ceiling = realpath parent) is unit-asserted directly (AC1/AC2).
+ * inconclusive and FAILS-OPEN). Exported so the env hardening (minimal allowlist,
+ * no inherited git-exec hooks, ceiling = realpath parent) is unit-asserted
+ * directly (AC1/AC2).
+ *
+ * Built from a MINIMAL ALLOWLIST, NOT a `...process.env` spread (security #5733).
+ * Spreading the ambient env would let git-exec hooks survive into the probe:
+ *   - `GIT_DIR` — would make `git -C <path> rev-parse` resolve via GIT_DIR
+ *     instead of the workspace, returning `true` for an UNRELATED repo (a false
+ *     PASS that re-darkens the strand this probe exists to catch).
+ *   - `GIT_SSH_COMMAND` / `GIT_PROXY_COMMAND` / `GIT_EXTERNAL_DIFF` — arbitrary
+ *     command execution hooks.
+ *   - `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY*` / `GIT_CONFIG_VALUE*` — ad-hoc config
+ *     injection that `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` do NOT suppress.
+ * Only `PATH` + `HOME` are copied (to find `git` / a sane home), plus the 4
+ * pinned safety vars. No credential/askpass var can survive — none is copied.
  */
 export function buildGitProbeEnv(
   workspacePath: string,
@@ -270,18 +296,17 @@ export function buildGitProbeEnv(
   } catch {
     return null;
   }
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CEILING_DIRECTORIES: ceiling,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  // Defense-in-depth: a read-only local probe must NEVER carry a credential or an
-  // askpass helper, even if the ambient process env happens to hold one.
-  delete env.GIT_INSTALLATION_TOKEN;
-  delete env.GIT_ASKPASS;
-  delete env.GIT_USERNAME;
+  // Near-empty base — inherit NOTHING by default. `NODE_ENV` is copied only to
+  // satisfy the typed-env contract (Next augments ProcessEnv with a required
+  // NODE_ENV); it is not a git-exec hook and does not affect the probe. Copy only
+  // PATH + HOME (when present) beyond that.
+  const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
+  if (process.env.PATH !== undefined) env.PATH = process.env.PATH;
+  if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  env.GIT_TERMINAL_PROMPT = "0";
+  env.GIT_CEILING_DIRECTORIES = ceiling;
   return { env };
 }
 

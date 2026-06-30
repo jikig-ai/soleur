@@ -29,6 +29,7 @@ import {
   isReadyGitWorkTree,
   evaluateAgentReadiness,
   probeGitWorktreeShape,
+  isLstatValidKind,
 } from "@/server/git-worktree-validity";
 import { reportAgentReadinessSelfStop } from "@/server/repo-resolver-divergence";
 import { ensureWorkspaceRepoCloned } from "@/server/ensure-workspace-repo";
@@ -424,9 +425,7 @@ export async function workspaceReconcileOnPushHandler({
           reportAgentReadinessSelfStop({
             userId: breadcrumbUserId,
             activeWorkspaceId: ws.id,
-            gitValid:
-              unrecoveredShape.kind === "dir-valid" ||
-              unrecoveredShape.kind === "file-pointer",
+            gitValid: isLstatValidKind(unrecoveredShape.kind),
             gitKind: unrecoveredShape.kind,
             gitdirEscapesWorkspace: unrecoveredShape.gitdirEscapesWorkspace,
             source: "host-pre-heal",

@@ -128,6 +128,9 @@ vi.mock("@/server/git-worktree-validity", () => ({
   evaluateAgentReadiness: (p: string, ctx: unknown) =>
     evaluateAgentReadinessSpy(p, ctx),
   probeGitWorktreeShape: (p: string) => probeGitWorktreeShapeSpy(p),
+  // FIX 8 — the shared lstat-valid-kind predicate (real impl; deterministic).
+  isLstatValidKind: (kind: string) =>
+    kind === "dir-valid" || kind === "file-pointer",
 }));
 // #5733 — spy the agent-readiness self-stop so the benign-skip emit is asserted
 // directly WITHOUT routing through the shared reportSilentFallback spy (keeping

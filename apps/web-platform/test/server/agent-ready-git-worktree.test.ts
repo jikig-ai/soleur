@@ -22,6 +22,7 @@ import {
   hostGitRevParseOutcome,
   buildGitProbeEnv,
   evaluateAgentReadiness,
+  isLstatValidKind,
   type GitRevParseRunner,
   type GitRevParseOutcome,
 } from "@/server/git-worktree-validity";
@@ -83,6 +84,57 @@ describe("git probe env hardening (#5733 AC1/AC2)", () => {
 
   it("returns null (→ inconclusive) when the workspace parent cannot be resolved", () => {
     expect(buildGitProbeEnv(join(dir, "does", "not", "exist", "ws"))).toBeNull();
+  });
+
+  it("FIX 2: ambient git-exec hooks (GIT_DIR / GIT_SSH_COMMAND / …) do NOT survive; PATH+HOME do", async () => {
+    const ws = join(dir, "ws");
+    await mkdir(ws, { recursive: true });
+    // A `...process.env` spread would let these leak into `git -C <path> rev-parse`.
+    // GIT_DIR is the critical one: it would make the probe resolve via an UNRELATED
+    // repo (returning "true" for the wrong dir → a false PASS that re-darkens the
+    // strand). The minimal allowlist must drop ALL of them.
+    const keys = [
+      "GIT_DIR",
+      "GIT_SSH_COMMAND",
+      "GIT_PROXY_COMMAND",
+      "GIT_EXTERNAL_DIFF",
+      "GIT_CONFIG_COUNT",
+    ] as const;
+    const saved: Record<string, string | undefined> = {};
+    for (const k of keys) saved[k] = process.env[k];
+    process.env.GIT_DIR = "/some/other/repo/.git";
+    process.env.GIT_SSH_COMMAND = "ssh -i /tmp/evil";
+    process.env.GIT_PROXY_COMMAND = "/tmp/proxy";
+    process.env.GIT_EXTERNAL_DIFF = "/tmp/diff";
+    process.env.GIT_CONFIG_COUNT = "1";
+    try {
+      const built = buildGitProbeEnv(ws);
+      expect(built).not.toBeNull();
+      const env = built!.env;
+      for (const k of keys) expect(env[k]).toBeUndefined();
+      // PATH + HOME ARE copied (git must be findable; a sane home).
+      expect(env.PATH).toBe(process.env.PATH);
+      expect(env.HOME).toBe(process.env.HOME);
+    } finally {
+      for (const k of keys) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  });
+});
+
+// review P3 (FIX 8) — the "lstat-valid `.git` kind" predicate is shared across the
+// 3 `reportAgentReadinessSelfStop({ gitValid })` emit sites; assert its truth table.
+describe("isLstatValidKind (#5733 FIX 8 — shared lstat-valid kind predicate)", () => {
+  it("true for the two lstat-valid kinds (dir-valid, file-pointer)", () => {
+    expect(isLstatValidKind("dir-valid")).toBe(true);
+    expect(isLstatValidKind("file-pointer")).toBe(true);
+  });
+  it("false for the non-lstat-valid kinds (absent, dir-invalid, other)", () => {
+    expect(isLstatValidKind("absent")).toBe(false);
+    expect(isLstatValidKind("dir-invalid")).toBe(false);
+    expect(isLstatValidKind("other")).toBe(false);
   });
 });
 
