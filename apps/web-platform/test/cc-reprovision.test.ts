@@ -22,7 +22,7 @@ const {
   mockReportSilentFallback,
   mockGetFreshTenantClient,
   mockResolveActiveWorkspace,
-  mockIsValidGitWorkTree,
+  mockIsReadyGitWorkTree,
 } = vi.hoisted(() => ({
   mockFetchUserWorkspacePath: vi.fn(),
   mockResolveInstallationId: vi.fn(),
@@ -32,7 +32,7 @@ const {
   mockReportSilentFallback: vi.fn(),
   mockGetFreshTenantClient: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
-  mockIsValidGitWorkTree: vi.fn(),
+  mockIsReadyGitWorkTree: vi.fn(),
 }));
 
 vi.mock("@/server/kb-document-resolver", () => ({
@@ -69,7 +69,7 @@ vi.mock("@/server/workspace-resolver", () => ({
 // discriminator is deterministic (default false → `.git` ABSENT-or-CORRUPT →
 // proceed to the validity-aware clone, preserving the pre-#5715 tests).
 vi.mock("@/server/git-worktree-validity", () => ({
-  isValidGitWorkTree: mockIsValidGitWorkTree,
+  isReadyGitWorkTree: mockIsReadyGitWorkTree,
 }));
 
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
@@ -102,7 +102,7 @@ beforeEach(() => {
   mockEnsureWorkspaceRepoCloned.mockResolvedValue("ok");
   // Default: `.git` ABSENT-or-INVALID (reclaimed/corrupt workspace) so the
   // recovery proceeds to the clone — the pre-#5715 behavior these suites assert.
-  mockIsValidGitWorkTree.mockReturnValue(false);
+  mockIsReadyGitWorkTree.mockReturnValue(false);
 });
 
 describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () => {
@@ -159,7 +159,7 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
 
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
 
-    expect(mockIsValidGitWorkTree).not.toHaveBeenCalled();
+    expect(mockIsReadyGitWorkTree).not.toHaveBeenCalled();
     expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
@@ -173,12 +173,12 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
   // heavy install/repo resolves + clone. One membership-verified resolve feeds the
   // validity probe; a VALID `.git` is NEVER re-cloned (safety invariant).
   it("AC2/AC4: `.git` VALID → early-return 'ok', NO install/repo resolve, NO clone", async () => {
-    mockIsValidGitWorkTree.mockReturnValue(true);
+    mockIsReadyGitWorkTree.mockReturnValue(true);
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
     // The workspace path WAS resolved (it is what we probe) ...
     expect(mockFetchUserWorkspacePath).toHaveBeenCalledWith(USER, ACTIVE);
-    expect(mockIsValidGitWorkTree).toHaveBeenCalledTimes(1);
-    expect(mockIsValidGitWorkTree).toHaveBeenCalledWith(WS);
+    expect(mockIsReadyGitWorkTree).toHaveBeenCalledTimes(1);
+    expect(mockIsReadyGitWorkTree).toHaveBeenCalledWith(WS);
     // ... but the heavier resolves + the clone are skipped entirely.
     expect(mockResolveInstallationId).not.toHaveBeenCalled();
     expect(mockGetCurrentRepoUrl).not.toHaveBeenCalled();
@@ -190,10 +190,10 @@ describe("reprovisionWorkspaceOnDispatch (warm-query reconnect coverage)", () =>
   // but not a valid work tree) must NOT short-circuit "ok"; it falls through to
   // the validity-aware clone instead of stranding the agent in a corrupt repo.
   it("corrupt `.git` (present but invalid) → does NOT short-circuit → install/repo resolve + clone attempted", async () => {
-    mockIsValidGitWorkTree.mockReturnValue(false);
+    mockIsReadyGitWorkTree.mockReturnValue(false);
     await expect(reprovisionWorkspaceOnDispatch(USER)).resolves.toBe("ok");
-    expect(mockIsValidGitWorkTree).toHaveBeenCalledTimes(1);
-    expect(mockIsValidGitWorkTree).toHaveBeenCalledWith(WS);
+    expect(mockIsReadyGitWorkTree).toHaveBeenCalledTimes(1);
+    expect(mockIsReadyGitWorkTree).toHaveBeenCalledWith(WS);
     // Invalid → the recovery proceeds to resolve inputs and clone.
     expect(mockResolveInstallationId).toHaveBeenCalledWith(USER, ACTIVE);
     expect(mockGetCurrentRepoUrl).toHaveBeenCalledWith(USER, ACTIVE);

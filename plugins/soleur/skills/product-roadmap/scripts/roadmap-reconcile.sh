@@ -33,6 +33,12 @@ ROADMAP_FILE="${ROADMAP_FILE:-knowledge-base/product/roadmap.md}"
 # tells the founder to /soleur:go a non-codeable task.
 CODEABLE_LABELS='"domain/engineering","type/bug","type/feature","type/refactor"'
 
+# A non-engineering domain-leader label means the work is operator-driven (marketing,
+# legal, ops, sales, finance, support, product) — it OVERRIDES a codeable type/* label.
+# Caught by dogfooding: #2603 ("Publish a case study") is type/feature + domain/marketing
+# and must classify OPERATOR, not CODEABLE — never tell the founder to /soleur:go it.
+OPERATOR_DOMAIN_LABELS='"domain/marketing","domain/legal","domain/operations","domain/sales","domain/finance","domain/support","domain/product"'
+
 # extract_phase_counts: read roadmap markdown on stdin, emit "N|open|closed"
 # for each `| Phase N (...) |` row in the `## Current State` table that carries
 # an "X open, Y closed" count. Rows without counts (prose, Beta users) are skipped.
@@ -98,7 +104,9 @@ pick_next_action() {
   num="$(printf '%s' "$first" | jq -r '.number')"
   title="$(printf '%s' "$first" | jq -r '.title')"
   codeable="$(printf '%s' "$first" | jq -r \
-    "if any(.labels[]?.name; IN($CODEABLE_LABELS)) then \"yes\" else \"no\" end")"
+    "if any(.labels[]?.name; IN($OPERATOR_DOMAIN_LABELS)) then \"no\"
+     elif any(.labels[]?.name; IN($CODEABLE_LABELS)) then \"yes\"
+     else \"no\" end")"
   if [[ "$codeable" == "yes" ]]; then
     printf 'CODEABLE|#%s|%s\n' "$num" "$title"
   else

@@ -13,6 +13,7 @@ const {
   mockLogInfo,
   mockIsValid,
   mockIsEmptyCorrupt,
+  mockProbeShape,
   mockRm,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
@@ -21,6 +22,7 @@ const {
   mockLogInfo: vi.fn(),
   mockIsValid: vi.fn(),
   mockIsEmptyCorrupt: vi.fn(),
+  mockProbeShape: vi.fn(),
   mockRm: vi.fn(),
 }));
 
@@ -38,6 +40,11 @@ vi.mock("node:fs/promises", async (orig) => {
 vi.mock("@/server/git-worktree-validity", () => ({
   isValidGitWorkTree: mockIsValid,
   isEmptyCorruptGitDir: mockIsEmptyCorrupt,
+  probeGitWorktreeShape: mockProbeShape,
+  // Pure function of the shape — provide the real predicate so the heal gates on
+  // the (mocked) shape the test sets, no separate spy to keep in sync.
+  isStrandingFilePointer: (s: { kind: string; gitdirEscapesWorkspace?: boolean }) =>
+    s.kind === "file-pointer" && s.gitdirEscapesWorkspace !== false,
 }));
 vi.mock("@/server/workspace-permission-lock", () => ({
   withWorkspacePermissionLock: (_p: string, fn: () => unknown) => fn(),
@@ -67,6 +74,10 @@ beforeEach(() => {
   // are not consulted. Per-test overrides set the validity shape under test.
   mockIsValid.mockReturnValue(false);
   mockIsEmptyCorrupt.mockReturnValue(false);
+  // Default shape is NOT a file-pointer, so the #5733 pointer-heal branch stays
+  // dormant for the legacy cases (which drive behavior via mockIsValid /
+  // mockIsEmptyCorrupt). The file-pointer test below overrides per-call.
+  mockProbeShape.mockReturnValue({ kind: "dir-invalid" });
   mockRm.mockResolvedValue(undefined);
 });
 
@@ -169,12 +180,94 @@ describe("ensureWorkspaceRepoCloned", () => {
     expect(firstArg).not.toHaveProperty("userId");
   });
 
-  it("VALID existing .git → no-op (never destroys a real repo: Start-Fresh, already-cloned, gitdir-file, or mismatched origin)", async () => {
+  it("VALID existing .git → no-op (never destroys a real repo: Start-Fresh, already-cloned, or mismatched origin)", async () => {
     mockExistsSync.mockReturnValue(true);
     mockIsValid.mockReturnValue(true);
+    mockProbeShape.mockReturnValue({ kind: "dir-valid" });
     await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
     expect(mockGraftRepoClone).not.toHaveBeenCalled();
     expect(mockRm).not.toHaveBeenCalled();
+  });
+
+  // #5733 — a `.git` FILE pointer at a workspace ROOT is a stale gitdir pointer
+  // (never a legit linked-worktree for a personal workspace). It passes
+  // isValidGitWorkTree (lstat) but strands the agent's in-bwrap `git rev-parse`.
+  // The pointer-heal removes the single FILE (NOT a recursive dir rm) and
+  // re-clones a self-contained repo from origin HEAD.
+  it("stale gitdir-pointer .git FILE → unlink the pointer + re-clone → 'ok'", async () => {
+    mockProbeShape.mockReturnValue({
+      kind: "file-pointer",
+      gitdirTarget: "/workspaces/other/.git/worktrees/x",
+      gitdirEscapesWorkspace: true,
+    });
+    // After the pointer is removed the tree is .git-absent → graft clones.
+    mockExistsSync.mockReturnValue(false);
+    mockIsValid.mockReturnValue(false);
+
+    const out = await ensureWorkspaceRepoCloned({
+      userId: "u1",
+      workspacePath: WS,
+      installationId: 123,
+      repoUrl: REPO,
+    });
+
+    expect(out).toBe("ok");
+    // The pointer FILE was unlinked (force, NOT recursive) before re-clone.
+    expect(mockRm).toHaveBeenCalledTimes(1);
+    expect(mockRm).toHaveBeenCalledWith(`${WS}/.git`, { force: true });
+    expect(mockGraftRepoClone).toHaveBeenCalledTimes(1);
+    expect(mockGraftRepoClone).toHaveBeenCalledWith(WS, REPO, 123);
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "ensure-workspace-repo",
+        op: "gitdir-pointer-reclone",
+      }),
+    );
+  });
+
+  it("NON-escaping in-workspace `.git` pointer → NOT a strand → left untouched (no unlink, no clone)", async () => {
+    // A pointer whose gitdir target stays inside the workspace is readable
+    // in-sandbox and does NOT strand → the heal must not fire (no data risk).
+    mockProbeShape.mockReturnValue({
+      kind: "file-pointer",
+      gitdirTarget: "./.git-real",
+      gitdirEscapesWorkspace: false,
+    });
+    mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(true); // a non-escaping pointer is lstat-valid → no-op gate returns "ok"
+
+    const out = await ensureWorkspaceRepoCloned({
+      userId: "u1",
+      workspacePath: WS,
+      installationId: 123,
+      repoUrl: REPO,
+    });
+
+    expect(out).toBe("ok");
+    expect(mockRm).not.toHaveBeenCalled(); // not stranding → never unlinked
+    expect(mockGraftRepoClone).not.toHaveBeenCalled();
+  });
+
+  it("file-pointer heal: a racer that grafts a valid .git mid-lock → no unlink, no double-clone", async () => {
+    // First probe (gate) sees a file-pointer; the lock re-check sees a valid dir
+    // (a racer grafted) → the unlink is skipped.
+    mockProbeShape
+      .mockReturnValueOnce({ kind: "file-pointer", gitdirEscapesWorkspace: true })
+      .mockReturnValue({ kind: "dir-valid" });
+    mockExistsSync.mockReturnValue(true);
+    mockIsValid.mockReturnValue(true); // racer's valid .git → clone no-op
+
+    const out = await ensureWorkspaceRepoCloned({
+      userId: "u1",
+      workspacePath: WS,
+      installationId: 123,
+      repoUrl: REPO,
+    });
+
+    expect(out).toBe("ok");
+    expect(mockRm).not.toHaveBeenCalled(); // re-check under lock saw a valid dir
+    expect(mockGraftRepoClone).not.toHaveBeenCalled();
   });
 
   it("non-github / malformed repo_url → skip + Sentry, no clone (argv/format guard)", async () => {
