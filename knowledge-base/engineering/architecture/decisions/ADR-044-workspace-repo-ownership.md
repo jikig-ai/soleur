@@ -1188,7 +1188,7 @@ migration `075` (#4520). The reconcile attribution now tolerates N owners
 owners). Reconciling the single-owner ownership RPCs (`transfer_workspace_ownership`,
 the `update_workspace_member_role` owner-promotion block) to the multi-owner model
 is tracked as a follow-up; this ADR records the direction, and the dedicated
-decision-of-record is now **ADR-072** (multi-owner workspaces + the
+decision-of-record is now **ADR-073** (multi-owner workspaces + the
 `organizations.owner_user_id` primary-owner pointer), which captures the
 supersession and additionally pins the `owner_user_id` pointer semantics under
 N owners.

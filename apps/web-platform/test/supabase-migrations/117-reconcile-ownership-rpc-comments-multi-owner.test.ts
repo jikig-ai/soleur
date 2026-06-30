@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 // Migration-shape test for
-// 117_reconcile_ownership_rpc_comments_multi_owner.sql (#5756 / ADR-072).
+// 117_reconcile_ownership_rpc_comments_multi_owner.sql (#5756 / ADR-073).
 //
 // Migration 117 is a COMMENT-ON-FUNCTION-ONLY metadata reconcile: it makes NO
 // RPC behavior change. So the canonical PR-time gates are static SQL-shape
@@ -101,13 +101,13 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
       // prose would dodge on a technicality.
       expect(upExecutable).not.toContain("Single-owner strict: promotes");
       expect(upExecutable).not.toContain("ownership transfer. Single-owner strict");
-      expect(upExecutable).toMatch(/ADR-072/i);
+      expect(upExecutable).toMatch(/ADR-073/i);
     });
 
     it("update_workspace_member_role comment states member->owner promotion is permitted + at-least-one-owner", () => {
       expect(upExecutable).toMatch(/member->owner promotion is PERMITTED/i);
       expect(upExecutable).toMatch(/at-least-one-owner invariant/i);
-      expect(upExecutable).toMatch(/ADR-072/i);
+      expect(upExecutable).toMatch(/ADR-073/i);
     });
   });
 
@@ -252,20 +252,20 @@ describe("migration 117_reconcile_ownership_rpc_comments_multi_owner", () => {
     });
   });
 
-  // owner_user_id behavior (ADR-072, documented contract — not DB-exercised here):
+  // owner_user_id behavior (ADR-073, documented contract — not DB-exercised here):
   // when the pointed-to owner is demoted while co-owners remain, the pointer is
   // UNCHANGED (transfer is the only product-reachable re-pointer; demote is
   // service_role-only with no live route). The demote->remove no-repoint dead-end
   // (transfer rejects an already-owner target, 092:104-107) means no RPC can
   // re-point a stranded pointer to a surviving co-owner — the Phase-6 follow-up.
-  describe("owner_user_id pointer contract (ADR-072)", () => {
+  describe("owner_user_id pointer contract (ADR-073)", () => {
     it("is documented as the single primary/billing/DSAR pointer, maintained only by transfer", () => {
       // Sanity-anchor the ADR exists and pins the pointer semantics so this
       // contract has a decision-of-record.
       const adr = readFileSync(
         path.join(
           __dirname,
-          "../../../../knowledge-base/engineering/architecture/decisions/ADR-072-workspaces-support-n-co-owners.md",
+          "../../../../knowledge-base/engineering/architecture/decisions/ADR-073-workspaces-support-n-co-owners.md",
         ),
         "utf8",
       );

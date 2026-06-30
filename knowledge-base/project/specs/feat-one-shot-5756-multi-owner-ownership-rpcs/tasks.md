@@ -4,17 +4,17 @@ Plan: `knowledge-base/project/plans/2026-06-30-feat-multi-owner-ownership-rpcs-r
 Lane: single-domain · Threshold: single-user incident (requires CPO sign-off) · Deepened 2026-06-30 (5 agents)
 
 ## Phase 0 — Preconditions
-- [x] 0.1 Confirm next migration index = 117, next ADR = ADR-072.
+- [x] 0.1 Confirm next migration index = 117, next ADR = ADR-073.
 - [x] 0.2 Confirm `092_transfer_ownership_caller_override.sql` exists on origin/main.
 - [x] 0.3 `COMMENT ON FUNCTION` apply-role: risk near-zero (092:193 + 094:278 already COMMENT these functions, apply green). Probe `git grep -n 'COMMENT ON FUNCTION public' apps/web-platform/supabase/migrations/` as a cheap precondition; fallback = ADR-only + inline prose; never `CREATE OR REPLACE` re-emit.
 - [x] 0.4 Capture VERBATIM current COMMENT strings from 092:193-198 + 094:278-283 for down.sql (092's is a multi-line adjacent-string concat, NO inserted space).
 - [x] 0.5 Read-only research owner_user_id consumers (workspace-resolver:491-516, dsar-export:975, account-delete:708-741) AND the THREE writers (transfer 092:145-147; anonymise_organization_membership mig 081:52-75; none in promotion/invite). No edits.
 
-## Phase 1 — ADR-072 (headline)
-- [x] 1.1 `soleur:architecture` create → `ADR-072-workspaces-support-n-co-owners.md` (title: multi-owner workspaces + `organizations.owner_user_id` primary-owner pointer).
+## Phase 1 — ADR-073 (headline)
+- [x] 1.1 `soleur:architecture` create → `ADR-073-workspaces-support-n-co-owners.md` (title: multi-owner workspaces + `organizations.owner_user_id` primary-owner pointer).
 - [x] 1.2 Decision body: ≥1 owner; invite-as-owner + promotion grant paths; transfer = hand-off-and-step-down; owner_user_id = primary/billing/DSAR pointer; at-least-one-owner invariant; carve-outs (transfer rejects already-owner; remove blocks any owner).
 - [x] 1.2b Enumerate ALL THREE owner_user_id writers (transfer 092; anonymise_organization_membership mig 081 — promotes oldest member, a wart; none in promotion/invite). State the derived "references-a-current-owner" invariant + its Phase-6 breakage trigger + the demote→remove no-repoint dead-end + the consumer-tolerance contract.
-- [x] 1.3 C4: one-line model.c4:9 citation refresh (ADR-038 → ADR-038, ADR-072); no topology edit.
+- [x] 1.3 C4: one-line model.c4:9 citation refresh (ADR-038 → ADR-038, ADR-073); no topology edit.
 - [x] 1.4 Frame as resolving the ADR-038-vs-mig-075 contradiction + supersede #4520 / mig 075 single-owner-strict.
 
 ## Phase 2 — migration 117 (CONTRACT; before tests)
@@ -35,9 +35,9 @@ Lane: single-domain · Threshold: single-user incident (requires CPO sign-off) �
 - [x] 4.4 Document expected owner_user_id behavior on pointed-to-owner demotion + the no-repoint dead-end.
 
 ## Phase 5 — cross-link
-- [x] 5.1 domain-model.md BR-WS-3 source cite → ADR-072.
-- [x] 5.2 ADR-044 2026-06-30 amendment → link ADR-072.
-- [x] 5.3 model.c4:9 founder-actor citation (ADR-038) → (ADR-038, ADR-072); re-run c4-code-syntax.test.ts + c4-render.test.ts.
+- [x] 5.1 domain-model.md BR-WS-3 source cite → ADR-073.
+- [x] 5.2 ADR-044 2026-06-30 amendment → link ADR-073.
+- [x] 5.3 model.c4:9 founder-actor citation (ADR-038) → (ADR-038, ADR-073); re-run c4-code-syntax.test.ts + c4-render.test.ts.
 
 ## Phase 6 — deferred follow-up
 - [x] 6.1 Filed **#5805** (milestone Post-MVP / Later; labels domain/engineering + type/feature): reconcile `organizations.owner_user_id` data under N owners (backfill/junction), with the three re-eval triggers.

@@ -1,7 +1,7 @@
 -- 117_reconcile_ownership_rpc_comments_multi_owner.sql
--- docs/metadata reconcile: multi-owner-by-design ownership RPCs (#5756 / ADR-072).
+-- docs/metadata reconcile: multi-owner-by-design ownership RPCs (#5756 / ADR-073).
 --
--- Workspaces support N co-owners by design (founder ruling #5733; ADR-072 is
+-- Workspaces support N co-owners by design (founder ruling #5733; ADR-073 is
 -- the dedicated decision-of-record, superseding the single-owner-strict model
 -- asserted by migration 075 / #4520 and resolving the long-standing ADR-038
 -- (multi-owner) vs mig-075 (single-owner-strict) contradiction).
@@ -33,10 +33,10 @@
 -- enforcer: it is the atomic hand-off that re-points the
 -- organizations.owner_user_id primary/billing/DSAR pointer; co-owners are added
 -- via invite-as-owner / update_workspace_member_role promotion, which do NOT
--- touch the pointer (ADR-072).
+-- touch the pointer (ADR-073).
 COMMENT ON FUNCTION public.transfer_workspace_ownership(uuid, uuid, text, uuid) IS
   'Atomic workspace ownership hand-off-and-step-down (multi-owner-by-design, '
-  'ADR-072 / #5756). Promotes target to owner FIRST then demotes caller to '
+  'ADR-073 / #5756). Promotes target to owner FIRST then demotes caller to '
   'member (promote-before-demote keeps the at-least-one-owner invariant); '
   're-points the organizations.owner_user_id primary/billing/DSAR pointer to '
   'the new owner; writes attestation + revocation rows. NOT the only owner path '
@@ -49,10 +49,10 @@ COMMENT ON FUNCTION public.transfer_workspace_ownership(uuid, uuid, text, uuid) 
 -- update_workspace_member_role: member->owner promotion is PERMITTED (the
 -- additive co-owner primitive; the mig-075 promotion block is gone). The
 -- retained count(owner) <= 1 guard is the at-least-one-owner invariant, the
--- only ownership-cardinality rule (ADR-072).
+-- only ownership-cardinality rule (ADR-073).
 COMMENT ON FUNCTION public.update_workspace_member_role(uuid, uuid, text, uuid) IS
   'Workspace-member role-change RPC (mig 094 caller-override fix; multi-owner '
-  'reconcile ADR-072 / #5756). Direct member->owner promotion is PERMITTED — '
+  'reconcile ADR-073 / #5756). Direct member->owner promotion is PERMITTED — '
   'the additive co-owner primitive (the single-owner-strict mig-075 promotion '
   'block is gone). The retained count(owner) <= 1 "cannot demote the last '
   'owner" guard is the at-least-one-owner invariant — the only '

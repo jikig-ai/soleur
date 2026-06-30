@@ -1,5 +1,5 @@
 ---
-adr: ADR-072
+adr: ADR-073
 title: Multi-owner workspaces and the organizations.owner_user_id primary-owner pointer
 status: accepted
 date: 2026-06-30
@@ -13,7 +13,7 @@ related_specs:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-072: Multi-owner workspaces and the `organizations.owner_user_id` primary-owner pointer
+# ADR-073: Multi-owner workspaces and the `organizations.owner_user_id` primary-owner pointer
 
 ## Context
 
@@ -83,11 +83,11 @@ Adopt **Option A**. This ADR is the dedicated decision-of-record. **No RPC behav
 
 ## Framing / Supersession
 
-ADR-072 **resolves the pre-existing ADR-038 (multi-owner) vs migration-075/#4520 (single-owner-strict) contradiction** — it is a clarification *consistent with* ADR-038, not a reversal of it — and **supersedes the single-owner-strict assertion of #4520 / migration 075**. It also concretises the ADR-044 2026-06-30 "Owner model note" deferral (the "dedicated ADR to follow").
+ADR-073 **resolves the pre-existing ADR-038 (multi-owner) vs migration-075/#4520 (single-owner-strict) contradiction** — it is a clarification *consistent with* ADR-038, not a reversal of it — and **supersedes the single-owner-strict assertion of #4520 / migration 075**. It also concretises the ADR-044 2026-06-30 "Owner model note" deferral (the "dedicated ADR to follow").
 
 ## C4
 
-One-line citation refresh only — **no structural / topology edit**. `model.c4:9` (the `founder` actor) already states "Workspaces may have MULTIPLE Owners (ADR-038 team workspaces)"; the citation is refreshed to `(ADR-038, ADR-072)` for cross-link consistency with `domain-model.md` BR-WS-3 and the ADR-044 amendment. Cardinality ("at-least-one-owner") and column semantics ("primary pointer") are domain rules belonging in `domain-model.md` (BR-WS-3/BR-WS-4), not in a C4 actor description — placing them in `model.c4` would be a category error.
+One-line citation refresh only — **no structural / topology edit**. `model.c4:9` (the `founder` actor) already states "Workspaces may have MULTIPLE Owners (ADR-038 team workspaces)"; the citation is refreshed to `(ADR-038, ADR-073)` for cross-link consistency with `domain-model.md` BR-WS-3 and the ADR-044 amendment. Cardinality ("at-least-one-owner") and column semantics ("primary pointer") are domain rules belonging in `domain-model.md` (BR-WS-3/BR-WS-4), not in a C4 actor description — placing them in `model.c4` would be a category error.
 
 ## Alternatives Considered
 
@@ -102,4 +102,4 @@ One-line citation refresh only — **no structural / topology edit**. `model.c4:
 
 ## Sequencing
 
-The decision is **already true** of the running system, so ADR-072 ships `status: accepted` immediately — no soak gate. The deferred `owner_user_id` data reconciliation is tracked as a follow-up issue and is gated on this ADR plus a concrete re-eval trigger (see Decision points 5-6 and the follow-up issue).
+The decision is **already true** of the running system, so ADR-073 ships `status: accepted` immediately — no soak gate. The deferred `owner_user_id` data reconciliation is tracked as a follow-up issue and is gated on this ADR plus a concrete re-eval trigger (see Decision points 5-6 and the follow-up issue).

@@ -3,7 +3,7 @@
 -- Contract: every row returns `check_name` + `bad`. Any `bad > 0` row fails CI
 -- verify-migrations (and auto-closes any matching `follow-through` issue).
 --
--- Locks the DURABLE multi-owner-by-design invariant (ADR-072 / #5756) — the
+-- Locks the DURABLE multi-owner-by-design invariant (ADR-073 / #5756) — the
 -- signature + grant + guard presence, NOT just comment prose:
 --   (1) no single-owner-enforcing partial-UNIQUE index AND no UNIQUE/EXCLUDE
 --       constraint on workspace_members;

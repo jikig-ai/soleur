@@ -22,7 +22,7 @@
 BEGIN;
 
 -- Re-introduce the forbidden single-owner-strict enforcement: at most one owner
--- row per workspace. This is exactly what ADR-072 forbids and what check 1 must
+-- row per workspace. This is exactly what ADR-073 forbids and what check 1 must
 -- catch.
 CREATE UNIQUE INDEX ws_members_one_owner_per_workspace_neg_idx
   ON public.workspace_members (workspace_id)
