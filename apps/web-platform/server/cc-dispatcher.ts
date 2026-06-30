@@ -2012,6 +2012,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         activeWorkspaceId,
         connected: Boolean(repoUrl),
         dbReady: confirmDbReady, // POST-heal (review P3) — see confirmDbReady note above
+        // #5733 D2 — the self-heal + ensureWorkspaceRepoCloned already ran above,
+        // so an absent/dir-invalid `.git` here is a TERMINAL strand → emit + block.
+        phase: "post-heal",
       })) === "block"
     ) {
       throw new RepoNotReadyError(
