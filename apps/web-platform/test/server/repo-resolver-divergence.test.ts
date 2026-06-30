@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  hashUserId: (s: string) => `hash-${s}`,
 }));
 
 import { reportSilentFallback } from "@/server/observability";
 import {
   reportRepoResolverDivergence,
+  reportAgentReadinessSelfStop,
   _resetResolverDivergenceDedupeForTests,
 } from "@/server/repo-resolver-divergence";
 
@@ -185,6 +187,57 @@ describe("reportRepoResolverDivergence — fingerprint-deduped breadcrumb (ADR-0
       resolvedWorkspaceId: "user-1",
     });
 
+    expect(reportSilentFallback).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("reportAgentReadinessSelfStop — agent-surface strand observability (#5733 Phase 1b)", () => {
+  const base = {
+    userId: "user-1",
+    activeWorkspaceId: "754ee124",
+    gitValid: true, // the FILE-pointer trap: lstat-valid yet strands in-bwrap
+    gitKind: "file-pointer",
+    gitdirEscapesWorkspace: true,
+  };
+
+  it("emits a DISTINCT agent_readiness_self_stop error (own Sentry issue group) carrying HASHED ws id + gitValid + shape; NO raw id/path/repoUrl/installationId", () => {
+    reportAgentReadinessSelfStop(base);
+
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    // Distinct message → its OWN issue group (NOT repo_resolver_divergence), so
+    // the discoverability `jq length` counts it independently.
+    expect((err as Error).message).toBe("agent_readiness_self_stop");
+    expect(ctx.feature).toBe("agent-readiness-self-stop");
+    expect(ctx.op).toBe("agent-readiness-self-stop");
+    expect(ctx.extra).toMatchObject({
+      // Pre-hashed: for a SOLO workspace this would equal the raw userId, so it
+      // MUST be hashed (security #5733) — not emitted raw.
+      activeWorkspaceIdHash: "hash-754ee124",
+      gitValid: true,
+      gitKind: "file-pointer",
+      gitdirEscapesWorkspace: true,
+    });
+    // userId is present (pseudonymized to userIdHash at the emit boundary).
+    expect(ctx.extra).toHaveProperty("userId");
+    // The raw workspace-id-bearing fields must NOT leak (they == userId for solo).
+    expect(ctx.extra).not.toHaveProperty("activeWorkspaceId");
+    expect(ctx.extra).not.toHaveProperty("workspacePath");
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("dedupes by (userId, workspace, .git kind) — recurring strand emits once per process", () => {
+    reportAgentReadinessSelfStop(base);
+    reportAgentReadinessSelfStop(base);
+    reportAgentReadinessSelfStop(base);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("a SHAPE CHANGE (file-pointer → dir-invalid) re-fires (not over-deduped on workspace alone)", () => {
+    reportAgentReadinessSelfStop(base);
+    reportAgentReadinessSelfStop({ ...base, gitKind: "dir-invalid", gitValid: false });
     expect(reportSilentFallback).toHaveBeenCalledTimes(2);
   });
 });
