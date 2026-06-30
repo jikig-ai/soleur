@@ -13,6 +13,9 @@ import { join } from "node:path";
 import {
   isValidGitWorkTree,
   isEmptyCorruptGitDir,
+  probeGitWorktreeShape,
+  isReadyGitWorkTree,
+  isStrandingFilePointer,
 } from "@/server/git-worktree-validity";
 
 // Safety-critical probes (deepen-plan F2): `isEmptyCorruptGitDir` is the ONLY
@@ -97,6 +100,115 @@ describe("git-worktree-validity", () => {
     const p = await ws("absent");
     expect(isValidGitWorkTree(p)).toBe(false);
     expect(isEmptyCorruptGitDir(p)).toBe(false);
+  });
+
+  // #5733 — structural shape classification for the dispatch readiness gate +
+  // observability. A `.git` FILE pointer is the strand precondition: it passes
+  // isValidGitWorkTree (lstat) but the agent's in-bwrap `git rev-parse` fails,
+  // especially when the gitdir target is under /workspaces (sandbox denyRead).
+  describe("probeGitWorktreeShape (#5733)", () => {
+    it("dir with HEAD+objects → dir-valid", async () => {
+      const p = await ws("shape-valid");
+      await mkdir(join(p, ".git", "objects"), { recursive: true });
+      await writeFile(join(p, ".git", "HEAD"), "ref: refs/heads/main\n");
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "dir-valid" });
+    });
+
+    it("absent `.git` → absent", async () => {
+      const p = await ws("shape-absent");
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "absent" });
+    });
+
+    it("bare `mkdir .git` (no HEAD/objects) → dir-invalid", async () => {
+      const p = await ws("shape-bare");
+      await mkdir(join(p, ".git"), { recursive: true });
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "dir-invalid" });
+    });
+
+    it("`.git` FILE whose gitdir target ESCAPES the workspace (under /workspaces) → file-pointer, escapes=true (the strand)", async () => {
+      const p = await ws("shape-escape");
+      await writeFile(
+        join(p, ".git"),
+        "gitdir: /workspaces/other/.git/worktrees/x\n",
+      );
+      const shape = probeGitWorktreeShape(p);
+      expect(shape.kind).toBe("file-pointer");
+      expect(shape.gitdirTarget).toBe("/workspaces/other/.git/worktrees/x");
+      expect(shape.gitdirEscapesWorkspace).toBe(true);
+    });
+
+    it("`.git` FILE whose gitdir target stays INSIDE the workspace → file-pointer, escapes=false", async () => {
+      const p = await ws("shape-inside");
+      await writeFile(join(p, ".git"), "gitdir: ./.git-real\n");
+      const shape = probeGitWorktreeShape(p);
+      expect(shape.kind).toBe("file-pointer");
+      expect(shape.gitdirEscapesWorkspace).toBe(false);
+    });
+
+    it("`.git` SYMLINK → other (O_NOFOLLOW does not follow it; never a file-pointer)", async () => {
+      // Pins the no-follow semantics the TOCTOU-safe fd open relies on: a
+      // symlink `.git` must NOT be read-through and classified file-pointer.
+      const p = await ws("shape-symlink");
+      const real = join(dir, "shape-real-git");
+      await mkdir(join(real, "objects"), { recursive: true });
+      await writeFile(join(real, "HEAD"), "ref: refs/heads/main\n");
+      await symlink(real, join(p, ".git"));
+      expect(probeGitWorktreeShape(p).kind).toBe("other");
+    });
+  });
+
+  // #5733 — readiness-grade validity: a `.git` FILE pointer is lstat-VALID but
+  // NOT ready (it strands the agent's in-bwrap rev-parse) → must route to heal.
+  describe("isReadyGitWorkTree (#5733)", () => {
+    it("dir with HEAD+objects → ready (true)", async () => {
+      const p = await ws("ready-valid");
+      await mkdir(join(p, ".git", "objects"), { recursive: true });
+      await writeFile(join(p, ".git", "HEAD"), "ref: refs/heads/main\n");
+      expect(isValidGitWorkTree(p)).toBe(true);
+      expect(isReadyGitWorkTree(p)).toBe(true);
+    });
+
+    it("ESCAPING `.git` FILE pointer → lstat-VALID but NOT ready (false) — routes to re-clone", async () => {
+      const p = await ws("ready-pointer-escape");
+      await writeFile(join(p, ".git"), "gitdir: /workspaces/other/.git/worktrees/x\n");
+      expect(isValidGitWorkTree(p)).toBe(true); // the lstat trap
+      expect(isReadyGitWorkTree(p)).toBe(false); // escaping → readiness rejects it
+    });
+
+    it("NON-escaping in-workspace `.git` FILE pointer → READY (true) — readable in-sandbox, left untouched", async () => {
+      const p = await ws("ready-pointer-inside");
+      await writeFile(join(p, ".git"), "gitdir: ./.git-real\n");
+      expect(isValidGitWorkTree(p)).toBe(true);
+      expect(isReadyGitWorkTree(p)).toBe(true); // non-escaping → ready, NOT healed
+    });
+
+    it("absent `.git` → not ready (false)", async () => {
+      const p = await ws("ready-absent");
+      expect(isReadyGitWorkTree(p)).toBe(false);
+    });
+  });
+
+  // #5733 — the destructive-heal predicate: ONLY an escaping/unclassifiable
+  // pointer strands (and is re-cloned); a non-escaping pointer is left untouched.
+  describe("isStrandingFilePointer (#5733)", () => {
+    it("escaping pointer → stranding (true)", () => {
+      expect(
+        isStrandingFilePointer({ kind: "file-pointer", gitdirEscapesWorkspace: true }),
+      ).toBe(true);
+    });
+    it("unreadable/unclassifiable pointer body (escapes undefined) → stranding (true)", () => {
+      expect(isStrandingFilePointer({ kind: "file-pointer" })).toBe(true);
+    });
+    it("non-escaping in-workspace pointer → NOT stranding (false)", () => {
+      expect(
+        isStrandingFilePointer({ kind: "file-pointer", gitdirEscapesWorkspace: false }),
+      ).toBe(false);
+    });
+    it("a valid dir / absent / dir-invalid is never a stranding pointer", () => {
+      expect(isStrandingFilePointer({ kind: "dir-valid" })).toBe(false);
+      expect(isStrandingFilePointer({ kind: "absent" })).toBe(false);
+      expect(isStrandingFilePointer({ kind: "dir-invalid" })).toBe(false);
+    });
   });
 
   it("`.git` symlink to a valid repo dir → treated by lstat as a non-dir/non-file link → not the empty fingerprint (never rm'd)", async () => {

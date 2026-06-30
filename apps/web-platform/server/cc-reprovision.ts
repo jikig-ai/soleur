@@ -10,7 +10,7 @@ import { reportSilentFallback } from "./observability";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { resolveActiveWorkspace } from "./workspace-resolver";
 import { reportRepoResolverDivergence } from "./repo-resolver-divergence";
-import { isValidGitWorkTree } from "./git-worktree-validity";
+import { isReadyGitWorkTree } from "./git-worktree-validity";
 
 /**
  * Per-dispatch workspace re-provision for the Concierge (cc-soleur-go) path
@@ -96,17 +96,22 @@ export async function reprovisionWorkspaceOnDispatch(
       });
       return "ok";
     }
-    // `.git` VALID work tree → the safe symptom (missing/corrupt repo) is absent:
-    // skip the install/repo resolution AND the clone. Safety invariant: a VALID
+    // `.git` READY work tree → the safe symptom (missing/corrupt repo) is absent:
+    // skip the install/repo resolution AND the clone. Safety invariant: a READY
     // `.git` is NEVER re-cloned/overwritten (never destroy Start-Fresh work /
     // un-pushed commits — learning 2026-06-03-self-heal-on-brand-path-only-acts-
-    // on-safe-symptom.md). Validity-not-presence (ADR-044 2026-06-19 amendment):
-    // a CORRUPT `.git` (a partial/interrupted clone, or a bare `mkdir .git` with
-    // no HEAD/objects) is NOT a usable work tree, so it must NOT short-circuit
-    // "ok" — it falls through to `ensureWorkspaceRepoCloned`, which does the
-    // validity check + empty-corrupt removal + re-clone. The path the probe used
-    // is exactly the path `ensureWorkspaceRepoCloned` clones into — probe == clone
-    // by construction.
+    // on-safe-symptom.md). READINESS-not-presence (ADR-044 2026-06-19 +
+    // 2026-06-30 amendments): a CORRUPT `.git` (partial clone / bare `mkdir .git`)
+    // OR a STRANDING gitdir-pointer FILE (#5733 — passes lstat-validity but its
+    // gitdir target escapes the sandbox, so the agent's in-bwrap `git rev-parse`
+    // fails) is NOT a usable work tree, so it must NOT short-circuit "ok" — it
+    // falls through to `ensureWorkspaceRepoCloned`, which does the validity check
+    // + empty-corrupt removal / stale-pointer unlink + re-clone. This is the WARM
+    // turn's only heal gate (the cold `realSdkQueryFactory` does not run on a warm
+    // turn), so it MUST use the same `isReadyGitWorkTree` predicate as the cold
+    // dispatch + reconcile gates or a mid-session pointer strands unhealed. The
+    // path the probe used is exactly the path `ensureWorkspaceRepoCloned` clones
+    // into — probe == clone by construction.
     //
     // Observability: a present-but-INVALID `.git` (corrupt / partial clone) falls
     // through to `ensureWorkspaceRepoCloned`, whose corrupt-recovery surfaces in
@@ -115,7 +120,7 @@ export async function reprovisionWorkspaceOnDispatch(
     // genuine re-clone failure). These are DISTINCT from the cold dispatch path's
     // `feature=repo-resolver-divergence op=corrupt-worktree-at-dispatch` breadcrumb
     // — a warm-path corruption is NOT visible under the cold divergence op.
-    if (isValidGitWorkTree(workspacePath)) {
+    if (isReadyGitWorkTree(workspacePath)) {
       return "ok";
     }
     const [storedInstallationId, repoUrl] = await Promise.all([
