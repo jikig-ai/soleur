@@ -1,5 +1,5 @@
 ---
-title: "Fix: owner-less workspace 754ee124 strands /soleur:go — workspace-ID resolution divergence + agent-surface observability blind spot (not a separate-container filesystem)"
+title: "Verify (post-merge): 754ee124 strand fix #5734 executes on the agent surface — de-anomalize via data check + Sentry exec-path confirmation (implementation already merged)"
 type: fix
 date: 2026-06-30
 lane: cross-domain
@@ -7,9 +7,40 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 issues: "#5733 #5591"
 prior_fixes: "#5716 #5584 #5730"
+implemented_by: "#5734 (commit 190ab58a5, merged 2026-06-30 16:32)"
+posture: "verification-only (code already on main)"
 ---
 
-# Fix: owner-less workspace `754ee124` strands `/soleur:go` — workspace-ID resolution divergence + agent-surface observability blind spot
+# Verify (post-merge): `754ee124` strand fix `#5734` on the agent surface — implementation already merged
+
+## ⚠️ STALE-PREMISE RECONCILIATION (2026-06-30, planning pass)
+
+**The implementation this plan describes is ALREADY MERGED TO MAIN.** Commit
+`190ab58a5` (PR #5734, *"heal gitdir-pointer strands + observe agent self-stop +
+tolerate N co-owners (#5734)"*, merged 2026-06-30 16:32) ships **all three
+committed deliverables** of the original plan, verified present in this worktree's
+tree (`git merge-base --is-ancestor 190ab58a5 origin/main` ⇒ YES; branch is 0
+commits behind main):
+
+| Original deliverable | Shipped in #5734 as |
+|---|---|
+| **H2 gitdir-pointer strand heal** (primary hypothesis) | `isStrandingFilePointer` + escaping-pointer unlink/re-clone in `ensure-workspace-repo.ts:154` |
+| **Phase 1b agent-surface strand observability** | `reportAgentReadinessSelfStop` (distinct Sentry issue, pseudonymized) in `repo-resolver-divergence.ts:98` |
+| **#5591 owner-less de-anomalization** | **Reframed + fixed**: 754ee124 is NOT owner-less — it has **2 legitimate co-owners**; the `.maybeSingle()` ERRORED on ≥2 rows → false "owner-less" warn. Fixed via select-all-owners + deterministic pick in `workspace-reconcile-on-push.ts:254-293`. **No owner-canary row is missing; Phase 1a "restore the canary" is REFUTED.** |
+
+**Consequence — this plan is now VERIFICATION-ONLY.** There is NO fourth code
+fix to write (writing one would duplicate merged code — the exact
+already-resolved trap Phase 0.6 + `hr-before-asserting-github-issue-status`
+guard against). #5733/#5591 remain OPEN only because their closure is gated on
+**post-merge operator verification** (#5591 also has its own open PR #5783).
+
+**What remains (the investigate-first ask, intact):** confirm via live Supabase +
+Sentry that the merged fix actually executes on the **agent's** exec-path surface
+(the `2026-06-30-verify-the-fixed-code-path-actually-executes` discipline),
+reproduce `/soleur:go` on `754ee124`, then close #5733. The Implementation Phases
+below are **superseded by the "Verification Plan (active)" section** added at the
+end; the original H2/H3/H1 branching + Phase 1a canary restore are retained ONLY
+as the historical pre-merge analysis that #5734 acted on.
 
 ## Enhancement Summary (deepen-plan, 2026-06-30)
 
@@ -439,8 +470,60 @@ OUT of reconcile aligns with #3243's reduce-responsibilities direction.)
 - The audit-unblock works via the **owner path** (`appendKbSyncRow(ownerId)` + minted JWT), not `append_kb_sync_row_for_user`; the recovered row lands on the owner's user row.
 - Test runner/typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` and the package's real runner (NOT `npm run -w`, NOT assumed `bun test`).
 
+## Verification Plan (active — supersedes the pre-merge Implementation Phases above)
+
+Since #5734 already merged the code, the only remaining work is **investigate-first
+verification on the agent surface**. No code ships from this branch unless V3
+re-opens a fix branch with NEW live evidence.
+
+### V0 — Confirm the merged fix is deployed (read-only)
+- Confirm `190ab58a5` is in the live web-platform image: query the deploy webhook
+  `deploy.soleur.ai/hooks/deploy-status` (HMAC + CF Access via Doppler
+  `prd_terraform`) for the running SHA/version, OR confirm the post-merge release
+  workflow for #5734 completed. Record the deployed version.
+
+### V1 — Exec-path confirmation via Sentry (the load-bearing learning)
+- Using `scripts/sentry-issue.sh` (host `jikigai-eu.sentry.io`,
+  `SENTRY_ISSUE_RO_TOKEN`), search the EU org for the NEW
+  `agent_readiness_self_stop` op scoped to `754ee124`'s `activeWorkspaceIdHash`
+  and recent window. Its presence proves the dispatch readiness gate (the merged
+  observability) **executes on the strand surface**; its absence on a fresh strand
+  means the strand is no longer reached (healed) OR the op never fires there →
+  re-trace.
+- Cross-check `ownerless-reconcile` STOPPED firing for `754ee124` after the merge
+  (the N-co-owner fix). The pre-fix data showed it firing 28×; post-fix expect 0.
+
+### V2 — Live Supabase de-anomalization data check (read-only, Supabase MCP)
+- `workspace_members` for `754ee124`: confirm **≥2 `role='owner'` rows** (the
+  co-owner topology that triggered the `.maybeSingle()` false positive). This
+  **refutes** the "missing canary" premise and **confirms** #5591's reframing.
+- `user_session_state.current_workspace_id` for the operator: record whether it is
+  `754ee124` (rules H3 in/out for any residual strand).
+- `organizations.owner_user_id` via the `workspaces.organization_id` join: record
+  the org-owner lineage (no write — multi-owner is by design, nothing to restore).
+
+### V3 — Reproduce on the operator surface + close-out
+- Reproduce `/soleur:go` on `754ee124`. **PASS:** agent reads `jikig-ai/soleur`, no
+  `not a git repository` strand → `gh issue close #5733` with a comment citing
+  #5734 + the V1/V2 evidence.
+- **FAIL (residual strand):** the merged `agent_readiness_self_stop` event now
+  carries `gitValid` + `gitKind` + the hash — capture it, and ONLY THEN open a new
+  fix branch with that NEW live evidence (the next layer is now data-driven, not
+  code-read). Do NOT pre-author a fix here.
+- #5591: it has its own open PR **#5783** — add a `Ref #5733` cross-link note;
+  do NOT duplicate its scope on this branch.
+
+### V-Disposition — the WIP PR #5788 on this branch
+This branch (`feat-one-shot-5733-...`) currently has WIP PR **#5788** over a tree
+identical to main (0 commits ahead). Because the fix is already merged, the
+correct disposition is one of: **(a)** convert #5788 to a verification-evidence PR
+(this reconciled plan + tasks + the V0–V3 findings recorded in the spec, no code),
+or **(b)** close #5788 and record the verification directly on #5733. Decide at
+/work time based on whether V3 surfaces residual work. Do NOT push a
+re-implementation.
+
 ## References
-- Issue: #5733 (this), #5591 (owner-less root). Prior: #5716, #5584, #5730. Related: #5673 (repo-connect-block-duplicate), #5394/ADR-044 PR-1 (reset-to-solo instrumentation), #4520 (single-owner enforcement).
+- Issue: #5733 (this), #5591 (owner-less root → its own PR #5783). Implemented by: **#5734 (commit `190ab58a5`)**. Prior: #5716, #5584, #5730. Related: #5673 (repo-connect-block-duplicate), #5394/ADR-044 PR-1 (reset-to-solo instrumentation), #4520 (single-owner enforcement, SUPERSEDED by N-co-owner #5733/#5734).
 - Learnings: `2026-06-30-verify-the-fixed-code-path-actually-executes-on-the-affected-surface.md`, `2026-06-15-bash-bwrap-sandbox-mount-visibility-vs-cwd-persistence.md`, `2026-06-12-resumability-claim-must-verify-workspace-lifecycle.md`, `2026-06-18-multi-workspace-per-installation-breaks-founder-resolve-and-ready-clone.md`, `2026-06-29-recurring-failure-root-cause-is-residual-bad-data-not-patched-code.md`.
 - ADRs: ADR-038 (workspace_members canary, N2), ADR-044 (workspace repo ownership), ADR-033 I7 (bwrap sandbox / spawn), ADR-030 (Inngest).
 - Code: `workspace-resolver.ts:365-450`, `cc-dispatcher.ts:1540-1653,1791-1793,2085`, `cc-reprovision.ts:54-138`, `workspace-reconcile-on-push.ts:251-369`, `git-worktree-validity.ts:49-67`, `agent-runner-query-options.ts:149`, `agent-runner-sandbox-config.ts:70-94`, `session-sync.ts:686-767`, `lib/supabase/tenant.ts:255-262`, migrations `053`, `075`, `079`, `100`, `109`.
