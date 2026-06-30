@@ -29,8 +29,11 @@ non-codeable (recruitment, interviews).
 
 ## Goals
 
-- **G1.** Automate roadmap↔GitHub reconciliation as `product-roadmap validate`, replacing the manual
-  weekly/monthly CPO sync, runnable on a `/soleur:schedule` weekly cron.
+- **G1.** [Re-scoped 2026-06-30 — see plan Research Reconciliation] Consolidate the **existing**
+  reconciliation logic (today scattered across `cron-roadmap-review.ts`'s embedded prompt, brainstorm
+  Phase 0.25, and a manual runbook) into ONE codified, deterministic `product-roadmap validate` skill
+  + shared parse module, runnable **on-demand** by the operator. Do NOT add a new cron — the Inngest
+  `cron-roadmap-review.ts` already runs weekly (ADR-033: Inngest > GHA).
 - **G2.** Provide an advisory `product-roadmap next` that reports the current phase and the single
   next action, routing codeable work to `/soleur:go #N` and naming non-codeable operator actions.
 - **G3.** Extract a shared roadmap parse module so the existing workshop, `validate`, and `next`
@@ -63,8 +66,11 @@ non-codeable (recruitment, interviews).
   next actionable item. If the item is a codeable issue, output a ready-to-paste `/soleur:go #N`
   (scrubbing closed `#N` per go.md sharp edge). If non-codeable, name the operator action plainly.
 - **FR6.** `next` is read-only — it makes **no** writes to `roadmap.md` and invokes no build skill.
-- **FR7.** A `/soleur:schedule` weekly cron runs `product-roadmap validate` (counts-only auto-fix),
-  disclosing API spend per `hr-autonomous-loop-skill-api-budget-disclosure`.
+- **FR7.** [DROPPED 2026-06-30 — premise correction] ~~A `/soleur:schedule` weekly cron runs
+  `product-roadmap validate`.~~ The Inngest `cron-roadmap-review.ts` already performs the weekly
+  reconciliation; adding a GHA cron would duplicate it and contradict ADR-033. Pointing that cron at
+  the new skill is a sequenced **follow-up** (ADR-070 records it; re-evaluates the ADR-054
+  `safeCommitAndPr` exemption), not part of this PR.
 
 ## Technical Requirements
 
