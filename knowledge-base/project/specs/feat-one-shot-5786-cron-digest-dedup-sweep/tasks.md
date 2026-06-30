@@ -17,18 +17,19 @@ Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 ## Phase 2 — Wire the 6 suffix-free crons
 For roadmap-review, content-generator, growth-audit, growth-execution, competitive-analysis, seo-aeo-audit:
 - [ ] 2.1 Add `digestIssueExistsForDate` to each `./_cron-shared` import block.
-- [ ] 2.2 Insert `dedup-digest-check` step after `run-started-at` (insert lines per plan table); early-return GREEN heartbeat on hit. Use each cron's `ensureScheduledAuditIssue` titlePrefix.
-- [ ] 2.3 roadmap-review: drop `--search`, widen `--state open`→`all` (AC7). Other 5: add fresh `gh issue list --label scheduled-<slug> --state all` DEDUP RULE.
-- [ ] 2.4 Add AC6 source-anchor assertions to each per-cron test file.
+- [ ] 2.2 Insert `dedup-digest-check` step after `run-started-at` (insert lines per plan table); early-return GREEN heartbeat (`postSentryHeartbeat({ok:true})`) on hit. Use each cron's `ensureScheduledAuditIssue` titlePrefix.
+- [ ] 2.3 ONLY roadmap-review: drop `--search`, widen `--state open`→`all` (AC7). The other 5 get NO new in-prompt rule (handler-side dedup is the sole guard).
+- [ ] 2.4 Add AC6 `concurrency:{scope:"fn",limit:1}` source-anchor to each per-cron test file (the dedup-block presence anchor is dropped — subsumed by AC1).
 
 ## Phase 3 — Wire cron-campaign-calendar (suffix variant)
-- [ ] 3.1 Import + dedup block after l.167, passing `titleSuffix: " (heartbeat)"`, prefix `[Scheduled] Campaign Calendar -`.
-- [ ] 3.2 Add in-prompt LIST rule matching the suffixed title.
-- [ ] 3.3 Per-cron test asserts `titleSuffix: " (heartbeat)"` present in source.
+- [ ] 3.1 Import + dedup block after l.167, passing `titleSuffix: " (heartbeat)"`, prefix `[Scheduled] Campaign Calendar -`. Add the partial-dedup asymmetry comment (fires only NEW==0). Post heartbeat BEFORE return — do NOT fall through to verify-output (AC1b).
+- [ ] 3.2 No in-prompt rule.
+- [ ] 3.3 Per-cron test asserts `concurrency:{scope:"fn",limit:1}` AND `titleSuffix: " (heartbeat)"` present in source.
 
-## Phase 4 — Parametrized dedup regression test
-- [ ] 4.1 Create `test/server/inngest/cron-cohort-dedup.test.ts` (fake octokit STORE + mocked spawn + frozen Date), modeled on `cron-community-monitor-dedup.test.ts`.
-- [ ] 4.2 Parametrize 7 `{handler,label,titlePrefix,titleSuffix,cronName}` rows via `it.each`; cover AC1 (2→1), AC2 (fail-OPEN), AC3 (FAILED-stub no-suppress) through the REAL handler.
+## Phase 4 — Parametrized cohort regression test
+- [ ] 4.1 Create `test/server/inngest/cron-cohort-dedup.test.ts`: fake octokit STORE + **partial `importOriginal` mock of `_cron-shared`** (keep `digestIssueExistsForDate` REAL) + per-row spawn mock writing the **row-derived** title `${row.titlePrefix} ${TODAY}${row.titleSuffix}` + frozen Date. Modeled on `cron-community-monitor-dedup.test.ts`.
+- [ ] 4.2 Parametrize 7 `{handler,label,titlePrefix,titleSuffix,cronName}` rows via `it.each`; per row: AC1 (2→1, `realDigestCount` keyed on row-derived title), LIST-route guard fired, `step.executed` has `dedup-digest-check`, AC1b (skip path GREEN `?status=ok`/`{ok:true}`/no `claude-eval`), AC2 (fail-OPEN), AC3 (FAILED-stub no-suppress) — all through the REAL handler.
+- [ ] 4.3 campaign-calendar rows: AC1c (mutation — dropping `titleSuffix` reds it; verify skip path does NOT reach `verify-output`/`finalizeOutputAwareHeartbeat`); AC1d (overdue-day NEW>0, no `(heartbeat)` digest in store → no suppression, spawn runs).
 
 ## Phase 5 — Verify
 - [ ] 5.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0 (AC8).
