@@ -978,6 +978,84 @@ resource "sentry_issue_alert" "kb_sync_protected_fallback_failed" {
   }
 }
 
+# ── Disk-IO WAL-concentration alert (#5736) — APPLY-CREATED, NOT import-only ────
+# server/inngest/functions/cron-supabase-disk-io.ts: the 6-hourly disk-IO monitor
+# now reads the per-statement WAL signal (migration 114: top_wal_statements +
+# max_wal_pct from extensions.pg_stat_statements) and emits ONE Sentry capture
+# tagged feature=cron-supabase-disk-io / op=wal-concentration when a single
+# statement's share of total WAL exceeds WAL_CONCENTRATION_PCT_CEIL (40). This is
+# the continuous backstop for the #5736 class — a webhook dedup INSERT that was
+# 63% of prod WAL yet shipped through review + green CI because no lens checked
+# write frequency × per-write WAL. This rule is the NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself): without it the capture sits in
+# Sentry un-paged. The signal already exists (reportSilentFallback →
+# captureException); no app change beyond the emit.
+#
+# 2-tag AND filter (`filter_match="all"`, feature + op tagged_event) — mirrors
+# github_webhook_founder_ambiguous's EQUAL/EQUAL shape. Scoped to
+# `op=wal-concentration` (NOT feature-only): `feature=cron-supabase-disk-io` also
+# carries the read-signal failure op (`op=read-signal`) which is paged via the
+# cron's own heartbeat monitor (scheduled-supabase-disk-io); a feature-only
+# filter here would double-page that. This rule fires ONLY on WAL concentration.
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue (e.g. fixes the dominating statement, then a later
+# regression re-introduces it). Distinct `frequency=21` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,18,19,20,30,60,61,62;
+# keyed on action_match+filter_match+frequency+actions-shape, NOT conditions —
+# must be unique). Cross-artifact op/feature contract pinned by
+# test/sentry-disk-io-wal-concentration-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "disk_io_wal_concentration" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "disk-io-wal-concentration"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 21
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cron-supabase-disk-io"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "wal-concentration"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the
+  # solo founder. The event carries only the normalized (literal-stripped) query
+  # text + WAL percentages — no row values / cross-tenant content — so the
+  # fallthrough does not over-disclose. Revisit recipient pinning
+  # (target_type="Member") before the first non-founder Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
 # watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
 # ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge
@@ -1103,6 +1181,82 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
   # pg_code/Resend-error tags — NO plaintext recipient or body — so the
   # fallthrough does not over-disclose. Revisit recipient pinning
   # (target_type="Member") before the first non-ops Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Disk-IO WAL-concentration alert (#5736) — APPLY-CREATED, NOT import-only ────
+# server/inngest/functions/cron-supabase-disk-io.ts: the 6-hourly disk-IO monitor
+# now reads top_wal_statements + max_wal_pct (migration 114) and, when one
+# statement exceeds WAL_CONCENTRATION_PCT_CEIL (40%) of total WAL, emits a
+# reportSilentFallback event tagged feature=cron-supabase-disk-io /
+# op=wal-concentration. This is the continuous backstop for the #5736 class: a
+# webhook dedup INSERT was 63% of prod WAL (the dominant Disk-IO consumer) yet
+# shipped through review + green CI because no lens checked write frequency ×
+# per-write WAL. This rule is the NOTIFICATION layer
+# (hr-no-dashboard-eyeball-pull-data-yourself): without it the event sits in
+# Sentry un-notified and a single statement can silently burn the Disk-IO budget.
+#
+# 2-tag AND filter (filter_match="all", feature + op tagged_event, both EQUAL) —
+# mirrors github_webhook_founder_ambiguous's single-op shape. Scoped to
+# op=wal-concentration (NOT feature-only): the cron-supabase-disk-io feature tag
+# also carries op=read-signal (RPC read failure), which is already covered by the
+# heartbeat monitor + the [disk-io] GitHub issue path; a feature-only filter would
+# double-page. This rule fires ONLY on the WAL-concentration signal.
+#
+# `action_match="any"` + first_seen/reappeared/regression: lifecycle states are
+# mutually exclusive (a captured event is exactly one) so "all" is never
+# satisfiable; reappeared+regression re-page a recurrence after the operator
+# resolves the Sentry issue. Distinct `frequency=22` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,13,14,15,16,17,18,19,20,21,30,60,61,
+# 62; 22 free 2026-06-30) — dedup keys on action_match+filter_match+frequency+
+# actions-shape, NOT conditions. Cross-artifact op/feature contract pinned by
+# test/sentry-disk-io-wal-concentration-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "disk_io_wal_concentration" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "disk-io-wal-concentration"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 22
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cron-supabase-disk-io"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "wal-concentration"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the
+  # solo founder. The event carries only the normalized (literal-stripped) query
+  # text + WAL percentages — no row values, no cross-tenant content — so the
+  # fallthrough does not over-disclose. Revisit recipient pinning
+  # (target_type="Member") before the first non-founder Sentry seat.
   actions_v2 = [
     {
       notify_email = {
