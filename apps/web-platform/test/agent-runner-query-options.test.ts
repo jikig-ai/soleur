@@ -68,6 +68,22 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
   });
 });
 
+describe("buildAgentQueryOptions — phase-surface hint per-caller opt-in (#5772 lever 1)", () => {
+  it("registers PostToolUse(Skill) only when enablePhaseSurfaceHint is true", () => {
+    const on = buildAgentQueryOptions({ ...minArgs, enablePhaseSurfaceHint: true });
+    expect(Array.isArray(on.hooks?.PostToolUse)).toBe(true);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Skill");
+  });
+
+  it("omits PostToolUse entirely for the legacy caller (flag absent)", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks?.PostToolUse).toBeUndefined();
+    // The PreToolUse + SubagentStart hooks remain regardless of the flag.
+    expect(off.hooks?.PreToolUse).toBeDefined();
+    expect(off.hooks?.SubagentStart).toBeDefined();
+  });
+});
+
 describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
   it("T2: allowedTools is wired through verbatim", () => {
     const opts = buildAgentQueryOptions({
