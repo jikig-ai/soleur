@@ -17,12 +17,13 @@ PR body: `Ref #5733` (NOT Closes — soak-gated).
 - [ ] 0.3 Read all three `.c4` files; confirm no-C4-impact citing actors/systems/relationships checked.
 - [ ] 0.4 Read precedents: `ensure-workspace-repo.ts:148-356`, `session-sync.ts` cred helper, `resolve_workspace_installation_id` RPC (member vs owner scope). FS-divergence Phase-0 verdict (single vs multi-replica /workspaces) — record, don't block.
 
-## Phase 1 — Deliverable D0 (PRIMARY — in-process dispatch-time re-clone) — TDD
-- [ ] 1.1 RED: `test/dispatch-inprocess-reclone.test.ts` — absent .git + connected workspace → clone runs into `workspacePath` keyed on the WORKSPACE'S OWN install (not membership-resolved user install); member-null user install still clones; `repo_status='ready'` does NOT short-circuit; clone FAILURE → distinct `repo_clone_failed` (sanitized, token never present) + `repo_error` write + RepoNotReadyError; non-UUID activeWorkspaceId rejected (id-shape guard).
-- [ ] 1.2 GREEN: `cc-dispatcher.ts` cold path — in-process guaranteed re-clone before `query()`; resolve install from workspace's own column when user/membership null; reuse `ensureWorkspaceRepoCloned` hardened clone (GIT_ASKPASS token, `--`-guard, github-https allowlist).
-- [ ] 1.3 GREEN: `ensure-workspace-repo.ts` — workspace-own-install fallback (no benign-skip for a CONNECTED workspace) + distinct `repo_clone_failed` loud emit; `repo-resolver-divergence.ts` (or sibling) — add the `repo_clone_failed` reporter (sanitized, ADR-029).
-- [ ] 1.4 GREEN: `cc-reprovision.ts` (warm) + `repo-readiness-self-heal.ts` (`graftReadyButGitAbsent`) — same workspace-own-install fallback so warm-turn member dispatch lands the repo.
-- [ ] 1.5 Verify `cc-dispatcher*` / `cc-reprovision*` / `repo-readiness*` suites green.
+## Phase 1 — Deliverable D0 (consume the EXISTING in-process clone outcome — loud + F4-safe) — TDD
+NO new clone site; NO service-role column read (architecture P0 — phantom premise + posture regression).
+- [ ] 1.1 RED: `test/dispatch-inprocess-reclone.test.ts` — clone FAILURE → `repo_clone_failed` event (exception value has NO token AND NO `/workspaces/<uuid>` path; `extra` excludes repoUrl/install, pre-hashes ws id) + RepoNotReadyError (no spawn). F4: member-path (ws!==user) → emit-only NO set_repo_status; solo/owner (ws===user) + `.git` still absent → error write. CAS: `.git` present after attempt → no error write. No duplicate clone call (grep).
+- [ ] 1.2 GREEN: `cc-dispatcher.ts:1987` — capture the discarded outcome; on "failed" emit `repo_clone_failed` (reason via `sanitizeGitStderr`) + F4-gated+CAS `repo_error`/error write + honest-block. Build path via existing `workspacePathForWorkspaceId` UUID guard. NO service-role read.
+- [ ] 1.3 GREEN: add `repo_clone_failed` reporter to `repo-resolver-divergence.ts` (sanitized, `hashUserId`, ADR-029); wire into `ensure-workspace-repo.ts:271-285` `op:clone` catch so every caller emits.
+- [ ] 1.4 GREEN: `repo-readiness-self-heal.ts` — gate `graftReadyButGitAbsent`→`failHonestly`'s `set_repo_status(error)` on solo/owner + CAS (fix pre-existing F4 inconsistency).
+- [ ] 1.5 Phase-0 gate: confirm `effectiveInstallationId` is non-null for the 754ee124 member dispatch (RPC any-role); if the clone succeeds but `.git` absent at agent read path → STOP, fix path/mount divergence (real bug). Verify `cc-dispatcher*`/`repo-readiness*`/`cc-reprovision*` suites green.
 
 ## Phase 2 — Deliverable D3 (C2 detector empty-output) — TDD
 - [ ] 1.1 RED: `test/in-sandbox-revparse-strand.test.ts` — empty output → strand; `"false\ntrue"` → not strand; `"true\nfalse"` → not strand; keep `fatal:`/`not a git repository`/`false` green.
