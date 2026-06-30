@@ -24,7 +24,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REF_DIR="$(cd "$SCRIPT_DIR/../references" && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+# REPO_ROOT defaults to the skill's own repo. CONSTRAINT_SCAFFOLD_REPO_ROOT points
+# the generator at a synthesized fixture repo (apps/web-platform-shaped) for the
+# hermetic generator self-tests; in normal use it is unset. Templates (REF_DIR)
+# always come from the real skill.
+REPO_ROOT="${CONSTRAINT_SCAFFOLD_REPO_ROOT:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)}"
 
 # v1: the one supported target.
 TARGET_REL="apps/web-platform"
