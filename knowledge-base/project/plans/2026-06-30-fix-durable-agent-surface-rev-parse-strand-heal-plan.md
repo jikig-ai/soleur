@@ -375,7 +375,8 @@ logs:
   retention:       "Sentry project retention (90d)"
 discoverability_test:
   command:         "curl -s -H \"Authorization: Bearer $SENTRY_TOKEN\" \"https://sentry.io/api/0/projects/<org>/web-platform/events/?query=message:agent_readiness_self_stop\" | jq 'length'"
-  expected_output: "0 in steady state; >0 (with gitKind + gitRevParseValid in extra) after a strand on ANY of the 3 gates — the signal that was previously dark"
+  expected_output: "0 in steady state; >0 after a strand on ANY of the 3 gates — the signal that was previously dark"
+  tag_queries:     "`source` and `gitKind` are emitted as SEARCHABLE Sentry tags (promoted via reportSilentFallback `tags`, not just `extra`), so `source:in-sandbox-backstop` and `gitKind:dir-valid` narrow the query directly; `gitRevParseValid` is a stringified-boolean tag too (extra is NOT searchable)"
 ```
 
 ## Architecture Decision (ADR/C4)

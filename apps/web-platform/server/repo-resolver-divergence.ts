@@ -130,7 +130,9 @@ export function reportRepoResolverDivergence(args: {
  *  `in-sandbox-backstop` is the agent's OWN in-bwrap Step 0.0 `rev-parse` result
  *  (deliverable C2) — robust to shapes the host confirm is blind to (escaping
  *  pointer, object-store residual). Folded into the dedupe fingerprint so the two
- *  surfaces are counted independently for the same workspace+kind. */
+ *  surfaces are counted independently for the same workspace+kind, AND promoted to
+ *  a searchable Sentry `source:` tag (the `source:in-sandbox-backstop` query the
+ *  plan advertises — `extra` alone is not queryable). */
 export type AgentReadinessSelfStopSource = "host-pre-heal" | "in-sandbox-backstop";
 
 export function reportAgentReadinessSelfStop(args: {
@@ -169,6 +171,18 @@ export function reportAgentReadinessSelfStop(args: {
   reportSilentFallback(new Error("agent_readiness_self_stop"), {
     feature: "agent-readiness-self-stop",
     op: "agent-readiness-self-stop",
+    // PROMOTED to searchable Sentry tags — `extra` is NOT queryable, and the plan
+    // advertises `source:in-sandbox-backstop` + `gitKind:` discoverability queries
+    // that only work as tags. All three are low-cardinality enums/booleans with NO
+    // PII (never the hashed/raw ids, never the gitdirTarget/path). Kept in `extra`
+    // below too (structured context) — the tags are what make them queryable.
+    tags: {
+      source,
+      gitKind: args.gitKind,
+      ...(args.gitRevParseValid === undefined
+        ? {}
+        : { gitRevParseValid: String(args.gitRevParseValid) }),
+    },
     extra: {
       userId: args.userId, // → userIdHash at the emit boundary (never raw)
       // Pre-hashed: for a solo workspace this equals the raw userId, which the

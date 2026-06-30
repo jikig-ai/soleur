@@ -264,6 +264,17 @@ describe("reportAgentReadinessSelfStop — agent-surface strand observability (#
       gitKind: "dir-valid",
       source: "host-pre-heal",
     });
+    // review P3 (FIX 1) — source / gitKind / gitRevParseValid are PROMOTED to
+    // SEARCHABLE Sentry tags (extra is not queryable; the plan advertises
+    // `source:` + `gitKind:` queries). gitRevParseValid is stringified (tags are
+    // strings). The hashed/raw ids must NEVER appear as tags (not pseudonymized).
+    expect(ctx.tags).toMatchObject({
+      source: "host-pre-heal",
+      gitKind: "dir-valid",
+      gitRevParseValid: "false",
+    });
+    expect(ctx.tags).not.toHaveProperty("userId");
+    expect(ctx.tags).not.toHaveProperty("activeWorkspaceIdHash");
     // The git failure text (which embeds the raw `/workspaces/<id>/.git` path ==
     // raw userId for a solo workspace) must NEVER reach the event.
     expect(ctx.extra).not.toHaveProperty("stderr");
@@ -297,6 +308,10 @@ describe("reportAgentReadinessSelfStop — agent-surface strand observability (#
     expect(ctx.extra.source).toBe("host-pre-heal");
     // No host confirm ran on the pure-lstat pre-heal emit → gitRevParseValid absent.
     expect(ctx.extra).not.toHaveProperty("gitRevParseValid");
+    // Tags still carry the searchable source + gitKind; no gitRevParseValid tag
+    // when no host confirm ran (FIX 1).
+    expect(ctx.tags).toMatchObject({ source: "host-pre-heal", gitKind: "file-pointer" });
+    expect(ctx.tags).not.toHaveProperty("gitRevParseValid");
   });
 });
 
