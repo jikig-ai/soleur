@@ -38,6 +38,16 @@ changed yet) or for re-runs after a transient failure.
 
 ## Merge queue (#5780)
 
+> **Status (2026-07-01): reverted, rolling forward.** The first enablement
+> deadlocked `main` — GitHub CodeQL **default setup** does not post the required
+> `CodeQL` context on `merge_group` temp refs, so every queue entry stalled. The
+> queue was kill-switched (the `merge_queue` rule is currently REMOVED from this
+> root and from the live ruleset). Re-enablement requires CodeQL **advanced**
+> setup (`.github/workflows/codeql.yml`, `on: merge_group`) to be live and
+> verified first. See ADR-032 (2026-07-01 incident note) + the PIR at
+> `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
+> The rest of this section describes the target (re-enabled) state.
+
 The ruleset carries a second rule sibling — a `merge_queue {}` block in
 `ruleset-ci-required.tf` — adopting a **GitHub merge queue** for `main`. It fixes
 the strict-up-to-date BEHIND starvation: with
