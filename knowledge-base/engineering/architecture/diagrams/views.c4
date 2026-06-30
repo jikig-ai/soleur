@@ -31,6 +31,8 @@ views {
       platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,
       platform.infra.supabase, platform.infra.tunnel, platform.infra.hetzner,
       platform.infra.inngest, platform.infra.inngestPostgres, platform.infra.inngestRedis,
+      platform.infra.coordinator, platform.infra.scheduler,
+      platform.infra.gitDataStore, platform.infra.sessionStore,
       anthropic, github, cloudflare, doppler, stripe, plausible, resend
 
     style element.tag == #external {
@@ -50,7 +52,7 @@ views {
       platform.plugin.review, platform.plugin.compound, platform.plugin.ship,
       platform.plugin.oneshot, platform.plugin.architecture,
       platform.plugin.cto, platform.plugin.cmo, platform.plugin.cpo,
-      platform.plugin.archstrat,
+      platform.plugin.archstrat, platform.plugin.evalharness,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb
 
     autoLayout LeftRight

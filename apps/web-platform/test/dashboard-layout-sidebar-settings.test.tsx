@@ -40,6 +40,9 @@ vi.mock("@/lib/supabase/client", () => ({
         Promise.resolve({ data: { session: null }, error: null }),
       getUser: () => Promise.resolve({ data: { user: null }, error: null }),
       signOut: signOutMock,
+      onAuthStateChange: () => ({
+        data: { subscription: { unsubscribe: vi.fn() } },
+      }),
     },
     from: () => ({
       select: () => ({
@@ -144,4 +147,70 @@ describe("DashboardLayout — Settings sidebar relocation", () => {
   // top level (where it is never "active"); its drilled active-state moved to
   // the lifted sub-nav (settings-sidebar-collapse.test.tsx). The footer-order
   // tests above still exercise the top-level state.
+});
+
+describe("DashboardLayout — resizable rail mounts in all expanded drill states", () => {
+  beforeEach(() => {
+    // Expanded by default (no collapse seeded).
+    try {
+      localStorage.removeItem("soleur:sidebar.main.collapsed");
+    } catch {
+      // no-op
+    }
+  });
+
+  it("mounts the resize grip on the NON-KB Dashboard rail, labeled generically (AC1, AC5)", async () => {
+    setPathname("/dashboard");
+    await renderDashboard();
+    const grip = screen.getByTestId("kb-rail-resize-handle");
+    expect(grip).toBeInTheDocument();
+    expect(grip).toHaveAttribute("aria-label", "Resize sidebar");
+  });
+
+  it("mounts the resize grip on the Settings rail (AC1)", async () => {
+    setPathname("/dashboard/settings");
+    await renderDashboard();
+    expect(screen.getByTestId("kb-rail-resize-handle")).toHaveAttribute(
+      "aria-label",
+      "Resize sidebar",
+    );
+  });
+
+  it("drives the non-KB rail width via data-main-rail-width, not the fixed md:w-56 (AC2)", async () => {
+    setPathname("/dashboard");
+    const { container } = await renderDashboard();
+    const aside = container.querySelector("aside");
+    expect(aside).not.toBeNull();
+    expect(aside).toHaveAttribute("data-main-rail-width");
+    expect(aside).not.toHaveAttribute("data-kb-rail-width");
+  });
+
+  it("renders the grip as a SIBLING of the secondary slot, not nested inside it (AC7)", async () => {
+    // Use a drilled route (Settings) so the overflow-y-auto secondary slot renders.
+    setPathname("/dashboard/settings");
+    await renderDashboard();
+    const slot = screen.getByTestId("rail-secondary-slot");
+    const grip = screen.getByTestId("kb-rail-resize-handle");
+    expect(slot.contains(grip)).toBe(false);
+  });
+
+  it("DOES mount the grip when the rail is collapsed (sole expand affordance)", async () => {
+    // useSidebarCollapse persists the collapsed state as the literal "1".
+    try {
+      localStorage.setItem("soleur:sidebar.main.collapsed", "1");
+    } catch {
+      // no-op
+    }
+    setPathname("/dashboard");
+    await renderDashboard();
+    // The dedicated ▢ collapse button was removed; the slider must stay mounted
+    // even when collapsed so the user can drag/double-click to expand again.
+    expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
+    try {
+      localStorage.removeItem("soleur:sidebar.main.collapsed");
+    } catch {
+      // no-op
+    }
+  });
+
 });

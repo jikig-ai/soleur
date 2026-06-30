@@ -4,7 +4,7 @@ title: Workspace context band + switcher render outside the single-rail swap reg
 status: active
 date: 2026-06-02
 related_adrs: [ADR-044]
-related: [4813, 4810, 4826]
+related: [4813, 4810, 4826, 5632]
 related_plans:
   - knowledge-base/project/plans/2026-06-02-feat-single-nav-rail-drill-in-plan.md
 related_specs:
@@ -97,3 +97,31 @@ scope-grant, so a wrong-workspace action is detectable post-hoc without a dashbo
   root; the open KB file is still preserved by the URL.
 - **Visual contracts move to Playwright.** jsdom layout assertions on the deleted section
   asides were removed; rail-collapse visuals are verified by the AC10 walkthrough.
+
+## Amendment 2026-06-22 (#5632): "never gated on `collapsed`" extends to the band's INTERNAL render path
+
+Decision 1 located the band *outside* the App-Router swap region and decided it is "never
+gated on `collapsed`." A later sidebar pass (#4810/#4915) honored the *location* clause but
+re-introduced a `collapsed` gate one level deeper, *inside* the band: `WorkspaceContextBand`
+early-returned a structurally-divergent icon-only subtree when `collapsed` that **omitted
+`OrgSwitcherContainer` entirely**, feeding the collapsed tile from a separate
+`useActiveWorkspace` hook instead. React reconciles by position, so swapping to a subtree
+without the container **unmounted it on every collapse and mounted a fresh instance on every
+expand** — re-running its `/api/workspace/list-memberships` fetch, resetting its state, and
+discarding any in-flight switch-confirm dialog (the visible "selector glitches and reloads"
+bug). This is the *same* unmount defect as the original `!collapsed` gate, relocated one
+level deeper.
+
+**Amendment:** the "never gated on `collapsed`" invariant is **structural, not locational** —
+it extends to the band's internal render path. A `collapsed` early-return (or any element
+swap) that removes `OrgSwitcherContainer` from the tree is prohibited. The collapse/expand
+toggle MUST be a *presentation* change (className branches, an icon-only **mode** of the
+mounted `OrgSwitcher` via its `collapsed` prop) on a **persistent** element — never an
+element swap. Consequently the `useActiveWorkspace` data-duplication hook (added only to feed
+the gated-out collapsed tile, fetching the same endpoint a second time) is **retired**: the
+single mounted container is again the sole source of workspace identity in both states. The
+`nav-single-mount.test.ts` import guard stays the structural backstop; the new
+`workspace-selector-collapse-persists.test.tsx` adds the lifecycle backstop (zero refetch
+across a collapse→expand toggle), since happy-dom presence assertions cannot observe a
+remount. Status stays `active` — this amendment describes the current (now-correct) target
+state.

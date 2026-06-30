@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
+import { swrConfig } from "@/lib/swr-config";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
-import { useSidebarHidden } from "@/hooks/use-sidebar-hidden";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
-import { useActiveWorkspace } from "@/hooks/use-active-workspace";
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -19,6 +19,12 @@ import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
+import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
+import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
+import { CommandPalette } from "@/components/command-palette/command-palette";
+import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { SupportLauncher } from "@/components/support/support-launcher";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -93,16 +99,17 @@ export function PaymentWarningBanner({
   );
 }
 
-const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: GridIcon },
-  { href: "/dashboard/inbox", label: "Inbox", icon: InboxIcon },
-  { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
-  { href: "/dashboard/routines", label: "Routines", icon: RepeatIcon },
-];
-
-const ADMIN_NAV_ITEMS = [
-  { href: "/dashboard/admin/analytics", label: "Analytics", icon: ChartIcon },
-];
+// Icons live here (local SVGs), keyed by href, so the nav DATA can live in the
+// shared `command-palette/nav-items.ts` module (imported by the rail AND the
+// ⌘K palette registry) without dragging this "use client" tree into the palette.
+const NAV_ICONS: Record<string, (props: { className?: string }) => React.JSX.Element> = {
+  "/dashboard": GridIcon,
+  "/dashboard/inbox": InboxIcon,
+  "/dashboard/workstream": KanbanIcon,
+  "/dashboard/kb": BookIcon,
+  "/dashboard/routines": RepeatIcon,
+  "/dashboard/admin/analytics": ChartIcon,
+};
 
 export default function DashboardLayout({
   children,
@@ -115,85 +122,22 @@ export default function DashboardLayout({
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
-  // Full-hide ("0px") state — ORTHOGONAL to collapse. `hidden` wins over
-  // collapse and drives the desktop rail to md:w-0 (all horizontal space
-  // reclaimed); the floating reveal hamburger + ⌘⇧B bring it back, restoring
-  // whatever collapsed/expanded state it had. See use-sidebar-hidden.ts.
-  const [hidden, toggleHidden] = useSidebarHidden();
-  // Brand-gold press feedback for the whole bar. Driven by React pointer state
-  // rather than CSS :active — :active does not reliably propagate from a pressed
-  // descendant up to the rail across synthetic/headless presses, so a JS latch is
-  // deterministic for both real users and the e2e gate. Reset on up/leave/cancel
-  // so a press that drags off the rail (or a cancelled touch) clears the wash.
-  const [railPressed, setRailPressed] = useState(false);
-  // Keyboard focus must follow the rail's visibility across the hide↔reveal
-  // control swap. The "Hide sidebar" button and the "Show sidebar" hamburger
-  // mount EXCLUSIVELY (one per state), so activating one unmounts it — without
-  // help, focus drops to <body> (a WCAG 2.4.3 focus-order break). After a USER
-  // toggle we move focus to whichever control now owns the role. The
-  // `focusAfterToggle` latch gates this to real user actions: it must NOT fire
-  // on the post-mount localStorage hydration flip, or a persisted-hidden session
-  // would steal focus to the hamburger on first paint.
-  const hideButtonRef = useRef<HTMLButtonElement>(null);
-  const revealButtonRef = useRef<HTMLButtonElement>(null);
-  const focusAfterToggle = useRef(false);
-  const requestToggleHidden = useCallback(() => {
-    focusAfterToggle.current = true;
-    toggleHidden();
-  }, [toggleHidden]);
-  useEffect(() => {
-    if (!focusAfterToggle.current) return;
-    focusAfterToggle.current = false;
-    (hidden ? revealButtonRef : hideButtonRef).current?.focus();
-  }, [hidden]);
-
-  // Double-click the bar BODY to fully hide it — the whole rail acts as a
-  // pressable "close" surface (the gold :active wash is its press feedback).
-  // Desktop-only: full-hide is an md+ state and double-click is a pointer idiom
-  // (touch uses the drawer). Double-clicks that land on an interactive control
-  // (nav link, button, form field) or the KB resize handle — which owns its OWN
-  // double-click-to-collapse — are ignored, so only an empty/background
-  // double-click closes the rail and real controls keep their behavior.
-  const handleRailDoubleClick = useCallback(
-    (e: React.MouseEvent<HTMLElement>) => {
-      if (
-        typeof window !== "undefined" &&
-        !window.matchMedia("(min-width: 768px)").matches
-      ) {
-        return;
-      }
-      const target = e.target as HTMLElement;
-      if (
-        target.closest(
-          'a, button, input, textarea, select, [role="button"], [contenteditable="true"], [data-testid="kb-rail-resize-handle"]',
-        )
-      ) {
-        return;
-      }
-      if (!hidden) requestToggleHidden();
-    },
-    [hidden, requestToggleHidden],
-  );
-  // Widenable KB rail (amendment): persisted width applied to the `aside` ONLY
-  // when drilled into KB and expanded (collapse takes precedence; KB-only) and
-  // only at the md+ breakpoint (the mobile drawer keeps its `w-64` width). The
-  // value rides the `--kb-rail-w` CSS var + a `data-kb-rail-width` attribute,
+  // Widenable rail: ONE persisted width applied to the `aside` whenever it is
+  // expanded, in EVERY drill state (collapse still takes precedence) and only at
+  // the md+ breakpoint (the mobile drawer keeps its `w-64` width). The value
+  // rides `--kb-rail-w` + `data-kb-rail-width` on the KB rail and `--main-rail-w`
+  // + `data-main-rail-width` elsewhere (one shared useRailWidth instance), each
   // consumed by an md+ rule in globals.css — deterministic, no JS media-query
   // state (which did not flip reliably under SSR hydration here).
   const [railWidth, setRailWidth] = useRailWidth();
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const { handleSignOut, isSigningOut } = useSignOut();
+  // feat-web-app-shortcuts — gates the ⌘K palette + ? overlay command layer.
+  // Optional (non-throwing) so a provider-less render degrades to "off".
+  const commandPaletteEnabled = useOptionalFeatureFlag("command-palette");
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
-  // Active workspace name for the COLLAPSED rail band's monogram tooltip — the
-  // collapsed band does not mount OrgSwitcherContainer, so the name is threaded
-  // in here (P0-3, #4915). Gated on `collapsed`: the expanded rail + mobile band
-  // already surface the name via OrgSwitcherContainer, so the fetch only fires
-  // for the one state that lacks it (avoids a redundant cold-mount GET + a
-  // net-new focus poll in the common expanded case).
-  const activeWorkspace = useActiveWorkspace(collapsed);
-  const activeWorkspaceName = activeWorkspace.name;
 
   // Check admin status on mount
   useEffect(() => {
@@ -225,16 +169,16 @@ export default function DashboardLayout({
   // pathname.startsWith("/dashboard/(kb|settings|chat)") literal lives here.
   const drill = segmentToDrillLevel(pathname);
   const settingsActive = drill === "settings";
-  // The widen affordance is KB-only AND subordinate to collapse: the inline
-  // width + handle apply solely in this branch, so collapsed (md:w-14) and
-  // Settings/Chat (md:w-56) widths are structurally untouched (AC12/AC13).
-  // Precedence: hidden ▸ collapsed ▸ KB-widen. When the rail is fully hidden
-  // there is no width to widen, so the data-kb-rail-width override (and the
-  // resize handle) MUST be suppressed — otherwise the unlayered globals.css
-  // `aside[data-kb-rail-width]{ width: var(--kb-rail-w) }` rule (which beats
-  // Tailwind utilities) would resurrect a non-zero width and the md:w-0 hide
-  // would not take.
-  const kbExpanded = drill === "kb" && !collapsed && !hidden;
+  // The widen affordance applies to ANY expanded rail (every drill state),
+  // subordinate to collapse. `kbExpanded` and `mainExpanded` are a structural
+  // PARTITION of "expanded" (drill === "kb" XOR drill !== "kb"), so at most one
+  // is ever true — the two `data-*-rail-width` attributes can never co-apply and
+  // the single grip mount (below) is never duplicated. Both rails share ONE
+  // persisted width (useRailWidth, key soleur:sidebar.kb.width); KB drives
+  // `--kb-rail-w`, the rest drive `--main-rail-w` (separate vars keep the
+  // existing KB CSS rule untouched). Collapsed (md:w-14) applies neither.
+  const kbExpanded = drill === "kb" && !collapsed;
+  const mainExpanded = drill !== "kb" && !collapsed;
   // Phase 3 (#4915): one back per state. In the mobile KB DOC VIEW the
   // kb-content-header owns the only back ("Back to file tree", md:hidden), so the
   // mobile band's "Back to menu" is suppressed to stop the two co-rendering. This
@@ -250,56 +194,10 @@ export default function DashboardLayout({
     setDrawerOpen(false);
   }, [pathname]);
 
-  // Close drawer on ESC key (register once — setDrawerOpen(false) is a no-op when already closed)
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setDrawerOpen(false);
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  // Cmd/Ctrl+B toggles THE single nav rail (AC5). This is now the sole ⌘B
-  // owner across every section — the per-route handlers that previously lived
-  // in SettingsShell, useKbLayoutState, and ConversationsRail are removed, so
-  // there is exactly one keydown handler and exactly one rail it toggles.
-  useEffect(() => {
-    function handleToggleShortcut(e: KeyboardEvent) {
-      // Shift is reserved for the full-hide shortcut (⌘⇧B) below; bare ⌘B is
-      // collapse only. Holding Shift normally reports e.key === "B" (uppercase),
-      // which the `!== "b"` guard already rejects, but the explicit `e.shiftKey`
-      // check keeps the two handlers disjoint on layouts that report lowercase.
-      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.key !== "b") return;
-      // Skip when typing in form elements
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      e.preventDefault();
-      toggleCollapsed();
-    }
-    document.addEventListener("keydown", handleToggleShortcut);
-    return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [toggleCollapsed]);
-
-  // ⌘⇧B fully hides / reveals the rail (0px), distinct from ⌘B's collapse
-  // (224px ↔ 56px icon rail). A sibling handler to the single ⌘B owner above —
-  // the two are disjoint (the ⌘B guard rejects e.shiftKey), so one keystroke
-  // never toggles both. Same INPUT/TEXTAREA/contentEditable guards. This is the
-  // keyboard equivalent of the floated "Hide sidebar" button and the floating
-  // reveal hamburger, and the always-available escape hatch from the 0px state.
-  useEffect(() => {
-    function handleHideShortcut(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
-      if (e.key !== "B" && e.key !== "b") return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      e.preventDefault();
-      requestToggleHidden();
-    }
-    document.addEventListener("keydown", handleHideShortcut);
-    return () => document.removeEventListener("keydown", handleHideShortcut);
-  }, [requestToggleHidden]);
+  // ⌘B (sidebar toggle), the drawer Escape, and ⌘K/⌘//? are ALL served by the
+  // single global keydown listener inside ShortcutsProvider (FR5/TR2) — there is
+  // no standalone document keydown handler here anymore. The provider dispatches
+  // ⌘B to `toggleCollapsed` and Esc-with-no-overlay-open to `setDrawerOpen(false)`.
 
   // Sidebar-UX follow-up Issue 6: a collapsed-rail child (the KB shell's
   // "Browse files" affordance) cannot reach the collapse state directly (it only
@@ -308,18 +206,15 @@ export default function DashboardLayout({
   // collapses), so a stray dispatch while expanded is a no-op.
   useEffect(() => {
     function handleExpandRequest() {
-      // An "expand request" must always yield a VISIBLE rail. Clear the full-hide
-      // FIRST (else the rail un-collapses but stays at 0px — a silent no-op), then
-      // un-collapse. The only dispatcher today (the KB "Browse files" button) is
-      // clipped while hidden, but this keeps any future out-of-aside dispatcher
-      // (command palette, deep link) from landing in an invisible rail.
-      if (hidden) toggleHidden();
+      // An "expand request" must always yield a VISIBLE (expanded) rail. The only
+      // dispatcher today is the KB "Browse files" button; this keeps any future
+      // out-of-aside dispatcher (command palette, deep link) working too.
       if (collapsed) toggleCollapsed();
     }
     window.addEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
     return () =>
       window.removeEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
-  }, [collapsed, toggleCollapsed, hidden, toggleHidden]);
+  }, [collapsed, toggleCollapsed]);
 
   // Body scroll lock when drawer is open
   useEffect(() => {
@@ -344,9 +239,20 @@ export default function DashboardLayout({
   }, []);
 
   return (
+    // ADR-067: the dashboard client-data cache. Mounted at a structurally
+    // stable position (cf. #5632 provider-tree stability) so a view's cached
+    // content survives navigation between sibling routes. In-memory only (no
+    // persistent provider — CPO C1); cleared on sign-out + workspace switch.
+    <SWRConfig value={swrConfig}>
     <TeamNamesProvider>
     <RailSlotProvider value={railSlotEl}>
     <RailCollapsedProvider value={collapsed}>
+    <ShortcutsProvider
+      enabled={commandPaletteEnabled}
+      isAdmin={isAdmin}
+      onToggleSidebar={toggleCollapsed}
+      onEscape={() => setDrawerOpen(false)}
+    >
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint. RQ1: the context
           band replaces the bare "Soleur" label so workspace identity is shown
@@ -389,20 +295,18 @@ export default function DashboardLayout({
           (and screen readers) target only the modal's confirm button. */}
       <aside
         inert={signOutModalOpen || undefined}
-        onDoubleClick={handleRailDoubleClick}
-        onPointerDown={() => setRailPressed(true)}
-        onPointerUp={() => setRailPressed(false)}
-        onPointerLeave={() => setRailPressed(false)}
-        onPointerCancel={() => setRailPressed(false)}
-        // The KB-expanded branch drives the md+ width from a CSS variable so the
-        // inline value is scoped to the desktop rail; the mobile `w-64` drawer
+        // Whichever rail is expanded drives the md+ width from a CSS variable so
+        // the inline value is scoped to the desktop rail; the mobile `w-64` drawer
         // is left to the base class. (Inline `style.width` would otherwise win
         // at every breakpoint and resize the mobile drawer too — Sharp Edge.)
         data-kb-rail-width={kbExpanded ? "" : undefined}
+        data-main-rail-width={mainExpanded ? "" : undefined}
         style={
           kbExpanded
             ? ({ "--kb-rail-w": `${railWidth}px` } as React.CSSProperties)
-            : undefined
+            : mainExpanded
+              ? ({ "--main-rail-w": `${railWidth}px` } as React.CSSProperties)
+              : undefined
         }
         className={`
           fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
@@ -413,14 +317,9 @@ export default function DashboardLayout({
           ${/* md:w-56 = 14rem = 224px = RAIL_DEFAULT_PX (use-rail-width.ts); the KB
                rail starts at that same default. When kbExpanded, the
                data-kb-rail-width rule in globals.css overrides this at md+ with
-               the persisted --kb-rail-w. HIDDEN wins over both: md:w-0 collapses
-               the in-flow rail to zero so <main> reclaims the full row;
-               md:overflow-hidden clips the (still-mounted) rail content and
-               md:border-r-0 drops the 1px divider so no sliver remains. The
-               existing md:transition-[width] animates the 224/56 → 0 glide.
-               kbExpanded is forced false when hidden (see above), so
-               data-kb-rail-width is absent and cannot resurrect a width. */ ""}
-          ${hidden ? "md:w-0 md:overflow-hidden md:border-r-0" : collapsed ? "md:w-14" : "md:w-56"}
+               the persisted --kb-rail-w. Collapsed → md:w-14 icon rail; the
+               existing md:transition-[width] animates the 224 ↔ 56 glide. */ ""}
+          ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
         {/* Mobile-only close row. The desktop collapse toggle was lifted OUT of
@@ -441,67 +340,27 @@ export default function DashboardLayout({
           </button>
         </div>
 
-        {/* Desktop collapse toggle — FLOATED in the rail's top-right so it costs
-            ZERO vertical space (the workspace band now owns the sidebar top).
-            Absolutely positioned against the <aside> (its md:relative containing
-            block), NOT in the flex-col flow. EXPANDED: `right-3` pins it to the rail's
-            top-right, the corner of the workspace pill. COLLAPSED: `left-1/2
-            -translate-x-1/2` centers it on the same vertical axis as the monogram tile
-            and the icon-only nav column below, so the collapsed rail reads as one clean
-            centered column (the right-3 corner control sat off-axis above the logo).
-            Vertical: EXPANDED `top-10` (40px) vertically CENTERS the h-6 (24px) button
-            on the workspace pill row's center. COLLAPSED `top-3` pins it HIGH near the
-            rail top — there is no pill to center on, and at top-10 the button's bottom
-            edge (64px) landed flush with the monogram tile (pt-16 → 64px) and read as
-            crowding the logo; top-3 lifts it clear. The toggle is positioned against the <aside>,
-            but the band (and its pill) sits ~12px BELOW the aside top (the reclaimed-
-            space offset — VRT-measured, asserted ≤12). The pill leads the band at pt-2
-            (8px) and is 64px tall (lg h-11 tile + py-2.5), so its center sits at
-            12+8+32 = 52px from the aside top; the toggle's center at 40+12 = 52px.
-            (VRT-derived: top-7 left a 12px residual = the band offset.) This follows the repo's
-            CENTER-against-an-adjacent-element convention (components/kb/file-tree.tsx,
-            components/kb/search-overlay.tsx) rather than the fixed top-right CORNER
-            convention (components/ui/error-card.tsx) — the toggle aligns to a card's
-            center, not a card's corner, so the corner `top-3` it originally mirrored
-            (PR #4997) read ~28px high. z-10 lifts it above the band's static content;
-            the multi-workspace switcher dropdown opens DOWNWARD (`top-full`) in a
-            disjoint vertical band and a separate stacking context, so there is no
-            cross-context z race. The expanded pill row (md:pr) and the collapsed
-            icon column (pt) reserve clearance so this never overlaps the workspace
-            card, its dropdown chevron, or the collapsed monogram tile. In the
-            collapsed rail (md:w-14 = 56px) it stays fully inside the rail and is the
-            only non-keyboard expand affordance — its aria-label/title/⌘B semantics
-            are preserved verbatim. */}
+        {/* Collapse/expand toggle — the floated « chevron. Collapses the rail to
+            the icon rail (md:w-14) and expands it back; the glyph ROTATES 180° when
+            collapsed (« → ») so it reads as an "expand" affordance. The resize
+            slider also toggles collapse (double-click) and resizes width, so this
+            button and the slider are the two collapse/expand affordances; ⌘B is the
+            keyboard equivalent. (The full-hide 0px state was removed — it was a
+            no-preview duplicate of this collapse.)
+            EXPANDED: `right-3 top-10` (the corner of the workspace pill row).
+            COLLAPSED: centered on the icon column at `top-3`, in the band's pt-16
+            clearance above the monogram. Always mounted (no exclusive unmount), so
+            no focus-swap handling is needed. */}
         <button
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
           className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-3" : "right-3 top-10"} z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
         >
-          <PanelToggleIcon className="h-4 w-4" />
+          <RailToggleIcon
+            className={`h-4 w-4 transition-transform duration-200 ${collapsed ? "rotate-180" : ""}`}
+          />
         </button>
-
-        {/* Full-hide entry (FR-hide): pushes the rail to 0px — all horizontal
-            space reclaimed — distinct from the collapse toggle's 224↔56px. A
-            floated companion to the collapse toggle, desktop-only, suppressed
-            once the rail is already fully hidden (the floating reveal hamburger
-            below takes over then, since this button would be clipped at 0px).
-            EXPANDED: sits just left of the collapse toggle (`right-10` to its
-            `right-3`). COLLAPSED: centered on the icon column, one slot below
-            the centered collapse toggle (`top-10` under its `top-3`), in the
-            band's pt-16 clearance above the monogram. ⌘⇧B is the keyboard
-            equivalent. */}
-        {!hidden && (
-          <button
-            ref={hideButtonRef}
-            onClick={requestToggleHidden}
-            aria-label="Hide sidebar"
-            title="Hide sidebar (⌘⇧B)"
-            className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-10" : "right-10 top-10"} z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
-          >
-            <SidebarHideIcon className="h-4 w-4" />
-          </button>
-        )}
 
         {/* Persistent workspace context band (ADR-047). Mounted OUTSIDE the
             rail swap region and NEVER gated on `collapsed` — this fixes the
@@ -515,13 +374,7 @@ export default function DashboardLayout({
             CSS-exclusive placements never show identity twice (AC4b: the band
             is still the single importer of OrgSwitcherContainer/LiveRepoBadge). */}
         <div className="hidden md:block">
-          <WorkspaceContextBand
-            pathname={pathname}
-            collapsed={collapsed}
-            activeWorkspaceName={activeWorkspaceName ?? undefined}
-            activeWorkspaceId={activeWorkspace.workspaceId ?? undefined}
-            activeWorkspaceHasLogo={activeWorkspace.hasLogo}
-          />
+          <WorkspaceContextBand pathname={pathname} collapsed={collapsed} />
         </div>
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
@@ -537,6 +390,7 @@ export default function DashboardLayout({
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
                     : pathname.startsWith(item.href);
+                const Icon = NAV_ICONS[item.href] ?? GridIcon;
 
                 return (
                   <Link
@@ -560,7 +414,7 @@ export default function DashboardLayout({
                         className={`absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill ${collapsed ? "md:hidden" : ""}`}
                       />
                     )}
-                    <item.icon className="h-4 w-4 shrink-0" />
+                    <Icon className="h-4 w-4 shrink-0" />
                     <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
                       {item.label}
                     </span>
@@ -627,93 +481,43 @@ export default function DashboardLayout({
           />
         )}
 
-        {/* Widenable KB rail (amendment): a right-edge drag handle, rendered
-            ONLY when drilled into KB and expanded. It drives the `aside`'s
-            --kb-rail-w via the persisted useRailWidth hook (transient on drag,
-            commit on pointerup). Collapsed / Settings / Chat never render it
-            (collapse precedence + KB-only). `hidden md:block` keeps it off the
-            mobile drawer. */}
-        {kbExpanded && (
-          <RailResizeHandle
-            width={railWidth}
-            min={RAIL_MIN_PX}
-            max={railMaxPx()}
-            onWidthChange={(px) => setRailWidth(px, false)}
-            onCommit={(px) => setRailWidth(px, true)}
-            onCollapse={toggleCollapsed}
-          />
-        )}
-
-        {/* Brand-gold press feedback (AC: gold, not grey, on click). The bar is
-            now a pressable surface (double-click-to-hide), so while it is held
-            (railPressed) a translucent brand-gold wash fades in over the ENTIRE
-            rail — the same gold-active idiom as the KB resize handle (#5522),
-            applied to the whole bar instead of a grey press. `pointer-events-none`
-            so it never intercepts clicks; clipped to nothing when hidden (md:w-0 +
-            overflow-hidden). z-20 sits above the floated toggles so the wash
-            covers them too. */}
-        <div
-          aria-hidden="true"
-          data-testid="rail-gold-active-overlay"
-          className={`pointer-events-none absolute inset-0 z-20 transition-colors duration-150 ${
-            railPressed
-              ? "bg-soleur-accent-gold-fill/40"
-              : "bg-soleur-accent-gold-fill/0"
-          }`}
+        {/* Widenable rail: a right-edge drag handle rendered in EVERY state —
+            expanded in any drill (Dashboard / Analytics / Settings / Chat / KB)
+            AND collapsed (md:w-14). Alongside the floated « toggle, it is the
+            second collapse/expand affordance and also resizes width. Drives the
+            `aside` width via the persisted useRailWidth hook (transient on drag,
+            commit on pointerup) — KB through --kb-rail-w, the rest through
+            --main-rail-w. A SINGLE mount; the width override only applies while
+            expanded (kbExpanded XOR mainExpanded = !collapsed), so a collapsed
+            rail stays md:w-14 until the user acts on the handle. COLLAPSED
+            interaction: `onResizeStart` un-collapses on the first real drag move
+            (so the width override engages and the drag widens the rail), and a
+            double-click toggles collapse via `onCollapse` (expands when collapsed,
+            collapses when expanded). `hidden md:block` keeps it off the mobile
+            drawer. A direct child of <aside> (sibling of the secondary slot) so
+            the slot's overflow never clips it. */}
+        <RailResizeHandle
+          width={railWidth}
+          min={RAIL_MIN_PX}
+          max={railMaxPx()}
+          onResizeStart={() => {
+            // First genuine drag move while collapsed: un-collapse so the width
+            // override (data-*-rail-width + --*-rail-w) engages and the drag
+            // actually widens the rail. No-op once already expanded. Fires once
+            // per drag (handle-internal latch), so no toggle thrash.
+            if (collapsed) toggleCollapsed();
+          }}
+          onWidthChange={(px) => setRailWidth(px, false)}
+          onCommit={(px) => setRailWidth(px, true)}
+          onCollapse={toggleCollapsed}
+          ariaLabel={drill === "kb" ? "Resize knowledge base sidebar" : "Resize sidebar"}
         />
       </aside>
 
-      {/* Full-hide reveal control. When the rail is hidden (md:w-0 +
-          overflow-hidden) every in-rail affordance — the floated collapse/hide
-          toggles, the collapsed-rail "Browse files" button, the workspace band —
-          is clipped, so without this the only way back would be the (invisible)
-          ⌘⇧B. This floating hamburger lives OUTSIDE the <aside> as a `fixed`
-          sibling, so the aside's zero width / overflow-hidden can never clip it.
-          Desktop-only (`hidden md:flex`) — on mobile the md:hidden top-bar
-          hamburger already owns this, and the 0px hide is a desktop-only state.
-          z-40 stays under the mobile drawer/overlay stack (z-50/z-40, both
-          md:hidden so they never co-render) and the sign-out / revoked overlays.
-          Gated on JS `hidden` state, so it only paints after the user hides —
-          it does not regress the band's first-frame identity guarantee. Clicking
-          it (or ⌘⇧B) restores the rail to its prior collapsed/expanded width. */}
-      {hidden && (
-        <button
-          ref={revealButtonRef}
-          onClick={requestToggleHidden}
-          aria-label="Show sidebar"
-          aria-expanded={false}
-          title="Show sidebar (⌘⇧B)"
-          data-testid="sidebar-reveal-button"
-          // Mirror the in-rail Sign-out inert guard: while the confirm modal is
-          // open this floating control (which lives OUTSIDE the inert <aside>)
-          // also leaves the a11y/focus tree.
-          inert={signOutModalOpen || undefined}
-          className="fixed left-2 top-2 z-40 hidden h-9 w-9 items-center justify-center rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 text-soleur-text-muted shadow-sm hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex"
-        >
-          <MenuIcon className="h-5 w-5" />
-        </button>
-      )}
-
-      {/* "Open from the side" affordance: a thin brand-gold strip pinned to the
-          screen's LEFT EDGE while the rail is hidden — click it (or hover to
-          brighten/widen it) to bring the rail back. This is the edge-reveal the
-          floating hamburger complements: the rail went off the left side, so the
-          left edge is where you reach to pull it back. Full height, desktop-only
-          (`hidden md:block`), z-30 (under the hamburger z-40 and the mobile
-          drawer/overlay z-50/z-40, which are md:hidden anyway). Redundant
-          accessible name with the hamburger is fine (two ways to the same
-          action); tests target it by data-testid. */}
-      {hidden && (
-        <button
-          onClick={requestToggleHidden}
-          aria-label="Show sidebar"
-          aria-expanded={false}
-          title="Show sidebar (⌘⇧B)"
-          data-testid="sidebar-reveal-edge"
-          inert={signOutModalOpen || undefined}
-          className="fixed inset-y-0 left-0 z-30 hidden w-1.5 cursor-pointer bg-soleur-accent-gold-fill/30 transition-[width,background-color] duration-150 hover:w-2.5 hover:bg-soleur-accent-gold-fill/80 focus-visible:w-2.5 focus-visible:bg-soleur-accent-gold-fill/80 focus-visible:outline-none md:block"
-        />
-      )}
+      {/* (The full-hide 0px state and its floating reveal hamburger + left-edge
+          gold strip were removed — that minimized state had no nav preview and
+          duplicated the icon-rail collapse, which is now the only minimized
+          state.) */}
 
       {/* Main content — inert when drawer is open for focus trapping */}
       <main
@@ -761,9 +565,19 @@ export default function DashboardLayout({
           once at the dashboard root so it survives across route changes. */}
       <MembershipRevokedScreen />
     </div>
+    {/* Command layer (feat-web-app-shortcuts) — portal-rendered (Radix), so
+        placement inside the provider is positional only. Both no-op when the
+        command-palette flag is off (enabled=false). */}
+    <CommandPalette />
+    <HelpOverlay />
+    {/* feat-support-interface — flag-gated floating support launcher + slide-over.
+        No-op when the `support` flag is off (renders null internally). */}
+    <SupportLauncher />
+    </ShortcutsProvider>
     </RailCollapsedProvider>
     </RailSlotProvider>
     </TeamNamesProvider>
+    </SWRConfig>
   );
 }
 
@@ -918,38 +732,10 @@ function LogOutIcon({ className }: { className?: string }) {
   );
 }
 
-// Sidebar-UX follow-up Issue 2: non-directional sidebar/panel-toggle glyph for
-// the rail collapse control. Replaces the old left/right ChevronLeftIcon/
-// ChevronRightIcon, which read like a "back" arrow on drilled secondary menus
-// (Settings / Knowledge Base) where the workspace band already shows a
-// BackArrowIcon "Back to menu". A rounded panel rectangle with a left divider
-// reads as "toggle the sidebar", not "go back". Used in BOTH toggle states —
-// the aria-label/title carry the Expand vs Collapse semantics.
-function PanelToggleIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={1.5}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h12a2.25 2.25 0 0 1 2.25 2.25v10.5A2.25 2.25 0 0 1 18 19.5H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z"
-      />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 4.5v15" />
-    </svg>
-  );
-}
-
-// Full-hide glyph for the "Hide sidebar" control: a double chevron pointing
-// left («), reading "push the whole rail off to the left / hide it entirely".
-// Deliberately NOT a panel rectangle — it must read as clearly distinct from the
-// adjacent PanelToggleIcon collapse control (which shares the rail header) so the
-// 0px hide is not confused with the 56px collapse at a glance.
-function SidebarHideIcon({ className }: { className?: string }) {
+// Collapse/expand toggle glyph: a double chevron pointing left («), reading
+// "fold the rail to the icon column". The caller rotates it 180° when collapsed
+// (« → ») so the same glyph reads as "expand" in the collapsed state.
+function RailToggleIcon({ className }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -980,6 +766,24 @@ function ChartIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
+      />
+    </svg>
+  );
+}
+
+function KanbanIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.75 5.25h4.5v13.5h-4.5V5.25Zm6 0h4.5v9h-4.5v-9Zm6 0h4.5v6h-4.5v-6Z"
       />
     </svg>
   );

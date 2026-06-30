@@ -1,6 +1,6 @@
 # ADR-059: Stream-since-disconnect in-memory replay buffer for backend agent sessions
 
-- **Status:** Accepted
+- **Status:** Accepted — **RE-OPENED by [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (2026-06-30).** The "no multi-instance requirement exists" premise that grounded the Redis rejection (Decision § Buffer tier (b)) no longer holds: ADR-068 (multi-host `/workspaces`, #5274) creates exactly that requirement. The in-memory buffer stays correct through ADR-068 Phase 3 (affinity routes a reconnect back to the lease-holding host → still same-process); it migrates to a self-hosted EU session-Redis in **Phase 4a**, where a host *death* can send a reconnect to a *different* host. The migration MUST preserve every invariant below — most critically **`seq` counter-outlives-`clear`** (§ `seq` authority) — and add per-`workspace_id` key namespacing + an app-layer read scope-check + TTL ≤ conversation retention (replay frames carry user content, not low-sensitivity routing metadata).
 - **Date:** 2026-06-14
 - **Issue:** #5273 (follow-up of umbrella #5240; gated on v1 PR #5256, MERGED 2026-06-14)
 - **Lineage:** **AP-013 "Process-local state for runner sessions" → ADR-027** (`principles-register.md:21`; `ADR-027-process-local-state-for-runners.md`) is the governing tier principle. This ADR extends it and mirrors the lifecycle discipline of `TtlDedupMap` (`apps/web-platform/server/observability.ts:413-458`). It does NOT extend ADR-042 (Anthropic-SDK-in-Inngest) or ADR-046 (Inngest one-shot scheduler) — an earlier draft mis-cited those as in-process-state precedents; they are unrelated.
@@ -23,7 +23,7 @@ In-memory, per-conversation, on the single backend instance. **Extends AP-013 �
 
 **Alternatives considered:**
 - **(a) Persist to Supabase** — rejected. Adds an Art. 30 surface (CLO), TTL management, and write amplification on the hot per-frame stream path. YAGNI at single-instance topology.
-- **(b) Redis** — rejected. A new infra dependency versus the established in-process pattern of AP-013/ADR-027. No multi-instance requirement exists to justify it.
+- **(b) Redis** — rejected *at this ADR's time*. A new infra dependency versus the established in-process pattern of AP-013/ADR-027, with **no multi-instance requirement to justify it** at single-host topology. **Re-opened by ADR-068 (2026-06-30):** the multi-host move IS that requirement. The buffer migrates to a self-hosted EU session-Redis in ADR-068 Phase 4a (TLS + `requirepass`/ACL + private-subnet firewall + per-`workspace_id` namespacing), preserving the counter-outlives-`clear` semantics below. Phases 1–3 keep the in-process buffer (affinity makes it host-local-sufficient).
 
 ### Reattach seam — NOT `resume_session`
 

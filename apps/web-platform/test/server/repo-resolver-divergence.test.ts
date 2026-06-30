@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  hashUserId: (s: string) => `hash-${s}`,
 }));
 
 import { reportSilentFallback } from "@/server/observability";
 import {
   reportRepoResolverDivergence,
+  reportAgentReadinessSelfStop,
   _resetResolverDivergenceDedupeForTests,
 } from "@/server/repo-resolver-divergence";
 
@@ -97,6 +99,80 @@ describe("reportRepoResolverDivergence — fingerprint-deduped breadcrumb (ADR-0
     expect(ctx.extra).not.toHaveProperty("installationId");
   });
 
+  // AC9 — the corrupt-worktree op (2026-06-19) carries `extra.recovered` so a
+  // self-healed re-clone (true) is triageable apart from an unrecovered
+  // honest-block (false); both shapes are safe (no repoUrl/installationId).
+  it("corrupt-worktree-at-dispatch carries extra.recovered (recovered branch)", () => {
+    reportRepoResolverDivergence({
+      userId: "user-1",
+      op: "corrupt-worktree-at-dispatch",
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "team-x",
+      recovered: true,
+    });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.op).toBe("corrupt-worktree-at-dispatch");
+    expect(ctx.feature).toBe("repo-resolver-divergence");
+    expect(ctx.extra).toMatchObject({ recovered: true });
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("corrupt-worktree-at-dispatch recovered=true vs recovered=false are NOT collapsed by the dedupe fingerprint", () => {
+    const base = {
+      userId: "user-1",
+      op: "corrupt-worktree-at-dispatch" as const,
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "team-x",
+    };
+    reportRepoResolverDivergence({ ...base, recovered: true });
+    reportRepoResolverDivergence({ ...base, recovered: false });
+    // Distinct `recovered` → distinct fingerprint → two emits (a self-heal
+    // breadcrumb AND a later unrecovered page on the same workspace both surface).
+    expect(reportSilentFallback).toHaveBeenCalledTimes(2);
+    const recovereds = (reportSilentFallback as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[1].extra.recovered,
+    );
+    expect(recovereds).toContain(true);
+    expect(recovereds).toContain(false);
+  });
+
+  // ADR-044 PR-3 — the per-dispatch reprovision-path op (warm+cold) emits with the
+  // same security-safe extra shape and is deduped independently by op.
+  it("reprovision-non-member-claim-reset is a distinct op with the two-workspace-id extra shape (no repoUrl/install leak)", () => {
+    reportRepoResolverDivergence({
+      userId: "user-1",
+      op: "reprovision-non-member-claim-reset",
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "user-1",
+    });
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(ctx.op).toBe("reprovision-non-member-claim-reset");
+    expect(ctx.feature).toBe("repo-resolver-divergence");
+    expect(ctx.extra).toMatchObject({
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "user-1",
+    });
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("reprovision-non-member-claim-reset dedupes by (op, userId, claim) fingerprint", () => {
+    const args = {
+      userId: "user-1",
+      op: "reprovision-non-member-claim-reset" as const,
+      activeClaimWorkspaceId: "team-x",
+      resolvedWorkspaceId: "user-1",
+    };
+    reportRepoResolverDivergence(args);
+    reportRepoResolverDivergence(args);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
   it("a DIFFERENT claim for the same user fires a new breadcrumb (not over-deduped on op alone)", () => {
     reportRepoResolverDivergence({
       userId: "user-1",
@@ -111,6 +187,57 @@ describe("reportRepoResolverDivergence — fingerprint-deduped breadcrumb (ADR-0
       resolvedWorkspaceId: "user-1",
     });
 
+    expect(reportSilentFallback).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("reportAgentReadinessSelfStop — agent-surface strand observability (#5733 Phase 1b)", () => {
+  const base = {
+    userId: "user-1",
+    activeWorkspaceId: "754ee124",
+    gitValid: true, // the FILE-pointer trap: lstat-valid yet strands in-bwrap
+    gitKind: "file-pointer",
+    gitdirEscapesWorkspace: true,
+  };
+
+  it("emits a DISTINCT agent_readiness_self_stop error (own Sentry issue group) carrying HASHED ws id + gitValid + shape; NO raw id/path/repoUrl/installationId", () => {
+    reportAgentReadinessSelfStop(base);
+
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, ctx] = (reportSilentFallback as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    // Distinct message → its OWN issue group (NOT repo_resolver_divergence), so
+    // the discoverability `jq length` counts it independently.
+    expect((err as Error).message).toBe("agent_readiness_self_stop");
+    expect(ctx.feature).toBe("agent-readiness-self-stop");
+    expect(ctx.op).toBe("agent-readiness-self-stop");
+    expect(ctx.extra).toMatchObject({
+      // Pre-hashed: for a SOLO workspace this would equal the raw userId, so it
+      // MUST be hashed (security #5733) — not emitted raw.
+      activeWorkspaceIdHash: "hash-754ee124",
+      gitValid: true,
+      gitKind: "file-pointer",
+      gitdirEscapesWorkspace: true,
+    });
+    // userId is present (pseudonymized to userIdHash at the emit boundary).
+    expect(ctx.extra).toHaveProperty("userId");
+    // The raw workspace-id-bearing fields must NOT leak (they == userId for solo).
+    expect(ctx.extra).not.toHaveProperty("activeWorkspaceId");
+    expect(ctx.extra).not.toHaveProperty("workspacePath");
+    expect(ctx.extra).not.toHaveProperty("repoUrl");
+    expect(ctx.extra).not.toHaveProperty("installationId");
+  });
+
+  it("dedupes by (userId, workspace, .git kind) — recurring strand emits once per process", () => {
+    reportAgentReadinessSelfStop(base);
+    reportAgentReadinessSelfStop(base);
+    reportAgentReadinessSelfStop(base);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("a SHAPE CHANGE (file-pointer → dir-invalid) re-fires (not over-deduped on workspace alone)", () => {
+    reportAgentReadinessSelfStop(base);
+    reportAgentReadinessSelfStop({ ...base, gitKind: "dir-invalid", gitValid: false });
     expect(reportSilentFallback).toHaveBeenCalledTimes(2);
   });
 });

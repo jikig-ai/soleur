@@ -196,6 +196,7 @@ jobs:
           terraform plan \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
+            -target=sentry_cron_monitor.scheduled_anthropic_credit_probe \
             -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
             -target=sentry_cron_monitor.cron_github_cidr_refresh \
             -target=sentry_cron_monitor.cron_kb_template_health \
@@ -252,6 +253,7 @@ jobs:
             -target=sentry_issue_alert.container_restart_burst \
             -target=sentry_issue_alert.kb_sync_protected_fallback_failed \
             -target=sentry_issue_alert.repo_resolver_divergence \
+            -target=sentry_issue_alert.disk_io_wal_concentration \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then

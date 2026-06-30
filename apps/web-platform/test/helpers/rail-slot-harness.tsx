@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SWRConfig } from "swr";
 import {
   RailSlotProvider,
   RailCollapsedProvider,
@@ -25,11 +26,25 @@ export function RailSlotHarness({
 }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   return (
-    <RailSlotProvider value={slot}>
-      <RailCollapsedProvider value={collapsed}>
-        <div data-testid="rail-slot-harness" ref={setSlot} />
-        {children}
-      </RailCollapsedProvider>
-    </RailSlotProvider>
+    // ADR-067: in production the dashboard layout mounts <SWRConfig>; isolated
+    // KB/rail tests render shells without that layout, so provide a FRESH SWR
+    // cache per render here (the production default cache is a module singleton
+    // and would leak cached trees/thread-info across test cases). dedupingInterval
+    // 0 + shouldRetryOnError false keep fetch-count assertions deterministic.
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        revalidateOnReconnect: false,
+        shouldRetryOnError: false,
+      }}
+    >
+      <RailSlotProvider value={slot}>
+        <RailCollapsedProvider value={collapsed}>
+          <div data-testid="rail-slot-harness" ref={setSlot} />
+          {children}
+        </RailCollapsedProvider>
+      </RailSlotProvider>
+    </SWRConfig>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, waitFor } from "@testing-library/react";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 const mockPush = vi.fn();
 let mockPathname = "/dashboard/kb/knowledge-base/product/roadmap.md";
@@ -100,7 +101,7 @@ describe("KbLayout — thread-info prefetch", () => {
   it("fetches thread-info for the initial contextPath", async () => {
     threadInfoResponses.set("knowledge-base/product/roadmap.md", 7);
     const KbLayout = await loadLayout();
-    render(<KbLayout><div>c</div></KbLayout>);
+    render(<SwrTestProvider><KbLayout><div>c</div></KbLayout></SwrTestProvider>);
     await waitFor(() => {
       expect(threadInfoCalls.some((u) => u.includes("knowledge-base%2Fproduct%2Froadmap.md"))).toBe(true);
     });
@@ -110,14 +111,14 @@ describe("KbLayout — thread-info prefetch", () => {
     threadInfoResponses.set("knowledge-base/product/roadmap.md", 5);
     threadInfoResponses.set("knowledge-base/product/vision.md", 0);
     const KbLayout = await loadLayout();
-    const { rerender } = render(<KbLayout><div>c</div></KbLayout>);
+    const { rerender } = render(<SwrTestProvider><KbLayout><div>c</div></KbLayout></SwrTestProvider>);
     await waitFor(() => {
       expect(threadInfoCalls.some((u) => u.includes("roadmap.md"))).toBe(true);
     });
 
     await act(async () => {
       mockPathname = "/dashboard/kb/knowledge-base/product/vision.md";
-      rerender(<KbLayout><div>c</div></KbLayout>);
+      rerender(<SwrTestProvider><KbLayout><div>c</div></KbLayout></SwrTestProvider>);
     });
 
     await waitFor(() => {
@@ -128,7 +129,7 @@ describe("KbLayout — thread-info prefetch", () => {
   it("does not fetch thread-info when contextPath is null (KB root)", async () => {
     mockPathname = "/dashboard/kb";
     const KbLayout = await loadLayout();
-    render(<KbLayout><div>c</div></KbLayout>);
+    render(<SwrTestProvider><KbLayout><div>c</div></KbLayout></SwrTestProvider>);
     // Give effects a chance to run.
     await waitFor(() => {
       expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
