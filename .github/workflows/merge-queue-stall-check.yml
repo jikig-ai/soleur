@@ -114,18 +114,23 @@ jobs:
 
           while IFS=$'\t' read -r pr age url; do
             [[ -z "$pr" ]] && continue
-            title_prefix="merge-queue stall: PR #${pr}"
-            existing="$(gh issue list --repo "$GH_REPO" --state open \
+            # Match anchor includes the constant " pending" suffix that always
+            # follows the PR number in the filed title — without it, the prefix
+            # for PR #1 ("…PR #1") would startswith-match PR #12's title
+            # ("…PR #12 pending …") and suppress a genuine stall for #1.
+            match_anchor="merge-queue stall: PR #${pr} pending"
+            existing="$(gh issue list --repo "$GH_REPO" --state open --limit 100 \
               --label merge-queue-stall --json number,title --jq '.[] | [.number, .title] | @tsv' \
-              | awk -F'\t' -v p="$title_prefix" 'index($2, p) == 1 { print $1; exit }')"
+              | awk -F'\t' -v p="$match_anchor" 'index($2, p) == 1 { print $1; exit }')"
             if [[ -n "$existing" ]]; then
               echo "Open stall issue #${existing} already tracks PR #${pr}; skipping create."
               continue
             fi
+            # shellcheck disable=SC2016  # single-quoted printf format: the backticks are literal markdown, no shell/var expansion intended
             body="$(printf 'PR #%s has been pending in the merge queue for ~%s minutes (> %sm threshold): %s\n\nA queue entry that never drains means a **required status check is not reporting on the `merge_group` event** for the queue temp ref, leaving the entry pending forever (#5780 failure mode).\n\nTriage:\n1. Open the queue: https://github.com/%s/queue/main\n2. Open the PR checks for the pending context: %s/checks\n3. Confirm every required-context producer fires on `merge_group`: ci.yml, secret-scan.yml, pr-quality-guards.yml, legal-doc-cross-document-gate.yml, tenant-integration.yml, dependency-review.yml, skill-security-scan-pr-trailer.yml, plus CodeQL default setup. A missing `merge_group:` trigger (or a context that never posts on it) is the usual cause.\n\nFiled automatically by .github/workflows/merge-queue-stall-check.yml.' \
               "$pr" "$age" "$STALL_THRESHOLD_MINUTES" "$url" "$GH_REPO" "$url")"
             gh issue create --repo "$GH_REPO" \
-              --title "${title_prefix} pending >${STALL_THRESHOLD_MINUTES}m" \
+              --title "merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m" \
               --label merge-queue-stall \
               --body "$body"
             echo "Filed stall issue for PR #${pr}."

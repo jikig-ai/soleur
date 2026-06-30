@@ -5,13 +5,16 @@ on:
     branches: [main]
   pull_request:
   # Merge queue (#5780). The queue dispatches `merge_group` against the
-  # gh-readonly-queue/main/* temp ref; every required-context producer here
-  # (`test`, `lockfile-sync`, `service-role-allowlist-gate`,
-  # `tc-document-sha-guard`) must run on it or the queue entry stalls pending
-  # forever. None of those jobs gate on `event_name == 'pull_request'`, so they
-  # run unconditionally on `merge_group`. `detect-changes` short-circuits
-  # non-PR events to docs=true (critical-css-gate runs — extra, not required);
-  # its event-shape refinement is optional polish, not load-bearing (P2-6).
+  # gh-readonly-queue/main/* temp ref; every required-context producer here —
+  # `test`, `e2e`, `lockfile-sync`, `service-role-allowlist-gate`,
+  # `tc-document-sha-guard` (FIVE; do NOT add an `event_name == 'pull_request'`
+  # gate to any of them or that required context never reports → the queue
+  # entry stalls pending forever) — must run on `merge_group`. None gate on the
+  # event, so they run unconditionally. `tc-document-sha-guard` additionally
+  # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
+  # on the candidate (github.base_ref is empty on merge_group). `detect-changes`
+  # short-circuits non-PR events to docs=true (critical-css-gate runs — extra,
+  # not required); its event-shape refinement is optional polish (P2-6).
   merge_group:
   workflow_dispatch:
 
@@ -125,6 +128,11 @@ jobs:
       - name: Verify all 9 legal-doc SHAs pinned
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          # github.base_ref is empty on merge_group; the script falls back to
+          # this candidate base SHA so the T&C TC_VERSION-bump bypass still works
+          # on the queue ref (else a legit stale-SHA + TC_VERSION-bump PR is
+          # green-on-PR but red-on-queue → dequeued). #5780.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: bash apps/web-platform/scripts/check-tc-document-sha.sh
 
   # ADR ordinal + required-content sentinel (PR-B #4379 ADR-040 + ADR-041).

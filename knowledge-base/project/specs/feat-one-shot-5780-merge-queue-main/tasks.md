@@ -47,6 +47,21 @@ after the queue is enabled, so canary verification is inherently post-merge.
 - [x] 1.7 `.github/workflows/skill-security-scan-pr-trailer.yml` — add `merge_group:` +
   branch base/head SHA to `merge_group.{base_sha,head_sha}`. **The missing 7th producer
   of `skill-security-scan PR gate` — without it the queue stalls on the first PR** (P0-1).
+- [x] 1.8 **(architecture review P1 — cross-ruleset enumeration gap)** `main` is gated by a
+  SECOND ruleset, "CLA Required" (`cla-check` + `cla-evidence`, `scripts/required-checks.txt`).
+  Its producers `cla.yml`/`cla-evidence.yml` are pull_request_target/issue_comment-driven and
+  CANNOT run on `merge_group` → the queue would stall on the first PR. Created
+  `.github/workflows/merge-queue-cla-synthetics.yml`: on `merge_group`, re-posts `cla-check`
+  + `cla-evidence` as success check-runs on `merge_group.head_sha` via the Checks API under
+  `GITHUB_TOKEN` (integration_id 15368 — an app token posts under the wrong integration and
+  FAILS the ruleset match), `checks: write` only, no checkout. **Trust model (CTO ruling):
+  sound because the queue ENTRY gate already required the REAL cla-check/cla-evidence green on
+  the PR head (GitHub docs: "Once a PR has passed all required branch protection checks, a user
+  with write access can add the PR to the queue"), and the legal evidence record was written to
+  R2 Object Lock at CLA SIGN time — the synthetic is only a CI-gate signal on a throwaway ref,
+  not a substitute for the evidence. Strictly safer than the existing bot-pr-with-synthetic-checks
+  precedent, which greens these for bot PRs that never ran the real CLA flow.** Lesson:
+  enumerate required-check producers across ALL rulesets targeting `main`, not just CI Required.
 
 ## Phase 2 (PR-1) — Latent apply-verify fix + positional-indexer audit
 
@@ -137,6 +152,11 @@ after the queue is enabled, so canary verification is inherently post-merge.
 - [x] `actionlint .github/workflows/*.yml` passes.
 - [x] verify grep asserts: `select(.type=="required_status_checks")` present, `.rules[0]...length` absent.
 - [x] `merge-queue-stall-check.yml` exists + actionlint-clean.
+- [x] **(architecture review P1)** `merge-queue-cla-synthetics.yml` exists: posts `cla-check` +
+  `cla-evidence` on `merge_group.head_sha` via Checks API under GITHUB_TOKEN — parity for the
+  CLA Required ruleset's 2 contexts alongside the 16 CI Required contexts.
+- [ ] **(PR-2 pre-enable hard gate, V-1)** Confirm CodeQL default setup AND the CLA synthetics
+  both post on a real `gh-readonly-queue/main/*` ref before PR-2 flips enforcement (canary 6.3).
 
 ## Pre-merge gate (PR-2)
 
