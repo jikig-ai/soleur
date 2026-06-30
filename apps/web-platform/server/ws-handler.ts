@@ -226,6 +226,29 @@ const DISCONNECT_GRACE_MS = 30_000;
  * any turn-boundary lifecycle hook needs wiring on BOTH lineages.
  */
 export function runDisconnectGraceAbort(uid: string, convId: string): void {
+  // Host-local owning-host guard (TR2 — epic #5274 Phase 1, ADR-068 §5).
+  // A live local OPEN socket for this user means they have reconnected. This
+  // CLOSES A REAL replicas=1 RACE: the auth/connect handler registers the new
+  // socket (`sessions.set`) BEFORE its `pendingDisconnects`-cancel loop runs —
+  // and that cancel sits behind three awaited workspace-bind DB calls
+  // (resolveCurrentOrganizationId / getWorkspaceForUserInOrganization /
+  // getDefaultWorkspaceForUser). A 30s grace timer expiring in that window would
+  // otherwise abort a just-reconnected live turn (#5240). This guard relies on
+  // `sessions` being keyed by userId (one live socket per user), so an OPEN entry
+  // means the user is back — the same user-level semantics as that cancel loop,
+  // which clears every `${userId}:`-prefixed timer regardless of conversation. It
+  // also localises the ownership decision inside this function — the one seam
+  // Phase 3 routes through the coordinator/Postgres lease so a reconnect landing
+  // on ANOTHER host no longer lets this host abort a now-remote-live session. NO
+  // host_id / lease / poll in Phase 1.
+  const live = sessions.get(uid);
+  if (live && live.ws.readyState === WebSocket.OPEN) {
+    log.info(
+      { userId: uid, conversationId: convId },
+      "Reconnected on this host before grace fired — skipping grace abort (owning-host guard)",
+    );
+    return;
+  }
   log.info(
     { userId: uid, conversationId: convId },
     "Grace period expired, aborting session",
