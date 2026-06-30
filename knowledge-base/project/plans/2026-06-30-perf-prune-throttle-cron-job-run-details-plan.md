@@ -91,7 +91,7 @@ AC "no loss of cron observability." Documented, not pursued.
 | processed_github_events_retention (094→103) | `0 4 * * *` | 1 | 1 |
 | processed_stripe_events_retention (094) | `0 4 * * *` | 1 | 1 |
 | processed_resend_events_retention (102) | `0 4 * * *` | 1 | 1 |
-| **cron_job_run_details_retention (NEW, 114)** | `0 4 * * *` | — | +1 |
+| **cron_job_run_details_retention (NEW, 115)** | `0 4 * * *` | — | +1 |
 | **Total** | | **~128** | **~56** |
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -152,7 +152,7 @@ Keep the `120_000` ms (= 120 s) cutoff consistent with the acquire RPC threshold
 This is a correctness fix that *reduces* user-facing risk (fewer false
 `TIER_CHANGED` evictions); it is in-scope as the safety prerequisite of the throttle.
 
-### Phase 1 — New migration `114_prune_cron_job_run_details.sql`
+### Phase 1 — New migration `115_prune_cron_job_run_details.sql`
 
 Single file, single transaction. **Two** statements (no one-time purge — see
 Enhancement Summary #2):
@@ -199,7 +199,7 @@ Like the cited precedent (103), the migration omits the `WHEN undefined_table`
 guard that 102 carries for pg_cron-less envs — acceptable because the apply target
 (`web-platform-release.yml#migrate` → `run-migrations.sh`) always has pg_cron.
 
-### Phase 2 — Down migration `114_prune_cron_job_run_details.down.sql`
+### Phase 2 — Down migration `115_prune_cron_job_run_details.down.sql`
 
 Restore the immediately-prior state: reschedule `user_concurrency_slots_sweep`
 back to `*/15 * * * *` (its state from migration 038), and
@@ -209,8 +209,8 @@ back to `*/15 * * * *` (its state from migration 038), and
 
 ## Files to Create
 
-- `apps/web-platform/supabase/migrations/114_prune_cron_job_run_details.sql`
-- `apps/web-platform/supabase/migrations/114_prune_cron_job_run_details.down.sql`
+- `apps/web-platform/supabase/migrations/115_prune_cron_job_run_details.sql`
+- `apps/web-platform/supabase/migrations/115_prune_cron_job_run_details.down.sql`
 
 ## Files to Edit
 
@@ -227,7 +227,7 @@ back to `*/15 * * * *` (its state from migration 038), and
   `.gte("last_heartbeat_at", liveCutoff)` with a 120 s (`120_000` ms) cutoff;
   `git grep -n 'last_heartbeat_at' apps/web-platform/server/ws-handler.ts` shows
   all three slot-count sites (`:522`, `:768-area`, `:2004`) now freshness-filter.
-- [x] `114_prune_cron_job_run_details.sql` exists with **two** statements (throttle
+- [x] `115_prune_cron_job_run_details.sql` exists with **two** statements (throttle
   + retention schedule; no one-time purge); the throttle uses `0 * * * *`, and the
   slots DELETE body + `120 seconds` interval are **functionally identical** to
   migration 038's body (038's is a multi-line heredoc — match behavior, not bytes).
@@ -235,7 +235,7 @@ back to `*/15 * * * *` (its state from migration 038), and
   (≥7-day retention preserved per AC).
 - [x] Idempotent `DO … unschedule guard → schedule … EXCEPTION WHEN duplicate_object`
   shape matches migration 103 (closest precedent).
-- [x] `114_…down.sql` restores `*/15 * * * *` for the slots sweep and unschedules
+- [x] `115_…down.sql` restores `*/15 * * * *` for the slots sweep and unschedules
   `cron_job_run_details_retention`. (The Phase 0 ws-handler fix is a strict
   improvement and is not reverted by the down migration.)
 - [x] Header comment cites issue #5738, the investigation learning, the 96→24
@@ -362,7 +362,7 @@ impact. No critical findings to record.
 
 ## Test Scenarios
 
-1. **Idempotency:** apply 114 twice on dev → second apply no-ops (guard + EXCEPTION),
+1. **Idempotency:** apply 115 twice on dev → second apply no-ops (guard + EXCEPTION),
    leaves exactly one `user_concurrency_slots_sweep` (hourly) and one
    `cron_job_run_details_retention`.
 2. **Throttle takes effect:** after apply, `cron.job` shows `0 * * * *` for the

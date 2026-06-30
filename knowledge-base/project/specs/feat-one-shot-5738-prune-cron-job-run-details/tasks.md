@@ -23,7 +23,7 @@ plan: knowledge-base/project/plans/2026-06-30-perf-prune-throttle-cron-job-run-d
 
 ## Phase 1 — Forward migration (two statements, no one-time purge)
 
-- [x] 1.1 Create `apps/web-platform/supabase/migrations/114_prune_cron_job_run_details.sql`.
+- [x] 1.1 Create `apps/web-platform/supabase/migrations/115_prune_cron_job_run_details.sql`.
 - [x] 1.2 Statement A: idempotent reschedule of `user_concurrency_slots_sweep` to
   `0 * * * *` (DELETE body + `120 seconds` interval functionally unchanged from 038).
 - [x] 1.3 Statement B: idempotent `cron.schedule('cron_job_run_details_retention',
@@ -34,7 +34,7 @@ plan: knowledge-base/project/plans/2026-06-30-perf-prune-throttle-cron-job-run-d
 
 ## Phase 2 — Down migration
 
-- [x] 2.1 Create `114_prune_cron_job_run_details.down.sql`: reschedule slots sweep
+- [x] 2.1 Create `115_prune_cron_job_run_details.down.sql`: reschedule slots sweep
   back to `*/15 * * * *`; `cron.unschedule('cron_job_run_details_retention')` (guarded).
   (Phase 0 ws-handler fix is a strict improvement — not reverted.)
 

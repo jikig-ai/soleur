@@ -1,4 +1,4 @@
--- 114_prune_cron_job_run_details.sql
+-- 115_prune_cron_job_run_details.sql
 --
 -- Cut the residual prod WAL from pg_cron's cron.job_run_details (issue #5738).
 --

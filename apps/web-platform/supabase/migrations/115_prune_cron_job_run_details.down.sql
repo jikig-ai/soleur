@@ -1,6 +1,6 @@
--- 114_prune_cron_job_run_details.down.sql
+-- 115_prune_cron_job_run_details.down.sql
 --
--- Reverse 114: restore the immediately-prior pg_cron state.
+-- Reverse 115: restore the immediately-prior pg_cron state.
 --   1. Reschedule user_concurrency_slots_sweep back to */15 * * * * (its state from
 --      migration 038), body unchanged.
 --   2. Unschedule cron_job_run_details_retention (guarded by IF EXISTS).
@@ -13,10 +13,10 @@
 -- (observability-only cron logs; acceptable loss on a down-migration).
 --
 -- Idempotent + atomic, same shape/guards as the up migration.
--- See: 114_prune_cron_job_run_details.sql · Issue: #5738
+-- See: 115_prune_cron_job_run_details.sql · Issue: #5738
 
 -- =====================================================================
--- 1. Restore the slots sweep to */15 (was hourly under 114)
+-- 1. Restore the slots sweep to */15 (was hourly under 115)
 -- =====================================================================
 
 DO $cron_block$

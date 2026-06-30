@@ -18,7 +18,7 @@ const WS_CLOSED = 3;
 // (b) SELECT count on `user_concurrency_slots` terminated by
 // `.gte("last_heartbeat_at", liveCutoff)` (head: true, count: 'exact' —
 // thenable returns `{ count, error }`). The count path freshness-filters
-// stale slots (migration 114 throttle safety, #5738) and resolves via `.gte()`.
+// stale slots (migration 115 throttle safety, #5738) and resolves via `.gte()`.
 const { mockSingle, mockEq, mockSelect, mockFrom, mockCount, mockGte } = vi.hoisted(() => {
   const mockSingle = vi.fn();
   const mockCount = vi.fn();
@@ -225,7 +225,7 @@ describe("ws-handler subscription refresh timer", () => {
     // (last_heartbeat_at older than the 120 s threshold), mirroring the sibling
     // slot probes (ws-handler.ts:526, :2013) and the acquire RPC self-reap
     // (093:79-81). Without it, a downgraded user whose stale slots linger longer
-    // under the throttled hourly sweep (migration 114, #5738) is falsely evicted.
+    // under the throttled hourly sweep (migration 115, #5738) is falsely evicted.
     // RED before the ws-handler fix: .gte is never called on the count path.
     mockSingle.mockResolvedValue({
       data: { subscription_status: "active", plan_tier: "solo", concurrency_override: null },

@@ -791,7 +791,7 @@ export async function refreshSubscriptionStatus(
     // Freshness-filter the count so crashed-but-unreaped slots don't trigger a
     // false eviction. Mirrors the acquire-RPC self-reap (093:79-81) and the
     // sibling slot probes (:526 divergence, :2013 sibling-slot). Load-bearing
-    // for the migration-114 throttle (#5738): the slots sweep moved */15 → hourly,
+    // for the migration-115 throttle (#5738): the slots sweep moved */15 → hourly,
     // so stale rows linger up to ~1h; without this filter a downgraded user with
     // a stale slot would be falsely evicted on the next refresh tick.
     const liveCutoff = new Date(Date.now() - 120_000).toISOString();
