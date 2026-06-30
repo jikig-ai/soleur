@@ -225,13 +225,24 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(b?.lease_generation).toBe(2);
     }, 30_000);
 
-    test("AC2(d): release frees the lease for an immediate fresh acquire", async () => {
+    test("AC2(d): release frees the lease for immediate takeover AND gen never resets", async () => {
       const a = await acquire(HOST_A);
+      expect(a?.lease_generation).toBe(1);
+      // Release TOMBSTONES the row (ages heartbeat to -infinity) — it does NOT
+      // delete it, so lease_generation is a globally-monotonic fence token that
+      // survives release (CTO ruling 2026-06-30; a reset-to-1 would invert the
+      // git-data `gen < max` fence into a write outage).
       expect(await release(HOST_A, a!.lease_generation)).toBe(1);
+      // A different host takes over IMMEDIATELY (no 120s wait — tombstone) and
+      // gen climbs to 2, it does NOT reset to the column default 1.
       const reacquired = await acquire(HOST_B);
       expect(reacquired?.host_id).toBe(HOST_B);
-      // First-ever insert after deletion → gen resets to the column default 1.
-      expect(reacquired?.lease_generation).toBe(1);
+      expect(reacquired?.lease_generation).toBe(2);
+      // Monotonicity across repeated release→takeover cycles: gen only ever climbs.
+      expect(await release(HOST_B, reacquired!.lease_generation)).toBe(1);
+      const third = await acquire(HOST_A);
+      expect(third?.host_id).toBe(HOST_A);
+      expect(third?.lease_generation).toBe(3);
     }, 30_000);
 
     test("AC2(e): touch returns 1 while held, 0 after reclaim", async () => {
@@ -262,14 +273,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect((data as { lease_generation: number }).lease_generation).toBe(2);
     }, 30_000);
 
-    test("AC4: table exists + service_role can read (RLS shape asserted in verify/116)", async () => {
-      // pg_policy is not exposed via PostgREST, so the authoritative RLS-shape
-      // assertion (exactly one SELECT policy, zero write policies, REVOKEd from
-      // anon/authenticated, search_path-pinned RPCs) lives in the SQL sentinel
-      // apps/web-platform/supabase/verify/116_worktree_write_lease.sql, run by
-      // CI's verify-migrations job. Here, a service_role smoke check only:
-      // service_role bypasses RLS, so a clean read proves the table + grants
-      // exist without contradicting the RLS posture.
+    test("table exists + service_role smoke read (authoritative RLS-shape gate is verify/116)", async () => {
+      // NOT an RLS-deny test: service_role BYPASSES RLS, so this proves only that
+      // the table + grants exist — it does NOT exercise the member-gated policy.
+      // The authoritative RLS-shape assertion (exactly one SELECT policy, zero
+      // write policies, REVOKEd from anon/authenticated, search_path-pinned RPCs)
+      // lives in the SQL sentinel apps/web-platform/supabase/verify/116_worktree_write_lease.sql,
+      // run by CI's verify-migrations job. A runtime authenticated-client deny
+      // test is deferred to PR B (which wires the member read path).
       const { error: existsErr } = await service
         .from("worktree_write_lease")
         .select("workspace_id")

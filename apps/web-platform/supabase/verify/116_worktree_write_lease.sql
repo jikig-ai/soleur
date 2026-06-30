@@ -5,10 +5,15 @@
 --   * worktree_write_lease exists with RLS enabled.
 --   * exactly one PERMISSIVE SELECT policy (worktree_write_lease_member_select);
 --     zero write policies.
---   * acquire/touch/release RPCs exist + SECURITY DEFINER.
+--   * acquire/touch/release RPCs exist + SECURITY DEFINER + the exact named-arg
+--     signatures the supabase-js client sends (proargnames parity).
 --   * none of the three RPCs is EXECUTE-able by anon or authenticated;
 --     service_role retains EXECUTE (writes via service_role RPCs only).
---   * anon + authenticated have NO table-level privilege (revoked).
+--   * the FUNCTION EXECUTE grants are the write-access control surface; the
+--     TABLE itself keeps authenticated's default SELECT grant (the member SELECT
+--     policy needs it to be reachable), with row access gated by RLS — anon has
+--     no policy ⇒ no rows. This migration does NOT revoke table grants (029
+--     RLS-only pattern); the function-revoke matrix above is the access gate.
 
 -- (1) table exists + RLS enabled
 SELECT 'worktree_write_lease_rls_enabled' AS check_name,
@@ -82,7 +87,32 @@ SELECT 'touch_service_role_grant',
        CASE WHEN has_function_privilege('service_role', 'public.touch_worktree_lease(uuid, text, text, bigint)', 'EXECUTE') THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'release_service_role_grant',
-       CASE WHEN has_function_privilege('service_role', 'public.release_worktree_lease(uuid, text, text, bigint)', 'EXECUTE') THEN 0 ELSE 1 END::int;
+       CASE WHEN has_function_privilege('service_role', 'public.release_worktree_lease(uuid, text, text, bigint)', 'EXECUTE') THEN 0 ELSE 1 END::int
+UNION ALL
+-- (16-18) Named-arg parity: a supabase-js .rpc() call routes by ARG NAME, so a
+-- drift between the migration's parameter names and the TS client's literals is
+-- a runtime PGRST/404, which the typed-signature checks above do NOT catch.
+-- Assert proargnames CONTAINS the exact input names the client sends
+-- (server/worktree-write-lease.ts). `@>` (array-contains) ignores acquire's
+-- RETURNS TABLE OUT columns (host_id, lease_generation), so it pins only the
+-- input arg names.
+SELECT 'acquire_argnames',
+       CASE WHEN p.proargnames @> ARRAY['p_workspace_id','p_worktree_id','p_host_id']
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'acquire_worktree_lease'
+UNION ALL
+SELECT 'touch_argnames',
+       CASE WHEN p.proargnames @> ARRAY['p_workspace_id','p_worktree_id','p_host_id','p_lease_generation']
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'touch_worktree_lease'
+UNION ALL
+SELECT 'release_argnames',
+       CASE WHEN p.proargnames @> ARRAY['p_workspace_id','p_worktree_id','p_host_id','p_lease_generation']
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'release_worktree_lease';
 
 -- NOTE: no table-grant assertions — this migration mirrors 029's RLS-only
 -- pattern (RLS + SELECT-only policy gates reads; absence of write policies

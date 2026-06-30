@@ -71,8 +71,14 @@ export async function acquireWorktreeLease(
       p_worktree_id: worktreeId,
       p_host_id: hostId,
     });
-    if (!error) {
-      const rows = (data ?? []) as { host_id: string; lease_generation: number }[];
+    // A clean response with a DEFINED payload: [] = a live lease held by another
+    // host (legitimate loss — silent, no Sentry), one row = we hold it. Gate on
+    // `data !== null` so an anomalous `{data: null, error: null}` PostgREST
+    // response (e.g. an RPC timeout) is NOT mistaken for "lost" and silently
+    // swallowed — it falls through to retry, then to the exhaustion mirror below
+    // (mirror concurrency.ts:93-128; cq-silent-fallback-must-mirror-to-sentry).
+    if (!error && data !== null) {
+      const rows = data as { host_id: string; lease_generation: number }[];
       if (rows.length === 0) return null; // a live lease held by another host
       const row = rows[0]!;
       return { hostId: row.host_id, leaseGeneration: Number(row.lease_generation) };
@@ -81,16 +87,25 @@ export async function acquireWorktreeLease(
       await delay(80 + Math.random() * 40); // 80–120 ms jitter (mirror concurrency)
       continue;
     }
-    reportSilentFallback(error, {
-      feature: "worktree_lease",
-      op: "acquireWorktreeLease",
-      extra: { workspaceId, worktreeId, hostId, attempt },
-    });
-    return null; // fail-closed: caller cannot prove it holds → must not write
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "worktree_lease",
+        op: "acquireWorktreeLease",
+        extra: { workspaceId, worktreeId, hostId, attempt },
+      });
+      return null; // fail-closed: caller cannot prove it holds → must not write
+    }
+    // !error && data === null (anomalous): retry while attempts remain.
+    if (attempt < 2) {
+      await delay(80 + Math.random() * 40);
+      continue;
+    }
   }
-  // 3 transient retries exhausted — fail-closed with operator visibility.
+  // Exhausted: 3 transient errors OR 3 anomalous {data:null,error:null} responses.
+  // Mirror to Sentry so the fail-close is operator-visible — now REACHABLE via the
+  // null-data fall-through above (concurrency.ts:116-128).
   reportSilentFallback(
-    new Error("acquireWorktreeLease exhausted 3 retries"),
+    new Error("acquireWorktreeLease exhausted 3 retries without data or error"),
     {
       feature: "worktree_lease",
       op: "acquireWorktreeLease",

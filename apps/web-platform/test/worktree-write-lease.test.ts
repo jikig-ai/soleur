@@ -81,6 +81,34 @@ describe("acquireWorktreeLease", () => {
     expect(rpcMock).toHaveBeenCalledTimes(2);
     expect(reportSilentFallbackMock).not.toHaveBeenCalled();
   });
+
+  test("an anomalous {data:null,error:null} retries (not silently treated as lost) then succeeds", async () => {
+    // A null payload with no error (e.g. an RPC timeout) is NOT the legitimate
+    // zero-rows "lost" path — it must fall through to retry, never short-circuit
+    // to null. (cq-silent-fallback-must-mirror-to-sentry / concurrency.ts:93-128)
+    rpcMock
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: [{ host_id: HOST, lease_generation: 4 }], error: null });
+    const lease = await acquireWorktreeLease(WS, WT, HOST);
+    expect(lease).toEqual({ hostId: HOST, leaseGeneration: 4 });
+    expect(rpcMock).toHaveBeenCalledTimes(2);
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  test("three anomalous {data:null,error:null} responses exhaust retries → report + null (fail-closed)", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: null });
+    expect(await acquireWorktreeLease(WS, WT, HOST)).toBeNull();
+    expect(rpcMock).toHaveBeenCalledTimes(3);
+    // The post-loop exhaustion mirror is now reachable — the silent-swallow is gone.
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("three consecutive transient errors exhaust retries → report + null (fail-closed)", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { code: "40P01", message: "deadlock_detected" } });
+    expect(await acquireWorktreeLease(WS, WT, HOST)).toBeNull();
+    expect(rpcMock).toHaveBeenCalledTimes(3);
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("touchWorktreeLease", () => {
@@ -121,6 +149,14 @@ describe("releaseWorktreeLease", () => {
 
   test("an RPC error is reported but not re-thrown (best-effort teardown)", async () => {
     rpcMock.mockResolvedValueOnce({ data: null, error: { code: "XX000", message: "boom" } });
+    await expect(releaseWorktreeLease(WS, WT, HOST, 5)).resolves.toBeUndefined();
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("a synchronous throw from rpc() is caught + reported, never re-thrown", async () => {
+    rpcMock.mockImplementationOnce(() => {
+      throw new Error("connection reset");
+    });
     await expect(releaseWorktreeLease(WS, WT, HOST, 5)).resolves.toBeUndefined();
     expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
   });
