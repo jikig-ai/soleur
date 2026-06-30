@@ -146,7 +146,7 @@ model {
       }
       hetzner = container "Compute" {
         technology "Hetzner Cloud"
-        description "Docker containers running web app and CLI engine"
+        description "Cluster of Hetzner Cloud hosts (Nomad clients, spread placement) running web app + CLI engine containers; per-user worktrees on host-local NVMe (ADR-068)"
       }
       inngest = container "Inngest Server" {
         technology "Self-hosted inngest (Hetzner, loopback 127.0.0.1:8288)"
@@ -159,6 +159,27 @@ model {
       inngestRedis = container "Inngest Redis" {
         technology "Self-hosted Redis — AOF on /mnt/data"
         description "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450)"
+      }
+
+      // ---- Multi-host /workspaces cluster (ADR-068, #5274 — adopting) ------
+      // Staged Approach A. Live-handle state stays host-local; cross-host
+      // control is ROUTED by the stateless coordinator (lease in Postgres),
+      // not serialized. Redis enters at Phase 4a. GA gates at Phase 3 (OQ3).
+      coordinator = container "Session Coordinator" {
+        technology "Node — stateless router"
+        description "Stateless — routes a session to the lease-holding host and forwards control ops (abort/gate/grace) to it; N replicas behind the one tunnel, lease in Postgres (ADR-068)"
+      }
+      scheduler = container "Nomad Scheduler" {
+        technology "Nomad (Phase 4a)"
+        description "Placement, health-reschedule, and rolling deploys across the Hetzner cluster (ADR-068 Phase 4a)"
+      }
+      gitDataStore = database "Shared git-data" {
+        technology "Bare git repos over private net"
+        description "Shared bare git repos (objects/refs) over the private net; per-user worktrees stay host-local on NVMe. The git-data host holds the per-ref monotonic max generation and writer-side-CAS-rejects stale lease writes (ADR-068)"
+      }
+      sessionStore = database "Session Redis" {
+        technology "Self-hosted Redis — TLS, EU (Phase 4a)"
+        description "Self-hosted EU Redis — ADR-059 replay buffer + session/control state; network-reachable, per-workspace key namespacing, TLS + requirepass. DISTINCT node from the loopback Inngest Redis (ADR-068 Phase 4a)"
       }
     }
   }
@@ -232,7 +253,7 @@ model {
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
-  tunnel -> api "Routes traffic" { technology "HTTPS" }
+  tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
   hetzner -> claude "Hosts" { technology "Docker" }
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }
@@ -246,6 +267,15 @@ model {
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
   hetzner -> inngest "Hosts" { technology "systemd" }
   doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }
+
+  // ---- C4 L2 — Multi-host /workspaces cluster (ADR-068, #5274) -----------
+  // tunnel -> coordinator (above) replaces the former tunnel -> api ingress.
+  coordinator -> claude "Places/routes sessions (lease-keyed)" { technology "HTTPS (private net)" }
+  coordinator -> supabase "Reads worktree lease" { technology "PostgreSQL" }
+  api -> sessionStore "Session/replay state" { technology "Redis (TLS)" }
+  claude -> sessionStore "Replay buffer + control state" { technology "Redis (TLS)" }
+  claude -> gitDataStore "Bare repo data; worktrees local" { technology "git over private net" }
+  scheduler -> hetzner "Schedules" { technology "Nomad" }
 
   // ---- C4 L3 (Component — Soleur Plugin) — 20 relationships --------------
   // (the L3 `hooks -> claude` edge is identical to the L2 one above and is not

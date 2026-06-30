@@ -14,9 +14,9 @@ status: epic — each phase is its own PR / /soleur:plan
 > that needs them (Redis → Phase 3; Nomad → Phase 4a) per plan-review.
 
 ## Phase 0 — Architecture decision (this epic's lifecycle)
-- [ ] 0.1 Author ADR-068 via `/soleur:architecture` (`status: adopting`); record coordinator-statelessness property
-- [ ] 0.2 **Supersede** ADR-027 (`superseded-by: ADR-068`, not amend) — carries Bucket-A migration; **re-open** ADR-059 (it rejected Redis — buffer→Redis lands Phase 4a)
-- [ ] 0.3 Edit `model.c4` (add sessionStore, gitDataStore, scheduler, coordinator[stateless] + relationships; widen `hetzner` desc) and `views.c4` (`view containers` include lines); run c4-code-syntax + c4-render tests
+- [x] 0.1 Author ADR-068 via `/soleur:architecture` (`status: adopting`); record coordinator-statelessness property + GA-gates-at-Phase-3 (OQ3 resolved by operator 2026-06-30)
+- [x] 0.2 **Supersede** ADR-027 (`superseded-by: ADR-068`, not amend) — carries Bucket-A migration; **re-open** ADR-059 (it rejected Redis — buffer→Redis lands Phase 4a)
+- [x] 0.3 Edit `model.c4` (add sessionStore, gitDataStore, scheduler, coordinator[stateless] + relationships; widen `hetzner` desc) and `views.c4` (`view containers` include lines); `likec4 validate` clean, 111 c4 tests pass
 
 ## Phase 1 — Host-local correctness (NO new infra)
 - [ ] 1.1 Add host-local owning-host guard before `runDisconnectGraceAbort` (ws-handler.ts:228-240); race-free on single event loop

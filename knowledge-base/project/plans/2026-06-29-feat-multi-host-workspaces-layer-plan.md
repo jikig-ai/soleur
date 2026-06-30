@@ -87,10 +87,10 @@ single most important correction this plan makes.
 > 4-phase shape, killing a premature Phase-1 control-plane and deferring Redis to Phase 3.
 
 ### Phase 0 — ADR-068 + C4 (this epic's lifecycle, not deferred)
-- [ ] Author **ADR-068** "Multi-host `/workspaces` via shared git-data + per-user worktrees + lease-routed coordinator (rejecting Ceph/k8s)" via `/soleur:architecture` — `status: adopting`. Records: affinity-via-lease + coordinator-forwarded control (coordinator is **stateless** — N replicas behind one tunnel); live-handle state stays host-local; writer-side CAS fencing; self-host EU Redis.
-- [ ] **Supersede ADR-027** (not amend — ADR-027 self-mandates supersession for any multi-replica diff; mark it `superseded-by: ADR-068`). ADR-068 carries the Bucket-A migration: routing truth → Postgres (#5338, already there); `_locks` → per-workspace lease; live handles stay host-local + coordinator-routed control.
-- [ ] **Re-open ADR-059** (it explicitly rejected Redis: "no multi-instance requirement exists to justify it"). ADR-068 records that the multi-host move IS that requirement; the replay buffer migrates to Redis in **Phase 4a** (when a reconnect can land on a *different* host after a death — affinity covers Phase 3).
-- [ ] C4 edits (`model.c4` + `views.c4`) — see `## Architecture Decision (ADR/C4)`.
+- [x] Author **ADR-068** "Multi-host `/workspaces` via shared git-data + per-user worktrees + lease-routed coordinator (rejecting Ceph/k8s)" via `/soleur:architecture` — `status: adopting`. Records: affinity-via-lease + coordinator-forwarded control (coordinator is **stateless** — N replicas behind one tunnel); live-handle state stays host-local; writer-side CAS fencing; self-host EU Redis; **GA gates at Phase 3 (OQ3 resolved by operator 2026-06-30)**.
+- [x] **Supersede ADR-027** (not amend — ADR-027 self-mandates supersession for any multi-replica diff; mark it `superseded-by: ADR-068`). ADR-068 carries the Bucket-A migration: routing truth → Postgres (#5338, already there); `_locks` → per-workspace lease; live handles stay host-local + coordinator-routed control.
+- [x] **Re-open ADR-059** (it explicitly rejected Redis: "no multi-instance requirement exists to justify it"). ADR-068 records that the multi-host move IS that requirement; the replay buffer migrates to Redis in **Phase 4a** (when a reconnect can land on a *different* host after a death — affinity covers Phase 3).
+- [x] C4 edits (`model.c4` + `views.c4`) — see `## Architecture Decision (ADR/C4)`. (4 new infra elements + relationships; `likec4 validate` clean; all 4 render in the containers view.)
 
 ### Phase 1 — Host-local correctness (NO new infra; still `replicas = 1`)
 - [ ] **TR2 host-local grace guard:** before `runDisconnectGraceAbort` (ws-handler.ts:228-240) aborts, confirm this host still owns the conversation (no live reconnect). On a single event loop this is **race-free** as today (cancel at :2893-2899 and fire are serialized) — no poll, no cross-host call. This is the seam Phase 3 will make affinity-correct.
@@ -440,9 +440,12 @@ The **Container view** (`view containers of platform`) changes:
    brief re-clone — gated on which phase gates GA.
 2. Worktree-checkpoint cadence/mechanism (shadow-branch vs rsync; value of N for
    "near-zero loss") — Phase 4b.
-3. Which phase gates GA: **Phase 3** (concurrent multi-host, planned-move seamless,
-   committed-state-durable) vs **Phase 4a** (seamless unplanned crash) vs **Phase 4b**
-   (near-zero uncommitted loss). Panel consensus: Phase 3 is a credible GA line.
+3. ~~Which phase gates GA~~ **RESOLVED (operator decision, 2026-06-30): Phase 3.**
+   Concurrent multi-host, planned-move seamless, committed-state-durable is the GA
+   line (panel + deepen consensus). **Phase 4a** (seamless unplanned crash) and
+   **Phase 4b** (near-zero uncommitted loss) are **post-GA hardening**, built against
+   real load / a real crash-loss incident — not on the GA-blocking path. Recorded as
+   a load-bearing property in ADR-068 (Decision §8).
 4. ~~Control-plane substrate~~ **RESOLVED (panel + deepen precedent-diff):** the
    Phase-3 coordinator reads the lease and forwards control ops by RPC to the owning
    host; no Redis pub/sub. Deepen confirmed this is a **clean extension** of the
