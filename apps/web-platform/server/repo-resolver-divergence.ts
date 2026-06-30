@@ -9,7 +9,7 @@
 // observability job.
 // ---------------------------------------------------------------------------
 
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, hashUserId } from "@/server/observability";
 
 // Dedupe by (op, userId, claim) fingerprint — NOT just `op`. The non-member
 // reset is read-time and mutates nothing, so without claim-pair fingerprinting
@@ -107,21 +107,32 @@ export function reportRepoResolverDivergence(args: {
  * so the strand is queryable and H2 is confirmed retroactively on the same
  * dispatch.
  *
+ * QUERY-ONLY BY DESIGN: the strand auto-heals in the SAME dispatch (the stale
+ * pointer is unlinked + re-cloned before `query()`), so this is a *discoverability*
+ * signal (the plan's `jq length` post-deploy check), not a page — it deliberately
+ * gets no `sentry_issue_alert` rule. `reportSilentFallback` still `captureException`s
+ * it, so it is queryable in Sentry.
+ *
  * DISTINCT `Error` message → its OWN Sentry issue group (NOT the shared
  * `repo_resolver_divergence` group), so the discoverability query counts it
- * independently. `userId` is pseudonymized to `userIdHash` at the
- * `reportSilentFallback` boundary; `extra` carries NO `installationId`/`repoUrl`
- * (credential-grant identifiers). `workspacePath` is the resolved on-disk path
- * (the active-workspace id, already non-credential).
+ * independently.
+ *
+ * PSEUDONYMIZATION (ADR-029, security #5733): `userId` is renamed to `userIdHash`
+ * at the `reportSilentFallback` boundary. CRITICAL — for a SOLO workspace
+ * `workspace_id == user_id`, so the active-workspace id IS the raw userId; it is
+ * pre-hashed here to `activeWorkspaceIdHash` and the raw `workspacePath`
+ * (`<root>/<id>`) is NOT emitted, so the rename-at-boundary is not defeated by a
+ * sibling field. `extra` carries NO `installationId`/`repoUrl` (credential-grant
+ * identifiers) and NO raw `gitdirTarget` (only the `gitKind` + escape boolean).
  */
 export function reportAgentReadinessSelfStop(args: {
   userId: string;
   activeWorkspaceId: string;
-  workspacePath: string;
   /** lstat-structural validity (`isValidGitWorkTree`) — true for the FILE-pointer
    *  trap, which is exactly why the strand was previously silent. */
   gitValid: boolean;
-  /** Structural `.git` shape kind (`probeGitWorktreeShape`). */
+  /** Structural `.git` shape kind (`probeGitWorktreeShape`) — distinguishes a
+   *  file-pointer strand from a dir-invalid / absent strand in the one event. */
   gitKind: string;
   /** For a file-pointer: did the gitdir target escape the workspace (denyRead)? */
   gitdirEscapesWorkspace?: boolean;
@@ -138,8 +149,9 @@ export function reportAgentReadinessSelfStop(args: {
     op: "agent-readiness-self-stop",
     extra: {
       userId: args.userId, // → userIdHash at the emit boundary (never raw)
-      activeWorkspaceId: args.activeWorkspaceId,
-      workspacePath: args.workspacePath,
+      // Pre-hashed: for a solo workspace this equals the raw userId, which the
+      // boundary rename would otherwise miss (it only transforms the `userId` key).
+      activeWorkspaceIdHash: hashUserId(args.activeWorkspaceId),
       gitValid: args.gitValid,
       gitKind: args.gitKind,
       ...(args.gitdirEscapesWorkspace === undefined

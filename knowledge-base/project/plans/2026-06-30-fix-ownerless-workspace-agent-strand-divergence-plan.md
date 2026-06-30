@@ -234,18 +234,30 @@ mechanism. Two committed deliverables hold regardless of branch:
   `/soleur:go` Concierge continues to strand on `not a git repository` with the
   misleading "Settings → Repository" honest-stop — the product's core surface is
   non-functional, with no observable signal that anything fired.
-- **If this leaks, the user's data / workflow is exposed via:** the fix mutates
-  the **owner canary** — the access-control primitive gating the GitHub
-  installation token (`079:88-134`, `resolve_workspace_installation_id` returns
-  the install id only when `is_workspace_member` is true). An **incorrectly-targeted
-  restore grants a wrong principal the installation token** for `jikig-ai/soleur`,
-  or causes the agent to dispatch into a sibling workspace's repo. Mitigation:
-  the owner principal is resolved via the **org join** (`organizations.owner_user_id`),
-  gated `IS NOT NULL`, single-row, **operator-acked with the resolved user_id +
-  email + org lineage displayed**; resolution remains fail-closed-to-own-solo
-  (verified `workspace-resolver.ts:365-418` — never a sibling). The org-derived
-  owner is itself treated as a hypothesis given the duplicate-creation lineage —
-  the operator confirms the principal; the plan does not infer it silently.
+- **UPDATED at implementation (multi-owner-by-design; Phase 1a DROPPED).** The
+  owner-canary restore in the original plan was REMOVED — multi-owner is by
+  design, so there is **no data write** and no owner-canary access-control change.
+  The shipped change is server-side TypeScript only. The two residual user-facing
+  vectors are:
+  - **Destructive re-clone discards user work.** The gitdir-pointer heal
+    (`ensure-workspace-repo.ts`) unlinks a stale `.git` FILE and re-clones from
+    origin HEAD. Artifact: uncommitted/un-pushed work at `/workspaces/<id>`.
+    Mitigations: (a) it fires ONLY on a STRANDING (escaping/unclassifiable)
+    pointer — a functional non-escaping in-workspace pointer is left untouched
+    (`isStrandingFilePointer`); (b) a `.git` FILE pointer holds NO objects (they
+    live at the gitdir target, which an escaping pointer abandons because the
+    sandbox can't read it anyway — there is no in-workspace work to lose); (c) a
+    personal workspace root is never a legitimate linked worktree (invariant); (d)
+    single-file `force` unlink, NOT a recursive `.git`-dir rm; lock-guarded with an
+    under-lock re-check.
+  - **Observability PII leak.** The new `agent-readiness-self-stop` Sentry event.
+    Artifact: for a SOLO workspace `workspace_id == user_id`, so the active id IS
+    the raw userId. Mitigation: the id is pre-hashed to `activeWorkspaceIdHash`,
+    the raw `workspacePath` is NOT emitted, `userId` → `userIdHash` at the
+    boundary, and NO `installationId`/`repoUrl`/`gitdirTarget` ride along.
+- **If this lands broken (residual):** the operator stays stranded — but the new
+  `agent-readiness-self-stop` event now fires with the `.git` shape, so a residual
+  strand is observable (no longer silent), and Phase 0.4 re-entry is data-driven.
 - **Brand-survival threshold:** `single-user incident`
 
 CPO sign-off required at plan time before `/work` begins (`requires_cpo_signoff:

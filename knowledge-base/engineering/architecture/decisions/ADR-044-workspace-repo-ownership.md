@@ -1131,7 +1131,7 @@ never destroying commits). Recovery is push-triggered. This supersedes the
 "readiness is a filesystem-existence check" note (Amendment 2026-06-17b context). The owner-less /
 duplicate-workspace anomaly that produced the corrupt state is tracked separately in #5591.
 
-## Amendment 2026-06-30 — readiness is `git rev-parse`-equivalent, not lstat-structural; keying-divergence boundary; strand observability (#5733)
+## Amendment 2026-06-30 — readiness is `git rev-parse`-AWARE (closes the dominant strand case), not lstat-structural-only; keying-divergence boundary; strand observability (#5733)
 
 Investigation of #5733 (operator `/soleur:go` strands on `not a git repository`
 after #5716/#5584/#5730) refuted the issue's separate-container hypothesis (one
@@ -1147,10 +1147,18 @@ sandbox) and isolated three load-bearing corrections:
    agent's `rev-parse` fails and `/soleur:go` Step 0.0 self-stops, even though the
    host-side lstat gate passed. **A personal workspace root is never a legitimate
    linked-worktree/submodule, so a `.git` FILE there is an anomalous stale
-   pointer.** Dispatch + reconcile readiness now detect it (`probeGitWorktreeShape`,
-   kind `file-pointer`) and re-clone a SELF-CONTAINED `.git` (unlink the single
-   pointer file under the workspace lock — NOT a widening of the empty-corrupt
-   recursive-rm fingerprint — then clone from origin HEAD).
+   pointer.** Readiness now uses `isReadyGitWorkTree` (a self-contained valid dir
+   OR a NON-escaping in-workspace pointer that is readable in-sandbox) — a
+   structural, `rev-parse`-AWARE check; it does not itself run `rev-parse`. Only an
+   ESCAPING (or unclassifiable) pointer is treated as not-ready and re-cloned to a
+   SELF-CONTAINED `.git` (unlink the single pointer file under the workspace lock —
+   NOT a widening of the empty-corrupt recursive-rm fingerprint — then clone from
+   origin HEAD); a non-escaping in-workspace pointer is left untouched. The
+   predicate is swept across **all THREE** workspace-readiness gates — cold
+   dispatch (`cc-dispatcher`), WARM re-provision (`cc-reprovision`), and
+   reconcile-on-push — so a pointer arising mid-session heals on the next warm turn
+   too. The new `agent-readiness-self-stop` signal is **query-only by design** (the
+   strand auto-heals in the same dispatch), a discoverability event, not a page.
 
 2. **Keying-divergence trust boundary (root architectural cause).** The two
    writers/readers of the `/workspaces/<id>` volume key the path by DIFFERENT

@@ -10,6 +10,7 @@ import {
   isValidGitWorkTree,
   isEmptyCorruptGitDir,
   probeGitWorktreeShape,
+  isStrandingFilePointer,
 } from "@/server/git-worktree-validity";
 import { withWorkspacePermissionLock } from "@/server/workspace-permission-lock";
 
@@ -45,9 +46,11 @@ export function __setGraftForTests(fn: GraftFn): void {
  *   2. the push-reconcile surface (workspace-reconcile-on-push.ts), which ALSO
  *      reads the `"ok"` variant — but NOT as a heal proxy: `"ok"` folds every
  *      benign exit (not-connected, `.git`-present no-op, skipped-bad-url, cloned),
- *      so the reconcile caller pairs it with a validity RE-PROBE
- *      (`outcome === "ok" && isValidGitWorkTree(...)`) to distinguish an actual
- *      re-clone from a benign skip that healed nothing.
+ *      so the reconcile caller pairs it with a readiness RE-PROBE
+ *      (`outcome === "ok" && isReadyGitWorkTree(...)`, #5733 — NOT
+ *      `isValidGitWorkTree`, which would falsely classify a re-clone-over-pointer
+ *      since a `.git` FILE pointer passes the lstat-structural check) to
+ *      distinguish an actual re-clone from a benign skip that healed nothing.
  * `"failed"` is ONLY the genuine clone-catch / honest-block signal. Callers may
  * key on `"ok"` (with a validity re-probe), not only on `"failed"`.
  */
@@ -148,32 +151,28 @@ export async function ensureWorkspaceRepoCloned(
   const { userId, workspacePath, installationId, repoUrl } = args;
   if (installationId === null || !repoUrl) return "ok"; // not connected → nothing to ensure
 
-  // #5733 — stale gitdir-POINTER heal (BEFORE the validity no-op below). A `.git`
-  // FILE at a workspace ROOT is never a legitimate linked-worktree/submodule (a
+  // #5733 — STRANDING gitdir-POINTER heal (BEFORE the validity no-op below). A
+  // `.git` FILE at a workspace ROOT is never a legitimate linked-worktree (a
   // personal workspace is always a top-level clone), yet `isValidGitWorkTree`
-  // treats it as VALID (git-worktree-validity.ts:60) — so the no-op gate below
-  // would skip the heal and the agent would spawn into a tree whose IN-BWRAP
-  // `git rev-parse` strands (the gitdir target is unreadable under the sandbox's
-  // `denyRead:["/workspaces"]`). Remove the stale pointer FILE and fall through
-  // to a fresh self-contained clone from origin HEAD (authoritative). This is
-  // NOT a widening of the empty-corrupt rm fingerprint (which authorizes a
-  // RECURSIVE `.git` DIR removal of an object-bearing dir); a `.git` FILE is a
-  // single pointer with NO objects — nothing to lose. Guarded by the workspace
-  // lock + a re-check so a racer that already grafted a valid dir wins.
-  if (probeGitWorktreeShape(workspacePath).kind === "file-pointer") {
-    reportSilentFallback(new Error("workspace .git is a stale gitdir pointer"), {
-      feature: "ensure-workspace-repo",
-      op: "gitdir-pointer-reclone",
-      extra: { userId, hasInstallation: true },
-      message:
-        "personal workspace .git is a FILE pointer (would strand the agent's in-bwrap git rev-parse); removing the pointer and re-cloning a self-contained repo",
-    });
+  // treats it as VALID (git-worktree-validity.ts:60). When that pointer's
+  // `gitdir:` target ESCAPES the workspace (unreadable under the sandbox's
+  // `denyRead:["/workspaces"]`), the agent's IN-BWRAP `git rev-parse` strands.
+  // Only the ESCAPING/unclassifiable pointer is healed (`isStrandingFilePointer`)
+  // — a non-escaping in-workspace pointer is readable in-sandbox, does NOT
+  // strand, and is left untouched (never needlessly re-cloned, never risks user
+  // work). Remove the stale pointer FILE and fall through to a fresh
+  // self-contained clone from origin HEAD. This is NOT a widening of the
+  // empty-corrupt rm fingerprint (a RECURSIVE `.git` DIR removal of an
+  // object-bearing dir); a `.git` FILE is a single pointer with NO objects —
+  // nothing to lose. Lock-guarded with an under-lock re-check (a racer that
+  // grafted a valid dir wins); the emit fires ONLY after a confirmed unlink.
+  if (isStrandingFilePointer(probeGitWorktreeShape(workspacePath))) {
+    let removedPointer = false;
     try {
       await withWorkspacePermissionLock(workspacePath, async () => {
-        // Re-check under the lock — only unlink if it is STILL a file-pointer (a
-        // racer may have grafted a valid self-contained `.git` dir meanwhile).
-        if (probeGitWorktreeShape(workspacePath).kind === "file-pointer") {
+        if (isStrandingFilePointer(probeGitWorktreeShape(workspacePath))) {
           await rm(join(workspacePath, ".git"), { force: true }); // single FILE, NOT recursive
+          removedPointer = true;
         }
       });
     } catch (err) {
@@ -186,6 +185,15 @@ export async function ensureWorkspaceRepoCloned(
       });
       return "failed";
     }
+    if (removedPointer) {
+      reportSilentFallback(new Error("workspace .git was a stale gitdir pointer"), {
+        feature: "ensure-workspace-repo",
+        op: "gitdir-pointer-reclone",
+        extra: { userId, hasInstallation: true },
+        message:
+          "personal workspace .git was an escaping FILE pointer (strands the agent's in-bwrap git rev-parse); removed the pointer and re-cloning a self-contained repo",
+      });
+    }
     // Pointer removed (or a racer landed a valid `.git`) → fall through to the
     // validity gate + clone below, which re-checks the now-absent/now-valid state.
   }
@@ -193,8 +201,9 @@ export async function ensureWorkspaceRepoCloned(
   // NEVER touch a VALID repo (Start-Fresh, already-cloned, or a different origin
   // the user is intentionally using). Validity — not mere presence — is the
   // no-op gate (2026-06-19): a `.git` that exists but is corrupt must NOT mask
-  // the heal the way bare `existsSync` did. (A `.git` FILE pointer was handled
-  // and removed just above, so it no longer reaches this `return "ok"`.)
+  // the heal the way bare `existsSync` did. (A STRANDING `.git` FILE pointer was
+  // handled and removed just above; a non-stranding in-workspace pointer is a
+  // valid linked tree we intentionally preserve here.)
   if (isValidGitWorkTree(workspacePath)) return "ok";
 
   // `.git` EXISTS but is INVALID. The destructive removal is authorized ONLY by

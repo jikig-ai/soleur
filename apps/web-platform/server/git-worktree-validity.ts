@@ -123,21 +123,41 @@ export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
 }
 
 /**
+ * A `.git` FILE pointer that STRANDS the agent's in-bwrap `git rev-parse`
+ * (#5733). The strand is specific: only a pointer whose `gitdir:` target
+ * resolves OUTSIDE the workspace (e.g. under `/workspaces`, which the agent
+ * sandbox `denyRead`s) is unreadable in-sandbox and fails `rev-parse`. A pointer
+ * whose target stays INSIDE the workspace is readable in-sandbox and works — it
+ * does NOT strand, so it is left untouched (never destructively re-cloned). An
+ * unreadable pointer body (`gitdirEscapesWorkspace === undefined`) is treated as
+ * stranding — a workspace-root `.git` FILE we cannot classify is anomalous and a
+ * personal workspace root is never a legitimate linked worktree. This is the
+ * predicate the destructive heal gates on, so it is deliberately narrow.
+ */
+export function isStrandingFilePointer(shape: GitWorktreeShape): boolean {
+  return shape.kind === "file-pointer" && shape.gitdirEscapesWorkspace !== false;
+}
+
+/**
  * READINESS-grade validity (#5733). `isValidGitWorkTree` is the STRUCTURAL
- * fast-path gate, but it returns `true` for a `.git` FILE pointer — which a
- * personal workspace root must never be, and which strands the agent's in-bwrap
- * `git rev-parse`. The dispatch + reconcile readiness gates use THIS instead:
- * lstat-valid AND not a stale gitdir-pointer FILE. A file-pointer therefore
- * routes into `ensureWorkspaceRepoCloned` (which unlinks the pointer + re-clones
- * a self-contained `.git`) rather than fast-pathing a doomed agent spawn. Cost:
- * sync lstat(s) only on the common dir-valid path (no subprocess; the small
- * pointer-body read happens only when `.git` is actually a FILE).
+ * fast-path gate, but it returns `true` for a `.git` FILE pointer — and an
+ * ESCAPING pointer strands the agent's in-bwrap `git rev-parse`. The dispatch +
+ * reconcile readiness gates use THIS: ready = a self-contained valid dir OR a
+ * NON-escaping in-workspace pointer (readable in-sandbox). A stranding (escaping
+ * / unclassifiable) pointer is NOT ready, so it routes into
+ * `ensureWorkspaceRepoCloned` (which unlinks the stale pointer + re-clones a
+ * self-contained `.git`) rather than fast-pathing a doomed agent spawn. This is
+ * `rev-parse`-AWARE structural readiness — it closes the dominant rev-parse
+ * strand case (the escaping pointer); it does not itself run `rev-parse`. Cost:
+ * a single `probeGitWorktreeShape` (sync lstat(s); the small pointer-body read
+ * happens only when `.git` is actually a FILE) — no subprocess, no double-probe.
  */
 export function isReadyGitWorkTree(workspacePath: string): boolean {
-  return (
-    isValidGitWorkTree(workspacePath) &&
-    probeGitWorktreeShape(workspacePath).kind !== "file-pointer"
-  );
+  const shape = probeGitWorktreeShape(workspacePath);
+  if (shape.kind === "dir-valid") return true;
+  // A non-escaping in-workspace pointer is functional in-sandbox → ready.
+  if (shape.kind === "file-pointer") return shape.gitdirEscapesWorkspace === false;
+  return false; // absent / dir-invalid / other (symlink) → not ready
 }
 
 /**

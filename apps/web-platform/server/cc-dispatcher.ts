@@ -120,7 +120,6 @@ import {
 // presence) so a corrupt/partial `.git` routes to recovery instead of a silent
 // repo-less spawn.
 import {
-  isValidGitWorkTree,
   isReadyGitWorkTree,
   probeGitWorktreeShape,
 } from "./git-worktree-validity";
@@ -1800,31 +1799,43 @@ export const realSdkQueryFactory: QueryFactory = async (
     // strands the agent's IN-BWRAP `git rev-parse` (its `gitdir:` target is
     // unreadable under the sandbox `denyRead:["/workspaces"]`). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
-    // surface all three prior fixes missed. Emit a server-side
-    // `agent-readiness-self-stop` (own Sentry issue group) carrying the resolved
-    // id + path + `.git` shape BEFORE the heal (confirms H2 on this dispatch),
-    // and route the pointer into the self-heal (ensureWorkspaceRepoCloned now
-    // unlinks the stale pointer + re-clones a self-contained `.git`). The shape
-    // probe is cheap (lstat + maybe one small read) and evaluated AFTER the
-    // readiness short-circuit so the common valid-`.git`-dir hot path is unaffected.
+    // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
+    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
+    // the readiness decision and the observability emit — no re-lstat. The common
+    // dir-valid case pays this single cheap probe; it is not free, but adds no
+    // subprocess and no DB/JWT.
     const gitShape = probeGitWorktreeShape(workspacePath);
-    if (gitShape.kind === "file-pointer") {
+    // Readiness derived from the SAME probe: a self-contained valid dir OR a
+    // non-escaping in-workspace pointer (readable in-sandbox) is ready.
+    const gitReady =
+      gitShape.kind === "dir-valid" ||
+      (gitShape.kind === "file-pointer" &&
+        gitShape.gitdirEscapesWorkspace === false);
+    // #5733 Phase 1b — emit the agent-readiness self-stop for ANY connected,
+    // DB-ready workspace whose on-disk `.git` is NOT rev-parse-ready (escaping
+    // pointer / corrupt dir / absent). The agent self-stops on its in-bwrap `git
+    // rev-parse` for ALL of these, and Phase 0 could not confirm WHICH shape prod
+    // has — so the one queryable event must cover them all (`gitKind`
+    // distinguishes). Excludes a legitimately repo-less workspace (no `repoUrl`)
+    // and a cloning/error status (the honest RepoNotReadyError owns those). Fires
+    // BEFORE the heal so the strand is queryable on this very dispatch.
+    if (repoReadiness.ok && repoUrl && !gitReady) {
       reportAgentReadinessSelfStop({
         userId: args.userId,
         activeWorkspaceId,
-        workspacePath,
-        gitValid: isValidGitWorkTree(workspacePath), // lstat-valid (the trap)
+        // lstat-validity (the FILE-pointer trap) — derived from the same probe.
+        gitValid:
+          gitShape.kind === "dir-valid" || gitShape.kind === "file-pointer",
         gitKind: gitShape.kind,
         gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
       });
     }
-    // Readiness-grade validity (`isReadyGitWorkTree`) treats a file-pointer as
-    // NOT valid, so it falls through to the self-heal below. `gitDirValid` (the
-    // seam consumed by resolveRepoReadinessWithSelfHeal) MUST use the same
-    // predicate, else the readiness module's fast-path (`:199`) short-circuits
-    // on lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
-    const needsSelfHeal =
-      !repoReadiness.ok || !isReadyGitWorkTree(workspacePath);
+    // `gitReady` treats an escaping pointer / corrupt dir as NOT ready, so it
+    // falls through to the self-heal. `gitDirValid` (the seam consumed by
+    // resolveRepoReadinessWithSelfHeal) uses the same `isReadyGitWorkTree`
+    // predicate, else the readiness module's fast-path (`:199`) short-circuits on
+    // lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
+    const needsSelfHeal = !repoReadiness.ok || !gitReady;
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {

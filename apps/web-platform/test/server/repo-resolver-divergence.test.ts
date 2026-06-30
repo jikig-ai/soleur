@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  hashUserId: (s: string) => `hash-${s}`,
 }));
 
 import { reportSilentFallback } from "@/server/observability";
@@ -194,13 +195,12 @@ describe("reportAgentReadinessSelfStop — agent-surface strand observability (#
   const base = {
     userId: "user-1",
     activeWorkspaceId: "754ee124",
-    workspacePath: "/workspaces/754ee124",
     gitValid: true, // the FILE-pointer trap: lstat-valid yet strands in-bwrap
     gitKind: "file-pointer",
     gitdirEscapesWorkspace: true,
   };
 
-  it("emits a DISTINCT agent_readiness_self_stop error (own Sentry issue group) carrying id + path + gitValid + shape; NO repoUrl/installationId", () => {
+  it("emits a DISTINCT agent_readiness_self_stop error (own Sentry issue group) carrying HASHED ws id + gitValid + shape; NO raw id/path/repoUrl/installationId", () => {
     reportAgentReadinessSelfStop(base);
 
     expect(reportSilentFallback).toHaveBeenCalledTimes(1);
@@ -212,14 +212,18 @@ describe("reportAgentReadinessSelfStop — agent-surface strand observability (#
     expect(ctx.feature).toBe("agent-readiness-self-stop");
     expect(ctx.op).toBe("agent-readiness-self-stop");
     expect(ctx.extra).toMatchObject({
-      activeWorkspaceId: "754ee124",
-      workspacePath: "/workspaces/754ee124",
+      // Pre-hashed: for a SOLO workspace this would equal the raw userId, so it
+      // MUST be hashed (security #5733) — not emitted raw.
+      activeWorkspaceIdHash: "hash-754ee124",
       gitValid: true,
       gitKind: "file-pointer",
       gitdirEscapesWorkspace: true,
     });
     // userId is present (pseudonymized to userIdHash at the emit boundary).
     expect(ctx.extra).toHaveProperty("userId");
+    // The raw workspace-id-bearing fields must NOT leak (they == userId for solo).
+    expect(ctx.extra).not.toHaveProperty("activeWorkspaceId");
+    expect(ctx.extra).not.toHaveProperty("workspacePath");
     expect(ctx.extra).not.toHaveProperty("repoUrl");
     expect(ctx.extra).not.toHaveProperty("installationId");
   });

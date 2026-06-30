@@ -266,7 +266,11 @@ export async function workspaceReconcileOnPushHandler({
         .select("user_id, created_at")
         .eq("workspace_id", ws.id)
         .eq("role", "owner")
-        .order("created_at", { ascending: true });
+        // `user_id` is the deterministic tie-break: two co-owners inserted in the
+        // same transaction share `created_at = now()`, so without it `owners[0]`
+        // is order-undefined (the team-workspace-without-self-row branch).
+        .order("created_at", { ascending: true })
+        .order("user_id", { ascending: true });
       if (ownerErr) {
         // A real probe error is NOT "owner-less" — never emit the drift warn on
         // a transient read failure (cq-silent-fallback-must-mirror-to-sentry).

@@ -2,6 +2,8 @@
 
 Date: 2026-06-30. Source: read-only prod Supabase (`DATABASE_URL_POOLER` via Doppler `soleur/prd`, `SET default_transaction_read_only=on`). Resolver code read at plan time.
 
+> NOTE: `file:line` citations below are **pre-implementation** point-in-time records (e.g. the reconcile owner query moved from `~255-260` to `~262-271`, and the validity gate from `~310` to `~353` after the multi-owner edit). They describe the as-found state; navigate by symbol/function name, not the exact line.
+
 ## 0.0 Resolver predicate (`workspace-resolver.ts:365-418`)
 `resolveActiveWorkspace(userId)`:
 1. `claim = resolveCurrentWorkspaceId(userId)` (reads `user_session_state.current_workspace_id`; fail-closes to `userId`).

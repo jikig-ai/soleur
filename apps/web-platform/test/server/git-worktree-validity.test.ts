@@ -15,6 +15,7 @@ import {
   isEmptyCorruptGitDir,
   probeGitWorktreeShape,
   isReadyGitWorkTree,
+  isStrandingFilePointer,
 } from "@/server/git-worktree-validity";
 
 // Safety-critical probes (deepen-plan F2): `isEmptyCorruptGitDir` is the ONLY
@@ -156,16 +157,46 @@ describe("git-worktree-validity", () => {
       expect(isReadyGitWorkTree(p)).toBe(true);
     });
 
-    it("`.git` FILE pointer → lstat-VALID but NOT ready (false) — routes to re-clone", async () => {
-      const p = await ws("ready-pointer");
+    it("ESCAPING `.git` FILE pointer → lstat-VALID but NOT ready (false) — routes to re-clone", async () => {
+      const p = await ws("ready-pointer-escape");
       await writeFile(join(p, ".git"), "gitdir: /workspaces/other/.git/worktrees/x\n");
       expect(isValidGitWorkTree(p)).toBe(true); // the lstat trap
-      expect(isReadyGitWorkTree(p)).toBe(false); // readiness-grade rejects it
+      expect(isReadyGitWorkTree(p)).toBe(false); // escaping → readiness rejects it
+    });
+
+    it("NON-escaping in-workspace `.git` FILE pointer → READY (true) — readable in-sandbox, left untouched", async () => {
+      const p = await ws("ready-pointer-inside");
+      await writeFile(join(p, ".git"), "gitdir: ./.git-real\n");
+      expect(isValidGitWorkTree(p)).toBe(true);
+      expect(isReadyGitWorkTree(p)).toBe(true); // non-escaping → ready, NOT healed
     });
 
     it("absent `.git` → not ready (false)", async () => {
       const p = await ws("ready-absent");
       expect(isReadyGitWorkTree(p)).toBe(false);
+    });
+  });
+
+  // #5733 — the destructive-heal predicate: ONLY an escaping/unclassifiable
+  // pointer strands (and is re-cloned); a non-escaping pointer is left untouched.
+  describe("isStrandingFilePointer (#5733)", () => {
+    it("escaping pointer → stranding (true)", () => {
+      expect(
+        isStrandingFilePointer({ kind: "file-pointer", gitdirEscapesWorkspace: true }),
+      ).toBe(true);
+    });
+    it("unreadable/unclassifiable pointer body (escapes undefined) → stranding (true)", () => {
+      expect(isStrandingFilePointer({ kind: "file-pointer" })).toBe(true);
+    });
+    it("non-escaping in-workspace pointer → NOT stranding (false)", () => {
+      expect(
+        isStrandingFilePointer({ kind: "file-pointer", gitdirEscapesWorkspace: false }),
+      ).toBe(false);
+    });
+    it("a valid dir / absent / dir-invalid is never a stranding pointer", () => {
+      expect(isStrandingFilePointer({ kind: "dir-valid" })).toBe(false);
+      expect(isStrandingFilePointer({ kind: "absent" })).toBe(false);
+      expect(isStrandingFilePointer({ kind: "dir-invalid" })).toBe(false);
     });
   });
 
