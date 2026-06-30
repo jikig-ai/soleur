@@ -88,24 +88,24 @@ semantic drift.**
 > (1.1) are written against the post-widening signature.
 
 ### Phase 1.A — `abortSession` found-count (contract change first)
-- [ ] Widen `abortSession(userId, conversationId, reason?, leaderId?)` from `: void`
+- [x] Widen `abortSession(userId, conversationId, reason?, leaderId?)` from `: void`
   to `: number`. Both branches return a count of sessions whose `.abort.abort(...)`
   was invoked:
   - `leaderId` branch (:198-204): `return session ? 1 : 0`.
   - Broadcast branch (:206-212): accumulate `let aborted = 0; … aborted += 1; return aborted;`
     — the same accumulator shape as `drainAutonomousDisclosureGates` (a **semantic**
     mirror: `abortSession` increments per matched session, not on a success signal).
-- [ ] Update the docblock (:178-189) to state the return contract precisely:
+- [x] Update the docblock (:178-189) to state the return contract precisely:
   *"Returns the number of **registered** sessions matched and signalled on **this
   host** (not necessarily still-live turns — a finishing-but-not-yet-deregistered
   entry still counts; the safe direction). The Phase-3 coordinator reads this to
   decide whether to RPC-forward (ADR-068 §4); the full forward rationale lives in
   ADR-068, not here."*
-- [ ] Do **not** touch any call site (all 6 production sites are statement calls; the
+- [x] Do **not** touch any call site (all 6 production sites are statement calls; the
   test spies assert call-args, not the return — see Reconciliation / AC6).
 
 ### Phase 1.B — TR2 host-local owning-host guard
-- [ ] At the top of `runDisconnectGraceAbort(uid, convId)` (ws-handler.ts:228),
+- [x] At the top of `runDisconnectGraceAbort(uid, convId)` (ws-handler.ts:228),
   before the abort, add the **local-liveness** guard reading the already-imported
   `sessions` map (session-registry.ts):
   ```ts
@@ -135,20 +135,20 @@ semantic drift.**
     (`WebSocket` + `sessions` imported at :324).
 
 ### Phase 1.C — Audit the legacy abort path (1.3, confirmation)
-- [ ] Confirm by **grep anchored on the stable symbol** `registerSession(` (NOT the
+- [x] Confirm by **grep anchored on the stable symbol** `registerSession(` (NOT the
   drift-prone line `:944`) that the `agent-runner` AbortController is wrapped as an
   `AgentSession` and stored in `activeSessions`, hence reachable by `abortSession`'s
   broadcast (`sessionKey` :62-70 → prefix match :207-211). Record the grep in the PR.
-- [ ] Add a **present-tense** one-line comment at the agent-runner registration:
+- [x] Add a **present-tense** one-line comment at the agent-runner registration:
   *"This controller is the legacy/registry abort surface reached by `abortSession`;
   the cc-soleur-go lineage has its own controller (`cc-dispatcher.ts:2117`, reached
   by `closeCcConversation`)."* No forward-reference to unbuilt Phase-3 machinery.
-- [ ] `session-registry.ts` (operator task 1.3 "add to edit set"): a **present-tense**
+- [x] `session-registry.ts` (operator task 1.3 "add to edit set"): a **present-tense**
   note on the `sessions` Map (:1-5) — *"holds the live socket — host-local by
   definition."* No Phase-3 coordinator narrative (that would rot when Phase 3 lands).
 
 ### Phase 1.D — RED→GREEN tests (1.5)
-- [ ] **Grace-guard unit test** — new `test/ws-handler-disconnect-grace-owning-host-guard.test.ts`
+- [x] **Grace-guard unit test** — new `test/ws-handler-disconnect-grace-owning-host-guard.test.ts`
   (node project; `test/**/*.test.ts`), mirroring the harness in the existing
   `test/ws-handler-grace-abort-cc-parity.test.ts` (which already imports and calls
   `runDisconnectGraceAbort` directly, bypassing the timer). `afterEach(() =>
@@ -162,7 +162,7 @@ semantic drift.**
   - **No session — guard passes (AC3):** no entry for `uid`; assert the abort **IS** called.
   - **Stale socket — guard passes (AC3):** seed `{ ws:{ readyState: WebSocket.CLOSED } }`;
     assert the abort **IS** called (pins the `readyState === OPEN` check, not `sessions.has`).
-- [ ] **`abortSession` found-count + legacy-abort routing** — extend
+- [x] **`abortSession` found-count + legacy-abort routing** — extend
   `test/server/abort-turn.test.ts` (folds the standalone legacy-abort deliverable in —
   `registerSession` IS the agent-runner path, no separate code path exists):
   - register 2 leaders → broadcast returns 2; 0 → returns 0; single-leader → 1/0 (AC4).
@@ -172,7 +172,7 @@ semantic drift.**
   - add a **decoy** session under a *different* `(uid, conv)`; assert it is **neither
     counted nor aborted** (pins the prefix-exclusion — over-count would mean
     "I own conversations I don't" in Phase 3) (AC4).
-- [ ] **Task 1.2 restart-survival — confirmation, NOT a new test** (operator decision
+- [x] **Task 1.2 restart-survival — confirmation, NOT a new test** (operator decision
   2026-06-30): cite `test/durable-workspace-binding-resolver.test.ts:43` (the existing
   "post-restart sim — load-bearing" rehydrate test) + :118-137 (`readWorkspaceIdFromDb`)
   as the coverage, and `git grep` to confirm the post-restart consumer path routes

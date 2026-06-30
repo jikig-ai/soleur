@@ -186,30 +186,42 @@ export function forEachSessionForConversation(
  * abort branch can read `controller.signal.reason` and route the
  * persistence + status-update logic via `classifyAbortReason` in
  * `abort-classifier.ts`.
+ *
+ * Returns the number of REGISTERED sessions matched and signalled on THIS
+ * host (not necessarily still-live turns — a finishing-but-not-yet-
+ * `unregisterSession`'d entry still counts; the safe direction). 0 ⇒ nothing
+ * matched here — the turn finished locally OR lives on another host. The
+ * Phase-3 coordinator reads this to decide whether to RPC-forward the abort
+ * to the lease-holding host (ADR-068 §4, epic #5274); the full forward
+ * rationale lives in ADR-068, not here. Harmless at `replicas = 1`.
  */
 export function abortSession(
   userId: string,
   conversationId: string,
   reason?: AbortKind,
   leaderId?: string,
-): void {
+): number {
   const kind: AbortKind = reason ?? "disconnected";
 
   if (leaderId) {
     const session = activeSessions.get(sessionKey(userId, conversationId, leaderId));
     if (session) {
       session.abort.abort(new SessionAbortError(kind));
+      return 1;
     }
-    return;
+    return 0;
   }
 
   // Broadcast: abort every session for this (userId, conversationId).
   const prefix = `${userId}:${conversationId}`;
+  let aborted = 0;
   for (const [key, session] of activeSessions) {
     if (key === prefix || key.startsWith(`${prefix}:`)) {
       session.abort.abort(new SessionAbortError(kind));
+      aborted += 1;
     }
   }
+  return aborted;
 }
 
 /** Abort every session for a user. Called during account deletion. */
