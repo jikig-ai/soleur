@@ -63,6 +63,9 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
     ...actual,
     resolveOutputAwareOk: (...a: unknown[]) => resolveOutputAwareOkSpy(...a),
     ensureScheduledAuditIssue: (...a: unknown[]) => ensureAuditIssueSpy(...a),
+    // #5751 — the handler now runs a pre-spawn date-dedup. These throw-path
+    // tests exercise the genuine-first-run flow, so the digest never pre-exists.
+    digestIssueExistsForDate: vi.fn().mockResolvedValue(false),
     mintInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken"),
   };
 });
