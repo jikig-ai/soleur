@@ -57,7 +57,16 @@ none of it.
   surface). The callback MUST NOT throw into the SDK.
 - FR3. **Security parity with the CLI hook:** the model-controlled `skill` value is used ONLY as
   a map lookup key and is NEVER echoed into the hint; the hint is composed from map-derived
-  constant text only (mirrors P1-1/P1-2/P1-3 of the shell hook).
+  constant text only (mirrors P1-1/P1-2/P1-3 of the shell hook). **Prototype-pollution guard
+  (TS-specific, security-sentinel F1 — `as const` is erased at runtime, NOT a null-proto object):**
+  (1) `if (typeof skill !== "string") return null` up front (the model may send a non-string);
+  (2) `Object.hasOwn(map.skill_to_phase, skill)` before the phase lookup AND `Object.hasOwn(
+  map.phase_to_surface, phase)` before the surface lookup — own-property guards defeat every
+  inherited-key read (`__proto__`, `constructor`, `toString`); (3) `typeof phase === "string"`
+  after; (4) belt-and-suspenders: validate `phase` against the literal allowlist
+  `{brainstorm,plan,work,review,ship}`. The bash hook is immune via `jq --arg`; the JS port must
+  add these guards explicitly — the "injection-safe" claim must rest on them, not on accidental
+  two-stage dead-ending.
 - FR4. The hint string is byte-equivalent in shape to the CLI hook's output (`[phase-scope] You
   are in the <phase> phase. Phase-relevant skills: … Phase-relevant agents: … Not yet live: …
   (Guidance only — all tools remain available; this never restricts what you can call.)`).
@@ -76,8 +85,12 @@ none of it.
   bundled copy against `.claude/phase-surface-map.json` (repo root is present in CI). Drift fails
   CI. This is the ADR-053 consistency coupling.
 - TR3. **Observability:** the catch arm mirrors to Sentry via the existing silent-fallback helper
-  (`cq-silent-fallback-must-mirror-to-sentry`) and logs `fail-open: no hint`. Discoverable from
-  Sentry without SSH.
+  (`reportSilentFallback`, used at `soleur-go-runner.ts:2120`) and logs `fail-open: no hint`.
+  Discoverable from Sentry without SSH. **F5 (security-sentinel):** the raw model-controlled
+  `skill` value MUST NOT appear in the log message, the Sentry `extra`, or the thrown error's
+  `message` — otherwise it re-enters logs/Sentry as message-borne content, re-opening the
+  log-injection/reflection surface the no-echo invariant closes. Use a static message string +
+  the error object only.
 - TR4. The drift-guard `stableShape` (T4) excludes `hooks`, so adding `PostToolUse` does not trip
   it; `agent-runner-query-options.test.ts` gains a positive assertion that `PostToolUse` is
   present with matcher `"Skill"`.

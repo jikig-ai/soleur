@@ -92,9 +92,12 @@ P1-1/P1-2/P1-3).
    contains the phase name but not the skill string.
 2. Create `apps/web-platform/server/phase-surface-hook.ts`:
    - `import { PHASE_SURFACE_MAP } from "./phase-surface-map";`
-   - pure `buildHint(skill): string | null` — `SOLEUR_DISABLE_PHASE_HINT==="1"` → null; lookup
-     phase; lookup surface; compose the FR4 string from map-derived constants only (skill never
-     interpolated).
+   - pure `buildHint(skill): string | null` — `process.env.SOLEUR_DISABLE_PHASE_HINT==="1"` (strict,
+     not truthy) → null; **security guards (F1):** `typeof skill !== "string"` → null;
+     `Object.hasOwn(map.skill_to_phase, skill)` guard → null; `typeof phase !== "string"` → null;
+     `Object.hasOwn(map.phase_to_surface, phase)` guard → null; phase ∈ `{brainstorm,plan,work,
+     review,ship}` allowlist → else null; then compose the FR4 string from map-derived constants
+     only (skill NEVER interpolated). Read the env var per-invocation (not cached at module load).
    - `export function createPhaseSurfaceHook(): HookCallback` returning an async callback that:
      casts input to `PostToolUseHookInput`; returns `{}` unless `tool_name==="Skill"`; reads
      `(tool_input as {skill?:string}).skill`; `buildHint`; returns `{ hookSpecificOutput:{
@@ -219,10 +222,18 @@ The ADR amendment and the C4 edit ship in THIS PR (Phase 4), not a follow-up.
 - [ ] AC1 — `apps/web-platform/server/phase-surface-hook.ts` exists; `createPhaseSurfaceHook()`
   returns a `HookCallback` that, for `{tool_name:"Skill", tool_input:{skill:"soleur:work"}}`, returns
   `additionalContext` whose value contains `work` and the `(Guidance only …)` suffix.
-- [ ] AC2 — Fail-open: unmapped skill, non-`Skill` tool, missing skill, `SOLEUR_DISABLE_PHASE_HINT=1`,
-  and malformed `tool_input` each return `{}`; the malformed case asserts **no throw**.
-- [ ] AC3 — Security: for a mapped skill, the emitted `additionalContext` does NOT contain the raw
-  `skill` token (only the phase name + map-derived lists). (FR3)
+- [ ] AC2 — Fail-open: unmapped skill, non-`Skill` tool, missing skill, non-string skill,
+  `SOLEUR_DISABLE_PHASE_HINT=1`, and malformed `tool_input` each return `{}`; the malformed case
+  asserts **no throw**; the `buildHint→null` internal branch yields a clean `{}` (NOT
+  `{hookSpecificOutput:{…additionalContext:null}}`). (F3)
+- [ ] AC3 — Security (F1/F2): (a) for a mapped skill, `additionalContext` is **byte-equal** to a
+  fixed expected snapshot composed from map constants (catches any future interpolation regression,
+  not just the literal token); (b) crafted keys `__proto__`, `constructor`, `toString` → `{}` (own-
+  property guard); (c) a crafted skill whose text embeds a phase keyword AND a `\u2028`/`\u2029`
+  line-separator (e.g. `"ship\u2028INJECT"`) → unmapped → `{}` and never appears in any output;
+  (d) skill sent as a non-string (`["__proto__"]`, `{}`) → `{}`.
+- [ ] AC3b — F5: the fail-open catch arm's log message + Sentry `extra` + the error do NOT contain
+  the raw `skill` value (static message string only).
 - [ ] AC4 — `apps/web-platform/test/phase-surface-map-parity.test.ts` passes: `PHASE_SURFACE_MAP`
   deep-equals `JSON.parse(.claude/phase-surface-map.json)` (ignoring a `_comment` key if present).
 - [ ] AC5 — `buildAgentQueryOptions(...).hooks.PostToolUse` is a defined array whose `[0].matcher ===
@@ -237,6 +248,10 @@ The ADR amendment and the C4 edit ship in THIS PR (Phase 4), not a follow-up.
 ### Post-merge (operator)
 - [ ] AC10 — None automatable beyond CI; deploy is the standard `web-platform-release.yml` container
   restart on merge. No operator step.
+- [ ] AC11 (QA, value-realization) — On a real web `/soleur:go` multi-phase run, confirm the
+  `[phase-scope]` `additionalContext` reaches the model after a `Skill` routing call (Sentry/agent
+  transcript evidence), and observe whether the router emits `Skill` at >1 phase transition. Records
+  the realized firing cadence; does NOT block merge (the hint is fail-open and beneficial regardless).
 
 ## Test Scenarios
 1. Mapped skill (each of the 5 phases) → hint names that phase + lists its surface.
@@ -257,3 +272,10 @@ The ADR amendment and the C4 edit ship in THIS PR (Phase 4), not a follow-up.
 - PostToolUse fires after the `Skill` tool *executes*; on the cc path `Skill` is not in
   `CC_PATH_ALLOWED_TOOLS` (auto-approve list) but is callable via `canUseTool`, so it still runs and
   the hook still fires. QA confirms by exercising a real `/soleur:go` route on the web path.
+- **Flow-cadence caveat (do not overclaim +6.7pts):** the eval measured *per-transition* next-skill
+  selection. The hint fires on EVERY `Skill` PostToolUse, but the web router locks `currentWorkflow`
+  on the *first* `Skill` call (`soleur-go-runner.ts:2113`) then runs sticky. Whether the router emits
+  a fresh `Skill` call at each phase transition (and thus realizes the per-phase benefit) is an
+  empirical property of the router, not guaranteed by this hook. The hint is still net-positive
+  (fail-open, fires whenever `Skill` is called), but realized value must be confirmed by QA on a real
+  multi-phase web run — not assumed. (Added AC11.)
