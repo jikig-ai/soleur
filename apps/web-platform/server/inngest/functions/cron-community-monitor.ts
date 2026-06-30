@@ -334,6 +334,7 @@ export async function cronCommunityMonitorHandler({
   const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
     digestIssueExistsForDate({
       label: SENTRY_MONITOR_SLUG,
+      titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX,
       date: runStartedAt.slice(0, 10),
       cronName: "cron-community-monitor",
     }),
