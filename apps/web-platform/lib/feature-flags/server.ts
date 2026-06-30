@@ -58,6 +58,11 @@ const RUNTIME_FLAGS = {
   // command layer (apps/web-platform/components/command-palette). Default OFF
   // for all roles; dev-cohort rollout via Flagsmith. Fail-closed: FLAG_COMMAND_PALETTE=0 mirror.
   "command-palette": "FLAG_COMMAND_PALETTE",
+  // feat-support-interface — gates the floating support launcher + slide-over
+  // support chat (apps/web-platform/components/support). INTERFACE-ONLY shell:
+  // sending a message yields a canned reply (no backend). Default OFF for all
+  // roles until the support backend lands. Fail-closed: FLAG_SUPPORT=0 mirror.
+  support: "FLAG_SUPPORT",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;

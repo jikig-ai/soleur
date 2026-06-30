@@ -21,12 +21,19 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 ADR_DIR=knowledge-base/engineering/architecture/decisions
 
-# Known pre-existing collisions on main as of 2026-05-25, accepted as
-# tech debt (filed as cleanup follow-up issue post-PR-B; brainstorm flagged
-# at 2026-05-25-pr-b-anthropic-leader-loop-brainstorm.md "Sharp Edges").
+# Known pre-existing collisions on main, accepted as tech debt (renumber
+# deferred to a single cleanup PR; brainstorm flagged at
+# 2026-05-25-pr-b-anthropic-leader-loop-brainstorm.md "Sharp Edges").
 # Any NEW collision (e.g., a future ADR-042 duplicate) trips the gate.
 # When the cleanup issue lands, shrink this allowlist accordingly.
-ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
+#
+# ADR-068: two ADRs landed the same ordinal from parallel 2026-06-29/30 merges —
+# ADR-068-graceful-cron-drain-before-container-swap (#5669, merged 06-29) and
+# ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator (#5274, merged
+# 06-30 at the tip, which left main red on this gate). Allowlisted to match the
+# established remediation for the five prior collisions; proper renumber tracked
+# in cleanup issue #5744.
+ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038 ADR-068)
 
 # (1) New (non-allowlisted) ordinal collisions.
 all_dups=$(ls "$ADR_DIR" | grep -oE '^ADR-[0-9]{3}' | sort | uniq -d || true)
