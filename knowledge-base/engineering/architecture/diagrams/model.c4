@@ -6,7 +6,7 @@
 model {
 
   founder = actor "Founder / Operator" {
-    description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
+    description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-072 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
   }
 
   // External actor — third parties whose inbound email is the operator
