@@ -2,126 +2,60 @@
 feature: feat-roadmap-program-layer
 date: 2026-06-30
 lane: cross-domain
-brand_survival_threshold: single-user incident
-requires_cpo_signoff: true
+brand_survival_threshold: low
+requires_cpo_signoff: false
 type: feature
 classification: workflow-skill-extension
 branch: feat-roadmap-program-layer
 draft_pr: 5753
 brainstorm: knowledge-base/project/brainstorms/2026-06-30-roadmap-program-layer-brainstorm.md
+plan: knowledge-base/project/plans/2026-06-30-feat-roadmap-program-layer-plan.md
 source_inspiration: https://github.com/mattmccray/plan
 ---
 
-# Spec: Roadmap Program Layer
+# Spec: Roadmap Program Layer (report-only)
 
-Two sub-commands added to the existing `/soleur:product-roadmap` skill, adapting the durable
-"document is the state" ideas from [mattmccray/plan](https://github.com/mattmccray/plan).
+Two **read-only** sub-commands on `/soleur:product-roadmap`, adapting the "document is the state"
+idea from [mattmccray/plan](https://github.com/mattmccray/plan). Re-scoped twice during planning
+(see plan): consolidate-not-duplicate, then drop the write path → report-only (deepen-plan).
 
 ## Problem Statement
 
-Soleur's `knowledge-base/product/roadmap.md` is the founder's program-level source of truth, but
-keeping its phase statuses and open/closed counts aligned with live GitHub milestone/issue state is
-a **manual** CPO chore (documented in `2026-03-24-monthly-roadmap-review-process.md`; the 2026-06-08
-footer audit caught a real 4-issue count drift). No automation performs it. Separately, there is no
-program-altitude "where am I / what's the next action" reporter — `/soleur:go` routes a *known*
-task but does not read the roadmap to surface the *next* one, especially when that next action is
-non-codeable (recruitment, interviews).
+`roadmap.md` drifts from live GitHub milestone/issue state; the reconciliation logic is scattered
+(the Inngest `cron-roadmap-review.ts` prompt, brainstorm Phase 0.25, a manual runbook). There's no
+fast, codified, **read-only** way to ask "is the roadmap in sync, and what's the next action?"
+without firing the 50-minute cloud cron.
 
 ## Goals
-
-- **G1.** [Re-scoped 2026-06-30 — see plan Research Reconciliation] Consolidate the **existing**
-  reconciliation logic (today scattered across `cron-roadmap-review.ts`'s embedded prompt, brainstorm
-  Phase 0.25, and a manual runbook) into ONE codified, deterministic `product-roadmap validate` skill
-  + shared parse module, runnable **on-demand** by the operator. Do NOT add a new cron — the Inngest
-  `cron-roadmap-review.ts` already runs weekly (ADR-033: Inngest > GHA).
-- **G2.** Provide an advisory `product-roadmap next` that reports the current phase and the single
-  next action, routing codeable work to `/soleur:go #N` and naming non-codeable operator actions.
-- **G3.** Extract a shared roadmap parse module so the existing workshop, `validate`, and `next`
-  read `roadmap.md` through one parser (single-writer boundary).
-- **G4.** Make every `roadmap.md` write safe: dry-run default, counts-only auto-fix, gated status /
-  phase-complete writes, bounded write region.
+- **G1.** A shared **read-only** `roadmap-reconcile` module that reports roadmap↔GitHub drift on demand.
+- **G2.** `product-roadmap next` — advisory next-action reporter (codeable → `/soleur:go #N`; else named operator action).
+- **G3.** Consolidate brainstorm Phase 0.25 onto the shared module (DRY).
 
 ## Non-Goals
-
-- **NG1.** No new top-level skills (fold into `product-roadmap` per brainstorm D1).
-- **NG2.** `next` does **not** auto-invoke `/soleur:one-shot` or any build (D6).
-- **NG3.** No third `fix` verb — `validate --apply` covers mechanical fixes.
-- **NG4.** No adoption of mattmccray/plan's "engine seam" or R6 "invariants" model.
-- **NG5.** Auto-fix never rewrites the footer audit log, free-text status prose, or feature-row
-  tables — only the bounded count region.
+- **NG1.** No new top-level skills (sub-commands on product-roadmap).
+- **NG2.** `next` never invokes `/soleur:one-shot` or any build.
+- **NG3.** **No write path.** `validate` does not edit `roadmap.md`; the existing cron remains sole writer (via reviewed fix PRs). [Dropped `--apply` at deepen-plan — all 5 write-safety holes + ADR-070 + the bounded-region migration dissolved with it.]
+- **NG4.** No new cron (the Inngest cron already runs weekly; ADR-033 Inngest > GHA).
 
 ## Functional Requirements
-
-- **FR1.** `product-roadmap validate` reads `roadmap.md` + queries GitHub milestones (**both open
-  and closed states**) and issue states, then emits per-dimension verdicts reusing the existing
-  vocabulary: `STALE_STATUS`, `MISSING_ISSUE`, `EMPTY_MILESTONE`.
-- **FR2.** `validate` is **dry-run by default** (reports proposed changes only). `--apply` persists
-  **mechanical count drift only** into the bounded `Current State` region.
-- **FR3.** Any **status-enum** change or **phase-complete** stamp is an explicit approval gate in
-  interactive mode; in headless/cron mode these are reported but **not** auto-applied (only counts
-  are), and surfaced as a created issue/PR for human review.
-- **FR4.** `validate` enforces **bidirectional** integrity (D9): flag roadmap features with no
-  linked issue, and milestones absent from the roadmap.
-- **FR5.** `product-roadmap next` reports: current phase, its exit-criteria status, and the single
-  next actionable item. If the item is a codeable issue, output a ready-to-paste `/soleur:go #N`
-  (scrubbing closed `#N` per go.md sharp edge). If non-codeable, name the operator action plainly.
-- **FR6.** `next` is read-only — it makes **no** writes to `roadmap.md` and invokes no build skill.
-- **FR7.** [DROPPED 2026-06-30 — premise correction] ~~A `/soleur:schedule` weekly cron runs
-  `product-roadmap validate`.~~ The Inngest `cron-roadmap-review.ts` already performs the weekly
-  reconciliation; adding a GHA cron would duplicate it and contradict ADR-033. Pointing that cron at
-  the new skill is a sequenced **follow-up** (ADR-070 records it; re-evaluates the ADR-054
-  `safeCommitAndPr` exemption), not part of this PR.
+- **FR1.** `product-roadmap validate` reads `roadmap.md` + queries GitHub milestones (open AND closed) + issues, and prints verdicts `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE`. **Zero file writes.**
+- **FR2.** When drift is found, the report ends with a remediation pointer: trigger the roadmap-review cron (`/soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Writing stays with the cron.
+- **FR3.** `product-roadmap next` reports current phase + exit-criteria status + the single next action; codeable → paste-ready `/soleur:go #N` (scrub closed `#N`); non-codeable → named operator action; explicit "no actionable next item" when none. Read-only.
+- **FR4.** Brainstorm Phase 0.25 calls `roadmap-reconcile.sh` instead of its ad-hoc inline reconciliation.
 
 ## Technical Requirements
-
-- **TR1.** **Parse anchor = the `Current State` table** (`Dimension | Status` schema, "X open, Y
-  closed" strings) — never the per-phase feature tables (inconsistent `Issue`/`Source`/`Trigger`
-  columns). Wrap the writable region in `<!-- roadmap-state:begin -->` / `<!-- roadmap-state:end -->`
-  delimiters (D3, D5).
-- **TR2.** **Milestone↔phase is not 1:1.** Reconcile milestone counts against the Current-State
-  milestone strings only, not feature-row tallies (roadmap.md:78 — Phase 4 milestone holds
-  internal-tooling / Marketing-Gate issues). (D4)
-- **TR3.** **API-first, file-second:** trust the GitHub API on conflict; **re-read** `open_issues` /
-  `closed_issues` immediately before any write; stamp phase-complete only if `open==0 AND closed>0`
-  (a 404/renamed milestone also reads 0 — never stamp on that). (D8)
-- **TR4.** Shared parse module under `plugins/soleur/skills/product-roadmap/scripts/`; the existing
-  Phase 2 workshop is refactored to call it (sole-writer boundary). (G3)
-- **TR5.** Milestone assignment uses the REST API integer form (`gh api .../issues/N -X PATCH -f
-  milestone=N`), not `--milestone <title>` (`2026-03-24` learning).
-- **TR6.** Cron correctness: post-fire verification as a **real Actions step outside**
-  `claude-code-action` (in-prompt `exit 1` is swallowed); `Ref #N` not `Closes #N`; no
-  `show_full_output`; **grep-verify** any `.yml` edit (PreToolUse hooks can silently block writes).
-  (`2026-05-07`, `2026-03-26` learnings)
-- **TR7.** SKILL.md description stays within the cumulative ~1800-word cap; verify via
-  `bun test plugins/soleur/test/components.test.ts`. Sub-commands add minimal description words
-  (extend the existing `product-roadmap` description, do not add new top-level entries).
-- **TR8.** Honor new-skills/user-facing governance (`hr-new-skills-agents-or-user-facing`):
-  `semver:minor` bump path, `## Changelog`, README component counts, third-person description.
-
-## Architecture Decision (plan deliverable)
-
-Per D10 / `wg-architecture-decision-is-a-plan-deliverable`, the plan must produce an ADR capturing:
-the `roadmap.md` machine-parse contract (Current-State region + HTML-comment delimiters), the
-single-writer boundary (`validate --apply` is the sole mechanical-count writer; the workshop calls
-the shared module), and the milestone↔phase non-1:1 reconciliation rule.
+- **TR1.** Phase-row→milestone resolution via an explicit inline map (not title-guess). Milestone↔phase is **not 1:1** (Phase 4 milestone holds internal-tooling/Marketing-Gate issues not on roadmap rows); allowlist non-row members instead of false-flagging (spec-flow S2/S5).
+- **TR2.** API-first: query both open and closed milestone states. Best-effort `roadmap.md` parse (read-only — a misparse prints a wrong report line, never corrupts the file).
+- **TR3.** Shared module under `plugins/soleur/skills/product-roadmap/scripts/`; brainstorm Phase 0.25 and both sub-commands consume it.
+- **TR4.** Milestone reads use `gh api`. No new test framework — existing `bun test`. SKILL.md `description:` stays within the ~1800-word cap (verify `bun test plugins/soleur/test/components.test.ts`).
+- **TR5.** New-skills/user-facing governance (`hr-new-skills-agents-or-user-facing`): `semver:minor`, `## Changelog`, README counts, third-person description. (No CPO sign-off — threshold low, read-only.)
 
 ## Acceptance Criteria
-
-- `product-roadmap validate` (dry-run) on the current `roadmap.md` reproduces the kind of finding in
-  the 2026-06-08 footer audit (count drift detected, `0 MISSING_ISSUE` / `0 EMPTY_MILESTONE` when
-  clean) without writing.
-- `validate --apply` corrects only count drift inside the bounded region; status/phase-complete
-  changes are gated (interactive) or report-only (headless), leaving a reviewable artifact.
-- `product-roadmap next` prints the current phase and a correct next action: a `/soleur:go #N` line
-  for a codeable open issue, or a named operator action for a non-codeable one — with zero file
-  writes.
-- A weekly scheduled workflow invokes `product-roadmap validate`, verified by a real post-fire
-  Actions step, with API-spend disclosure.
-- ADR committed; `bun test plugins/soleur/test/components.test.ts` passes (word budget); README +
-  changelog updated.
+- `validate` prints a drift report with zero file writes (git-clean post-run); exit 0 clean / non-zero on drift.
+- Phase-row→milestone map handles row-label ≠ milestone-title; non-row milestone members allowlisted (only true zero-issue milestones → `EMPTY_MILESTONE`).
+- Drift report includes the cron-trigger remediation pointer.
+- `next` prints current phase + correct next action (a `/soleur:go #N` line or named operator action), with deterministic tie-break and an explicit empty-state; zero writes.
+- Brainstorm Phase 0.25 calls the shared module; `bun test …/components.test.ts` passes; README + changelog updated.
 
 ## Sequencing
-
-**validate first, then next.** `next` reads `roadmap.md` as source of truth; if counts are stale it
-would surface the wrong phase, so `validate` (and its freshness guard) must land first. `next`
-should warn (or suggest running `validate`) when `last_reviewed` is stale.
+Build the shared read module first, then `validate` (thin CLI), then wire brainstorm Phase 0.25, then `next`, then governance.
