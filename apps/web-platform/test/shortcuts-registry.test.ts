@@ -102,74 +102,73 @@ describe("buildCommands", () => {
 describe("resolveSequence", () => {
   const admin = { isAdmin: true };
   const nonAdmin = { isAdmin: false };
-  // A pending prefix (the resolve phase). `at` is irrelevant to the pure
-  // resolver — expiry is the listener's concern.
-  const pending = { at: 0 };
+  // `armed` is the phase discriminant: false = arm phase, true = resolve phase.
+  // Expiry (the arm timestamp) is the listener's concern, not the pure resolver's.
 
   it("arms on a bare g when no prefix is pending", () => {
-    expect(resolveSequence(null, key("g"), nonAdmin)).toBe("arm");
-    expect(resolveSequence(null, key("G"), nonAdmin)).toBe("arm");
+    expect(resolveSequence(false, key("g"), nonAdmin)).toBe("arm");
+    expect(resolveSequence(false, key("G"), nonAdmin)).toBe("arm");
   });
 
   it("does not arm on g with a modifier, or while focus is editable", () => {
-    expect(resolveSequence(null, key("g", { meta: true }), nonAdmin)).toBeNull();
-    expect(resolveSequence(null, key("g", { ctrl: true }), nonAdmin)).toBeNull();
+    expect(resolveSequence(false, key("g", { meta: true }), nonAdmin)).toBeNull();
+    expect(resolveSequence(false, key("g", { ctrl: true }), nonAdmin)).toBeNull();
     expect(
-      resolveSequence(null, key("g", { target: { tagName: "INPUT" } }), nonAdmin),
+      resolveSequence(false, key("g", { target: { tagName: "INPUT" } }), nonAdmin),
     ).toBeNull();
   });
 
   it("does not arm or resolve on auto-repeat", () => {
-    expect(resolveSequence(null, { ...key("g"), repeat: true }, nonAdmin)).toBeNull();
+    expect(resolveSequence(false, { ...key("g"), repeat: true }, nonAdmin)).toBeNull();
     expect(
-      resolveSequence(pending, { ...key("d"), repeat: true }, nonAdmin),
+      resolveSequence(true, { ...key("d"), repeat: true }, nonAdmin),
     ).toBeNull();
   });
 
   it("resolves each mapped second key to its navigate/openChat effect", () => {
-    expect(resolveSequence(pending, key("d"), nonAdmin)).toEqual({
+    expect(resolveSequence(true, key("d"), nonAdmin)).toEqual({
       kind: "navigate",
       href: "/dashboard",
     });
-    expect(resolveSequence(pending, key("i"), nonAdmin)).toEqual({
+    expect(resolveSequence(true, key("i"), nonAdmin)).toEqual({
       kind: "navigate",
       href: "/dashboard/inbox",
     });
-    expect(resolveSequence(pending, key("w"), nonAdmin)).toEqual({
+    expect(resolveSequence(true, key("w"), nonAdmin)).toEqual({
       kind: "navigate",
       href: "/dashboard/workstream",
     });
-    expect(resolveSequence(pending, key("k"), nonAdmin)).toEqual({
+    expect(resolveSequence(true, key("k"), nonAdmin)).toEqual({
       kind: "navigate",
       href: "/dashboard/kb",
     });
-    expect(resolveSequence(pending, key("r"), nonAdmin)).toEqual({
+    expect(resolveSequence(true, key("r"), nonAdmin)).toEqual({
       kind: "navigate",
       href: "/dashboard/routines",
     });
     // `g c` — Ask an agent (the rebound-from-Ctrl+C hero summon).
-    expect(resolveSequence(pending, key("c"), nonAdmin)).toEqual({
+    expect(resolveSequence(true, key("c"), nonAdmin)).toEqual({
       kind: "openChat",
     });
   });
 
   it("gates g a (Analytics) on ctx.isAdmin", () => {
-    expect(resolveSequence(pending, key("a"), admin)).toEqual({
+    expect(resolveSequence(true, key("a"), admin)).toEqual({
       kind: "navigate",
       href: "/dashboard/admin/analytics",
     });
-    expect(resolveSequence(pending, key("a"), nonAdmin)).toBeNull();
+    expect(resolveSequence(true, key("a"), nonAdmin)).toBeNull();
   });
 
   it("returns null for an unmapped second key, a second g, and a chord", () => {
-    expect(resolveSequence(pending, key("x"), admin)).toBeNull();
-    expect(resolveSequence(pending, key("g"), admin)).toBeNull();
-    expect(resolveSequence(pending, key("k", { meta: true }), admin)).toBeNull();
+    expect(resolveSequence(true, key("x"), admin)).toBeNull();
+    expect(resolveSequence(true, key("g"), admin)).toBeNull();
+    expect(resolveSequence(true, key("k", { meta: true }), admin)).toBeNull();
   });
 
   it("is suppressed while focus is editable even mid-sequence", () => {
     expect(
-      resolveSequence(pending, key("d", { target: { tagName: "TEXTAREA" } }), admin),
+      resolveSequence(true, key("d", { target: { tagName: "TEXTAREA" } }), admin),
     ).toBeNull();
   });
 });

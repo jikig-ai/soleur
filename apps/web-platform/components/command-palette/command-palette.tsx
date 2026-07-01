@@ -278,7 +278,11 @@ export function CommandPalette() {
               {askCmd && (
                 <Command.Group heading="Ask an agent">
                   <Command.Item
-                    value={trimmed ? `ask agent ${trimmed}` : "ask an agent"}
+                    value={
+                      trimmed
+                        ? `ask agent ${trimmed}`
+                        : `ask an agent ${askCmd.keys ?? ""}`
+                    }
                     onSelect={() =>
                       runEffect({ kind: "openChat", query: trimmed || undefined })
                     }

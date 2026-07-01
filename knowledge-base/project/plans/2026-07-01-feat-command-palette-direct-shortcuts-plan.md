@@ -147,7 +147,14 @@ not recommended. This is the sole item requiring CPO sign-off before `/work`.
 
 **If this lands broken, the user experiences:** a shortcut that navigates to the wrong page, or a
 `g`-prefix that swallows the next keystroke inside chat/search, or a bound `Ctrl+C` that stops
-copying selected text — on a keyboard surface the operator drives constantly.
+copying selected text, or a go-sequence fired from a button *inside an open app modal*
+(new-issue-dialog, cancel-retention, etc.) that navigates away and discards unsaved input — on a
+keyboard surface the operator drives constantly.
+
+**Modal-underneath surface (review FINDING 5, fixed inline).** FR7 originally suppressed sequences
+only while the palette/help overlay was open. The arm guard is generalized to also suppress while
+any `[role="dialog"][aria-modal="true"]` app modal is mounted, so a `g d` cannot fire from a
+non-editable button inside a modal that holds unsaved input. Covered by a modal-suppression test.
 
 **If this leaks, the user's data is exposed via:** N/A — no data surface; client-side navigation
 only. The only "leak" vector is admin-gated `g a` navigating a non-admin toward an admin route

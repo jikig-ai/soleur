@@ -120,9 +120,15 @@ import { NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEMS } from "./nav-items";
 // ---------------------------------------------------------------------------
 // Direct "go-to" keyboard sequences (`g` prefix + a letter) — #5636, the
 // wireframe's design. The `seq` field on NAV_ITEMS/ADMIN_NAV_ITEMS is the SINGLE
-// source: the resolver map, the palette key hint, and the `?` overlay rows all
-// derive from it, so a documented key can never drift from the live binding.
+// source for the SECOND key: the resolver map, the palette key hint, and the
+// `?` overlay rows all derive from it, so the destination letter can never drift
+// from the live binding. The shared `g` PREFIX is the fixed `SEQUENCE_PREFIX`
+// constant below (every `seq` starts with it by construction).
 // ---------------------------------------------------------------------------
+
+/** The one shared "go-to" prefix. The arm matcher keys on this, and every `seq`
+ * (incl. ASK_AGENT_SEQ) is authored `"<SEQUENCE_PREFIX> <letter>"`. */
+export const SEQUENCE_PREFIX = "g";
 
 /** The Ask-an-agent hero sequence ("go to chat"). Not a nav route, so it lives
  * here rather than on a nav array. Rebound from the requested `Ctrl+C` (a hard
@@ -132,11 +138,6 @@ export const ASK_AGENT_SEQ = "g c";
 
 /** Window between the two keystrokes of a sequence (GitHub `hotkey`'s value). */
 export const SEQUENCE_WINDOW_MS = 1500;
-
-/** A pending "go-to" prefix — armed by `g`, resolved by the next key or cleared
- * on expiry/unmapped/Escape/editable-focus. `at` is the arm timestamp so expiry
- * is a timestamp compare on the next keydown (no `setTimeout`, TR2 preserved). */
-export type PendingPrefix = { at: number };
 
 /** Format a `seq` for display: `"g d"` → `"G D"` (the palette/overlay hint). */
 export function formatSeqHint(seq: string): string {
@@ -173,16 +174,17 @@ const ADMIN_SEQUENCE_EFFECTS: Readonly<Record<string, CommandEffect>> =
 
 /**
  * Pure keystroke → sequence outcome, the DOM-free companion to `resolveShortcut`.
- * `pending === null` → the arm phase: a bare `g` (no modifier, not editable)
- * returns `"arm"`; anything else `null`. `pending` set → the resolve phase: a
+ * `armed === false` → the arm phase: a bare `g` (no modifier, not editable)
+ * returns `"arm"`; anything else `null`. `armed === true` → the resolve phase: a
  * mapped second key returns its `CommandEffect` (admin-gated for `g a`); an
  * unmapped key / second `g` / chord / editable focus returns `null` (the caller
  * clears the prefix and lets the key fall through to its own binding). Auto-repeat
  * never arms or resolves. Shares `isEditable` with `resolveShortcut` so both are
- * tested without a DOM. Expiry is the caller's concern (timestamp on `pending`).
+ * tested without a DOM. The 1500 ms expiry is the caller's concern (it tracks the
+ * arm timestamp; a pure matcher cannot see wall-clock).
  */
 export function resolveSequence(
-  pending: PendingPrefix | null,
+  armed: boolean,
   e: ShortcutKeyEvent,
   ctx: ShortcutContext,
 ): CommandEffect | "arm" | null {
@@ -190,9 +192,9 @@ export function resolveSequence(
   if (e.repeat) return null;
   const mod = e.metaKey || e.ctrlKey;
   const k = e.key.toLowerCase();
-  if (pending === null) {
-    // Arm phase — only a bare `g` starts a sequence.
-    return !mod && k === "g" ? "arm" : null;
+  if (!armed) {
+    // Arm phase — only a bare `g` prefix starts a sequence.
+    return !mod && k === SEQUENCE_PREFIX ? "arm" : null;
   }
   // Resolve phase — a modifier chord aborts (falls through to resolveShortcut).
   if (mod) return null;
@@ -401,9 +403,10 @@ export function ShortcutsProvider({
     runEffect,
   };
 
-  // The pending "go-to" prefix, held in a ref so the ONE listener never
-  // re-subscribes (TR2). Armed by `g`, resolved/cleared on the next key.
-  const pendingPrefixRef = useRef<PendingPrefix | null>(null);
+  // The pending "go-to" prefix as its arm timestamp (null = none), held in a ref
+  // so the ONE listener never re-subscribes (TR2). Armed by `g`; resolved/cleared
+  // on the next key. Expiry is `Date.now() - armedAt > SEQUENCE_WINDOW_MS`.
+  const pendingPrefixRef = useRef<number | null>(null);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -413,17 +416,27 @@ export function ShortcutsProvider({
       if (!s.shortcutsEnabled) return;
       // Auto-repeat (held key) never arms, advances, or clears a sequence.
       if (e.repeat) return;
+      // A lone modifier keydown (Shift/Ctrl/Alt/Meta) is never a shortcut and must
+      // not clear a pending prefix — so `g` then Shift-hold then `d` still works.
+      if (
+        e.key === "Shift" ||
+        e.key === "Control" ||
+        e.key === "Alt" ||
+        e.key === "Meta"
+      )
+        return;
 
       // --- Pending go-to prefix: resolve or clear. Runs BEFORE the Escape
       // drawer branch and the chord matcher so `g` then <key> is handled as one
       // sequence (FR1). ---
-      const pending = pendingPrefixRef.current;
-      if (pending) {
-        const expired = Date.now() - pending.at > SEQUENCE_WINDOW_MS;
+      const armedAt = pendingPrefixRef.current;
+      if (armedAt !== null) {
         // The second key always ends the sequence, mapped or not.
         pendingPrefixRef.current = null;
-        if (!expired) {
-          const effect = resolveSequence(pending, e, { isAdmin: s.isAdmin });
+        if (Date.now() - armedAt <= SEQUENCE_WINDOW_MS) {
+          const effect = resolveSequence(true, e, { isAdmin: s.isAdmin });
+          // `armed === true` cannot return "arm" at runtime, but the union type
+          // includes it — the `!== "arm"` check narrows it out for `runEffect`.
           if (effect && effect !== "arm") {
             e.preventDefault();
             s.runEffect(effect);
@@ -470,27 +483,23 @@ export function ShortcutsProvider({
       }
 
       // --- Arm a new go-to prefix on `g`. Gated on the command-palette flag
-      // (`enabled`) — these are new flag-gated bindings — AND suppressed while an
-      // overlay is open (FR7: the help overlay has no focused input, so isEditable
-      // alone would let `g d` navigate from underneath it). ---
+      // (`enabled`) — these are new flag-gated bindings — AND suppressed while the
+      // palette/help overlay is open. ---
       if (s.enabled && !s.paletteOpen && !s.helpOpen) {
-        if (resolveSequence(null, e, { isAdmin: s.isAdmin }) === "arm") {
+        if (resolveSequence(false, e, { isAdmin: s.isAdmin }) === "arm") {
+          // Also suppress while ANY app modal is open (generalizes FR7 beyond
+          // palette/help): a go-sequence fired from a button inside a modal —
+          // where focus is non-editable — would navigate away and silently
+          // discard the modal's unsaved input. Cheap: only runs on a `g` press.
+          if (document.querySelector('[role="dialog"][aria-modal="true"]'))
+            return;
           e.preventDefault();
-          pendingPrefixRef.current = { at: Date.now() };
+          pendingPrefixRef.current = Date.now();
         }
       }
     }
-    // Focusing an editable element clears a stale prefix — never trap the user
-    // mid-sequence (belt-and-suspenders; the 1500 ms window already bounds it).
-    function handleFocusIn(e: FocusEvent) {
-      if (isEditable(e.target)) pendingPrefixRef.current = null;
-    }
     document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("focusin", handleFocusIn);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("focusin", handleFocusIn);
-    };
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const value = useMemo<ShortcutsContextValue>(

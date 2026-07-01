@@ -108,6 +108,7 @@ function renderPalette(
     isAdmin: boolean;
     enabled: boolean;
     onToggleSidebar: () => void;
+    onEscape: () => void;
   }> = {},
 ) {
   return render(
@@ -115,6 +116,7 @@ function renderPalette(
       enabled={props.enabled ?? true}
       isAdmin={props.isAdmin ?? false}
       onToggleSidebar={props.onToggleSidebar ?? (() => {})}
+      onEscape={props.onEscape}
     >
       <input data-testid="outside-input" />
       <CommandPalette />
@@ -244,11 +246,35 @@ describe("CommandPalette — direct go-to sequences (FR1/FR2/AC2/AC3/AC9)", () =
     }
   });
 
-  it("does not navigate on `g` then Escape (prefix cleared, drawer untouched)", () => {
-    renderPalette();
+  it("`g` then Escape aborts the prefix and SWALLOWS Escape (drawer not closed, AC9)", () => {
+    const onEscape = vi.fn();
+    renderPalette({ onEscape });
     pressKey("g");
     pressKey("Escape");
     expect(routerPush).not.toHaveBeenCalled();
+    // The swallowed Escape must NOT fall through to the drawer-close handler…
+    expect(onEscape).not.toHaveBeenCalled();
+    // …but a bare Escape (no pending prefix) still closes the drawer.
+    pressKey("Escape");
+    expect(onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  it("`g` then a chord (⌘K) still opens the palette (listener fall-through)", async () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("k", { meta: true });
+    expect(
+      await screen.findByLabelText("Command palette search"),
+    ).toBeInTheDocument();
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("a lone modifier keydown mid-sequence does not break `g` … `d`", () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("Shift");
+    pressKey("d");
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
   });
 
   it("does not arm while focus is in an editable element", () => {
@@ -269,7 +295,20 @@ describe("CommandPalette — direct go-to sequences (FR1/FR2/AC2/AC3/AC9)", () =
     expect(routerPush).toHaveBeenCalledWith("/dashboard");
   });
 
-  it("expires the prefix after the 1500ms window", () => {
+  it("navigates when the second key lands within the 1500ms window", () => {
+    vi.useFakeTimers();
+    try {
+      renderPalette();
+      pressKey("g");
+      vi.advanceTimersByTime(1400);
+      pressKey("d");
+      expect(routerPush).toHaveBeenCalledWith("/dashboard");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires the prefix when the second key comes after the 1500ms window", () => {
     vi.useFakeTimers();
     try {
       renderPalette();
@@ -279,6 +318,23 @@ describe("CommandPalette — direct go-to sequences (FR1/FR2/AC2/AC3/AC9)", () =
       expect(routerPush).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("does not arm while an app modal (role=dialog aria-modal) is open", () => {
+    renderPalette();
+    // Simulate an open app modal (e.g. new-issue-dialog) — a go-sequence fired
+    // from a button inside it must NOT navigate away and discard unsaved input.
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(modal);
+    try {
+      pressKey("g");
+      pressKey("d");
+      expect(routerPush).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeChild(modal);
     }
   });
 
