@@ -24,7 +24,7 @@
 -- helper uses getServiceClient(). No SECURITY DEFINER RPC (direct .upsert()), so
 -- no search_path pin is required (cf. cq-pg-security-definer-*).
 --
--- Single-operator RLS assumption (ADR-075): SELECT is auth.uid() IS NOT NULL,
+-- Single-operator RLS assumption (ADR-076): SELECT is auth.uid() IS NOT NULL,
 -- mirroring 107. Because the table is attribution-free it cannot be workspace-
 -- scoped by policy alone; a workspace_id + is_workspace_member() predicate is
 -- required before multi-tenant enablement (deferred, with the other not-yet-

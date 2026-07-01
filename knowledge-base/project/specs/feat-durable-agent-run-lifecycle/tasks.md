@@ -14,7 +14,7 @@ Derived from the finalized (post-review) plan. Writer model: `spawnClaudeEval` o
 ## Phase 0 — Preconditions (verify before code)
 
 - [x] 0.1 F1 build-vs-join gate: **VERDICT — BUILD.** `list-runs.ts` queries `/v1/events` + `/v1/events/{id}/runs` (event-specific terminal history only; no query-by-fn-name, no in-flight liveness, no heartbeat). Table justified.
-- [ ] 0.2 Confirm migration `120` free; grep BOTH `ADR-075-*` filename AND `adr:` frontmatter (duplicate-number hazard).
+- [ ] 0.2 Confirm migration `120` free; grep BOTH `ADR-076-*` filename AND `adr:` frontmatter (duplicate-number hazard).
 - [ ] 0.3 Read `spawnClaudeEval` (`_cron-claude-eval-substrate.ts:732`): confirm it can host `upsertProgress` + a periodic tick; callers close over `ctx.runId`+`attempt`.
 - [ ] 0.4 Confirm the two heavy bypass crons (`cron-daily-triage.ts:149`, `cron-follow-through-monitor.ts:246`) are the only heavy non-`spawnClaudeEval` crons → NG9 (out of v1).
 - [ ] 0.5 Confirm `run-log.ts transformOutput` early returns (`:148`, `:166`).
@@ -41,7 +41,7 @@ Derived from the finalized (post-review) plan. Writer model: `spawnClaudeEval` o
 
 ## Phase 4 — Contract + ADR
 
-- [x] 4.1 Author ADR-075 (Decision + 3 rejected alternatives; `brand_survival_threshold` frontmatter; AP-014 xref; general clause review-gated). Include the deepen mandates: node-side vs agent-side persistence classification (`cron-bug-fixer` = agent-side reference carve-out; run-keyed `bot-fix/<issue#>` names so re-spawn collides); "last-in-step" precise def; keys from `ctx.runId` never `randomUUID`; single-operator RLS assumption + workspace_id-before-multi-tenant. AC8.
+- [x] 4.1 Author ADR-076 (Decision + 3 rejected alternatives; `brand_survival_threshold` frontmatter; AP-014 xref; general clause review-gated). Include the deepen mandates: node-side vs agent-side persistence classification (`cron-bug-fixer` = agent-side reference carve-out; run-keyed `bot-fix/<issue#>` names so re-spawn collides); "last-in-step" precise def; keys from `ctx.runId` never `randomUUID`; single-operator RLS assumption + workspace_id-before-multi-tenant. AC8.
 - [x] 4.2 Document NG9 (heavy bypass crons deferred); `log()` coverage = `spawnClaudeEval`-routed only.
 
 ## Phase 5 — Verify
