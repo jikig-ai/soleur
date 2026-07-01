@@ -152,6 +152,23 @@ Phase 2 (#3948) migrates 21 additional functions to the single `cron-platform` p
 
 Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resources. Sentry cron monitors would permanently false-alert on missed check-ins for functions that have no recurring schedule.
 
+### Registration checklist (a NEW `cron-*` claude-eval function)
+
+`[Added 2026-06-30 — #5631.]` Adding a recurring claude-eval cron touches **eight** gated locations, not the "four" (handler + manifest + metadata + serve route) often cited in PR bodies. Each location below has a CI gate that fails closed; a stale or bot-generated PR that ran before some gate existed will look green until rebased onto current `main`. Mirror the structurally-closest live cron (claude-eval + `safeCommitAndPr` ⇒ `cron-seo-aeo-audit.ts`) signature-for-signature rather than writing the handler from the substrate's prose.
+
+| # | Location | What to add | Gate that catches an omission |
+|---|----------|-------------|-------------------------------|
+| 1 | `server/inngest/functions/cron-<name>.ts` | Handler using the REAL substrate API (`spawnClaudeEval({spawnCwd, buildSpawnEnv, …})`, `mintInstallationToken({tokenMinLifetimeMs, repositories})`, `resolveOutputAwareOk({spawnOk, …})`). Prompt MUST carry `PERSISTENCE: Do NOT run git add` for safe-commit crons. | `web-platform-build` (`tsc`) + `cron-safe-commit-parity` (prompt anchor) |
+| 2 | `app/api/inngest/route.ts` | `import` + entry in the `functions: [...]` array | `function-registry-count (a)` count + `(e)` watchdog set |
+| 3 | `server/inngest/cron-manifest.ts` | `EXPECTED_CRON_FUNCTIONS` entry | `cron-inngest-cron-watchdog` parity |
+| 4 | `server/inngest/routine-metadata.ts` | `ROUTINE_METADATA` entry | routine-metadata parity test |
+| 5 | `server/inngest/functions/_cron-claude-eval-substrate.ts` | `CRON_BASH_ALLOWLISTS` entry (or `TIER2_DEFERRED_CRONS` if deferred) — substrate-contained crons MUST be in exactly one | `cron-containment-classify` |
+| 6 | `test/server/inngest/function-registry-count.test.ts` | Bump the `route.ts functions array` count | `function-registry-count (a)` |
+| 7 | `infra/sentry/cron-monitors.tf` | `sentry_cron_monitor` resource for the slug | `sentry-monitor-iac-parity` + `function-registry-count (c)` |
+| 8 | `.github/workflows/apply-sentry-infra.yml` | `-target=sentry_cron_monitor.<slug>` line | `function-registry-count (f)` |
+
+Plus the `cron-tier2-parity` sibling-set sweep (`.github/enforcement-contracts.json`) forces `cron-safe-commit-parity.test.ts` (add to `MIGRATED_PROMPT` for safe-commit crons) and `cron-shared.test.ts` into the same diff whenever `cron-manifest.ts` changes. Validate locally before push: `bunx vitest run test/server/inngest/{function-registry-count,sentry-monitor-iac-parity,cron-containment-classify,cron-safe-commit-parity,cron-shared}.test.ts`.
+
 ## Cost Impacts
 
 **None.** Inngest substrate is already in `knowledge-base/operations/expenses.md` (PR-F shipped self-hosted on existing Hetzner node; no new vendor, no billing-tier change). `claude-code` CLI install on Hetzner is free; binary pin is a config change, not a paid resource. Operator `ANTHROPIC_API_KEY` consumption stays in the same operator-Anthropic billing surface — the migration is a substrate swap (GitHub Actions runner → Hetzner node), not a budget increase.
