@@ -22,6 +22,7 @@
 
 import type {
   CanUseTool,
+  HookCallback,
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
@@ -136,6 +137,19 @@ export interface AgentQueryOptionsArgs {
    * hint only — never touches `canUseTool`/`disallowedTools`.
    */
   enablePhaseSurfaceHint?: boolean;
+  /**
+   * TR3 tool-attempt telemetry (#5843, ADR-070 amendment). When set, this single
+   * fail-open `PreToolUse` hook (minted per query by `createToolAttemptCollector`
+   * in the cc dispatcher) is registered as a SEPARATE, matcher-less PreToolUse
+   * entry — matcher-less so it captures the FULL tool surface (`Skill`/`Task`/
+   * `mcp__*`/`Read`/`Bash`/...), not just the sandbox subset. ONLY the
+   * cc-soleur-go path passes it (its `flush()` fires from `handleCcCloseQuery`);
+   * the legacy runner leaves it undefined so the AC5 drift snapshot stays
+   * byte-identical. Never mutates `canUseTool`/`disallowedTools`; the collector's
+   * hook always returns `{}` (observe-only). Passed as the hook (not a boolean)
+   * because the paired `flush()` handle must escape to the close chokepoint.
+   */
+  toolAttemptPreToolUseHook?: HookCallback;
 }
 
 /**
@@ -208,6 +222,14 @@ export function buildAgentQueryOptions(
           matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
           hooks: [createSandboxHook(args.workspacePath)],
         },
+        // TR3 tool-attempt telemetry (#5843, ADR-070). Separate gated entry — NOT
+        // a modification of the sandbox matcher (preserves the AC5 drift snapshot).
+        // Matcher-less so it captures the FULL surface (`Skill`/`Task`/`mcp__*`/
+        // `Read`/`Bash`/...) — the sandbox regex above only lists the fs/exec
+        // subset. Observe-only + fail-open (always returns `{}`). cc-only opt-in.
+        ...(args.toolAttemptPreToolUseHook
+          ? [{ hooks: [args.toolAttemptPreToolUseHook] }]
+          : []),
       ],
       // Defense-in-depth: log subagent spawns for audit visibility.
       // If a future SDK version stops routing subagent tool calls

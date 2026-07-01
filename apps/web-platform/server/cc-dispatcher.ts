@@ -87,6 +87,11 @@ import {
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { formatAssistantText } from "@/lib/format-assistant-text";
+import { sanitizeToolNameForLog } from "@/lib/tool-name-sanitize";
+import {
+  createToolAttemptCollector,
+  type ToolAttemptCollector,
+} from "./tool-attempt-telemetry";
 import { debugRedactionProbeTrips } from "./debug-probes";
 import { insertTurnSummary } from "./messages/insert-turn-summary";
 import {
@@ -436,12 +441,6 @@ export function buildConnectedRepoContext(owner: string, repo: string): string {
   );
 }
 
-// Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
-// depth against future model regressions that might emit pathologically long
-// tool names; the SDK validation gate constrains names to the registered
-// catalog today, so this is bounded but not impossible.
-const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
-
 // feat-concierge-stream-commands — `command_stream` output caps (D4) + the
 // UTF-8 byte-cap util. Definitions moved to `./command-stream-caps` so the
 // debug-mode emit path can reuse them without a cc-dispatcher import cycle.
@@ -504,19 +503,6 @@ function probeRedactionFallthrough(
     }
   }
   return redacted;
-}
-
-/**
- * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
- * Unicode line/paragraph separators (CWE-117 log injection defense-in-depth),
- * and length-cap. Pino's JSON serialization is the primary defense; this is
- * a belt-and-suspenders pass per the log-injection-unicode-line-separators
- * learning.
- */
-function sanitizeToolNameForLog(name: string): string {
-  return name
-    .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "?")
-    .slice(0, MAX_TOOL_NAME_LEN_FOR_LOG);
 }
 
 // Hoisted module-level sets (avoid per-call construction in
@@ -1295,6 +1281,45 @@ async function releaseCcWorktreeLease(
   await handle.release();
 }
 
+// ---------------------------------------------------------------------------
+// TR3 tool-attempt telemetry (#5843, ADR-070 amendment). Same two-function
+// register/drain shape as `_ccWorktreeLeases`: the collector is minted per cold
+// Query in `realSdkQueryFactory` (its `preToolUseHook` goes into the SDK options),
+// and its `flush()` fires from `handleCcCloseQuery` (the abort-covering close
+// chokepoint, CRITICAL-3). Keyed by (userId, conversationId) — a bounded routing
+// map, deleted on every close path; the ACCUMULATOR itself stays closure-scoped
+// with a minted random id inside the collector (HIGH-5), and NO identifier here
+// reaches public.tool_attempts (the row is anonymous, CRITICAL-2).
+// ---------------------------------------------------------------------------
+const _ccToolAttemptCollectors = new Map<string, ToolAttemptCollector>();
+
+/** Stash the per-query collector (call after minting in the cold-Query factory,
+ *  only when telemetry is enabled). */
+function registerCcToolAttemptCollector(
+  userId: string,
+  conversationId: string,
+  collector: ToolAttemptCollector,
+): void {
+  _ccToolAttemptCollectors.set(
+    makeWorktreeLeaseKey(userId, conversationId),
+    collector,
+  );
+}
+
+/** Flush + drop the conversation's collector (call from the close hook). No-op
+ *  when telemetry was off / already flushed. Fire-and-forget: `flush()` never
+ *  throws (a DB failure mirrors to Sentry inside the collector). */
+function flushCcToolAttemptCollector(
+  userId: string,
+  conversationId: string,
+): void {
+  const key = makeWorktreeLeaseKey(userId, conversationId);
+  const collector = _ccToolAttemptCollectors.get(key);
+  if (!collector) return;
+  _ccToolAttemptCollectors.delete(key);
+  void collector.flush();
+}
+
 function makeCcBashGateKey(
   userId: string,
   conversationId: string,
@@ -1486,6 +1511,10 @@ export function handleCcCloseQuery({
   reason?: "disconnected";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
+  // TR3 (#5843) — flush the aggregated tool-attempt row for this session. Once
+  // per ActiveQuery (closeQuery is `state.closed`-guarded at every call site);
+  // fire-and-forget + fail-open (never throws, mirrors to Sentry on DB failure).
+  flushCcToolAttemptCollector(userId, conversationId);
   // #5274 PR B — release the worktree write-lease held for this conversation
   // (stops the heartbeat, unregisters from the SIGTERM drain, frees the row).
   // Fire-and-forget: the close hook is synchronous and the release never throws.
@@ -2522,6 +2551,17 @@ export const realSdkQueryFactory: QueryFactory = async (
       registerCcWorktreeLease(args.userId, args.conversationId, worktreeLeaseHandle);
     }
 
+    // TR3 (#5843) — mint the per-query tool-attempt collector and stash it so
+    // `handleCcCloseQuery` can flush its one aggregated row at teardown. Its
+    // fail-open PreToolUse hook goes into the SDK options below. cc-only opt-in;
+    // the legacy runner passes neither the hook nor registers a collector.
+    const toolAttemptCollector = createToolAttemptCollector();
+    registerCcToolAttemptCollector(
+      args.userId,
+      args.conversationId,
+      toolAttemptCollector,
+    );
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -2585,6 +2625,10 @@ export const realSdkQueryFactory: QueryFactory = async (
         // cc-soleur-go Concierge router (the eval-covered workflow-routing path).
         // The legacy domain-leader runner (agent-runner.ts) does NOT opt in.
         enablePhaseSurfaceHint: true,
+        // #5843 (ADR-070) — register the per-query tool-attempt telemetry hook
+        // as a separate matcher-less PreToolUse entry (full-surface capture).
+        // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
+        toolAttemptPreToolUseHook: toolAttemptCollector.preToolUseHook,
       }),
     });
   } catch (err) {
@@ -2595,6 +2639,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // indefinitely — wedging the workspace for every other host. No-op when the
     // lease path is gated off or the acquire never registered.
     await releaseCcWorktreeLease(args.userId, args.conversationId);
+    // TR3 (#5843) — same leak class: the collector was registered just above, but
+    // a factory throw means the Query never enters `activeQueries` so
+    // `handleCcCloseQuery` never fires. Drop it here (flush is a harmless no-op —
+    // no tools ran yet). Never throws.
+    flushCcToolAttemptCollector(args.userId, args.conversationId);
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
