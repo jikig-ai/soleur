@@ -53,6 +53,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       filesystem: {
         allowWrite: [workspacePath],
         denyRead: ["/workspaces", "/proc"],
+        allowRead: [workspacePath],
       },
     });
   });
@@ -60,6 +61,29 @@ describe("buildAgentSandboxConfig drift guard", () => {
   it("threads the workspacePath into filesystem.allowWrite (per-user write isolation)", () => {
     const result = buildAgentSandboxConfig("/workspaces/alice");
     expect(result.filesystem.allowWrite).toEqual(["/workspaces/alice"]);
+  });
+
+  // #5733 — the agent bwrap sandbox tmpfs-obscures the whole `/workspaces`
+  // tree via `denyRead`, and `allowWrite` grants WRITE only (SDK semantics:
+  // reading within a denyRead region requires `allowRead`, which "takes
+  // precedence over denyRead"). Without an explicit read carve-out the agent
+  // cannot `git rev-parse`/`ls` its OWN repo → the "not a git repository"
+  // strand (Sentry WEB-PLATFORM-46, gitKind=dir-valid, gitRevParseValid=false).
+  // The re-allow must be the agent's own workspacePath so it survives the
+  // `/workspaces` parent-deny.
+  it("re-allows READ of the agent's own workspace within the /workspaces denyRead region (#5733)", () => {
+    const result = buildAgentSandboxConfig("/workspaces/alice");
+    expect(result.filesystem.allowRead).toEqual(["/workspaces/alice"]);
+  });
+
+  // Security invariant: the read carve-out must be EXACTLY the agent's own
+  // workspace — never the whole `/workspaces` tree — so sibling tenants'
+  // `/workspaces/<other>` stay tmpfs-hidden. `allowRead` re-binds only the
+  // listed path; a broader entry would breach cross-tenant isolation.
+  it("allowRead re-allows ONLY the caller's workspace, not the /workspaces root (cross-tenant isolation)", () => {
+    const result = buildAgentSandboxConfig("/workspaces/alice");
+    expect(result.filesystem.allowRead).not.toContain("/workspaces");
+    expect(result.filesystem.allowRead).toEqual(["/workspaces/alice"]);
   });
 
   it("filesystem.denyRead is constant across workspaces", () => {
@@ -99,6 +123,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
       filesystem: {
         allowWrite: [workspacePath],
         denyRead: ["/workspaces", "/proc"],
+        allowRead: [workspacePath],
       },
     });
   });

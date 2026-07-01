@@ -19,8 +19,19 @@
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `GITHUB_EGRESS_DOMAINS` (entitled-token
 //     sessions only — derived from `ghToken` presence at the consumer).
-//   - `filesystem.allowWrite: [workspacePath]` + `denyRead` —
-//     workspace-confined writes; deny reads outside.
+//   - `filesystem.allowWrite: [workspacePath]` + `denyRead` +
+//     `allowRead: [workspacePath]` — workspace-confined writes; deny reads
+//     outside; RE-ALLOW reads of the agent's OWN workspace within the
+//     `denyRead: ["/workspaces"]` region. Critical (#5733): `allowWrite`
+//     grants WRITE only — per the SDK, reading within a `denyRead` region
+//     requires an explicit `allowRead` (which "takes precedence over
+//     denyRead"). Without it, the bwrap builder tmpfs-obscures the whole
+//     `/workspaces` tree and nothing re-binds the workspace for read, so the
+//     agent cannot `git rev-parse`/`ls` its own repo and strands on "not a
+//     git repository" (Sentry WEB-PLATFORM-46: gitKind=dir-valid,
+//     gitRevParseValid=false). `allowRead` re-binds ONLY `workspacePath`
+//     (read-only, on top of the tmpfs), so sibling tenants' `/workspaces/<other>`
+//     stay hidden — cross-tenant isolation is preserved.
 
 // SDK's `SandboxSettings` is a Zod-inferred type with `[x: string]: unknown`
 // index signature. Our helper returns a structurally-compatible object
@@ -40,6 +51,7 @@ export type AgentSandboxConfig = {
   filesystem: {
     allowWrite: string[];
     denyRead: string[];
+    allowRead: string[];
   };
 } & { [x: string]: unknown };
 
@@ -92,6 +104,12 @@ export function buildAgentSandboxConfig(
     filesystem: {
       allowWrite: [workspacePath],
       denyRead: ["/workspaces", "/proc"],
+      // Re-allow reading the agent's OWN workspace within the `/workspaces`
+      // deny region (#5733). `allowWrite` grants write only; without this
+      // the agent cannot read its own repo and strands on "not a git
+      // repository". Scoped to `workspacePath` alone — sibling workspaces
+      // stay denied (cross-tenant isolation).
+      allowRead: [workspacePath],
     },
   };
 }
