@@ -401,6 +401,25 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_firewall_attachment.git_data",
   "betteruptime_heartbeat.git_data_prd",
   "doppler_secret.git_data_heartbeat_url_prd",
+  // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
+  // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
+  // git-data keys above, NOT the #5566 per-PR-CI class:
+  //   - the 3rd git-data key (REMOVE / Art.17 erasure) rides the git-data host
+  //     apply, same class as git_transport/git_provision;
+  //   - the spread placement group attaches to the RUNNING hcloud_server.web and
+  //     forces a power-off reboot — a maintenance-window apply, same class as the
+  //     host it groups;
+  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets belong to
+  //     the web-host cluster (SANs = web host private IPs) and ride the same
+  //     cluster apply (doppler_secret, not the CI-published token types the test
+  //     forces).
+  "tls_private_key.git_remove",
+  "doppler_secret.git_remove_ssh_private_key",
+  "hcloud_placement_group.web_spread",
+  "tls_private_key.proxy_server",
+  "tls_self_signed_cert.proxy_server",
+  "doppler_secret.proxy_tls_key",
+  "doppler_secret.proxy_tls_cert",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
