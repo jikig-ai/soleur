@@ -24,7 +24,7 @@ plan: ../../plans/2026-07-01-chore-dogfood-domain-model-drift-triage-plan.md
 
 ## Phase 2 — Triage `conversations` → BR-CONV-1
 
-- [ ] 2.1 (Recommended) Exercise `write-row --anchor "075_conversation_visibility.sql › conversations.conversations_owner_select" --statement "<candidate>"` to populate `## Auto-inferred (unreviewed)` (soak evidence for the machine-append path).
+- [ ] 2.1 (Recommended, `conversations`-only) Exercise `write-row --anchor "075_conversation_visibility.sql › conversations.conversations_owner_select" --statement "<candidate>"` to populate `## Auto-inferred (unreviewed)`; **verify exactly one row landed** (a repeat call dedups to a no-op → vacuous soak evidence). `storage` has no extract anchor (098 policies are blind spots) → BR-STORAGE-1 is hand-authored, no write-row demo.
 - [ ] 2.2 Human-promote: add curated `BR-CONV-1` to `## Business Rules` + a `Conversation` entity row (key `conversations.id`) to `## Entities`; remove the Auto-inferred row (keep the content anchor).
 - [ ] 2.3 **R2 guard:** scope "owner-only write" to `conversations.user_id`; cross-reference BR-WS-3 so BR-CONV-1 does not reintroduce the retired single-owner *workspace* model. Cite `075_conversation_visibility.sql` (+032/017/041) by ADR-076 §3 anchors.
 - [ ] 2.4 Ensure the statement carries the lowercase whole-word `conversations`.
@@ -52,7 +52,7 @@ plan: ../../plans/2026-07-01-chore-dogfood-domain-model-drift-triage-plan.md
 
 ## Phase 6 — Re-run, idempotency, verification
 
-- [ ] 6.1 Re-run `drift`: confirm stale 0, **undocumented 1 (`public`)**, exit 1, blind 47 — the intended residual.
+- [ ] 6.1 Re-run `drift` with explicit exit-code capture (`… > /tmp/drift.out; rc=$?; [ "$rc" -eq 1 ]`) so the intended non-zero is read as success not failure (`hr-when-a-command-exits-non-zero-or-prints`): confirm stale 0, **undocumented 1 (`public`)**, `rc == 1`, blind 47 — the intended residual. `rc == 0` = FAILURE (public leaked → AC4); `rc == 2` = source-not-analyzable.
 - [ ] 6.2 Re-run a second time; confirm byte-identical output (`diff` of two captures empty). Idempotency = byte-identical output, NOT exit 0.
 - [ ] 6.3 Confirm `## Auto-inferred (unreviewed)` is empty (demo row promoted, not stranded); `## Business Rules` shape hand-authored (no machine-edit).
 - [ ] 6.4 Verify ACs: AC4 `grep -cwE public <register>` == 0; AC8 `grep -oE 'BR-[A-Z]+-[0-9]+' <register> | sort | uniq -d` empty; AC9 #5871 comment filed.

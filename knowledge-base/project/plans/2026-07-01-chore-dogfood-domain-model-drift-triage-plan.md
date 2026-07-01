@@ -11,6 +11,35 @@ related: [5754, 5871, 5872, ADR-076]
 
 # chore: dogfood the domain-model drift analyzer and triage its findings into the register 🧹
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-01
+**Gates cleared:** 4.6 User-Brand Impact (present, threshold none, non-sensitive `.md`), 4.7 Observability
+(pure-docs skip), 4.8 PAT-shaped (no hits), 4.9 UI-wireframe (no UI surface).
+**Reviewers:** architecture-strategist (Engineering domain), spec-flow-analyzer (verification flow),
+code-simplicity-reviewer (YAGNI).
+
+### Key improvements folded in
+
+1. **`public` is an extraction defect, not a suppressible artifact (architecture-strategist R1/R4).** Naming
+   "public" in the register would permanently blind undocumented-table detection for the whole schema (~20
+   tables collapse to one token). Intended residual reversed from exit-0/undoc-0 to **exit-1/undoc-1 (`public`)**;
+   the `public` decision-record lives on #5871, never the register.
+2. **BR-CONV-1 / BR-WS-3 collision guard (R2), storage citation-source fix (R3/R5), and BR-BYOK-1** (byok
+   delegation consent, GDPR Art. 7) surfaced from the blind-spot spot-check with a concrete disposition rule.
+3. **Verification hardening (spec-flow):** fixed a real internal contradiction (Test Scenarios said "exit 0"),
+   added explicit `rc==1` capture so the intended non-zero isn't misread as failure (P1-1), a `public`-leak
+   inverse guard (P0-2), the #5871 ship-gate ordering hand-off (P1-2), the write-row "exactly-one-row" positive
+   assertion (P1-4), and the human-audited-only + "N tables" mislabel notes (P2).
+4. **Simplification (code-simplicity):** cut the duplicate advisory ADR-076 amendment, resolved R5 to a
+   one-liner, bounded the LARP tail of AC6.
+
+### New considerations discovered
+
+- Because `public` stays permanently flagged (exit 1), **#5871's future ship gate must land the extractor
+  schema-qualifier strip first OR allowlist the known `public` residual** — otherwise it hard-blocks every ship.
+- No current CI/ship/preflight step runs the analyzer (verified), so this permanent exit-1 blocks nothing today.
+
 ## Overview
 
 First real use ("dogfood") of the `/soleur:sync domain-model` drift analyzer (shipped in #5754,
@@ -97,9 +126,18 @@ edit is a static markdown documentation change. No new processing activity.
 Real Command Center conversation entity with an owner/shared-visibility access model.
 
 1. **(Optional, recommended) Exercise the approval-gated write-row loop first** to generate end-to-end
-   soak evidence of the machine-append path:
+   soak evidence of the machine-append path — **`conversations` only** (it has a parseable extract anchor;
+   `storage`'s 098 policies are quoted-name blind spots with NO anchor, so BR-STORAGE-1 is authored directly,
+   NOT via a write-row demo — P1-3):
    `bash scripts/domain-model-drift.sh write-row --register <register> --anchor "075_conversation_visibility.sql › conversations.conversations_owner_select" --statement "<candidate>"`
-   → appends one escaped/secret-scanned/deduped row to `## Auto-inferred (unreviewed)`.
+   → appends one escaped/secret-scanned/deduped row to `## Auto-inferred (unreviewed)`. **Verify exactly one
+   row landed** before promoting (a repeat call `exit 0`s as a dedup no-op having written nothing — AC7). This
+   demo is scoped to `conversations` ONLY: it has a parseable extract anchor. `storage`/BR-STORAGE-1 is
+   hand-authored directly (its 098 policies are blind spots → no extract anchor exists to write-row/dedup on).
+   - **P1-4 (guard against vacuous soak):** write-row `exit 0`s as a no-op if the anchor already exists
+     (`grep -qF "$ANCHOR"`). Before promoting, positively assert exactly ONE new row landed
+     (`grep -c 'conversations_owner_select' <register>` increased by 1) — otherwise the demo proved nothing
+     and AC7 would pass vacuously. If it deduped, the append path was NOT exercised; drop the demo claim.
 2. **Human-promote** (deliberate edit per ADR-076 §5): add a curated `BR-CONV-1` row to `## Business Rules`
    and a `Conversation` entity row to `## Entities`. Remove the corresponding Auto-inferred row (promotion
    moves it), keeping the content anchor so it is never re-proposed.
@@ -127,11 +165,10 @@ The `storage.objects` schema token; real workspace/tenant-scoped RLS.
 2. **R3 (do not imply analyzer-backing):** 3 of the 47 blind spots ARE the quoted-name logo policies in 098.
    BR-STORAGE-1 documents them from the **migration file** directly — cite the filenames, NOT extracted
    `extract`-mode anchors (the analyzer cannot statically parse the quoted policy names, so no anchor exists).
-3. **R5 (entity decision — resolve + record):** decide whether to add a `Storage object` entity row OR state
-   that `storage.objects` is Supabase-managed infra (the domain concepts — attachments/logos — are keyed
-   elsewhere). Promoting `storage` (a schema token) is defensible ONLY because it collapses to essentially
-   ONE real table (`objects`), unlike `public` (~20). Record this 1-table-vs-~20-tables rationale so the
-   promote-`storage` / leave-`public`-flagged asymmetry reads consistently to a future maintainer.
+3. **R5 (entity decision — resolved):** do NOT add a `Storage object` entity row — `storage.objects` is
+   Supabase-managed infra and the domain concepts (attachments/logos) are keyed elsewhere. BR-STORAGE-1 alone
+   documents the tenancy. (The promote-`storage` / flag-`public` asymmetry — 1 real table vs ~20 — is already
+   stated in the Overview + Research Reconciliation; no need to re-record it here.)
 4. Statement MUST contain the lowercase whole-word `storage` (e.g., `storage.objects`) so the token is
    silenced — acceptable here (maps to one real, now-documented table).
 
@@ -152,11 +189,11 @@ tables. That is a silent, permanent reduction of the guard's power (Domain Revie
 3. **Escalate to #5871 as a correctness bug (not merely soak evidence):** the fix strips the known schema
    qualifier (`public.` / `storage.`) before capturing the table token, so the ~20 tables surface individually.
    `gh issue comment 5871 --body-file <note>` recording: (a) the schema-qualifier collapse defect + its blast
-   radius, (b) the manual-triage cost/burden, (c) that `public` is deliberately left flagged pending the fix.
-   (Automatable; `Ref #5882` linkage — #5871 stays open.)
-4. **Advisory ADR-076 amendment:** ADR-076 §3's content-anchor convention does not contemplate a schema
-   qualifier. Recommend (advisory, not a blocker for this issue) an amendment via `/soleur:architecture` noting
-   the known limitation. The extraction *fix itself* is #5871's scope.
+   radius, (b) the manual-triage cost/burden, (c) that `public` is deliberately left flagged pending the fix,
+   and (d) a **hand-off constraint for #5871's ship gate**: because `public` is a permanent exit-1 until the
+   extractor fix lands, #5871's ship/CI drift gate MUST either (i) land the schema-qualifier strip first, or
+   (ii) baseline the known `public` residual (allowlist the single expected token) — a naive "exit 0 or block"
+   gate would hard-block every ship on this known defect. (Automatable; `Ref #5882` — #5871 stays open.)
 
 ### Phase 4 — Blind-spot spot-check (47)
 
@@ -176,16 +213,21 @@ spots (regulated-data surfaces, `hr-gdpr-gate`).
      carrying GDPR Art. 7 weight. Cite `083_byok_delegation_consent_gate.sql` / `084_byok_delegation_withdrawals.sql`.
 2. **Secondary (GDPR, Domain Review c/R6):** confirm the DSAR/erasure row-scoping on `dsar_export_jobs` /
    `audit_byok_use` has a curated home — BR-STORAGE-1 covers the DSAR *bucket* (042) but not the DB-side job-row
-   tenancy + Art. 17 erasure. Name it (fold into BR-BYOK-1's neighbourhood or a short BR) or record why not.
+   tenancy + Art. 17 erasure. If promoted, give it **its own short BR** (keep Art. 17 erasure distinct from
+   BR-BYOK-1's Art. 7 consent — do not conflate), else record why not.
 3. Confirm no remaining spot-checked blind spot hides a material access/tenancy invariant the register should
    name that is not already covered. Record the confirmation.
 
 ### Phase 5 — Re-run & idempotency
 
-1. Re-run `drift`. Confirm the **intended residual**: stale = 0, **undocumented = 1 (`public` only)**, exit 1.
+1. Re-run `drift` with **explicit exit-code capture** (P1-1 — a bare non-zero exit trips `hr-when-a-command-exits-non-zero-or-prints`; an autonomous /work run would misread the intended residual as a failure and "remediate" it). Use:
+   `bash scripts/domain-model-drift.sh drift --repo . --register <register> > /tmp/drift.out; rc=$?; [ "$rc" -eq 1 ] || echo "UNEXPECTED rc=$rc"`.
+   Confirm the **intended residual**: stale = 0, **undocumented = 1 (`public` only)**, `rc == 1`.
    `conversations` and `storage` are gone (curated); `public` remains flagged by design (extraction defect,
-   #5871). Blind spots remain 47 (disclosed, not counted). Exit 1 is the *correct* success state here — do NOT
-   chase exit 0 by naming "public" (Domain Review R4).
+   #5871). Blind spots remain 47 (disclosed, not counted). `rc == 1` is the *correct* success state — do NOT
+   chase exit 0 by naming "public" (Domain Review R4). **Inverse-guard (P0-2):** an `rc == 0` / undoc 0 on the
+   FINAL run is a FAILURE signal here — it means "public" leaked into the register and silenced the whole-schema
+   guard; AC4's `grep -cwE public == 0` catches it.
 2. Re-run a **second** time and confirm byte-identical output (no spurious diff) — ADR-076 §1 guarantees
    deterministic re-runs; idempotency is byte-identical *output*, not a green exit code. The register edit
    must not introduce churn on unrelated facts (only `conversations`/`storage` flip undocumented → documented).
@@ -224,18 +266,27 @@ spots (regulated-data surfaces, `hr-gdpr-gate`).
       019/042/068/071/098 (not `extract` anchors — the 098 quoted policies are blind spots); the Storage-entity
       question (R5) is resolved + recorded; `grep -cwE storage <register>` ≥ 1.
 - [ ] **AC4 (`public` LEFT FLAGGED, not silenced):** the word `public` does NOT appear in the register
-      (`grep -cwE public <register>` == 0 — the whole-schema guard stays live); the collapsed `public.*` set was
-      enumerated and its per-table disposition recorded on #5871/PR body; any material invariant found was promoted
-      to a real-table `BR-*` (e.g. `BR-BYOK-1`), not buried.
-- [ ] **AC5 (residual = 1, idempotent):** re-running `drift` reports `Undocumented source facts (1 ...)` naming
-      `public`, `Stale register citations (0)`, **exits 1** (the intended residual); two consecutive runs are
-      byte-identical (`diff` of the two captures is empty). Exit 1 here is success, not failure (Domain Review R4).
-- [ ] **AC6 (blind-spot spot-check recorded):** the 47 blind spots are grouped; the tenancy set
-      (111/102/110/083/084/079/080) has a recorded disposition per the spot-check rule; **byok_delegation
-      (083/084) is promoted to `BR-BYOK-1`**; DSAR/erasure row-scoping (dsar_export_jobs/audit_byok_use) has a
-      recorded home; no un-named material access/tenancy invariant remains.
-- [ ] **AC7 (Auto-inferred clean):** `## Auto-inferred (unreviewed)` has no leftover row (demo row promoted, not stranded);
-      the curated table shape is unchanged (no `## Business Rules` machine-edit — hand-authored per ADR-076 §5).
+      (`grep -cwE public <register>` == 0 on the FINAL post-promotion register — the whole-schema guard stays
+      live); the collapsed `public.*` set was enumerated and its per-table disposition recorded on #5871/PR body.
+      Note (P2-2): because the extractor collapses all `public.*` to one token, naming an individual bare table
+      neither drops the undoc count nor gets re-flagged — this enumeration is **human-audited only** (no
+      analyzer-level cross-check) until #5871's extractor fix. Any material invariant found was promoted to a
+      real-table `BR-*` (e.g. `BR-BYOK-1`), not buried.
+- [ ] **AC5 (residual = 1, idempotent, rc-asserted):** the FINAL `drift` run is captured with `rc=$?` and
+      **`rc == 1`** asserted explicitly (not read as a raw failure); it reports `Undocumented source facts (1 ...)`
+      naming `public` and `Stale register citations (0)`; two consecutive runs are byte-identical (`diff` of the
+      two captures is empty). `rc == 0` = FAILURE (public leaked); `rc == 2` = source-not-analyzable (assert
+      `stack != unsupported`). The header literally prints "(1 **tables** …)" — that "tables" label is the
+      analyzer's own imprecision (fixed by #5871), NOT a cue to edit the register. Exit 1 is success (Domain Review R4).
+- [ ] **AC6 (blind-spot spot-check recorded):** the 47 blind spots are grouped; **each blind spot in the
+      enumerated tenancy set (111/102/110/083/084/079/080) has a recorded disposition** per the spot-check rule;
+      **byok_delegation (083/084) is promoted to `BR-BYOK-1`**; DSAR/erasure row-scoping (dsar_export_jobs/
+      audit_byok_use) has a recorded home (its own row if promoted — NOT glued onto BR-BYOK-1, to keep Art. 7
+      consent distinct from Art. 17 erasure) or a recorded reason-why-not.
+- [ ] **AC7 (Auto-inferred clean, demo actually exercised):** if the optional `conversations` write-row demo ran,
+      assert **exactly one row was appended** (not a dedup no-op — else the append path was never exercised and the
+      "soak evidence" is vacuous) BEFORE promotion; after promotion `## Auto-inferred (unreviewed)` has no leftover
+      row; the curated table shape is unchanged (no `## Business Rules` machine-edit — hand-authored per ADR-076 §5).
 - [ ] **AC8 (immutable BR IDs):** `BR-CONV-1`, `BR-STORAGE-1`, `BR-BYOK-1` do not collide with existing IDs
       (`grep -oE 'BR-[A-Z]+-[0-9]+' <register> | sort | uniq -d` is empty).
 - [ ] **AC9 (#5871 correctness-bug escalation filed):** a comment on #5871 records (a) the schema-qualifier
@@ -269,19 +320,23 @@ citations; no `.c4` model edit is needed because no external actor, external sys
 relationship changes (the Conversation entity and storage buckets are pre-existing runtime surfaces, not new C4
 elements introduced by this change).
 
-**Advisory (not a hard deliverable of this issue):** ADR-076 §3's content-anchor convention (`<file> ›
-<table>.<object>`) does not contemplate a *schema* qualifier, which is the root of the `public` collapse.
-An amendment noting this known limitation MAY be recorded via `/soleur:architecture`; the extraction *fix*
-itself is #5871's scope. This is optional here — it is not required for the triage to be complete.
+The `public`-collapse extraction defect (root: ADR-076 §3's content-anchor convention has no schema-qualifier
+case) is captured once, in the AC9 escalation comment on #5871 — the issue chartered to *fix* it. No separate
+advisory ADR amendment is authored here (it would duplicate a fact a live issue already owns and will soon make
+stale).
 
 ## Test Scenarios
 
-- **Happy path:** run drift (exit 1, 3 undoc) → triage 3 tokens → re-run drift (exit 0, 0 undoc) → re-run again
-  (byte-identical). Blind spots stay 47 throughout.
+- **Happy path:** run drift (exit 1, 3 undoc) → triage 3 tokens (`conversations`/`storage` curated, `public`
+  left flagged) → re-run drift (**exit 1, undoc = 1 — `public` only**) → re-run again (byte-identical). Blind
+  spots stay 47 throughout. NOTE: exit 1 is the intended terminal state — do NOT rewrite this to exit 0.
 - **write-row demo:** `write-row` appends exactly one Auto-inferred row; re-running the same `write-row` is a
   dedup no-op (anchor already present); after human-promotion the Auto-inferred table is empty.
-- **Idempotency guard:** editing the register must not change the drift output shape on unrelated facts (only the
-  3 tokens flip from undocumented → documented).
+- **Idempotency guard:** editing the register must not change the drift output shape on unrelated facts (only
+  **2 tokens** — `conversations` + `storage` — flip undocumented → documented; `public` stays flagged).
+- **`public`-leak guard (failure mode):** if the register accidentally names `public`, undoc drops 3→0 and drift
+  **exits 0** — which, given the analyzer semantics, is a FAILURE here, not success. AC4 (`grep -cwE public == 0`
+  on the final register) is the guard; a final drift run that exits 0 means `public` leaked.
 - **Case-sensitivity guard:** confirm each triaged token appears as a *lowercase* whole-word (a BR-ID like
   `BR-STORAGE-1` alone does NOT satisfy the analyzer's case-sensitive `\bstorage\b` grep).
 
