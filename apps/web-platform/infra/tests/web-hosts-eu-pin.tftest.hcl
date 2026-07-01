@@ -45,6 +45,11 @@ variables {
   resend_receiving_api_key     = "dummy"
   supabase_access_token        = "dummy"
   webhook_deploy_secret        = "dummy"
+  # command=plan evaluates file(var.ssh_key_path) (hcloud_ssh_key.default). The
+  # default ~/.ssh/id_ed25519.pub does not exist in CI, so point at a committed
+  # fixture (content is irrelevant — the hcloud provider is mocked). Path is
+  # CWD-relative (terraform test runs from the infra dir in CI + locally).
+  ssh_key_path = "tests/dummy-id_ed25519.pub"
 }
 
 # A non-EU location (ash = US) MUST be rejected (GDPR residency).
