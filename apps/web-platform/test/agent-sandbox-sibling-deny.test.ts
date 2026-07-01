@@ -113,5 +113,59 @@ describe("enumerateSiblingDenyPaths", () => {
       feature: "agent-sandbox",
       op: "enumerateSiblingDenyPaths",
     });
+    // The own-workspace UUID is threaded as the join key back to the strand
+    // telemetry so the degraded event is attributable to a session.
+    expect(call[1].extra).toMatchObject({ workspace: "own" });
+  });
+
+  it("denies a SIBLING that is itself a symlink to a different real dir (not mis-excluded)", () => {
+    // A sibling entry whose realpath resolves ELSEWHERE (not to own) must still
+    // be denied — the realpath filter excludes ONLY entries that resolve to own.
+    const realTarget = mkdtempSync(join(tmpdir(), "sbx-target-"));
+    const sibLink = join(root, "sib-link");
+    symlinkSync(realTarget, sibLink);
+    try {
+      const { denyRead } = enumerateSiblingDenyPaths(own);
+      expect(denyRead).toContain(sibLink); // stored path is the link, denied
+      expect(denyRead).not.toContain(own);
+    } finally {
+      rmSync(realTarget, { recursive: true, force: true });
+    }
+  });
+
+  it("workspacePath not under root (own absent) → every entry denied, nothing wrongly excluded", () => {
+    const sibA = join(root, "00000000-0000-0000-0000-0000000000a1");
+    const sibB = join(root, "00000000-0000-0000-0000-0000000000b2");
+    mkdirSync(sibA);
+    mkdirSync(sibB);
+    // own lives elsewhere, so it is not one of the root's entries — the
+    // own-exclusion is a no-op and EVERY root entry (incl. the beforeEach
+    // `own` dir) is denied (safe superset — nothing wrongly excluded).
+    const elsewhere = join(mkdtempSync(join(tmpdir(), "sbx-elsewhere-")), "own");
+    const { denyRead, degraded } = enumerateSiblingDenyPaths(elsewhere);
+    expect(degraded).toBe(false);
+    expect([...denyRead].sort()).toEqual([own, sibA, sibB, "/proc"].sort());
+  });
+
+  it("denies a plain FILE sibling entry (files are denied, harmless)", () => {
+    const fileSib = join(root, "stray.txt");
+    writeFileSync(fileSib, "not a dir");
+    const { denyRead } = enumerateSiblingDenyPaths(own);
+    expect(denyRead).toContain(fileSib);
+  });
+
+  it("ENOENT root in PRODUCTION (vanished bind-mount) → broad deny + degraded + Sentry page", () => {
+    // In prod the volume is bind-mounted at boot, so an ENOENT on the root is a
+    // real fault (the mount vanished), NOT the benign local/CI absence.
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("WORKSPACES_ROOT", join(root, "vanished"));
+    const { denyRead, degraded } = enumerateSiblingDenyPaths(own);
+    expect(degraded).toBe(true);
+    expect(denyRead).toEqual([join(root, "vanished"), "/proc"]);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(
+      (reportSilentFallback as unknown as ReturnType<typeof vi.fn>).mock
+        .calls[0][1],
+    ).toMatchObject({ feature: "agent-sandbox", op: "enumerateSiblingDenyPaths" });
   });
 });

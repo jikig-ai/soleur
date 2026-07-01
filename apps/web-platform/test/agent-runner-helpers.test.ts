@@ -79,8 +79,13 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // filesystem: write own; deny every sibling + /proc; NO allowRead key.
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
-    expect(result.filesystem.denyRead).toEqual(
-      expect.arrayContaining([sibA, sibB, "/proc"]),
+    // EXACT set (order-independent): denyRead must be precisely the two
+    // siblings + /proc. `arrayContaining` would let a stray/extra entry or a
+    // silently-widened deny set slip through the guard — and denyRead is now
+    // the sole bwrap-level cross-tenant guard, so an unexpected member is
+    // exactly what this must fail on.
+    expect([...result.filesystem.denyRead].sort()).toEqual(
+      [sibA, sibB, "/proc"].sort(),
     );
   });
 
@@ -157,8 +162,9 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     // Filesystem is unchanged by the egress flag.
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
-    expect(result.filesystem.denyRead).toEqual(
-      expect.arrayContaining([sibA, "/proc"]),
+    // EXACT set (order-independent) — see the T17 guard rationale above.
+    expect([...result.filesystem.denyRead].sort()).toEqual(
+      [sibA, "/proc"].sort(),
     );
   });
 
