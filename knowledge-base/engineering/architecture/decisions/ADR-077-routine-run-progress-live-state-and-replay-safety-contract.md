@@ -1,5 +1,5 @@
 ---
-adr: 076
+adr: 077
 title: routine_run_progress live-state table + replay-safety contract for heavy crons
 status: accepted
 date: 2026-07-01
@@ -10,7 +10,7 @@ related_plans:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-076: routine_run_progress live-state table + replay-safety contract
+# ADR-077: routine_run_progress live-state table + replay-safety contract
 
 ## Status
 

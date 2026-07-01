@@ -28,7 +28,7 @@ evicted mid-run — the founder sees nothing, then eventually a row. This adds:
 1. A **new mutable `routine_run_progress` live-state table** (one row per in-flight run:
    step/heartbeat), written from the shared `spawnClaudeEval` substrate + run-log middleware, so
    a running run is a DB fact and an evicted run is detectable as a **stale heartbeat**.
-2. A **replay-safety contract** (ADR-076): every mutating Inngest step is idempotency-keyed or
+2. A **replay-safety contract** (ADR-077): every mutating Inngest step is idempotency-keyed or
    last-in-step; write+commit atomized; a resumed run stamps **"Resumed from step N"**.
 3. Founder-visible **running / stuck / resumed** states + a **completed≠succeeded** rendering,
    surfaced through the existing `/api/dashboard/routines/runs` + `routines-surface.tsx`.
@@ -56,7 +56,7 @@ reviewed — opt-out ack in the header.
 |---|---|---|
 | FR4: "distinguish completed-but-`{ok:false}` from succeeded" is new work | `run-log.ts:157-161` **already** writes `status='failed'` for BOTH thrown errors and `data?.ok===false` (the #5674 fix). DB has no "completed-but-errored" state — `completed`⇒success, `failed`⇒error. | FR4 reduces to **UI-only**: render `failed` distinctly (StatusPill already maps `failed`→red) + surface `error_summary`. The wireframe's "lifecycle vs outcome" split is over-modeled; collapse to `completed`(green)/`failed`(red). Do NOT re-implement backend classification. A finer `error_classification` (fatal/auth/billing) is an **OQ**, not v1. |
 | An optimistic "running" pill already exists | `routines-surface.tsx:107-111` `STATUS_COLOR` has `running:blue`, shown ~5s post-trigger (`RECONCILE_DELAY_MS`) as a **client** placeholder, not DB-backed. | FR1 replaces the client placeholder with a **durable heartbeat-backed** live row spanning the full run + eviction. |
-| TR2: extend `routine_runs` with a `running` state | `routine_runs` has a **blanket** `BEFORE UPDATE/DELETE` WORM trigger (`107:85-108`) — ALL updates forbidden (unlike `action_sends`, whose `064` trigger is column-scoped `BEFORE UPDATE OF`). | **New mutable table `routine_run_progress`** (ADR-076); `routine_runs` stays untouched terminal WORM. Update-in-place on `routine_runs` is structurally impossible. |
+| TR2: extend `routine_runs` with a `running` state | `routine_runs` has a **blanket** `BEFORE UPDATE/DELETE` WORM trigger (`107:85-108`) — ALL updates forbidden (unlike `action_sends`, whose `064` trigger is column-scoped `BEFORE UPDATE OF`). | **New mutable table `routine_run_progress`** (ADR-077); `routine_runs` stays untouched terminal WORM. Update-in-place on `routine_runs` is structurally impossible. |
 | TR5: build "completed steps not re-metered on resume" | Inngest `step.run` memoization + existing per-step idempotency keys (`cost-writer.ts`, keyed `${actionSendId}-turn-${n}`) already ensure completed cost steps don't re-run on replay. | TR5 = **document + test** the invariant, not build it. |
 | Heartbeat at step boundaries | Heavy crons spend minutes inside ONE `spawnClaudeEval` step (`_cron-claude-eval-substrate.ts:732`); step-boundary heartbeats would false-positive "stuck" mid-healthy-run. | Heartbeat = **periodic wall-clock tick inside `spawnClaudeEval`** (one chokepoint, 15 crons), per the output-aware-heartbeat learning. |
 
@@ -91,13 +91,13 @@ Keystone decision: **`upsertProgress` is written from `spawnClaudeEval`, not the
 | S-F3/F4/F6 | simplicity | Drop `resumed_from_heartbeat`, `current_step` (constant), `heartbeat_count` (redundant) | **Adopt.** Badge = `attempt>1`. Minimal table: `id, routine_id, run_id UNIQUE, attempt, started_at, last_heartbeat_at`. |
 | S-F5 | simplicity | Drop `pg_cron` TTL sweep | **Adopt.** Orphans handled by: terminal delete + delete-stale-same-routine on upsert + reader ignores rows older than max-run-duration (row count bounded by ~16 routines). |
 | S-F7 | simplicity | v1 = `spawnClaudeEval`-routed only; defer stragglers | **Adopt** (see A-1). |
-| S-YAGNI | simplicity | Drop AC2a (proxy), drop standalone replay test of untouched code, move AC12 out of checklist | **Adopt.** Keep ADR-076 (codification) + AC7 (billing, genuinely enforceable). |
+| S-YAGNI | simplicity | Drop AC2a (proxy), drop standalone replay test of untouched code, move AC12 out of checklist | **Adopt.** Keep ADR-077 (codification) + AC7 (billing, genuinely enforceable). |
 | A-1 | architecture | `isHeavyCron ⊆ heartbeat set` invariant; 2 HEAVY crons bypass `spawnClaudeEval`: `cron-daily-triage.ts:149`, `cron-follow-through-monitor.ts:246` | **Dissolved by S-F2** (no `isHeavyCron`): the two bypass crons get NO live row in v1 → deferred, never false-stuck. Named in NG9. |
 | A-2 | architecture | `transformOutput` delete-vs-terminal-write ordering unspecified; delete-first + terminal-fail = run vanishes | **Adopt.** `finishProgress` fires **terminal-write-first, delete-second**, AND after BOTH early returns (`:148` step-level `if (step) return`, `:166` thrown-non-final). AC + Phase 2. |
 | A-3 | architecture | Drop ALS; thread explicit bound callback (ALS across `step.run` is fragile — `enterWith`, undefined on replay) | **Adopt.** ~16 one-line `heartbeat: () => heartbeat(ctx.runId)` edits; no ALS. |
-| A-4 | architecture | Replay-safety contract enforceable for billing, aspirational for general clause | **Adopt.** ADR-076 general clause scoped **review-gated** (write-boundary sweep + `observability-coverage-reviewer`), NOT machine-enforced; the one behavioral test is AC7 (billing, `cost-writer.ts:144` `ON CONFLICT (invocation_id) DO NOTHING`). |
+| A-4 | architecture | Replay-safety contract enforceable for billing, aspirational for general clause | **Adopt.** ADR-077 general clause scoped **review-gated** (write-boundary sweep + `observability-coverage-reviewer`), NOT machine-enforced; the one behavioral test is AC7 (billing, `cost-writer.ts:144` `ON CONFLICT (invocation_id) DO NOTHING`). |
 | A-5 | architecture | Reader precedence live-vs-terminal undefined | **Adopt.** Merge prefers the terminal `routine_runs` row over a lingering live row (AC4). |
-| A-LOW | architecture | Duplicate-ADR-number hazard (027/030/031/033/038 each ×2); ADR-076 needs `brand_survival_threshold` + AP-014 xref | **Adopt.** Phase 0 greps BOTH `ADR-076-*` filename AND `adr:` frontmatter; ADR-076 carries `brand_survival_threshold: single-user incident` + AP-014 cross-link. |
+| A-LOW | architecture | Duplicate-ADR-number hazard (027/030/031/033/038 each ×2); ADR-077 needs `brand_survival_threshold` + AP-014 xref | **Adopt.** Phase 0 greps BOTH `ADR-077-*` filename AND `adr:` frontmatter; ADR-077 carries `brand_survival_threshold: single-user incident` + AP-014 cross-link. |
 | S-F1 | simplicity | Could the Inngest run-state API back the reader, eliminating the table? | **Phase 0 gate** (below). Expected: minimal table justified by output-aware liveness + SIGKILL-fast detection (arch affirmed the sidecar), but verify before Phase 1. |
 
 ## Deepen Enhancement — data-integrity + security (authoritative; /work reads this)
@@ -134,7 +134,7 @@ REVOKE INSERT, UPDATE, DELETE ON public.routine_run_progress FROM anon, authenti
 - `STATUS_VALUES` widening (P1-5): apply the status filter to the **merged** result set — do NOT push `.eq("status","stuck")` into `listRecentRuns` (`list-routines.ts:137`), which would return empty (running/stuck/resumed are reader-computed, not persisted `routine_runs.status`).
 - A genuinely-dead never-replayed run transitions **stuck → gone** at `ignore_bound` (disappears mid-watch, no terminal record) — accepted-orphan tradeoff; document as a known state in the ADR/AC so it doesn't read as a bug.
 
-### ADR-076 — replay-safety contract mandates (SEC-1, SEC-2, SEC-3)
+### ADR-077 — replay-safety contract mandates (SEC-1, SEC-2, SEC-3)
 - **Classify persistence per heavy cron: node-side vs agent-side.** Node-side (`safeCommitAndPr`, `_cron-safe-commit.ts:429-441` — replay-idempotent: commit-detect, push no-op, PR-create `422 already exists` tolerated) is covered by "last-in-step". **Agent-side** (the LLM runs `git`/`gh pr` INSIDE `claude-eval`, e.g. `cron-bug-fixer.ts:727` + `_cron-shared.ts:601-602`) is **at-least-once** and NOT covered — a mid-`claude-eval` eviction re-spawns claude and can open a **duplicate PR/branch**. This is the highest-probability eviction window (the very one this feature makes visible), so it must be closed, not implied.
   - **Mandate:** agent-side crons MUST use **deterministic run-keyed resource names** (branch `bot-fix/<issue#>` — bug-fixer already uses this prefix per the watchdog) so a re-spawn **collides (422)** rather than duplicates; OR lift the mutation into a deterministic node step. Record `cron-bug-fixer` as the reference carve-out.
 - **"last-in-step" defined precisely:** the mutation is the final awaited side effect in its `step.run`, with NO awaited work after it (else a crash post-mutation-pre-return repeats it).
@@ -153,7 +153,7 @@ work as fresh — the founder trusts a run state that is false.
 
 **If this leaks, the user's workflow/money is exposed via:** a resumed run replays a mis-attributed or stale
 journal step and re-executes a mutating side effect (git commit, GitHub write, credit spend) against the
-wrong workspace. Mitigated by the ADR-076 replay-safety contract + attribution-free live table.
+wrong workspace. Mitigated by the ADR-077 replay-safety contract + attribution-free live table.
 
 **Brand-survival threshold:** single-user incident. (Carried forward from brainstorm; `requires_cpo_signoff:
 true`. CPO reviewed the brainstorm — Domain Review carry-forward below. `user-impact-reviewer` runs at PR review.)
@@ -163,7 +163,7 @@ true`. CPO reviewed the brainstorm — Domain Review carry-forward below. `user-
 - G1 — In-flight heavy-cron runs are a queryable live DB fact (`running` + heartbeat).
 - G2 — Evicted/stuck runs are **visibly distinct** from healthy-running (stale heartbeat, reader-computed).
 - G3 — A resumed run is honestly labeled **"Resumed from step N"**; completed steps are not re-metered.
-- G4 — Replay-safety contract codified (ADR-076) + enforced at review (`observability-coverage-reviewer` + write-boundary sweep).
+- G4 — Replay-safety contract codified (ADR-077) + enforced at review (`observability-coverage-reviewer` + write-boundary sweep).
 - G5 — Terminal `failed` renders distinctly from `completed`, `error_summary` surfaced (FR4, UI-only).
 
 ## Non-Goals
@@ -182,7 +182,7 @@ true`. CPO reviewed the brainstorm — Domain Review carry-forward below. `user-
 
 - `apps/web-platform/supabase/migrations/120_routine_run_progress.sql` + `.down.sql` — new mutable live-state table (next number verified: highest is 119).
 - `apps/web-platform/server/inngest/routine-run-progress.ts` — `upsertProgress()` / `heartbeat()` / `finishProgress()` helpers (service-client writes; fail-soft).
-- `knowledge-base/engineering/architecture/decisions/ADR-076-routine-run-progress-live-state-and-replay-safety-contract.md` — ADR (frontmatter: `brand_survival_threshold: single-user incident`, cross-link AP-014; general replay-safety clause scoped **review-gated**, not machine-enforced — arch-A-4).
+- `knowledge-base/engineering/architecture/decisions/ADR-077-routine-run-progress-live-state-and-replay-safety-contract.md` — ADR (frontmatter: `brand_survival_threshold: single-user incident`, cross-link AP-014; general replay-safety clause scoped **review-gated**, not machine-enforced — arch-A-4).
 - `apps/web-platform/test/server/routine-run-progress.test.ts` — deterministic unit tests incl. the AC7 billing-invariant behavioral test (no LLM in assertion path; vitest `test/**/*.test.ts` glob). **No standalone `replay-safety-contract.test.ts`** (S-YAGNI: it would assert pre-existing cost-writer/commit paths this PR doesn't touch; the ADR codifies the contract, `observability-coverage-reviewer` + write-boundary sweep enforce it at review).
 
 ## Files to Edit
@@ -198,7 +198,7 @@ true`. CPO reviewed the brainstorm — Domain Review carry-forward below. `user-
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-- **Create ADR-076** — "routine_run_progress live-state table + replay-safety contract". Decision: in-flight run
+- **Create ADR-077** — "routine_run_progress live-state table + replay-safety contract". Decision: in-flight run
   state lives in a NEW mutable table (`routine_runs` WORM trigger forbids in-place transition); the replay-safety
   contract (mutating steps idempotency-keyed/last-in-step; write+commit atomic) is the cross-cutting invariant every
   heavy-cron tool must honor. `## Alternatives Considered`: (a) append start+terminal rows to `routine_runs` — rejected
@@ -218,7 +218,7 @@ true`. CPO reviewed the brainstorm — Domain Review carry-forward below. `user-
   tables sit below C4 container grain — no view `include` line changes.
 
 ### Sequencing
-- ADR-076 authored in this PR (not deferred). #5694 (deploy-stable worker) is a soft prereq for *long* runs only — the
+- ADR-077 authored in this PR (not deferred). #5694 (deploy-stable worker) is a soft prereq for *long* runs only — the
   heartbeat + reader-side stale detection ship independently and degrade gracefully without it.
 
 ## Observability
@@ -259,7 +259,7 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 
 ### Phase 0 — Preconditions (verify before code)
 - **F1 gate (build-vs-join):** confirm the self-hosted Inngest run-state API (`lib/inngest/list-runs.ts`) does NOT already expose per-routine in-flight liveness with SIGKILL-fast detection. If it does, collapse the table to a read-path join and STOP. Expected outcome: minimal table justified (output-aware liveness + faster-than-step-timeout eviction detection; arch affirmed the sidecar) — but verify first.
-- Confirm migration 120 free (verified: highest is 119). Grep BOTH `ADR-076-*` filename AND `adr:` frontmatter (duplicate-ADR-number hazard — arch-A-LOW).
+- Confirm migration 120 free (verified: highest is 119). Grep BOTH `ADR-077-*` filename AND `adr:` frontmatter (duplicate-ADR-number hazard — arch-A-LOW).
 - Read `spawnClaudeEval` (`:732`) — confirm it can host `upsertProgress` + a periodic tick and that callers close over `ctx.runId`+`attempt`.
 - Enumerate the HEAVY crons that bypass `spawnClaudeEval`: `cron-daily-triage.ts:149`, `cron-follow-through-monitor.ts:246` (arch-A-1) — confirm they are the only heavy bypassers; they are **out of v1 scope** (NG9), not false-stuck (they get no live row).
 - Confirm `run-log.ts transformOutput` early returns (`:148` step-level, `:166` thrown-non-final) so `finishProgress` lands after both.
@@ -275,14 +275,14 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 - `routine-run-progress.ts` (see Deepen Enhancement for exact SQL): `upsertProgress(fnId, runId, attempt)` = INSERT…ON CONFLICT(run_id) DO UPDATE **preserving `started_at`** (DI-P2-D) + a **separate staleness-guarded** delete-stale (DI-P1-A); `heartbeat(runId)` = **UPDATE-only** (DI-P2-E, never upsert); `finishProgress(runId)` = delete. All service-client (`getServiceClient()`); fail-soft.
 - `spawnClaudeEval` + ~16 callers: caller passes `runId`+`attempt` (explicit bound closure — arch-A-3). On entry `upsertProgress`; then periodic `heartbeat(runId)` tick (~30s) while child runs; **clear the interval on child exit** (`:820-824`). Domain ≡ heartbeat domain by construction (no `isHeavyCron`).
 - `run-log.ts transformOutput`: `finishProgress(runId)` **inside** the try, on the line immediately **after** `write_routine_run` resolves (DI-P1-C — never in `finally`/after catch, or a failed terminal write + delete = vanish) and after both early returns (`:148`, `:166`). Own inner try/catch→Sentry. `transformInput` untouched (stays sync).
-- **Replay-safety:** upsert/heartbeat are within-step self-healing side effects; mutating steps per ADR-076 (node-side idempotent vs agent-side run-keyed — see Deepen Enhancement SEC-1).
+- **Replay-safety:** upsert/heartbeat are within-step self-healing side effects; mutating steps per ADR-077 (node-side idempotent vs agent-side run-keyed — see Deepen Enhancement SEC-1).
 
 ### Phase 3 — API + UI (RED→GREEN) — see Deepen Enhancement "Reader"
 - `runs/route.ts`: merge live rows; both `stuck` AND the ignore-filter key on **`last_heartbeat_at`** (NOT `started_at` — DI-P1-B, else healthy ~50min runs vanish); invariant `stuck_threshold < ignore_bound`. Terminal `routine_runs` row wins on `run_id` collision (NULL-run_id terminal rows don't match live rows — DI-Q3). Apply the status filter to the **merged** set, not pushed into `listRecentRuns` (DI-P2-F).
 - `routines-surface.tsx`: `StatusPill`/`STATUS_COLOR` add distinct `stuck`/`never`; `resumed` badge from `attempt>1`; render heartbeat/elapsed + "Resumed" (elapsed framing, not "step N" — P2-5)/`error_summary` per wireframes 13–16; reuse `leader-loop-status.tsx` Realtime + 2s-poll fallback.
 
 ### Phase 4 — Contract + ADR
-- Author ADR-076 (above); the general replay-safety clause is **review-gated** (write-boundary sweep + `observability-coverage-reviewer`), the billing clause is behaviorally tested (AC7). No standalone contract test of untouched code.
+- Author ADR-077 (above); the general replay-safety clause is **review-gated** (write-boundary sweep + `observability-coverage-reviewer`), the billing clause is behaviorally tested (AC7). No standalone contract test of untouched code.
 - Confirm the two heavy bypass crons (`cron-daily-triage`, `cron-follow-through-monitor`) are documented as NG9 (out of v1); `log()` that coverage is `spawnClaudeEval`-routed only.
 
 ## Acceptance Criteria
@@ -294,8 +294,8 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 - [ ] AC4 — A light cron (not `spawnClaudeEval`-routed) gets **no** live row (domain-by-construction — P1-3/A-1). `runs/route.ts`: in-flight rows carry a reader-computed `stuck` flag (`now - last_heartbeat_at > threshold`); rows older than max-run-duration are ignored (not "stuck forever" — S-F5); when a live row and a terminal `routine_runs` row share a `run_id`, the **terminal row wins** (A-5); `STATUS_VALUES` enumerates `running`/`stuck`/`resumed` (P1-5).
 - [ ] AC5 — UI: `running`/`stuck`/`completed`/`failed` have **distinct** `STATUS_COLOR` entries (distinct from running **and from each other** — P2-2); `resumed` is a **badge overlay** from `attempt > 1` (P1-2/S-F3); `never` has an explicit color. Component test asserts all four wireframe states + the badge.
 - [ ] AC6 — `transformOutput` ordering (A-2): `finishProgress` fires **after** the terminal `write_routine_run` and **after both** early returns (`:148` step-level, `:166` thrown-non-final) — test that a step-level event and a non-final throw do NOT delete the live row, and a delete-before-terminal cannot vanish a run.
-- [ ] AC7 — Replay-cost invariant (**reframed — SEC-2**): assert **Inngest step memoization** — a completed (memoized) step is NOT re-executed on replay (so its side effects/cost don't repeat); an interrupted `claude-eval` step DOES re-run and re-spend (inherent to resume, acceptable). Do NOT assert `cost-writer` `ON CONFLICT` (heavy crons don't call `cost-writer`; its `invocation_id` is `randomUUID()` per call, so it never dedupes across a replay — false-confidence). Also assert the ADR-076 mandate: agent-side mutations use run-keyed resource names so a re-spawn collides (422), not duplicates.
-- [ ] AC8 — ADR-076 exists with `## Decision` + `## Alternatives Considered` (3 rejected), `brand_survival_threshold: single-user incident` frontmatter, AP-014 cross-link, and the C4 "no-impact" enumeration.
+- [ ] AC7 — Replay-cost invariant (**reframed — SEC-2**): assert **Inngest step memoization** — a completed (memoized) step is NOT re-executed on replay (so its side effects/cost don't repeat); an interrupted `claude-eval` step DOES re-run and re-spend (inherent to resume, acceptable). Do NOT assert `cost-writer` `ON CONFLICT` (heavy crons don't call `cost-writer`; its `invocation_id` is `randomUUID()` per call, so it never dedupes across a replay — false-confidence). Also assert the ADR-077 mandate: agent-side mutations use run-keyed resource names so a re-spawn collides (422), not duplicates.
+- [ ] AC8 — ADR-077 exists with `## Decision` + `## Alternatives Considered` (3 rejected), `brand_survival_threshold: single-user incident` frontmatter, AP-014 cross-link, and the C4 "no-impact" enumeration.
 - [ ] AC9 — Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`. Tests: `./node_modules/.bin/vitest run test/server/routine-run-progress.test.ts` (path matches `test/**/*.test.ts` glob).
 - [ ] AC10 — `Ref #5766` in PR body (not `Closes` — migration applies post-merge; see AC13).
 
@@ -310,7 +310,7 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 **Domains relevant:** Engineering (CTO), Product (CPO), Legal (CLO) — carried forward from the 2026-07-01 brainstorm `## Domain Assessments`.
 
 ### Engineering (CTO)
-**Status:** reviewed (carry-forward). **Assessment:** generalize + add queryable state, not build-a-substrate; keep CC-plugin worktree/lease as owner; core risk = at-least-once side effects on replay (idempotency-keyed/last-in-step); #5694 soft prereq for long runs only; no parallel event-log, no new wake primitive. Reflected in TR1, ADR-076, NG2/NG3.
+**Status:** reviewed (carry-forward). **Assessment:** generalize + add queryable state, not build-a-substrate; keep CC-plugin worktree/lease as owner; core risk = at-least-once side effects on replay (idempotency-keyed/last-in-step); #5694 soft prereq for long runs only; no parallel event-log, no new wake primitive. Reflected in TR1, ADR-077, NG2/NG3.
 
 ### Product (CPO)
 **Status:** reviewed (carry-forward). **Assessment:** live visibility already ships for agent-spawn; genuine gap is `routine_runs` terminal-only; reuse `leader-loop-status.tsx`/`action_sends` patterns; trust label "resumed from step N", never silently re-run visible side effects. Reflected in FR1/FR3, Files to Edit.
@@ -336,7 +336,7 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 ## Risks & Mitigations
 
 - **False "stuck" on healthy long runs** → heartbeat ticks *during* `spawnClaudeEval` (not step boundaries); threshold ≥ 2–3× tick; AC12 calibration.
-- **Replay double-execution of a mutation** → ADR-076 contract + `replay-safety-contract.test.ts`; write+commit atomized (learning 2026-06-14).
+- **Replay double-execution of a mutation** → ADR-077 contract + `replay-safety-contract.test.ts`; write+commit atomized (learning 2026-06-14).
 - **Live-row write failure poisoning a cron** → fail-soft mirror (never throw), preserving run-log contract.
 - **WORM confusion** → live table is NOT WORM (mutable); `routine_runs` untouched; no worm_bypass role-check trap (use GUC if any bypass ever needed — learning 2026-05-18).
 - **Direct-spawn straggler crons uninstrumented** → Phase 4 enumerates the 10; instrument or explicit scope-out; `log()` any dropped coverage (no silent cap).
