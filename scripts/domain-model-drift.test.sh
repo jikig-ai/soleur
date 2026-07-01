@@ -112,5 +112,56 @@ echo "$out7" | jq -e '.stack == "unsupported"' >/dev/null 2>&1 && pass || fail "
 bash "$DRIFT" extract --repo /nonexistent-path-xyz >/dev/null 2>&1
 [[ $? -ne 0 ]] && pass || fail "T8: nonexistent --repo should fail"
 
+# --- Test 9: drift — stale citation flagged, live citation NOT flagged (AC5) ---
+t9_repo="$(mktemp -d)"; t9_mig="$t9_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t9_mig"
+t9_ts="$t9_repo/apps/web-platform/server"; mkdir -p "$t9_ts"
+cat > "$t9_ts/workspace-resolver.ts" <<'TS'
+export async function resolveActiveWorkspace(userId, supabase) { return null; }
+TS
+echo "CREATE POLICY p ON t FOR SELECT USING (true);" > "$t9_mig/001.sql"
+t9_reg="$t9_repo/register.md"
+cat > "$t9_reg" <<'MD'
+# Domain Model & Business Rules Register
+
+## Business Rules
+
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+| BR-1 | Live guard | Access via (`workspace-resolver.ts` `resolveActiveWorkspace`). | ADR-038 |
+| BR-2 | Stale guard | Old probe (`workspace-resolver.ts` `resolveGoneSymbol`). | ADR-038 |
+MD
+out9="$(bash "$DRIFT" drift --repo "$t9_repo" --register "$t9_reg" 2>/dev/null)"
+rc9=$?
+# a synthesized non-existent symbol is flagged stale
+echo "$out9" | grep -q "resolveGoneSymbol" && pass || fail "T9: stale citation (resolveGoneSymbol) not flagged"
+# the LIVE resolveActiveWorkspace (exists in the cited file) is NOT flagged stale
+echo "$out9" | awk '/[Ss]tale/{f=1} f' | grep -q "resolveActiveWorkspace" && fail "T9: live resolveActiveWorkspace wrongly flagged stale" || pass
+# drift found → exit 1
+[[ "$rc9" -eq 1 ]] && pass || fail "T9: drift-found exit=$rc9 (want 1)"
+
+# --- Test 10: drift — clean register (no stale, table documented) → exit 0 ---
+t10_repo="$(mktemp -d)"; t10_mig="$t10_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t10_mig"
+echo "CREATE TABLE lonely (id uuid PRIMARY KEY);" > "$t10_mig/001.sql"
+t10_reg="$t10_repo/register.md"
+cat > "$t10_reg" <<'MD'
+# Register
+## Business Rules
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+| BR-1 | Lonely table | The `lonely` table exists. | migration 001 |
+MD
+out10="$(bash "$DRIFT" drift --repo "$t10_repo" --register "$t10_reg" 2>/dev/null)"
+rc10=$?
+[[ "$rc10" -eq 0 ]] && pass || fail "T10: clean register drift-exit=$rc10 (want 0)"
+echo "$out10" | grep -qi "NOT a security audit" && pass || fail "T10: report missing completeness disclaimer"
+
+# --- Test 11: drift — undocumented table flagged ---
+t11_repo="$(mktemp -d)"; t11_mig="$t11_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t11_mig"
+echo "CREATE POLICY secret_pol ON undocumented_table FOR SELECT USING (true);" > "$t11_mig/001.sql"
+t11_reg="$t11_repo/register.md"
+printf '# Register\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n' > "$t11_reg"
+out11="$(bash "$DRIFT" drift --repo "$t11_repo" --register "$t11_reg" 2>/dev/null)"
+echo "$out11" | grep -q "undocumented_table" && pass || fail "T11: undocumented table not surfaced"
+
 echo "domain-model-drift.test.sh: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

@@ -107,6 +107,34 @@ dm_tokenize() {
   done
 }
 
+# dm_register_code_citations <register-file> — emit code-citation pairs (TSV):
+#   CITE<TAB>file<TAB>symbol
+# Scans the WHOLE row (Statement + Source cells) of every `| ... |` table row —
+# the canonical guard citation lives in a Statement cell, not the Source cell
+# (data-integrity P1 / Kieran P0). Pairs each backticked `*.ts`/`*.sql` file token
+# with every backticked bare-identifier token in the same row.
+dm_register_code_citations() {
+  local reg="$1"
+  [[ -f "$reg" ]] || return 0
+  grep -E '^\|' "$reg" 2>/dev/null | awk '
+    {
+      nfile = 0; nsym = 0
+      line = $0
+      # collect every backticked token on the row
+      while (match(line, /`[^`]+`/)) {
+        tok = substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+        if (tok ~ /\.(ts|tsx|sql)$/) { files[++nfile] = tok }
+        else if (tok ~ /^[A-Za-z_][A-Za-z0-9_]*$/) { syms[++nsym] = tok }
+      }
+      for (i = 1; i <= nfile; i++)
+        for (j = 1; j <= nsym; j++)
+          print "CITE\t" files[i] "\t" syms[j]
+      delete files; delete syms
+    }
+  ' | LC_ALL=C sort -u
+}
+
 # dm_guards_from_ts <repo-root> — emit guard events for named TS resolver/guard symbols.
 # Scoped to the canonical resolver file; exact-token (word-boundary) matching so a
 # cited `resolveActiveWorkspace` never substring-matches `resolveActiveWorkspaceKbRoot`.

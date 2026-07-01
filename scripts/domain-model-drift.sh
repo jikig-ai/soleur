@@ -102,8 +102,71 @@ emit_extract_json() {
     '{schema_version:$v, stack:"supabase-ts", disclaimer:$d, facts:$facts, blind_spots:$blind}'
 }
 
+# ---------------------------------------------------------------------------
+# drift: two-way report — stale register citations + undocumented source facts.
+# Exit: 0 = clean, 1 = drift found, 2 = error, 3 = secret-refuse.
+# ---------------------------------------------------------------------------
+emit_drift_report() {
+  local reg="$REGISTER"
+  if [[ -z "$reg" ]]; then
+    reg="$REPO/knowledge-base/engineering/architecture/domain-model.md"
+  fi
+  reg="$(realpath -e -- "$reg" 2>/dev/null)" || die "--register does not resolve to an existing file"
+  # confine: the register must live under the repo root (no arbitrary write/read target)
+  case "$reg" in "$REPO"/*) ;; *) die "--register must resolve under --repo" ;; esac
+
+  # NOTE: declare + assign on SEPARATE lines — `local x="$(cmd)"` masks the
+  # subshell exit code, which would swallow the fail-closed secret-refuse (exit 3).
+  local extract_json
+  extract_json="$(emit_extract_json)" || exit $?
+
+  # STALE: register code-citations whose symbol no longer resolves in the cited file.
+  local stale=""
+  while IFS=$'\t' read -r _ cfile csym; do
+    [[ -n "${csym:-}" ]] || continue
+    local path; path="$(find "$REPO" -type f -name "$cfile" -not -path '*/node_modules/*' 2>/dev/null | LC_ALL=C sort | head -1)"
+    if [[ -z "$path" ]]; then
+      stale+="- \`$cfile\` › \`$csym\` — cited file not found in repo"$'\n'
+    elif ! grep -qE "\\b${csym//[^A-Za-z0-9_]/}\\b" "$path" 2>/dev/null; then
+      stale+="- \`$cfile\` › \`$csym\` — symbol not found in \`$cfile\` (stale citation)"$'\n'
+    fi
+  done < <(dm_register_code_citations "$reg")
+
+  # UNDOCUMENTED: tables carrying a policy/constraint whose name the register never mentions.
+  local undoc="" undoc_n=0
+  local reg_body; reg_body="$(cat "$reg")"
+  while IFS= read -r tbl; do
+    [[ -n "$tbl" ]] || continue
+    if ! printf '%s' "$reg_body" | grep -qE "\\b${tbl//[^A-Za-z0-9_]/}\\b"; then
+      undoc_n=$((undoc_n + 1))
+      [[ $undoc_n -le 25 ]] && undoc+="- \`$tbl\` — table has RLS/constraints but is not named in the register"$'\n'
+    fi
+  done < <(printf '%s' "$extract_json" | jq -r '[.facts[] | select(.kind=="policy" or .kind=="constraint") | (.anchor | capture("› (?<t>[^.]+)\\.") .t)] | unique | .[]' 2>/dev/null | LC_ALL=C sort -u)
+
+  local blind_n; blind_n="$(printf '%s' "$extract_json" | jq '.blind_spots | length')"
+  local stale_n; stale_n="$(printf '%s\n' "$stale" | grep -c '^- ' || true)"
+
+  # ---- report ----
+  echo "# Domain-model drift report"
+  echo
+  echo "> $DISCLAIMER"
+  echo
+  echo "## Stale register citations ($stale_n)"
+  echo
+  [[ -n "$stale" ]] && printf '%s\n' "$stale" || echo "_none_"
+  echo "## Undocumented source facts ($undoc_n tables not in the register)"
+  echo
+  [[ -n "$undoc" ]] && printf '%s\n' "$undoc" || echo "_none_"
+  [[ $undoc_n -gt 25 ]] && echo "_… and $((undoc_n - 25)) more (capped)._" && echo
+  echo "## Blind spots ($blind_n)"
+  echo
+  echo "_$blind_n source constructs (dynamic \`EXECUTE format\`/\`DO \$\$\`, un-merged \`ALTER POLICY\`) were NOT statically analyzed and are not covered by the counts above._"
+
+  [[ $stale_n -gt 0 || $undoc_n -gt 0 ]] && exit 1 || exit 0
+}
+
 case "$MODE" in
   extract) emit_extract_json ;;
-  drift)   die "drift mode not yet implemented (Phase 2)" ;;
+  drift)   emit_drift_report ;;
   *) usage ;;
 esac
