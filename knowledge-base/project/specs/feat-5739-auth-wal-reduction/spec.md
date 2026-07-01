@@ -59,3 +59,36 @@ counts the issue flagged as a possible loop are normal ~30–60/day rates over a
 - Any JWT/session-lifetime change carries explicit security rationale + CLO sign-off (N/A
   under current decision — lever deferred).
 - Auth-schema WAL share re-measured after any change.
+
+## Measurement Log
+
+### 2026-07-01 — mid-soak snapshot (day 1 of 7, NOT the decision measurement)
+
+pgss window age **0.98 days** (reset 2026-06-30 12:40:27 UTC). Recorded to track the
+trajectory only — the soak completes ~2026-07-07; this reading over-weights transient
+activity vs the issue's 55-day/18% baseline and must not be used to decide FR2.
+
+WAL by role (prod `ifsccnjhymdmidffkzhl`):
+
+| Role | WAL | % |
+|---|---|---|
+| `supabase_auth_admin` (GoTrue) | 21 MB | 47.9% |
+| postgres | 10 MB | 23.7% |
+| service_role | 7.5 MB | 16.9% |
+| authenticated | 3.8 MB | 8.6% |
+
+Auth WAL composition (~214 login flows in 23.5 h ≈ 9/hr): `refresh_tokens` INSERT 6.9 MB ·
+`sessions` INSERT 5.3 MB · `mfa_amr_claims` INSERT 2.9 MB · `one_time_tokens` 1.6 MB ·
+`flow_state` INSERT 1.1 MB.
+
+Findings (already directionally answering the acceptance question):
+- **No loop.** ~1 refresh token per session; ~214 flows/day = legitimate volume, as predicted.
+- **flow_state bloat confirmed but is NOT the WAL driver.** `auth.flow_state` = 3,865 rows,
+  3,793 older than 1 day, oldest 2026-03-17 (GoTrue never prunes it). But flow_state INSERTs
+  are only ~1.1 MB of ~21 MB auth WAL — the FR2 prune is a **table-hygiene** win, not a WAL
+  lever. Bulk auth WAL (refresh_tokens/sessions/mfa) is irreducible without breaking sessions.
+- No short-JWT-TTL refresh churn observed → confirms NG1 (TTL lever stays deferred).
+
+Provisional post-soak conclusion (to confirm ~2026-07-07): auth WAL is legitimate volume;
+no high-ROI WAL reduction exists; ship flow_state prune as bloat cleanup **or** close #5739
+as no-actionable-WAL-work.
