@@ -1,0 +1,103 @@
+name: CodeQL #1537 revisit watch
+
+# Upstream-dependency watcher (#5780). The GitHub merge queue was reverted
+# because CodeQL does not report a status context on `merge_group`
+# (github/codeql-action#1537, open since 2023). A merge queue and a blocking
+# required `CodeQL` check are therefore mutually exclusive on GitHub. If/when
+# #1537 is resolved upstream, the queue becomes re-adoptable — this workflow is
+# the reminder so that window is not missed.
+#
+# Behaviour: monthly, check the upstream issue state. While #1537 is OPEN, this
+# is a silent green no-op (no comments, no churn — the failure mode of the
+# follow-through sweeper for a maybe-years wait). When #1537 CLOSES, post ONE
+# idempotent comment on the standing tracking issue (label `merge-queue-revisit`)
+# and flag it `needs-attention`, so the operator revisits per the ADR-032
+# re-adoption recipe. A `not_planned` close is surfaced too but flagged as
+# "verify this is a real fix, not a wontfix".
+#
+# WHY GH-Actions cron (ADR-033 repo-scoped): default GITHUB_TOKEN + `gh api`/
+# `gh issue` ONLY — no app context, no Doppler/app secrets, no token mint. The
+# upstream issue state is public read; our tracking issue is same-repo write.
+# Mirrors the (now-removed) merge-queue-stall-check.yml scope determination.
+#
+# To test manually: gh workflow run codeql-1537-revisit-watch.yml
+
+on:
+  schedule:
+    - cron: '0 12 1 * *' # 12:00 UTC on the 1st of each month
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: codeql-1537-revisit-watch
+  cancel-in-progress: false
+
+jobs:
+  revisit-watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      UPSTREAM: github/codeql-action
+      UPSTREAM_ISSUE: '1537'
+      TRACK_LABEL: merge-queue-revisit
+      # Sentinel that marks "we already pinged for this closure" — keeps the
+      # comment idempotent across monthly runs after #1537 closes.
+      SENTINEL: '<!-- codeql-1537-closed-ping -->'
+    steps:
+      - name: Ping tracking issue if upstream #1537 has closed
+        run: |
+          set -euo pipefail
+
+          # Public read of the upstream issue state. A transient API failure must
+          # NOT false-fire; treat any non-clean read as "unknown → no-op".
+          state="$(gh api "repos/${UPSTREAM}/issues/${UPSTREAM_ISSUE}" \
+            --jq '.state' 2>/dev/null || true)"
+          reason="$(gh api "repos/${UPSTREAM}/issues/${UPSTREAM_ISSUE}" \
+            --jq '.state_reason // "unspecified"' 2>/dev/null || true)"
+
+          if [[ -z "$state" ]]; then
+            echo "::warning::Could not read ${UPSTREAM}#${UPSTREAM_ISSUE} state (transient?) — no-op this run."
+            exit 0
+          fi
+          if [[ "$state" != "closed" ]]; then
+            echo "${UPSTREAM}#${UPSTREAM_ISSUE} is still ${state} — merge queue remains blocked; no action. Silent green no-op."
+            exit 0
+          fi
+
+          echo "::notice::${UPSTREAM}#${UPSTREAM_ISSUE} is CLOSED (reason=${reason}). Checking tracking issue."
+
+          # Locate the standing tracking issue by label (number is not hardcoded
+          # so this survives issue re-creation).
+          track_num="$(gh issue list --repo "$GH_REPO" --state open --limit 20 \
+            --label "$TRACK_LABEL" --json number --jq '.[0].number // empty')"
+          if [[ -z "$track_num" ]]; then
+            echo "::warning::No open issue labelled '${TRACK_LABEL}' found — cannot ping. Create the tracking issue (see ADR-032 re-adoption recipe)."
+            exit 0
+          fi
+
+          # Idempotency: only comment once per closure.
+          if gh issue view "$track_num" --repo "$GH_REPO" --json comments \
+              --jq '.comments[].body' 2>/dev/null | grep -qF "$SENTINEL"; then
+            echo "Tracking issue #${track_num} already pinged for this closure; nothing to do."
+            exit 0
+          fi
+
+          reason_note=""
+          if [[ "$reason" == "not_planned" ]]; then
+            reason_note=" **Note: closed as \`not_planned\` — this may be a wontfix/supersede, NOT a fix. Verify a \`CodeQL\` status actually posts on a \`merge_group\` ref before re-adopting.**"
+          fi
+
+          # shellcheck disable=SC2016  # single-quoted printf FORMAT: backticks are literal markdown, %s are positional args — no shell expansion intended
+          body="$(printf '%s\n%s upstream issue %s has CLOSED (reason: `%s`).%s\n\nThe GitHub merge queue was reverted (#5780) solely because CodeQL did not report a status on `merge_group` (that issue). If it is genuinely fixed, the queue is now re-adoptable.\n\n**Verify + re-adopt per the ADR-032 recipe** (`knowledge-base/engineering/architecture/decisions/ADR-032-github-branch-protection-as-iac.md`, 2026-07-01 amendment):\n1. Confirm a `CodeQL` status context now posts on a real `merge_group` ref (open a canary PR through a temporarily-enabled queue, or check GitHub docs/changelog).\n2. Only then re-add the `merge_queue` rule to `infra/github/ruleset-ci-required.tf` and flip the `T-mq-1` guard back to a param-parity test.\n\nUpstream: https://github.com/%s/issues/%s\n\n_Filed automatically by .github/workflows/codeql-1537-revisit-watch.yml._' \
+            "$SENTINEL" "$UPSTREAM" "$UPSTREAM_ISSUE" "$reason" "$reason_note" "$UPSTREAM" "$UPSTREAM_ISSUE")"
+
+          gh label create needs-attention --repo "$GH_REPO" \
+            --color D93F0B --description "Requires operator action" 2>/dev/null || true
+          gh issue edit "$track_num" --repo "$GH_REPO" --add-label needs-attention 2>/dev/null || true
+          printf '%s' "$body" | gh issue comment "$track_num" --repo "$GH_REPO" --body-file -
+          echo "Pinged tracking issue #${track_num} — ${UPSTREAM}#${UPSTREAM_ISSUE} closed."
