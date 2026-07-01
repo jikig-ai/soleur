@@ -84,6 +84,19 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 - Resolve every model ID / pin SHA / release tag via `gh api` or official docs in-pass — never
   from memory (2026-04-18 / 2026-02-22 learnings; SHA-from-memory errors recur).
 - Inventory by independent grep, not by a checklist's file list (inventories undercount).
+- **When the launch migration bumps the Anthropic SDK toolchain in
+  `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
+  `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`), regenerate BOTH
+  lockfiles — `package-lock.json` AND `bun.lock` — in the same PR.** The new
+  releases are <3 days old, so a plain `bun install` is blocked by
+  `bunfig.toml`'s `minimumReleaseAge = 259200` (#1174) and silently leaves
+  `bun.lock` stale; every CI job running `bun install --frozen-lockfile` then
+  fails at the install step. Regenerate with
+  `cd apps/web-platform && bun install --lockfile-only --minimum-release-age=0`,
+  then prove CI-parity with `bun install --frozen-lockfile` (no override →
+  "no changes"). CI's `lockfile-sync` job covers only `package-lock.json`, not
+  `bun.lock`. See
+  [2026-07-01-bun-lock-minimum-release-age-blocks-sdk-toolchain-bump.md](../../../../knowledge-base/project/learnings/best-practices/2026-07-01-bun-lock-minimum-release-age-blocks-sdk-toolchain-bump.md).
 - Pricing is a billing constant — flag, never auto-edit; the opus `MODEL_PRICING` row is
   deferred to #5106 (do not fabricate it).
 - When #5106 lands its `model-tiers.ts` registry, the model-ID grep target collapses to that
