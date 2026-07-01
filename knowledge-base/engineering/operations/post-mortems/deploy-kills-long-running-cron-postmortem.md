@@ -1,7 +1,7 @@
 ---
 title: "Post-Incident Report — app redeploy kills long-running Claude-eval crons mid-flight"
 date: 2026-06-29
-status: RESOLVED (Option 1 — graceful drain via host-mounted lease; ADR-068)
+status: RESOLVED (Option 1 — graceful drain via host-mounted lease; ADR-076)
 incident_class: availability (cron-cohort, single-tenant)
 brand_survival_threshold: single-user incident
 gdpr_art_33_notifiable: false
@@ -9,7 +9,7 @@ gdpr_art_33_rationale: "Availability-only incident. No personal data was accesse
 gdpr_art_34_notifiable: false
 gdpr_art_34_rationale: "No high risk to data-subject rights and freedoms — no personal-data processing was involved in the failure mode."
 issue: 5669
-adr: ADR-068
+adr: ADR-076
 ---
 
 ## Summary
@@ -37,7 +37,7 @@ container (ADR-033). The deploy lifecycle had no awareness of in-flight cron
 children — the container swap (`docker stop`) was unconditional. Heavy crons run
 up to ~70 min (`cron-growth-audit`), so any deploy in that window truncated them.
 
-## Resolution (Option 1 — graceful drain; ADR-068)
+## Resolution (Option 1 — graceful drain; ADR-076)
 
 A host-mounted **lease** (`/mnt/data/workspaces/.deploy-lease`, == container
 `/workspaces/.deploy-lease`) plus a host-side **drain loop** in `ci-deploy.sh`:
@@ -59,4 +59,4 @@ pause's fail-dangerous (kill in-flight child), and unit-verifiable.
 
 | Issue | Item | Owner |
 | --- | --- | --- |
-| #5694 | Evaluate Option 2 (isolated, deploy-stable cron-worker container) — the RCA-recommended durable fix — if any ADR-068 re-eval criterion fires (2nd hosted founder, deploys timing out >~1×/week per `cron_drain_timed_out`, host upsized to ≥16GB, a claude-spawn pool's concurrency turns the drain wait Σ-shaped, or sustained OOM during a drain window). The `cron_drain_timed_out` / `cron_drain_wait_secs` deploy-status webhook fields are the observability that feeds criteria (b) and (d). | agent |
+| #5694 | Evaluate Option 2 (isolated, deploy-stable cron-worker container) — the RCA-recommended durable fix — if any ADR-076 re-eval criterion fires (2nd hosted founder, deploys timing out >~1×/week per `cron_drain_timed_out`, host upsized to ≥16GB, a claude-spawn pool's concurrency turns the drain wait Σ-shaped, or sustained OOM during a drain window). The `cron_drain_timed_out` / `cron_drain_wait_secs` deploy-status webhook fields are the observability that feeds criteria (b) and (d). | agent |

@@ -214,7 +214,7 @@ export async function cronArchitectureDiagramSyncHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare.
+    // #5728 G1 — benign deploy-in-progress defer (ADR-076): rethrow bare.
     if (err instanceof DeployInProgressError) throw err;
     const e = err as Error;
     const redacted = new Error(redactToken(e.message ?? "", installationToken));

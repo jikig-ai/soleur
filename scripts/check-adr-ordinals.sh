@@ -27,13 +27,10 @@ ADR_DIR=knowledge-base/engineering/architecture/decisions
 # Any NEW collision (e.g., a future ADR-042 duplicate) trips the gate.
 # When the cleanup issue lands, shrink this allowlist accordingly.
 #
-# ADR-068: two ADRs landed the same ordinal from parallel 2026-06-29/30 merges —
-# ADR-068-graceful-cron-drain-before-container-swap (#5669, merged 06-29) and
-# ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator (#5274, merged
-# 06-30 at the tip, which left main red on this gate). Allowlisted to match the
-# established remediation for the five prior collisions; proper renumber tracked
-# in cleanup issue #5744.
-ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038 ADR-068)
+# ADR-068 was resolved (#5274 Phase 3): the graceful-cron-drain ADR was renumbered
+# to ADR-076-graceful-cron-drain-before-container-swap, leaving ADR-068 uniquely
+# the multi-host-workspaces coordinator ADR. Dropped from the allowlist here.
+ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
 
 # (1) New (non-allowlisted) ordinal collisions.
 all_dups=$(ls "$ADR_DIR" | grep -oE '^ADR-[0-9]{3}' | sort | uniq -d || true)

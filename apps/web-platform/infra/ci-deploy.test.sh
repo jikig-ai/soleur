@@ -741,7 +741,7 @@ assert_canary_trace_order() {
 #   bwrap sandbox check (docker exec) → stop(canary) → rm(canary) [#5669 memory-dwell:
 #   torn down BEFORE the drain] → stop(old) → rm(old) →
 #   ps(ADR-027 single-replica assertion) → run(prod)
-# (#5669/ADR-068: the post-success canary teardown was removed — the canary is now
+# (#5669/ADR-076: the post-success canary teardown was removed — the canary is now
 #  torn down before the cron drain gate, so it no longer appears after run(prod).)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
@@ -2319,7 +2319,7 @@ else
 fi
 
 echo ""
-echo "--- Cron drain (#5669 / ADR-068) ---"
+echo "--- Cron drain (#5669 / ADR-076) ---"
 
 # This section drives real (mocked) deploys whose runners return non-zero on the
 # negative paths (L2) and uses grep|head extractions that SIGPIPE under

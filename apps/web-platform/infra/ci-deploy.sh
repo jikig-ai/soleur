@@ -67,7 +67,7 @@ readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
-# Cron drain (#5669 / ADR-068)
+# Cron drain (#5669 / ADR-076)
 # -----------------------------------------------------------------------------
 # Every prod swap stops the container (`docker stop --time=12 soleur-web-platform`
 # below), killing any in-flight cron `claude` child — the
@@ -199,7 +199,7 @@ trap 'trap - TERM INT; final_write_state 124 "timeout"; pkill -TERM -P $$ 2>/dev
 # via journalctl -u webhook, not the HTTP response.
 trap 'echo "DEPLOY_ERROR: ci-deploy.sh failed at line $LINENO (exit $?)" >&2' ERR
 
-# --- Cron drain helpers (#5669 / ADR-068) ------------------------------------
+# --- Cron drain helpers (#5669 / ADR-076) ------------------------------------
 #
 # cron_in_flight: pool-agnostic in-flight detection. claude-eval runs in the
 # cron-platform pool (limit:1) AND the agent-runtime pool (limit:50,
@@ -797,7 +797,7 @@ case "$COMPONENT" in
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
 
-      # --- Cron drain gate (#5669 / ADR-068) --------------------------------
+      # --- Cron drain gate (#5669 / ADR-076) --------------------------------
       # Tear the canary down FIRST (free its CANARY_MEMORY_CAP) so the drain
       # wait does NOT hold canary + old-prod + cron resident (~6.9GB) for up to
       # ~70min on the 8GB host (platform-strategist memory-dwell fix). The canary
@@ -886,7 +886,7 @@ case "$COMPONENT" in
         # (memory-dwell fix), so no teardown is needed here on the success path.
 
         # Clear the deploy lease so the new container's crons resume immediately
-        # (#5669 / ADR-068). Best-effort: the substrate's TTL fail-open is the
+        # (#5669 / ADR-076). Best-effort: the substrate's TTL fail-open is the
         # real backstop if a crash skips this clear, but clearing now avoids
         # deferring the next cron fire.
         rm -f "$CRON_DEPLOY_LEASE_FILE" 2>/dev/null || true

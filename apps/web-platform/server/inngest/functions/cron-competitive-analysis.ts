@@ -266,7 +266,7 @@ export async function cronCompetitiveAnalysisHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare, no heartbeat.
+    // #5728 G1 — benign deploy-in-progress defer (ADR-076): rethrow bare, no heartbeat.
     if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
@@ -383,7 +383,7 @@ export async function cronCompetitiveAnalysisHandler({
         );
       }
     } catch (err) {
-      // #5728 G1 — benign deploy-in-progress defer (ADR-068): rethrow bare, no
+      // #5728 G1 — benign deploy-in-progress defer (ADR-076): rethrow bare, no
       // heartbeat. Any OTHER throw is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
       if (err instanceof DeployInProgressError) throw err;

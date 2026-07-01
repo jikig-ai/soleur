@@ -20,7 +20,7 @@ status: draft — architecture chosen (user-sticky); open decisions D0-ref/D1/D2
 - [x] 0.1 **D0-ref** → RESOLVED: **distinct per-user refs** `refs/soleur/worktrees/<id>/heads/*`; the current shared-ref `--force` refspec silently clobbers under a 2nd writer → the namespaced refspec is a hard 3.B prereq. Fence unchanged (per-worktree, 1:1). Migration 116 supports per-user `worktree_id` with zero schema change.
 - [x] 0.2 **D1** → RESOLVED: app WS ingress is `dns.tf` `cloudflare_record.app` (proxied A → host IP) + `firewall.tf`, NOT the tunnel. Rewire = Cloudflare LB / two A records across both hosts' co-located routers.
 - [x] 0.3 **D2** → RESOLVED: app-side **write-boundary membership sentinel** on the push path (fail-closed) gates the flip; host-compromise cross-tenant write = accepted GA residual (per-workspace keys post-GA + tripwire); non-gating host-side `git-shell` allowlist wrapper.
-- [ ] 0.4 Author the two ADR-068 amendments (D0 user-sticky routing + distinct-per-user-refs + namespace-ownership fence check; D-TLS/cred + D2 write-boundary/residual); reconcile ADR-068 stale anchors (mig 114→116, sandbox :94→:106); renumber the duplicate ADR-068.
+- [x] 0.4 Author the two ADR-068 amendments (D0 user-sticky routing + distinct-per-user-refs + namespace-ownership fence check; D-TLS/cred + D2 write-boundary/residual); reconcile ADR-068 stale anchors (mig 114→116, sandbox :94→:106); renumber the duplicate ADR-068.
 
 ## Sub-PR 3.A — Infra foundations: 2nd host + placement group + host_id + proxy TLS + erasure wrapper (dark)
 - [ ] 3.A.1 `for_each` refactor of `hcloud_server "web"` (server.tf:21) → `var.web_hosts`; `moved` blocks for server + `hcloud_volume`/`hcloud_volume_attachment` (server.tf:926–940) + all 8 sibling `terraform_data` provisioners; `set -e` on every remote-exec inline; replace positional TF readers (`terraform providers schema -json`).
@@ -31,7 +31,7 @@ status: draft — architecture chosen (user-sticky); open decisions D0-ref/D1/D2
 - [ ] 3.A.6 `SOLEUR_HOST_ID` injection in `ci-deploy.sh` (canary + prod docker run; metadata-resolved).
 - [ ] 3.A.7 2-host deploy fan-out in `ci-deploy.sh`/`apply-web-platform-infra.yml` (deliver to both hosts) — AC5.
 - [ ] 3.A.8 Art. 17 host wrapper: cloud-init `git-data-remove` forced-command on the git-data host (sibling to `git-data-provision.sh`, CWE-22 validated) — cloud-init ONLY (CLO DL-1; must pre-exist for 3.D).
-- [ ] 3.A.9 Renumber `ADR-068-graceful-cron-drain…` to the next free ordinal; grep-sweep references (Kieran P2-8).
+- [x] 3.A.9 Renumber `ADR-068-graceful-cron-drain…` to the next free ordinal; grep-sweep references (Kieran P2-8).
 - [ ] 3.A.10 `expenses.md` += 2nd host (€15/mo) + LUKS volume (verify Hetzner pricing).
 - [ ] 3.A.T RED→GREEN: `terraform plan` 0-destroy (jq); non-EU location rejected (negative, T-1); `host-identity` metadata-resolve test; server-cert chain validates.
 

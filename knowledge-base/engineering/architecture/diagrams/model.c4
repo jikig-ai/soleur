@@ -179,12 +179,13 @@ model {
       }
 
       // ---- Multi-host /workspaces cluster (ADR-068, #5274 — adopting) ------
-      // Staged Approach A. Live-handle state stays host-local; cross-host
-      // control is ROUTED by the stateless coordinator (lease in Postgres),
-      // not serialized. Redis enters at Phase 4a. GA gates at Phase 3 (OQ3).
-      coordinator = container "Session Coordinator" {
-        technology "Node — stateless router"
-        description "Stateless — routes a session to the lease-holding host and forwards control ops (abort/gate/grace) to it; N replicas behind the one tunnel, lease in Postgres (ADR-068)"
+      // Staged Approach A. Live-handle state stays host-local. Phase 3 GA is
+      // USER-STICKY (ADR-068 2026-07-01 amendment): a session routes to the host
+      // holding that user's per-user worktree lease; control ops are sticky to
+      // the owner (NO cross-host forwarding). Redis enters at Phase 4a. GA at P3.
+      coordinator = container "Session Router" {
+        technology "Node — co-located sticky reverse-proxy"
+        description "Co-located stateless sticky router (in each web-host process, not a separate box) — resolves a session's owning host from the per-user worktree lease at the WS-upgrade handshake; local ⇒ serve, remote ⇒ proxy over one-way-TLS private net. Control ops are host-local (no cross-host forwarding). Lease in Postgres (ADR-068 user-sticky amendment)"
       }
       scheduler = container "Nomad Scheduler" {
         technology "Nomad (Phase 4a)"
