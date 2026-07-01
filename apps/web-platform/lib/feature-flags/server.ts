@@ -63,6 +63,11 @@ const RUNTIME_FLAGS = {
   // sending a message yields a canned reply (no backend). Default OFF for all
   // roles until the support backend lands. Fail-closed: FLAG_SUPPORT=0 mirror.
   support: "FLAG_SUPPORT",
+  // feat-guided-tour — gates the onboarding tour: spotlight overlay + TourProvider
+  // (apps/web-platform/components/tour) and the "Take a tour" launch points. Default
+  // OFF for all roles until rollout. Fail-closed: FLAG_GUIDED_TOUR=0 mirror (the
+  // env fallback is role-blind, so keep it 0 until the Flagsmith feature is created).
+  "guided-tour": "FLAG_GUIDED_TOUR",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;

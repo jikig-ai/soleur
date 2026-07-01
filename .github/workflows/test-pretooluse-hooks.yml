@@ -60,7 +60,7 @@ jobs:
 
       - name: Test hooks via claude-code-action
         id: claude-hooks-test
-        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
         env:
           # Test 6 asserts dry-run telemetry (kind=would_defer). The hook's
           # hardcoded default is now 0 (enforce) as of PR #3800, so this test
@@ -74,7 +74,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-sonnet-4-6 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          claude_args: '--model claude-sonnet-5 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
           prompt: |
             You are testing whether PreToolUse hooks fire in claude-code-action.
             Run each test below IN ORDER. For each test, report PASS (hook blocked

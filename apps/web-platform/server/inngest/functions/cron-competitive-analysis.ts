@@ -25,7 +25,7 @@
 // is added in the same PR (apps/web-platform/infra/sentry/cron-monitors.tf).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - --model claude-opus-4-8 (was claude-sonnet-4-6) — competitive-analysis
+//   - --model claude-opus-4-8 — competitive-analysis
 //     skill uses opus for cross-tier landscape reasoning.
 //   - --max-turns 45 (was 40) — multi-tier fan-out (tiers 0,3) plus the
 //     follow-up PR creation step needs slightly more headroom.

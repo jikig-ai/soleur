@@ -70,6 +70,7 @@ import {
   resolveActiveWorkspacePath,
   isGitDataStoreEnabled,
 } from "./workspace-resolver";
+import { replicateToGitData } from "./git-data-replication";
 import { resolveHostId } from "./host-identity";
 import {
   acquireAndHoldWorktreeLease,
@@ -2005,7 +2006,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
-    // `claude-sonnet-4-6`, which 400s on assistant-terminated threads.
+    // `claude-sonnet-5`, which 400s on assistant-terminated threads.
     // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
     const {
       safeResumeSessionId,
@@ -2345,6 +2346,28 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // invited member's leader edits to a connected shared workspace).
           await syncPush(userId, workspacePath, supabase(), activeWorkspaceId);
 
+          // #5274 PR B part 2 (ADR-068) — replicate the workspace's refs to the
+          // shared git-data bare store, FENCED by the held lease generation. A
+          // DISTINCT durability tier from the GitHub push above (git-data = the
+          // shared object store Phase 3's 2nd host reads), NOT a redundant
+          // double-write. The lease-gen / worktree-id push-options ride the
+          // git-data push ONLY, never the GitHub `syncPush` above. NO-OP at
+          // flag-off. Its failure (incl. a fence reject) is mirrored to Sentry
+          // inside replicateToGitData and MUST NOT break the turn.
+          if (isGitDataStoreEnabled() && worktreeLeaseHandle) {
+            try {
+              await replicateToGitData({
+                workspacePath,
+                workspaceId: activeWorkspaceId,
+                leaseGeneration: worktreeLeaseHandle.leaseGeneration,
+                userId,
+              });
+            } catch {
+              // Already reported (feature: worktree_lease) inside; swallow so a
+              // replication failure never fails an otherwise-complete turn.
+            }
+          }
+
           // Notify client that this leader finished streaming. The finally block
           // below emits the same event as a fallback for exception paths; guard
           // with `streamStartSent && !streamEndSent` so the two sites are
@@ -2426,8 +2449,12 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           throw resultBranchErr;
         }
       } else if (
-        // Partial messages (streaming text deltas — cumulative snapshots)
+        // Partial messages (streaming text deltas — cumulative snapshots).
+        // agent-sdk 0.3 widened `message.message` to `string | MessageParam`;
+        // only the object form carries `.content`, so narrow out the string
+        // case (a string never had a truthy `.content` under 0.2 either).
         "message" in message &&
+        typeof message.message !== "string" &&
         message.message?.content
       ) {
         const content = message.message.content;

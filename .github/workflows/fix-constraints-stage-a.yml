@@ -87,12 +87,12 @@ jobs:
       - name: Dispatch agent to fix the gate (fix-only)
         if: steps.gate.outputs.rc != '0' && steps.preflight.outputs.ok == 'true'
         id: agent
-        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Model pin + action SHA mirror claude-code-review.yml verbatim (CI-validated).
           # Pin freshness is model-launch-review's job — do NOT substitute a model id from memory.
-          claude_args: '--model claude-sonnet-4-6 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          claude_args: '--model claude-sonnet-5 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
           prompt: |
             A constraint-gate tripped on this PR. Run `apps/web-platform/scripts/constraint-gates.sh`,
             read the failure, and FIX the offending import so a client ("use client") module no longer

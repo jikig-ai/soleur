@@ -331,3 +331,9 @@ apps/web-platform/server/routines-tools.ts
 # initiated sync; the row is written FOR the user by the post-clone background
 # task, which runs after the response with no live tenant session to lease).
 apps/web-platform/server/auto-sync-trigger.ts
+
+# TR3 tool-attempt telemetry (#5843): flush() inserts ONE anonymous aggregated
+# jsonb row per cc conversation-session into public.tool_attempts via the service
+# client. No per-tenant key — the row is anonymous (NO session/user/conversation
+# column, CRITICAL-2) and RLS is service-role-only (no authenticated write path).
+apps/web-platform/server/tool-attempt-telemetry.ts

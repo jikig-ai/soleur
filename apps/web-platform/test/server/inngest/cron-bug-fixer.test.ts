@@ -708,7 +708,7 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(args).toContain("--max-turns");
     expect(args).toContain("55");
     expect(args).toContain("--model");
-    expect(args).toContain("claude-sonnet-4-6");
+    expect(args).toContain("claude-sonnet-5");
 
     // Regression guard for #4017 bug 8/8: `--` MUST be immediately before
     // the prompt (the last argument).

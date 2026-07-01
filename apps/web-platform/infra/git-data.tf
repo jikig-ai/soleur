@@ -27,12 +27,26 @@ resource "tls_private_key" "git_transport" {
   algorithm = "ED25519"
 }
 
+# --- In-band PROVISION keypair (ED25519) ------------------------------------
+# A SECOND, dedicated key — SEPARATE from tls_private_key.git_transport (ADR-068
+# amendment 2026-07-01 "PR B bare-repo provisioning"). Its cloud-init forced
+# command is the FIXED `git-data-provision.sh` (idempotent `git init --bare`),
+# NEVER git-shell. Provisioning authority and ref-write authority are separate
+# credentials with separate blast radii (ADR-068 §6): a leaked transport key
+# cannot fabricate repos, and a leaked provision key cannot write refs. Same OS
+# `git` user (per-key command= overrides the login shell). Same throwaway-shape as
+# git_transport; Phase 3's per-workspace_id mTLS replaces both.
+resource "tls_private_key" "git_provision" {
+  algorithm = "ED25519"
+}
+
 locals {
   # trimspace() strips the trailing newline tls_private_key.public_key_openssh
   # carries — without it the cloud-init authorized_keys line renders with a
   # trailing blank, breaking the forced-command entry. Same rationale as
   # local.ci_ssh_pubkey (ci-ssh-key.tf).
   git_transport_pubkey = trimspace(tls_private_key.git_transport.public_key_openssh)
+  git_provision_pubkey = trimspace(tls_private_key.git_provision.public_key_openssh)
 }
 
 # Private half → Doppler. Consumed at RUNTIME by the web host's git-auth.ts, which
@@ -48,6 +62,17 @@ resource "doppler_secret" "git_transport_ssh_private_key" {
   config     = "prd"
   name       = "GIT_TRANSPORT_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_transport.private_key_openssh
+  visibility = "masked"
+}
+
+# Provision key private half → Doppler `prd` (RUNTIME key; same rationale as
+# git_transport above). Consumed by git-data-replication.ts (sshWithPrivateKeyAuth)
+# to reach the `git-data-provision.sh` forced command before the first push.
+resource "doppler_secret" "git_provision_ssh_private_key" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "GIT_PROVISION_SSH_PRIVATE_KEY"
+  value      = tls_private_key.git_provision.private_key_openssh
   visibility = "masked"
 }
 
@@ -73,8 +98,12 @@ resource "hcloud_server" "git_data" {
   user_data = templatefile("${path.module}/cloud-init-git-data.yml", {
     git_data_bootstrap_b64               = base64encode(file("${path.module}/git-data-bootstrap.sh"))
     git_data_pre_receive_placeholder_b64 = base64encode(file("${path.module}/git-data-pre-receive-placeholder.sh"))
-    # trimspace()'d — see local.git_transport_pubkey.
+    # The FIXED provision forced-command wrapper (git init --bare), delivered to
+    # /usr/local/bin like the bootstrap (ADR provisioning amendment).
+    git_data_provision_b64 = base64encode(file("${path.module}/git-data-provision.sh"))
+    # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
     git_transport_pubkey = local.git_transport_pubkey
+    git_provision_pubkey = local.git_provision_pubkey
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = hcloud_volume.git_data.id

@@ -709,7 +709,7 @@ describe("mintInstallationToken (least-privilege cron token)", () => {
 // tests pin the transport contract: request headers + body, return shape,
 // non-ok throw, optional timeout wiring, optional output_config passthrough.
 describe("postAnthropicMessage (shared Anthropic transport)", () => {
-  const ANY_MODEL = "claude-sonnet-4-6";
+  const ANY_MODEL = "claude-sonnet-5";
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   function okResponse(body: unknown) {
@@ -983,7 +983,7 @@ describe("AnthropicApiError (widened transport, #5674)", () => {
     );
     const err = await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic",
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       maxTokens: 1,
       messages: [{ role: "user", content: "ping" }],
     }).catch((e: unknown) => e);
@@ -999,7 +999,7 @@ describe("AnthropicApiError (widened transport, #5674)", () => {
     await expect(
       postAnthropicMessage({
         apiKey: "sk-ant-" + "synthetic",
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-5",
         maxTokens: 1,
         messages: [{ role: "user", content: "x" }],
       }),

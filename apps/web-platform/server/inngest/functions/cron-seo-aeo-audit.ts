@@ -19,7 +19,7 @@
 // GHA predecessor had NO Sentry check-in (it ran on GHA's runner pool).
 //
 // SHAPE DIFF vs cron-roadmap-review.ts:
-//   - --model claude-sonnet-4-6 (same).
+//   - --model claude-sonnet-5 (same).
 //   - --max-turns 40 (same).
 //   - --allowedTools Bash,Read,Write,Edit,Glob,Grep (no WebSearch/WebFetch
 //     needed — SEO/AEO audit operates on local source files).
@@ -96,7 +96,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-seo-aeo-audit.yml `claude_args`:
-//   --model claude-sonnet-4-6
+//   --model claude-sonnet-5
 //   --max-turns 40
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep
 const CLAUDE_CODE_FLAGS = [

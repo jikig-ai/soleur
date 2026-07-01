@@ -40,23 +40,34 @@ describe("held-lease registry (SIGTERM drain, #5274 Phase 2 PR B)", () => {
     expect(__test_only__.heldLeaseCount()).toBe(1);
   });
 
-  it("is idempotent per (workspaceId, worktreeId) key — re-register does not double-count", () => {
+  it("F3 — two handles for the SAME workspace coexist as distinct entries (no stomp)", () => {
+    // Migration-116's same-host carve-out lets two lineages on one host both hold
+    // a lease for the same workspace. Each register is its OWN entry now.
     registerHeldLease(lease("ws-a", 1));
-    registerHeldLease(lease("ws-a", 2)); // same key, refreshed gen
-    expect(__test_only__.heldLeaseCount()).toBe(1);
+    registerHeldLease(lease("ws-a", 1)); // same (workspace, worktree, gen) — coexists
+    expect(__test_only__.heldLeaseCount()).toBe(2);
   });
 
-  it("distinct workspaces occupy distinct keys", () => {
+  it("distinct workspaces occupy distinct entries", () => {
     registerHeldLease(lease("ws-a"));
     registerHeldLease(lease("ws-b"));
     expect(__test_only__.heldLeaseCount()).toBe(2);
   });
 
-  it("unregisterHeldLease drops only the matching key", () => {
-    registerHeldLease(lease("ws-a"));
-    registerHeldLease(lease("ws-b"));
-    unregisterHeldLease("ws-a", "primary");
+  it("F3 — unregister by token drops ONLY that handle, never a coexisting same-workspace one", () => {
+    const tokenA1 = registerHeldLease(lease("ws-a"));
+    registerHeldLease(lease("ws-a")); // a second same-workspace handle (the survivor)
+    expect(__test_only__.heldLeaseCount()).toBe(2);
+    unregisterHeldLease(tokenA1);
+    // The first handle's release must NOT drop the still-live second handle.
     expect(__test_only__.heldLeaseCount()).toBe(1);
+  });
+
+  it("unregisterHeldLease is a no-op for an already-removed token", () => {
+    const token = registerHeldLease(lease("ws-a"));
+    unregisterHeldLease(token);
+    unregisterHeldLease(token);
+    expect(__test_only__.heldLeaseCount()).toBe(0);
   });
 
   it("releaseAllHeldLeases releases every held lease via the RPC, with the held lease's identity", async () => {

@@ -20,7 +20,7 @@
 //
 // SSOT constant: PER_SPAWN_COST_CEILING_CENTS lives here (per learning
 // 2026-05-06-cap-coupling-between-adjacent-prs.md). Drift-guard test
-// in constants-ssot.test.ts forbids hand-rolled `200` / `$2.00` literals
+// in constants-ssot.test.ts forbids hand-rolled `260` / `$2.60` literals
 // in this directory and the Inngest function file.
 
 // Re-export constants + types from ./constants for back-compat. Per-class

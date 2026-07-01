@@ -22,7 +22,7 @@
 // is added in the same PR (apps/web-platform/infra/sentry/cron-monitors.tf).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - --model claude-opus-4-8 (was claude-sonnet-4-6) — legal-audit skill
+//   - --model claude-opus-4-8 — legal-audit skill
 //     uses opus for cross-document consistency reasoning.
 //   - --max-turns 60 (was 40) — multi-document audit fans out across
 //     jurisdictions (US, EU/GDPR, UK).

@@ -28,7 +28,7 @@ step), not a PR.
 
 | # | Item | Disposition | Surface |
 |---|------|-------------|---------|
-| 1 | **Model-ID swaps** | **AUTO-FIX** | config-class files (server SDK call sites, Inngest `cron-*.ts`, `leader-prompts/constants.ts`, workflow `--model`, skill reference docs) — never test fixtures, archives, `knowledge-base/project/**`, or community digests |
+| 1 | **Model-ID swaps** | **AUTO-FIX** | config-class files (server SDK call sites, Inngest `cron-*.ts`, `leader-prompts/constants.ts`, workflow `--model`, skill reference docs) — never test fixtures, archives, `knowledge-base/**`, or community digests |
 | 2 | **claude-code-action pin freshness** | flag-only | `.github/workflows/*.yml` pins; auto-bump ONLY when coupled to a `--model` swap in the same workflow (#2540 invariant) |
 | 3 | **Thinking-API shape** | flag-only (no-op v1) | carried by the claude-code-action pin's embedded SDK; no `thinking`/`output_config` params in config today |
 | 4 | **Pricing-table drift** | flag-only | `agent-on-spawn-requested.ts` `MODEL_PRICING` (billing constant — never auto-edit); compare vs the `claude-api` source-of-truth |
@@ -45,8 +45,10 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
    ```
 
 2. **Resolve the current landscape from authoritative sources** — never memory. Read the
-   `claude-api` skill model table + the official Anthropic models docs. Update
-   `AUTOFIX_FROM`/`AUTOFIX_TO` in `audit-models.sh` if the current top-tier ID changed.
+   `claude-api` skill model table + the official Anthropic models docs. If a new model
+   shipped in an existing tier (the next Sonnet/Opus/etc.), add a
+   `"<superseded-id>=<current-id>"` entry to the `AUTOFIX_PAIRS` array in `audit-models.sh`
+   (each stale id maps to its OWN same-tier target, so tiers coexist).
 
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 

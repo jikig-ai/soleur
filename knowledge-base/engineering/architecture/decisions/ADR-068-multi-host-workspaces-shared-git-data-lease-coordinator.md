@@ -162,6 +162,51 @@ fixes for every per-step plan:
 > true` stays in the bootstrap (forward-compat). **Prereq:** `gitWithPrivateKeyAuth`
 > (git-auth.ts) is unbuilt and must land before any git-data push/clone wiring.
 
+> **Amendment (CTO ruling, 2026-07-01, PR B bare-repo provisioning).** §3's
+> `pre-receive` fence guards a `git push`, but `git-receive-pack` never
+> auto-creates its target — the per-workspace bare repo MUST exist before the
+> first replication push, and the transport `git` user is `git-shell`-restricted
+> (`git-shell -c` permits only `receive-pack`/`upload-pack`/`upload-archive` and
+> does NOT consult `~/git-shell-commands/`, so the app cannot `git init --bare`
+> through the transport key). **Resolution: a dedicated, separately-keyed SSH
+> forced-command provisioning path.** A SECOND ED25519 key on the git-data host —
+> distinct from the git-shell transport key, same `git` OS user (repo root is
+> `git:git 0750`; per-key `command=` overrides the login shell) — carries a FIXED
+> forced command `command="/usr/local/bin/git-data-provision.sh"`. The wrapper
+> reads `workspace_id` from `SSH_ORIGINAL_COMMAND` as an OPAQUE argument (validated,
+> NEVER `eval`'d), enforces `^[A-Za-z0-9._-]+$` and rejects `.`/`..`/slash
+> (CWE-22, the same posture the fence hook applies to `worktree-id`), builds
+> `/mnt/git-data/repositories/<workspace_id>.git`, refuses if it does not
+> canonicalize under the repo root, and runs an idempotent `git init --bare`
+> under `flock` on a per-workspace init lock (concurrent first-init safe). The
+> transport (git-shell) key is UNTOUCHED — provisioning authority and ref-write
+> authority are separate credentials with separate blast radii (ADR-068 §6:
+> never a cluster-wide cred). A freshly inited repo needs no sidecar seeding: it
+> inherits `core.hooksPath` (the fail-closed placeholder → the real CAS fence)
+> automatically, and the fence's `stored_max` defaults to 0 on the absent
+> `fence/` dir, so the first push at `gen=N` advances `0→N` correctly; the repo
+> is inited ON THE BLOCK VOLUME, preserving the reboot-durable fence guarantee.
+> The app calls provision UNCONDITIONALLY before each git-data push (idempotent,
+> no existence pre-check), gated behind `isGitDataStoreEnabled()`, over the
+> private net from the web host — a pure additive `create` that never touches
+> GitHub `origin` or the NVMe worktree, keeping the additive rsync-then-flag-flip
+> cutover shape intact. The key + wrapper ship via cloud-init ONLY (like the
+> git-shell key and `git-data-bootstrap.sh`; the wrapper is a fixed low-churn
+> security boundary, NOT the iterate-heavy fence, so cloud-init immutability is
+> its correct home); no SSH provisioner, CI never SSHes. **Rejected:** (a) a
+> server-side hook/wrapper that inits "on first push contact" — `receive-pack`
+> requires the repo to pre-exist and `pre-receive` cannot fire before its repo
+> exists, so this necessarily REPLACES git-shell with a parser over the untrusted
+> `SSH_ORIGINAL_COMMAND` on the hot write path (the exact surface the fixed
+> git-shell forced command eliminates) and couples provisioning to the data-plane
+> key; (c) relax the forced command to allow a constrained `init` on the SAME key
+> — `git-shell -c` cannot run `init`, so "relax" collapses into (a)'s wrapper,
+> and one leaked transport key could then fabricate repos store-wide, not merely
+> write existing refs; (b-HTTP) a standalone provisioning HTTP RPC — adds a new
+> daemon, open port, inbound firewall rule, and auth layer to a deliberately
+> SSH-only, deny-all-public-ingress host, where the SSH-forced-command form
+> reuses the existing sshd + private-net + key-auth substrate.
+
 4. **Live-handle state stays host-local; control is routed by a stateless
    coordinator.** The coordinator holds **no live handles** (the lease lives in
    Postgres), so it is **stateless and replicable — N replicas behind the one

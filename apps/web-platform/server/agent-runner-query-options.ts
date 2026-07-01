@@ -22,6 +22,7 @@
 
 import type {
   CanUseTool,
+  HookCallback,
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
@@ -90,7 +91,7 @@ export interface AgentQueryOptionsArgs {
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
   canUseTool: CanUseTool;
-  /** Defaults to "claude-sonnet-4-6" (matches both legacy + cc paths today). */
+  /** Defaults to "claude-sonnet-5" (matches both legacy + cc paths today). */
   model?: string;
   /** Defaults to "default" (matches both paths). */
   permissionMode?: SDKOptions["permissionMode"];
@@ -136,6 +137,19 @@ export interface AgentQueryOptionsArgs {
    * hint only — never touches `canUseTool`/`disallowedTools`.
    */
   enablePhaseSurfaceHint?: boolean;
+  /**
+   * TR3 tool-attempt telemetry (#5843, ADR-070 amendment). When set, this single
+   * fail-open `PreToolUse` hook (minted per query by `createToolAttemptCollector`
+   * in the cc dispatcher) is registered as a SEPARATE, matcher-less PreToolUse
+   * entry — matcher-less so it captures the FULL tool surface (`Skill`/`Task`/
+   * `mcp__*`/`Read`/`Bash`/...), not just the sandbox subset. ONLY the
+   * cc-soleur-go path passes it (its `flush()` fires from `handleCcCloseQuery`);
+   * the legacy runner leaves it undefined so the AC5 drift snapshot stays
+   * byte-identical. Never mutates `canUseTool`/`disallowedTools`; the collector's
+   * hook always returns `{}` (observe-only). Passed as the hook (not a boolean)
+   * because the paired `flush()` handle must escape to the close chokepoint.
+   */
+  toolAttemptPreToolUseHook?: HookCallback;
 }
 
 /**
@@ -158,7 +172,7 @@ export function buildAgentQueryOptions(
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
     cwd: args.workspacePath,
-    model: args.model ?? "claude-sonnet-4-6",
+    model: args.model ?? "claude-sonnet-5",
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
     // Prevents the SDK from loading `.claude/settings.json` whose
@@ -208,6 +222,14 @@ export function buildAgentQueryOptions(
           matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
           hooks: [createSandboxHook(args.workspacePath)],
         },
+        // TR3 tool-attempt telemetry (#5843, ADR-070). Separate gated entry — NOT
+        // a modification of the sandbox matcher (preserves the AC5 drift snapshot).
+        // Matcher-less so it captures the FULL surface (`Skill`/`Task`/`mcp__*`/
+        // `Read`/`Bash`/...) — the sandbox regex above only lists the fs/exec
+        // subset. Observe-only + fail-open (always returns `{}`). cc-only opt-in.
+        ...(args.toolAttemptPreToolUseHook
+          ? [{ hooks: [args.toolAttemptPreToolUseHook] }]
+          : []),
       ],
       // Defense-in-depth: log subagent spawns for audit visibility.
       // If a future SDK version stops routing subagent tool calls

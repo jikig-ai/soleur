@@ -16,11 +16,14 @@ export function SupportPanel({
   onClose,
   messages,
   onSend,
+  onStartTour,
 }: {
   open: boolean;
   onClose: () => void;
   messages: SupportMessage[];
   onSend: (text: string, chipKey?: string) => void;
+  /** feat-guided-tour: present only when the guided-tour flag is on. */
+  onStartTour?: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -146,6 +149,32 @@ export function SupportPanel({
             </svg>
           </button>
         </header>
+
+        {/* feat-guided-tour: "Take a tour" launch row — only when the flag is on
+            (onStartTour provided). Closes the panel first so its focus-trap tears
+            down before the tour overlay mounts. */}
+        {onStartTour && (
+          <button
+            type="button"
+            onClick={onStartTour}
+            className="flex shrink-0 items-center gap-2 border-b border-soleur-border-default bg-soleur-bg-accent-surface px-4 py-2.5 text-left text-sm text-soleur-accent-gold-text transition-colors hover:bg-soleur-bg-surface-2"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-4 w-4 shrink-0"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polygon points="10 8 16 12 10 16 10 8" />
+            </svg>
+            Take a tour of the app
+          </button>
+        )}
 
         {/* display:contents keeps the flex layout while letting the click
             handler intercept internal reply links (bubbles from descendants). */}

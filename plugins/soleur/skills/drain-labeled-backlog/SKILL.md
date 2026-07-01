@@ -126,7 +126,7 @@ The `/soleur:schedule` skill accepts any soleur skill as `--skill <name>` and ge
 
 ```text
 /soleur:schedule create --name weekly-deferred-scope-out-drain \
-  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-4-6
+  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-5
 ```
 
 This turns the skill from a manual cadence tool into a programmatic backlog opener. Tracked as a follow-up issue rather than bundled into this skill, so the skill lands clean.

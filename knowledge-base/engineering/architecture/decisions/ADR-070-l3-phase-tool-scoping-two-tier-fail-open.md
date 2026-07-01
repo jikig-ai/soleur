@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-06-30
 - **Amended:** 2026-06-30 (#5772 — shared-registry resolution; see Amendment below)
+- **Amended:** 2026-07-01 (#5843 TR3 — tool-attempt telemetry collector; see Amendment 2 below)
 - **Issue:** #5768 (L3 "Execution" gap of the harness 5-layer analysis)
 - **Deferred follow-up:** #5772 (web/SDK parity)
 
@@ -159,3 +160,54 @@ map is **FQN-keyed** (`soleur:work` — the CLI emits FQN). The web hook normali
 bare→FQN at lookup (`SOLEUR_SKILL_PREFIX`). Without this, the hint silently never
 fires on the web. Re-keying the bundled copy to bare names would break byte-parity
 with the canonical JSON, so normalization lives in the hook, not the map.
+
+## Amendment 2 (2026-07-01, #5843 — TR3 tool-attempt telemetry collector)
+
+Lever 2 (`disallowedTools` per phase) is fail-CLOSED and requires evidence of
+which tools are *never* attempted per phase before anything is removed. TR3 adds
+the measurement instrument. Four decisions, all folded into
+`apps/web-platform/server/tool-attempt-telemetry.ts`:
+
+- **(a) Aggregated one-row-per-session, NOT insert-per-tool-call.** An
+  insert-per-call design would add per-tool WAL + index write IO on the hot prod
+  cc agent path for every user — the exact Disk-IO class that migrations 114/115
+  and PR #5736 addressed. The collector accumulates counts in an in-memory
+  closure and flushes ONE `public.tool_attempts` jsonb row at query teardown
+  (`soleur-go-runner.ts closeQuery` → `cc-dispatcher.ts handleCcCloseQuery`, the
+  abort-covering chokepoint that fires exactly once per `ActiveQuery`).
+
+- **(b) Static-availability oracle, NOT SDK-iterator unknown-tool capture.**
+  `available(cc)` is derived from config (SDK built-in default toolset minus the
+  cc floor `CANONICAL_DISALLOWED_TOOLS ∪ [Edit,Write]`, plus registered MCP), not
+  from observation. A tool the model never happened to try is therefore NOT
+  falsely dropped from `available`; `never-needed(phase) = available(cc) −
+  attempted(phase)` stays sound. The collector only records the *attempted* half.
+
+- **(c) Phase tracked on the PreToolUse(Skill) WAY-IN, not PostToolUse(Skill).**
+  `PostToolUse(Skill)` fires AFTER the routed sub-skill runs, so it would
+  attribute that skill's own tools to the PREVIOUS phase (off-by-one). A single
+  fail-open `PreToolUse` hook sets `phase = skillToPhase(tool_input.skill)` on the
+  way in; the routed skill's subsequent tool calls then attribute to the new
+  phase. Reading `tool_input.skill` (a known own-property-gated enum key, shared
+  `skillToPhase` with lever 1) is the SOLE permitted `tool_input` read — it does
+  NOT violate NO-ECHO, which forbids capturing arbitrary `tool_input` for
+  non-Skill tools. Tools before the first Skill land under `"unrouted"`.
+
+- **(d) Closure-minted pseudonymous id, never persisted.** The accumulator is
+  closure-scoped with a per-query `crypto.randomUUID()` — NOT a module-level
+  `Map<sessionId>` (re-identification + leak + unbounded growth). The SDK
+  `BaseHookInput.session_id` is UNIQUE-indexed to `user_id`
+  (`028_conversations_user_id_session_id_unique.sql`), so it is DELIBERATELY kept
+  out of the table: `tool_attempts` has NO session/user/conversation column — the
+  row is anonymous (`counts` only), and the cc-side routing map that reaches
+  `flush()` is keyed by `(userId, conversationId)` in memory only, drained on
+  every close path (mirrors `_ccWorktreeLeases`).
+
+**Opt-in seam (inherits lever 1's per-caller rule).** The telemetry hook is
+registered as a SEPARATE matcher-less `PreToolUse` entry (full-surface capture:
+`Skill`/`Task`/`mcp__*`/`Read`/`Bash`/…) ONLY when the caller passes
+`toolAttemptPreToolUseHook` — the cc-soleur-go router opts in; the legacy runner
+leaves it undefined, so its `PreToolUse` array is byte-unchanged (AC5 drift
+snapshot). Observe-only + fail-open: the hook always returns `{}` and never
+mutates `canUseTool`/`disallowedTools`; a flush DB failure mirrors to Sentry via
+`reportSilentFallback` and never fails the agent turn. Retention: 90d pg_cron.

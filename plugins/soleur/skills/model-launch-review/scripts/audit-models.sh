@@ -13,7 +13,8 @@
 #
 # Auto-fix surface = stale model IDs in config. Excluded from auto-fix (never mutated):
 #   test fixtures (*/test/*, *.test.*), archives (**/archive/**), spikes (*/spike/*),
-#   knowledge-base/project/** (plans/specs/brainstorms/learnings), community digests.
+#   all of knowledge-base/** (docs/plans/specs/brainstorms/learnings — archival prose
+#   that never selects a model at runtime), community digests.
 # Source of truth for current IDs: the claude-api skill table + official docs.
 set -euo pipefail
 
@@ -32,22 +33,37 @@ if [[ -z "$ROOT" ]]; then
 fi
 ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
 
-# --- current landscape (2026-06) — update at each model launch ---
-# Auto-fixable stale IDs map to a current same-tier ID (mechanical, same-tier bump).
-# Older families (claude-3, dated 2025 IDs) are flag-only (too old for a blind swap).
-AUTOFIX_FROM=("claude-opus-4-7" "claude-opus-4-6")
-AUTOFIX_TO="claude-opus-4-8"
+# --- current landscape — update at each model launch ---
+# Each superseded id maps to the CURRENT same-tier id as "<stale>=<current>".
+# Add a pair when a new model ships in an existing tier (the next Sonnet/Opus);
+# `--fix` rewrites each stale id to ITS OWN target, so multiple tiers coexist.
+# Older families (claude-3, dated 2025 ids) stay flag-only (too old for a blind
+# swap). Source of truth for current ids: the claude-api skill table + docs.
+AUTOFIX_PAIRS=(
+  "claude-opus-4-7=claude-opus-4-8"
+  "claude-opus-4-6=claude-opus-4-8"
+  "claude-sonnet-4-6=claude-sonnet-5"
+  "claude-sonnet-4-5=claude-sonnet-5"
+)
+# The stale ids (LHS of each pair), '|'-joined for grep.
+autofix_from_re() {
+  local p out=""
+  for p in "${AUTOFIX_PAIRS[@]}"; do out="${out:+$out|}${p%%=*}"; done
+  printf '%s' "$out"
+}
 FLAG_ONLY_STALE_RE='claude-3[._-]|claude-(opus|sonnet|haiku)-[0-9.]+-20250[0-9]+'
 
 DELETION_GUARD=20   # abort --fix if any file would lose more than this many lines
 
-# Path classes excluded from the config (auto-fix) surface.
-EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/project/|/community/|\.test\.|\.spec\.|/model-launch-review/)'
+# Path classes excluded from the config (auto-fix) surface. knowledge-base/** is
+# archival/historical prose (learnings, plans, brainstorms) — it never selects a
+# model at runtime, so a stale id there is not operational drift.
+EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|/model-launch-review/)'
 
 # Collect config-class files containing any auto-fixable stale ID.
 collect_config_hits() {
-  local re hits
-  re="$(IFS='|'; echo "${AUTOFIX_FROM[*]}")"
+  local re
+  re="$(autofix_from_re)"
   grep -rEl "$re" "$ROOT" \
     --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next \
     --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive \
@@ -77,10 +93,11 @@ if [[ "$MODE" == "fix" ]]; then
     before=$(wc -l < "$f")
     tmp="$(mktemp)"
     cp "$f" "$tmp"
-    for from in "${AUTOFIX_FROM[@]}"; do
+    for pair in "${AUTOFIX_PAIRS[@]}"; do
+      from="${pair%%=*}"; to="${pair#*=}"
       # anchored: preserve the trailing char so a longer/dated variant
       # (e.g. claude-opus-4-7-20260101) is NOT corrupted by a prefix swap.
-      sed -i -E "s/${from}([^0-9A-Za-z-]|\$)/${AUTOFIX_TO}\1/g" "$f"
+      sed -i -E "s/${from}([^0-9A-Za-z-]|\$)/${to}\1/g" "$f"
     done
     after=$(wc -l < "$f")
     # deletion guard: a 1-for-1 ID swap must not change line count materially.
@@ -104,12 +121,12 @@ echo
 echo "[1] model-ID inventory (AUTO-FIX)"
 mapfile -t hits < <(collect_config_hits)
 if [[ ${#hits[@]} -gt 0 ]]; then
-  echo "  stale config model IDs found (mechanical swap → ${AUTOFIX_TO}):"
+  echo "  stale config model IDs found (mechanical same-tier swap):"
   for f in "${hits[@]}"; do
-    ids="$(grep -oE "$(IFS='|'; echo "${AUTOFIX_FROM[*]}")" "$f" | sort -u | tr '\n' ' ')"
+    ids="$(grep -oE "$(autofix_from_re)" "$f" | sort -u | tr '\n' ' ')"
     echo "    - $(rel "$f")  [${ids}]"
   done
-  echo "  → run with --fix to apply, then open a CI-gated PR."
+  echo "  → run with --fix (each stale id → its current same-tier id), then open a CI-gated PR."
 else
   echo "  none — config model IDs are current."
 fi
