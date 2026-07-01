@@ -406,7 +406,18 @@ post-enablement canary below passes). The parent ADR remains `accepted`.
 > resolves `codeql-action#1537` (native merge-queue CodeQL status), OR (b) a
 > deliberate decision to make CodeQL advisory (remove it from
 > `required_status_checks`, then re-add the `merge_queue` rule — no CodeQL setup
-> migration needed). PIR:
+> migration needed).
+>
+> **PR-1 observability workflows were removed after the revert (restore on
+> re-adoption).** `merge-queue-stall-check.yml` and `merge-queue-cla-synthetics.yml`
+> were deleted as dead weight once the queue was off (the stall probe polled a
+> null queue every 30 min; the CLA synthetics only fire on `merge_group`, which
+> never occurs without a live queue). They are preserved in git history and are
+> part of the re-adoption checklist below — the forward-looking mentions of them
+> in this amendment's Observability / canary sections describe that
+> to-be-restored target state, not currently-live workflows. The standing
+> `codeql-1537-revisit-watch.yml` (added post-revert) is the live watcher that
+> pings issue #5840 when `codeql-action#1537` closes. PIR:
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
 > Generalized lesson: a plan recovered from disk after a subagent crash carries
 > its "verify X before shipping" Phase-0 gates as UNVERIFIED claims — re-run the
