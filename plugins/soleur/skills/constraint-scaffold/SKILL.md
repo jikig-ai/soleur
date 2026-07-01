@@ -12,8 +12,11 @@ the server-only tree (`server/**`) — i.e. a server secret leaking into the bro
 runs in CI and rejects the violation *before* the LLM-judged review layer (`soleur:review`). See
 ADR-071 (mechanism = Option D) and `knowledge-base/project/plans/2026-06-30-feat-constraint-scaffold-l1-gate-generator-plan.md`.
 
-v1 = this one gate only, CI-only, direct-edge only, Next.js-only. Naming / contract / pre-commit /
-multi-stack / transitive coverage are deferred (ADR-071 Consequences).
+This gate covers this one boundary only, CI-only, Next.js-only. It catches BOTH direct
+client→server-secret value imports AND transitive ones (a `"use client"` module reaching a
+server secret through a chain of value imports, e.g. a non-client `lib/` helper) — the transitive
+`reachable` rule was added in the 2026-07-01 #5777 amendment (ADR-071 §Amendment). Naming /
+contract / pre-commit / multi-stack coverage remain deferred (ADR-071 Consequences).
 
 ## Agent-owns-gates recovery model (load-bearing)
 

@@ -82,9 +82,58 @@ rule.
 
 Structural import-boundary violations get deterministic, fail-closed, token-free enforcement
 at tier 1 instead of probabilistic LLM review. The agent-owns-gates contract keeps the
-fail-closed gate from stranding a non-technical founder. v1 is Next.js-only, direct-edge
-only, single gate (client→server-secret); the naming gate, contract gate, pre-commit surface,
-multi-stack support, and transitive-edge coverage are deferred (#5774–#5778). The content-scan
-adds a small amount of executable logic to the `.cjs` config that must stay correct (regex
-escaping, module-source format) — covered by self-tests. Cross-reference: ADR-011 (the
-three-tier model this instantiates at tier 1 for product code).
+fail-closed gate from stranding a non-technical founder. v1 is Next.js-only, single gate
+(client→server-secret); the naming gate, contract gate, pre-commit surface, and
+multi-stack support are deferred (#5774–#5776, #5778). **Transitive-edge coverage (#5777/NG5)
+is now CLOSED** — see §Amendment 2026-07-01. The content-scan adds a small amount of executable
+logic to the `.cjs` config that must stay correct (regex escaping, module-source format) —
+covered by self-tests. Cross-reference: ADR-011 (the three-tier model this instantiates at
+tier 1 for product code).
+
+## Amendment 2026-07-01 (#5777) — transitive client→helper→server-secret coverage
+
+The v1 gate matched **direct** edges only, so a `"use client"` module that imports a non-client
+helper (e.g. in `lib/`) which value-imports a `server/**` secret still shipped that secret into
+the browser bundle undetected (NG5, deferred from #5765). This amendment adds a dependency-cruiser
+`reachable` rule to catch `client → helper → … → server-secret` value chains. The original
+Context / Decision / Alternatives above are preserved intact — this is an EXTENSION of the v1
+decision, not a rewrite.
+
+**Decision (added).** The gate now enforces **transitive** reachability via a second forbidden
+rule (`no-client-to-server-secret-transitive`, `to.reachable: true`) alongside the direct rule.
+Two load-bearing sub-decisions, both verified against the installed dependency-cruiser@16.10.x
+source:
+
+- **`options.tsPreCompilationDeps` flipped `true → false`.** dependency-cruiser v16 `reachable`
+  rules are schema-locked to `{path, pathNot, reachable}` (`additionalProperties: false`) and
+  CANNOT filter `dependencyTypesNot` per-rule, so the ONLY way to stop reachability from following
+  a build-time-erased `import type` hop is to elide type-only edges from the graph GLOBALLY. With
+  type-only edges gone, the direct rule no longer needs its `dependencyTypesNot:["type-only"]`
+  filter — its violation set is **byte-identical** before and after the flip (proven empirically at
+  build time; locked permanently by a `boundary.test.sh` assertion that the direct baseline count
+  stays 10). Both rules therefore ignore type-only imports.
+- **The reachable baseline is kept EMPTY.** dependency-cruiser softens `reachability` violations
+  **per-origin** (`soften-known-violations.mjs` matches on `from` + rule name only, ignoring
+  `to`/`via`), so baselining even one value-safe transitive path would blind that client to EVERY
+  future transitive secret. Instead, the known value-safe server modules are excluded from the
+  reachable **target** via `to.pathNot` (never from the `from` set — that would blind the client to
+  all secrets), and any real transitive leak is FIXED, never grandfathered. A guard in the shared
+  runner AND `boundary.test.sh` fails closed on any committed `type:"reachability"` baseline entry.
+
+**Alternatives Considered (added).** (i) per-rule `dependencyTypesNot` on the reachable rule —
+**impossible** (schema-forbidden in v16.10.x); (ii) baselining pre-existing transitive paths —
+**rejected** (per-origin suppression = permanent blind spot); (iii) a separate reachable-only
+second config with `tsPreCompilationDeps:false` isolated to it — retained as the fallback had the
+flip changed the direct-rule set (it did not, so the single-config design shipped).
+
+**Consequences (added).** The `to.pathNot` value-safe allowlist
+(`domain-leaders`, `providers`, `team-names-validation`, `scope-grants/action-class-map` — the
+4 modules any client reaches today, verified value-safe: no `process.env` value read, no secret
+import) is a hand-maintained fail-open: if one later gains a real secret it ships green on both the
+direct (baseline-suppressed) and transitive (`pathNot`-excluded) paths. Mitigated by a mandatory
+D4 content-invariant drift guard in `boundary.test.sh` (each listed module must read no
+`process.env` value / take no value import). The structural fix — relocating the 4 modules out of
+`server/**` so the exclusion is enforced by LOCATION — is tracked in #5850 (`SOLEUR-DEBT` marker at
+the `VALUE_SAFE_PATH` definition). The gate remains informational/non-blocking; the reachable rule
+adds no new CI job (same shared runner, same version pin `^16.10.0`). NG5/#5777 moves from
+deferred → closed.

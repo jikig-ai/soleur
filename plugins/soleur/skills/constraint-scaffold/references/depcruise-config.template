@@ -16,6 +16,23 @@
  * NEVER committed as a static list — a stale list would be blind to a newly added
  * client file (the exact leak this gate exists to catch). An empty from-set while
  * `"use client"` files exist is a HARD ERROR, not a silently-disabled rule.
+ *
+ * Two rules (ADR-071 + the 2026-07-01 #5777 amendment):
+ *   1. `no-client-to-server-secret` — DIRECT edges: a "use client" module
+ *      value-imports `server/**` directly.
+ *   2. `no-client-to-server-secret-transitive` — TRANSITIVE reach: a "use client"
+ *      module reaches `server/**` through a chain of value imports (e.g. a
+ *      non-client `lib/` helper that value-imports a server secret). This is the
+ *      dependency hop the direct rule is blind to (#5777, NG5 of #5765).
+ *
+ * `options.tsPreCompilationDeps` is `false` (v1 set it `true`): dependency-cruiser
+ * v16 `reachable` rules are schema-locked to `{path,pathNot,reachable}` and CANNOT
+ * filter `dependencyTypesNot` per-rule, so the ONLY way to keep the transitive rule
+ * from following a build-time-erased `import type` hop is to elide type-only edges
+ * from the graph GLOBALLY. With type-only edges gone, the direct rule no longer
+ * needs `dependencyTypesNot:["type-only"]` (its violation set is byte-identical
+ * before/after the flip — proven at build time, locked by boundary.test.sh). Both
+ * rules therefore ignore type-only imports for free. See ADR-071 §Amendment 2026-07-01.
  */
 const fs = require("fs");
 const path = require("path");
@@ -25,6 +42,27 @@ const CLIENT_DIRS = ["app", "components"];
 const SOURCE_EXT = /\.(?:tsx?|jsx?|mjs|cjs)$/;
 // The secret set: the whole server tree is server-only (reads server-only secrets).
 const SECRET_PATH = "^server/";
+// Value-safe server modules the TRANSITIVE rule excludes via `to.pathNot`. These
+// carry NO secret values — they are code-static registries / editorial metadata a
+// client may legitimately reach through a helper:
+//   server/domain-leaders.ts            — static leader array, no secrets
+//   server/providers.ts                 — env-var NAMES as metadata (never reads process.env)
+//   server/team-names-validation.ts     — pure validation, no secrets
+//   server/scope-grants/action-class-map.ts — code-static action-class registry (no imports, no env)
+// COUPLING: this is the SAME "known value-safe server modules" set the DIRECT rule
+// grandfathers via its baseline (.dependency-cruiser-known-violations.json). Two
+// hand-maintained copies that can drift — a future editor MUST update both, and any
+// module added here MUST be security-reviewed value-safe (no process.env value read,
+// no secret import) and covered by the boundary.test.sh drift guard (D4). Excluding a
+// module here does NOT blind a client to OTHER server modules (it is a `to` filter,
+// never a `from` filter). See ADR-071 §Amendment 2026-07-01 and the D3c drift guard.
+// SOLEUR-DEBT: pathNot allowlist is a hand-maintained fail-open backstopped only by the
+// D4 content-invariant drift guard; relocate these 4 modules OUT of server/** so the
+// exclusion is enforced by LOCATION (deletes pathNot + the guard). Upgrade trigger: next
+// time one of the 4 is edited to add a runtime value, OR a 5th value-safe module would
+// need adding here. Tracked: #5850.
+const VALUE_SAFE_PATH =
+  "^server/(domain-leaders|providers|team-names-validation|scope-grants/action-class-map)\\.";
 
 function walk(dir, acc) {
   let entries;
@@ -135,6 +173,12 @@ function computeClientFromSet() {
   return fromSet;
 }
 
+// Compute the client-module from-set ONCE and share it across both rules so the
+// fail-closed guards inside computeClientFromSet (empty-from-set hard error, the
+// `(?!)` never-match sentinel, the "neither app/ nor components/" hard error, the
+// symlinked-source hard error) apply to BOTH rules identically.
+const clientFrom = computeClientFromSet();
+
 module.exports = {
   forbidden: [
     {
@@ -144,13 +188,38 @@ module.exports = {
         'A "use client" module must not take a value (non-type-only) import on the ' +
         "server-only tree (server/**) — that ships a server secret into the browser " +
         "bundle. Use `import type` for types, or move the value behind a server boundary.",
-      from: { path: computeClientFromSet() },
-      to: { path: SECRET_PATH, dependencyTypesNot: ["type-only"] },
+      from: { path: clientFrom },
+      // No `dependencyTypesNot:["type-only"]` — type-only edges are elided globally
+      // by `tsPreCompilationDeps:false` (see header), so this rule flags exactly the
+      // value edges it flagged under v1's `true` + `dependencyTypesNot` (proven
+      // byte-identical; locked by boundary.test.sh's direct-count==10 assertion).
+      to: { path: SECRET_PATH },
+    },
+    {
+      name: "no-client-to-server-secret-transitive",
+      severity: "error",
+      comment:
+        'A "use client" module must not TRANSITIVELY reach the server-only tree ' +
+        "(server/**) through a chain of value imports — a non-client helper that " +
+        "value-imports a server secret ships that secret into the browser bundle. " +
+        "Break the chain, or use `import type`. (Type-only hops are elided globally, " +
+        "so a client -> `import type` helper -> server chain does NOT flag.)",
+      from: { path: clientFrom },
+      // `pathNot` excludes the known value-safe server modules (VALUE_SAFE_PATH) so
+      // the reachable baseline stays EMPTY: dependency-cruiser softens `reachability`
+      // violations per-ORIGIN (`from`+rule name only, ignoring `to`/`via`), so
+      // baselining even one value-safe transitive path would blind that client to
+      // EVERY future transitive secret. We never baseline a reachability entry — we
+      // exclude value-safe targets here and FIX real leaks (D2/D3, ADR-071 amendment).
+      to: { path: SECRET_PATH, pathNot: VALUE_SAFE_PATH, reachable: true },
     },
   ],
   options: {
     tsConfig: { fileName: "tsconfig.json" },
-    tsPreCompilationDeps: true,
+    // false (v1: true) — elide type-only edges globally so the reachable rule cannot
+    // follow a build-time-erased `import type` hop (its `to` is schema-locked and
+    // cannot filter dependency-types per-rule). The direct rule's output is unchanged.
+    tsPreCompilationDeps: false,
     doNotFollow: { path: "node_modules" },
   },
 };

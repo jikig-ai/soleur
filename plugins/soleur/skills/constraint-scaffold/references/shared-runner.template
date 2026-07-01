@@ -44,6 +44,28 @@ if [[ ! -f "$BASELINE" ]]; then
   exit 1
 fi
 
+# Zero-reachability-baseline guard (ADR-071 §Amendment 2026-07-01, #5777). The
+# transitive `reachable` rule's violations are softened per-ORIGIN by
+# dependency-cruiser (matched on `from` + rule name only, ignoring `to`/`via`), so a
+# SINGLE baselined `type:"reachability"` entry blinds that client to EVERY future
+# transitive client->server-secret leak. The design keeps the reachable baseline
+# EMPTY (value-safe targets excluded via `to.pathNot`; real leaks fixed, never
+# grandfathered). This guard is the ONLY always-on enforcement of that invariant: a
+# PR that edits ONLY the baseline JSON trips this runner (paths: <app>/**) but may
+# NOT trip the scripts shard that runs boundary.test.sh. Fail closed on any
+# reachability entry (a JSON parse failure => -1 => also fails closed).
+REACHABILITY_ENTRIES="$(node -e '
+  const fs = require("fs");
+  try {
+    const b = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(String((Array.isArray(b) ? b : []).filter((e) => e && e.type === "reachability").length));
+  } catch (e) { process.stdout.write("-1"); }
+' "$BASELINE" 2>/dev/null)"
+if [[ "$REACHABILITY_ENTRIES" != "0" ]]; then
+  echo "::error::constraint-gates: committed baseline ${APP_DIR}/${BASELINE} contains ${REACHABILITY_ENTRIES} type:\"reachability\" entry/entries (or is unparseable) — a reachability entry is NEVER benign: dependency-cruiser suppresses reachability per-origin, so it blinds that client to every transitive client->server-secret leak. The reachable baseline MUST stay empty (exclude value-safe targets via to.pathNot; FIX real leaks). Failing closed. To recover, re-run the constraint-scaffold skill (the agent fixes the import or removes the reachability baseline entry); auto-recovery (fix-constraints-stage-a/b, ADR-074) opens a follow-up PR when the gate is auto-fixable." >&2
+  exit 1
+fi
+
 set +e
 OUT="$("$DEPCRUISE" --config "$CONFIG" --ignore-known "$BASELINE" --output-type err app components server 2>&1)"
 RC=$?
