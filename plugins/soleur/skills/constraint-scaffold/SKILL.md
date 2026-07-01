@@ -31,13 +31,15 @@ maintenance and recovery:
 3. **In-code escape hatch (agent-owned, used sparingly):** dependency-cruiser's native
    `// dependency-cruiser-disable-next-line` comment on the importing line.
 4. **Founder hotfix with no agent in the loop (the brand-survival deadlock).** A GitHub-web hotfix
-   or a machine without the repo tooling can trip the gate with no agent present. The intended
-   single-account recovery is **`/soleur fix constraints`** — but that comment-dispatcher is
-   **PLANNED (#5791), not yet wired** (no `issue_comment` handler exists for it today). Until #5791
-   lands the agent owns gate maintenance directly (re-run this skill: fix the import, or
-   `--refresh-baseline`), and the gate stays **informational / non-blocking** — it is NOT promoted
-   to a required check (promotion is blocked on #5791 and #5778), so it cannot deadlock a founder
-   hotfix. **No override label, no `.cjs` edit, no second human required.**
+   or a machine without the repo tooling can trip the gate with no agent present. Recovery is
+   **automatic and zero-touch**: the two-stage auto-recovery dispatcher (`fix-constraints-stage-a`
+   → `fix-constraints-stage-b`, **ADR-074**) fires on the PR, fixes the offending import, and opens
+   a **draft follow-up PR** the founder can merge — no comment, no command, no agent-in-the-loop
+   required. (A real leak the agent cannot fix is surfaced for a maintainer; auto-recovery is
+   fix-only and never grows the suppression baseline.) The gate stays **informational /
+   non-blocking** — it is NOT promoted to a required check (promotion is now blocked only on #5778;
+   the #5791 dispatcher half is satisfied by ADR-074), so it cannot deadlock a founder hotfix.
+   **No override label, no `.cjs` edit, no second human required.**
 5. The founder is **never** required to read or unblock the gate.
 
 ## Usage
@@ -65,7 +67,9 @@ bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --
 | `.dependency-cruiser.cjs` | Executable CommonJS config. Computes the `"use client"` from-set at require-time (recomputed every run, **never** committed static), regex-escaping route-group paths. `tsConfig.fileName` + `tsPreCompilationDeps` give `@/*` alias resolution and the type-only/value distinction. |
 | `.dependency-cruiser-known-violations.json` | dependency-cruiser native baseline (`--output-type baseline` / `--ignore-known`). Grandfathers only pre-existing violations. |
 | `apps/web-platform/scripts/constraint-gates.sh` | Shared runner — owns the single pinned `depcruise --ignore-known … --output-type err` invocation. Fails closed on any non-zero depcruise rc; CI (and future pre-commit) both exec this. |
-| `.github/workflows/constraint-gates.yml` | Always-runs + internal path-check (reports a real conclusion on every PR; no pending-forever deadlock). On failure prints the recovery path (re-run the skill; the `/soleur fix constraints` auto-dispatcher is planned (#5791), not yet wired). Informational/non-blocking until promoted (blocked on #5791, #5778). |
+| `.github/workflows/constraint-gates.yml` | Always-runs + internal path-check (reports a real conclusion on every PR; no pending-forever deadlock). On failure the two-stage auto-recovery dispatcher (`fix-constraints-stage-a/b`, ADR-074) auto-opens a follow-up PR when the gate is auto-fixable. Informational/non-blocking until promoted (now blocked only on #5778; the #5791 dispatcher half is satisfied by ADR-074). |
+| `.github/workflows/fix-constraints-stage-a.yml` | Untrusted `pull_request` producer (ADR-074): `contents: read` only. Runs the gate, dispatches the fix-only agent, re-verifies green, uploads the fix as a full-post-image-contents artifact (per-file sha256 + meta.json). No write token, no commit/push. |
+| `.github/workflows/fix-constraints-stage-b.yml` | Privileged `workflow_run` consumer (ADR-074): validates the attacker-controlled artifact (isCrossRepository==false gate, event-sourced identity, charset+traversal+symlink+size allowlist, sha256 byte-verify) and applies it via the Git Data API (blob→tree with mandatory base_tree→commit→ref) — never checks out the untrusted tree, never git-applies. Delivers a draft follow-up PR. |
 
 ## Self-tests
 
