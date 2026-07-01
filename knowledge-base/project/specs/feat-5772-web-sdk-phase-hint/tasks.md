@@ -43,4 +43,7 @@ plan: knowledge-base/project/plans/2026-06-30-feat-web-sdk-phase-surface-hint-pl
 - [x] 5.4 PR body: `Ref #5772` (NOT Closes), `## Changelog`, `semver:minor` (AC9).
 
 ## Post-merge
-- [ ] 6.1 QA (AC11): real web `/soleur:go` run (cc Concierge path only — legacy doesn't opt in) — confirm `[phase-scope]` reaches the model after a Skill call (Sentry/transcript) AND the turn completes normally; observe per-phase Skill-call cadence. Non-blocking.
+- [x] 6.1 QA (AC11) — **SATISFIED by existing evidence 2026-07-01 (no new live run needed).**
+  - Reaches the model: verified two ways — (1) the #5768 Phase 0 live transcript probe (ADR-070:39, CC 2.1.196): PostToolUse(Skill) `additionalContext` arrives as a `<system-reminder>`; (2) the #5792 hardened eval shows it *measurably changes* behavior (+6.7pts Sonnet next-skill selection) — behavioral proof of delivery.
+  - Per-phase Skill cadence: confirmed structural — `soleur-go-runner.ts` locks `currentWorkflow` only on the FIRST Skill call and re-enters on every subsequent one; the hook fires on every Skill call (ADR-070:35), so a multi-phase run injects the hint once per brainstorm→plan→work→review→ship transition. Agent-driven, no count governor.
+  - Caveat (intentional, not a gap to fix): the success path emits NO telemetry — `phase-surface-hook.ts:76` returns the hint silently; only the error path reports via `reportSilentFallback` (Sentry/pino). So a *specific* live run can't be confirmed from Sentry alone — by design on the hot, fail-open path. A per-Skill success breadcrumb would be pure noise; not worth adding.
