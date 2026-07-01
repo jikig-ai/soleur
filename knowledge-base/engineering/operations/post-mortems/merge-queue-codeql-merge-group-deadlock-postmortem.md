@@ -133,7 +133,7 @@ subagent-crash recovery.
 ## Versions of Components
 
 - **Version(s) that triggered the outage:** PR #5800 (merge_queue rule on ruleset 14145388); CodeQL default setup (languages actions/javascript-typescript/python, extended suite).
-- **Version(s) that restored the service:** kill-switch apply (merge_queue rule removed). Roll-forward: CodeQL **advanced** setup (`.github/workflows/codeql.yml`, `on: merge_group`) + queue re-enable.
+- **Version(s) that restored the service:** kill-switch apply (merge_queue rule removed). No roll-forward: post-incident investigation found the deadlock is a GitHub platform limitation ([`codeql-action#1537`](https://github.com/github/codeql-action/issues/1537), open since 2023) — CodeQL does not report a status on `merge_group` in ANY setup mode, so advanced setup does not fix it. The queue and a blocking required CodeQL check are mutually exclusive; decision is to keep CodeQL required and not adopt the queue.
 
 ## Impact details
 
@@ -186,4 +186,4 @@ enabled on an unverified precondition inherited from a crash-recovered plan.
 
 | Issue | Action | Status |
 |---|---|---|
-| #5780 | Roll forward: land CodeQL advanced setup (`.github/workflows/codeql.yml`, `on: merge_group`), disable CodeQL default setup, verify the required `CodeQL` context posts on a real ref, then re-enable the merge queue and confirm the queue drains (post-enablement canary). | open |
+| #5780 | Investigated re-adoption; found it blocked by `codeql-action#1537` (CodeQL never posts a `merge_group` status, any setup mode). Decision: keep CodeQL as a blocking required check; do NOT adopt the queue (the BEHIND-race is handled by `/ship`'s auto-sync loop). Re-adopt only if GitHub resolves #1537 or CodeQL is made advisory. Docs corrected (ADR-032, infra/github/README.md). | closed (not planned) |
