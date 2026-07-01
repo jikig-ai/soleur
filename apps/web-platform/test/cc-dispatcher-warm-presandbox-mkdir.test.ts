@@ -308,7 +308,7 @@ describe("realSdkQueryFactory — unconditional pre-sandbox workspace-dir guaran
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
-      filesystem: { allowWrite: [], denyRead: ["/workspaces", "/proc"], allowRead: [] },
+      filesystem: { allowWrite: [], denyRead: ["/workspaces", "/proc"] },
     });
     // Capture dir-existence AT the instant the sandbox is constructed (the SDK
     // query() call binds the bwrap cwd). This is the invariant, not a proxy.

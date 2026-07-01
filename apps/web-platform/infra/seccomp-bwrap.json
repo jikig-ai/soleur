@@ -765,6 +765,58 @@
 		},
 		{
 			"names": [
+				"unshare"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"comment": "Allow unshare of a NEW MOUNT namespace (CLONE_NEWNS=0x20000) WITHOUT CLONE_NEWUSER. claude-agent-sdk 0.3.x / claude-code 2.1.197 (#5849) split sandbox setup into unshare(CLONE_NEWUSER) then unshare(CLONE_NEWPID|CLONE_NEWNS); the 0.2.85 builder combined them so CLONE_NEWUSER was always present. The split second call lacks CLONE_NEWUSER and fell through to defaultAction ERRNO, breaking the sandbox for every tenant. Minimal broadening: the process is already in its own user namespace here, so a nested mount-namespace unshare adds no capability beyond the Docker boundary (soleur #5873). Hardened: also requires CLONE_NEWUSER unset (arg0 & 0x10000000 == 0) so this rule matches ONLY the post-userns namespace unshare and cannot be used to smuggle a user-namespace creation (defense-in-depth; the userns unshare is already handled by the #1557 CLONE_NEWUSER rule).",
+			"args": [
+				{
+					"index": 0,
+					"value": 131072,
+					"valueTwo": 131072,
+					"op": "SCMP_CMP_MASKED_EQ"
+				},
+				{
+					"index": 0,
+					"value": 268435456,
+					"valueTwo": 0,
+					"op": "SCMP_CMP_MASKED_EQ"
+				}
+			],
+			"excludes": {
+				"caps": [
+					"CAP_SYS_ADMIN"
+				]
+			}
+		},
+		{
+			"names": [
+				"unshare"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"comment": "Allow unshare of a NEW PID namespace (CLONE_NEWPID=0x20000000) WITHOUT CLONE_NEWUSER. FORWARD-LOOKING: the observed #5849 call is the COMBINED unshare(CLONE_NEWPID|CLONE_NEWNS)=0x20020000, which the mount-namespace rule above already matches (it gates on the NEWNS bit and ignores NEWPID). This rule additionally covers a hypothetical pid-only unshare(CLONE_NEWPID) the current SDK does not emit \u2014 do NOT assume the mount-ns rule is removable because this exists (soleur #5873).",
+			"args": [
+				{
+					"index": 0,
+					"value": 536870912,
+					"valueTwo": 536870912,
+					"op": "SCMP_CMP_MASKED_EQ"
+				},
+				{
+					"index": 0,
+					"value": 268435456,
+					"valueTwo": 0,
+					"op": "SCMP_CMP_MASKED_EQ"
+				}
+			],
+			"excludes": {
+				"caps": [
+					"CAP_SYS_ADMIN"
+				]
+			}
+		},
+		{
+			"names": [
 				"clone3"
 			],
 			"action": "SCMP_ACT_ERRNO",

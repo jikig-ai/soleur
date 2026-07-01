@@ -2,20 +2,28 @@
 
 // feat-web-app-shortcuts — the `?` / `⌘/` help overlay (FR4). A searchable
 // cheat-sheet sharing the palette's cmdk Command.Dialog (Radix-backed focus
-// trap/restore), NOT a parallel a11y impl. Lists ONLY shortcuts that actually
-// DO something in v1 — the wireframe's `G`-then-I/K/R/D nav sequences are
-// NG2-deferred (#5636) and would document dead keys, so they are omitted.
+// trap/restore), NOT a parallel a11y impl. Lists the chords plus the direct
+// "go-to" sequences (`G` `D` …) and the Ask-an-agent summon (`G` `C`) — the
+// wireframe's design, un-deferred from #5636. Sequence rows derive from the
+// single-source `seq` field on NAV_ITEMS/ADMIN_NAV_ITEMS, so a documented key
+// can never drift from the live binding.
 
 import { Command } from "cmdk";
-import { useShortcuts } from "./use-shortcuts";
+import {
+  useShortcuts,
+  formatSeqHint,
+  ASK_AGENT_SEQ,
+  type CommandEffect,
+} from "./use-shortcuts";
+import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "./nav-items";
 import { useTour } from "@/components/tour/tour-provider";
 
-// Each row carries the action it performs, so selecting it (click or ↵) RUNS
-// the shortcut rather than only dismissing the overlay — the overlay doubles as
-// a clickable launcher, not just a cheat-sheet.
+// Each chord row carries the action it performs, so selecting it (click or ↵)
+// RUNS the shortcut rather than only dismissing the overlay — the overlay
+// doubles as a clickable launcher, not just a cheat-sheet.
 type HelpAction = "palette" | "help" | "sidebar" | "close";
 
-const SHORTCUTS: ReadonlyArray<{
+const CHORDS: ReadonlyArray<{
   keys: string;
   label: string;
   action: HelpAction;
@@ -27,12 +35,38 @@ const SHORTCUTS: ReadonlyArray<{
   { keys: "Esc", label: "Close palette / overlay / drawer", action: "close" },
 ];
 
+// "Go to" sequence rows — derived from the single-source `seq` field. Each runs
+// its navigate effect. Admin rows render only when the operator is an admin.
+type SeqRow = { keys: string; label: string; effect: CommandEffect };
+
+const NAV_ROWS: readonly SeqRow[] = NAV_ITEMS.filter((i) => i.seq).map((i) => ({
+  keys: formatSeqHint(i.seq as string),
+  label: `Go to ${i.label}`,
+  effect: { kind: "navigate", href: i.href },
+}));
+
+const ADMIN_NAV_ROWS: readonly SeqRow[] = ADMIN_NAV_ITEMS.filter((i) => i.seq).map(
+  (i) => ({
+    keys: formatSeqHint(i.seq as string),
+    label: `Go to ${i.label}`,
+    effect: { kind: "navigate", href: i.href },
+  }),
+);
+
+// The Ask-an-agent hero summon — grouped as an ACTION ("Ask an agent"), not
+// navigation, so it reads as the hero verb it is.
+const AGENT_ROW: SeqRow = {
+  keys: formatSeqHint(ASK_AGENT_SEQ),
+  label: "Ask an agent",
+  effect: { kind: "openChat" },
+};
+
 export function HelpOverlay() {
-  const { enabled, helpOpen, closeHelp, openPalette, runEffect } =
+  const { enabled, helpOpen, closeHelp, openPalette, runEffect, isAdmin } =
     useShortcuts();
   const tour = useTour();
 
-  function runShortcut(action: HelpAction) {
+  function runChord(action: HelpAction) {
     switch (action) {
       case "palette":
         // Dismiss the overlay first so the palette opens as the top layer.
@@ -53,6 +87,14 @@ export function HelpOverlay() {
     }
   }
 
+  // Dismiss the overlay first so the destination mounts as the top layer.
+  function runRow(effect: CommandEffect) {
+    closeHelp();
+    runEffect(effect);
+  }
+
+  const navRows = isAdmin ? [...NAV_ROWS, ...ADMIN_NAV_ROWS] : NAV_ROWS;
+
   if (!enabled) return null;
   return (
     <Command.Dialog
@@ -70,13 +112,36 @@ export function HelpOverlay() {
       <Command.List>
         <Command.Empty>No matching shortcuts.</Command.Empty>
         <Command.Group heading="Keyboard shortcuts">
-          {SHORTCUTS.map((s) => (
+          {CHORDS.map((s) => (
             <Command.Item
               key={s.keys + s.label}
               value={`${s.label} ${s.keys}`}
               // Selecting a row RUNS its shortcut (open palette / toggle sidebar
               // / close), not just dismiss the overlay.
-              onSelect={() => runShortcut(s.action)}
+              onSelect={() => runChord(s.action)}
+              data-testid={`help-row-${s.keys}`}
+            >
+              <span className="cmdk-help-label">{s.label}</span>
+              <kbd className="cmdk-keys">{s.keys}</kbd>
+            </Command.Item>
+          ))}
+        </Command.Group>
+        <Command.Group heading="Ask an agent">
+          <Command.Item
+            value={`${AGENT_ROW.label} ${AGENT_ROW.keys}`}
+            onSelect={() => runRow(AGENT_ROW.effect)}
+            data-testid={`help-row-${AGENT_ROW.keys}`}
+          >
+            <span className="cmdk-help-label">{AGENT_ROW.label}</span>
+            <kbd className="cmdk-keys">{AGENT_ROW.keys}</kbd>
+          </Command.Item>
+        </Command.Group>
+        <Command.Group heading="Go to">
+          {navRows.map((s) => (
+            <Command.Item
+              key={s.keys + s.label}
+              value={`${s.label} ${s.keys}`}
+              onSelect={() => runRow(s.effect)}
               data-testid={`help-row-${s.keys}`}
             >
               <span className="cmdk-help-label">{s.label}</span>
