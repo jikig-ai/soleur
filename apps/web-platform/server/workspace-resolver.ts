@@ -27,6 +27,11 @@ export {
 
 const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
+// Host-local NVMe root for a workspace's WORKING TREE once the epic #5274 Phase 2
+// git-data split is enabled (ADR-068 §1). Used only when GIT_DATA_STORE_ENABLED is
+// on; until the PR-C cutover flips that flag, every path resolves to the volume.
+const WORKTREE_ROOT_DEFAULT = "/var/lib/soleur/worktrees";
+
 // Mirrors workspace.ts:67 / api-usage.ts:46 — id-shape gate before any value
 // flows into join() to build a bwrap mount path (ADR-038, CWE-22 #5344). The
 // workspaceId column is typed `string | null`, not a validated UUID; this
@@ -37,6 +42,34 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
+}
+
+/**
+ * Read-source flag for the epic #5274 Phase 2 git-data split (ADR-068 §1).
+ * STRICT `=== "true"` gate, DEFAULTING to false = the single RWO volume (today's
+ * behavior, byte-identical). The PR-C cutover flips it to true only AFTER the
+ * verify gate proves the bare store is populated — an empty/unpopulated git-data
+ * store is never read as truth (spec-flow P0-5 / AC6b). Exported so the clone /
+ * transport callers (`ensure-workspace-repo.ts`, `git-auth.ts`) branch on the
+ * same single source of truth.
+ */
+export function isGitDataStoreEnabled(): boolean {
+  return process.env.GIT_DATA_STORE_ENABLED === "true";
+}
+
+/**
+ * Host-local root for a workspace's WORKING TREE. When the git-data split is
+ * disabled (the default) this IS {@link getWorkspacesRoot} — the single volume
+ * root — so the path is byte-identical to today and this change is INERT until
+ * the cutover flips the flag. When enabled, the working tree lives on host-local
+ * NVMe (`<WORKTREE_ROOT>/<id>`) while objects/refs live on the remote git-data
+ * host. Never silently falls back to the volume when enabled (the fall-back is
+ * the NVMe default, not `/workspaces`).
+ */
+function getWorkspaceWorktreeRoot(): string {
+  return isGitDataStoreEnabled()
+    ? process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT
+    : getWorkspacesRoot();
 }
 
 /**
@@ -779,7 +812,7 @@ export async function resolveWorkspacePathForUser(
     // a crafted/corrupted id would otherwise open (#5344).
     throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
   }
-  return join(getWorkspacesRoot(), workspaceId);
+  return join(getWorkspaceWorktreeRoot(), workspaceId);
 }
 
 /**
@@ -793,5 +826,5 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
   }
-  return join(getWorkspacesRoot(), workspaceId);
+  return join(getWorkspaceWorktreeRoot(), workspaceId);
 }

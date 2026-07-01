@@ -373,6 +373,28 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.workspaces",
   "hcloud_volume_attachment.workspaces",
   "terraform_data.root_authorized_keys",
+  // #5274 Phase 2 (ADR-068) — the git-data host + its private network are a
+  // one-time operator initial-apply, exactly like `hcloud_server.web` above. The
+  // per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot
+  // provision a brand-new host, a new private network, or that host's transport
+  // keypair/firewall. These land via the operator's full apply + the drift
+  // detector, never per-PR — so they are operator-applied exclusions, not the
+  // #5566 silent-un-applied class. (`doppler_secret.*` here ride the same apply
+  // as the host they belong to; they are `doppler_secret`, not the CI-published
+  // `doppler_service_token`/`github_actions_secret` types the test forces.)
+  "hcloud_network.private",
+  "hcloud_network_subnet.private",
+  "hcloud_server_network.web",
+  "hcloud_server_network.git_data",
+  "tls_private_key.git_transport",
+  "doppler_secret.git_transport_ssh_private_key",
+  "hcloud_server.git_data",
+  "hcloud_volume.git_data",
+  "hcloud_volume_attachment.git_data",
+  "hcloud_firewall.git_data",
+  "hcloud_firewall_attachment.git_data",
+  "betteruptime_heartbeat.git_data_prd",
+  "doppler_secret.git_data_heartbeat_url_prd",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry

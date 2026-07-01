@@ -361,3 +361,90 @@ describe("gitWithInstallationAuth", () => {
     });
   });
 });
+
+describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase 2)", () => {
+  const KEY =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLXRlc3Qta2V5\n-----END OPENSSH PRIVATE KEY-----";
+
+  test("delivers the key via GIT_SSH_COMMAND -i (NEVER argv) with the Phase-2 TOFU options; cleans up after", async () => {
+    const capturedCalls: ExecFileMockArgs[] = [];
+    let keyPathDuringCall = "";
+    let keyModeDuringCall = 0;
+    let keyContentDuringCall = "";
+    // Inspect the on-disk key file WHILE git is "running" (before finally unlinks it).
+    mockExecFile(capturedCalls, (call) => {
+      const sshCmd = call.opts?.env?.GIT_SSH_COMMAND ?? "";
+      const m = sshCmd.match(/ -i (\S+) /);
+      if (m) {
+        keyPathDuringCall = m[1];
+        // Open ONCE and stat+read the same descriptor (not the path) — a
+        // statSync(path)+readFileSync(path) pair is a CodeQL js/file-system-race
+        // (TOCTOU) alert. Mirrors the $HOME askpass fd pattern above.
+        const fd = openSync(keyPathDuringCall, "r");
+        try {
+          keyModeDuringCall = fstatSync(fd).mode & 0o777;
+          keyContentDuringCall = readFileSync(fd, "utf8");
+        } finally {
+          closeSync(fd);
+        }
+      }
+      call.cb(null, { stdout: Buffer.from("ok"), stderr: Buffer.from("") });
+    });
+
+    const { gitWithPrivateKeyAuth } = await import("../server/git-auth");
+    const out = await gitWithPrivateKeyAuth(
+      ["push", "git-data", "--push-option=lease-gen=3"],
+      KEY,
+      { cwd: "/tmp/ws", timeout: 60_000 },
+    );
+    expect(out.toString()).toBe("ok");
+
+    const env = capturedCalls[0].opts?.env ?? ({} as NodeJS.ProcessEnv);
+    const sshCommand = env.GIT_SSH_COMMAND ?? "";
+    // TOFU options for the private-net trust floor.
+    expect(sshCommand).toMatch(/^ssh -i \S+ /);
+    expect(sshCommand).toContain("IdentitiesOnly=yes");
+    expect(sshCommand).toContain("StrictHostKeyChecking=accept-new");
+    expect(sshCommand).toContain("UserKnownHostsFile=");
+    expect(sshCommand).toContain("BatchMode=yes");
+    // Prompt-free + no system/global gitconfig leak (mirror the askpass path).
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    // HELPER_RESET is prepended.
+    expect(capturedCalls[0].args.slice(0, 2)).toEqual(["-c", "credential.helper="]);
+
+    // The key material is on disk 0600 during the call, with the real key bytes,
+    // and is removed afterward.
+    expect(keyModeDuringCall).toBe(0o600);
+    expect(keyContentDuringCall).toContain("BEGIN OPENSSH PRIVATE KEY");
+    expect(existsSync(keyPathDuringCall)).toBe(false); // cleaned up in finally
+
+    // The key NEVER appears in argv (only via the env-referenced file).
+    const argvJoined = capturedCalls[0].args.join(" ");
+    expect(argvJoined).not.toContain("BEGIN OPENSSH PRIVATE KEY");
+    expect(argvJoined).not.toContain(keyPathDuringCall);
+  });
+
+  test("cleans up the key file even when git fails, and does not leak key material in the throw", async () => {
+    const capturedCalls: ExecFileMockArgs[] = [];
+    let keyPathDuringCall = "";
+    mockExecFile(capturedCalls, (call) => {
+      const m = (call.opts?.env?.GIT_SSH_COMMAND ?? "").match(/ -i (\S+) /);
+      if (m) keyPathDuringCall = m[1];
+      call.cb(
+        Object.assign(new Error("fatal: Permission denied (publickey)"), {
+          code: 128,
+        }),
+        { stdout: Buffer.from(""), stderr: Buffer.from("publickey") },
+      );
+    });
+
+    const { gitWithPrivateKeyAuth } = await import("../server/git-auth");
+    await expect(
+      gitWithPrivateKeyAuth(["ls-remote", "git-data"], KEY),
+    ).rejects.toThrow(/Permission denied|publickey/);
+    expect(keyPathDuringCall).not.toBe("");
+    expect(existsSync(keyPathDuringCall)).toBe(false); // finally still ran
+  });
+});
