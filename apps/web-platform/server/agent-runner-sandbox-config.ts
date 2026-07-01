@@ -1,8 +1,13 @@
 import { readdirSync, realpathSync } from "fs";
 import { basename, join } from "path";
 
-import logger from "./logger";
+import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
+
+// Match the agent-runner logging convention (`createChildLogger` — see
+// agent-runner.ts / agent-runner-query-options.ts) so the shared test mocks
+// that stub `createChildLogger` (not the default export) keep working.
+const log = createChildLogger("agent-sandbox");
 
 // Sandbox config helper extracted from agent-runner.ts so two consumers
 // — `startAgentSession` (legacy domain-leader path) and the cc-soleur-go
@@ -174,7 +179,7 @@ export function buildAgentSandboxConfig(
   // agent sandbox). `degraded: true` is the fail-closed broad-deny path a
   // reviewer/operator can alert on; `deniedCount` makes the deny-set size
   // queryable per session.
-  logger.info(
+  log.info(
     {
       feature: "agent-sandbox",
       op: "sibling-deny",
