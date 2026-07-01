@@ -55,14 +55,16 @@ export interface ToolAttemptCollector {
  * per cold Query.
  */
 export function createToolAttemptCollector(): ToolAttemptCollector {
-  // Closure-private accumulator. `randomId` is an OPAQUE trace handle only —
+  // Closure-private accumulator. `traceId` is an OPAQUE trace handle only —
   // NEVER inserted (the row is anonymous; see CRITICAL-2 in the module header).
   const state: {
-    readonly randomId: string;
+    // Minted per-query crypto.randomUUID() used ONLY as a log-correlation handle
+    // (emitted under the `traceId` log key below); DELIBERATELY never persisted.
+    readonly traceId: string;
     phase: string;
     counts: Record<string, Record<string, number>>;
   } = {
-    randomId: randomUUID(),
+    traceId: randomUUID(),
     phase: UNROUTED_PHASE,
     counts: {},
   };
@@ -81,8 +83,11 @@ export function createToolAttemptCollector(): ToolAttemptCollector {
       bucket[tool] = (bucket[tool] ?? 0) + 1;
 
       // Phase transition on the Skill WAY-IN, AFTER counting Skill under the
-      // prior phase. `tool_input.skill` is a known enum key (own-property-gated
-      // in skillToPhase) — the sole permitted tool_input read (NO-ECHO exempt).
+      // prior phase. Gate on the RAW (pre-sanitize) name deliberately: a spoofed
+      // `"Skill\x00"` sanitizes to `"Skill?"` (bucketed as such) but must NOT
+      // trigger a phase transition. `tool_input.skill` is a known enum key
+      // (own-property-gated in skillToPhase) — the sole permitted tool_input read
+      // (NO-ECHO exempt).
       if (rawName === "Skill") {
         const skill = (i.tool_input as { skill?: unknown } | null | undefined)?.skill;
         if (typeof skill === "string") {
@@ -95,7 +100,7 @@ export function createToolAttemptCollector(): ToolAttemptCollector {
       // Fail-open: never throw into the SDK turn. STATIC message — no
       // model-controlled value enters the error path.
       log.warn(
-        { err, traceId: state.randomId },
+        { err, traceId: state.traceId },
         "tool-attempt telemetry hook failed (fail-open)",
       );
       reportSilentFallback(err, {
@@ -117,7 +122,7 @@ export function createToolAttemptCollector(): ToolAttemptCollector {
       if (error) throw error;
     } catch (err) {
       log.warn(
-        { err, traceId: state.randomId },
+        { err, traceId: state.traceId },
         "tool-attempt telemetry flush failed (fail-open)",
       );
       reportSilentFallback(err, {

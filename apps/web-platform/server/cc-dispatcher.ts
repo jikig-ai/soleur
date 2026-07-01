@@ -441,7 +441,6 @@ export function buildConnectedRepoContext(owner: string, repo: string): string {
   );
 }
 
-
 // feat-concierge-stream-commands — `command_stream` output caps (D4) + the
 // UTF-8 byte-cap util. Definitions moved to `./command-stream-caps` so the
 // debug-mode emit path can reuse them without a cc-dispatcher import cycle.
@@ -505,7 +504,6 @@ function probeRedactionFallthrough(
   }
   return redacted;
 }
-
 
 // Hoisted module-level sets (avoid per-call construction in
 // `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
