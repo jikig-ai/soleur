@@ -90,5 +90,5 @@ resource "hcloud_firewall" "web" {
 
 resource "hcloud_firewall_attachment" "web" {
   firewall_id = hcloud_firewall.web.id
-  server_ids  = [hcloud_server.web.id]
+  server_ids  = [for h in hcloud_server.web : h.id]
 }

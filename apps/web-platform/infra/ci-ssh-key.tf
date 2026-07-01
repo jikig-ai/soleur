@@ -70,7 +70,7 @@ resource "terraform_data" "root_authorized_keys" {
 
   connection {
     type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
+    host  = hcloud_server.web["web-1"].ipv4_address
     user  = "root"
     agent = true
   }

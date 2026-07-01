@@ -1,11 +1,11 @@
 output "server_ip" {
   description = "Public IPv4 address of the web platform server"
-  value       = hcloud_server.web.ipv4_address
+  value       = hcloud_server.web["web-1"].ipv4_address
 }
 
 output "ssh_command" {
   description = "SSH command to connect to the server"
-  value       = "ssh root@${hcloud_server.web.ipv4_address}"
+  value       = "ssh root@${hcloud_server.web["web-1"].ipv4_address}"
 }
 
 output "app_url" {
@@ -15,12 +15,12 @@ output "app_url" {
 
 output "app_url_direct" {
   description = "Direct app URL (bypasses Cloudflare)"
-  value       = "http://${hcloud_server.web.ipv4_address}:3000"
+  value       = "http://${hcloud_server.web["web-1"].ipv4_address}:3000"
 }
 
 output "server_status" {
   description = "Current server status"
-  value       = hcloud_server.web.status
+  value       = hcloud_server.web["web-1"].status
 }
 
 output "inngest_heartbeat_url" {
