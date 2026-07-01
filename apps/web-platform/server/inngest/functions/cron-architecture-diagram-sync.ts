@@ -142,6 +142,7 @@ export async function cronArchitectureDiagramSyncHandler({
   logger,
   attempt,
   maxAttempts,
+  runId,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // Tier-2 firewall: posts an honest on-schedule check-in and skips the spawn
   // if this cron is still deferred (no fail-closed FAILED-issue storm).
@@ -256,6 +257,8 @@ export async function cronArchitectureDiagramSyncHandler({
             cronName: "cron-architecture-diagram-sync",
             buildSpawnEnv,
             logger,
+            runId,
+            attempt,
           });
         },
       );

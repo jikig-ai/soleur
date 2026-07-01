@@ -175,6 +175,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronAgentNativeAuditHandler({
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{ ok: boolean; errorSummary?: string }> {
   // D6 (#5018) / #5046 PR-2: RESTORED — out of TIER2_DEFERRED_CRONS since the
   // relax-minimal hook allows Task (this cron's only denied construct). The
@@ -257,6 +259,8 @@ export async function cronAgentNativeAuditHandler({
           cronName: "cron-agent-native-audit",
           buildSpawnEnv,
           logger,
+          runId,
+          attempt,
         });
       },
     );

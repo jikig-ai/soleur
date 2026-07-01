@@ -207,6 +207,7 @@ export async function cronRoadmapReviewHandler({
   logger,
   attempt,
   maxAttempts,
+  runId,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // Run-window start — the lower bound for the post-run output check. Captured
   // before the mint step (memoized across Inngest replays) so a replay reuses
@@ -318,6 +319,8 @@ export async function cronRoadmapReviewHandler({
             cronName: "cron-roadmap-review",
             buildSpawnEnv,
             logger,
+            runId,
+            attempt,
           });
         },
       );

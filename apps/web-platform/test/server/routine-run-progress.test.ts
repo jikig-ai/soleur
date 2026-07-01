@@ -12,7 +12,7 @@ function makeBuilder(result: { error: unknown } = { error: null }) {
     neq: [],
     lt: [],
   };
-  const builder: Record<string, unknown> = {
+  const builder: { _calls: Record<string, unknown[][]>; [k: string]: unknown } = {
     then: (resolve: (r: { error: unknown }) => unknown) => resolve(result),
     _calls: calls,
   };

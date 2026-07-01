@@ -188,6 +188,7 @@ export async function cronCompetitiveAnalysisHandler({
   logger,
   attempt,
   maxAttempts,
+  runId,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
   // this cron needs per-construct Bash-allowlist refinement or non-GitHub
@@ -317,6 +318,8 @@ export async function cronCompetitiveAnalysisHandler({
             cronName: "cron-competitive-analysis",
             buildSpawnEnv,
             logger,
+            runId,
+            attempt,
           });
         },
       );

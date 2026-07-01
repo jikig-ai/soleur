@@ -222,6 +222,8 @@ async function uploadFindings(args: {
 export async function cronUxAuditHandler({
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{ ok: boolean; errorSummary?: string }> {
   // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
   // this cron needs per-construct Bash-allowlist refinement or non-GitHub
@@ -365,6 +367,8 @@ export async function cronUxAuditHandler({
             UX_AUDIT_STORAGE_STATE: storageStatePath,
           }),
           logger,
+          runId,
+          attempt,
         });
       },
     );

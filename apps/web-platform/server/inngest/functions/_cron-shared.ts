@@ -189,6 +189,8 @@ export interface HandlerArgs {
   // transient that the retry recovers.
   attempt?: number;
   maxAttempts?: number;
+  // Inngest run id (ctx.runId), threaded to routine_run_progress live-state (#5766)
+  runId?: string;
 }
 
 export function redactToken(s: string, token: string): string {
