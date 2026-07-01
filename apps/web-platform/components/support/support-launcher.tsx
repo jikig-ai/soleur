@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
+import { useTour } from "@/components/tour/tour-provider";
 import { SupportPanel } from "./support-panel";
 import { useSupportChat } from "./use-support-chat";
 
@@ -14,6 +15,7 @@ export function SupportLauncher() {
   const enabled = useOptionalFeatureFlag("support");
   const [open, setOpen] = useState(false);
   const { messages, send } = useSupportChat();
+  const tour = useTour();
   const bubbleRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
 
@@ -58,6 +60,16 @@ export function SupportLauncher() {
         onClose={() => setOpen(false)}
         messages={messages}
         onSend={send}
+        onStartTour={
+          tour.available
+            ? () => {
+                // Close the panel (tears down its focus-trap) BEFORE starting the
+                // tour so the two overlays never fight over focus.
+                setOpen(false);
+                tour.startTour("support-panel");
+              }
+            : undefined
+        }
       />
     </>
   );

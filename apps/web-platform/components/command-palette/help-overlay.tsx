@@ -8,6 +8,7 @@
 
 import { Command } from "cmdk";
 import { useShortcuts } from "./use-shortcuts";
+import { useTour } from "@/components/tour/tour-provider";
 
 // Each row carries the action it performs, so selecting it (click or ↵) RUNS
 // the shortcut rather than only dismissing the overlay — the overlay doubles as
@@ -29,6 +30,7 @@ const SHORTCUTS: ReadonlyArray<{
 export function HelpOverlay() {
   const { enabled, helpOpen, closeHelp, openPalette, runEffect } =
     useShortcuts();
+  const tour = useTour();
 
   function runShortcut(action: HelpAction) {
     switch (action) {
@@ -82,6 +84,21 @@ export function HelpOverlay() {
             </Command.Item>
           ))}
         </Command.Group>
+        {tour.available && (
+          <Command.Group heading="Get started">
+            <Command.Item
+              value="Take a tour of the app guided onboarding"
+              onSelect={() => {
+                // Dismiss the overlay first so the tour mounts as the top layer.
+                closeHelp();
+                tour.startTour("help-overlay");
+              }}
+              data-testid="help-row-take-a-tour"
+            >
+              <span className="cmdk-help-label">Take a tour of the app</span>
+            </Command.Item>
+          </Command.Group>
+        )}
       </Command.List>
     </Command.Dialog>
   );
