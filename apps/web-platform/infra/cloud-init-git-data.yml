@@ -37,15 +37,20 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # Transport pubkey with a git-shell RESTRICTED forced-command: this key can ONLY
-  # run git-shell against SSH_ORIGINAL_COMMAND (git-receive-pack / git-upload-pack),
-  # never an interactive shell or arbitrary command. A bare dollar-var (no braces)
-  # is left literal by terraform templatefile() — only dollar-brace interpolates.
-  # `defer: true` writes it after the `git` user exists. git-data-bootstrap.sh
-  # fixes the .ssh dir/file ownership + perms so sshd accepts it.
+  # TWO keys for the `git` user, each pinned to a FIXED forced-command (ADR-068
+  # amendment 2026-07-01 "PR B bare-repo provisioning"):
+  #   1. TRANSPORT (git-shell): can ONLY run git-shell against SSH_ORIGINAL_COMMAND
+  #      (git-receive-pack / git-upload-pack) — never an interactive shell.
+  #   2. PROVISION (git-data-provision.sh): a FIXED wrapper that idempotently
+  #      `git init --bare`s ONE per-workspace repo (git-shell -c cannot run init).
+  # Separate keys ⇒ provisioning authority and ref-write authority have separate
+  # blast radii. A bare dollar-var (no braces) is left literal by terraform
+  # templatefile() — only dollar-brace interpolates. `defer: true` writes after the
+  # `git` user exists; git-data-bootstrap.sh fixes the .ssh perms so sshd accepts.
   - path: /home/git/.ssh/authorized_keys
     content: |
       command="git-shell -c \"$SSH_ORIGINAL_COMMAND\"",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
+      command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
     owner: git:git
     permissions: '0600'
     defer: true
@@ -54,6 +59,14 @@ write_files:
   - path: /usr/local/bin/git-data-bootstrap.sh
     encoding: b64
     content: ${git_data_bootstrap_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # The FIXED provision forced-command wrapper. Installed to /usr/local/bin so the
+  # provision key's authorized_keys command= resolves it. Runs as the `git` user.
+  - path: /usr/local/bin/git-data-provision.sh
+    encoding: b64
+    content: ${git_data_provision_b64}
     owner: root:root
     permissions: '0755'
 

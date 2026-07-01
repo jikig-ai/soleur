@@ -396,3 +396,83 @@ export async function gitWithPrivateKeyAuth(
     }
   }
 }
+
+/**
+ * Run a raw `ssh` command against the git-data host with a private SSH key — the
+ * transport for the **bare-repo provisioning** path (epic #5274 Phase 2, ADR-068
+ * amendment 2026-07-01 "PR B bare-repo provisioning").
+ *
+ * Distinct from {@link gitWithPrivateKeyAuth} in two ways: (1) it invokes `ssh`
+ * directly (not `git`), because the git-data host's PROVISION key is bound to a
+ * FIXED forced command (`/usr/local/bin/git-data-provision.sh`) that ignores the
+ * requested command and reads its single argument from `SSH_ORIGINAL_COMMAND`;
+ * (2) it uses the SEPARATE provision key (`GIT_PROVISION_SSH_PRIVATE_KEY`), never
+ * the git-shell transport key — provisioning authority and ref-write authority are
+ * separate credentials with separate blast radii (ADR-068 §6: never a cluster-wide
+ * cred). The forced command validates the arg server-side (never `eval`'d), so
+ * `remoteCommand` is passed as ONE opaque argv element.
+ *
+ * Key handling mirrors {@link gitWithPrivateKeyAuth}: the key NEVER appears in
+ * argv (delivered via `-i` at a 0600 temp file, removed in `finally`);
+ * `StrictHostKeyChecking=accept-new` + a per-invocation throwaway
+ * `UserKnownHostsFile` is the Phase-2 private-net trust floor (TOFU); `BatchMode=yes`
+ * so an auth/host-key problem fails deterministically instead of hanging.
+ *
+ * @param host  the git-data host (private-net address, e.g. `10.0.1.20`)
+ * @param remoteCommand  the single opaque argument delivered as `SSH_ORIGINAL_COMMAND`
+ *   (the validated `workspace_id` — the forced command ignores the command word)
+ * @param privateKey  the OpenSSH-format provision private key (from Doppler)
+ * @param opts  cwd + timeout passthrough
+ * @returns the stdout Buffer from the ssh invocation
+ */
+export async function sshWithPrivateKeyAuth(
+  host: string,
+  remoteCommand: string,
+  privateKey: string,
+  opts: GitExecOptions = {},
+): Promise<Buffer> {
+  const dir = getAskpassDir();
+  const keyPath = join(dir, `.git-provision-${randomUUID()}.key`);
+  const knownHostsPath = join(dir, `.git-provision-${randomUUID()}.known_hosts`);
+
+  // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+  writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+    mode: 0o600,
+  });
+  writeFileSync(knownHostsPath, "", { mode: 0o600 });
+
+  try {
+    const sshArgs = [
+      "-i",
+      keyPath,
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      `UserKnownHostsFile=${knownHostsPath}`,
+      "-o",
+      "BatchMode=yes",
+      `git@${host}`,
+      // ONE opaque argv element → SSH_ORIGINAL_COMMAND. The forced command
+      // validates it server-side and never eval's it (no shell-injection surface).
+      remoteCommand,
+    ];
+
+    const { stdout } = await execFileAsync("ssh", sshArgs, {
+      ...opts,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
+  } finally {
+    for (const p of [keyPath, knownHostsPath]) {
+      try {
+        unlinkSync(p);
+      } catch {
+        // best-effort cleanup; a leaked 0600 temp key is bounded by the
+        // throwaway filename and the runtime user's $HOME.
+      }
+    }
+  }
+}

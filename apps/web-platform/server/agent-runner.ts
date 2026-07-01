@@ -70,6 +70,7 @@ import {
   resolveActiveWorkspacePath,
   isGitDataStoreEnabled,
 } from "./workspace-resolver";
+import { replicateToGitData } from "./git-data-replication";
 import { resolveHostId } from "./host-identity";
 import {
   acquireAndHoldWorktreeLease,
@@ -2344,6 +2345,28 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // so no legacy `repo_status` gate (which would silently drop an
           // invited member's leader edits to a connected shared workspace).
           await syncPush(userId, workspacePath, supabase(), activeWorkspaceId);
+
+          // #5274 PR B part 2 (ADR-068) — replicate the workspace's refs to the
+          // shared git-data bare store, FENCED by the held lease generation. A
+          // DISTINCT durability tier from the GitHub push above (git-data = the
+          // shared object store Phase 3's 2nd host reads), NOT a redundant
+          // double-write. The lease-gen / worktree-id push-options ride the
+          // git-data push ONLY, never the GitHub `syncPush` above. NO-OP at
+          // flag-off. Its failure (incl. a fence reject) is mirrored to Sentry
+          // inside replicateToGitData and MUST NOT break the turn.
+          if (isGitDataStoreEnabled() && worktreeLeaseHandle) {
+            try {
+              await replicateToGitData({
+                workspacePath,
+                workspaceId: activeWorkspaceId,
+                leaseGeneration: worktreeLeaseHandle.leaseGeneration,
+                userId,
+              });
+            } catch {
+              // Already reported (feature: worktree_lease) inside; swallow so a
+              // replication failure never fails an otherwise-complete turn.
+            }
+          }
 
           // Notify client that this leader finished streaming. The finally block
           // below emits the same event as a fallback for exception paths; guard

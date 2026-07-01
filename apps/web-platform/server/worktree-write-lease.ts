@@ -196,7 +196,7 @@ export async function releaseWorktreeLease(
 // the module-level Map pattern in agent-session-registry.ts, collocated here so
 // the lease concern owns its own lifecycle state.
 
-/** A lease currently held by this host, keyed by `(workspaceId, worktreeId)`. */
+/** A lease currently held by this host. */
 export interface HeldWorktreeLease {
   workspaceId: string;
   worktreeId: string;
@@ -204,45 +204,75 @@ export interface HeldWorktreeLease {
   leaseGeneration: number;
 }
 
-const heldLeases = new Map<string, HeldWorktreeLease>();
+// #5817 F3 — the registry is keyed PER-HANDLE (a monotonic token), NOT by
+// `(workspaceId, worktreeId)`. `worktreeId` is always the `"primary"` constant, and
+// migration-116's same-host carve-out (`where wl.host_id = excluded.host_id`, keep
+// gen) lets TWO lineages on ONE host (legacy agent-runner + cc-dispatcher, or two
+// concurrent cc conversations) both acquire+hold a lease for the SAME workspace.
+// Under the old `(workspaceId, worktreeId)` key the second register OVERWROTE the
+// first and the first `release()` then DELETED the shared entry out from under the
+// still-live second handle — dropping the survivor from the SIGTERM drain. Keying
+// per-handle makes coexisting same-workspace handles independent: each release
+// removes only its own entry; the drain still covers every live handle.
+export type HeldLeaseToken = number;
 
-function heldKey(workspaceId: string, worktreeId: string): string {
-  return `${workspaceId}:${worktreeId}`;
+const heldLeases = new Map<HeldLeaseToken, HeldWorktreeLease>();
+let heldLeaseSeq = 0;
+
+/** Record a held lease (call after a successful acquire). Returns a unique token
+ *  the caller passes to {@link unregisterHeldLease} so it removes ONLY its own
+ *  entry — never a coexisting same-workspace handle's (F3). */
+export function registerHeldLease(lease: HeldWorktreeLease): HeldLeaseToken {
+  const token: HeldLeaseToken = ++heldLeaseSeq;
+  heldLeases.set(token, lease);
+  return token;
 }
 
-/** Record a held lease (call after a successful acquire). Idempotent per key. */
-export function registerHeldLease(lease: HeldWorktreeLease): void {
-  heldLeases.set(heldKey(lease.workspaceId, lease.worktreeId), lease);
+/** Drop a specific held lease from the registry by its token (call after release /
+ *  on loss). No-op if already removed. */
+export function unregisterHeldLease(token: HeldLeaseToken): void {
+  heldLeases.delete(token);
 }
 
-/** Drop a held lease from the registry (call after release / on loss). */
-export function unregisterHeldLease(
-  workspaceId: string,
-  worktreeId: string,
-): void {
-  heldLeases.delete(heldKey(workspaceId, worktreeId));
-}
+/** #5817 F5 — per-release timeout for the SIGTERM drain. Without it, a single
+ *  black-holed Postgres connection (release_worktree_lease never returns) could
+ *  consume the whole graceful-shutdown budget before `Sentry.flush()` runs. Each
+ *  release is raced against this bound; a timed-out lease simply expires at 120s
+ *  and a surviving host reclaims it (the fence still guards a late write). */
+export const WORKTREE_LEASE_RELEASE_TIMEOUT_MS = 2_000;
 
 /**
  * Release every held lease — the SIGTERM drain step (server/index.ts, after the
- * cc-query drain, before server.close()). Best-effort + bounded: each release is
- * a never-throwing RPC, run concurrently via allSettled so one slow release can't
- * starve the 8s shutdown budget. Clears the registry up front so a release that
- * races a concurrent acquire doesn't resurrect a stale entry. A lease that fails
- * to release simply expires at 120s and a surviving host reclaims it.
+ * cc-query drain, before server.close()). Best-effort + BOUNDED: each release is a
+ * never-throwing RPC, run concurrently via allSettled AND raced against a
+ * per-release timeout (F5) so one black-holed connection can't starve the 8s
+ * shutdown budget. Clears the registry up front so a release that races a
+ * concurrent acquire doesn't resurrect a stale entry.
  */
 export async function releaseAllHeldLeases(): Promise<void> {
   const leases = [...heldLeases.values()];
   heldLeases.clear();
   await Promise.allSettled(
-    leases.map((l) =>
-      releaseWorktreeLease(
-        l.workspaceId,
-        l.worktreeId,
-        l.hostId,
-        l.leaseGeneration,
-      ),
-    ),
+    leases.map((l) => {
+      // Race the release against a timeout; the timer is unref'd so it never
+      // itself holds the process open past exit.
+      let timer: NodeJS.Timeout | undefined;
+      const bounded = Promise.race([
+        releaseWorktreeLease(
+          l.workspaceId,
+          l.worktreeId,
+          l.hostId,
+          l.leaseGeneration,
+        ),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, WORKTREE_LEASE_RELEASE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      return bounded.finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+    }),
   );
 }
 
@@ -300,7 +330,7 @@ export async function acquireAndHoldWorktreeLease(
   const lease = await acquireWorktreeLease(workspaceId, worktreeId, hostId);
   if (!lease) return null;
   const { leaseGeneration } = lease;
-  registerHeldLease({ workspaceId, worktreeId, hostId, leaseGeneration });
+  const heldToken = registerHeldLease({ workspaceId, worktreeId, hostId, leaseGeneration });
 
   // Settled on the FIRST of {release, observed-loss}; both transitions are
   // idempotent and mutually exclusive thereafter.
@@ -321,7 +351,7 @@ export async function acquireAndHoldWorktreeLease(
       if (++consecutiveMisses < MAX_CONSECUTIVE_TOUCH_MISSES) return;
       settled = true;
       clearInterval(heartbeat);
-      unregisterHeldLease(workspaceId, worktreeId);
+      unregisterHeldLease(heldToken);
       onLost();
     });
   }, WORKTREE_LEASE_HEARTBEAT_MS);
@@ -334,7 +364,7 @@ export async function acquireAndHoldWorktreeLease(
       if (settled) return;
       settled = true;
       clearInterval(heartbeat);
-      unregisterHeldLease(workspaceId, worktreeId);
+      unregisterHeldLease(heldToken);
       await releaseWorktreeLease(workspaceId, worktreeId, hostId, leaseGeneration);
     },
   };
