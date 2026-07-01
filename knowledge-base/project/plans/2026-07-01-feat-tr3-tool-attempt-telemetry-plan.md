@@ -88,10 +88,14 @@ logs:
   where: pino stdout (Better Stack) — failure path only; NO success-path per-call logging
   retention: Better Stack plan window (failure path); rows purged by pg_cron TTL (~90d)
 discoverability_test:
-  command: >-
-    (via mcp__plugin_supabase_supabase__execute_sql) select count(*), max(created_at)
-    from tool_attempts where created_at > now() - interval '1 day'
-  expected_output: non-zero count after cc-sessions run (NO ssh)
+  # Runnable, ssh-free pre/post-merge probe: an UNAUTHENTICATED PostgREST GET
+  # against the table must be denied (proves the anon/authenticated default-deny
+  # RLS posture — CRITICAL-2 — since tool_attempts is service-role-only).
+  command: curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://api.soleur.ai/rest/v1/tool_attempts
+  expected_output: "401"
+  # Post-deploy ANALYTICS check (the actual data verification, AC9; run once):
+  #   (via mcp__plugin_supabase_supabase__execute_sql) select count(*), max(created_at)
+  #   from tool_attempts where created_at > now() - interval '1 day'  → non-zero after cc-sessions run
 ```
 
 ## Implementation Phases
