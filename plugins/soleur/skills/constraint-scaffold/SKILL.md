@@ -82,3 +82,10 @@ bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --
 via the `@/server/…` alias FAILS, an `import type` of the same PASSES, route-group/metacharacter
 paths are matched (regex-escaping), an empty from-set while `"use client"` files exist is a hard
 error, and a broken `.cjs` fails the runner closed.
+
+- **Sharp edge (transitive rule):** the "reachable baseline stays empty" guard MUST key on the
+  transitive rule NAME, never on `type:"reachability"` — dependency-cruiser softens the reachable
+  rule per-origin on `from`+`rule.name` IGNORING entry `type`, so a `type:"module"` baseline entry
+  naming the rule suppresses a real leak while a type-count reads 0 (a `--refresh-baseline` capture
+  never emits that shape, so the regression fixture must inject it by hand). See
+  `knowledge-base/project/learnings/security-issues/2026-07-01-depcruise-reachability-baseline-softens-per-rule-name-ignoring-type.md`.
