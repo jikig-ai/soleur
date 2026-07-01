@@ -52,7 +52,7 @@ describe("proxyClientToOwner", () => {
   test("dials with the pinned CA + rejectUnauthorized:true and sends proxy_hello on open", async () => {
     const client = new FakeWs();
     const owner = new FakeWs();
-    const dial = vi.fn(() => owner);
+    const dial = vi.fn((_url: string, _opts: { ca: string; rejectUnauthorized: true }) => owner);
     await proxyClientToOwner({
       clientWs: client as never,
       ownerAddress: "10.0.1.12",
@@ -61,7 +61,7 @@ describe("proxyClientToOwner", () => {
       dial: dial as never,
     });
     expect(dial).toHaveBeenCalledTimes(1);
-    const [url, opts] = dial.mock.calls[0];
+    const [url, opts] = dial.mock.calls[0]!;
     expect(url).toContain("wss://10.0.1.12");
     expect(opts).toMatchObject({ ca: TEST_CERT, rejectUnauthorized: true });
 
