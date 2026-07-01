@@ -377,8 +377,16 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
       const m = sshCmd.match(/ -i (\S+) /);
       if (m) {
         keyPathDuringCall = m[1];
-        keyModeDuringCall = statSync(keyPathDuringCall).mode & 0o777;
-        keyContentDuringCall = readFileSync(keyPathDuringCall, "utf8");
+        // Open ONCE and stat+read the same descriptor (not the path) — a
+        // statSync(path)+readFileSync(path) pair is a CodeQL js/file-system-race
+        // (TOCTOU) alert. Mirrors the $HOME askpass fd pattern above.
+        const fd = openSync(keyPathDuringCall, "r");
+        try {
+          keyModeDuringCall = fstatSync(fd).mode & 0o777;
+          keyContentDuringCall = readFileSync(fd, "utf8");
+        } finally {
+          closeSync(fd);
+        }
       }
       call.cb(null, { stdout: Buffer.from("ok"), stderr: Buffer.from("") });
     });
