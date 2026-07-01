@@ -153,20 +153,26 @@ file at `cleanup_merged_worktrees:989-999` (which uses `date +%s` + a `git log
 (negative age) is treated as fresh and never removed** — same clock-skew posture as
 the existing code.
 
-### Lock-file set (revised per CTO)
+### Lock-file set (revised per CTO, then narrowed at review)
 
-Sweep these files in the resolved common `git_dir`:
-**`config.lock`, `config.worktree.lock`** (the confirmed config-write wedge — both
-live in the common dir), plus `index.lock`, `HEAD.lock` for completeness against the
-same stale-lock class. Per CTO: `index.lock`/`HEAD.lock` do **not** block `git
-config` writes and, on a bare repo, the common dir has no index at all, so those two
-are near-inert (harmless, low value) — they stay in the list only because the brief
-names them. **Do NOT** expand the sweep to per-worktree lock dirs
-(`.git/worktrees/*/index.lock`): that is a *different* failure class (a wedged
-commit/checkout inside one worktree), unrelated to the config-write wedge, and
-sweeping those enlarges blast radius onto paths where a >60s hold is more plausible
-(large checkout/rebase). Scope stays on the common `git_dir`. `packed-refs.lock` is
-**out** — not the wedge class, not in the brief.
+Sweep ONLY the config-write locks in the resolved common `git_dir`:
+**`config.lock`, `config.worktree.lock`** — the confirmed EEXIST wedge that blocks
+`ensure_bare_config`'s writes.
+
+**`index.lock` / `HEAD.lock` dropped at review time (user-impact P2).** The CTO
+pass had kept them "for completeness / near-inert." Review found they are worse than
+inert on the **non-bare** path: when `ensure_bare_config` resolves
+`git_dir="$GIT_ROOT/.git"`, `index.lock`/`HEAD.lock` are the **live working-tree
+locks** a concurrent >60s `git commit`/`checkout`/`rebase` legitimately holds —
+removing one mid-op tears that tenant's index. They also never block a `git config`
+write, so they carried live-clobber risk with zero wedge-fix value. Dropping them
+eliminates the race and the dead weight; the actual self-heal (config writes) is
+unaffected. Test AC3b pins the exclusion (aged `index.lock`/`HEAD.lock` preserved).
+
+**Do NOT** expand the sweep to per-worktree lock dirs (`.git/worktrees/*/index.lock`):
+a *different* failure class (a wedged commit/checkout inside one worktree), unrelated
+to the config-write wedge, with a larger blast radius. `packed-refs.lock` is **out** —
+not the wedge class.
 
 ## Files to Edit
 
@@ -189,10 +195,10 @@ sweeping those enlarges blast radius onto paths where a >60s hold is more plausi
       [[ -d "$git_dir" ]] || return 0
       local now lock mtime age swept=0
       now=$(date +%s)
-      for lock in config.lock config.worktree.lock index.lock HEAD.lock; do
+      for lock in config.lock config.worktree.lock; do  # config-write wedge only (index/HEAD dropped at review)
         local path="$git_dir/$lock"
         [[ -f "$path" ]] || continue
-        mtime=$(stat -c %Y "$path" 2>/dev/null) || continue
+        mtime=$(stat -c%Y "$path" 2>/dev/null) || continue
         age=$(( now - mtime ))
         # Remove only stale (age >= threshold). Skips fresh AND future-dated
         # (age < 0, clock skew). Arithmetic nested in `if` so a false `(( ))`

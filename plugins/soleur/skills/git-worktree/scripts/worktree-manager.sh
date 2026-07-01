@@ -128,28 +128,32 @@ require_working_tree() {
 # Age-guarded: removes ONLY locks older than $threshold seconds, so a legitimately
 # in-flight sub-second config writer (lock lifetime is single-digit ms) is never
 # clobbered. Clock-skew guard: a future-dated lock (negative age) is treated as
-# fresh and preserved, matching cleanup_merged_worktrees' age check (~:995).
-# GNU-only `stat -c %Y` (Linux containers + CI ubuntu + dev; mirrors the existing
-# GNU `stat -c%s` at ~:1186). Idempotent; safe for parallel sessions — the
-# age-guard, not a flock, is the safety mechanism.
+# fresh and preserved, matching cleanup_merged_worktrees' clock-skew age check.
+# GNU-only `stat -c%Y` (Linux containers + CI ubuntu + dev; mirrors the existing
+# GNU `stat -c%s` in cleanup_claude_tmp). Idempotent; safe for parallel sessions
+# — the age-guard, not a flock, is the safety mechanism.
 sweep_stale_git_locks() {
   local git_dir="$1"
   local threshold="${2:-60}"   # seconds
   [[ -d "$git_dir" ]] || return 0
   local now lock path mtime age swept=0
   now=$(date +%s)
-  # Scope: the common git_dir's config-write locks (the confirmed wedge) plus
-  # index/HEAD locks for completeness against the same stale-lock class. NOT the
-  # per-worktree lock dirs (.git/worktrees/*/index.lock) — a different failure
-  # class (a wedged checkout/rebase) with a larger blast radius.
-  for lock in config.lock config.worktree.lock index.lock HEAD.lock; do
+  # Scope: ONLY the config-write locks (`config.lock`, `config.worktree.lock`) —
+  # the confirmed EEXIST wedge that blocks ensure_bare_config's writes below.
+  # Deliberately NOT index.lock / HEAD.lock: on a NON-bare git_dir those are the
+  # LIVE working-tree locks a concurrent >60s commit/checkout/rebase legitimately
+  # holds (removing one mid-op tears that tenant's index), and they never block a
+  # `git config` write, so they add live-clobber risk with zero wedge-fix value.
+  # Also NOT the per-worktree lock dirs (.git/worktrees/*/index.lock) — a
+  # different failure class (a wedged checkout/rebase) with a larger blast radius.
+  for lock in config.lock config.worktree.lock; do
     path="$git_dir/$lock"
     [[ -f "$path" ]] || continue
-    mtime=$(stat -c %Y "$path" 2>/dev/null) || continue
+    mtime=$(stat -c%Y "$path" 2>/dev/null) || continue
     age=$(( now - mtime ))
     # Remove only stale (age >= threshold). Skips fresh AND future-dated
     # (age < 0, clock skew). Arithmetic nested in `if` so a false `(( ))`
-    # exit status never trips `set -e` (mirrors the guard at ~:995).
+    # exit status never trips `set -e` (mirrors cleanup_merged_worktrees).
     if (( age >= threshold )); then
       if rm -f "$path" 2>/dev/null; then
         swept=$(( swept + 1 ))
@@ -178,8 +182,8 @@ ensure_bare_config() {
 
   # Self-heal: remove stale git locks BEFORE any config write below, or those
   # writes fail EEXIST forever (2026-07-01 outage class). This chokepoint runs on
-  # every create path and on the session-start cleanup-merged path (:888), so an
-  # affected workspace self-heals on its next session — no operator SSH required.
+  # every create path and on the session-start cleanup_merged_worktrees path, so
+  # an affected workspace self-heals on its next session — no operator SSH.
   sweep_stale_git_locks "$git_dir"
 
   local shared_config="$git_dir/config"
@@ -280,6 +284,10 @@ verify_worktree_created() {
 # onto the worktree's local config so every commit made from inside the worktree
 # is authored as the real human. Idempotent: skips silently if no global identity
 # exists, or if the worktree already has a matching local identity.
+# NOTE: its `git config --local` writes can hit the shared config's lock on a bare
+# repo; it relies on a preceding ensure_bare_config() (which runs the stale-lock
+# sweep) on every current call path. A future config-writing subcommand added
+# without that precedence would reopen the EEXIST wedge — keep sweep coverage in mind.
 ensure_worktree_identity() {
   local worktree_path="$1"
   local global_email global_name
