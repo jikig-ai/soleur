@@ -104,11 +104,15 @@ function mockFetch(opts: {
 }
 
 function renderPalette(
-  props: Partial<{ isAdmin: boolean; onToggleSidebar: () => void }> = {},
+  props: Partial<{
+    isAdmin: boolean;
+    enabled: boolean;
+    onToggleSidebar: () => void;
+  }> = {},
 ) {
   return render(
     <ShortcutsProvider
-      enabled
+      enabled={props.enabled ?? true}
       isAdmin={props.isAdmin ?? false}
       onToggleSidebar={props.onToggleSidebar ?? (() => {})}
     >
@@ -180,6 +184,131 @@ describe("CommandPalette — open / suppression", () => {
     pressKey("k", { meta: true });
     await screen.findByLabelText("Command palette search");
     expect(screen.getByText("Analytics")).toBeInTheDocument();
+  });
+});
+
+describe("CommandPalette — direct shortcut hints (FR3/AC4)", () => {
+  it("renders the go-to key hint on each nav row and G C on the ask hero", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    // Each nav row shows its `G <letter>` hint.
+    expect(screen.getByText("G D")).toBeInTheDocument(); // Dashboard
+    expect(screen.getByText("G I")).toBeInTheDocument(); // Inbox
+    expect(screen.getByText("G W")).toBeInTheDocument(); // Workstream
+    expect(screen.getByText("G K")).toBeInTheDocument(); // Knowledge Base
+    expect(screen.getByText("G R")).toBeInTheDocument(); // Routines
+    // The ask hero shows its GLOBAL summon binding, not the palette-only ⌘↵.
+    const ask = screen.getByTestId("cmd-ask-agent");
+    expect(ask).toHaveTextContent("G C");
+    expect(ask).not.toHaveTextContent("⌘↵");
+  });
+
+  it("omits the Analytics row + hint for a non-admin, shows G A for an admin", async () => {
+    const { unmount } = renderPalette({ isAdmin: false });
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    expect(screen.queryByText("Analytics")).not.toBeInTheDocument();
+    expect(screen.queryByText("G A")).not.toBeInTheDocument();
+    unmount();
+
+    renderPalette({ isAdmin: true });
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    expect(screen.getByText("Analytics")).toBeInTheDocument();
+    expect(screen.getByText("G A")).toBeInTheDocument();
+  });
+});
+
+describe("CommandPalette — direct go-to sequences (FR1/FR2/AC2/AC3/AC9)", () => {
+  it("navigates on `g` then `d`", () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("d");
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("routes every mapped second key, including `g c` → chat", () => {
+    renderPalette();
+    for (const [k, href] of [
+      ["i", "/dashboard/inbox"],
+      ["w", "/dashboard/workstream"],
+      ["k", "/dashboard/kb"],
+      ["r", "/dashboard/routines"],
+      ["c", "/dashboard/chat/new"],
+    ] as const) {
+      routerPush.mockClear();
+      pressKey("g");
+      pressKey(k);
+      expect(routerPush).toHaveBeenCalledWith(href);
+    }
+  });
+
+  it("does not navigate on `g` then Escape (prefix cleared, drawer untouched)", () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("Escape");
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("does not arm while focus is in an editable element", () => {
+    renderPalette();
+    const input = screen.getByTestId("outside-input");
+    pressKey("g", { target: input });
+    pressKey("d", { target: input });
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("`g` then an unmapped key aborts, and a fresh `g d` still works", () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("x");
+    expect(routerPush).not.toHaveBeenCalled();
+    pressKey("g");
+    pressKey("d");
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("expires the prefix after the 1500ms window", () => {
+    vi.useFakeTimers();
+    try {
+      renderPalette();
+      pressKey("g");
+      vi.advanceTimersByTime(1600);
+      pressKey("d");
+      expect(routerPush).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("admin-gates `g a`: inert for a non-admin, navigates for an admin", () => {
+    const { unmount } = renderPalette({ isAdmin: false });
+    pressKey("g");
+    pressKey("a");
+    expect(routerPush).not.toHaveBeenCalled();
+    unmount();
+
+    renderPalette({ isAdmin: true });
+    pressKey("g");
+    pressKey("a");
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/admin/analytics");
+  });
+
+  it("is inert when shortcutsEnabled=false (WCAG turn-off)", async () => {
+    localStorage.setItem("soleur:shortcuts.enabled", "0");
+    renderPalette();
+    await act(async () => {});
+    pressKey("g");
+    pressKey("d");
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("is inert when the command-palette flag is off (enabled=false)", () => {
+    renderPalette({ enabled: false });
+    pressKey("g");
+    pressKey("d");
+    expect(routerPush).not.toHaveBeenCalled();
   });
 });
 

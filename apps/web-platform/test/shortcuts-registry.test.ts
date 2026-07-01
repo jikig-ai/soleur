@@ -3,11 +3,19 @@ import {
   isEditable,
   buildCommands,
   resolveShortcut,
+  resolveSequence,
+  formatSeqHint,
+  ASK_AGENT_SEQ,
+  SEQUENCE_WINDOW_MS,
   readShortcutsEnabled,
   writeShortcutsEnabled,
   SHORTCUTS_STORAGE_KEY,
   type Command,
 } from "@/components/command-palette/use-shortcuts";
+import {
+  NAV_ITEMS,
+  ADMIN_NAV_ITEMS,
+} from "@/components/command-palette/nav-items";
 
 function byId(cmds: Command[], id: string): Command | undefined {
   return cmds.find((c) => c.id === id);
@@ -88,6 +96,104 @@ describe("buildCommands", () => {
   it("exposes the help command (opens the ? overlay) as a serializable effect", () => {
     const help = byId(buildCommands({ isAdmin: false }), "help");
     expect(help?.run().kind).toBe("openHelp");
+  });
+});
+
+describe("resolveSequence", () => {
+  const admin = { isAdmin: true };
+  const nonAdmin = { isAdmin: false };
+  // A pending prefix (the resolve phase). `at` is irrelevant to the pure
+  // resolver — expiry is the listener's concern.
+  const pending = { at: 0 };
+
+  it("arms on a bare g when no prefix is pending", () => {
+    expect(resolveSequence(null, key("g"), nonAdmin)).toBe("arm");
+    expect(resolveSequence(null, key("G"), nonAdmin)).toBe("arm");
+  });
+
+  it("does not arm on g with a modifier, or while focus is editable", () => {
+    expect(resolveSequence(null, key("g", { meta: true }), nonAdmin)).toBeNull();
+    expect(resolveSequence(null, key("g", { ctrl: true }), nonAdmin)).toBeNull();
+    expect(
+      resolveSequence(null, key("g", { target: { tagName: "INPUT" } }), nonAdmin),
+    ).toBeNull();
+  });
+
+  it("does not arm or resolve on auto-repeat", () => {
+    expect(resolveSequence(null, { ...key("g"), repeat: true }, nonAdmin)).toBeNull();
+    expect(
+      resolveSequence(pending, { ...key("d"), repeat: true }, nonAdmin),
+    ).toBeNull();
+  });
+
+  it("resolves each mapped second key to its navigate/openChat effect", () => {
+    expect(resolveSequence(pending, key("d"), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard",
+    });
+    expect(resolveSequence(pending, key("i"), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/inbox",
+    });
+    expect(resolveSequence(pending, key("w"), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/workstream",
+    });
+    expect(resolveSequence(pending, key("k"), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/kb",
+    });
+    expect(resolveSequence(pending, key("r"), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/routines",
+    });
+    // `g c` — Ask an agent (the rebound-from-Ctrl+C hero summon).
+    expect(resolveSequence(pending, key("c"), nonAdmin)).toEqual({
+      kind: "openChat",
+    });
+  });
+
+  it("gates g a (Analytics) on ctx.isAdmin", () => {
+    expect(resolveSequence(pending, key("a"), admin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/admin/analytics",
+    });
+    expect(resolveSequence(pending, key("a"), nonAdmin)).toBeNull();
+  });
+
+  it("returns null for an unmapped second key, a second g, and a chord", () => {
+    expect(resolveSequence(pending, key("x"), admin)).toBeNull();
+    expect(resolveSequence(pending, key("g"), admin)).toBeNull();
+    expect(resolveSequence(pending, key("k", { meta: true }), admin)).toBeNull();
+  });
+
+  it("is suppressed while focus is editable even mid-sequence", () => {
+    expect(
+      resolveSequence(pending, key("d", { target: { tagName: "TEXTAREA" } }), admin),
+    ).toBeNull();
+  });
+});
+
+describe("seq single-source (AC7) + formatSeqHint", () => {
+  it("upcases a sequence for display (g d -> G D)", () => {
+    expect(formatSeqHint("g d")).toBe("G D");
+    expect(formatSeqHint(ASK_AGENT_SEQ)).toBe("G C");
+  });
+
+  it("uses GitHub's proven 1500 ms sequence window", () => {
+    expect(SEQUENCE_WINDOW_MS).toBe(1500);
+  });
+
+  it("derives every nav command's keys hint from the seq field on the arrays", () => {
+    const cmds = buildCommands({ isAdmin: true });
+    for (const item of [...NAV_ITEMS, ...ADMIN_NAV_ITEMS]) {
+      const cmd = byId(cmds, `nav:${item.href}`);
+      expect(item.seq).toBeTruthy();
+      expect(cmd?.keys).toBe(formatSeqHint(item.seq as string));
+    }
+    // The ask hero shows its GLOBAL summon binding, not the palette-only ⌘↵.
+    expect(byId(cmds, "ask-agent")?.keys).toBe("G C");
+    expect(byId(cmds, "ask-agent")?.keys).not.toBe("⌘↵");
   });
 });
 
