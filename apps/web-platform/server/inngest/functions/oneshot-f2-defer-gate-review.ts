@@ -75,6 +75,8 @@ export async function oneshotF2DeferGateReviewHandler({
   event,
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs & { event: { data: EventData } }): Promise<HandlerResult> {
   const { data } = event;
 
@@ -183,6 +185,8 @@ export async function oneshotF2DeferGateReviewHandler({
           cronName: FUNCTION_NAME,
           buildSpawnEnv,
           logger,
+          runId,
+          attempt,
         });
       },
     );

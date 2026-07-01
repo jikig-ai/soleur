@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { reportSilentFallback } from "@/server/observability";
 import {
+  upsertRoutineRunProgress,
+  heartbeatRoutineRunProgress,
+  HEARTBEAT_INTERVAL_MS,
+} from "@/server/inngest/routine-run-progress";
+import {
   buildAuthenticatedCloneUrl,
   DeployInProgressError,
   deployLeaseAgeMsIfFresh,
@@ -738,6 +743,12 @@ export async function spawnClaudeEval(args: {
   cronName: string;
   buildSpawnEnv: (token: string) => NodeJS.ProcessEnv;
   logger: HandlerArgs["logger"];
+  // #5766: Inngest run identity, threaded from the caller (ctx.runId / attempt).
+  // When present, this run is recorded as a live DB fact (routine_run_progress):
+  // upsert on entry + heartbeat every ~30s while the child runs. Optional so
+  // non-Inngest callers / tests need not supply it.
+  runId?: string;
+  attempt?: number;
 }): Promise<SpawnResult> {
   const {
     spawnCwd,
@@ -748,6 +759,8 @@ export async function spawnClaudeEval(args: {
     cronName,
     buildSpawnEnv,
     logger,
+    runId,
+    attempt,
   } = args;
 
   if (!existsSync(spawnCwd)) {
@@ -771,6 +784,21 @@ export async function spawnClaudeEval(args: {
   // Carries the `claude --print` max-turns notice (stdout, not stderr) to the
   // Sentry surface. #4773.
   let stdoutTail = "";
+
+  // #5766: record this run as a live DB fact. upsert on entry (ON CONFLICT
+  // refreshes on replay, preserving started_at), then a wall-clock heartbeat tick
+  // while the child runs — this is what a stale-heartbeat reader uses to detect a
+  // SIGKILL eviction faster than Inngest's step timeout. All fail-soft (never
+  // throws). Cleared in finish() below so no tick fires after child exit.
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+  if (runId) {
+    await upsertRoutineRunProgress(cronName, runId, attempt ?? 1);
+    heartbeatTimer = setInterval(() => {
+      void heartbeatRoutineRunProgress(runId);
+    }, HEARTBEAT_INTERVAL_MS);
+    // Do not keep the event loop alive solely for the heartbeat.
+    heartbeatTimer.unref?.();
+  }
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
@@ -820,6 +848,9 @@ export async function spawnClaudeEval(args: {
       const finish = (r: SpawnResult) => {
         exited = true;
         if (escalationTimer) clearTimeout(escalationTimer);
+        // #5766: stop heartbeating once the child has exited — no tick may land
+        // after the middleware's terminal delete (would resurrect a phantom row).
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         resolve(r);
       };
 
@@ -888,5 +919,9 @@ export async function spawnClaudeEval(args: {
     });
   } finally {
     clearTimeout(timer);
+    // #5766 — guarantee the heartbeat interval is cleared even if the Promise
+    // executor threw synchronously (spawn/buildSpawnEnv config error) before
+    // finish() ran. clearInterval on an already-cleared handle is a safe no-op.
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
   }
 }

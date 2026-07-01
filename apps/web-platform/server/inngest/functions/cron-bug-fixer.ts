@@ -574,6 +574,8 @@ export async function cronBugFixerHandler({
   event,
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{
   selectedIssue: number | null;
   prNumber: number | null;
@@ -736,6 +738,8 @@ export async function cronBugFixerHandler({
           cronName: "cron-bug-fixer",
           buildSpawnEnv,
           logger,
+          runId,
+          attempt,
         });
       },
     );

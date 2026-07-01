@@ -12,6 +12,12 @@ vi.mock("@sentry/nextjs", () => ({
   addBreadcrumb: vi.fn(),
   getCurrentScope: () => ({ setTag: vi.fn(), setExtra: vi.fn() }),
 }));
+// #5766 — spy on the live-state delete so we can assert it fires AFTER a
+// successful terminal write and NOT when the write throws (DI-P1-C).
+const finishProgressMock = vi.fn();
+vi.mock("@/server/inngest/routine-run-progress", () => ({
+  finishRoutineRunProgress: (...a: unknown[]) => finishProgressMock(...a),
+}));
 
 import { runLogMiddleware } from "@/server/inngest/middleware/run-log";
 
@@ -51,6 +57,45 @@ beforeEach(() => {
   rpcMock.mockReset();
   rpcMock.mockResolvedValue({ error: null });
   captureExceptionMock.mockReset();
+  finishProgressMock.mockReset();
+});
+
+describe("run-log middleware — live-state finish ordering (#5766 AC6 / DI-P1-C)", () => {
+  it("deletes the live row AFTER a successful terminal write", async () => {
+    const a = makeHooks({ attempt: 0, maxAttempts: 1 });
+    await a.transformInput?.(a.inputCtx as never);
+    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(finishProgressMock).toHaveBeenCalledWith("run-abc");
+    // Ordering: the terminal write is invoked BEFORE the live-row delete.
+    expect(rpcMock.mock.invocationCallOrder[0]).toBeLessThan(
+      finishProgressMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does NOT delete the live row when the terminal write throws (run stays visible as stuck, never vanishes)", async () => {
+    rpcMock.mockRejectedValueOnce(new Error("db down"));
+    const a = makeHooks({ attempt: 0, maxAttempts: 1 });
+    await a.transformInput?.(a.inputCtx as never);
+    await a.transformOutput?.({ result: { data: "ok" } } as never);
+    expect(finishProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT delete on a step-level event (no terminal row yet)", async () => {
+    const a = makeHooks({ attempt: 0, maxAttempts: 1 });
+    await a.transformInput?.(a.inputCtx as never);
+    await a.transformOutput?.({ result: { data: "ok" }, step: {} } as never);
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(finishProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT delete on a non-final failed attempt (write is gated, so is the delete)", async () => {
+    const a = makeHooks({ attempt: 1, maxAttempts: 3 });
+    await a.transformInput?.(a.inputCtx as never);
+    await a.transformOutput?.({ result: { error: new Error("retry") } } as never);
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(finishProgressMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("run-log middleware — final-attempt gate", () => {

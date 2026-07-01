@@ -7,6 +7,10 @@ import {
   EXPECTED_CRON_FUNCTIONS,
 } from "@/server/inngest/cron-manifest";
 import { ROUTINE_METADATA, type RoutineMeta } from "@/server/inngest/routine-metadata";
+import {
+  STUCK_THRESHOLD_MS,
+  ORPHAN_IGNORE_MS,
+} from "@/server/inngest/routine-run-progress";
 
 // Minimal structural type so this module does not depend on the supabase-js
 // generic client type (which the project leaves untyped).
@@ -67,6 +71,62 @@ export interface RecentRun extends RunSummary {
 export interface RecentRunsPage {
   runs: RecentRun[];
   nextCursor: string | null;
+}
+
+// #5766 — an in-flight heavy-cron run (routine_run_progress). status is
+// reader-computed from heartbeat staleness; `resumed` is an overlay, not a
+// mutually-exclusive status.
+export interface LiveRun {
+  id: string;
+  routine_id: string;
+  run_id: string;
+  status: "running" | "stuck";
+  resumed: boolean;
+  started_at: string;
+  last_heartbeat_at: string;
+}
+
+const LIVE_COLS = "id,routine_id,run_id,attempt,started_at,last_heartbeat_at";
+
+/**
+ * In-flight heavy-cron runs. Status is reader-computed from heartbeat staleness
+ * (DI-P1-B — keyed on last_heartbeat_at, never started_at, so a healthy ~50-min
+ * run is not dropped): rows staler than ORPHAN_IGNORE_MS are ignored (dead
+ * orphans), else `stuck` if staleness > STUCK_THRESHOLD_MS, else `running`.
+ * `resumed` = attempt > 1. Uses the passed (user-session) client so the SELECT
+ * RLS policy is enforced (DI-Q4). Newest-first by started_at.
+ */
+export async function listLiveRuns(
+  supabase: SupabaseLike,
+  now: number,
+): Promise<LiveRun[]> {
+  const { data, error } = await supabase
+    .from("routine_run_progress")
+    .select(LIVE_COLS);
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{
+    id: string;
+    routine_id: string;
+    run_id: string;
+    attempt: number;
+    started_at: string;
+    last_heartbeat_at: string;
+  }>;
+  return rows
+    .map((r) => ({ r, staleness: now - Date.parse(r.last_heartbeat_at) }))
+    .filter(({ staleness }) => staleness <= ORPHAN_IGNORE_MS)
+    .map(({ r, staleness }) => ({
+      id: r.id,
+      routine_id: r.routine_id,
+      run_id: r.run_id,
+      status: (staleness > STUCK_THRESHOLD_MS ? "stuck" : "running") as
+        | "running"
+        | "stuck",
+      resumed: r.attempt > 1,
+      started_at: r.started_at,
+      last_heartbeat_at: r.last_heartbeat_at,
+    }))
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
 }
 
 const LATEST_COLS =

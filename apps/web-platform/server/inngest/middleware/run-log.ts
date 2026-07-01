@@ -38,6 +38,7 @@ import * as Sentry from "@sentry/nextjs";
 import { getServiceClient } from "@/lib/supabase/service";
 import { ROUTINE_METADATA } from "@/server/inngest/routine-metadata";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
+import { finishRoutineRunProgress } from "@/server/inngest/routine-run-progress";
 
 const ERROR_SUMMARY_MAX = 500;
 
@@ -188,6 +189,14 @@ export const runLogMiddleware = new InngestMiddleware({
                     ? formatErrorSummary(data?.errorSummary)
                     : null,
               });
+              // #5766: the terminal row landed — delete the live-state row (a run
+              // that reaches here is no longer in-flight). Placed AFTER the write
+              // resolves and INSIDE the try (arch-A-2 / DI-P1-C): if write_routine_run
+              // threw, we skip this and the live row survives so the reader shows
+              // "stuck" instead of vanishing the run. finishRoutineRunProgress is
+              // itself fail-soft (own Sentry mirror), so it never poisons the write
+              // path. A no-op (0 rows) for light crons that never wrote a live row.
+              await finishRoutineRunProgress(runId);
             } catch (e) {
               // Fail-soft: mirror to Sentry, never propagate (no retry-poisoning).
               try {

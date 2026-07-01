@@ -318,6 +318,11 @@ apps/web-platform/server/inngest/functions/cron-email-ingress-probe.ts
 # (routine runs are operator-global operational records).
 apps/web-platform/server/inngest/middleware/run-log.ts
 
+# Routine-run live-state helper (#5766): upsert/heartbeat/finish on the mutable,
+# attribution-free routine_run_progress sidecar. System writer — operator-global
+# in-flight cron liveness, no per-tenant key, no PII.
+apps/web-platform/server/inngest/routine-run-progress.ts
+
 # Routines agent MCP tools (#5345): routines_list / routine_runs_list read
 # operator-global routine_runs via the service client (the agent acts for the
 # operator; routine_runs is not tenant-scoped data). routine_run dispatches
