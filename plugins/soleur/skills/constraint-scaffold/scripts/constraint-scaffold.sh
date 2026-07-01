@@ -37,6 +37,12 @@ TARGET="$REPO_ROOT/$TARGET_REL"
 CFG="$TARGET/.dependency-cruiser.cjs"
 RUNNER="$TARGET/scripts/constraint-gates.sh"
 WORKFLOW="$TARGET/.github/workflows/constraint-gates.yml"
+# Two-stage recovery dispatcher (ADR-074, #5814): an UNTRUSTED pull_request producer
+# (Stage A) + a PRIVILEGED workflow_run consumer (Stage B). Replaces the single held
+# issue_comment dispatcher — the privileged trigger no longer co-locates with untrusted
+# PR-code execution.
+FIXWORKFLOW_A="$TARGET/.github/workflows/fix-constraints-stage-a.yml"
+FIXWORKFLOW_B="$TARGET/.github/workflows/fix-constraints-stage-b.yml"
 BASELINE="$TARGET/.dependency-cruiser-known-violations.json"
 DEPCRUISE="$TARGET/node_modules/.bin/depcruise"
 
@@ -131,7 +137,7 @@ if ! { git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --q
   die "working tree is dirty — commit or discard changes before generating the gate" 67
 fi
 
-for f in "$CFG" "$RUNNER" "$WORKFLOW"; do
+for f in "$CFG" "$RUNNER" "$WORKFLOW" "$FIXWORKFLOW_A" "$FIXWORKFLOW_B"; do
   [[ -e "$f" ]] && die "refuse-if-exists: ${f#$REPO_ROOT/} already present (no --force; re-baseline via --refresh-baseline)" 66
 done
 [[ -e "$BASELINE" ]] && die "refuse-if-exists: ${BASELINE#$REPO_ROOT/} already present (re-baseline via --refresh-baseline)" 66
@@ -150,7 +156,12 @@ chmod +x "$RUNNER"
 # runner path). sed delimiter is '|' since the value contains no '|'.
 sed "s|__TARGET_DIR__|$TARGET_REL|g" "$REF_DIR/constraint-gates-workflow.template" > "$WORKFLOW"
 
-log "emitted: ${CFG#$REPO_ROOT/}, ${RUNNER#$REPO_ROOT/}, ${WORKFLOW#$REPO_ROOT/}"
+# Two-stage recovery dispatcher (ADR-074): same __TARGET_DIR__ substitution. Stage A
+# (untrusted producer) + Stage B (privileged consumer, Git Data API — no checkout/apply).
+sed "s|__TARGET_DIR__|$TARGET_REL|g" "$REF_DIR/fix-constraints-stage-a.template" > "$FIXWORKFLOW_A"
+sed "s|__TARGET_DIR__|$TARGET_REL|g" "$REF_DIR/fix-constraints-stage-b.template" > "$FIXWORKFLOW_B"
+
+log "emitted: ${CFG#$REPO_ROOT/}, ${RUNNER#$REPO_ROOT/}, ${WORKFLOW#$REPO_ROOT/}, ${FIXWORKFLOW_A#$REPO_ROOT/}, ${FIXWORKFLOW_B#$REPO_ROOT/}"
 
 # Capture the initial baseline against the origin/main merge-base — same path as
 # --refresh-baseline, so a leak introduced in the SAME PR that scaffolds the gate
