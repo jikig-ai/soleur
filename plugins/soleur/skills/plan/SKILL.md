@@ -506,6 +506,15 @@ The deliverable names:
 
 This is enforced at ship time (fail-closed) by `/ship` Phase 5.5's **Soak-Gated Follow-Through Enrollment Gate** + the `ship-soak-followthrough-gate.sh` PreToolUse hook; declaring it here means the work phase builds the probe instead of /ship blocking PR-ready on a missing one. **Why:** 2026-06-29 — PR #5671 (#5673) and PR #5675 (#5689) both shipped soak-gated closures in prose with no enrollment; both trackers were left to rot until caught manually.
 
+#### 2.9.2. Affected-surface observability (blind execution surfaces)
+
+If the plan's Files-to-Edit touch a surface the operator/agent CANNOT directly inspect — an **agent bwrap sandbox** (`server/agent-runner-sandbox-config.ts`, `server/sandbox*.ts`, `server/bash-sandbox.ts`), a **container dispatch/readiness gate** (`server/cc-dispatcher.ts`, `server/agent-runner.ts`, `*agent-on-spawn*`, any `*readiness*`/`*self-stop*` path), or a **cron worker** — the `## Observability` block's `failure_modes` MUST additionally satisfy:
+
+- Each `detection` names an **in-surface** probe (a signal emitted FROM the sandbox/container/worker), not only a host-side layer. A host gate cannot observe a sandbox's internal state.
+- The probe's **structured fields discriminate ALL competing root-cause hypotheses in one event** (e.g. `source` / `gitKind` / `gitRevParseValid` for a host-vs-sandbox-mount split) — not a single boolean that emits for only one failure shape.
+
+This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
+
 ### 2.10. Architecture Decision (ADR / C4) Gate
 
 [skill-enforced: plan Phase 2.10 — `wg-architecture-decision-is-a-plan-deliverable`]

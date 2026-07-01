@@ -167,6 +167,10 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
   it("cron-ux-audit is RESTORED — no longer Tier-2 deferred (#5199)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-ux-audit")).toBe(false);
   });
+
+  it("cron-architecture-diagram-sync is live — not Tier-2 deferred (#5631)", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-architecture-diagram-sync")).toBe(false);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {
@@ -1132,6 +1136,12 @@ describe("postSentryHeartbeat — delivery robustness (#5728)", () => {
 const CM_LABEL = "scheduled-community-monitor";
 const CM_PREFIX = "[Scheduled] Community Monitor -";
 const CM_DATE = "2026-06-30";
+// #5786 — campaign-calendar carries a trailing ` (heartbeat)` title suffix that
+// the widened matcher must accept via the optional titleSuffix arg.
+const CC_LABEL = "scheduled-campaign-calendar";
+const CC_PREFIX = "[Scheduled] Campaign Calendar -";
+const CC_SUFFIX = " (heartbeat)";
+const CC_DATE = "2026-06-15";
 
 function octokitReturningIssues(
   issues: Array<{ title?: string | null; body?: string | null }>,
@@ -1148,6 +1158,7 @@ describe("isRealScheduledDigest", () => {
       isRealScheduledDigest(
         { title: `${CM_PREFIX} ${CM_DATE}`, body: "## Platform Status" },
         CM_DATE,
+        CM_PREFIX,
       ),
     ).toBe(true);
   });
@@ -1160,6 +1171,7 @@ describe("isRealScheduledDigest", () => {
           body: "Automated FAILED self-report from `cron-community-monitor`.",
         },
         CM_DATE,
+        CM_PREFIX,
       ),
     ).toBe(false);
   });
@@ -1169,6 +1181,7 @@ describe("isRealScheduledDigest", () => {
       isRealScheduledDigest(
         { title: `${CM_PREFIX} FAILED`, body: "misconfig" },
         CM_DATE,
+        CM_PREFIX,
       ),
     ).toBe(false);
   });
@@ -1178,6 +1191,7 @@ describe("isRealScheduledDigest", () => {
       isRealScheduledDigest(
         { title: `${CM_PREFIX} 2026-06-29`, body: "## Platform Status" },
         CM_DATE,
+        CM_PREFIX,
       ),
     ).toBe(false);
   });
@@ -1191,6 +1205,7 @@ describe("isRealScheduledDigest", () => {
       isRealScheduledDigest(
         { title: `Investigate community drop ${CM_DATE}`, body: "looks low" },
         CM_DATE,
+        CM_PREFIX,
       ),
     ).toBe(false);
   });
@@ -1203,6 +1218,35 @@ describe("isRealScheduledDigest", () => {
       isRealScheduledDigest(
         { title: `${CM_PREFIX} FAILED - ${CM_DATE}`, body: "## Platform Status" },
         CM_DATE,
+        CM_PREFIX,
+      ),
+    ).toBe(false);
+  });
+
+  // #5786 — campaign-calendar's producer digest carries a trailing
+  // ` (heartbeat)` suffix (STEP 2.5). The widened matcher must accept it via
+  // the optional titleSuffix arg (AC4).
+  it("matches a suffixed campaign-calendar digest when titleSuffix is supplied (AC4)", () => {
+    expect(
+      isRealScheduledDigest(
+        {
+          title: `${CC_PREFIX} ${CC_DATE}${CC_SUFFIX}`,
+          body: "## Campaign Calendar\nupcoming",
+        },
+        CC_DATE,
+        CC_PREFIX,
+        CC_SUFFIX,
+      ),
+    ).toBe(true);
+  });
+
+  it("REJECTS the bare campaign-calendar title (the FAILED-audit fallback shape) when titleSuffix is required (AC4)", () => {
+    expect(
+      isRealScheduledDigest(
+        { title: `${CC_PREFIX} ${CC_DATE}`, body: "## Campaign Calendar" },
+        CC_DATE,
+        CC_PREFIX,
+        CC_SUFFIX,
       ),
     ).toBe(false);
   });
@@ -1217,6 +1261,7 @@ describe("digestIssueExistsForDate", () => {
       label: CM_LABEL,
       date: CM_DATE,
       cronName: "cron-community-monitor",
+      titlePrefix: CM_PREFIX,
       octokit,
     });
     expect(exists).toBe(true);
@@ -1233,6 +1278,7 @@ describe("digestIssueExistsForDate", () => {
       label: CM_LABEL,
       date: CM_DATE,
       cronName: "cron-community-monitor",
+      titlePrefix: CM_PREFIX,
       octokit,
     });
     expect(exists).toBe(false);
@@ -1244,6 +1290,7 @@ describe("digestIssueExistsForDate", () => {
       label: CM_LABEL,
       date: CM_DATE,
       cronName: "cron-community-monitor",
+      titlePrefix: CM_PREFIX,
       octokit,
     });
     const [route, params] = octokit.request.mock.calls[0];
@@ -1265,6 +1312,7 @@ describe("digestIssueExistsForDate", () => {
       label: CM_LABEL,
       date: CM_DATE,
       cronName: "cron-community-monitor",
+      titlePrefix: CM_PREFIX,
       octokit,
     });
     expect(exists).toBe(false);
@@ -1274,5 +1322,39 @@ describe("digestIssueExistsForDate", () => {
         (c) => c[1]?.op === "digest-dedup-read-failed",
       ),
     ).toBe(true);
+  });
+
+  // #5786 — campaign-calendar threads its ` (heartbeat)` suffix through (AC4).
+  it("matches a suffixed campaign-calendar digest when titleSuffix is threaded through", async () => {
+    const octokit = octokitReturningIssues([
+      {
+        title: `${CC_PREFIX} ${CC_DATE}${CC_SUFFIX}`,
+        body: "## Campaign Calendar\nupcoming",
+      },
+    ]);
+    const exists = await digestIssueExistsForDate({
+      label: CC_LABEL,
+      date: CC_DATE,
+      cronName: "cron-campaign-calendar",
+      titlePrefix: CC_PREFIX,
+      titleSuffix: CC_SUFFIX,
+      octokit,
+    });
+    expect(exists).toBe(true);
+  });
+
+  it("does NOT match the bare campaign-calendar title when titleSuffix is required", async () => {
+    const octokit = octokitReturningIssues([
+      { title: `${CC_PREFIX} ${CC_DATE}`, body: "## Campaign Calendar" },
+    ]);
+    const exists = await digestIssueExistsForDate({
+      label: CC_LABEL,
+      date: CC_DATE,
+      cronName: "cron-campaign-calendar",
+      titlePrefix: CC_PREFIX,
+      titleSuffix: CC_SUFFIX,
+      octokit,
+    });
+    expect(exists).toBe(false);
   });
 });

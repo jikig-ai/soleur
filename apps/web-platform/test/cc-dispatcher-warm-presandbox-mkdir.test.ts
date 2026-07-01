@@ -165,6 +165,22 @@ vi.mock("@/server/ensure-workspace-repo", async () => {
 vi.mock("@/server/permission-callback", () => ({
   createCanUseTool: vi.fn(() => async () => ({ behavior: "allow" })),
 }));
+// #5733 D2 — T2 models a CONNECTED reclaimed workspace whose `.git` is absent
+// (clone stubbed to a no-op). D2 now honest-blocks an absent `.git` at the cold
+// gate, which would prevent reaching sandbox construction. This file's invariant
+// is the pre-sandbox MKDIR (the REAL ensureWorkspaceDirExists), not the git-shape
+// readiness gate — so force the shape ready here. The real mkdir still runs and
+// the dir-exists-at-sandbox-build assertion is unaffected.
+vi.mock("@/server/git-worktree-validity", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    probeGitWorktreeShape: () => ({ kind: "dir-valid" }),
+    isReadyGitWorkTree: () => true,
+    isValidGitWorkTree: () => true,
+    evaluateAgentReadiness: async () => "ready",
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
@@ -292,7 +308,7 @@ describe("realSdkQueryFactory — unconditional pre-sandbox workspace-dir guaran
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
-      filesystem: { allowWrite: [], denyRead: ["/workspaces", "/proc"] },
+      filesystem: { allowWrite: [], denyRead: ["/workspaces", "/proc"], allowRead: [] },
     });
     // Capture dir-existence AT the instant the sandbox is constructed (the SDK
     // query() call binds the bwrap cwd). This is the invariant, not a proxy.

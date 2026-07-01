@@ -282,6 +282,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pencil-collapse-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/phase-surface-hint.sh"
+          }
+        ]
       }
     ]
   }

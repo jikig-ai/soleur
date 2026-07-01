@@ -87,6 +87,11 @@ import {
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { formatAssistantText } from "@/lib/format-assistant-text";
+import { sanitizeToolNameForLog } from "@/lib/tool-name-sanitize";
+import {
+  createToolAttemptCollector,
+  type ToolAttemptCollector,
+} from "./tool-attempt-telemetry";
 import { debugRedactionProbeTrips } from "./debug-probes";
 import { insertTurnSummary } from "./messages/insert-turn-summary";
 import {
@@ -116,12 +121,17 @@ import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
 } from "./ensure-workspace-repo";
+// #5733 D0 — consume the dispatch-time clone outcome (previously discarded):
+// loud emit (upstream) + F4-gated CAS status write + honest-block.
+import { consumeDispatchCloneOutcome } from "./cc-dispatch-clone-consume";
 // 2026-06-19 — dispatch readiness gates on worktree VALIDITY (not mere `.git`
 // presence) so a corrupt/partial `.git` routes to recovery instead of a silent
 // repo-less spawn.
 import {
   isReadyGitWorkTree,
   probeGitWorktreeShape,
+  evaluateAgentReadiness,
+  isLstatValidKind,
 } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
@@ -136,7 +146,14 @@ import {
 // `repo_status=error` workspace heals + re-evaluates instead of dead-ending at
 // the gate (short-circuit-guard-must-sit-after-the-recovery-it-gates).
 import { resolveRepoReadinessWithSelfHeal } from "./repo-readiness-self-heal";
-import { resolveActiveWorkspace } from "./workspace-resolver";
+import { resolveActiveWorkspace, isGitDataStoreEnabled } from "./workspace-resolver";
+import { resolveHostId } from "./host-identity";
+import {
+  acquireAndHoldWorktreeLease,
+  WORKTREE_ID_PRIMARY,
+  type WorktreeLeaseHandle,
+} from "./worktree-write-lease";
+import { ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -190,7 +207,11 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 // (the only verified sandbox-readable allowWrite dir); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
-import { buildToolProgressWSMessage, buildToolUseWSMessage } from "./tool-labels";
+import {
+  buildToolProgressWSMessage,
+  buildToolUseWSMessage,
+  isInSandboxRevParseStrand,
+} from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -420,12 +441,6 @@ export function buildConnectedRepoContext(owner: string, repo: string): string {
   );
 }
 
-// Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
-// depth against future model regressions that might emit pathologically long
-// tool names; the SDK validation gate constrains names to the registered
-// catalog today, so this is bounded but not impossible.
-const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
-
 // feat-concierge-stream-commands — `command_stream` output caps (D4) + the
 // UTF-8 byte-cap util. Definitions moved to `./command-stream-caps` so the
 // debug-mode emit path can reuse them without a cc-dispatcher import cycle.
@@ -488,19 +503,6 @@ function probeRedactionFallthrough(
     }
   }
   return redacted;
-}
-
-/**
- * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
- * Unicode line/paragraph separators (CWE-117 log injection defense-in-depth),
- * and length-cap. Pino's JSON serialization is the primary defense; this is
- * a belt-and-suspenders pass per the log-injection-unicode-line-separators
- * learning.
- */
-function sanitizeToolNameForLog(name: string): string {
-  return name
-    .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "?")
-    .slice(0, MAX_TOOL_NAME_LEN_FOR_LOG);
 }
 
 // Hoisted module-level sets (avoid per-call construction in
@@ -1243,6 +1245,81 @@ export function markConversationAcked(
   cell?.set(ackAtMs);
 }
 
+// ---------------------------------------------------------------------------
+// #5274 PR B — per-conversation worktree write-lease handle. The cc lineage
+// acquires in `realSdkQueryFactory` (cold Query) and releases in
+// `handleCcCloseQuery` (every close path) — two separate functions, so the
+// handle is stashed here keyed by (userId, conversationId), mirroring the
+// `_ccAutonomousAckPosture` registry. Empty when the lease path is gated off.
+// ---------------------------------------------------------------------------
+const _ccWorktreeLeases = new Map<string, WorktreeLeaseHandle>();
+
+function makeWorktreeLeaseKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+/** Stash the held lease for the conversation (call after a successful acquire
+ *  in the cold-Query factory). */
+function registerCcWorktreeLease(
+  userId: string,
+  conversationId: string,
+  handle: WorktreeLeaseHandle,
+): void {
+  _ccWorktreeLeases.set(makeWorktreeLeaseKey(userId, conversationId), handle);
+}
+
+/** Release + drop the conversation's lease (call from the close hook). No-op
+ *  when none is held (gated off, or already released). Never throws. */
+async function releaseCcWorktreeLease(
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  const key = makeWorktreeLeaseKey(userId, conversationId);
+  const handle = _ccWorktreeLeases.get(key);
+  if (!handle) return;
+  _ccWorktreeLeases.delete(key);
+  await handle.release();
+}
+
+// ---------------------------------------------------------------------------
+// TR3 tool-attempt telemetry (#5843, ADR-070 amendment). Same two-function
+// register/drain shape as `_ccWorktreeLeases`: the collector is minted per cold
+// Query in `realSdkQueryFactory` (its `preToolUseHook` goes into the SDK options),
+// and its `flush()` fires from `handleCcCloseQuery` (the abort-covering close
+// chokepoint, CRITICAL-3). Keyed by (userId, conversationId) — a bounded routing
+// map, deleted on every close path; the ACCUMULATOR itself stays closure-scoped
+// with a minted random id inside the collector (HIGH-5), and NO identifier here
+// reaches public.tool_attempts (the row is anonymous, CRITICAL-2).
+// ---------------------------------------------------------------------------
+const _ccToolAttemptCollectors = new Map<string, ToolAttemptCollector>();
+
+/** Stash the per-query collector (call after minting in the cold-Query factory,
+ *  only when telemetry is enabled). */
+function registerCcToolAttemptCollector(
+  userId: string,
+  conversationId: string,
+  collector: ToolAttemptCollector,
+): void {
+  _ccToolAttemptCollectors.set(
+    makeWorktreeLeaseKey(userId, conversationId),
+    collector,
+  );
+}
+
+/** Flush + drop the conversation's collector (call from the close hook). No-op
+ *  when telemetry was off / already flushed. Fire-and-forget: `flush()` never
+ *  throws (a DB failure mirrors to Sentry inside the collector). */
+function flushCcToolAttemptCollector(
+  userId: string,
+  conversationId: string,
+): void {
+  const key = makeWorktreeLeaseKey(userId, conversationId);
+  const collector = _ccToolAttemptCollectors.get(key);
+  if (!collector) return;
+  _ccToolAttemptCollectors.delete(key);
+  void collector.flush();
+}
+
 function makeCcBashGateKey(
   userId: string,
   conversationId: string,
@@ -1434,6 +1511,15 @@ export function handleCcCloseQuery({
   reason?: "disconnected";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
+  // TR3 (#5843) — flush the aggregated tool-attempt row for this session. Once
+  // per ActiveQuery (closeQuery is `state.closed`-guarded at every call site);
+  // fire-and-forget + fail-open (never throws, mirrors to Sentry on DB failure).
+  flushCcToolAttemptCollector(userId, conversationId);
+  // #5274 PR B — release the worktree write-lease held for this conversation
+  // (stops the heartbeat, unregisters from the SIGTERM drain, frees the row).
+  // Fire-and-forget: the close hook is synchronous and the release never throws.
+  // No-op when the lease path was gated off or already lost mid-session.
+  void releaseCcWorktreeLease(userId, conversationId);
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
       userId,
@@ -1801,9 +1887,17 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
-    // the readiness decision and the observability emit — no re-lstat. The common
-    // dir-valid case pays this single cheap probe; it is not free, but adds no
-    // subprocess and no DB/JWT.
+    // the SYNC readiness decision and the observability emit here — no re-lstat on
+    // the sync path. The common dir-valid case pays this single cheap probe here;
+    // the additive host `rev-parse` confirm below (#5733 deliverable A) then
+    // re-probes ONLY that dir-valid slice the lstat verdict greenlights but the
+    // agent can still strand on (detailed in the note immediately following).
+    // #5733 deliverable A (2026-06-30 — SUPERSEDES the 2026-06-19 "adds no
+    // subprocess" zero-await guarantee for the connected cold path): after this
+    // sync lstat routing, `evaluateAgentReadiness` (below, post-heal) runs ONE
+    // host `git rev-parse` confirm for the `dir-valid` slice — the one shape lstat
+    // greenlights but the agent still strands on. The fast lstat path here is
+    // unchanged; the async confirm is additive and dir-valid-gated.
     const gitShape = probeGitWorktreeShape(workspacePath);
     // Readiness derived from the SAME probe: a self-contained valid dir OR a
     // non-escaping in-workspace pointer (readable in-sandbox) is ready.
@@ -1824,8 +1918,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         userId: args.userId,
         activeWorkspaceId,
         // lstat-validity (the FILE-pointer trap) — derived from the same probe.
-        gitValid:
-          gitShape.kind === "dir-valid" || gitShape.kind === "file-pointer",
+        gitValid: isLstatValidKind(gitShape.kind),
         gitKind: gitShape.kind,
         gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
       });
@@ -1836,6 +1929,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // predicate, else the readiness module's fast-path (`:199`) short-circuits on
     // lstat-validity and never calls ensureWorkspaceRepoCloned for a pointer.
     const needsSelfHeal = !repoReadiness.ok || !gitReady;
+    // #5733 (review P3) — the readiness used to SCOPE the host `rev-parse` confirm
+    // below. It must reflect the POST-heal state: a heal-from-not-ready dispatch
+    // (repoReadiness.ok=false → self-heal lands the repo → healed.ok=true) would,
+    // if scoped on the PRE-heal `repoReadiness.ok=false`, short-circuit
+    // `evaluateAgentReadiness` to "ready" and SKIP the dir-valid confirm. Seeded to
+    // the pre-heal value (used as-is when no heal runs) and lifted to the post-heal
+    // `repoReadiness.ok || healed.ok` inside the heal block (where `healed` scopes).
+    let confirmDbReady = repoReadiness.ok;
     if (needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
@@ -1940,6 +2041,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       // healed.ok === true → the self-heal landed `.git` (or the row was already
       // recoverable into ready). Dispatch proceeds; the `ensureWorkspaceRepoCloned`
       // below now no-ops because `.git` is present.
+      // Post-heal readiness: a heal-from-not-ready is now connected+ready, so the
+      // dir-valid host confirm below must run (not be short-circuited away).
+      confirmDbReady = repoReadiness.ok || healed.ok;
     }
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
@@ -1960,12 +2064,83 @@ export const realSdkQueryFactory: QueryFactory = async (
     // wired through). In every non-promotion branch `effectiveInstallationId ===
     // installationId`, so the clone uses exactly the stored install it did before
     // whenever the entitlement gate did not promote — the fix never widens access.
-    await ensureWorkspaceRepoCloned({
+    // #5733 D0 — CAPTURE the dispatch-time clone outcome (previously DISCARDED).
+    // This is the only clone placement guaranteed same-FS-as-agent (in-process,
+    // into the agent's own `workspacePath`). On `"failed"` the distinct
+    // `repo_clone_failed` Sentry event already fired INSIDE this call (sanitized
+    // git stderr, every caller). `consumeDispatchCloneOutcome` then F4-safely
+    // flips `repo_status→error` ONLY on the solo/owner path after a post-clone
+    // `.git`-absence CAS, and returns `"block"` so the dispatch honest-blocks
+    // instead of spawning a doomed agent. NO new clone site; NO service-role read.
+    const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
       userId: args.userId,
       workspacePath,
       installationId: effectiveInstallationId,
       repoUrl,
     });
+    if (
+      (await consumeDispatchCloneOutcome(
+        {
+          outcome: dispatchCloneOutcome,
+          userId: args.userId,
+          activeWorkspaceId,
+          workspacePath,
+        },
+        {
+          // F4 status write via the SECURITY DEFINER RPC on the TENANT client
+          // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
+          // the rare failure path, never on the common success hot path.
+          setRepoStatus: async (status, reason) => {
+            const tenant = await getFreshTenantClient(args.userId);
+            const { error } = await tenant.rpc("set_repo_status", {
+              p_workspace_id: activeWorkspaceId,
+              p_status: status,
+              p_error: reason,
+            });
+            if (error) throw error;
+          },
+        },
+      )) === "block"
+    ) {
+      throw new RepoNotReadyError(
+        "error",
+        "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
+        "repo_setup_failed",
+      );
+    }
+
+    // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
+    // self-heal returned `healed.ok=true` AND after `ensureWorkspaceRepoCloned`
+    // (which no-ops at `:207` on a populated-corrupt `dir-valid` — `isValidGit-
+    // WorkTree` passes lstat, so it is NEVER re-cloned/destroyed). This is the
+    // ONLY gate that catches a `dir-valid` `.git` that `git` itself cannot resolve
+    // as a work tree (broken config/refs/gitdir indirection): the agent's in-bwrap
+    // Step 0.0 rev-parse would strand on it, but the lstat verdict greenlit the
+    // spawn. The shared `evaluateAgentReadiness` is the ONE helper across cold /
+    // warm / reconcile, so the emit + heal-route is structural (not the cold-only
+    // drift the 26×-dark incident exposed). A confirmed `"not-a-worktree"` emits
+    // the self-stop (inside the helper) and returns `"block"` → honest
+    // `RepoNotReadyError` (NO destroy of a populated `.git`); an inconclusive probe
+    // FAILS-OPEN (spawn) so a transient blip never blocks a healthy repo. This does
+    // NOT replace the sync `gitDirValid` seam consumed by the self-heal above — it
+    // is an additive re-probe of `agentReady` despite `healed.ok=true`.
+    if (
+      (await evaluateAgentReadiness(workspacePath, {
+        userId: args.userId,
+        activeWorkspaceId,
+        connected: Boolean(repoUrl),
+        dbReady: confirmDbReady, // POST-heal (review P3) — see confirmDbReady note above
+        // #5733 D2 — the self-heal + ensureWorkspaceRepoCloned already ran above,
+        // so an absent/dir-invalid `.git` here is a TERMINAL strand → emit + block.
+        phase: "post-heal",
+      })) === "block"
+    ) {
+      throw new RepoNotReadyError(
+        "error",
+        "Your workspace's Git repository is present but unreadable, so I can't safely start work in it. Please re-connect or re-create the repository.",
+        "repo_setup_failed",
+      );
+    }
 
     // Issue A: mint a short-lived GitHub App installation token for the
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
@@ -2168,13 +2343,23 @@ export const realSdkQueryFactory: QueryFactory = async (
     sessionId: null,
   };
 
+  // #5274 PR B — the worktree write-lease acquire is deliberately deferred to
+  // JUST BEFORE the Query is handed off (inside the `try` below, before
+  // `sdkQuery`), so a throw in the intervening setup (askpass write, ccDeps,
+  // buildAgentQueryOptions) cannot orphan a held lease whose only release path
+  // (`handleCcCloseQuery`) fires solely once the Query is registered in
+  // `activeQueries`. The catch releases it if `sdkQuery` itself throws. See the
+  // legacy lineage's same-function try/finally for the symmetric guarantee.
+
   // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` (above)
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
   // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
-  // verified sandbox-readable allowWrite dir is `workspacePath`
-  // (`buildAgentSandboxConfig` allowWrite:[workspacePath] +
-  // `createSandboxHook` realpath-containment); `$HOME`/`/tmp` bwrap-visibility
-  // is unverifiable. We write the helper into the repo's `.git/` directory
+  // sandbox-readable dir is `workspacePath` — read visibility comes from
+  // `buildAgentSandboxConfig` allowRead:[workspacePath] (which re-binds it
+  // over the `/workspaces` denyRead tmpfs; allowWrite alone grants WRITE
+  // only, not read — see #5733) plus `createSandboxHook` realpath-containment;
+  // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into
+  // the repo's `.git/` directory
   // (under `workspacePath`, so the SAME containment guarantees sandbox
   // readability) rather than the working-tree root, for two reasons:
   //   1. `.git/` is outside the working tree, so the agent's own
@@ -2323,6 +2508,60 @@ export const realSdkQueryFactory: QueryFactory = async (
     // throws on Tier 3 denylist short-names (3 Plausible tools — permanent,
     // shared service-token cross-tenant credentials). Promotion of non-denylist
     // tools is Phase 2 (#3722, blocked-by Stage 6 #2939).
+
+    // #5274 PR B — acquire the workspace write-lease for the Query lifetime
+    // (cc-soleur-go holds ONE Query across many turns). GATED behind
+    // isGitDataStoreEnabled() (ADR-068 amendment): entirely inert at flag-off. A
+    // null acquire = another host holds it live → fail-closed throw (this host
+    // must not write). Heartbeat loss aborts the in-flight Query via `controller`.
+    // Acquired LAST (after all setup) and inside this try so the catch releases
+    // it on an `sdkQuery` throw; released on every close path via
+    // `handleCcCloseQuery`.
+    if (isGitDataStoreEnabled()) {
+      const hostId = resolveHostId();
+      const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
+        activeWorkspaceId,
+        WORKTREE_ID_PRIMARY,
+        hostId,
+        () => {
+          reportSilentFallback(
+            new Error("worktree write-lease lost mid-session (reclaimed by another host)"),
+            {
+              feature: "worktree_lease",
+              op: "realSdkQueryFactory.heartbeat-lost",
+              extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+            },
+          );
+          controller.abort(
+            new Error("Worktree write-lease lost (reclaimed by another host)"),
+          );
+        },
+      );
+      if (!worktreeLeaseHandle) {
+        reportSilentFallback(
+          new Error("worktree write-lease unavailable (held by another host)"),
+          {
+            feature: "worktree_lease",
+            op: "realSdkQueryFactory.acquire",
+            extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+          },
+        );
+        throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
+      }
+      registerCcWorktreeLease(args.userId, args.conversationId, worktreeLeaseHandle);
+    }
+
+    // TR3 (#5843) — mint the per-query tool-attempt collector and stash it so
+    // `handleCcCloseQuery` can flush its one aggregated row at teardown. Its
+    // fail-open PreToolUse hook goes into the SDK options below. cc-only opt-in;
+    // the legacy runner passes neither the hook nor registers a collector.
+    const toolAttemptCollector = createToolAttemptCollector();
+    registerCcToolAttemptCollector(
+      args.userId,
+      args.conversationId,
+      toolAttemptCollector,
+    );
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -2382,9 +2621,29 @@ export const realSdkQueryFactory: QueryFactory = async (
           controllerSignal: controller.signal,
           deps: ccDeps,
         }),
+        // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
+        // cc-soleur-go Concierge router (the eval-covered workflow-routing path).
+        // The legacy domain-leader runner (agent-runner.ts) does NOT opt in.
+        enablePhaseSurfaceHint: true,
+        // #5843 (ADR-070) — register the per-query tool-attempt telemetry hook
+        // as a separate matcher-less PreToolUse entry (full-surface capture).
+        // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
+        toolAttemptPreToolUseHook: toolAttemptCollector.preToolUseHook,
       }),
     });
   } catch (err) {
+    // #5274 PR B — release the write-lease if it was acquired just above before
+    // `sdkQuery` threw. Without this, the lease's only release path
+    // (`handleCcCloseQuery`, which fires once the Query is in `activeQueries`)
+    // never runs on a factory throw, and the 25s heartbeat would renew the lease
+    // indefinitely — wedging the workspace for every other host. No-op when the
+    // lease path is gated off or the acquire never registered.
+    await releaseCcWorktreeLease(args.userId, args.conversationId);
+    // TR3 (#5843) — same leak class: the collector was registered just above, but
+    // a factory throw means the Query never enters `activeQueries` so
+    // `handleCcCloseQuery` never fires. Drop it here (flush is a harmless no-op —
+    // no tools ran yet). Never throws.
+    flushCcToolAttemptCollector(args.userId, args.conversationId);
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
@@ -3347,6 +3606,52 @@ export async function dispatchSoleurGo(
       }
     },
     onToolResult: (block) => {
+      // #5733 deliverable C2 — the agent-context observability backstop. The host
+      // `rev-parse` confirm is blind to the escaping-pointer strand (host git is
+      // NOT sandboxed) AND to object-store corruption (rev-parse passes both
+      // sides). The GUARANTEED signal is the agent's OWN in-bwrap `/soleur:go`
+      // Step 0.0 `git rev-parse --is-inside-work-tree` result: when it reports
+      // not-a-work-tree, emit the self-stop from the agent's REAL context (distinct
+      // `in-sandbox-backstop` source tag), enriched with a host-side
+      // `probeGitWorktreeShape` gitKind — so a strand of ANY on-disk shape produces
+      // a queryable event without pre-confirming 754ee124's (unobservable) shape.
+      // Runs BEFORE the autonomous-posture gate (strand observability is posture-
+      // independent); wrapped so it can never break the command-stream path.
+      try {
+        if (
+          workspacePath &&
+          isInSandboxRevParseStrand(block.command, block.output)
+        ) {
+          const shape = probeGitWorktreeShape(workspacePath);
+          reportAgentReadinessSelfStop({
+            userId,
+            // `<root>/<activeWorkspaceId>` by construction (ADR-044) → basename is
+            // the workspace id, pre-hashed inside reportAgentReadinessSelfStop.
+            activeWorkspaceId: path.basename(workspacePath),
+            gitValid: isLstatValidKind(shape.kind),
+            // The agent's OWN rev-parse said not-a-work-tree (the authoritative
+            // in-sandbox verdict). NEVER the subprocess stderr / raw path.
+            gitRevParseValid: false,
+            gitKind: shape.kind,
+            gitdirEscapesWorkspace: shape.gitdirEscapesWorkspace,
+            source: "in-sandbox-backstop",
+          });
+        }
+      } catch (err) {
+        // Pass a SANITIZED error, never raw `err` (security #5733): a path-bearing
+        // fs error message could carry the raw workspacePath (== userId for a solo
+        // workspace) into Sentry. The error NAME is enough to triage the backstop's
+        // own failure; the `extra` keeps userId (pseudonymized at the boundary).
+        reportSilentFallback(
+          err instanceof Error ? err.name : "agent-readiness-backstop-error",
+          {
+            feature: "cc-dispatcher",
+            op: "agent-readiness-backstop",
+            extra: { userId, conversationId },
+          },
+        );
+      }
+
       // feat-concierge-stream-commands — stream the Bash command's
       // (truncated, REDACTED) stdout/stderr into the cc_router bubble, then
       // close the block. Autonomous-only (D1). Both the per-chunk and the

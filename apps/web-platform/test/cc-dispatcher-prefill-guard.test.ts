@@ -293,6 +293,7 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
       filesystem: {
         allowWrite: [WORKSPACE_PATH],
         denyRead: ["/workspaces", "/proc"],
+        allowRead: [WORKSPACE_PATH],
       },
     });
     mockQuery.mockReturnValue(makeFakeQuery());
@@ -374,6 +375,7 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
       filesystem: {
         allowWrite: [WORKSPACE_PATH],
         denyRead: ["/workspaces", "/proc"],
+        allowRead: [WORKSPACE_PATH],
       },
     });
     mockQuery.mockReturnValue(makeFakeQuery());

@@ -185,6 +185,22 @@ vi.mock("@/server/ensure-workspace-repo", () => ({
   // lives in cc-dispatcher-warm-presandbox-mkdir.test.ts (real mkdir).
   ensureWorkspaceDirExists: vi.fn(async () => undefined),
 }));
+// #5733 D2 — these tests assert SDK-binding / mint / egress shape on a fixture
+// workspace path (`/tmp/cc-test-workspace`) that has no on-disk `.git`. D2 now
+// honest-blocks an absent `.git` at the cold dispatch gate, so force the
+// git-shape readiness to a ready dir-valid here (these tests do NOT exercise the
+// readiness gate — that is owned by cc-dispatcher-repo-gate.test.ts +
+// agent-ready-git-worktree.test.ts).
+vi.mock("@/server/git-worktree-validity", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    probeGitWorktreeShape: () => ({ kind: "dir-valid" }),
+    isReadyGitWorkTree: () => true,
+    isValidGitWorkTree: () => true,
+    evaluateAgentReadiness: async () => "ready",
+  };
+});
 
 vi.mock("@/server/permission-callback", () => ({
   // The factory composes a canUseTool from this — we capture the ctx
@@ -376,6 +392,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       filesystem: {
         allowWrite: [WORKSPACE_PATH],
         denyRead: ["/workspaces", "/proc"],
+        allowRead: [WORKSPACE_PATH],
       },
     });
     mockQuery.mockReturnValue(makeFakeQuery());

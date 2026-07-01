@@ -82,7 +82,7 @@ fixes for every per-step plan:
    self-heal, #5546).
 
 2. **The Postgres write-lease is the placement authority.** A per-`(workspace_id,
-   worktree_id)` lease row (migration 114) records `{host_id, lease_generation,
+   worktree_id)` lease row (migration 116) records `{host_id, lease_generation,
    acquired_at, heartbeat_at}`. Acquire/reclaim is **one atomic statement** under
    `pg_advisory_xact_lock` — `INSERT … ON CONFLICT DO UPDATE … WHERE heartbeat_at <
    now() - interval '120s' RETURNING`, with `lease_generation + 1` computed
@@ -100,6 +100,67 @@ fixes for every per-step plan:
    lock. The resource server enforces the token (Kleppmann), not the client. Fencing
    — not the heartbeat timeout — is the load-bearing invariant that makes reclaim
    safe.
+
+> **Amendment (CTO ruling, 2026-06-30, PR A review).** `lease_generation` is a
+> **globally-monotonic fencing token per `(workspace_id, worktree_id)` that
+> survives lock release** — this is a precondition of §3's `gen < max` reject.
+> The PR-A review caught that a literal 1:1 mirror of `acquire_conversation_slot`
+> made `release_worktree_lease` **DELETE** the row, so the next acquire reset
+> `gen` to the column default `1`; with §3's fence that inverts into a
+> workspace-level **write outage** (HOST_B reclaims → `gen=2`, releases, next
+> acquire `gen=1 < max=2` → every push rejected). Resolution: **`release`
+> TOMBSTONES the row** (retains it + its `lease_generation`, ages `heartbeat_at`
+> to `-infinity` so the next acquire takes over immediately via the expiry
+> disjunct), `host_id` kept so the acquire CASE is unchanged. The monotonic-token
+> responsibility stays at the **lock service** (the lease), and §3's fence remains
+> the unmodified dumb `reject gen < max` — no `(epoch, gen)` scheme needed. The
+> FK `ON DELETE CASCADE` is untouched (Art.17 erasure intact; the tombstone is
+> non-personal operational state bounded by worktree count). **Rejected:** (A1) a
+> per-resource sequence / side-counter table — breaks the single-atomic-statement
+> acquire and shares a hot object; (B) keep DELETE + amend the fence to tolerate
+> the epoch reset — pushes safety-critical state into the resource server (wrong
+> Kleppmann layer) and the crash path never releases, so the fence would need to
+> persist epoch boundaries independently anyway (strictly more state, zero
+> benefit). The slot precedent (029) was only ever a concurrency slot, never a
+> fence token, so DELETE-on-release was correct there and silently wrong here.
+
+> **Amendment (CTO ruling, 2026-07-01, PR B write-path).** §1's "worktrees on
+> NVMe, bare data on git-data" has no native git form (a worktree's objects must
+> be local), so PR B adopts the **dedicated-remote replication-push model**: the
+> NVMe worktree is an ordinary clone with a SECOND git remote `git-data`
+> (`git+ssh://git@<private-ip>/<workspace_id>.git`) ALONGSIDE GitHub `origin`. An
+> internal `git push git-data` over `gitWithPrivateKeyAuth` (private net),
+> triggered at the **turn/session boundary** (the existing `syncPush` sync points
+> — `unregisterSession`/`handleCcCloseQuery` finally), is the push §3's
+> `pre-receive` CAS fence guards; it carries `--push-option=lease-gen=<N>
+> --push-option=worktree-id=primary`. **The push-options attach to the git-data
+> push ONLY, never to the GitHub `syncPush`/`origin` push** (GitHub runs no fence
+> hook). The two pushes are distinct durability tiers, not a redundant double-write:
+> GitHub = external durable rehydration (the §8 SPOF mitigation, #5546, PUSHED refs
+> only); git-data = the shared object store Phase 3's 2nd host reads. Clone wiring
+> is **additive** — clone from git-data when enabled AND retain `origin`→GitHub
+> (orphaning GitHub would collapse the rehydration story). **Rejected:** (b)
+> alternates/network-mount borrow — the `pre-receive` fence would never fire
+> (no push), pushing enforcement onto a network-FS write-lock = the shared-POSIX
+> corruption surface Option C already rejected; (c) bare-authoritative
+> checkout-pull — forces a checkout-from-remote on every session open (latency +
+> a private-net failure mode at the worst moment) and makes PR C a semantic
+> authority-flip instead of the additive rsync-then-flag-flip it is designed to be
+> (Phase 3's 2nd-host *read* of the shared bare store is a (c)-flavored read
+> ADDITIVE on top of (a), not a replacement). **Lease activation: GATED behind
+> `isGitDataStoreEnabled()`, NOT live, at replicas=1.** A live "monitored
+> fail-closed" lease around every write (handoff note 3) adds a fail-closed
+> Postgres dependency to every prod turn for ZERO multi-host safety benefit (the
+> fence provably never rejects at replicas=1 — same-host gen is stable); it trades
+> a concrete single-user-incident regression (silent write block on a lease-RPC
+> outage) for a non-existent benefit (`hr-weigh-every-decision-against-target-user-impact`).
+> The one flag flips clone + path-split + push-with-gen + lease lifecycle ATOMICALLY
+> at cutover; the live lease path is first exercised under real contention at PR C /
+> Phase 3, not dark-run on prod. **Scope:** the in-sandbox `GIT_PUSH_OPTION_*` env
+> injection is DEFERRED to Phase 3 (the in-sandbox agent pushes to GitHub `origin`,
+> not git-data; Phase-2 replication is entirely app-server-side) — `receive.advertisePushOptions
+> true` stays in the bootstrap (forward-compat). **Prereq:** `gitWithPrivateKeyAuth`
+> (git-auth.ts) is unbuilt and must land before any git-data push/clone wiring.
 
 4. **Live-handle state stays host-local; control is routed by a stateless
    coordinator.** The coordinator holds **no live handles** (the lease lives in

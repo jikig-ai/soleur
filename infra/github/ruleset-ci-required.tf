@@ -19,6 +19,15 @@
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
+#
+# #5780 adds a second rule sibling — a `merge_queue` block (below the
+# required_status_checks block) — adopting a GitHub merge queue for `main` to
+# fix the strict-up-to-date BEHIND starvation. The queue REQUIRES every
+# required-check workflow to also fire on `merge_group` (landed in PR-1,
+# #5784), else queue entries stall pending forever. Because `rules` now holds
+# TWO rule types, any code/probe that reads the required-status-checks rule
+# MUST select by type (`select(.type=="required_status_checks")`), never a
+# positional `.rules[0]` — the apply-verify probe and audit script already do.
 resource "github_repository_ruleset" "ci_required" {
   name        = "CI Required"
   repository  = var.gh_repo
@@ -147,5 +156,18 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
     }
+
+    # Merge queue REVERTED (#5780 kill-switch, 2026-06-30). The queue was
+    # enabled by PR #5800 but DEADLOCKED main: GitHub CodeQL *default setup*
+    # does not run / post the required `CodeQL` context on a `merge_group`
+    # temp ref (it fires only on `push`/`pull_request`), so every queue entry
+    # stalled AWAITING_CHECKS until the 15-min timeout, then re-jammed (3 real
+    # PRs — #5808/#5794/#5798 — were stuck). All 15 OTHER required contexts DID
+    # report on the temp ref, so PR-1's `merge_group` wiring is correct; the
+    # gap is CodeQL-on-`merge_group` only. Reverting to direct-merge restores
+    # CodeQL coverage (it runs on `pull_request`). Re-adopt the queue ONLY
+    # after CodeQL is converted to *advanced* setup (a `codeql.yml` workflow
+    # with an `on: merge_group` trigger) so the `CodeQL` context posts on the
+    # temp ref. Tracked in #5780; see the PIR + ADR-032 amendment.
   }
 }

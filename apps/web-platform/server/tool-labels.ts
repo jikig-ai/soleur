@@ -17,6 +17,48 @@ import {
   SUSPECTED_LEAK_SHAPE as SHARED_SUSPECTED_LEAK_SHAPE,
 } from "@/lib/sandbox-path-patterns";
 
+/**
+ * #5733 deliverable C2 — the agent-context observability backstop predicate.
+ * Decides whether an in-sandbox Bash tool RESULT is the agent's `/soleur:go`
+ * Step 0.0 `git rev-parse --is-inside-work-tree` reporting NOT-a-work-tree (the
+ * strand). This is the GUARANTEED strand signal: it fires from the agent's REAL
+ * in-bwrap context, so it surfaces the strand for shapes the host `rev-parse`
+ * confirm is blind to (the escaping pointer — host git is not sandboxed — and
+ * object-store corruption, which passes host rev-parse).
+ *
+ * Deliberately conservative (it must NOT false-positive a healthy probe, which
+ * prints exactly `"true"`): fires ONLY when the command IS the rev-parse work-tree
+ * probe AND its output carries NO standalone `true` token. This single negation
+ * (#5733 D3) subsumes the prior `not a git repository` / `^fatal:` / bare-`false`
+ * branches AND closes the dominant prod shape they all missed: go.md Step 0.0 runs
+ * `git rev-parse … --is-inside-work-tree 2>/dev/null || true`, so a stranded
+ * workspace emits EMPTY stdout (stderr suppressed, `|| true` swallows the non-zero
+ * exit) — empty output carries no `true`, so it is now correctly a strand. The
+ * healthy forms all print a standalone `true` (a lone `true`, the compound
+ * `false\ntrue` work-tree case, or the bare-repo `true\nfalse`) → NOT a strand.
+ *
+ * The command guard requires the probe to be the operative STATEMENT (a command
+ * head — start of line / after `;`/`&&`/`||`/`|`/newline, optionally behind a
+ * `cd … &&` prelude), NOT merely a substring embedded in an unrelated command
+ * (e.g. `echo "git rev-parse --is-inside-work-tree"`) — which would otherwise
+ * false-positive a strand on empty output (architecture-review bound). Pure — the
+ * dispatcher owns the emit + pseudonymization.
+ */
+export function isInSandboxRevParseStrand(
+  command: string,
+  output: string,
+): boolean {
+  const isWorkTreeProbe =
+    /(?:^|[\n;|]|&&|\|\|)[ \t]*(?:cd[ \t]+\S[^\n;|]*?(?:&&|;)[ \t]*)?git[ \t]+(?:-\S+[ \t]+)*rev-parse[ \t][^\n;|]*--is-inside-work-tree\b/i.test(
+      command,
+    );
+  if (!isWorkTreeProbe) return false;
+  // Strand iff the output has NO standalone `true` token. Healthy probes always
+  // print a whitespace-delimited `true`; a stranded/empty/`false`/`fatal:` output
+  // does not.
+  return !/(^|\s)true(\s|$)/i.test(output);
+}
+
 /** Fallback labels when input is unavailable or unrecognized */
 const FALLBACK_LABELS: Record<string, string> = {
   Read: "Reading file...",

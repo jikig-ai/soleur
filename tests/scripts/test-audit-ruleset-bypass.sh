@@ -669,6 +669,44 @@ t_rsc_canonical_matches_terraform() {
   fi
 }
 
+# T-mq-1 (merge_queue stays REVERTED, #5780): the merge queue was enabled by
+# PR #5800 then reverted (kill-switch) because GitHub CodeQL default setup does
+# not post the required `CodeQL` context on `merge_group` temp refs → every
+# queue entry deadlocked. Until CodeQL is moved to *advanced* setup with an
+# `on: merge_group` trigger, neither the Terraform source of truth
+# (infra/github/ruleset-ci-required.tf) nor the DR-restore skeleton
+# (scripts/create-ci-required-ruleset.sh) may declare a `merge_queue` rule —
+# re-adding one before the CodeQL fix re-introduces the outage. This guard
+# fails CI if a `merge_queue` rule reappears in either file. See ADR-032 +
+# the PIR. (When re-adopting, replace this guard with a param-parity gate.)
+t_mq_stays_reverted() {
+  local tf="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+  local dr="$REPO_ROOT/scripts/create-ci-required-ruleset.sh"
+  if [[ ! -f "$tf" || ! -f "$dr" ]]; then
+    _report "T-mq-1 merge_queue source files exist" fail "missing $tf or $dr"
+    return
+  fi
+  # .tf: a `merge_queue {` HCL block (not a comment) would re-enable the queue.
+  # Strip comment lines (leading #) before matching so the revert-rationale
+  # comment that names "merge_queue" does not false-fail.
+  # `grep -c` exits 1 on zero matches — the EXPECTED reverted state — so `|| true`
+  # keeps `set -euo pipefail` from aborting the suite mid-run.
+  local tf_block
+  tf_block=$(grep -vE '^[[:space:]]*#' "$tf" | grep -cE 'merge_queue[[:space:]]*\{' || true)
+  # DR skeleton: a "type": "merge_queue" rule in the heredoc would re-add it.
+  local dr_rule
+  dr_rule=$(sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$dr" \
+    | sed '1d;$d' \
+    | jq -c '[.rules[] | select(.type=="merge_queue")] | length' 2>/dev/null || true)
+  [[ -z "$dr_rule" ]] && dr_rule=0
+  if [[ "$tf_block" == "0" && "$dr_rule" == "0" ]]; then
+    _report "T-mq-1 merge_queue stays reverted (.tf + DR skeleton)" ok
+  else
+    _report "T-mq-1 merge_queue stays reverted (.tf + DR skeleton)" fail \
+      "tf_merge_queue_blocks=$tf_block dr_merge_queue_rules=$dr_rule — re-adopting requires CodeQL advanced setup first (#5780)"
+  fi
+}
+
 # T-rsc-8: cross-script parity — shared canonicalize-required-status-checks lib is sourced
 t_rsc_shared_lib_used() {
   local audit_file="$REPO_ROOT/scripts/audit-ruleset-bypass.sh"
@@ -743,6 +781,7 @@ t_rsc_order_insensitive
 t_rsc_real_canonical_shape
 t_rsc_shared_lib_used
 t_rsc_canonical_matches_terraform
+t_mq_stays_reverted
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

@@ -2,6 +2,8 @@
 
 Queryable index of architectural principles. Each principle links to its canonical source — rationale and full context live there. This register enables structured references in ADRs and automated compliance checking during PR review.
 
+> **Sibling registers:** [`domain-model.md`](./domain-model.md) (domain entities + business-rule invariants), [`nfr-register.md`](./nfr-register.md) (non-functional requirements). Use this register for *how we build*; use `domain-model.md` for *what the product's entities are and the rules that govern them* (e.g. `AP-015`'s workspace owner-canary principle maps to `domain-model.md` rules `BR-WS-3`/`BR-WS-4`).
+
 ## Principles
 
 | ID | Title | Canonical Source | Enforcement | Related NFRs |
@@ -20,7 +22,7 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-012 | New vendor checklist | constitution.md (Architecture/Always) | skill | NFR-026, NFR-027 |
 | AP-013 | Process-local state for runner sessions | ADR-027 | skill | NFR-019 |
 | AP-014 | Platform-loop / per-founder cohabitation boundary | ADR-033 | hook | NFR-014 |
-| AP-015 | Always-enforce-workspace (every user owns a guaranteed 1-member personal workspace; the owner-membership canary) | ADR-044 | advisory | NFR-014 |
+| AP-015 | Always-enforce-workspace (every user owns a guaranteed 1-member personal workspace; the owner-membership canary) | ADR-044, ADR-073 | advisory | NFR-014 |
 
 ## Enforcement Tiers
 

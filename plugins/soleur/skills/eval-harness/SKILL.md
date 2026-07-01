@@ -107,7 +107,18 @@ cd plugins/soleur/skills/eval-harness
 bash scripts/gen-models.sh                                            # refresh model IDs from the registry
 npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3      # ~126 API calls (7 tasks)
 npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3   # ~108 API calls (6 tasks)
+npx promptfoo eval -c promptfooconfig.tool-selection.yaml --repeat 5  # ~450 API calls (15 tasks) — manual only
 ```
+
+**`tool-selection`** is a **manual measurement-only** target (#5768 AC(c)): it
+measures whether the L3 phase-scoped surface (the hint
+`.claude/hooks/phase-surface-hint.sh` injects) lets the model pick the correct
+next skill more often than the full-surface baseline. The mean of the MEASUREMENT
+score across the two arms IS the before/after uplift. Unlike `go-routing` /
+`ticket-triage` it is **not** in [gated-skills.json](./gated-skills.json) — there
+is no prose block to project (the surface lives in `phase-surface-map.json`, not a
+SKILL.md `eval-gate` block), so it never runs as a per-PR projection round-trip;
+run it by hand when you want the AC(c) number.
 
 `--repeat 3` runs each cell 3× so the rate can be a median over runs — a config-level `repeat:` key
 is NOT honored by promptfoo, so the flag is required.

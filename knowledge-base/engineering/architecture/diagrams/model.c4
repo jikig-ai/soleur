@@ -6,7 +6,7 @@
 model {
 
   founder = actor "Founder / Operator" {
-    description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
+    description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
   }
 
   // External actor — third parties whose inbound email is the operator
@@ -14,6 +14,15 @@ model {
   emailSender = actor "Inbound Correspondent" {
     #external
     description "Vendors, regulators, and counsel emailing the operator address. Their statutory/operational mail is the email-triage inbox's inbound source."
+  }
+
+  // External actor — an UNTRUSTED pull-request author, distinct from the trusted
+  // `founder` Owner above. Their PR-head code executes only in the fix-constraints
+  // Stage A recovery producer (`pull_request`, contents:read, no write/secret
+  // token); it never runs in the privileged Stage B consumer (ADR-074).
+  contributor = actor "Contributor / PR Author" {
+    #external
+    description "An untrusted contributor opening a pull request. Their PR-head code is executed only by the fix-constraints Stage A producer (pull_request, contents:read, no write token) — never by the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074)."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------
@@ -29,7 +38,7 @@ model {
       }
       api = container "API Routes" {
         technology "Next.js API"
-        description "REST endpoints for auth, sessions, and agent control"
+        description "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843)."
       }
       auth = container "Auth Module" {
         technology "Supabase Auth"
@@ -135,6 +144,10 @@ model {
         technology "Validation Gate"
         description "Validation-gates classifier-skill block edits (no-regression + target-passes)"
       }
+      constraintscaffold = component "constraint-scaffold skill" {
+        technology "Constraint Generator"
+        description "Generates the L1 dep-cruiser import-boundary gate (client→server-secret) plus the two-stage pull_request→workflow_run auto-recovery workflows (ADR-074) into the product codebase CI"
+      }
     }
 
     infra = system "Infrastructure" {
@@ -226,7 +239,7 @@ model {
   // Relationships — preserved 1:1 from the three Mermaid sources.
   // ======================================================================
 
-  // ---- C4 L1 (System Context) — 12 relationships -------------------------
+  // ---- C4 L1 (System Context) — 17 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }
   webapp -> supabase "Auth and data" { technology "HTTPS" }
@@ -242,6 +255,15 @@ model {
   emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
   resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
   webapp -> resend "Statutory triage notifications (outbound email)" { technology "HTTPS (Resend API)" }
+
+  // ---- fix-constraints two-stage privileged recovery boundary (ADR-074) ----
+  // Trust boundary: the untrusted contributor's PR-head code runs ONLY in the
+  // Stage A producer (read-only, no secret/write); the privileged Stage B
+  // consumer — always run by GitHub from the default branch — opens a data-only
+  // draft follow-up PR into the product codebase via the Git Data API (no
+  // untrusted checkout, structurally clearing the toctou sink).
+  contributor -> github "Opens untrusted PR — head code runs in fix-constraints Stage A (pull_request, contents:read, no write token) (ADR-074)" { technology "HTTPS" }
+  github -> webapp "fix-constraints Stage B (workflow_run, PRIVILEGED, contents:write): opens a data-only draft follow-up PR via Git Data API — never checks out the untrusted tree (ADR-074)" { technology "HTTPS (Git Data API)" }
 
   // ---- C4 L2 (Container) — 24 relationships ------------------------------
   founder -> dashboard "Browses and converses" { technology "HTTPS" }
@@ -305,4 +327,5 @@ model {
   compound -> kb "Writes learnings, promotes to constitution"
   architecture -> kb "Writes ADRs and diagrams"
   compound -> evalharness "Validates classifier-skill edits before applying"
+  constraintscaffold -> webapp "Generates L1 import-boundary gate (CI)"
 }

@@ -68,6 +68,45 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
   });
 });
 
+describe("buildAgentQueryOptions — phase-surface hint per-caller opt-in (#5772 lever 1)", () => {
+  it("registers PostToolUse(Skill) only when enablePhaseSurfaceHint is true", () => {
+    const on = buildAgentQueryOptions({ ...minArgs, enablePhaseSurfaceHint: true });
+    expect(Array.isArray(on.hooks?.PostToolUse)).toBe(true);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Skill");
+  });
+
+  it("omits PostToolUse entirely for the legacy caller (flag absent)", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks?.PostToolUse).toBeUndefined();
+    // The PreToolUse + SubagentStart hooks remain regardless of the flag.
+    expect(off.hooks?.PreToolUse).toBeDefined();
+    expect(off.hooks?.SubagentStart).toBeDefined();
+  });
+});
+
+describe("buildAgentQueryOptions — tool-attempt telemetry per-caller opt-in (#5843, AC5)", () => {
+  const telemetryHook = (async () => ({})) as never;
+
+  it("appends a SEPARATE matcher-less PreToolUse entry only when the hook is passed", () => {
+    const on = buildAgentQueryOptions({
+      ...minArgs,
+      toolAttemptPreToolUseHook: telemetryHook,
+    });
+    // The sandbox entry stays first + unchanged (its matcher is preserved), and
+    // the telemetry entry is appended matcher-less (full-surface capture).
+    expect(on.hooks!.PreToolUse).toHaveLength(2);
+    expect(on.hooks!.PreToolUse![0].matcher).toContain("Bash");
+    expect(on.hooks!.PreToolUse![1].matcher).toBeUndefined();
+    expect(on.hooks!.PreToolUse![1].hooks).toEqual([telemetryHook]);
+  });
+
+  it("legacy caller (hook absent) keeps exactly ONE PreToolUse entry — the sandbox hook (AC5 byte-unchanged)", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks!.PreToolUse).toHaveLength(1);
+    expect(off.hooks!.PreToolUse![0].matcher).toContain("Bash");
+  });
+});
+
 describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
   it("T2: allowedTools is wired through verbatim", () => {
     const opts = buildAgentQueryOptions({

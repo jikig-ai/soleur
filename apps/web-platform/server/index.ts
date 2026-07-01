@@ -21,6 +21,7 @@ import {
   startCcIdleReaper,
 } from "./cc-dispatcher";
 import { handleConversationMessages } from "./api-messages";
+import { releaseAllHeldLeases } from "./worktree-write-lease";
 import { createChildLogger } from "./logger";
 import { installCrashHandlers } from "./crash-handlers";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
@@ -269,6 +270,13 @@ app.prepare().then(() => {
     // feat-stream-since-disconnect (#5273) — drain the in-memory replay buffer
     // on shutdown (process-local; nothing to persist). See ADR-059.
     streamReplayBuffer.clearAll();
+
+    // #5274 PR B — gracefully release every worktree write-lease this host
+    // holds so a surviving host reclaims immediately rather than waiting out the
+    // 120s heartbeat expiry. Best-effort + bounded (allSettled, never throws);
+    // a lease that fails to release simply expires. Inert when the lease path is
+    // gated off (the registry is empty) — no git-data dependency at flag-off.
+    await releaseAllHeldLeases();
 
     server.close();
     server.closeIdleConnections();

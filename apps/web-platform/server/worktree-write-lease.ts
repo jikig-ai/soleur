@@ -1,0 +1,347 @@
+import { createServiceClient } from "@/lib/supabase/service";
+import { reportSilentFallback } from "./observability";
+
+/**
+ * Thin RPC client over the migration-116 worktree-write-lease functions
+ * (`acquire_worktree_lease` / `touch_worktree_lease` / `release_worktree_lease`).
+ * Epic #5274 Phase 2, ADR-068 §2. Mirrors concurrency.ts:77-186 for the
+ * RPC-call shape (lazy service client, transient retry on acquire,
+ * reportSilentFallback on error, never throws).
+ *
+ * `host_id` is passed in by the caller — a host-STABLE infra identity (the
+ * Hetzner server id injected at cloud-init), NEVER the per-container hostname
+ * and NEVER an auth.uid(). Resolving that stable source + wiring acquire/touch/
+ * release into the write path (SIGTERM-release, ≤30s heartbeat, fail-loud on a
+ * touch-0, and the `git push --push-option=lease-gen=<N>` fence wrapper) is
+ * PR B; this module provides only the lease primitives.
+ */
+
+/** The single worktree id per workspace today — one tree per workspace
+ *  (inflight-checkpoint.ts:14, ensure-workspace-repo.ts:75). A stable opaque
+ *  constant; multi-worktree is Phase 3 (additive, non-breaking). Shared so the
+ *  two turn-boundary lineages key the lease identically (no drift). */
+export const WORKTREE_ID_PRIMARY = "primary";
+
+/** The lease a host currently holds: its infra `host_id` + the fencing
+ *  generation token it presents to the git-data host's pre-receive CAS. */
+export interface WorktreeLease {
+  hostId: string;
+  leaseGeneration: number;
+}
+
+// Lazy-init: this module may be imported transitively by route files that
+// `next build` evaluates with SUPABASE_URL unset. Evaluating
+// createServiceClient() at module-eval time would throw there. Mirror
+// concurrency.ts:48-58.
+type ServiceClient = ReturnType<typeof createServiceClient>;
+let _supabase: ServiceClient | null = null;
+const supabase = new Proxy({} as ServiceClient, {
+  get(_target, prop) {
+    _supabase ??= createServiceClient();
+    const value = Reflect.get(_supabase, prop);
+    return typeof value === "function" ? value.bind(_supabase) : value;
+  },
+});
+
+/** Transient Postgres error SQLSTATEs that warrant a single retry:
+ *  40P01 deadlock_detected, 55P03 lock_not_available. Mirror concurrency.ts:62. */
+const TRANSIENT_SQLSTATES = new Set(["40P01", "55P03"]);
+
+function isTransient(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return typeof code === "string" && TRANSIENT_SQLSTATES.has(code);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+/**
+ * Acquire (or refresh) the write lease for `(workspaceId, worktreeId)` as
+ * `hostId`. Returns the held lease on success, or `null` when the lease is held
+ * live by ANOTHER host (the caller LOST — it must not write).
+ *
+ * Fail-closed: a non-transient RPC error is mirrored to Sentry and ALSO maps to
+ * `null` — the caller cannot prove it holds the lease, so it must treat the
+ * acquire as lost and not write. Bounded jittered retry covers deadlock /
+ * lock-timeout on the per-key advisory xact lock. Never throws.
+ */
+export async function acquireWorktreeLease(
+  workspaceId: string,
+  worktreeId: string,
+  hostId: string,
+): Promise<WorktreeLease | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data, error } = await supabase.rpc("acquire_worktree_lease", {
+      p_workspace_id: workspaceId,
+      p_worktree_id: worktreeId,
+      p_host_id: hostId,
+    });
+    // A clean response with a DEFINED payload: [] = a live lease held by another
+    // host (legitimate loss — silent, no Sentry), one row = we hold it. Gate on
+    // `data !== null` so an anomalous `{data: null, error: null}` PostgREST
+    // response (e.g. an RPC timeout) is NOT mistaken for "lost" and silently
+    // swallowed — it falls through to retry, then to the exhaustion mirror below
+    // (mirror concurrency.ts:93-128; cq-silent-fallback-must-mirror-to-sentry).
+    if (!error && data !== null) {
+      const rows = data as { host_id: string; lease_generation: number }[];
+      if (rows.length === 0) return null; // a live lease held by another host
+      const row = rows[0]!;
+      return { hostId: row.host_id, leaseGeneration: Number(row.lease_generation) };
+    }
+    if (isTransient(error) && attempt < 2) {
+      await delay(80 + Math.random() * 40); // 80–120 ms jitter (mirror concurrency)
+      continue;
+    }
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "worktree_lease",
+        op: "acquireWorktreeLease",
+        extra: { workspaceId, worktreeId, hostId, attempt },
+      });
+      return null; // fail-closed: caller cannot prove it holds → must not write
+    }
+    // !error && data === null (anomalous): retry while attempts remain.
+    if (attempt < 2) {
+      await delay(80 + Math.random() * 40);
+      continue;
+    }
+  }
+  // Exhausted: 3 transient errors OR 3 anomalous {data:null,error:null} responses.
+  // Mirror to Sentry so the fail-close is operator-visible — now REACHABLE via the
+  // null-data fall-through above (concurrency.ts:116-128).
+  reportSilentFallback(
+    new Error("acquireWorktreeLease exhausted 3 retries without data or error"),
+    {
+      feature: "worktree_lease",
+      op: "acquireWorktreeLease",
+      extra: { workspaceId, worktreeId, hostId },
+    },
+  );
+  return null;
+}
+
+/**
+ * Heartbeat the held lease. Returns `true` while still held; `false` when the
+ * lease was reclaimed (host_id changed, gen bumped, or row gone) — the caller
+ * MUST treat `false` as "you no longer hold it", abort the in-flight write, and
+ * fail loud (the Sentry `worktree_lease` slug wiring is PR B). The caller passes
+ * the gen from its most-recent successful acquire. An RPC error maps to `false`
+ * (treated as lost) and is mirrored to Sentry. Never throws.
+ */
+export async function touchWorktreeLease(
+  workspaceId: string,
+  worktreeId: string,
+  hostId: string,
+  leaseGeneration: number,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc("touch_worktree_lease", {
+    p_workspace_id: workspaceId,
+    p_worktree_id: worktreeId,
+    p_host_id: hostId,
+    p_lease_generation: leaseGeneration,
+  });
+  if (error) {
+    reportSilentFallback(error, {
+      feature: "worktree_lease",
+      op: "touchWorktreeLease",
+      extra: { workspaceId, worktreeId, hostId, leaseGeneration },
+    });
+    return false;
+  }
+  // RPC returns the updated integer row count (0 or 1).
+  const updated = typeof data === "number" ? data : Number(data ?? 0);
+  return updated > 0;
+}
+
+/**
+ * Graceful release: delete the lease row only if `hostId` AND `leaseGeneration`
+ * still match (a reclaimer's row is never stomped — a stale-gen release is a
+ * server-side no-op). Best-effort teardown: errors are mirrored to Sentry but
+ * not re-thrown. Never throws.
+ */
+export async function releaseWorktreeLease(
+  workspaceId: string,
+  worktreeId: string,
+  hostId: string,
+  leaseGeneration: number,
+): Promise<void> {
+  try {
+    const { error } = await supabase.rpc("release_worktree_lease", {
+      p_workspace_id: workspaceId,
+      p_worktree_id: worktreeId,
+      p_host_id: hostId,
+      p_lease_generation: leaseGeneration,
+    });
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "worktree_lease",
+        op: "releaseWorktreeLease",
+        extra: { workspaceId, worktreeId, hostId, leaseGeneration },
+      });
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "worktree_lease",
+      op: "releaseWorktreeLease",
+      extra: { workspaceId, worktreeId, hostId, leaseGeneration },
+    });
+  }
+}
+
+// --- Held-lease registry (SIGTERM drain) ------------------------------------
+// Process-local record of the leases this host currently holds, so the SIGTERM
+// handler can release them before exit (a graceful release lets a surviving host
+// reclaim immediately rather than waiting out the 120s heartbeat expiry). Mirrors
+// the module-level Map pattern in agent-session-registry.ts, collocated here so
+// the lease concern owns its own lifecycle state.
+
+/** A lease currently held by this host, keyed by `(workspaceId, worktreeId)`. */
+export interface HeldWorktreeLease {
+  workspaceId: string;
+  worktreeId: string;
+  hostId: string;
+  leaseGeneration: number;
+}
+
+const heldLeases = new Map<string, HeldWorktreeLease>();
+
+function heldKey(workspaceId: string, worktreeId: string): string {
+  return `${workspaceId}:${worktreeId}`;
+}
+
+/** Record a held lease (call after a successful acquire). Idempotent per key. */
+export function registerHeldLease(lease: HeldWorktreeLease): void {
+  heldLeases.set(heldKey(lease.workspaceId, lease.worktreeId), lease);
+}
+
+/** Drop a held lease from the registry (call after release / on loss). */
+export function unregisterHeldLease(
+  workspaceId: string,
+  worktreeId: string,
+): void {
+  heldLeases.delete(heldKey(workspaceId, worktreeId));
+}
+
+/**
+ * Release every held lease — the SIGTERM drain step (server/index.ts, after the
+ * cc-query drain, before server.close()). Best-effort + bounded: each release is
+ * a never-throwing RPC, run concurrently via allSettled so one slow release can't
+ * starve the 8s shutdown budget. Clears the registry up front so a release that
+ * races a concurrent acquire doesn't resurrect a stale entry. A lease that fails
+ * to release simply expires at 120s and a surviving host reclaims it.
+ */
+export async function releaseAllHeldLeases(): Promise<void> {
+  const leases = [...heldLeases.values()];
+  heldLeases.clear();
+  await Promise.allSettled(
+    leases.map((l) =>
+      releaseWorktreeLease(
+        l.workspaceId,
+        l.worktreeId,
+        l.hostId,
+        l.leaseGeneration,
+      ),
+    ),
+  );
+}
+
+// --- Session-lifetime lease handle (acquire + heartbeat + release) ----------
+
+/** Heartbeat cadence — refresh well inside the 120s lease expiry (migration
+ *  116). Mirrors the `touchSlot` ≤30s ping in ws-handler.ts:2946. */
+export const WORKTREE_LEASE_HEARTBEAT_MS = 25_000;
+
+/** Consecutive failed touches before declaring the lease lost. >1 so a single
+ *  transient Postgres error (which `touchWorktreeLease` maps to `false`, same as
+ *  a real reclaim) does not abort a valid session; 2 beats (~50s) stays well
+ *  inside the 120s expiry. */
+export const MAX_CONSECUTIVE_TOUCH_MISSES = 2;
+
+/** A held lease's lifetime handle: the fencing generation to present on the
+ *  git-data push, and an idempotent release that stops the heartbeat + frees
+ *  the row. */
+export interface WorktreeLeaseHandle {
+  leaseGeneration: number;
+  release(): Promise<void>;
+}
+
+/**
+ * Acquire a write lease and hold it for the session lifetime: register it for
+ * the SIGTERM drain and start a ≤25s heartbeat. Returns `null` when the lease is
+ * held live by ANOTHER host — the caller LOST and MUST NOT write (fail-closed).
+ *
+ * On heartbeat loss the heartbeat stops, the registry entry is dropped, and
+ * `onLost` fires exactly once — the caller aborts the in-flight write and fails
+ * loud. `release()` is idempotent and is also suppressed once a loss is observed
+ * (the row already belongs to the reclaimer; release_worktree_lease would no-op).
+ *
+ * Loss requires `MAX_CONSECUTIVE_TOUCH_MISSES` CONSECUTIVE failed touches, not
+ * one: `touchWorktreeLease` maps a transient Postgres error to the same `false`
+ * as a real reclaim, and a single DB blip should not abort an otherwise-valid
+ * session. The 120s lease expiry affords ~4 missed 25s beats of slack, so two
+ * consecutive misses (~50s) still declares a genuine reclaim well inside expiry
+ * while tolerating one transient blip. A real reclaim returns `false` every
+ * beat, so it still trips; the git-data fence is the ultimate guard against a
+ * write by a host that has actually lost the row, so the slack cannot double-write.
+ *
+ * GATED: callers invoke this ONLY behind `isGitDataStoreEnabled()`. At
+ * replicas=1 with the flag off the lease path is entirely inert (ADR-068
+ * amendment) — the fence provably never rejects same-host pushes, so a live
+ * lease would add a fail-closed Postgres dependency to every turn for zero
+ * multi-host benefit (`hr-weigh-every-decision-against-target-user-impact`).
+ */
+export async function acquireAndHoldWorktreeLease(
+  workspaceId: string,
+  worktreeId: string,
+  hostId: string,
+  onLost: () => void,
+): Promise<WorktreeLeaseHandle | null> {
+  const lease = await acquireWorktreeLease(workspaceId, worktreeId, hostId);
+  if (!lease) return null;
+  const { leaseGeneration } = lease;
+  registerHeldLease({ workspaceId, worktreeId, hostId, leaseGeneration });
+
+  // Settled on the FIRST of {release, observed-loss}; both transitions are
+  // idempotent and mutually exclusive thereafter.
+  let settled = false;
+  let consecutiveMisses = 0;
+  const heartbeat = setInterval(() => {
+    void touchWorktreeLease(
+      workspaceId,
+      worktreeId,
+      hostId,
+      leaseGeneration,
+    ).then((held) => {
+      if (settled) return;
+      if (held) {
+        consecutiveMisses = 0; // a single good beat clears a transient blip
+        return;
+      }
+      if (++consecutiveMisses < MAX_CONSECUTIVE_TOUCH_MISSES) return;
+      settled = true;
+      clearInterval(heartbeat);
+      unregisterHeldLease(workspaceId, worktreeId);
+      onLost();
+    });
+  }, WORKTREE_LEASE_HEARTBEAT_MS);
+  // The heartbeat alone must never block process exit (mirror ws-handler:842).
+  heartbeat.unref?.();
+
+  return {
+    leaseGeneration,
+    release: async (): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      unregisterHeldLease(workspaceId, worktreeId);
+      await releaseWorktreeLease(workspaceId, worktreeId, hostId, leaseGeneration);
+    },
+  };
+}
+
+/** Test-only registry accessors (the runtime never reads these). */
+export const __test_only__ = {
+  heldLeaseCount: (): number => heldLeases.size,
+  clearHeldLeases: (): void => heldLeases.clear(),
+};

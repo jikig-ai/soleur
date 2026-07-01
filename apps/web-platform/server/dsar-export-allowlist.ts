@@ -413,6 +413,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "executions, not user-profile data. Promote to DSAR_TABLE_ALLOWLIST " +
     "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
     "dsar-export.ts chain is wired.",
+
+  // #5274 (Phase 2, ADR-068 §2): per-worktree write-lease coordination state.
+  // workspace_id is the only user-transitive FK; the remaining columns
+  // (worktree_id, host_id, lease_generation, two timestamps) are pure infra
+  // coordination. host_id is a host-STABLE server identity, explicitly NEVER
+  // an auth.uid() (migration 116) — it identifies a machine, not a data
+  // subject. Nothing here is Art. 15-relevant personal data.
+  worktree_write_lease:
+    "Migration 116 operational write-lease state for the multi-host " +
+    "/workspaces layer (epic #5274). Columns are infra coordination only: " +
+    "workspace_id (FK), worktree_id, host_id (host-stable server identity, " +
+    "NEVER auth.uid()), lease_generation, acquired_at, heartbeat_at. No " +
+    "user-provided content and no personal-profile data. Art. 17 erasure is " +
+    "satisfied by ON DELETE CASCADE from public.workspaces (no anonymise RPC " +
+    "needed — the row has zero audit lineage; proven by the AC5 " +
+    "cascade integration test). No DSAR export surface.",
 };
 
 /**
