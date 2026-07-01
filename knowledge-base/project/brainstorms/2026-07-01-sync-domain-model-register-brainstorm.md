@@ -71,9 +71,9 @@ the register's curation trust while still delivering auto-fill.
 
 - **Enforcement gates** (plan-time flagging, review drift-check, ship block): distinct CI/workflow-gate
   concern the register already calls "fast-follow." The drift report IS the drift-check primitive;
-  wiring it into plan/review/ship is separable. → follow-up issue.
+  wiring it into plan/review/ship is separable. → **#5871**.
 - **Scheduled drift-check cron** (Productize Candidate): run `--domain-model` drift weekly, file an
-  issue when register/source diverge. → follow-up issue.
+  issue when register/source diverge. → **#5872**.
 
 ## Open Questions (for the plan skill)
 
