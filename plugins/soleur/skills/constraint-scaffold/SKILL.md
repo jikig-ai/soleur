@@ -71,6 +71,8 @@ bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --
 | `.github/workflows/fix-constraints-stage-a.yml` | Untrusted `pull_request` producer (ADR-074): `contents: read` only. Runs the gate, dispatches the fix-only agent, re-verifies green, uploads the fix as a full-post-image-contents artifact (per-file sha256 + meta.json). No write token, no commit/push. |
 | `.github/workflows/fix-constraints-stage-b.yml` | Privileged `workflow_run` consumer (ADR-074): validates the attacker-controlled artifact (isCrossRepository==false gate, event-sourced identity, charset+traversal+symlink+size allowlist, sha256 byte-verify) and applies it via the Git Data API (blob→tree with mandatory base_tree→commit→ref) — never checks out the untrusted tree, never git-applies. Delivers a draft follow-up PR. |
 
+**Before editing either stage workflow (or its template), read ADR-074 + [[2026-07-01-two-stage-privileged-workflow-split-and-its-review-traps]].** The load-bearing invariants — trigger split (untrusted producer / privileged non-executing consumer), Stage B's `isCrossRepository==false` gate on the *fully attacker-controlled* artifact, event-sourced identity, mandatory `base_tree`, name-coupling (`workflow_run` matches Stage A's `name:`, not its filename), the give-up marker (no terminal state is silent), and `emit()` output-sanitization — are enforced by `test/emit-fix-constraints.test.sh` + `test/parity.test.sh` (which covers the repo-root dogfood copies, not just emitted fixtures). A change that greens those tests but breaks an invariant is the class the tests exist to catch.
+
 ## Self-tests
 
 `test/boundary.test.sh` (scripts shard) proves the gate is not vacuous: a value import of `server/**`
