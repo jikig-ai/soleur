@@ -9,7 +9,7 @@ views {
     title "Soleur Platform — System Context (C4 L1)"
 
     include
-      founder, emailSender,
+      founder, emailSender, contributor,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
       anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend
 
@@ -24,7 +24,7 @@ views {
     title "Soleur Platform — Containers (C4 L2)"
 
     include
-      founder, emailSender,
+      founder, emailSender, contributor,
       platform.webapp, platform.engine, platform.plugin, platform.infra,
       platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
