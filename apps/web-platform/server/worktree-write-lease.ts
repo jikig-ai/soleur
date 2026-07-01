@@ -71,6 +71,70 @@ export interface WorktreeLease {
   leaseGeneration: number;
 }
 
+/** Liveness window for a read-only holder lookup (session routing). Mirrors the
+ *  migration-116 lease expiry: a lease whose `heartbeat_at` is older than this is
+ *  reclaimable (acquire bumps gen past 120s of silence) and is NOT a live owner —
+ *  a `release` tombstones by ageing the heartbeat out, so an expired/tombstoned
+ *  row reads as "no live holder" (cold → the placing host acquires). */
+export const LEASE_LIVENESS_WINDOW_MS = 120_000;
+
+/** The LIVE holder of a `(workspaceId, worktreeId)` lease, as read by the session
+ *  router to place an inbound session. */
+export interface WorktreeLeaseHolder {
+  hostId: string;
+  leaseGeneration: number;
+  heartbeatAt: string;
+}
+
+/**
+ * Read the CURRENT LIVE holder of the `(workspaceId, worktreeId)` lease, or
+ * `null` when there is none — the row is absent (cold session) OR its heartbeat
+ * is older than {@link LEASE_LIVENESS_WINDOW_MS} (a tombstoned/expired lease the
+ * next acquire will reclaim). READ-ONLY: no acquire side effect, so the router
+ * can decide local-serve vs proxy-to-owner without stealing the lease. Uses the
+ * service client (the lease table is operational state; this bypasses RLS to read
+ * any tenant's row for routing — never returns tenant CONTENT, only a host id +
+ * gen).
+ *
+ * Fail-QUIET to `null` on a DB read error (mirrored to Sentry): the placing host
+ * then treats the session as cold and acquires — and `acquireWorktreeLease` is
+ * itself fail-CLOSED (returns null if another host truly holds it live), with the
+ * git-data fence as the ultimate write guard. So a routing read-error degrades to
+ * honest-reconnect affinity loss, never a cross-tenant write.
+ */
+export async function readWorktreeLeaseHolder(
+  workspaceId: string,
+  worktreeId: string,
+): Promise<WorktreeLeaseHolder | null> {
+  const { data, error } = await supabase
+    .from("worktree_write_lease")
+    .select("host_id, lease_generation, heartbeat_at")
+    .eq("workspace_id", workspaceId)
+    .eq("worktree_id", worktreeId)
+    .maybeSingle();
+  if (error) {
+    reportSilentFallback(error, {
+      feature: "worktree_lease",
+      op: "readWorktreeLeaseHolder",
+      extra: { workspaceId, worktreeId },
+    });
+    return null;
+  }
+  const row = data as
+    | { host_id: string; lease_generation: number; heartbeat_at: string }
+    | null;
+  if (!row) return null;
+  const heartbeatMs = Date.parse(row.heartbeat_at);
+  if (Number.isNaN(heartbeatMs) || Date.now() - heartbeatMs > LEASE_LIVENESS_WINDOW_MS) {
+    return null; // tombstoned / expired — no live owner (cold → local acquire)
+  }
+  return {
+    hostId: row.host_id,
+    leaseGeneration: Number(row.lease_generation),
+    heartbeatAt: row.heartbeat_at,
+  };
+}
+
 // Lazy-init: this module may be imported transitively by route files that
 // `next build` evaluates with SUPABASE_URL unset. Evaluating
 // createServiceClient() at module-eval time would throw there. Mirror
