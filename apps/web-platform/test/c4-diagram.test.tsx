@@ -14,6 +14,7 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
     "c4-edit": c4Edit,
     "command-palette": false,
     support: false,
+    "guided-tour": false,
   };
 }
 

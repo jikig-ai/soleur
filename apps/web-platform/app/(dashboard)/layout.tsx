@@ -24,6 +24,7 @@ import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
 import { SupportLauncher } from "@/components/support/support-launcher";
+import { TourProvider } from "@/components/tour/tour-provider";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
@@ -396,6 +397,7 @@ export default function DashboardLayout({
                   <Link
                     key={item.href}
                     href={item.href}
+                    data-tour-id={item.href}
                     title={collapsed ? item.label : undefined}
                     aria-current={active ? "page" : undefined}
                     className={`relative flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
@@ -567,12 +569,16 @@ export default function DashboardLayout({
     </div>
     {/* Command layer (feat-web-app-shortcuts) — portal-rendered (Radix), so
         placement inside the provider is positional only. Both no-op when the
-        command-palette flag is off (enabled=false). */}
-    <CommandPalette />
-    <HelpOverlay />
-    {/* feat-support-interface — flag-gated floating support launcher + slide-over.
-        No-op when the `support` flag is off (renders null internally). */}
-    <SupportLauncher />
+        command-palette flag is off (enabled=false). feat-guided-tour: TourProvider
+        wraps the launch surfaces (support panel + ? overlay) + auto-first-run; no-op
+        when the guided-tour flag is off. */}
+    <TourProvider>
+      <CommandPalette />
+      <HelpOverlay />
+      {/* feat-support-interface — flag-gated floating support launcher + slide-over.
+          No-op when the `support` flag is off (renders null internally). */}
+      <SupportLauncher />
+    </TourProvider>
     </ShortcutsProvider>
     </RailCollapsedProvider>
     </RailSlotProvider>

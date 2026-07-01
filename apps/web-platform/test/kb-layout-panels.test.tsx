@@ -117,7 +117,7 @@ describe("KbLayout — resizable panels", () => {
       "@/components/feature-flags/provider"
     );
     return render(
-      <FeatureFlagProvider flags={{ "kb-chat-sidebar": true, "dev-signin": false, "team-workspace-invite": false, "byok-delegations": false, "c4-visualizer": false, "debug-mode": false, "c4-edit": false, "command-palette": false, support: false }}>
+      <FeatureFlagProvider flags={{ "kb-chat-sidebar": true, "dev-signin": false, "team-workspace-invite": false, "byok-delegations": false, "c4-visualizer": false, "debug-mode": false, "c4-edit": false, "command-palette": false, support: false, "guided-tour": false }}>
         <KbLayout>
           <div data-testid="content-page">File content</div>
         </KbLayout>
