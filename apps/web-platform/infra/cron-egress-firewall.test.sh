@@ -96,10 +96,10 @@ done
 # The template unit's `@` needs its own anchors (regex-escaping differs).
 assert_grep "delivers cron-egress-alarm@.service (source=)" 'source += +"\$\{path\.module\}/cron-egress-alarm@\.service"' "$SERVER_TF"
 SERVER_BLOCK="$(awk '/resource "terraform_data" "cron_egress_firewall"/,/^}/' "$SERVER_TF")"
-if echo "$SERVER_BLOCK" | grep -qE 'server_id += +hcloud_server\.web\.id'; then
-  PASS=$((PASS + 1)); echo "  PASS: cron_egress_firewall trigger folds hcloud_server.web.id"
+if echo "$SERVER_BLOCK" | grep -qE 'server_id += +hcloud_server\.web\["web-1"\]\.id'; then
+  PASS=$((PASS + 1)); echo "  PASS: cron_egress_firewall trigger folds hcloud_server.web[\"web-1\"].id"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: cron_egress_firewall trigger does not fold hcloud_server.web.id"
+  FAIL=$((FAIL + 1)); echo "  FAIL: cron_egress_firewall trigger does not fold hcloud_server.web[\"web-1\"].id"
 fi
 if echo "$SERVER_BLOCK" | grep -q 'mkdir -p /etc/soleur'; then
   PASS=$((PASS + 1)); echo "  PASS: parent dir created before file provisioners (scp does not mkdir)"

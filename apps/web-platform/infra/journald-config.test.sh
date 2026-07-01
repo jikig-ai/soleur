@@ -117,8 +117,8 @@ assert "SSH connection block (type=ssh)" \
 # the #4829 dual-context comment (which reads literal `agent = true`).
 assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
-assert "connection host = hcloud_server.web.ipv4_address" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\.ipv4_address'"
+assert "connection host = hcloud_server.web[\"web-1\"].ipv4_address" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address'"
 assert "file provisioner pushes drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/etc/systemd/journald\.conf\.d/00-soleur\.conf\"'"
 # The drop-in dir is NOT created by default on Ubuntu and scp won't create
