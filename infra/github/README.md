@@ -84,8 +84,13 @@ The queue dispatches a `merge_group` event against a temporary
 
 1. **PR-1 (#5784, merged 2026-06-30)** added `merge_group:` to all 7 producer
    workflows (CodeQL is default-setup, the 8th producer), fixed the apply-verify
-   `rules[0]` → `select(.type==…)` fragility, and added the stall probe
+   `rules[0]` → `select(.type==…)` fragility, and added a stall probe
    (`merge-queue-stall-check.yml`) + CLA synthetics (`merge-queue-cla-synthetics.yml`).
+   **Both of those PR-1 workflows were removed after the revert** (dead weight
+   with the queue off — the stall probe polled a null queue every 30 min; the CLA
+   synthetics only fire on `merge_group`, which never occurs without a queue).
+   They are preserved in git history and MUST be restored as part of any
+   re-adoption.
 2. **PR-2 (this root)** adds the `merge_queue` block and *enables* the queue.
 
 `merge_group` only fires *after* the queue is live, so enabling and verifying
@@ -140,9 +145,11 @@ of 2026-07 this step is known to FAIL for `CodeQL` while it is a required check
 (codeql-action#1537) — that is exactly the deadlock. This canary is only runnable
 once CodeQL is either advisory or #1537 is fixed** (see the status note at the top
 of this section). Then confirm a `rule-metrics-aggregate.yml` bot PR flows through
-(CLA synthetics cover its CLA contexts), and that `merge-queue-stall-check.yml`
-has run ≥1 green cycle.
-When all pass, flip the ADR-032 amendment status `adopting → accepted`.
+(CLA synthetics cover its CLA contexts — restore `merge-queue-cla-synthetics.yml`
+first, removed after the revert), and that the stall probe
+(`merge-queue-stall-check.yml`, also removed after the revert — restore it) has
+run ≥1 green cycle. When all pass, flip the ADR-032 amendment status
+`adopting → accepted`.
 
 ## Phase 0 -- Doppler setup (one-time, App-auth)
 
