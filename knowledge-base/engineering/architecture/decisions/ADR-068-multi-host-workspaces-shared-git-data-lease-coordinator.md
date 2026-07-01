@@ -310,6 +310,44 @@ fixes for every per-step plan:
 > mTLS). **Status:** this ADR flips `adopting`→`accepted` when the GA cutover lands in
 > prod (3.D — **only after LUKS-at-rest + one-way-TLS are verified**, NFR-026).
 
+> **Amendment (CTO ruling, 2026-07-01, Phase 3 GA — deploy fan-out).** With the web
+> host `for_each`'d to a 2-host cluster, deploys must deterministically **deliver the
+> container to BOTH hosts** (drain-both, deliver-both). Today the release workflow
+> POSTs an HMAC-signed webhook to `deploy.soleur.ai` → the single Cloudflare tunnel
+> (`cloudflared.web`); both hosts run cloudflared on that ONE tunnel, so a POST
+> load-balances to ONE connector non-deterministically. **Chosen: Option B — a
+> receiving-host private-net fan-out.** One POST lands on host A; A deploys itself AND
+> forwards the same HMAC-signed payload to each peer over the private net
+> (`10.0.1.x:9000`), so one trigger reaches both. This is the deploy-path expression
+> of the co-located-router decision already made (§4 user-sticky amendment) and reuses
+> the git-data host's "second host that only exists post-apply, verified by a
+> web-host-driven private-net script — never CI, never the merge-apply"
+> precedent (`hr-fresh-host-provisioning-reachable-from-terraform-apply`). The webhook
+> listener binds `0.0.0.0:9000` (was loopback) so the peer is reachable; this is safe
+> because `hcloud_firewall.web` default-denies 9000 on the public interface — making
+> that default-deny **load-bearing for webhook exposure**, so a drift-guard assertion
+> pins it (a future firewall edit opening 9000 must fail CI). The peer list is
+> **declarative** — the other hosts' `private_ip`s rendered from `var.web_hosts` into
+> each host's config; empty at one host ⇒ the fan-out is a no-op ⇒ the single-host
+> deploy path is byte-identical. **Binding constraints:** (a) the peer receives on a
+> distinct `/hooks/deploy-peer` hook that runs `ci-deploy.sh` **without re-fanning**
+> (A→B must never trigger B→A); (b) the forward result folds into the webhook's HTTP
+> response so the release workflow's existing status check catches "web-1 ok, web-2
+> down" (`ci-deploy.sh` is idempotent + flock-serialized → a full retry re-delivers to
+> both); (c) AC5's per-host state verification is **private-net + peer-driven** (query
+> `10.0.1.11:9000`, no SSH — `hr-no-ssh-fallback-in-runbooks`), and the peer-forward
+> failure path reaches Sentry/Better Stack from the RECEIVING host
+> (`hr-observability-layer-citation`). **Rejected:** (A) **per-host tunnels** —
+> `for_each`-ing `cloudflared.web` risks REPLACING the live tunnel (import artifact,
+> `config_src` forces replacement) = deploy-path outage; cannot be dormant (rewrites
+> `deploy.soleur.ai` at merge, before web-2 exists); collides with 3.D's ingress
+> rewire; its only edge (clean per-host CI status) is recovered in B via the
+> synchronous forward result. (C) **per-host SSH deploy** — same tunnel restructure as
+> A plus a new host-to-host key surface (the 11 SSH provisioners are all
+> `web-1`-scoped). (D) **defer** — ships a maintenance-window apply that creates web-2
+> which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
+> single-user-incident trap the threshold exists to prevent.
+
 7. **Self-host the session-Redis on EU Hetzner; secrets via `random_password`.**
    Hetzner has no managed Redis. A self-hosted dedicated EU Redis adds **no new
    sub-processor / DPA** (the deciding GDPR reason over Upstash/Aiven). It is a
