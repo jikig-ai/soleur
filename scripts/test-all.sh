@@ -121,6 +121,7 @@ if want_scripts; then
   run_suite "scripts/lint-agents-rule-budget-live" python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
   run_suite "scripts/lint-agents-rule-budget-unit" bash scripts/lint-agents-rule-budget.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
+  run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
