@@ -14,6 +14,48 @@ created: 2026-07-01
 
 # Plan: constraint-scaffold v2 — transitive import-boundary gate (#5777)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-01
+**Research applied:** dependency-cruiser@16.10.x reachable-rule schema + baseline-suppression
+verification (two independent passes: docs/schema research + installed-source trace);
+learnings-researcher; spec-flow-analyzer; architecture + simplicity + security review agents.
+
+**Key improvements from the deepen pass (3 review agents; conflicts resolved in favor of
+brand-survival):**
+1. **Central P0 (security + architecture converge) — the `pathNot` value-safe exclusion is the
+   residual fail-open.** The 3 excluded modules are the ONLY server modules any client reaches today
+   (all 10 baseline `to` entries are them), so if any later gains a real secret it ships on BOTH the
+   direct (suppressed) and transitive (`pathNot`) paths. Resolution: Phase 2.2-A **relocate the 3 out
+   of `server/**`** (preferred — deletes `pathNot`, drops the baseline to zero, enforces the
+   exclusion by module LOCATION) OR 2.2-B keep `pathNot` **with a mandatory content-invariant drift
+   guard** (D4) + relocation debt issue. The guard is non-optional.
+2. **Runner guard is MANDATORY (security overrides simplicity).** A PR editing ONLY the baseline JSON
+   trips the always-runs runner but not the scripts shard, so the `boundary.test.sh` assertion alone
+   is insufficient — the reachability-baseline-zero guard ships in BOTH the runner (always-on) and
+   the test.
+3. **Security fixtures added:** mixed-import (`import { type A, realValue }` — value edge must survive
+   the flip), barrel/re-export (`export *` / named re-export), dynamic `import()`, and a real-runner
+   `rc≠0` fixture via the `CONSTRAINT_GATES_DIR` seam. Phase 0 adds a mixed-import proof, a
+   post-flip `couldNotResolve==0` re-verification, and a `SOLEUR-DEBT:` bounded-gap marker for
+   unresolvable dynamic imports.
+4. **Architecture hardening:** the D1 `tsPreCompilationDeps:false` flip makes the direct edge set a
+   strict SUBSET of v1's, so the Phase 0.3 equivalence proof is **locked permanently** by a
+   `boundary.test.sh` assertion (baseline `type:"dependency"` count == 10 unchanged; D3.3). ADR-071
+   is a **dated append** (not in-place rewrite) preserving the v1 decision-log.
+5. **Simplicity (applied where non-conflicting):** fixtures trimmed of depth-3 + terminal-type-only
+   (redundant); D1-alt demoted to a one-line re-plan trigger; keep BOTH rules (direct + reachable) —
+   `pathNot` prevents baseline doubling (verified: all 10 baseline targets are the excluded 3).
+6. **Context correction (architecture P2-C):** the gate is **informational / non-blocking**
+   (ADR-071 §42) — it does not merge-block a leaking PR; the operative control is signal accuracy +
+   ADR-074 auto-recovery. The "reads green while a secret ships" urgency is about **signal
+   integrity** (what D2/D3/D4 protect), not merge-gating.
+
+**New considerations discovered:** the requirement as literally worded is **not buildable** in the
+pinned version (reachable rules cannot filter type-only per-rule); the correct mechanism (global
+`tsPreCompilationDeps:false`) + the per-origin baseline fail-open are the two load-bearing pivots,
+both verified against installed source.
+
 ## Overview
 
 The v1 Layer-1 gate (`constraint-scaffold`, ADR-071, shipped in #5770) rejects a `"use client"`
@@ -86,6 +128,12 @@ a non-client helper (`lib/*`) that value-imports a server-secret module — the 
 secret into client JS served to every browser. This is the same exposure vector as v1, one
 dependency hop deeper (the hop v1 is blind to).
 
+**Framing note (architecture P2-C):** the gate is **informational / non-blocking** (ADR-071 §42) —
+it does NOT merge-block a PR that ships a real transitive leak; the operative controls are the
+gate's **signal accuracy** + ADR-074 auto-recovery. So "reads green while a secret ships" is a
+**signal-integrity** failure (what D2/D3/D4 protect), not a merge-gate bypass. The brand-survival
+weight is on the signal being TRUE, not on the check blocking the merge.
+
 **Brand-survival threshold:** single-user incident.
 
 `requires_cpo_signoff: true` — CPO reviewed the gate's threshold framing at the parent brainstorm
@@ -118,13 +166,10 @@ guards for BOTH rules automatically (confirmed: shared `computeClientFromSet` in
 
 **Phase 0 GATE (mandatory, brand-survival):** empirically prove the **direct rule's violation set
 is byte-identical** before and after the `tsPreCompilationDeps` flip (diff `depcruise --output-type
-baseline` for the direct rule only, on the real tree). If it diverges, fall back to **D1-alt**:
-keep v1's `.cjs` untouched (`tsPreCompilationDeps:true`), add a **separate** config
-`.dependency-cruiser-reachable.cjs` (`tsPreCompilationDeps:false`, reachable rule only) with its
-own `references/depcruise-reachable-config.template` + parity assertion, and extend the runner to
-run the second cruise + second (empty) baseline. D1 is strongly preferred (one config, one cruise,
-runner reused, matches the issue's "add a rule to `.dependency-cruiser.cjs`"); D1-alt is the
-zero-v1-regression escape hatch.
+baseline` for the direct rule only, on the real tree). **Escape hatch (do NOT pre-build):** if 0.3
+shows the flip changes the direct-rule set, STOP and re-plan — the candidate is a separate
+reachable-only config (`tsPreCompilationDeps:false`) run as a second cruise, leaving v1's `.cjs`
+untouched. Phase 0.3 is the decision point; do not scaffold the two-config split until it fires.
 
 ### D2 — Reachable baseline MUST be empty (avoid per-origin fail-open); use `to.pathNot` + fix, never grandfather
 
@@ -159,6 +204,9 @@ entries. Two mechanisms, both schema-legal:
 ```
 where `const VALUE_SAFE_PATH = "^server/(domain-leaders|providers|team-names-validation)\\.";`
 (finalized against Phase 0's enumerated reached-set; add only Phase-0-verified value-safe modules).
+**Coupling note (add as an inline `.cjs` comment):** this list is the same "known value-safe server
+modules" set the direct rule grandfathers via its baseline — two hand-maintained copies that can
+drift. The comment must tie `VALUE_SAFE_PATH` to the direct baseline so a future editor updates both.
 
 Because `pathNot` already excludes the value-safe targets, the reachable rule does **not**
 re-flag v1's 10 direct value-safe edges (they reach only excluded modules) — the baseline does NOT
@@ -167,13 +215,31 @@ double. The single baseline file keeps its existing direct entries (fine-grained
 
 ### D3 — CI guard: zero reachability entries in the committed baseline
 
-Add a guard that FAILS if `.dependency-cruiser-known-violations.json` contains any `type:
-"reachability"` entry. Placement: the hermetic self-test `boundary.test.sh` (asserts the committed
-baseline is reachability-free; runs in the `test-webplat` shard where the toolchain is present),
-AND — preferred for defense-in-depth — a small additive check in the shared runner
-`constraint-gates.sh` so the dogfood CI job fails if a future `--refresh-baseline` ever captures a
-reachability entry. The runner check is generic ("no reachability entry may be suppressed") and is
-mirrored into `shared-runner.template` to keep `parity.test.sh` green.
+TWO guards on the invariant "a `type:"reachability"` entry may NEVER be suppressed": (a) a
+toolchain-free assertion in `boundary.test.sh` (JSON parse of the committed baseline — never
+skipped), AND (b) a **mandatory** additive check in the shared runner (`constraint-gates.sh` +
+`shared-runner.template`, byte-identical). **Security review overrides the simplicity "cut the
+runner guard" recommendation:** `boundary.test.sh` only runs in the scripts/`test-webplat` shard,
+but a PR that edits ONLY the baseline JSON (the careless-`--refresh-baseline` vector) triggers the
+always-runs runner and may not trip that shard — so the runner guard is the sole always-on
+enforcement. The invariant is generic to the gate, so it belongs in the shared runner. See Phase 3.
+
+**D3b — direct-rule non-regression assertion (architecture P1-A).** Because
+`tsPreCompilationDeps:false` makes the direct rule's edge set a strict *subset* of v1's (`true` +
+`dependencyTypesNot`), the Phase 0.3 equivalence proof is a one-time spike unless locked. Add a
+permanent assertion in `boundary.test.sh`: the committed baseline's `type:"dependency"` entry count
+is unchanged (10) after the flip, AND a fixture proving a value edge into `server/` is still flagged
+under `tsPreCompilationDeps:false`. If this proves too weak to guarantee no pre-compilation-only
+value edge is missed, promote the D1 escape-hatch (reachable-only second config, v1 `.cjs`
+untouched) to primary — it isolates the `false` flip to the reachable rule.
+
+**D3c — `VALUE_SAFE_PATH` drift guard (architecture P1-B, latent fail-open).** The 3 allowlisted
+modules are exempt from BOTH the direct baseline (suppressed) and the reachable rule (`pathNot`). If
+any ever gains a real secret, the gate reads green while every client that imports it leaks — the
+`single-user incident` vector one hop deeper. Add a `boundary.test.sh` assertion (or a dedicated
+depcruise rule) that each `VALUE_SAFE_PATH` module imports no secret source and reads no
+`process.env` value, so a module cannot silently drift out of "value-safe" while staying allowlisted.
+Wire into AC5, and add a Sharp Edge + a code comment at the `VALUE_SAFE_PATH` definition.
 
 ## Architecture Decision (ADR/C4)
 
@@ -261,11 +327,21 @@ at this threshold, EXERCISE every capability before writing it load-bearing.
   EVERY distinct `server/**` module transitively reached from any client origin (parse
   `--output-type json` `via`/`to`). For EACH: classify **value-safe** (→ candidate for `pathNot`)
   vs **real leak** (→ Phase 2 fix). Do NOT trust the v1 count or the issue's framing — re-scan
-  (learning `2026-04-06-rule-audit-budget-baseline-drift.md`). Record the reached-set + the
-  disposition of each module.
+  (learning `2026-04-06-rule-audit-budget-baseline-drift.md`). **Enumeration is bounded, not total
+  (security P2):** dep-cruiser cannot resolve template-literal dynamic imports (`import(\`@/server/${x}\`)`)
+  or unresolvable aliases, so a leak hidden behind those is not enumerable here — record this as a
+  bounded known-gap with a `SOLEUR-DEBT:` marker + a linked follow-up issue, not an implicit
+  completeness claim. The runner's `couldNotResolve`-into-`server/` guard (0.7) is the backstop.
+- **0.2b Mixed-import proof (security P1):** verify `import { type A, realValue } from "@/server/x"`
+  keeps the VALUE edge under `tsPreCompilationDeps:false` (a value edge elided as type-only = silent
+  fail-open). Also probe a barrel (`export * from`) and a static dynamic-import edge resolve.
 - **0.5 Perf probe (P2-1):** wall-clock `depcruise … app components server` with the reachable
   rule on the real tree (~170 client modules). Record the delta; if it materially slows CI, tighten
   `to.path`/`pathNot` and note a runner timeout budget.
+- **0.7 Re-prove alias resolution under the flip (security P1):** `tsPreCompilationDeps:false`
+  changes graph resolution globally, so re-run the runner's real-tree `couldNotResolve`-into-`server/`
+  self-check (`constraint-gates.sh:64-82`) and confirm it is **0** under the new config — an
+  unresolved `@/server` edge would blind the gate.
 - **0.6 Confirm no description-budget impact:** the change edits `SKILL.md` **body prose** only
   (line 15 "direct-edge only … transitive coverage deferred"), NOT the `description:` frontmatter →
   no `components.test.ts` budget re-check needed. Verify no `description:` edit is introduced.
@@ -291,52 +367,98 @@ at this threshold, EXERCISE every capability before writing it load-bearing.
   depends on the live scan; `lib/*.ts` importing `@/server/*` as a value AND reachable from a
   client is the candidate shape). At `single-user incident` threshold a real leak MUST be fixed,
   never baselined. If the fix set is large/risky, STOP and surface for scoping (do not grandfather).
-- **2.2** Finalize `VALUE_SAFE_PATH` = the Phase-0-verified value-safe reached modules (start with
-  the 3 v1-verified; add only security-reviewed additions with a one-line justification comment).
+- **2.2** Finalize the value-safe exclusion. **Two options (security P0 — decide in Phase 0 by
+  blast radius):**
+  - **2.2-A (preferred, structural):** relocate the 3 value-safe modules OUT of `server/**` into a
+    tree `SECRET_PATH` (`^server/`) does not match (e.g. `server/public/**` or `shared/**`) and
+    update their importers. This drops the direct baseline to **zero** AND deletes `pathNot`
+    entirely — the exclusion becomes enforced by module LOCATION, so a future secret added to one of
+    them lands in the wrong tree and the direct rule catches it. Closes the P0 fail-open structurally.
+    Assess the importer blast radius in Phase 0 (`domain-leaders` alone has 8 client importers); if
+    small, do it here; if large, use 2.2-B now + a follow-up relocation issue.
+  - **2.2-B (minimum, if relocation is out of scope):** keep `VALUE_SAFE_PATH` = the Phase-0-verified
+    value-safe reached modules, AND ship the **mandatory** D4/D3c content-invariant guard (Phase 3 /
+    4.7) + a `SOLEUR-DEBT:` marker + linked issue for the relocation. The guard is NOT optional under
+    2.2-B — it is the only thing preventing silent value-safe drift.
 - **2.3** Single authoritative `constraint-scaffold.sh --refresh-baseline` (clean tree +
   origin/main merge-base). **Review the full baseline diff:** it MUST show **zero** new
   `type:"reachability"` entries (ideally the baseline is byte-unchanged from v1 — only the direct
   entries). Any reachability entry ⇒ go back to 2.1/2.2 (fix or exclude), do NOT commit it.
 
-### Phase 3 — CI guard (D3)
+### Phase 3 — CI guard (D3) — the runner guard is MANDATORY (security P1 overrides simplicity)
 
-- **3.1** Add to `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh` an assertion:
-  the committed `apps/web-platform/.dependency-cruiser-known-violations.json` contains **zero**
-  `type:"reachability"` entries (jq/node parse). Fail loud otherwise.
-- **3.2** Add a generic additive guard to `references/shared-runner.template` AND
+**Conflict resolution:** simplicity review proposed cutting the runner-side guard as redundant with
+the `boundary.test.sh` assertion; **security review overrides** — `boundary.test.sh` runs only in
+the `test-webplat`/scripts shard (triggered by `plugins/**` or the test globs), but the exact
+careless-`--refresh-baseline` vector is a PR that edits ONLY
+`apps/web-platform/.dependency-cruiser-known-violations.json`, which triggers `constraint-gates.yml`
+(`paths: apps/web-platform/**`) → the **runner**, and may NOT trip the scripts shard. Only the
+always-runs runner covers that PR. The invariant "a reachability entry may NEVER be suppressed" is
+generic to the gate (not v2-web-platform-specific), so it legitimately lives in the shared runner.
+
+- **3.1** Add to `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh` a toolchain-free
+  assertion: the committed `apps/web-platform/.dependency-cruiser-known-violations.json` contains
+  **zero** `type:"reachability"` entries (jq/node parse of the JSON — no depcruise, never skipped).
+- **3.2 (MANDATORY)** Add a generic additive guard to `references/shared-runner.template` AND
   `apps/web-platform/scripts/constraint-gates.sh` (byte-identical): after loading the baseline,
-  fail-closed if it contains any `type:"reachability"` entry (a reachability suppression is never
-  legitimate under D2). Keep `parity.test.sh` tests #1/#2 green (edit template + emitted copy
-  together). If this guard is judged out-of-scope for the shared/tenant runner at review, fall back
-  to the boundary.test.sh assertion alone (3.1) — that is the minimum.
+  fail-closed if it contains any `type:"reachability"` entry. Keep `parity.test.sh` tests #1/#2
+  green (edit template + emitted copy together). This is the ONLY always-on enforcement for a
+  baseline-only PR — do not cut it.
+- **3.3 (architecture P1-A)** Add a permanent direct-rule non-regression assertion to
+  `boundary.test.sh`: the committed baseline's `type:"dependency"` entry count is unchanged (**10**)
+  after the `tsPreCompilationDeps` flip, so the one-time Phase 0.3 equivalence proof is locked
+  against future config drift.
 
 ### Phase 4 — Fixtures (negative + both-directional positive) + anti-vacuity guard
 
 Add to `boundary.test.sh` `make_fixture` + assertions (all synthesized under mktemp; nothing
 written to the real tree):
 
+Fixture set (simplicity cut depth-3 + terminal-type-only as redundant; security added mixed-import,
+barrel, dynamic-import, real-runner, and value-safe-drift). Fixture `secret.ts` is a module NOT in
+`VALUE_SAFE_PATH` (so the transitive rule genuinely fires):
+
 - **4.1 NEGATIVE (transitive, helper in `lib/` — locks P2-2):** `components/leakdir/transitive.tsx`
   (`"use client"`) → `import { fmt } from "@/lib/leak-helper"`; `lib/leak-helper.ts` (non-client)
-  → `import { SECRET_TOKEN } from "@/server/secret"` (value). The transitive rule MUST flag
-  `transitive.tsx`. (Fixture `secret.ts` must be a module NOT in `VALUE_SAFE_PATH`.)
-- **4.2 NEGATIVE (depth-3):** `client → lib/a → lib/b → server/secret` (value). MUST flag.
-- **4.3 POSITIVE (terminal type-only):** `client → lib/helper(value) → server` via `import type`.
-  MUST NOT flag (terminal edge elided).
-- **4.4 POSITIVE (first-hop type-only — the load-bearing case, P0-2):**
-  `client → import type helper`, helper value-imports server. MUST NOT flag (client→helper edge
-  elided → no path). This is the case a naive per-edge filter would false-positive.
-- **4.5 POSITIVE (pathNot target):** `client → lib/helper(value) → server/domain-leaders` (value).
+  → `import { SECRET_TOKEN } from "@/server/secret"` (value). MUST flag `transitive.tsx`. (Proves
+  arbitrary-depth transitive closure — depth-3 fixture cut as adding no new code path.)
+- **4.2 POSITIVE (first-hop type-only — load-bearing, P0-2):** `client → import type helper`, helper
+  value-imports server. MUST NOT flag (client→helper edge elided → no path). Global elision is
+  position-independent, so this subsumes the cut terminal-type-only case.
+- **4.3 NEGATIVE (mixed import — security P1, the value-misclassification vector):** both
+  `client → import { type A, realValue } from "@/lib/helper"` → helper value-imports server, AND
+  `helper: import { type X, SECRET } from "@/server/secret"`. The VALUE edge MUST survive
+  `tsPreCompilationDeps:false`; the chain MUST flag. (A value edge elided as type-only = silent
+  fail-open on both rules.)
+- **4.4 NEGATIVE (barrel / re-export — security P1):** `client → lib/helper → lib/index.ts`
+  (`export * from "@/server/secret"` AND a named `export { SECRET } from "@/server/secret"`) — both
+  re-export forms MUST flag (barrels are the classic dep-cruiser under-resolution site).
+- **4.5 NEGATIVE (dynamic import — security P1):** statically-resolvable
+  `client → helper → import("@/server/secret")` MUST flag (reachability traverses dynamic edges).
+- **4.6 POSITIVE (pathNot target):** `client → lib/helper(value) → server/domain-leaders` (value).
   MUST NOT be flagged by the transitive rule (`pathNot` excludes it) — proves `pathNot` + no
   double-count against the direct rule.
-- **4.6 Anti-vacuity guard (P1-2):** if `PARSED_COMPONENTS >= 1` (toolchain present), the transitive
-  assertions MUST execute and MUST `bad`/exit-nonzero if the negative fixtures are not flagged —
-  never silently skipped. Keep the existing toolchain-absent SKIP (exit 0) for shards with no
-  depcruise, but ensure the new assertions live AFTER the existing skip guard and are covered by the
-  `test-webplat` shard (committed toolchain present).
+- **4.7 NEGATIVE (value-safe drift — architecture P1-B / security P0):** a fixture where a
+  `VALUE_SAFE_PATH`-listed module gains a `process.env` value read / secret import — the D4 content
+  guard MUST fail. Proves the allowlist cannot silently rot.
+- **4.8 real-runner rc≠0 (security P2):** drive the actual runner via the `CONSTRAINT_GATES_DIR`
+  seam on a fixture containing a transitive leak; assert exit≠0 (proves a reachability violation
+  reaches the runner's `--output-type err` + `grep 'dependency violations'` fail branch, not just
+  `--output-type json`).
+- **4.9 Anti-vacuity guard (P1-2):** if `PARSED_COMPONENTS >= 1` (toolchain present), the transitive
+  assertions MUST execute and MUST `bad`/exit-nonzero if a negative fixture is not flagged — never
+  silently skipped. New assertions live AFTER the existing toolchain-absent SKIP guard and are
+  covered by the `test-webplat` shard.
 
 ### Phase 5 — Docs / ADR / prose
 
-- **5.1** Amend ADR-071 (§Decision, §Alternatives Considered, §Consequences) per the ADR gate above.
+- **5.1** Amend ADR-071 as a **dated append** (architecture P2-B — preserve v1 decision-log
+  immutability): add a discrete `## Amendment 2026-07-01 (#5777) — transitive coverage` section that
+  (a) records the reachable rule, (b) records the `tsPreCompilationDeps` `true→false` **reversal +
+  rationale** (the schema lock forces the global lever; direct-rule equivalence proven in Phase 0.3
+  + locked by the D3.3 assertion), (c) records the value-safe exclusion decision (2.2-A relocation
+  or 2.2-B pathNot+guard), (d) moves #5777 from deferred→closed in Consequences. Leave the original
+  Context/Decision/Mechanism/Alternatives (which encode WHY v1 chose `true`) intact.
 - **5.2** Update `SKILL.md` body line 15–16: remove "direct-edge only" and the "transitive coverage
   … deferred" claim; state transitive coverage is now included (cite #5777 / ADR-071 amendment).
   **Do NOT edit the `description:` frontmatter** (no budget impact).
@@ -353,21 +475,27 @@ written to the real tree):
   carries `dependencyTypesNot`; `computeClientFromSet()` is computed once and shared by both rules.
   Phase 0.3 evidence recorded: the **direct-rule** violation set is byte-identical before/after the
   flip (or D1-alt adopted, with the divergence documented).
-- [ ] **AC3 (type-only, both directions)** — `boundary.test.sh` asserts: a transitive value chain
-  (`client → lib/helper → server(value)`) is FLAGGED; a terminal-`import type` chain PASSES; a
-  **first-hop** `import type` chain (`client → import type helper → server(value)`) PASSES. All
-  three via the real `.cjs`.
-- [ ] **AC4 (D2, zero reachability baseline)** — the committed
-  `.dependency-cruiser-known-violations.json` contains **zero** `type:"reachability"` entries;
-  a guard (boundary.test.sh, and the runner if adopted) FAILS if one is present. The reachable rule
-  is GREEN on HEAD without any reachability suppression.
-- [ ] **AC5 (real leaks fixed, not grandfathered)** — every real transitive leak enumerated in
-  Phase 0.4 is fixed in this PR (import moved behind a server boundary); `VALUE_SAFE_PATH` contains
-  ONLY security-reviewed value-safe modules, each with a justification comment. No real leak is
-  added to `pathNot` or the baseline.
-- [ ] **AC6 (helper outside scan roots)** — a fixture with the helper in `lib/` (outside
-  `app|components|server`) proves transitive-through-non-scanned-root reachability is caught
-  (dep-cruiser follows it; `doNotFollow` is node_modules-only).
+- [ ] **AC3 (type-only + resolution-mode fixtures, all via the real `.cjs`)** — `boundary.test.sh`
+  asserts, at minimum: transitive value chain via a `lib/` helper (outside the scan roots) is
+  FLAGGED (Phase 4.1, subsumes old AC6); first-hop `import type` chain PASSES (4.2); **mixed import**
+  `{ type A, realValue }` chain is FLAGGED (4.3, value edge survives the flip); **barrel/re-export**
+  (`export *` + named) is FLAGGED (4.4); **dynamic `import()`** is FLAGGED (4.5); `pathNot`-target
+  chain is NOT flagged (4.6).
+- [ ] **AC4 (D2, zero reachability baseline — TWO guards)** — the committed
+  `.dependency-cruiser-known-violations.json` contains **zero** `type:"reachability"` entries,
+  enforced by BOTH the `boundary.test.sh` assertion AND the **mandatory** shared-runner guard
+  (`constraint-gates.sh` + `shared-runner.template`, byte-identical) so a baseline-only PR that
+  skips the scripts shard is still caught (security P1). A real-runner `rc≠0` fixture (4.8) proves a
+  reachability violation reaches the runner's fail branch. The reachable rule is GREEN on HEAD.
+- [ ] **AC5 (real leaks fixed + value-safe exclusion is drift-proof)** — every real transitive leak
+  from Phase 0.4 is FIXED (never baselined). The value-safe exclusion is either **2.2-A** (the 3
+  modules relocated out of `server/**` → `pathNot` deleted, direct baseline drops to zero) OR
+  **2.2-B** (`VALUE_SAFE_PATH` retained WITH the mandatory D4 content-invariant guard — each listed
+  module reads no `process.env` value / imports no secret, asserted in `boundary.test.sh` (4.7), plus
+  a `SOLEUR-DEBT:` relocation issue). The drift guard is non-optional under 2.2-B.
+- [ ] **AC5b (direct-rule non-regression locked)** — a permanent `boundary.test.sh` assertion holds
+  the committed baseline's `type:"dependency"` count unchanged (10) after the flip (D3.3), so the
+  Phase 0.3 equivalence proof is not a one-time spike.
 - [ ] **AC7 (anti-vacuity)** — when the toolchain is present (`PARSED_COMPONENTS >= 1`) the new
   transitive assertions execute and FAIL (not SKIP) if a negative fixture is unflagged; the
   `test-webplat` shard exercises them.
@@ -445,18 +573,24 @@ Create/Edit (`.dependency-cruiser.cjs`, `depcruise-config.template`, `constraint
 - `apps/web-platform/.dependency-cruiser.cjs` — byte-identical to the template (Phase 1.2).
 - `apps/web-platform/.dependency-cruiser-known-violations.json` — re-captured via a single
   `--refresh-baseline`; MUST show zero reachability entries (Phase 2.3).
-- `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh` — negative + both-directional
-  positive + `lib/`-helper + `pathNot`-target fixtures, anti-vacuity guard, zero-reachability-entry
-  baseline assertion (Phases 3.1, 4).
+- `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh` — all Phase 4 fixtures
+  (transitive `lib/`-helper, first-hop type-only, mixed-import, barrel, dynamic-import, `pathNot`
+  target, value-safe-drift, real-runner-rc, anti-vacuity), the zero-reachability-baseline assertion
+  (3.1), the direct-rule non-regression assertion (3.3), and the D4 value-safe drift guard.
 - `plugins/soleur/skills/constraint-scaffold/references/shared-runner.template` +
-  `apps/web-platform/scripts/constraint-gates.sh` — optional additive D3 runner guard, byte-identical
-  (Phase 3.2).
-- `knowledge-base/engineering/architecture/decisions/ADR-071-l1-constraint-gates.md` — amend
-  (Phase 5.1).
+  `apps/web-platform/scripts/constraint-gates.sh` — **MANDATORY** byte-identical additive guard:
+  fail-closed on any `type:"reachability"` baseline entry (Phase 3.2; security P1 — the only
+  always-on coverage for a baseline-only PR).
+- `knowledge-base/engineering/architecture/decisions/ADR-071-l1-constraint-gates.md` — dated
+  amendment append (Phase 5.1).
 - `plugins/soleur/skills/constraint-scaffold/SKILL.md` — body prose only, remove "direct-edge only"
   (Phase 5.2).
 - `apps/web-platform/lib/*.ts` (and/or the real client/helper files) — ONLY the specific files
   Phase 0.4 identifies as real transitive leaks (cannot be enumerated at plan time; scan-derived).
+- **(If Phase 2.2-A chosen)** the 3 value-safe modules `apps/web-platform/server/{domain-leaders,
+  providers,team-names-validation}.ts` relocated out of `server/**` + all their importers updated;
+  `pathNot` deleted; baseline drops to zero. Blast radius assessed in Phase 0 (`domain-leaders` has
+  8 client importers).
 
 ## Risks & Mitigations
 
@@ -498,3 +632,16 @@ Create/Edit (`.dependency-cruiser.cjs`, `depcruise-config.template`, `constraint
   rule needs no newer dep-cruiser (reachable + `pathNot` are stable since long before 16.10).
 - `constraint-scaffold.sh --refresh-baseline` is **agent-only** (never shown to the founder); it
   needs `node_modules` installed and a clean tree, and captures against the origin/main merge-base.
+- **The `pathNot` value-safe allowlist is the deepest fail-open (P0).** The 3 excluded modules are
+  the ONLY server modules any client reaches today, so the transitive gate is near-vacuous *except*
+  where deliberately switched off. If any of them later gains a real secret, it ships on BOTH the
+  direct (baseline-suppressed) and transitive (`pathNot`-excluded) paths, green. Mitigate
+  structurally (2.2-A relocate out of `server/**`) or with the mandatory D4 content-invariant guard
+  (2.2-B). Never treat `pathNot` as fire-and-forget.
+- **The runner guard, not the test, is the always-on enforcement.** `boundary.test.sh` runs only in
+  the scripts/`test-webplat` shard; a PR editing ONLY the baseline JSON trips the always-runs runner
+  but may skip that shard. The reachability-baseline-zero guard MUST live in the runner (Phase 3.2).
+- Keep BOTH rules (direct + reachable) — a future "simplify to reachable-only" silently drops the
+  direct rule's per-edge scrutiny of NEW value-safe imports (which `pathNot` only exempts coarsely).
+- ADR-071 amendment is a **dated append**, not an in-place Mechanism rewrite — the v1 `true` choice
+  is decision-log context a future reader needs (architecture P2-B).
