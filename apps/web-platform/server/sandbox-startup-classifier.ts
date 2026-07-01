@@ -113,11 +113,31 @@ function resolveSdkVersion(): string | null {
  * `.message`). `sdkVersion` is injectable for deterministic tests; the default
  * resolves the installed version best-effort.
  */
+/**
+ * Extract the classification text from a caught error. Phase-0 confirmed
+ * 0.3.197 merges the bwrap/seccomp stderr into `.message`, but a future SDK
+ * could relocate it onto `.cause` or a `.stderr` property — so scan those too.
+ * Without this, an SDK that moved the text would silently degrade every case to
+ * `"other"` (zero signal — a recurrence of the #5873 blind-surface failure).
+ * The namespace-token requirement in the classifier keeps the wider scan from
+ * introducing false positives.
+ */
+function extractErrorText(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts: string[] = [err.message];
+  const cause: unknown = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message) parts.push(cause.message);
+  else if (typeof cause === "string" && cause) parts.push(cause);
+  const stderrProp: unknown = (err as { stderr?: unknown }).stderr;
+  if (typeof stderrProp === "string" && stderrProp) parts.push(stderrProp);
+  return parts.join("\n");
+}
+
 export function classifySandboxStartupError(
   err: unknown,
   sdkVersion: string | null = resolveSdkVersion(),
 ): SandboxStartupClassification {
-  const stderr = err instanceof Error ? err.message : String(err);
+  const stderr = extractErrorText(err);
 
   if (stderr.toLowerCase().includes(SANDBOX_UNAVAILABLE)) {
     return {

@@ -19,14 +19,14 @@ Derived from the finalized plan. Three PRs preceded by a blocking spike. Check #
 
 ## Phase 1 — PR1: sandbox-start observability (item 2)
 
-- [ ] 1.1 Create `apps/web-platform/server/sandbox-startup-classifier.ts` (mirror `abort-classifier.ts:54-88`): `classifySandboxStartupError()` → `{ sandboxKind, errorCode, sdkVersion }`, keyed off the Phase-0 error shape; `sandboxKind` enum = `missing_binary | seccomp_or_userns_denial | other`.
-- [ ] 1.2 Create `apps/web-platform/test/sandbox-startup-classifier.test.ts` — synthesized seccomp-EPERM signal (in the Phase-0 field), assert `sandboxKind` + `feature:"agent-sandbox"` tag + raw stderr; deterministic, no LLM in the assertion path.
-- [ ] 1.3 Broaden `cc-dispatcher.ts` catch (`:2694`; substring at `:2722`) to emit the tagged structured event for any startup failure; confirm the streaming-phase catch is covered.
+- [x] 1.1 Create `apps/web-platform/server/sandbox-startup-classifier.ts` (mirror `abort-classifier.ts:54-88`): `classifySandboxStartupError()` → `{ sandboxKind, errorCode, sdkVersion }`, keyed off the Phase-0 error shape; `sandboxKind` enum = `missing_binary | seccomp_or_userns_denial | other`.
+- [x] 1.2 Create `apps/web-platform/test/sandbox-startup-classifier.test.ts` — synthesized seccomp-EPERM signal (in the Phase-0 field), assert `sandboxKind` + `feature:"agent-sandbox"` tag + raw stderr; deterministic, no LLM in the assertion path.
+- [x] 1.3 Broaden `cc-dispatcher.ts` catch (`:2694`; substring at `:2722`) to emit the tagged structured event for any startup failure; confirm the streaming-phase catch is covered.
 - [x] 1.4 Broaden `agent-runner.ts` catch (`:2476`; substring at `:2649`; generic capture at `:2662`) to tag when `sandboxKind !== "other"`. **CTO ruling (ADR-079): NO `streamStartSent` gate** — it is always true at the catch (set before the iterator loop) and the seccomp denial surfaces mid-stream, so the gate silently suppressed the real signal; the classifier's signature match is the necessary+sufficient mis-tag guard.
-- [ ] 1.5 Keep emit per-user (no global-key debounce on the sandbox-startup path); pass raw `userId` → auto-hash to `userIdHash` (`observability.ts:217`); omit/hash `workspacePath`. Evaluate folding in #3739's `reportSilentFallbackWithUser` helper.
-- [ ] 1.6 Add the Sentry alert to `apps/web-platform/infra/sentry/issue-alerts.tf` using a native frequency/affected-users threshold; `terraform validate`.
-- [ ] 1.7 Author `knowledge-base/engineering/architecture/decisions/ADR-079-faithful-sandbox-canary-and-profile-redeploy-verification.md` (status `adopting`); cross-ref ADR-031/068/072/075/027. (Optional cleanup: add `sentry` to C4 — not a merge gate.)
-- [ ] 1.8 `tsc --noEmit`; run `observability-coverage-reviewer` at review. PR body: `Ref #5875` (item 2).
+- [x] 1.5 Emit per-user (no global-key debounce); pass raw `userId` → auto-hash to `userIdHash`; omit `workspacePath`. **Also promote `userIdHash` → event `user.id` (`observability.ts` `userScopeFromExtra`)** so `event_unique_user_frequency` counts distinct tenants — found at PR1 review (`observability-coverage-reviewer` P1). #3739 fold-in NOT taken (no new withIsolationScope+setUser site; the emit routes through the existing `reportSilentFallback`).
+- [x] 1.6 Add the Sentry alert to `apps/web-platform/infra/sentry/issue-alerts.tf` — `event_unique_user_frequency` (≥3 tenants/1h), filters `feature=agent-sandbox`+`op=sdk-startup`; `terraform validate` passes.
+- [x] 1.7 Author `knowledge-base/engineering/architecture/decisions/ADR-079-faithful-sandbox-canary-and-profile-redeploy-verification.md` (status `adopting`); cross-ref ADR-031/068/072/075/027. (Optional cleanup: add `sentry` to C4 — not a merge gate.)
+- [x] 1.8 `tsc --noEmit`; run `observability-coverage-reviewer` at review. PR body: `Ref #5875` (item 2).
 
 ## Phase 2 — PR2: faithful canary, dark-launch (item 1)
 

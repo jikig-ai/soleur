@@ -71,6 +71,26 @@ describe("classifySandboxStartupError — sandboxKind (Phase-0 shape, #5875)", (
     expect(c.sandboxKind).toBe("other");
   });
 
+  it("also scans err.cause when the sandbox text is not on .message", () => {
+    // Future-proofing: an SDK that moves bwrap/seccomp stderr onto `.cause`
+    // must not degrade to "other" (silent #5873 recurrence).
+    const err = new Error("Command failed with exit code 1", {
+      cause: new Error("bwrap: Operation not permitted"),
+    });
+    const c = classifySandboxStartupError(err, "0.3.197");
+    expect(c.sandboxKind).toBe("seccomp_or_userns_denial");
+    expect(c.errorCode).toBe("bwrap_eperm");
+    expect(c.stderr).toContain("bwrap: Operation not permitted");
+  });
+
+  it("also scans a string .stderr property", () => {
+    const err = Object.assign(new Error("Command failed"), {
+      stderr: "bwrap: setting up uid map: Operation not permitted",
+    });
+    const c = classifySandboxStartupError(err, "0.3.197");
+    expect(c.sandboxKind).toBe("seccomp_or_userns_denial");
+  });
+
   it("tolerates a non-Error thrown value (stringifies into stderr)", () => {
     const c = classifySandboxStartupError("bwrap: Operation not permitted", null);
     expect(c.sandboxKind).toBe("seccomp_or_userns_denial");

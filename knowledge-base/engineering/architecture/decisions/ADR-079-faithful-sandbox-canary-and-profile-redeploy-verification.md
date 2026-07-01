@@ -83,10 +83,16 @@ correct sandbox signal; not suppressed. The emit is **per-user** (agent-runner v
 cc-dispatcher via `mirrorWithDebounce` keyed per-`(userId, class)`) — never a
 global-key debounce — so Sentry's **native affected-users threshold**
 (`event_unique_user_frequency`, ≥3 tenants / 1h) can distinguish a one-tenant
-blip from a fleet outage. Attribution is pseudonymized: raw `userId` is passed
-and auto-hashed to `userIdHash` at the emit boundary (`observability.ts`); raw
-`workspacePath` is never emitted. The alert is IaC (ADR-031):
-`apps/web-platform/infra/sentry/issue-alerts.tf`.
+blip from a fleet outage. **That threshold counts distinct Sentry *users*, not
+`extra` keys** — so `reportSilentFallback` promotes the pseudonymized
+`userIdHash` to the event's `user.id` (`observability.ts` `userScopeFromExtra`);
+without it the count stays 0 and the alert can never fire (caught at PR1 review by
+`observability-coverage-reviewer`). Attribution is pseudonymized: raw `userId` is
+passed and auto-hashed to `userIdHash` at the emit boundary (`user.id =
+userIdHash` keeps Recital-26 intact); raw `workspacePath` is never emitted. Only
+`sandboxKind` + `sdkVersion` are searchable **tags**; `sandboxErrorCode` (a
+refinement recoverable from stderr) rides in `extra` to avoid a redundant tag.
+The alert is IaC (ADR-031): `apps/web-platform/infra/sentry/issue-alerts.tf`.
 
 ### 2. Faithful canary (PR2 — dark-launch, non-blocking)
 

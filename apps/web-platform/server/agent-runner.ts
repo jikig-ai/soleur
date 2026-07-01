@@ -2668,15 +2668,19 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           op: "sdk-startup",
           // Low-cardinality searchable dimensions (never PII — raw ids stay in
           // `extra`, auto-hashed at the emit boundary).
+          // Searchable dimensions only: `sandboxKind` (triage axis) + the SDK
+          // version (the bump that broke the sandbox is the root-cause signal).
+          // `sandboxErrorCode` is a refinement of `sandboxKind` recoverable from
+          // stderr — kept in `extra` rather than a redundant second tag.
           tags: {
             sandboxKind: sandboxClass.sandboxKind,
-            sandboxErrorCode: sandboxClass.errorCode,
             sdkVersion: sandboxClass.sdkVersion ?? "unknown",
           },
           extra: {
             userId,
             conversationId,
             leaderId,
+            sandboxErrorCode: sandboxClass.errorCode,
             sandboxStderr: sandboxClass.stderr,
           },
         });

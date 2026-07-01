@@ -2732,15 +2732,17 @@ export const realSdkQueryFactory: QueryFactory = async (
         {
           feature: "agent-sandbox",
           op: "sdk-startup",
+          // Searchable dimensions only (see agent-runner.ts): `sandboxKind` +
+          // `sdkVersion`. `sandboxErrorCode` rides in `extra`, not a second tag.
           tags: {
             sandboxKind: sandboxClass.sandboxKind,
-            sandboxErrorCode: sandboxClass.errorCode,
             sdkVersion: sandboxClass.sdkVersion ?? "unknown",
           },
           extra: {
             userId: args.userId,
             conversationId: args.conversationId,
             leaderId: CC_ROUTER_LEADER_ID,
+            sandboxErrorCode: sandboxClass.errorCode,
             sandboxStderr: sandboxClass.stderr,
           },
         },
