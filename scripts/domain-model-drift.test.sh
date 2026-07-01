@@ -191,11 +191,11 @@ grep -q '001.sql' "$t13a_reg" 2>/dev/null; grep -q 'BR‑042' "$t13a_reg" && pas
 # (b) field-LEADING heading marker in the STATEMENT
 t13b_reg="$(mktemp)"; mk_register "$t13b_reg"
 wr "$t13b_reg" --anchor "a › b" --statement '## injected heading' >/dev/null 2>&1
-grep -q '\\#\\# injected' "$t13b_reg" && pass || fail "T13b: leading ## not neutralized"
+grep -qF '\#\# injected' "$t13b_reg" && pass || fail "T13b: leading ## not neutralized"
 # (c) pipe escaped mid-cell
 t13c_reg="$(mktemp)"; mk_register "$t13c_reg"
 wr "$t13c_reg" --anchor "a › b" --statement 'left | right' >/dev/null 2>&1
-grep -q 'left \\| right' "$t13c_reg" && pass || fail "T13c: pipe not escaped"
+grep -qF 'left \| right' "$t13c_reg" && pass || fail "T13c: pipe not escaped"
 
 # --- Test 14: content-anchor dedup — same anchor not re-proposed ---
 t14_reg="$(mktemp)"; mk_register "$t14_reg"
