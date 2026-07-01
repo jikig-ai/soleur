@@ -18,29 +18,30 @@ Derived from the finalized (post-review) plan. Writer model: `spawnClaudeEval` o
 - [ ] 0.3 Read `spawnClaudeEval` (`_cron-claude-eval-substrate.ts:732`): confirm it can host `upsertProgress` + a periodic tick; callers close over `ctx.runId`+`attempt`.
 - [ ] 0.4 Confirm the two heavy bypass crons (`cron-daily-triage.ts:149`, `cron-follow-through-monitor.ts:246`) are the only heavy non-`spawnClaudeEval` crons → NG9 (out of v1).
 - [ ] 0.5 Confirm `run-log.ts transformOutput` early returns (`:148`, `:166`).
+- [ ] 0.6 Verify same-routine concurrency (DI-P1-A): can a heavy cron double-fire (scheduled + manual-trigger, or concurrency>1)? The staleness-guarded delete-stale is safe either way; confirm the guard is present.
 
 ## Phase 1 — Schema
 
-- [ ] 1.1 Write `120_routine_run_progress.sql`: cols `id, routine_id, run_id UNIQUE, attempt, started_at, last_heartbeat_at`; index on `last_heartbeat_at`; `-- LAWFUL_BASIS:` + `-- RETENTION:` annotations; RLS (service-role write, founder SELECT). No `CONCURRENTLY`.
+- [ ] 1.1 Write `120_routine_run_progress.sql` (exact DDL in plan Deepen Enhancement): cols `id, routine_id, run_id UNIQUE, attempt, started_at, last_heartbeat_at`; `-- LAWFUL_BASIS:` + `-- RETENTION:` annotations; RLS `SELECT USING (auth.uid() IS NOT NULL)` + `REVOKE INSERT/UPDATE/DELETE FROM anon, authenticated`. No `CONCURRENTLY`.
 - [ ] 1.2 Write `.down.sql` (drop table).
 - [ ] 1.3 Migration test (RED→GREEN). AC1.
 
 ## Phase 2 — Live-state helper + heartbeat (writer model)
 
-- [ ] 2.1 `routine-run-progress.ts`: `upsertProgress(fnId, runId, attempt)` (ON CONFLICT(run_id) DO UPDATE + delete-stale-same-routine), `heartbeat(runId)`, `finishProgress(runId)`; all fail-soft. AC3.
-- [ ] 2.2 `spawnClaudeEval`: on entry `upsertProgress`; periodic `heartbeat(runId)` tick (~30s) while child runs. AC2.
+- [ ] 2.1 `routine-run-progress.ts`: `upsertProgress` = ON CONFLICT(run_id) DO UPDATE **preserving `started_at`** (DI-P2-D) + **separate staleness-guarded** delete-stale (`last_heartbeat_at < now() - bound` — DI-P1-A); `heartbeat(runId)` = **UPDATE-only** (DI-P2-E); `finishProgress(runId)` = delete. Service-client, fail-soft. AC3.
+- [ ] 2.2 `spawnClaudeEval`: on entry `upsertProgress`; periodic `heartbeat` tick (~30s); **clear interval on child exit** (`:820-824`). AC2.
 - [ ] 2.3 Thread `runId`+`attempt` through the ~16 `spawnClaudeEval` callers (explicit bound closure — NOT ALS).
-- [ ] 2.4 `run-log.ts transformOutput`: `finishProgress(runId)` after terminal write + after both early returns. AC6.
-- [ ] 2.5 Billing-invariant behavioral test (twice same key ⇒ one metered row). AC7.
+- [ ] 2.4 `run-log.ts transformOutput`: `finishProgress(runId)` **inside the try, immediately after** `write_routine_run` resolves (DI-P1-C — not finally/after-catch); own inner try/catch→Sentry; after both early returns. AC6.
+- [ ] 2.5 Replay-cost test: memoized step not re-executed on replay (NOT cost-writer ON CONFLICT — SEC-2). AC7.
 
 ## Phase 3 — API + UI
 
-- [ ] 3.1 `runs/route.ts`: merge live rows (terminal row wins on `run_id` collision); reader-computed `stuck`; ignore rows older than max-run-duration; enumerate `running`/`stuck`/`resumed` in `STATUS_VALUES`. AC4.
+- [ ] 3.1 `runs/route.ts`: merge live rows (terminal wins on `run_id`; NULL-run_id doesn't match — DI-Q3); `stuck` + ignore-filter both key on **`last_heartbeat_at`** (`stuck_threshold < ignore_bound` — DI-P1-B); apply status filter to the **merged** set (DI-P2-F); enumerate `running`/`stuck`/`resumed` in `STATUS_VALUES`. AC4.
 - [ ] 3.2 `routines-surface.tsx`: distinct `STATUS_COLOR` for `stuck`/`never`; `resumed` badge from `attempt>1`; pill precedence `stuck > running`; elapsed/"Resumed" per wireframes 13–16 (elapsed framing, not "step N"). Reuse `leader-loop-status.tsx` Realtime + poll fallback. AC5.
 
 ## Phase 4 — Contract + ADR
 
-- [ ] 4.1 Author ADR-075 (Decision + 3 rejected alternatives; `brand_survival_threshold` frontmatter; AP-014 xref; general clause review-gated). AC8.
+- [ ] 4.1 Author ADR-075 (Decision + 3 rejected alternatives; `brand_survival_threshold` frontmatter; AP-014 xref; general clause review-gated). Include the deepen mandates: node-side vs agent-side persistence classification (`cron-bug-fixer` = agent-side reference carve-out; run-keyed `bot-fix/<issue#>` names so re-spawn collides); "last-in-step" precise def; keys from `ctx.runId` never `randomUUID`; single-operator RLS assumption + workspace_id-before-multi-tenant. AC8.
 - [ ] 4.2 Document NG9 (heavy bypass crons deferred); `log()` coverage = `spawnClaudeEval`-routed only.
 
 ## Phase 5 — Verify

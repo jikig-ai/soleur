@@ -100,6 +100,51 @@ Keystone decision: **`upsertProgress` is written from `spawnClaudeEval`, not the
 | A-LOW | architecture | Duplicate-ADR-number hazard (027/030/031/033/038 each ×2); ADR-075 needs `brand_survival_threshold` + AP-014 xref | **Adopt.** Phase 0 greps BOTH `ADR-075-*` filename AND `adr:` frontmatter; ADR-075 carries `brand_survival_threshold: single-user incident` + AP-014 cross-link. |
 | S-F1 | simplicity | Could the Inngest run-state API back the reader, eliminating the table? | **Phase 0 gate** (below). Expected: minimal table justified by output-aware liveness + SIGKILL-fast detection (arch affirmed the sidecar), but verify before Phase 1. |
 
+## Deepen Enhancement — data-integrity + security (authoritative; /work reads this)
+
+Deepened 2026-07-01 via data-integrity-guardian + security-sentinel (single-user-incident triad). No P0; the findings below are load-bearing P1s with concrete fixes that the phase patches encode.
+
+### Migration 120 — final SQL shape (DI-P1-A, DI-P2-D, DI-Q4)
+```sql
+-- LAWFUL_BASIS: legitimate_interest (operational run observability)
+-- RETENTION: ephemeral — deleted on terminal write; orphans reader-bounded by max-run-duration
+CREATE TABLE public.routine_run_progress (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  routine_id        text NOT NULL,
+  run_id            text NOT NULL UNIQUE,          -- UNIQUE index is load-bearing (ON CONFLICT + point lookups)
+  attempt           smallint NOT NULL DEFAULT 1,
+  started_at        timestamptz NOT NULL DEFAULT now(),
+  last_heartbeat_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.routine_run_progress ENABLE ROW LEVEL SECURITY;
+CREATE POLICY routine_run_progress_authenticated_select
+  ON public.routine_run_progress FOR SELECT USING (auth.uid() IS NOT NULL);   -- mirrors routine_runs 107:75-76
+REVOKE INSERT, UPDATE, DELETE ON public.routine_run_progress FROM anon, authenticated;  -- writes are service_role (BYPASSRLS); NO write policy
+```
+- **upsert (2 statements, NOT one):** (1) `INSERT … ON CONFLICT (run_id) DO UPDATE SET attempt=EXCLUDED.attempt, last_heartbeat_at=now()` — **do NOT touch `started_at`** (DI-P2-D: a replay must not reset the elapsed clock). (2) delete-stale is a **separate, staleness-guarded** statement: `DELETE … WHERE routine_id=$1 AND run_id<>$2 AND last_heartbeat_at < now() - <bound>`. **The guard is mandatory** — an unconditional `run_id<>$2` delete lets two same-routine runs mutually delete each other's live rows (DI-P1-A), and since `heartbeat` is UPDATE-only it can never recreate a deleted row → permanent live-row loss.
+- Writes via `getServiceClient()` (service role), **not** a tenant client (else RLS silently writes 0 rows). Reader uses the existing user-session client (`route.ts:24`) so the SELECT policy is enforced. No `SECURITY DEFINER` RPC needed (direct service-role `.upsert()`); if a future RPC is added it MUST pin `SET search_path=public, pg_temp` (`cq-pg-security-definer`).
+
+### Write-path (DI-P1-C, DI-P2-E)
+- `finishProgress(runId)` fires **inside** the `transformOutput` try, on the line immediately **after** `await …rpc("write_routine_run")` resolves — NOT in a `finally`/after the catch. The terminal write is fail-soft (swallows errors, `run-log.ts:170-201`); deleting after a *failed* terminal write = the run shows neither live nor terminal (vanish). Give `finishProgress` its own inner try/catch→Sentry.
+- `heartbeat(runId)` is **UPDATE-only** (`WHERE run_id=$1`) — never an upsert (a tick landing after `finishProgress` would resurrect a phantom live row). Clear the ~30s interval when `spawnClaudeEval`'s child exits (`_cron-claude-eval-substrate.ts:820-824`).
+
+### Reader (DI-P1-B, DI-Q3, DI-P2-F)
+- Ignore-filter + stuck MUST both key on **`last_heartbeat_at`**, never `started_at` (heavy crons run ~50 min — `cron-bug-fixer.ts:726` — so a `started_at`-based bound would vanish healthy long runs). Invariant: `stuck_threshold < ignore_bound` so states are contiguous (running ≤ threshold < stuck ≤ ignore_bound < ignored).
+- Merge: terminal `routine_runs` row wins on `run_id` collision. `routine_runs.run_id` is **NULLABLE** (`107:53`) — do NOT treat a NULL-run_id terminal row as matching a live row.
+- `STATUS_VALUES` widening (P1-5): apply the status filter to the **merged** result set — do NOT push `.eq("status","stuck")` into `listRecentRuns` (`list-routines.ts:137`), which would return empty (running/stuck/resumed are reader-computed, not persisted `routine_runs.status`).
+- A genuinely-dead never-replayed run transitions **stuck → gone** at `ignore_bound` (disappears mid-watch, no terminal record) — accepted-orphan tradeoff; document as a known state in the ADR/AC so it doesn't read as a bug.
+
+### ADR-075 — replay-safety contract mandates (SEC-1, SEC-2, SEC-3)
+- **Classify persistence per heavy cron: node-side vs agent-side.** Node-side (`safeCommitAndPr`, `_cron-safe-commit.ts:429-441` — replay-idempotent: commit-detect, push no-op, PR-create `422 already exists` tolerated) is covered by "last-in-step". **Agent-side** (the LLM runs `git`/`gh pr` INSIDE `claude-eval`, e.g. `cron-bug-fixer.ts:727` + `_cron-shared.ts:601-602`) is **at-least-once** and NOT covered — a mid-`claude-eval` eviction re-spawns claude and can open a **duplicate PR/branch**. This is the highest-probability eviction window (the very one this feature makes visible), so it must be closed, not implied.
+  - **Mandate:** agent-side crons MUST use **deterministic run-keyed resource names** (branch `bot-fix/<issue#>` — bug-fixer already uses this prefix per the watchdog) so a re-spawn **collides (422)** rather than duplicates; OR lift the mutation into a deterministic node step. Record `cron-bug-fixer` as the reference carve-out.
+- **"last-in-step" defined precisely:** the mutation is the final awaited side effect in its `step.run`, with NO awaited work after it (else a crash post-mutation-pre-return repeats it).
+- **Idempotency keys derive from stable Inngest run identity** (`ctx.runId` [+ deterministic sub-index]), **never `randomUUID()`/`Date.now()`** (those defeat cross-replay dedup by construction).
+- **Per-cron persistence declaration** is a concrete checklist item for `observability-coverage-reviewer` + the write-boundary sweep (`hr-write-boundary-sentinel-sweep-all-write-sites`) — not just prose.
+- **Single-operator RLS assumption recorded:** `routine_run_progress` inherits `routine_runs`' `auth.uid() IS NOT NULL` SELECT (any authenticated principal reads all rows — fine for tenant-zero). Because the table is attribution-free it CANNOT be workspace-scoped by policy alone; a `workspace_id` + `is_workspace_member()` predicate is required before multi-tenant enablement. Add to the deferred not-yet-workspace-keyed set (with #4304/#4305/#4306).
+
+### AC7 reframed (SEC-2 — the original was false-confidence)
+Heavy crons run on the operator's CC subscription via `buildSpawnEnv` (`_cron-claude-eval-substrate.ts:790-798`) and **do not call `cost-writer` at all**; and `cost-writer`'s `invocation_id` is `randomUUID()` per call (`:151/:325`), so `ON CONFLICT(invocation_id)` never fires across a replay. → AC7 asserts the REAL mechanism: **Inngest step memoization** — a completed (memoized) step is not re-executed on replay (so its cost/side effects don't repeat); an *interrupted* `claude-eval` step DOES re-run and re-spend (inherent to resume, acceptable). Drop the `ON CONFLICT`/cost-writer framing from the heavy-cron path.
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** the routines dashboard shows a run as healthy-running
@@ -160,7 +205,8 @@ true`. CPO reviewed the brainstorm — Domain Review carry-forward below. `user-
   (breaks the one-terminal-row-per-run audit contract + WAL cost the middleware bounds); (b) worm_bypass UPDATE on
   `routine_runs` per heartbeat — rejected (WORM is for terminal audit, not mutable in-flight state; heavy RPC per tick);
   (c) reaper cron for stuck detection — deferred (6-registry lockstep; reader-side stale is sufficient for v1).
-  Extends ADR-033 (heavy crons spawn claude in `step.run`) + ADR-030 (self-hosted EU Inngest). Status: `accepted`.
+  Extends ADR-033 (heavy crons spawn claude in `step.run`) + ADR-030 (self-hosted EU Inngest). Status: `accepted`. Frontmatter `brand_survival_threshold: single-user incident`; cross-link AP-014.
+  - **Contract mandates (from deepen security review — see Deepen Enhancement SEC-1/2/3):** (i) classify each heavy cron's persistence **node-side** (`safeCommitAndPr`, replay-idempotent — covered) vs **agent-side** (LLM runs `git`/`gh` inside `claude-eval` — at-least-once, NOT covered by the idempotency clause); agent-side MUST use deterministic run-keyed resource names (`bot-fix/<issue#>`) so re-spawn collides not duplicates (`cron-bug-fixer` = reference carve-out). (ii) "last-in-step" = final awaited side effect, no awaited work after. (iii) idempotency keys derive from `ctx.runId`, never `randomUUID()`/`Date.now()`. (iv) per-cron persistence declaration is an `observability-coverage-reviewer` checklist item (review-gated general clause). (v) records the single-operator RLS assumption + that a `workspace_id`/`is_workspace_member()` predicate is needed before multi-tenant (deferred with #4304/#4305/#4306).
 
 ### C4 views
 - **No C4 model/view change.** Completeness enumeration (all three `.c4` read): (a) external human actors — `founder`
@@ -217,22 +263,23 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 - Read `spawnClaudeEval` (`:732`) — confirm it can host `upsertProgress` + a periodic tick and that callers close over `ctx.runId`+`attempt`.
 - Enumerate the HEAVY crons that bypass `spawnClaudeEval`: `cron-daily-triage.ts:149`, `cron-follow-through-monitor.ts:246` (arch-A-1) — confirm they are the only heavy bypassers; they are **out of v1 scope** (NG9), not false-stuck (they get no live row).
 - Confirm `run-log.ts transformOutput` early returns (`:148` step-level, `:166` thrown-non-final) so `finishProgress` lands after both.
+- **Same-routine concurrency (DI-P1-A):** verify whether a heavy cron can double-fire (scheduled + `*.manual-trigger` overlap, or Inngest concurrency>1). The staleness-guarded delete-stale makes it safe regardless, but if two runs of one routine can be live simultaneously, confirm the guard is present (it is P0 without it).
 
 ### Phase 1 — Schema (RED: migration test first)
-- `120_routine_run_progress.sql` — **minimal table** (post-review): `id uuid PK`, `routine_id text NOT NULL`, `run_id text NOT NULL UNIQUE`, `attempt smallint NOT NULL DEFAULT 1`, `started_at timestamptz NOT NULL`, `last_heartbeat_at timestamptz NOT NULL`. Index on `last_heartbeat_at`. **Dropped** `total_steps`/`current_step_index` (P2-5), `current_step` (constant `"claude-eval"` — S-F4), `heartbeat_count` (redundant with `last_heartbeat_at` — S-F6), `resumed_from_heartbeat` (badge = `attempt>1` — S-F3). **Attribution-free** (no actor_id/FK-to-users → no PII surface; TR4). NOT WORM (mutable heartbeat). RLS: service-role write; founder SELECT via existing routines RLS. Sibling-migration check for non-transactional DDL (no `CONCURRENTLY`).
+- `120_routine_run_progress.sql` — **minimal table** (exact DDL + RLS in Deepen Enhancement): cols `id, routine_id, run_id UNIQUE, attempt, started_at, last_heartbeat_at`. **Dropped** `total_steps`/`current_step_index` (P2-5), `current_step` (constant — S-F4), `heartbeat_count` (redundant — S-F6), `resumed_from_heartbeat` (badge = `attempt>1` — S-F3). **Attribution-free** (no actor_id/FK-to-users → no PII surface; TR4). NOT WORM. RLS: `SELECT USING (auth.uid() IS NOT NULL)` + `REVOKE INSERT/UPDATE/DELETE FROM anon, authenticated` (service_role BYPASSRLS writes; DI-Q4). The load-bearing index is the auto-created `UNIQUE(run_id)`; the `last_heartbeat_at` index is cosmetic at ~16 rows (DI-Q6). No `CONCURRENTLY`.
   - **Orphan handling (no `pg_cron` — S-F5):** terminal delete (`finishProgress`) + delete-stale-same-routine on upsert + reader ignores rows older than max-run-duration. Row count bounded by ~16 routines; a run-once-then-dead orphan is a harmless reader-filtered row.
   - **GDPR-gate fold-ins (Phase 2.7, both Important):** annotate `-- LAWFUL_BASIS: legitimate_interest (operational run observability)` (mirrors `routine_runs`/ADR-028) and `-- RETENTION: ephemeral — deleted on terminal write; orphans reader-bounded by max-run-duration`. Gate confirmed: no Art.9/Art.17/Chapter-V findings (attribution-free + EU-resident).
 - `.down.sql`: drop table.
 
 ### Phase 2 — Live-state helper + heartbeat (RED→GREEN) — final writer model
-- `routine-run-progress.ts`: `upsertProgress(fnId, runId, attempt)` (INSERT…ON CONFLICT(run_id) DO UPDATE + delete-stale-same-routine), `heartbeat(runId)` (bump `last_heartbeat_at`), `finishProgress(runId)` (delete). All service-client; fail-soft (mirror to Sentry, never throw).
-- `spawnClaudeEval` + ~16 callers: caller passes `runId`+`attempt` (explicit bound closure — arch-A-3). On entry `upsertProgress`; then periodic `heartbeat(runId)` tick (~30s) while child runs. Domain ≡ heartbeat domain by construction (no `isHeavyCron`).
-- `run-log.ts transformOutput`: `finishProgress(runId)` **after** the terminal `write_routine_run` succeeds and **after both** early returns (`:148`, `:166`) — arch-A-2. `transformInput` untouched.
-- **Replay-safety:** upsert/heartbeat are within-step self-healing side effects; no mutating step split (git commit/PR/credit stays idempotency-keyed or last-in-step per ADR-075).
+- `routine-run-progress.ts` (see Deepen Enhancement for exact SQL): `upsertProgress(fnId, runId, attempt)` = INSERT…ON CONFLICT(run_id) DO UPDATE **preserving `started_at`** (DI-P2-D) + a **separate staleness-guarded** delete-stale (DI-P1-A); `heartbeat(runId)` = **UPDATE-only** (DI-P2-E, never upsert); `finishProgress(runId)` = delete. All service-client (`getServiceClient()`); fail-soft.
+- `spawnClaudeEval` + ~16 callers: caller passes `runId`+`attempt` (explicit bound closure — arch-A-3). On entry `upsertProgress`; then periodic `heartbeat(runId)` tick (~30s) while child runs; **clear the interval on child exit** (`:820-824`). Domain ≡ heartbeat domain by construction (no `isHeavyCron`).
+- `run-log.ts transformOutput`: `finishProgress(runId)` **inside** the try, on the line immediately **after** `write_routine_run` resolves (DI-P1-C — never in `finally`/after catch, or a failed terminal write + delete = vanish) and after both early returns (`:148`, `:166`). Own inner try/catch→Sentry. `transformInput` untouched (stays sync).
+- **Replay-safety:** upsert/heartbeat are within-step self-healing side effects; mutating steps per ADR-075 (node-side idempotent vs agent-side run-keyed — see Deepen Enhancement SEC-1).
 
-### Phase 3 — API + UI (RED→GREEN)
-- `runs/route.ts`: merge live rows; compute `stuck` reader-side (`now - last_heartbeat_at > threshold`).
-- `routines-surface.tsx`: `StatusPill`/`STATUS_COLOR` add `stuck`/`resumed`; render heartbeat/elapsed/"Resumed from step N"/`error_summary` per wireframes 13–16; reuse `leader-loop-status.tsx` Realtime + 2s-poll fallback.
+### Phase 3 — API + UI (RED→GREEN) — see Deepen Enhancement "Reader"
+- `runs/route.ts`: merge live rows; both `stuck` AND the ignore-filter key on **`last_heartbeat_at`** (NOT `started_at` — DI-P1-B, else healthy ~50min runs vanish); invariant `stuck_threshold < ignore_bound`. Terminal `routine_runs` row wins on `run_id` collision (NULL-run_id terminal rows don't match live rows — DI-Q3). Apply the status filter to the **merged** set, not pushed into `listRecentRuns` (DI-P2-F).
+- `routines-surface.tsx`: `StatusPill`/`STATUS_COLOR` add distinct `stuck`/`never`; `resumed` badge from `attempt>1`; render heartbeat/elapsed + "Resumed" (elapsed framing, not "step N" — P2-5)/`error_summary` per wireframes 13–16; reuse `leader-loop-status.tsx` Realtime + 2s-poll fallback.
 
 ### Phase 4 — Contract + ADR
 - Author ADR-075 (above); the general replay-safety clause is **review-gated** (write-boundary sweep + `observability-coverage-reviewer`), the billing clause is behaviorally tested (AC7). No standalone contract test of untouched code.
@@ -247,7 +294,7 @@ heartbeat) vs. resumed (resumed_from_step set) vs. clean-completed (row deleted 
 - [ ] AC4 — A light cron (not `spawnClaudeEval`-routed) gets **no** live row (domain-by-construction — P1-3/A-1). `runs/route.ts`: in-flight rows carry a reader-computed `stuck` flag (`now - last_heartbeat_at > threshold`); rows older than max-run-duration are ignored (not "stuck forever" — S-F5); when a live row and a terminal `routine_runs` row share a `run_id`, the **terminal row wins** (A-5); `STATUS_VALUES` enumerates `running`/`stuck`/`resumed` (P1-5).
 - [ ] AC5 — UI: `running`/`stuck`/`completed`/`failed` have **distinct** `STATUS_COLOR` entries (distinct from running **and from each other** — P2-2); `resumed` is a **badge overlay** from `attempt > 1` (P1-2/S-F3); `never` has an explicit color. Component test asserts all four wireframe states + the badge.
 - [ ] AC6 — `transformOutput` ordering (A-2): `finishProgress` fires **after** the terminal `write_routine_run` and **after both** early returns (`:148` step-level, `:166` thrown-non-final) — test that a step-level event and a non-final throw do NOT delete the live row, and a delete-before-terminal cannot vanish a run.
-- [ ] AC7 — Billing invariant (**behavioral** — P2-4/A-4): invoking a completed cost step twice with the same idempotency key yields **one** metered row (backed by `cost-writer.ts:144` `ON CONFLICT (invocation_id) DO NOTHING`).
+- [ ] AC7 — Replay-cost invariant (**reframed — SEC-2**): assert **Inngest step memoization** — a completed (memoized) step is NOT re-executed on replay (so its side effects/cost don't repeat); an interrupted `claude-eval` step DOES re-run and re-spend (inherent to resume, acceptable). Do NOT assert `cost-writer` `ON CONFLICT` (heavy crons don't call `cost-writer`; its `invocation_id` is `randomUUID()` per call, so it never dedupes across a replay — false-confidence). Also assert the ADR-075 mandate: agent-side mutations use run-keyed resource names so a re-spawn collides (422), not duplicates.
 - [ ] AC8 — ADR-075 exists with `## Decision` + `## Alternatives Considered` (3 rejected), `brand_survival_threshold: single-user incident` frontmatter, AP-014 cross-link, and the C4 "no-impact" enumeration.
 - [ ] AC9 — Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`. Tests: `./node_modules/.bin/vitest run test/server/routine-run-progress.test.ts` (path matches `test/**/*.test.ts` glob).
 - [ ] AC10 — `Ref #5766` in PR body (not `Closes` — migration applies post-merge; see AC13).
