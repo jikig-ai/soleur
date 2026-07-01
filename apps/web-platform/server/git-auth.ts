@@ -348,13 +348,15 @@ export async function gitWithPrivateKeyAuth(
   const keyPath = join(dir, `.git-transport-${randomUUID()}.key`);
   const knownHostsPath = join(dir, `.git-transport-${randomUUID()}.known_hosts`);
 
-  // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
-  writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
-    mode: 0o600,
-  });
-  writeFileSync(knownHostsPath, "", { mode: 0o600 });
-
   try {
+    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+    // BOTH writes live inside the try so a throw on the SECOND write still reaches
+    // the finally cleanup for the first (0600 key) file (#5817 security review P3).
+    writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+      mode: 0o600,
+    });
+    writeFileSync(knownHostsPath, "", { mode: 0o600 });
+
     const sshCommand = [
       "ssh",
       "-i",
@@ -435,13 +437,15 @@ export async function sshWithPrivateKeyAuth(
   const keyPath = join(dir, `.git-provision-${randomUUID()}.key`);
   const knownHostsPath = join(dir, `.git-provision-${randomUUID()}.known_hosts`);
 
-  // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
-  writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
-    mode: 0o600,
-  });
-  writeFileSync(knownHostsPath, "", { mode: 0o600 });
-
   try {
+    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+    // BOTH writes live inside the try so a throw on the SECOND write still reaches
+    // the finally cleanup for the first (0600 key) file (#5817 security review P3).
+    writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+      mode: 0o600,
+    });
+    writeFileSync(knownHostsPath, "", { mode: 0o600 });
+
     const sshArgs = [
       "-i",
       keyPath,

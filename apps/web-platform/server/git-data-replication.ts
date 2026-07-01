@@ -151,10 +151,16 @@ export function ensureGitDataRemote(
 }
 
 /**
- * Replicate the workspace's refs to the shared git-data bare store: provision →
- * ensure remote → fenced force-push carrying the lease generation. Called at the
- * session-end sync points on BOTH lineages (agent-runner `unregisterSession`
- * finally; cc `handleCcCloseQuery`). NO-OP at flag-off.
+ * Replicate the workspace's branch + tag refs to the shared git-data bare store:
+ * provision → ensure remote → fenced force-push carrying the lease generation.
+ * Called at the session-end sync points on BOTH lineages (agent-runner
+ * `unregisterSession` finally; cc `handleCcCloseQuery`). NO-OP at flag-off.
+ *
+ * Session-end-coupled, NOT drain-coupled: the SIGTERM lease-drain deliberately
+ * skips replication (it must fit the 8s shutdown budget). A crash/shutdown mid-
+ * session leaves git-data at most one turn behind; the next session force-pushes
+ * every head + tag, so the replica self-heals. Safe because git-data is a
+ * write-only replica here (the read-source flag defaults to the volume until PR C).
  *
  * FAIL-LOUD: a push failure — most importantly a **fence reject** (stale
  * `lease-gen < stored max`), which at replicas=1 can never arise but becomes
@@ -178,16 +184,21 @@ export async function replicateToGitData(params: {
     ensureGitDataRemote(workspacePath, workspaceId);
 
     const transportKey = requireEnvKey("GIT_TRANSPORT_SSH_PRIVATE_KEY");
-    // The git-data store is a REPLICA of the workspace refs — force so a
-    // non-fast-forward on the shared store never blocks replication; the fence's
-    // monotonic gen (NOT ref ancestry) is the ordering authority. Push-options
-    // ride THIS push only, never origin/syncPush.
+    // The git-data store is a REPLICA of the workspace's branch + tag refs — force
+    // so a non-fast-forward on the shared store never blocks replication; the
+    // fence's monotonic gen (NOT ref ancestry) is the ordering authority.
+    // BOTH refspecs are carried so a local-only tag (never pushed to GitHub origin,
+    // so uncovered by GitHub rehydration) still reaches the durable replica — the
+    // ref-completeness the cutover's ref-set-equality check depends on (#5817 review
+    // F1). NOT `--mirror`: deletes/prune are PR C cutover scope, not the transport's.
+    // Push-options ride THIS push only, never origin/syncPush.
     await gitWithPrivateKeyAuth(
       [
         "push",
         "--force",
         "git-data",
         "refs/heads/*:refs/heads/*",
+        "refs/tags/*:refs/tags/*",
         `--push-option=lease-gen=${leaseGeneration}`,
         `--push-option=worktree-id=${WORKTREE_ID_PRIMARY}`,
       ],
