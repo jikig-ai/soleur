@@ -16,6 +16,12 @@ import { reportSilentFallback } from "./observability";
  * PR B; this module provides only the lease primitives.
  */
 
+/** The single worktree id per workspace today — one tree per workspace
+ *  (inflight-checkpoint.ts:14, ensure-workspace-repo.ts:75). A stable opaque
+ *  constant; multi-worktree is Phase 3 (additive, non-breaking). Shared so the
+ *  two turn-boundary lineages key the lease identically (no drift). */
+export const WORKTREE_ID_PRIMARY = "primary";
+
 /** The lease a host currently holds: its infra `host_id` + the fencing
  *  generation token it presents to the git-data host's pre-receive CAS. */
 export interface WorktreeLease {
@@ -182,3 +188,160 @@ export async function releaseWorktreeLease(
     });
   }
 }
+
+// --- Held-lease registry (SIGTERM drain) ------------------------------------
+// Process-local record of the leases this host currently holds, so the SIGTERM
+// handler can release them before exit (a graceful release lets a surviving host
+// reclaim immediately rather than waiting out the 120s heartbeat expiry). Mirrors
+// the module-level Map pattern in agent-session-registry.ts, collocated here so
+// the lease concern owns its own lifecycle state.
+
+/** A lease currently held by this host, keyed by `(workspaceId, worktreeId)`. */
+export interface HeldWorktreeLease {
+  workspaceId: string;
+  worktreeId: string;
+  hostId: string;
+  leaseGeneration: number;
+}
+
+const heldLeases = new Map<string, HeldWorktreeLease>();
+
+function heldKey(workspaceId: string, worktreeId: string): string {
+  return `${workspaceId}:${worktreeId}`;
+}
+
+/** Record a held lease (call after a successful acquire). Idempotent per key. */
+export function registerHeldLease(lease: HeldWorktreeLease): void {
+  heldLeases.set(heldKey(lease.workspaceId, lease.worktreeId), lease);
+}
+
+/** Drop a held lease from the registry (call after release / on loss). */
+export function unregisterHeldLease(
+  workspaceId: string,
+  worktreeId: string,
+): void {
+  heldLeases.delete(heldKey(workspaceId, worktreeId));
+}
+
+/**
+ * Release every held lease — the SIGTERM drain step (server/index.ts, after the
+ * cc-query drain, before server.close()). Best-effort + bounded: each release is
+ * a never-throwing RPC, run concurrently via allSettled so one slow release can't
+ * starve the 8s shutdown budget. Clears the registry up front so a release that
+ * races a concurrent acquire doesn't resurrect a stale entry. A lease that fails
+ * to release simply expires at 120s and a surviving host reclaims it.
+ */
+export async function releaseAllHeldLeases(): Promise<void> {
+  const leases = [...heldLeases.values()];
+  heldLeases.clear();
+  await Promise.allSettled(
+    leases.map((l) =>
+      releaseWorktreeLease(
+        l.workspaceId,
+        l.worktreeId,
+        l.hostId,
+        l.leaseGeneration,
+      ),
+    ),
+  );
+}
+
+// --- Session-lifetime lease handle (acquire + heartbeat + release) ----------
+
+/** Heartbeat cadence — refresh well inside the 120s lease expiry (migration
+ *  116). Mirrors the `touchSlot` ≤30s ping in ws-handler.ts:2946. */
+export const WORKTREE_LEASE_HEARTBEAT_MS = 25_000;
+
+/** Consecutive failed touches before declaring the lease lost. >1 so a single
+ *  transient Postgres error (which `touchWorktreeLease` maps to `false`, same as
+ *  a real reclaim) does not abort a valid session; 2 beats (~50s) stays well
+ *  inside the 120s expiry. */
+export const MAX_CONSECUTIVE_TOUCH_MISSES = 2;
+
+/** A held lease's lifetime handle: the fencing generation to present on the
+ *  git-data push, and an idempotent release that stops the heartbeat + frees
+ *  the row. */
+export interface WorktreeLeaseHandle {
+  leaseGeneration: number;
+  release(): Promise<void>;
+}
+
+/**
+ * Acquire a write lease and hold it for the session lifetime: register it for
+ * the SIGTERM drain and start a ≤25s heartbeat. Returns `null` when the lease is
+ * held live by ANOTHER host — the caller LOST and MUST NOT write (fail-closed).
+ *
+ * On heartbeat loss the heartbeat stops, the registry entry is dropped, and
+ * `onLost` fires exactly once — the caller aborts the in-flight write and fails
+ * loud. `release()` is idempotent and is also suppressed once a loss is observed
+ * (the row already belongs to the reclaimer; release_worktree_lease would no-op).
+ *
+ * Loss requires `MAX_CONSECUTIVE_TOUCH_MISSES` CONSECUTIVE failed touches, not
+ * one: `touchWorktreeLease` maps a transient Postgres error to the same `false`
+ * as a real reclaim, and a single DB blip should not abort an otherwise-valid
+ * session. The 120s lease expiry affords ~4 missed 25s beats of slack, so two
+ * consecutive misses (~50s) still declares a genuine reclaim well inside expiry
+ * while tolerating one transient blip. A real reclaim returns `false` every
+ * beat, so it still trips; the git-data fence is the ultimate guard against a
+ * write by a host that has actually lost the row, so the slack cannot double-write.
+ *
+ * GATED: callers invoke this ONLY behind `isGitDataStoreEnabled()`. At
+ * replicas=1 with the flag off the lease path is entirely inert (ADR-068
+ * amendment) — the fence provably never rejects same-host pushes, so a live
+ * lease would add a fail-closed Postgres dependency to every turn for zero
+ * multi-host benefit (`hr-weigh-every-decision-against-target-user-impact`).
+ */
+export async function acquireAndHoldWorktreeLease(
+  workspaceId: string,
+  worktreeId: string,
+  hostId: string,
+  onLost: () => void,
+): Promise<WorktreeLeaseHandle | null> {
+  const lease = await acquireWorktreeLease(workspaceId, worktreeId, hostId);
+  if (!lease) return null;
+  const { leaseGeneration } = lease;
+  registerHeldLease({ workspaceId, worktreeId, hostId, leaseGeneration });
+
+  // Settled on the FIRST of {release, observed-loss}; both transitions are
+  // idempotent and mutually exclusive thereafter.
+  let settled = false;
+  let consecutiveMisses = 0;
+  const heartbeat = setInterval(() => {
+    void touchWorktreeLease(
+      workspaceId,
+      worktreeId,
+      hostId,
+      leaseGeneration,
+    ).then((held) => {
+      if (settled) return;
+      if (held) {
+        consecutiveMisses = 0; // a single good beat clears a transient blip
+        return;
+      }
+      if (++consecutiveMisses < MAX_CONSECUTIVE_TOUCH_MISSES) return;
+      settled = true;
+      clearInterval(heartbeat);
+      unregisterHeldLease(workspaceId, worktreeId);
+      onLost();
+    });
+  }, WORKTREE_LEASE_HEARTBEAT_MS);
+  // The heartbeat alone must never block process exit (mirror ws-handler:842).
+  heartbeat.unref?.();
+
+  return {
+    leaseGeneration,
+    release: async (): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      unregisterHeldLease(workspaceId, worktreeId);
+      await releaseWorktreeLease(workspaceId, worktreeId, hostId, leaseGeneration);
+    },
+  };
+}
+
+/** Test-only registry accessors (the runtime never reads these). */
+export const __test_only__ = {
+  heldLeaseCount: (): number => heldLeases.size,
+  clearHeldLeases: (): void => heldLeases.clear(),
+};

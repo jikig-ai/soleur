@@ -1,0 +1,82 @@
+#cloud-config
+# Epic #5274 Phase 2 PR B / ADR-068 — git-data host cloud-init (minimal).
+#
+# Rendered by templatefile() in git-data.tf. Installs ONLY the durable substrate
+# (git, the transport user + its restricted key, the volume mount, the bootstrap,
+# the fail-closed placeholder hook). The real CAS fence hook ships later via the
+# web-platform deploy pipeline. NO SSH provisioner runs against this host
+# (cloud-init-only) — the CI runner cannot SSH either host, so a remote-exec would
+# hang the merge-triggered auto-apply.
+package_update: true
+packages:
+  - git
+  - util-linux # provides flock for the per-(workspace,worktree) fence lock
+
+# Dedicated transport user for git over the private net. Its login shell is
+# git-shell (no arbitrary commands), and the authorized_keys forced-command below
+# is defense-in-depth on top of that. cloud-init's `ssh_authorized_keys:`
+# directive cannot carry per-key options (command=...), so the key is written via
+# write_files instead.
+users:
+  - default
+  - name: git
+    shell: /usr/bin/git-shell
+    lock_passwd: true
+
+write_files:
+  # SSH hardening parity with the web host's minimal set.
+  - path: /etc/ssh/sshd_config.d/01-hardening.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      PermitRootLogin prohibit-password
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+    owner: root:root
+    permissions: '0644'
+
+  # Transport pubkey with a git-shell RESTRICTED forced-command: this key can ONLY
+  # run git-shell against SSH_ORIGINAL_COMMAND (git-receive-pack / git-upload-pack),
+  # never an interactive shell or arbitrary command. A bare dollar-var (no braces)
+  # is left literal by terraform templatefile() — only dollar-brace interpolates.
+  # `defer: true` writes it after the `git` user exists. git-data-bootstrap.sh
+  # fixes the .ssh dir/file ownership + perms so sshd accepts it.
+  - path: /home/git/.ssh/authorized_keys
+    content: |
+      command="git-shell -c \"$SSH_ORIGINAL_COMMAND\"",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
+    owner: git:git
+    permissions: '0600'
+    defer: true
+
+  # Idempotent bootstrap (git-data-bootstrap.sh) — injected via base64encode(file()).
+  - path: /usr/local/bin/git-data-bootstrap.sh
+    encoding: b64
+    content: ${git_data_bootstrap_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # Fail-closed placeholder pre-receive — staged to /tmp; the bootstrap installs it
+  # onto the volume at /mnt/git-data/hooks/pre-receive and wires core.hooksPath.
+  - path: /tmp/git-data-pre-receive-placeholder.sh
+    encoding: b64
+    content: ${git_data_pre_receive_placeholder_b64}
+    owner: root:root
+    permissions: '0755'
+
+runcmd:
+  # Apply SSH hardening immediately.
+  - systemctl restart sshd
+
+  # Mount the git-data block volume by id BEFORE the bootstrap runs (the bootstrap
+  # fails closed if it is not mounted). Matches the by-id mount pattern server.tf /
+  # cloud-init.yml uses for hcloud_volume.workspaces. `nofail` so a volume hiccup
+  # does not wedge boot; the bootstrap's mount assert is the real gate.
+  - mkdir -p /mnt/git-data
+  - mount /dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data || true
+  - echo '/dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data ext4 defaults,nofail 0 2' >> /etc/fstab
+
+  # Run the idempotent bootstrap (installs git substrate, bare-repo root, fence
+  # placeholder, core.hooksPath; asserts liveness / fails loud).
+  - bash /usr/local/bin/git-data-bootstrap.sh
