@@ -192,3 +192,31 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
+  test("--fix maps a stale Sonnet id to claude-sonnet-5", () => {
+    const root = makeFixtureRoot("claude-sonnet-4-6");
+    expect(run([], root).stdout).toContain("claude-sonnet-4-6");
+    expect(run(["--fix"], root).status).toBe(0);
+    const config = readFileSync(
+      join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
+      "utf8",
+    );
+    expect(config).toContain("claude-sonnet-5");
+    expect(config).not.toContain("claude-sonnet-4-6");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("Opus and Sonnet stale ids each map to their OWN tier target in one run", () => {
+    const root = mkdtempSync(join(tmpdir(), "mlr-multitier-"));
+    const dir = join(root, "apps/web-platform/server/inngest/functions");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
+    writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
+    expect(run(["--fix"], root).status).toBe(0);
+    // Per-tier map: opus → opus-4-8, sonnet → sonnet-5 (not a single global target).
+    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-4-8");
+    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toContain("claude-sonnet-5");
+    rmSync(root, { recursive: true, force: true });
+  });
+});
