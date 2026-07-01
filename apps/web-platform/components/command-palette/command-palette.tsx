@@ -278,13 +278,20 @@ export function CommandPalette() {
               {askCmd && (
                 <Command.Group heading="Ask an agent">
                   <Command.Item
-                    value={trimmed ? `ask agent ${trimmed}` : "ask an agent"}
+                    value={
+                      trimmed
+                        ? `ask agent ${trimmed}`
+                        : `ask an agent ${askCmd.keys ?? ""}`
+                    }
                     onSelect={() =>
                       runEffect({ kind: "openChat", query: trimmed || undefined })
                     }
                     data-testid="cmd-ask-agent"
                   >
                     {trimmed ? `Ask an agent about “${trimmed}”` : askCmd.label}
+                    {!trimmed && askCmd.keys && (
+                      <span className="cmdk-keys"> {askCmd.keys}</span>
+                    )}
                   </Command.Item>
                 </Command.Group>
               )}
@@ -293,10 +300,11 @@ export function CommandPalette() {
                 {navCmds.map((cmd) => (
                   <Command.Item
                     key={cmd.id}
-                    value={cmd.label}
+                    value={`${cmd.label} ${cmd.keys ?? ""}`}
                     onSelect={() => onSelectCommand(cmd)}
                   >
                     {cmd.label}
+                    {cmd.keys && <span className="cmdk-keys"> {cmd.keys}</span>}
                   </Command.Item>
                 ))}
               </Command.Group>

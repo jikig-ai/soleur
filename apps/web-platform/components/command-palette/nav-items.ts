@@ -8,18 +8,28 @@
 export type NavItem = {
   readonly href: string;
   readonly label: string;
+  /**
+   * Optional two-key "go-to" sequence (e.g. `"g d"` — the `g` prefix then `d`).
+   * The SINGLE source of truth for this destination's global keyboard binding:
+   * the resolver, the palette key hint, and the `?` overlay row all derive from
+   * it, so a documented key can never drift from the live binding (no separate
+   * NAV_SEQUENCES table). `g`-prefixed sequences (never a bare letter) are
+   * collision-free with browser chords — the wireframe's design, un-deferred
+   * from #5636.
+   */
+  readonly seq?: string;
 };
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/dashboard/inbox", label: "Inbox" },
-  { href: "/dashboard/workstream", label: "Workstream" },
-  { href: "/dashboard/kb", label: "Knowledge Base" },
-  { href: "/dashboard/routines", label: "Routines" },
+  { href: "/dashboard", label: "Dashboard", seq: "g d" },
+  { href: "/dashboard/inbox", label: "Inbox", seq: "g i" },
+  { href: "/dashboard/workstream", label: "Workstream", seq: "g w" },
+  { href: "/dashboard/kb", label: "Knowledge Base", seq: "g k" },
+  { href: "/dashboard/routines", label: "Routines", seq: "g r" },
 ] as const;
 
 export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
-  { href: "/dashboard/admin/analytics", label: "Analytics" },
+  { href: "/dashboard/admin/analytics", label: "Analytics", seq: "g a" },
 ] as const;
 
 // Settings destinations — surfaced under the palette's "Settings" drill-in
