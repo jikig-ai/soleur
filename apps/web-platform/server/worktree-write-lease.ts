@@ -247,10 +247,13 @@ export interface HeldWorktreeLease {
 }
 
 // #5817 F3 — the registry is keyed PER-HANDLE (a monotonic token), NOT by
-// `(workspaceId, worktreeId)`. `worktreeId` is always the `"primary"` constant, and
-// migration-116's same-host carve-out (`where wl.host_id = excluded.host_id`, keep
-// gen) lets TWO lineages on ONE host (legacy agent-runner + cc-dispatcher, or two
-// concurrent cc conversations) both acquire+hold a lease for the SAME workspace.
+// `(workspaceId, worktreeId)`. Since Phase 3 (ADR-068 D0) `worktreeId` is PER-USER
+// (`resolveWorktreeId(userId)`), so a single user's TWO lineages on ONE host
+// (legacy agent-runner + cc-dispatcher, or two concurrent cc conversations for the
+// same user) share the SAME `(workspaceId, worktreeId)` key and both acquire+hold a
+// lease for it via migration-116's same-host carve-out (`where wl.host_id =
+// excluded.host_id`, keep gen). (Two DIFFERENT users get distinct worktreeIds →
+// distinct leases → routable to distinct hosts — the whole point of D0.)
 // Under the old `(workspaceId, worktreeId)` key the second register OVERWROTE the
 // first and the first `release()` then DELETED the shared entry out from under the
 // still-live second handle — dropping the survivor from the SIGTERM drain. Keying

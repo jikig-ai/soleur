@@ -151,7 +151,7 @@ import { replicateToGitData } from "./git-data-replication";
 import { resolveHostId } from "./host-identity";
 import {
   acquireAndHoldWorktreeLease,
-  WORKTREE_ID_PRIMARY,
+  resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
 import { ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
@@ -1316,6 +1316,7 @@ async function replicateAndReleaseCcWorktreeLease(
       await replicateToGitData({
         workspacePath: record.workspacePath,
         workspaceId: record.workspaceId,
+        worktreeId: resolveWorktreeId(userId),
         leaseGeneration: record.handle.leaseGeneration,
         userId,
       });
@@ -2575,7 +2576,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       const hostId = resolveHostId();
       const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
         activeWorkspaceId,
-        WORKTREE_ID_PRIMARY,
+        resolveWorktreeId(args.userId),
         hostId,
         () => {
           reportSilentFallback(
