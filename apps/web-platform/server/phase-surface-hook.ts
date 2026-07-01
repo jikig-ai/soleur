@@ -24,6 +24,24 @@ const log = createChildLogger("phase-surface-hook");
 const SOLEUR_SKILL_PREFIX = "soleur:";
 
 /**
+ * Map a (possibly bare) skill name → its workflow phase, or null on any
+ * non-match. Pure + sync. Shared between the phase-surface hint hook (below)
+ * and the TR3 tool-attempt telemetry collector (DHH-2) so both derive the phase
+ * with identical normalization + prototype-safety semantics:
+ *   - bare→FQN normalization (`work` → `soleur:work`);
+ *   - `Object.hasOwn` own-property gate rejects every inherited key
+ *     (`__proto__`, `constructor`, `toString`) before reading the value;
+ *   - the model-controlled `skill` value is used ONLY as a map key, never echoed.
+ * The `?? null` collapses a garbage/inherited value that slipped the gate to the
+ * same fail-closed null (the map values are all strings by construction).
+ */
+export function skillToPhase(skill: string): string | null {
+  const key = skill.includes(":") ? skill : SOLEUR_SKILL_PREFIX + skill;
+  if (!Object.hasOwn(PHASE_SURFACE_MAP.skill_to_phase, key)) return null;
+  return PHASE_SURFACE_MAP.skill_to_phase[key] ?? null;
+}
+
+/**
  * Compose the phase hint for a skill, or null on any non-match. Pure + sync.
  * Mirrors the CLI hook's jq pipeline: one own-property gate on the
  * model-controlled key, one null-check on the derived surface.
@@ -33,11 +51,8 @@ function buildHint(skill: string): string | null {
   if (process.env.SOLEUR_DISABLE_PHASE_HINT === "1") return null;
   // (`skill` is already narrowed to a string by the caller before this runs.)
 
-  const key = skill.includes(":") ? skill : SOLEUR_SKILL_PREFIX + skill;
-  // Primary security gate: own-property lookup rejects every inherited key
-  // (`__proto__`, `constructor`, `toString`) before reading the value.
-  if (!Object.hasOwn(PHASE_SURFACE_MAP.skill_to_phase, key)) return null;
-  const phase = PHASE_SURFACE_MAP.skill_to_phase[key];
+  // Own-property-gated bare→FQN lookup (shared with the telemetry collector).
+  const phase = skillToPhase(skill);
 
   // Load-bearing fail-closed backstop (mirrors the CLI hook's `$s == null`): even
   // if a crafted key ever slipped the gate above, an inherited/garbage `phase`

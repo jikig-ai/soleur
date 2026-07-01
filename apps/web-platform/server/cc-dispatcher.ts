@@ -87,6 +87,7 @@ import {
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { formatAssistantText } from "@/lib/format-assistant-text";
+import { sanitizeToolNameForLog } from "@/lib/tool-name-sanitize";
 import { debugRedactionProbeTrips } from "./debug-probes";
 import { insertTurnSummary } from "./messages/insert-turn-summary";
 import {
@@ -436,11 +437,6 @@ export function buildConnectedRepoContext(owner: string, repo: string): string {
   );
 }
 
-// Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
-// depth against future model regressions that might emit pathologically long
-// tool names; the SDK validation gate constrains names to the registered
-// catalog today, so this is bounded but not impossible.
-const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
 
 // feat-concierge-stream-commands — `command_stream` output caps (D4) + the
 // UTF-8 byte-cap util. Definitions moved to `./command-stream-caps` so the
@@ -506,18 +502,6 @@ function probeRedactionFallthrough(
   return redacted;
 }
 
-/**
- * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
- * Unicode line/paragraph separators (CWE-117 log injection defense-in-depth),
- * and length-cap. Pino's JSON serialization is the primary defense; this is
- * a belt-and-suspenders pass per the log-injection-unicode-line-separators
- * learning.
- */
-function sanitizeToolNameForLog(name: string): string {
-  return name
-    .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "?")
-    .slice(0, MAX_TOOL_NAME_LEN_FOR_LOG);
-}
 
 // Hoisted module-level sets (avoid per-call construction in
 // `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
