@@ -373,28 +373,46 @@ post-enablement canary below passes). The parent ADR remains `accepted`.
 > wrong assumption — default setup is **structurally incompatible** with a
 > required-`CodeQL` merge queue.
 >
-> **Decision (2026-07-01): queue stays OFF; NOT re-adopting now.** The merge
-> queue is an optimization over `/ship`'s BEHIND-auto-sync loop, which already
-> mitigates the strict-up-to-date starvation #5780 set out to fix (both PR #5800
-> and the kill-switch PR #5811 merged cleanly through that loop). Re-adopting the
-> queue requires migrating CodeQL **default → advanced** setup
-> (`.github/workflows/codeql.yml` with `on: merge_group`), which (a) disrupts
-> every in-flight PR until it is rebased onto the codeql.yml-bearing main, and
-> (b) adds permanent codeql.yml maintenance (pin/matrix/query-suite) + SAST-drift
-> risk. That cost is not justified while the auto-sync loop works. CodeQL stays
-> on **default setup**.
+> **Root cause is a GitHub platform limitation, NOT our config (corrected
+> 2026-07-01 after investigation).** The real blocker is
+> [`github/codeql-action#1537`](https://github.com/github/codeql-action/issues/1537)
+> — *"GitHub merge queue builds don't report CodeQL status"* — **open since Feb
+> 2023, last updated 2026-05-22, no ETA** (GitHub code-scanning maintainer,
+> on-thread). CodeQL runs its analysis on `merge_group` but does **not** report
+> the code-scanning **status context** on the temp ref. This is true for BOTH
+> default AND advanced setup — so the earlier "migrate to advanced setup with
+> `on: merge_group`" idea does **not** fix it (the analysis runs; the required
+> `CodeQL` *status* still never posts). The most-endorsed comment on #1537 (15
+> 👍): *"there is no way to select different required checks for the branch
+> protection rules and those required by the merge queue"* — a ruleset's required
+> checks apply to both direct-merge and the queue, so CodeQL cannot be
+> required-for-PRs-but-exempt-in-queue. Every known workaround disables CodeQL
+> for merge groups entirely.
 >
-> An advanced-setup `codeql.yml` was prototyped in PR #5811 and **removed again
-> in the follow-up** (it errors continuously while default setup is active —
-> the two are mutually exclusive). The full prototype is preserved in #5811's
-> git history as the re-adoption recipe. **To re-adopt the queue later:** restore
-> that `codeql.yml`, disable CodeQL default setup, verify a `CodeQL` context
-> (integration_id 57789) satisfies the required check on a normal PR, rebase
-> in-flight PRs, THEN re-add the `merge_queue` rule. PIR:
+> **Decision (2026-07-01): queue stays OFF; CodeQL stays a blocking required
+> check.** The choice is binary and unavoidable:
+> - **CodeQL required (blocks merge) ⇒ no merge queue** ← chosen. The BEHIND-race
+>   starvation #5780 targeted is already mitigated by `/ship`'s auto-sync loop
+>   (both PR #5800 and the kill-switch PR #5811 merged cleanly through it).
+> - **Merge queue ⇒ CodeQL must be dropped from the ruleset's required checks**
+>   (advisory only — still runs + raises code-scanning alerts, but no longer
+>   blocks a merge). Rejected: trading a blocking SAST gate for marginally
+>   smoother merges over the working auto-sync loop is a bad trade.
+>
+> An advanced-setup `codeql.yml` was prototyped in PR #5811 and removed in #5812
+> (it also auto-disabled default setup, leaving main with no CodeQL producer —
+> re-enabled default setup to recover). **Do NOT restore it as a "fix" — it does
+> not solve #1537.** The ONLY correct re-adoption triggers are: (a) GitHub
+> resolves `codeql-action#1537` (native merge-queue CodeQL status), OR (b) a
+> deliberate decision to make CodeQL advisory (remove it from
+> `required_status_checks`, then re-add the `merge_queue` rule — no CodeQL setup
+> migration needed). PIR:
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
 > Generalized lesson: a plan recovered from disk after a subagent crash carries
 > its "verify X before shipping" Phase-0 gates as UNVERIFIED claims — re-run the
-> empirical probes, do not inherit them as done.
+> empirical probes, do not inherit them as done. Second lesson: verify a vendor
+> capability against its own issue tracker (#1537) before designing a fix around
+> it (`hr-verify-repo-capability-claim-before-assert`).
 
 ### Decision
 
@@ -439,11 +457,13 @@ landed in the sequenced predecessor PR-1 (#5784). A merge queue dispatches a
 required check whose workflow never fires on `merge_group` leaves the queue entry
 **permanently pending → the queue stalls forever** (the merge-queue analogue of
 the `[skip ci]` / path-filter deadlock). PR-1 added `merge_group:` to all 7
-producer workflows; the 8th producer, CodeQL, was originally left on default
-setup **(this was the bug — default setup never fires on `merge_group`; see the
-2026-07-01 incident note above)**. Fixing it requires CodeQL advanced setup with
-an `on: merge_group` trigger — deferred along with the queue itself per the
-2026-07-01 decision (CodeQL remains on default setup for now). PR-1 also fixed
+producer workflows; the 8th producer, CodeQL, cannot report a `merge_group`
+status at all **(the deadlock cause — see the 2026-07-01 incident note above;
+`codeql-action#1537`)**. This is NOT fixable by switching CodeQL to advanced
+setup — the code-scanning *status* is unreported on `merge_group` regardless of
+setup mode, so the required `CodeQL` context can never post on a queue temp ref.
+The queue is therefore incompatible with a required CodeQL check until GitHub
+resolves #1537. PR-1 also fixed
 the apply-verify `rules[0]` → `select(.type==…)` fragility, and added the
 observability + CLA-synthetic workflows.
 
@@ -517,12 +537,13 @@ plan tier; the `terraform apply` enables it without a plan upgrade.
 These are post-merge verifications — the queue only fires `merge_group` after
 the queue rule is re-applied:
 
-- **CodeQL advanced setup verified FIRST (the 2026-07-01 deadlock gate):** before
-  re-enabling the queue, confirm CodeQL default setup is disabled, that
-  `.github/workflows/codeql.yml` runs green on `pull_request`, and that a
-  `CodeQL` status context (integration_id 57789) posts and satisfies the required
-  check on a normal PR. Re-enabling the queue before this is the exact regression
-  that caused the incident.
+- **Blocked by `codeql-action#1537` — this canary CANNOT pass while CodeQL is a
+  required check.** CodeQL does not report a status context on `merge_group`
+  (any setup mode), so a queued entry can never satisfy the required `CodeQL`
+  check. Do not attempt re-enablement until EITHER GitHub resolves #1537, OR
+  CodeQL is deliberately removed from `required_status_checks` (advisory mode).
+  The remaining canary items below apply only after one of those preconditions
+  holds.
 - `apply-github-infra.yml` ran green on the re-enable merge; summary shows the
   required_status_checks count (16) via the `select(.type==…)` probe.
 - Discoverability:
