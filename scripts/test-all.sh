@@ -121,6 +121,7 @@ if want_scripts; then
   run_suite "scripts/lint-agents-rule-budget-live" python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
   run_suite "scripts/lint-agents-rule-budget-unit" bash scripts/lint-agents-rule-budget.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
+  run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
@@ -129,6 +130,7 @@ if want_scripts; then
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
+  run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   run_suite "tests/scripts/kb-drift-walker" bash tests/scripts/test-kb-drift-walker.sh
   # Destroy-guard counters (apply-* workflow trio). Pre-existing gap from
   # #4420 closed in #4419 — without these in CI, a PR that mutates a filter
