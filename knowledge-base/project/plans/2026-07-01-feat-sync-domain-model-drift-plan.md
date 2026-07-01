@@ -16,6 +16,20 @@ plan_reviewed: [dhh, kieran, code-simplicity, spec-flow-analyzer]
 
 # Plan — `/soleur:sync domain-model`: auto-fill + drift-detect the business-rules register
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-01 · **Triad:** data-integrity-guardian, security-sentinel, architecture-strategist (P0: architecture "unusually well-grounded"). See `## Deepen Research Insights` for binding requirements.
+
+**Key hardening added:**
+1. **`.down.sql` exclusion** from policy replay (P0 — else a rollback DROP silently deletes a live fact).
+2. **Fail-closed secret-shape scan** before emit + write (P0 — the report is committed; RLS predicates embed literals).
+3. **Path-confinement + injection safety** for generic-`--repo` (realpath-confine, `--` terminators, no eval, markdown-escape).
+4. **Anchor = full-filename + table-qualified object** (14 shared migration numbers; non-unique policy names).
+5. **`ALTER POLICY` merge semantics** + `DO $$`/`EXECUTE format()` → `blind_spots` (leaky-abstraction honesty).
+6. **Atomic register write** (mktemp+mv) + heading re-validate (TOCTOU); **`LC_ALL=C`/`jq -S`** idempotency pins.
+7. **Contract made real for #5871:** `schema_version` in the JSON now + pinned `drift` exit codes (0/1/2).
+8. **`scripts/lib/domain-model-lib.sh` tokenizer** factored for #5871 reuse; conventional-path defaults (AP-010).
+
 ## Overview
 
 Add a `domain-model` area to the `/soleur:sync` command that analyzes a repo's data model and
@@ -149,9 +163,39 @@ Not run — no UI surface (no `components/**/*.tsx`, `app/**/page.tsx|layout.tsx
 
 - **GDPR (2.7):** No regulated-data *code* surface in Files-to-Edit (command prompt, two scripts, a command test, a
   markdown register, an ADR — migrations are read-only *input*, not modified). Single-user-incident trigger (b) answered by CLO carry-forward + disclaimer.
-- **IaC (2.8):** Skipped — no server/cron/secret/DNS/vendor (cron deferred #5872).
-- **Observability (2.9):** N/A — interactive dev-tooling CLI at repo-root `scripts/` (not `apps/*` nor `plugins/*/scripts`,
-  not a cron/server/infra runtime), matching `rule-prune.sh`/`extract-api-spend.sh` precedent (no observability block). Failures surface to the invoking terminal.
+- **IaC (2.8):** Skipped — no server/cron/secret/DNS/vendor introduced (cron deferred #5872). <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+- **Observability (2.9):** the tool is an interactive/CI-invoked dev CLI at repo-root `scripts/` (not `apps/*` nor
+  `plugins/*/scripts`, not a cron/server/infra runtime) — matching `rule-prune.sh`/`extract-api-spend.sh` precedent.
+  The `## Observability` block below states this honestly (no Sentry/Better Stack surface exists for a local CLI).
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: N/A — interactive/CI-invoked CLI, not a long-running service (no heartbeat/cadence)
+  cadence: on-demand (via /soleur:sync domain-model; and in CI via test-all.sh)
+  alert_target: CI job failure (test-all.sh); terminal exit code for interactive runs
+  configured_in: scripts/domain-model-drift.sh
+error_reporting:
+  destination: stderr + non-zero exit code to the invoking terminal / CI job (no external sink)
+  fail_loud: yes — parse error, unreadable register, or (per security pass) secret-shape hit exits non-zero, never silent
+failure_modes:
+  - mode: migration/SQL parse error
+    detection: non-zero exit + stderr message naming the file
+    alert_route: CI job failure (test-all.sh) / terminal
+  - mode: register file unparseable or hand-edited mid-run
+    detection: non-zero exit before any write
+    alert_route: terminal / CI
+  - mode: idempotency divergence (report differs across two identical runs)
+    detection: scripts/domain-model-drift.test.sh assertion fails
+    alert_route: test-all.sh / CI
+logs:
+  where: stdout (the drift report) + stderr (diagnostics); no persistent log
+  retention: none — ephemeral CLI output
+discoverability_test:
+  command: bash scripts/domain-model-drift.test.sh
+  expected_output: "domain-model-drift.test.sh: N passed, 0 failed" (exit 0)
+```
 
 ## Acceptance Criteria (all pre-merge — no operator/post-merge steps)
 
@@ -166,6 +210,14 @@ Not run — no UI surface (no `components/**/*.tsx`, `app/**/page.tsx|layout.tsx
 - [ ] Completeness disclaimer (structural-not-semantic) in register header + every report.
 - [ ] Both bash suites registered in `test-all.sh` and green.
 - [ ] ADR-0XX created and linked from the register.
+- [ ] **`.down.sql` excluded from replay** — fixture: a down-file DROPping a live policy does NOT delete that fact.
+- [ ] **Fail-closed secret-shape scan** before emit AND before write — fixture: a migration with a planted secret-shaped literal → refuse to emit, exit non-zero.
+- [ ] **No command injection / no eval over migration bytes**; SQL treated as data (`grep -F --`, awk `-v`).
+- [ ] **Markdown-injection safe write** — fixture: a predicate containing `|` + a forged `BR-WS-9` row is escaped, not structurally injected; templated rows matching `^BR-`/`^##` rejected.
+- [ ] **Atomic register write** (mktemp+mv) + `## Auto-inferred` heading re-validated immediately before write.
+- [ ] **`--repo`/`--register` realpath-confined** (register write resolves under repo root; symlinks denied on the walk).
+- [ ] **Idempotency pinned:** `LC_ALL=C` sorts + `jq -S` emits.
+- [ ] **`extract` JSON carries `schema_version`** (marked internal/unstable); **`drift` exit codes** `0`=clean / `1`=drift / `2`=error.
 
 ## Open Code-Review Overlap
 
@@ -178,6 +230,65 @@ Synthesized fixtures only: (1) mini migration dir (PK, CHECK, `CREATE POLICY`, `
 (3) unchanged→byte-identical, mutate→differs; (4) fixture register with a stale citation + a missing constraint →
 one `stale` + one `undocumented`; live-citation negative control not flagged; (5) `EXECUTE format()` policy → appears
 in `blind_spots`; (6) non-Supabase repo → disclaimered empty, exit 0; (7) command test: `domain-model` valid, excluded from `all`.
+
+## Deepen Research Insights (2026-07-01 — data-integrity, security, architecture triad)
+
+These are **binding implementation requirements** folded in from the deepen-plan domain triad. Grouped by concern.
+
+### Extraction correctness (data-integrity P0/P1, architecture P1)
+
+- **P0 — Exclude `.down.sql` from replay.** 78 rollback files exist; some carry `CREATE`/`DROP`/`ALTER POLICY`. A naive
+  `*.sql` glob lets a down-file `DROP` execute in replay and **silently delete a live policy fact** (the exact silent-loss
+  the tool exists to prevent). Extractor globs base migrations only (`*[0-9].sql`, exclude `*.down.sql`); dedicated fixture.
+- **Replay order:** `LC_ALL=C` lexical sort == apply order for zero-padded base files (verified) — *after* the down-exclusion.
+- **`ALTER POLICY` is merge-not-replace** — `ALTER … USING(...)` leaves `WITH CHECK` intact. Replay merges USING/WITH CHECK
+  onto prior policy state; if a merged predicate can't be deterministically reconstructed, the policy goes to `blind_spots`, never a mis-counted fact.
+- **Content-anchor = full base-filename + table-qualified object** (NOT the 3-digit number, NOT a bare policy name).
+  14 numbers are shared across distinct files (017×4, 053×2, 075×3); policy names are not globally unique. The register-citation
+  parser resolves a cited `migration NNN` to the base (non-`.down`) file and flags a genuinely-ambiguous number.
+- **`blind_spots` detector triggers on `DO $$` bodies AND `EXECUTE format(`** (53 files) — a `DO` block emitting a static
+  `CREATE POLICY` via plpgsql string is line-parser-invisible and must still reach `blind_spots`, plus schema-qualified / cross-table same-name policies that can't be disambiguated.
+
+### Idempotency (data-integrity P1)
+
+- **Pin `LC_ALL=C` on every sort and `jq -S` on every JSON emit** — no precedent script pins locale; without it the
+  byte-identical AC breaks on a different-locale CI runner.
+
+### Security (security P0×2, P1×2 — extract-api-spend.sh is the template)
+
+- **P0 — Fail-closed secret-shape scan before emit AND before write.** RLS predicates / `SECURITY DEFINER` bodies embed
+  literals (JWT claims, `current_setting()` tokens, seeded UUIDs, old connection strings); the report is **committed**.
+  Port extract-api-spend.sh's `grep -qiE 'sk-ant|sk_(live|test)|ghp_|ghs_|github_pat_|AKIA[0-9A-Z]{16}|xoxb-|sbp_|-----BEGIN'`
+  over every assembled row → refuse + exit non-zero on hit. Extractor projects the **citation anchor**, not full predicate bodies. AC + planted-secret fixture.
+- **P0 — Path handling:** `set -euo pipefail`; quote every expansion; parse args with `--` terminators; `realpath`-confine
+  `--repo`/`--register` (the register write MUST resolve under the repo root, else reject); `[[ -L ]]` symlink-deny on the migration walk.
+- **P1 — No command injection:** treat all SQL as data — never `eval`, never interpolate migration content into `$(...)`,
+  patterns via `grep -F -- "$pat"` / awk `-v`. AC asserts no dynamic-command construction over migration bytes.
+- **P1 — Markdown/table injection on write:** escape `|`→`\|`, strip/encode newlines + control chars (`\x7f`, ` `,
+  ` `), reject templated rows matching `^BR-` or `^##`, validate every field against the citation-token grammar. Fixture: a predicate containing `|` + a forged `BR-WS-9` row → escaped, not structurally injected.
+
+### Register-write integrity (data-integrity P1, architecture)
+
+- **Atomic whole-file rewrite** via `mktemp` + `trap` + `mv` (precedent `scripts/rule-metrics-aggregate.sh:48,334`) — a
+  non-atomic partial write on interrupt can corrupt the curated `## Business Rules` pipe-table.
+- **Re-parse the `## Auto-inferred` heading offset immediately before write; abort on a missing/duplicate anchor** (TOCTOU —
+  a hand-edit relocating the heading between extract and write could split the curated table).
+
+### Contract for #5871 (architecture P1 — makes the deferral real)
+
+- **`extract` JSON emits a `schema_version` field now** and is marked **internal/unstable** in the ADR + script header —
+  otherwise Phase 1 ships the de-facto contract while "deferring" it, producing the exact v1→v2 break the deferral meant to avoid.
+- **Exit-code contract, pinned now:** `drift` mode → `0` = no drift, `1` = drift found, `2` = error. #5871 (enforcement gate under `set -e`) keys on `1`. Breaking change if discovered later.
+
+### Placement & reuse (architecture P2, AP-010)
+
+- **Location = repo-root `scripts/`** (confirmed): generic-`--repo` forces repo-agnosticism; `apps/web-platform/scripts/`
+  parsers are app-locked (`MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"`, no repo arg).
+- **Reuse idioms, not app code:** copy house style (`SCRIPT_DIR` sourcing, `scripts/lib/` constants, `run_suite` registration);
+  do NOT import the web-platform parsers. **Factor the policy tokenizer into `scripts/lib/domain-model-lib.sh`** so #5871 reuses it rather than re-parsing.
+- **AP-010 defaults:** `extract`/`drift` default to conventional paths (`apps/web-platform/supabase/migrations`, the canonical
+  register) when flags are omitted; flags are for generic-repo override only.
+- **ADR cross-references `run-migrations.sh`** — documenting the deliberate text-replay-vs-authoritative-PG-replay divergence (no-DB / deterministic / generic-repo trade).
 
 ## Alternatives Considered
 
