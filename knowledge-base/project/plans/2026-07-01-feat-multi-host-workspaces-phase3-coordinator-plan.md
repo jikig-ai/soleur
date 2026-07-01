@@ -12,8 +12,8 @@ adr: knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-worksp
 epic_plan: knowledge-base/project/plans/2026-06-29-feat-multi-host-workspaces-layer-plan.md
 spec: knowledge-base/project/specs/feat-multi-host-workspaces/spec.md
 branch: feat-multi-host-workspaces-phase3
-status: draft
-revision: v3 (2026-07-01 — operator chose user-sticky routing; folded CTO + CLO + DHH/Kieran/simplicity review)
+status: ready
+revision: v4 (2026-07-01 — deepen-plan resolved D0-ref/D1/D2; v3 chose user-sticky + folded CTO/CLO/DHH/Kieran/simplicity)
 ---
 
 # ✨ Multi-host `/workspaces` — Phase 3: 2nd host + user-sticky router (GA line)
@@ -32,6 +32,26 @@ revision: v3 (2026-07-01 — operator chose user-sticky routing; folded CTO + CL
 > recorded as an **ADR-068 amendment**. (Alternatives considered: workspace-sticky —
 > re-scopes G1; coordinator-forwarding — the drafted plane, rejected as over-built for
 > the goal by CTO/DHH/simplicity.)
+
+## Enhancement Summary (deepen-plan, 2026-07-01)
+
+Deepened after the operator chose user-sticky routing. Four focused agents (data-integrity,
+security, infra-precedent, ingress/L3) + the mandatory gates (User-Brand Impact ✓,
+Observability ✓, PAT-var ✓). **All three open decisions are now RESOLVED** (see §Resolved
+Decisions) and the load-bearing findings are folded in:
+
+1. **D0-ref → distinct per-user refs**, and the *current* replication refspec is proven to
+   **silently clobber commits under a 2nd writer** — the namespaced-refspec change is now a
+   hard 3.B prerequisite, not a "nice to have."
+2. **D1 → the app ingress is `dns.tf` (proxied A record), not the tunnel** — the rewire target
+   is corrected across §3.D + IaC.
+3. **D2 → app-side write sentinel gates the flip; host-compromise write is an accepted,
+   tracked GA residual** (proportionate to the mTLS downgrade).
+4. **Precedent-diffs:** LUKS + one-way-TLS are novel (idempotent guard; CA-pinning), and the
+   `for_each` refactor needs cloud-init for `web-2` (SSH-provisioner reachability).
+
+Migration 116 supports per-user `worktree_id` with **zero schema change** — the entire D0
+mechanism is app-layer. No new blocking decisions remain; the plan is `/work`-ready.
 
 ## Overview
 
@@ -165,10 +185,17 @@ its cloud-init wiring.
 
 Maps tasks **3.2 + 3.4 + 3.5**.
 
-- **Per-user `worktree_id`** — stop hardcoding `"primary"` (`worktree-write-lease.ts:23`);
-  thread a per-user worktree id through the lease acquire/heartbeat/release + the
-  worktree path (`workspace-resolver.ts`). Each user's worktree gets its own lease +
-  fence stream.
+- **Per-user `worktree_id`** — stop hardcoding `"primary"` (`worktree-write-lease.ts:23`;
+  migration-116 PK already supports it, **zero schema change**); thread a CWE-22-validated
+  per-user worktree id through the lease acquire/heartbeat/release + the worktree path
+  (`workspace-resolver.ts`) + `git-data-replication.ts:203`. Each user's worktree gets its
+  own lease + fence stream.
+- **Namespaced git-data refspec (D0-ref):** change `replicateToGitData`
+  (`git-data-replication.ts:195-207`) to push `refs/heads/*:refs/soleur/worktrees/<worktree_id>/heads/*`
+  (+ tags), replacing the current option-(b)-shaped `refs/heads/*:refs/heads/*` `--force`
+  that **silently clobbers a peer user's commits under a 2nd writer**. GitHub `origin` push
+  untouched (canonical `refs/heads/main` → rehydration). Add a namespace-ownership check to
+  `git-data-pre-receive.sh`.
 - **`server/session-router.ts` (new):** co-located, stateless. Inbound WS → resolve the
   conversation's owning host from the per-user lease → **local ⇒ serve; remote ⇒ proxy**
   over one-way-TLS private net. Decision at the **WS-upgrade handshake, not after**
@@ -202,13 +229,14 @@ Maps task **3.3** + §6 fetch boundary + D2.
   new per-workspace secret) on the git-data **fetch/clone** path — the boundary bwrap can't
   cover (`agent-runner-sandbox-config.ts:106`). Authorized via the
   `resolve_workspace_installation_id` membership shape (NULL→deny).
-- **D2 threat-model (CLO TS-1 + CTO P1-2):** the **push** path retains the cluster-wide
-  transport key; the fence enforces gen-monotonicity, **not pusher identity**. The
-  app-side membership check closes the **logic-bug** cross-tenant case, not
-  **host-compromise**. If host-compromise is in scope (single-user threshold ⇒ likely),
-  move enforcement to the git-data host (per-workspace forced-command authz on
-  `receive-pack`/`upload-pack`, mirroring the provisioning wrapper) or per-workspace push
-  keys. **Resolve before the 3.D flip.**
+- **D2 write-boundary sentinel (RESOLVED — gates the 3.D flip):** add a **fail-closed
+  membership check on the PUSH path** in `git-data-replication.ts` before the push (mirror
+  of 3.C's fetch check; `hr-write-boundary-sentinel-sweep-all-write-sites`) — make the
+  optional `userId` (`:176`) mandatory + authorizing, keyed on the exact `workspaceId` that
+  builds the push URL. Closes the realistic logic-bug cross-tenant write. **Host-compromise**
+  cross-tenant write is an **accepted GA residual** (per-workspace push keys deferred post-GA
+  + tripwire — see Resolved Decisions D2); cheap non-gating host-side hardening: a
+  receive/upload-pack allowlist wrapper on the transport key.
 - **Clone-from-git-data when flag on:** `ensure-workspace-repo.ts` clones from `git-data`,
   retaining `origin`→GitHub (never orphan — rehydration backstop).
 - **RED→GREEN (3.6c):** host-A + tenant-A cred **cannot read** tenant-B git-data
@@ -221,8 +249,10 @@ Maps task **3.3** + §6 fetch boundary + D2.
 
 Maps **cutover** + **3.1 tunnel** + GA. **Gated on D1 + D2.**
 
-- **Confirm app WS ingress (D1)** before the ingress→router rewire (`tunnel.tf` if that is
-  the front door; else the actual ingress config).
+- **Ingress→router rewire (D1 resolved):** edit **`dns.tf`** (`cloudflare_record.app`) +
+  **`firewall.tf`** — a Cloudflare Load Balancer (or two proxied A records) across both
+  hosts' co-located routers, CF-IP firewall rule extended to `web-2`. **Not `tunnel.tf`**
+  (deploy/ssh only). Keeps CF edge-TLS termination + the proxied-DNS model.
 - **Hardened cutover (CTO P1-4, CLO DL-2):**
   1. **Fresh LUKS git-data volume (TF)** as the rsync target (TS-2/P1-7); Doppler-env key at
      boot, never argv.
@@ -345,8 +375,10 @@ tracker directive + `follow-through` label in `scheduled-followthrough-sweeper.y
   cross-host forward); placement decided **pre-upgrade** (negative: off-owner upgrade is
   proxied before upgrade, P2-10); reconnect lands on the owner + grace cancel host-local;
   membership re-verify **rejects** a cross-tenant proxied session (negative, AP-2).
-- **AC3 (3.C)** — host-A + tenant-A cred **cannot read** tenant-B git-data (negative);
-  **cannot write** tenant-B git-data (negative — TS-1); non-member RPC→NULL→deny.
+- **AC3 (3.C)** — a non-member session **cannot read** tenant-B git-data (negative);
+  the **app-side write sentinel** rejects a push for a workspace the session-user isn't a
+  member of (negative, fail-closed — D2 logic-bug boundary); non-member RPC→NULL→deny. (The
+  host-compromise cross-tenant write is a documented GA residual, NOT asserted here.)
 - **AC4 (3.D-pre)** — LUKS volume TF present + validates; `git-data-remove` app call wired.
 
 ### Post-merge (operator / soak — automate all automatable; verify read-only)
@@ -356,9 +388,10 @@ tracker directive + `follow-through` label in `scheduled-followthrough-sweeper.y
   coordinated cross-host flip; **old volume decommissioned/wiped**; rollback dependency
   (GitHub rehydration) documented.
 - **AC7** — Flag on: **two users on one workspace served by two different hosts, each on
-  their own per-user worktree, and the 2nd user's committed work reaches shared git-data and
-  is visible to the workspace** (G1 — sharpened per Kieran P1-5; not the trivial
-  separate-index pass).
+  their own per-user worktree; each user's committed work reaches shared git-data under its
+  own `refs/soleur/worktrees/<id>/` namespace and is FETCHABLE by the peer** (G1 — sharpened
+  per Kieran P1-5 + D0-ref: "visible" = fetchable distinct refs, NOT an auto-merged shared
+  branch; the negative test proves the current shared-ref `--force` refspec is gone).
 - **AC8** — A drain/deploy → **no fresh-session greeting**; a brief stream re-render on the
   migrated turn is acceptable at GA (the ADR-059 replay buffer is Phase 4a — CTO P1-5). Do
   NOT assert "invisible" beyond this.
@@ -393,6 +426,17 @@ session) asserted at the **tool/RPC entry or captured-argv**, never via an LLM p
 - **Placement-group attach reboots the running host.** → maintenance-window apply.
 - **Wrong-layer fix on a recurring cross-host symptom.** → Sentry breadcrumb exec-path proof
   before shipping any Phase-3 fix (learning `2026-06-30`).
+- **Precedent-diff — LUKS is NOVEL** (no cryptsetup anywhere; scrutinize). Boot-secret-via-Doppler
+  exists (`git-data.tf:60-77`). Needs an idempotent `cryptsetup isLuks` guard (luksFormat fails
+  on 2nd cloud-init run) + the `git-data-bootstrap.sh` mount switched to `/dev/mapper/git-data`.
+- **Precedent-diff — one-way TLS Node proxy is NOVEL** (server is HTTP-only, `index.ts:6`). The
+  client MUST **pin our self-signed CA (`rejectUnauthorized:true`)**, never `false` (MITM-able);
+  WS-over-TLS needs `wss://` + CSP (`test/csp.test.ts`) + `WebSocketServer noServer` on `https.createServer`.
+- **`for_each` web-host refactor is not purely mechanical:** `web-1` provisions via 10
+  `remote-exec`/SSH `terraform_data` blocks; prefer **cloud-init for `web-2`** (mirror git-data)
+  to avoid an SSH-reachability dependency that would hang the merge-triggered auto-apply.
+- **Host-compromise cross-tenant write = accepted GA residual** (D2) — tracked with a
+  per-workspace-keys post-GA closer + tripwire, mirroring the §8 SPOF acceptance.
 
 ## Domain Review
 
@@ -428,13 +472,49 @@ renumber (3.A), P2-9/P2-10 ACs (done). P2-9 ADR stale anchors → reconcile in t
 - **#2191** (`clearSessionTimers` in `ws-handler.ts`) — Acknowledge (fold the helper if the
   reconnect edit passes the disconnect timer; else leave open).
 
-## Open Decisions (resolve at deepen-plan / architecture, before the gated sub-PR)
-1. **D0-ref (folds into 3.B):** per-user **distinct-ref** vs **serialized shared-ref**
-   git-data push semantics (cross-user visibility). `data-integrity-guardian`.
-2. **D1 (blocks 3.D):** where the app WS ingress enters today (before the ingress→router rewire).
-3. **D2 (blocks 3.D flip):** cross-tenant **write** threat-model scope (logic-bug vs
-   host-compromise) + enforcement locus (app-side vs git-data-host forced-command authz).
-   `security-sentinel` + `data-integrity-guardian`.
+## Resolved Decisions (deepen-plan, 2026-07-01)
+
+**D0-ref → RESOLVED: distinct per-user refs.** Each worktree pushes ONLY to
+`refs/soleur/worktrees/<worktree_id>/heads/*` (+ `/tags/*`), sole writer of its
+namespace, `--force` stays safe, the per-`(workspace,worktree)` fence aligns 1:1 with
+the namespace (unchanged). Cross-user visibility = `git fetch` the peer namespace;
+reconciliation = explicit user merge; **GitHub `origin/main` stays canonical** (rehydration
+intact). **⚠ Load-bearing:** the *current* `replicateToGitData` refspec
+(`refs/heads/*:refs/heads/*` `--force`, `worktree-id=primary`, `git-data-replication.ts:195-207`)
+is safe only at replicas=1 — under a 2nd writer it **silently clobbers one user's commits**
+(the per-worktree fence guards monotonicity within a gen-stream, not last-writer-wins
+across streams). So 3.B MUST land the namespaced refspec + per-user `worktree_id` before
+the flip. Add a **namespace-ownership check** to `git-data-pre-receive.sh` (`worktree-id=W`
+may only write `refs/soleur/worktrees/W/`) — also a down-payment on D2. CWE-22-validate
+`worktree_id` app-side (symmetric to `assertSafeWorkspaceId`). Fold into the ADR-068 D0 amendment.
+
+**D1 → RESOLVED: the app WS ingress is NOT the tunnel.** It is `dns.tf`
+`cloudflare_record.app` (proxied A → `hcloud_server.web.ipv4_address`) → `firewall.tf`
+(443 from Cloudflare IPs only) → host:80 → container:3000. So the Phase-3 ingress→router
+rewire edits **`dns.tf` + `firewall.tf`** — multi-host via a Cloudflare Load Balancer (or
+two proxied A records) across both hosts' co-located routers, with the CF-IP firewall rule
+extended to `web-2` via the `for_each`. **Not `tunnel.tf`** (that fronts only deploy/ssh).
+L3: the 2nd-host apply has **no firewall-allowlist prerequisite** (cloud-init-only per the
+git-data precedent).
+
+**D2 → RESOLVED: split by threat case.**
+- **Logic-bug cross-tenant write → CLOSE, gates the 3.D flip.** Add a **write-boundary
+  membership sentinel** on the push path (`hr-write-boundary-sentinel-sweep-all-write-sites`):
+  in `git-data-replication.ts` before the push, assert `resolve_workspace_installation_id`-shape
+  membership for `(userId, workspaceId)` **fail-closed**, keyed on the exact `workspaceId`
+  that builds the push URL (no re-derivation). Make the already-present optional `userId`
+  (`:176`) **mandatory + authorizing** when `isGitDataStoreEnabled()`.
+- **Host-compromise (transport-key abuse) write → ACCEPTED GA residual**, mirroring the §8
+  shared-git-data-host SPOF acceptance: per-workspace push keys (the only true control) are
+  disproportionate for a 2-host GA line (a full web-host breach dominates via the DB
+  service-role + GitHub App key anyway — same proportionality bar that downgraded mTLS).
+  Name **per-workspace keys** as the post-GA closer + file a tracking issue + a promotion
+  tripwire (any key-leak/host-compromise incident, or workspace count crossing a blast-radius
+  threshold). The read side (3.C fetch check) is app-side too → same residual acceptance.
+- **Cheap host-side hardening (non-gating):** replace the transport key's bare
+  `git-shell -c` (`cloud-init-git-data.yml:52`) with a receive/upload-pack allowlist wrapper
+  + CWE-22 path canonicalization (closes traversal outside the repo root; NOT same-store
+  cross-tenant).
 
 ## Sharp Edges
 - `## User-Brand Impact` is filled (carried from brainstorm) — do not empty it.
