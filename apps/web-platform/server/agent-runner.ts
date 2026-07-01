@@ -2006,7 +2006,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
-    // `claude-sonnet-4-6`, which 400s on assistant-terminated threads.
+    // `claude-sonnet-5`, which 400s on assistant-terminated threads.
     // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
     const {
       safeResumeSessionId,
@@ -2449,8 +2449,12 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           throw resultBranchErr;
         }
       } else if (
-        // Partial messages (streaming text deltas — cumulative snapshots)
+        // Partial messages (streaming text deltas — cumulative snapshots).
+        // agent-sdk 0.3 widened `message.message` to `string | MessageParam`;
+        // only the object form carries `.content`, so narrow out the string
+        // case (a string never had a truthy `.content` under 0.2 either).
         "message" in message &&
+        typeof message.message !== "string" &&
         message.message?.content
       ) {
         const content = message.message.content;

@@ -53,7 +53,7 @@ describeWithAuth("canUseTool caching behavior (#876)", () => {
       prompt: `Read all three files in ${TEST_DIR}: file1.txt, file2.txt, and file3.txt. Report their contents.`,
       options: {
         cwd: TEST_DIR,
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-5",
         maxTurns: 5,
         maxBudgetUsd: 0.25,
         permissionMode: "default",

@@ -180,7 +180,7 @@ EOF
 printf '::compound-promote-byte-budget::%d:%d\n' "$ALWAYS_LOADED_NOW" "$ALWAYS_LOADED_CAP"
 
 REQUEST=$(jq -n \
-  --arg model "claude-sonnet-4-6" \
+  --arg model "claude-sonnet-5" \
   --argjson max_tokens 16384 \
   --arg prompt "$PROMPT" \
   --argjson corpus "$CORPUS_JSON" \

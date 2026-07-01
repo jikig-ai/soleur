@@ -196,7 +196,7 @@ describe("selectChapter", () => {
       | { options?: { model?: string } }
       | undefined;
     // Pin Sonnet 4.6 — DO NOT inherit runner's model (may be Opus on KB chats).
-    expect(callArgs?.options?.model).toBe("claude-sonnet-4-6");
+    expect(callArgs?.options?.model).toBe("claude-sonnet-5");
   });
 
   it("returns kind:'router-error' when the SDK throws and mirrors to Sentry", async () => {

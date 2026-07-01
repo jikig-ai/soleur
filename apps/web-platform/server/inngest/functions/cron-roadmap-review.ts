@@ -93,7 +93,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-roadmap-review.yml `claude_args`:
-//   --model claude-sonnet-4-6
+//   --model claude-sonnet-5
 //   --max-turns 40
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
 const CLAUDE_CODE_FLAGS = [
