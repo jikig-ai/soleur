@@ -154,10 +154,31 @@ export async function proxyClientToOwner(params: {
 export function createProxyServer(params: {
   onProxiedSession: (ws: WebSocket, ctx: ProxiedSessionContext) => void;
   port?: number;
+  /** The interface to bind. MUST be the host's PRIVATE-net address (e.g.
+   *  10.0.1.x) so the proxy listener is not reachable from the public internet —
+   *  this port carries a token-less pre-authenticated session (AP-2 verifies only
+   *  a valid member PAIR, not the caller's right to act as that user), so binding
+   *  it publicly would make network reachability the only control. Defaults to
+   *  `SOLEUR_PROXY_BIND`; when unset the listener refuses to start (fail-closed —
+   *  never fall back to 0.0.0.0). 3.D supplies the host's reserved private IP. */
+  bindAddress?: string;
 }): HttpsServer | null {
   const tls = loadProxyTlsServerOptions();
   if (!tls) {
     log.info("session-proxy: no PROXY_TLS material — owner proxy listener disabled (single-host/dev)");
+    return null;
+  }
+  const bindAddress = params.bindAddress ?? process.env.SOLEUR_PROXY_BIND?.trim();
+  if (!bindAddress) {
+    // Fail-closed: without an explicit private-net bind we would default to
+    // 0.0.0.0 and expose a token-less session port behind only the firewall.
+    reportSilentFallback(
+      new Error(
+        "SOLEUR_PROXY_BIND unset — refusing to start the owner proxy listener on all " +
+          "interfaces (a token-less pre-authenticated session port must bind the private net only)",
+      ),
+      { feature: "control_plane_route", op: "createProxyServer.no-bind" },
+    );
     return null;
   }
   const port = params.port ?? PROXY_LISTEN_PORT;
