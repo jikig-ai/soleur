@@ -87,6 +87,15 @@ on:
       - "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
       - "apps/web-platform/infra/cat-inngest-verify-state.sh"
       - "apps/web-platform/infra/inngest-inventory.sh"
+      # #5873 — the container seccomp profile is delivered by the
+      # docker_seccomp_config SSH provisioner (server.tf), whose triggers_replace
+      # hashes this file. A profile-only edit must fire this apply so the new
+      # profile reaches /etc/docker/seccomp-profiles/soleur-bwrap.json on the
+      # host. NOTE: the RUNNING container only loads a new seccomp profile at
+      # `docker run` (container start), so a redeploy is required AFTER this apply
+      # for a profile change to take effect — sequence apply→redeploy explicitly
+      # (do not rely on the concurrent web-platform-release run winning the race).
+      - "apps/web-platform/infra/seccomp-bwrap.json"
       - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
@@ -229,6 +238,7 @@ jobs:
           doppler run --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
+            -target=terraform_data.docker_seccomp_config \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -no-color -input=false
 
@@ -243,6 +253,7 @@ jobs:
           doppler run --name-transformer tf-var -- \
             terraform apply -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
+            -target=terraform_data.docker_seccomp_config \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -auto-approve -input=false
 
