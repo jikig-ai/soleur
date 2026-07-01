@@ -15,17 +15,17 @@ Derived from the finalized plan. Three PRs preceded by a blocking spike. Check #
 - [x] 0.2 **Finding: NOT feasible.** Sandbox init is gated behind `query()` (Anthropic API call); `startup()` only pre-warms the subprocess; the Bash tool is always model-driven. → faithful canary needs creds + network + must handle model non-determinism.
 - [x] 0.3 Recorded both findings in #5875 (comment).
 
-**PR2/PR3 mechanism fork (route to `soleur:engineering:cto` at PR2 kickoff — work-skill architectural-fork gate):** Q2 means the plan's "SDK-driven, no-model-turn canary" is partially blocked. Two candidates: (a) model-turn-driven (faithful; creds+network; scope to SDK-bump PRs; handle non-determinism), (b) capture-the-SDK-bwrap-argv-once-then-replay creds-free (decouples faithfulness from the model turn; re-capture on each SDK bump). CTO picks the mechanism; record in ADR-077.
+**PR2/PR3 mechanism fork (route to `soleur:engineering:cto` at PR2 kickoff — work-skill architectural-fork gate):** Q2 means the plan's "SDK-driven, no-model-turn canary" is partially blocked. Two candidates: (a) model-turn-driven (faithful; creds+network; scope to SDK-bump PRs; handle non-determinism), (b) capture-the-SDK-bwrap-argv-once-then-replay creds-free (decouples faithfulness from the model turn; re-capture on each SDK bump). CTO picks the mechanism; record in ADR-079.
 
 ## Phase 1 — PR1: sandbox-start observability (item 2)
 
 - [ ] 1.1 Create `apps/web-platform/server/sandbox-startup-classifier.ts` (mirror `abort-classifier.ts:54-88`): `classifySandboxStartupError()` → `{ sandboxKind, errorCode, sdkVersion }`, keyed off the Phase-0 error shape; `sandboxKind` enum = `missing_binary | seccomp_or_userns_denial | other`.
 - [ ] 1.2 Create `apps/web-platform/test/sandbox-startup-classifier.test.ts` — synthesized seccomp-EPERM signal (in the Phase-0 field), assert `sandboxKind` + `feature:"agent-sandbox"` tag + raw stderr; deterministic, no LLM in the assertion path.
 - [ ] 1.3 Broaden `cc-dispatcher.ts` catch (`:2694`; substring at `:2722`) to emit the tagged structured event for any startup failure; confirm the streaming-phase catch is covered.
-- [ ] 1.4 Broaden `agent-runner.ts` catch (`:2476`; substring at `:2649`; generic capture at `:2662`); gate classification on `streamStartSent === false` (declared `:980`, set `:2107`) so mid-stream errors are not tagged.
+- [x] 1.4 Broaden `agent-runner.ts` catch (`:2476`; substring at `:2649`; generic capture at `:2662`) to tag when `sandboxKind !== "other"`. **CTO ruling (ADR-079): NO `streamStartSent` gate** — it is always true at the catch (set before the iterator loop) and the seccomp denial surfaces mid-stream, so the gate silently suppressed the real signal; the classifier's signature match is the necessary+sufficient mis-tag guard.
 - [ ] 1.5 Keep emit per-user (no global-key debounce on the sandbox-startup path); pass raw `userId` → auto-hash to `userIdHash` (`observability.ts:217`); omit/hash `workspacePath`. Evaluate folding in #3739's `reportSilentFallbackWithUser` helper.
 - [ ] 1.6 Add the Sentry alert to `apps/web-platform/infra/sentry/issue-alerts.tf` using a native frequency/affected-users threshold; `terraform validate`.
-- [ ] 1.7 Author `knowledge-base/engineering/architecture/decisions/ADR-077-faithful-sandbox-canary-and-profile-redeploy-verification.md` (status `adopting`); cross-ref ADR-031/068/072/075/027. (Optional cleanup: add `sentry` to C4 — not a merge gate.)
+- [ ] 1.7 Author `knowledge-base/engineering/architecture/decisions/ADR-079-faithful-sandbox-canary-and-profile-redeploy-verification.md` (status `adopting`); cross-ref ADR-031/068/072/075/027. (Optional cleanup: add `sentry` to C4 — not a merge gate.)
 - [ ] 1.8 `tsc --noEmit`; run `observability-coverage-reviewer` at review. PR body: `Ref #5875` (item 2).
 
 ## Phase 2 — PR2: faithful canary, dark-launch (item 1)
@@ -47,7 +47,7 @@ Derived from the finalized plan. Three PRs preceded by a blocking spike. Check #
 - [ ] 3.5 AppArmor apply-parity: add `terraform_data.apparmor_bwrap_profile` to the workflow `-target=` set + `on.push.paths`; update the #5505 paths-union and #5873 co-target assertions in lockstep.
 - [ ] 3.6 Add a **new** loaded-verification guard to `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`: redeploy step ordered after `terraform apply` + a `loaded==committed` fail-loud assertion. Keep the #5505/#5515/#5873 describes green.
 - [ ] 3.7 Promote the canary to blocking; a `sandbox_broken` verdict hooks the existing `ci-deploy.sh:784` rollback path.
-- [ ] 3.8 Flip ADR-077 → `accepted`. `tsc --noEmit`; `bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`; run `security-sentinel` at review. PR body: `Closes #5875`.
+- [ ] 3.8 Flip ADR-079 → `accepted`. `tsc --noEmit`; `bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`; run `security-sentinel` at review. PR body: `Closes #5875`.
 
 ## Sequencing notes
 - Phase 0 gates everything (error shape → classifier; no-model-turn → canary/CI shape).

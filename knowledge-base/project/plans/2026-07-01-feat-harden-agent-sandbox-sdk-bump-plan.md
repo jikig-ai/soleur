@@ -6,7 +6,7 @@ lane: cross-domain
 closes: 5875
 brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
-adr: ADR-077
+adr: ADR-079
 ---
 
 # Harden agent-sandbox against SDK-bump breakage 🛡️
@@ -22,7 +22,7 @@ The incident class is fully closed by **two** load-bearing preventions: a **tagg
 | Step | #5875 item(s) | Ships |
 |------|---------------|-------|
 | **Phase 0 spike** (blocking, pre-PR) | — | Determine the SDK error-shape + whether the sandbox can be probed without a model round-trip. Both decide PR1's classifier and PR2/PR3's canary shape. |
-| **PR1** | Item 2 — sandbox-start observability | Tag + stderr + `sdkVersion` + `streamStartSent` guard, both catch paths. First (fastest safety win, no dependency). |
+| **PR1** | Item 2 — sandbox-start observability | Tag + stderr + `sdkVersion`, signature-gated (`sandboxKind !== "other"`) on both catch paths. First (fastest safety win, no dependency). |
 | **PR2** | Item 1 — faithful canary | SDK-driven payload, wired **non-blocking** (dark-launch). |
 | **PR3** | Items 3 + 4 — SDK-bump guard + profile→redeploy | Both consume the canary; promote it to blocking here. |
 
@@ -33,7 +33,7 @@ The incident class is fully closed by **two** load-bearing preventions: a **tagg
 Both unknowns resolved against the installed `@anthropic-ai/claude-agent-sdk@0.3.197`:
 
 1. **Error shape — resolved favorably.** The bwrap/seccomp stderr (incl. `Operation not permitted`) is merged into the thrown `Error`'s **`.message`** (plain `Error`, no separate `.stderr`/`.cause`/`.data`); `agent-runner.ts:2648` already reads `err.message`, and `agent-runner-sandbox-config.test.ts:161-167` confirms the SDK writes sandbox failures to stderr→message (#2634). **→ PR1's classifier keyed on `.message` is correct**; it broadens the substring set beyond `"sandbox required but unavailable"` to also match the bwrap/unshare/seccomp/`Operation not permitted` signatures.
-2. **No-model-round-trip — resolved NO.** Sandbox init is gated behind `query()` (an Anthropic API call); `startup()` only pre-warms the subprocess (not sandbox validation); the internal Bash tool is always model-driven. **→ a faithful canary needs ANTHROPIC creds + network AND must handle model non-determinism.** This turns PR2's canary into a **mechanism fork routed to the CTO agent at PR2 kickoff** (work-skill architectural-fork gate): (a) *model-turn-driven* (faithful; creds+network; scope to SDK-bump PRs; handle non-determinism) vs (b) *capture-the-SDK-bwrap-argv-once-then-replay* creds-free (decouples faithfulness from the model turn; re-capture on each SDK bump). The chosen mechanism is recorded in ADR-077. PR1 (observability) is unaffected.
+2. **No-model-round-trip — resolved NO.** Sandbox init is gated behind `query()` (an Anthropic API call); `startup()` only pre-warms the subprocess (not sandbox validation); the internal Bash tool is always model-driven. **→ a faithful canary needs ANTHROPIC creds + network AND must handle model non-determinism.** This turns PR2's canary into a **mechanism fork routed to the CTO agent at PR2 kickoff** (work-skill architectural-fork gate): (a) *model-turn-driven* (faithful; creds+network; scope to SDK-bump PRs; handle non-determinism) vs (b) *capture-the-SDK-bwrap-argv-once-then-replay* creds-free (decouples faithfulness from the model turn; re-capture on each SDK bump). The chosen mechanism is recorded in ADR-079. PR1 (observability) is unaffected.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -61,7 +61,7 @@ Three independent amplifiers, each closed here:
 Emit a **structured, `agent-sandbox`-tagged, Sentry-alertable event** for *any* sandbox-startup failure.
 
 - **Minimal, faithful event.** A small `classifySandboxStartupError()` (mirroring the existing `abort-classifier.ts` precedent) returns `{ sandboxKind, errorCode, sdkVersion }` and the event carries **raw stderr** too. `sandboxKind` is a single category enum (`missing_binary` | `seccomp_or_userns_denial` | `other`) keyed off the Phase-0 error shape — not a fan-out of per-hypothesis booleans (a human reads the stderr; add a boolean only when a specific alert route must branch on it).
-- **Startup-vs-midstream phase guard (correctness, load-bearing).** `agent-runner.ts:2476–~2686` wraps the whole session including the mid-stream loop; gate classification on **`streamStartSent === false`** (declared `agent-runner.ts:980`, set at `:2107`; in scope in the catch) so a mid-conversation model/API error is never mis-tagged. `cc-dispatcher.ts:2694` is factory-scoped (safe) — also confirm the streaming-phase catch on that path.
+- **Tag on error SIGNATURE, not stream phase (CTO ruling, ADR-079 — supersedes the plan's original `streamStartSent` guard).** Tag `feature:"agent-sandbox"` iff `classifySandboxStartupError(err).sandboxKind !== "other"` at both catch sites. The `streamStartSent === false` gate the plan originally prescribed was **rejected**: `streamStartSent` is set unconditionally at `agent-runner.ts:2111` *before* the SDK iterator loop, so it is always true at the `:2476` catch; and the #5873 seccomp denial surfaces *after* `stream_start` (the sandbox wraps the model-driven Bash tool, Phase-0 §0.2) — the gate produced a silent no-op on the exact incident shape (0 emits, proven against `agent-runner-sandbox-config.test.ts`). The classifier's namespace/preflight-token requirement is what excludes a mid-conversation model/API error (no token → `"other"`). `cc-dispatcher.ts:2694` is factory-scoped (inherently startup) and already shipped the correct ungated form.
 - **Both paths.** Broaden `cc-dispatcher.ts` and `agent-runner.ts`.
 - **Don't collapse a fleet outage.** `agent-runner.ts:2650` already emits **undebounced** (`reportSilentFallback`); `cc-dispatcher.ts:2723` uses `mirrorWithDebounce` keyed per-`(userId, class)` → one event per user per TTL, not a global collapse. Keep emit **per-user** (do not introduce a global-key debounce). The `issue-alerts.tf` alert uses Sentry's **native frequency / affected-users threshold** (≥K users in T) — no custom distinct-tenant primitive.
 - **Pseudonymized attribution.** Pass raw `userId`; the existing helper auto-hashes to `userIdHash` at `observability.ts:217`. Omit/hash `workspacePath`.
@@ -88,17 +88,17 @@ Emit a **structured, `agent-sandbox`-tagged, Sentry-alertable event** for *any* 
 ### Implementation Phases
 
 - **Phase 0 (spike, pre-PR):** the two determinations above.
-- **PR1 (small):** `classifySandboxStartupError` (+ unit test with a **synthesized** seccomp-EPERM signal in the shape Phase-0 confirmed — deterministic, no LLM in the assertion path); broaden both catch sites (`streamStartSent` guard); `issue-alerts.tf` frequency/affected-users alert; author **ADR-077** (status `adopting`).
+- **PR1 (small):** `classifySandboxStartupError` (+ unit test with a **synthesized** seccomp-EPERM signal in the shape Phase-0 confirmed — deterministic, no LLM in the assertion path); broaden both catch sites (signature-gated on `sandboxKind !== "other"` — no `streamStartSent` gate per the CTO ruling); `issue-alerts.tf` frequency/affected-users alert; author **ADR-079** (status `adopting`).
 - **PR2 (medium):** `sandbox-canary.mjs`; wire non-blocking into `ci-deploy.sh`; emit verdict to deploy-state; `cat-deploy-state.sh` surfaces it; follow-through enrollment.
-- **PR3 (medium):** `ci.yml` SDK-bump job (package-lock detection + parity assertion + docker-run canary); `apply-deploy-pipeline-fix.yml` sequenced redeploy + `loaded==committed` assert + fail-loud + apparmor apply-parity; `cat-deploy-state.sh`/`ci-deploy.sh` `seccomp_profile_sha256` surface; new loaded-verification guard in the coupling test; promote canary to blocking; flip ADR-077 → `accepted`.
+- **PR3 (medium):** `ci.yml` SDK-bump job (package-lock detection + parity assertion + docker-run canary); `apply-deploy-pipeline-fix.yml` sequenced redeploy + `loaded==committed` assert + fail-loud + apparmor apply-parity; `cat-deploy-state.sh`/`ci-deploy.sh` `seccomp_profile_sha256` surface; new loaded-verification guard in the coupling test; promote canary to blocking; flip ADR-079 → `accepted`.
 
 ### Files to Edit / Create
 
-**PR1:** create `apps/web-platform/server/sandbox-startup-classifier.ts`, `apps/web-platform/test/sandbox-startup-classifier.test.ts`, `knowledge-base/engineering/architecture/decisions/ADR-077-faithful-sandbox-canary-and-profile-redeploy-verification.md`; edit `apps/web-platform/server/agent-runner.ts`, `apps/web-platform/server/cc-dispatcher.ts`, `apps/web-platform/server/observability.ts` (only if a shared helper is warranted — see Overlap #3739), `apps/web-platform/infra/sentry/issue-alerts.tf`.
+**PR1:** create `apps/web-platform/server/sandbox-startup-classifier.ts`, `apps/web-platform/test/sandbox-startup-classifier.test.ts`, `knowledge-base/engineering/architecture/decisions/ADR-079-faithful-sandbox-canary-and-profile-redeploy-verification.md`; edit `apps/web-platform/server/agent-runner.ts`, `apps/web-platform/server/cc-dispatcher.ts`, `apps/web-platform/server/observability.ts` (only if a shared helper is warranted — see Overlap #3739), `apps/web-platform/infra/sentry/issue-alerts.tf`.
 
 **PR2:** create `apps/web-platform/scripts/sandbox-canary.mjs`, `apps/web-platform/test/sandbox-canary.test.ts` (vitest, under `test/` so the config globs collect it — **not** `scripts/`), `scripts/followthroughs/canary-promotion-5875.sh`; edit `apps/web-platform/infra/ci-deploy.sh`, `apps/web-platform/infra/cat-deploy-state.sh`.
 
-**PR3:** edit `.github/workflows/ci.yml`, `.github/workflows/apply-deploy-pipeline-fix.yml`, `apps/web-platform/infra/ci-deploy.sh`, `apps/web-platform/infra/cat-deploy-state.sh`, `apps/web-platform/infra/server.tf` (apparmor apply-parity), `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`, `ADR-077` (status flip).
+**PR3:** edit `.github/workflows/ci.yml`, `.github/workflows/apply-deploy-pipeline-fix.yml`, `apps/web-platform/infra/ci-deploy.sh`, `apps/web-platform/infra/cat-deploy-state.sh`, `apps/web-platform/infra/server.tf` (apparmor apply-parity), `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`, `ADR-079` (status flip).
 
 ### Attack Surface Enumeration (security boundary: seccomp + apparmor)
 
@@ -184,10 +184,10 @@ Fresh-host trap intact (`{ sha256, server_id }` untouched). No `lifecycle.ignore
 ## Architecture Decision (ADR / C4)
 
 ### ADR
-Author **ADR-077 — "Faithful SDK sandbox canary + profile-apply→redeploy verification contract"** in PR1 (status `adopting`), flip to `accepted` in PR3. Records: (1) the canary drives the *real* SDK codepath (faithfulness invariant); (2) dark-launch-before-blocking (`wg-dark-launch-deploy-gates`); (3) the "applied ≠ loaded" coupling and the sequenced-redeploy-then-assert contract. Cross-refs ADR-031 (Sentry-as-IaC), ADR-068 (cron-drain), ADR-075 (sandbox config the canary imports), ADR-072 (adaptive deploy gate).
+Author **ADR-079 — "Faithful SDK sandbox canary + profile-apply→redeploy verification contract"** in PR1 (status `adopting`), flip to `accepted` in PR3. Records: (1) the canary drives the *real* SDK codepath (faithfulness invariant); (2) dark-launch-before-blocking (`wg-dark-launch-deploy-gates`); (3) the "applied ≠ loaded" coupling and the sequenced-redeploy-then-assert contract. Cross-refs ADR-031 (Sentry-as-IaC), ADR-068 (cron-drain), ADR-075 (sandbox config the canary imports), ADR-072 (adaptive deploy gate).
 
 ### C4 views
-Enumeration checked against all three `.c4` files: no new external human actor, no new container/data-store (`hetzner = container "Compute"` already models the host), no changed access relationship. The **one** candidate is Sentry, absent from the external-systems block (`model.c4` ~L204–237) — but Sentry has been the error sink all along; this change does not *introduce* it, so its C4 absence is a **pre-existing doc gap**, not an impact of this plan. **Optional cleanup (not a PR1 merge gate):** add `sentry` (`#external`) + a `hetzner -> sentry` edge + view include; if done, run `c4-code-syntax.test.ts` + `c4-render.test.ts`. The architectural decision itself is recorded in ADR-077, satisfying `wg-architecture-decision-is-a-plan-deliverable`.
+Enumeration checked against all three `.c4` files: no new external human actor, no new container/data-store (`hetzner = container "Compute"` already models the host), no changed access relationship. The **one** candidate is Sentry, absent from the external-systems block (`model.c4` ~L204–237) — but Sentry has been the error sink all along; this change does not *introduce* it, so its C4 absence is a **pre-existing doc gap**, not an impact of this plan. **Optional cleanup (not a PR1 merge gate):** add `sentry` (`#external`) + a `hetzner -> sentry` edge + view include; if done, run `c4-code-syntax.test.ts` + `c4-render.test.ts`. The architectural decision itself is recorded in ADR-079, satisfying `wg-architecture-decision-is-a-plan-deliverable`.
 
 ## Acceptance Criteria
 
@@ -197,10 +197,10 @@ Enumeration checked against all three `.c4` files: no new external human actor, 
 ### PR1 — observability
 #### Pre-merge (PR)
 - [ ] Given the real seccomp-EPERM signal shape (from Phase 0), `classifySandboxStartupError` returns `sandboxKind="seccomp_or_userns_denial"` with `errorCode`/`sdkVersion`; the emitted event carries `feature:"agent-sandbox"` + raw stderr. Test uses a **synthesized** signal in that shape (no LLM in the assertion path).
-- [ ] Both `cc-dispatcher.ts` and `agent-runner.ts` emit the tagged event on sandbox-startup failure; a mid-stream error (`streamStartSent===true`) is **not** tagged (regression test).
+- [x] Both `cc-dispatcher.ts` and `agent-runner.ts` emit the tagged event on sandbox-startup failure. Tagging is by SIGNATURE (`sandboxKind !== "other"`), not stream phase (CTO ruling): a model/API error carrying no sandbox token is **not** tagged **even though `streamStartSent===true` at the catch**; a sandbox-shaped error IS tagged despite `streamStartSent===true` (regression pair: `agent-runner-sandbox-config.test.ts` positive+negative, `cc-dispatcher-real-factory.test.ts` T16).
 - [ ] `issue-alerts.tf` alert fires on the tagged event via a native frequency/affected-users threshold; `terraform validate` passes; no global-key debounce is introduced on the sandbox-startup emit.
 - [ ] Raw `userId`/`workspacePath` never reach Sentry (test asserts `userIdHash` present, raw absent).
-- [ ] ADR-077 committed (`adopting`).
+- [ ] ADR-079 committed (`adopting`).
 
 ### PR2 — faithful canary
 #### Pre-merge (PR)
@@ -219,7 +219,7 @@ Enumeration checked against all three `.c4` files: no new external human actor, 
 - [ ] AppArmor apply-parity: `apparmor_bwrap_profile` added to the `-target=` set + `on.push.paths`; the #5505 paths-union and #5873 co-target assertions updated accordingly; all three existing describes stay green.
 - [ ] **New** loaded-verification guard in `ship-deploy-pipeline-fix-gate.test.ts` asserts: a redeploy step ordered after the `terraform apply` step, and a `loaded==committed` assertion that fails loud.
 - [ ] Canary promoted to blocking; a `sandbox_broken` verdict hooks the existing `ci-deploy.sh:784` rollback path.
-- [ ] ADR-077 flipped to `accepted`.
+- [ ] ADR-079 flipped to `accepted`.
 
 ### Non-Functional
 - [ ] CI SDK-bump gate runtime bounded per the CTO-chosen canary mechanism (Phase 0 Q2: a faithful probe needs a model turn → either a creds-gated model-turn run scoped to SDK-bump PRs, or a creds-free argv-replay after a one-time capture).
@@ -232,7 +232,7 @@ Enumeration checked against all three `.c4` files: no new external human actor, 
 
 ### Acceptance (RED targets)
 - Given a synthesized seccomp-EPERM signal (Phase-0 shape), when the classifier runs, then `sandboxKind="seccomp_or_userns_denial"` and the emit carries `feature:"agent-sandbox"` + stderr + `sdkVersion`.
-- Given a mid-conversation error (`streamStartSent=true`), when caught in `agent-runner.ts`, then it is **not** tagged sandbox-startup.
+- Given a mid-conversation model/API error carrying no sandbox token (`sandboxKind="other"`), when caught in `agent-runner.ts` (with `streamStartSent=true`), then it is **not** tagged sandbox-startup; given a sandbox-shaped error at the same catch, it **is** tagged (tagging is by signature, not stream phase — CTO ruling).
 - Given a `package-lock.json`-only bump of `@anthropic-ai/claude-agent-sdk`, when CI runs, then the SDK-bump gate fires and runs the canary; given a `bun.lock`/`package-lock.json` version mismatch, the gate fails.
 - Given the seccomp profile applied but the container running the old profile, when the sequenced post-apply assert runs, then `loaded != committed` fails the run loud.
 
@@ -259,7 +259,7 @@ Item 4's auto-apply reaches the host via the existing CF-Tunnel SSH bridge; the 
 
 ### Engineering (CTO)
 **Status:** reviewed.
-**Assessment:** Full advisory obtained and incorporated. Confirmed: one payload / two contexts (docker-run committed vs docker-exec loaded); hand-rolled argv disqualified → SDK-driven probe with a no-model-turn AC; classify by error signature + `streamStartSent` phase, not substring/timing; emit per-user + native alert (not a global-key debounce); ordered apply→redeploy over a concurrency group; threshold `aggregate pattern`. New considerations folded in: AppArmor parity, lockfile-vs-manifest detection, blocking-canary reuses the existing rollback path, synthesized-stderr classifier test. **Capability gaps:** none.
+**Assessment:** Full advisory obtained and incorporated. Confirmed: one payload / two contexts (docker-run committed vs docker-exec loaded); hand-rolled argv disqualified → SDK-driven probe with a no-model-turn AC; classify by error signature, not substring/timing (the plan's original `streamStartSent` phase gate was later **rejected at PR1 kickoff by a second CTO ruling** — ADR-079 — because `streamStartSent` is always true at the catch and the seccomp denial surfaces mid-stream; signature alone is the guard); emit per-user + native alert (not a global-key debounce); ordered apply→redeploy over a concurrency group; threshold `aggregate pattern`. New considerations folded in: AppArmor parity, lockfile-vs-manifest detection, blocking-canary reuses the existing rollback path, synthesized-stderr classifier test. **Capability gaps:** none.
 
 **Product/UX Gate:** NONE — no UI surface (no `components/**`/`app/**/page.tsx`/`layout.tsx` in Files); mechanical override does not fire. **Operations:** assessed not-relevant (Soleur Operations = expense/vendor/provisioning, not SRE). **Legal:** event is pseudonymized; no regulated-data surface touched; threshold aggregate → `gdpr-gate` (2.7) skips; pseudonymization captured as an AC.
 
@@ -287,7 +287,7 @@ The canary promotion is a soak-gated close criterion. Enrolled so it's automated
 ## Dependencies & Risks
 1. **[HIGH] Canary faithfulness drift** — import `agent-runner-sandbox-config.ts` + no-model-turn AC.
 2. **[HIGH] Phase-0 error-shape unknown** — the classifier is false-green-prone if built against the wrong field; the spike resolves it before PR1 freezes the design.
-3. **[MED] Observability false-tag** — `streamStartSent` guard + both paths.
+3. **[MED] Observability false-tag** — signature-based classifier (`sandboxKind !== "other"`) is the sole mis-tag guard; a bare EPERM with no namespace token must stay `"other"` (unit-pinned). The `streamStartSent` gate was rejected (CTO ruling, ADR-079) as a silent-no-op false-NEGATIVE.
 4. **[MED] Lockfile source-of-truth** — key on `package-lock.json` (deploy-authoritative) + `bun.lock` parity assertion.
 5. **[MED] Ordering illusion** — sequenced apply→redeploy (not a concurrency group); `flock` dedupes the concurrent release.
 6. **[LOW] CI-vs-host faithfulness divergence** — CI gate claims only "committed profile valid"; host-load is item 4.
