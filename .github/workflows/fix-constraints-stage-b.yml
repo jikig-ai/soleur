@@ -1,0 +1,310 @@
+name: fix-constraints-stage-b
+
+# Stage B — PRIVILEGED consumer of Stage A's recovery artifact (ADR-074, #5814). Dogfood copy
+# of references/fix-constraints-stage-b.template (sed __TARGET_DIR__ -> apps/web-platform).
+# Triggered by Stage A completion via `workflow_run` — GitHub ALWAYS runs this file from the
+# default branch, so its logic is trusted even when Stage A ran fork-controlled code. It holds
+# the write token and delivers the fix as a DRAFT follow-up PR (human merge gate).
+#
+# CRITICAL — the entire Stage A artifact (file contents AND meta.json) is 100% attacker-
+# controlled: `pull_request` runs the FORK'S OWN Stage A definition, so a fork can skip the
+# agent and upload a hand-crafted artifact while keeping Stage A's name: to fire this stage.
+# Therefore Stage B:
+#   (1) requires isCrossRepository == false AND exactly one matching open PR before ANY write;
+#   (2) sources routing identity (head_sha) from the trusted workflow_run EVENT, never the
+#       artifact; resolves pr_number/head_ref by API; cross-checks meta.json and rejects on
+#       mismatch;
+#   (3) validates every artifact path (charset + traversal + symlink/gitlink mode + allowlist,
+#       fail-closed) and enforces file-count/size bounds before the blob loop;
+#   (4) builds the commit via the Git Data API (blob -> tree WITH mandatory base_tree ->
+#       commit -> ref), verifying each blob's bytes against the per-file sha256 in meta.json.
+# Stage B NEVER `actions/checkout`s the untrusted tree, NEVER `git apply`s, NEVER runs
+# `bun install` or any PR script. The write token never co-locates with untrusted execution,
+# so the untrusted-checkout sink is STRUCTURALLY ABSENT (no checkout step to flag). "0 CodeQL
+# alerts" proves the checkout sink is gone — the explicit gates above are what make the
+# artifact-data trust safe. All PR-derived strings are env/argv-passed, never shell-interpolated.
+
+on:
+  workflow_run:
+    workflows: ["fix-constraints-stage-a"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read   # REQUIRED for the cross-workflow download-artifact of the Stage A run
+
+concurrency:
+  # Coarse guard on the immutable head SHA so two Stage A completions on the same head can't
+  # race the ref create; the ref-create step is also create-or-update to be safe.
+  group: fix-constraints-b-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check the Stage A run for a recovery artifact
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          arts=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq '[.artifacts[].name]')
+          recovery=$(jq '[.[] | select(startswith("fix-constraints-patch-"))] | length' <<<"$arts")
+          giveup=$(jq '[.[] | select(startswith("fix-constraints-giveup-"))] | length' <<<"$arts")
+          echo "recovery=${recovery}" >> "$GITHUB_OUTPUT"
+          echo "giveup=${giveup}" >> "$GITHUB_OUTPUT"
+          if [ "${recovery}" = "0" ] && [ "${giveup}" = "0" ]; then
+            echo "::notice::Stage A produced no artifact (gate was green — nothing to apply)."
+          fi
+
+      - name: Download the Stage A artifact(s)
+        if: steps.check.outputs.recovery != '0' || steps.check.outputs.giveup != '0'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          # Matches BOTH the recovery patch and the give-up marker; excludes the Stage A run's
+          # separate `api-spend-*` artifact.
+          pattern: fix-constraints-*
+          path: artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve identity, validate artifact, apply via Git Data API
+        if: steps.check.outputs.recovery != '0'
+        id: apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # Routing identity comes from the TRUSTED event, never the artifact.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          MAX_FILES: '50'
+          MAX_FILE_BYTES: '1048576'
+          MAX_TOTAL_BYTES: '5242880'
+        run: |
+          set -euo pipefail
+
+          # Strip control chars + unicode line/para separators as escape sequences (never
+          # literal chars) before embedding any string in a comment / PR body (log-injection).
+          sanitize() { LC_ALL=C sed $'s/[\x01-\x1f\x7f]//g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+          # `detail` interpolates attacker-controlled artifact data (meta.json fields, rejected
+          # paths); a `jq -r`-decoded newline would otherwise inject extra `state=`/`pr_url=`
+          # lines into $GITHUB_OUTPUT and forge a success comment. sanitize() strips \n/\r, so
+          # emit() is the single choke point that neutralizes it.
+          emit() { echo "state=$1" >> "$GITHUB_OUTPUT"; echo "detail=$(printf '%s' "$2" | sanitize)" >> "$GITHUB_OUTPUT"; }
+
+          # --- Identity from the event; validate SHA shape BEFORE any use ------------------
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            emit "identity-mismatch" "workflow_run head_sha is not a 40-hex commit SHA"; exit 0
+          fi
+
+          # Resolve the PR from the trusted head SHA (NOT workflow_run.pull_requests, empty for forks).
+          prs_json=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+            | jq --arg repo "$REPO" '[.[] | select(.state=="open") | {number, headRef: .head.ref, cross: (.head.repo.full_name != $repo)}]')
+          n=$(jq 'length' <<<"$prs_json")
+          if [ "$n" != "1" ]; then
+            emit "no-single-pr" "expected exactly one open PR for ${HEAD_SHA}, found ${n}"; exit 0
+          fi
+          PR_NUMBER=$(jq -r '.[0].number' <<<"$prs_json")
+          HEAD_REF=$(jq -r '.[0].headRef' <<<"$prs_json")
+          IS_CROSS=$(jq -r '.[0].cross' <<<"$prs_json")
+
+          # --- Load-bearing fork defense: same-repo only ------------------------------------
+          if [ "$IS_CROSS" != "false" ]; then
+            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            emit "fork-rejected" "PR #${PR_NUMBER} is cross-repository (fork); auto-recovery cannot run over an attacker-controlled artifact"; exit 0
+          fi
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            emit "identity-mismatch" "resolved pr_number is not numeric"; exit 0
+          fi
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          # --- Locate the single artifact dir ----------------------------------------------
+          art_dir=$(find artifact -maxdepth 1 -type d -name 'fix-constraints-patch-*' | head -1)
+          if [ -z "$art_dir" ] || [ ! -f "$art_dir/meta.json" ] || [ ! -d "$art_dir/files" ]; then
+            emit "integrity-fail" "artifact missing, or has no meta.json / files dir"; exit 0
+          fi
+          meta="$art_dir/meta.json"
+          # A malformed (non-JSON) meta.json must fail as integrity-fail, not crash to the
+          # generic "unexpected error" branch — validate it parses before any jq read.
+          if ! jq -e . "$meta" >/dev/null 2>&1; then
+            emit "integrity-fail" "meta.json is not valid JSON"; exit 0
+          fi
+
+          # --- Cross-check meta.json against the trusted identity (meta is a cross-check only) --
+          m_pr=$(jq -r '.pr_number' "$meta")
+          m_sha=$(jq -r '.head_sha' "$meta")
+          if [ "$m_pr" != "$PR_NUMBER" ] || [ "$m_sha" != "$HEAD_SHA" ]; then
+            emit "identity-mismatch" "meta.json (pr=${m_pr}, sha=${m_sha}) disagrees with the event-resolved identity (pr=${PR_NUMBER}, sha=${HEAD_SHA})"; exit 0
+          fi
+
+          # --- Resource bounds BEFORE the blob loop (CWE-400) -------------------------------
+          nfiles=$(jq '.files | length' "$meta")
+          if [ "$nfiles" -eq 0 ] || [ "$nfiles" -gt "$MAX_FILES" ]; then
+            emit "rejected-out-of-scope" "artifact declares ${nfiles} files (bound 1..${MAX_FILES})"; exit 0
+          fi
+          # Every file physically present must be declared in meta and vice-versa.
+          declared=$(jq -r '.files[].path' "$meta" | sort)
+          present=$( (cd "$art_dir/files" && find . -type f -o -type l | sed 's|^\./||') | sort )
+          if [ "$declared" != "$present" ]; then
+            emit "integrity-fail" "artifact files/ set does not match meta.json files[] (extra or missing paths)"; exit 0
+          fi
+
+          allow_re='^apps/web-platform/(app|components|server)/[A-Za-z0-9._/-]+$'
+          total=0
+          # Build the Git Data API tree entries as we validate.
+          tree='[]'
+          base_tree=$(gh api "repos/${REPO}/git/commits/${HEAD_SHA}" --jq '.tree.sha')
+          while IFS= read -r path; do
+            # Path allowlist (positive charset, no traversal, in-scope only). Fail-closed.
+            if [[ "$path" == /* ]] || [[ "$path" == *".."* ]] || ! [[ "$path" =~ $allow_re ]]; then
+              emit "rejected-out-of-scope" "path rejected by allowlist: ${path}"; exit 0
+            fi
+            fp="$art_dir/files/$path"
+            if [ -L "$fp" ] || [ ! -f "$fp" ]; then
+              emit "rejected-out-of-scope" "path is a symlink or not a regular file: ${path}"; exit 0
+            fi
+            sz=$(stat -c '%s' "$fp")
+            if [ "$sz" -gt "$MAX_FILE_BYTES" ]; then
+              emit "rejected-out-of-scope" "file exceeds per-file size bound: ${path}"; exit 0
+            fi
+            total=$((total + sz))
+            if [ "$total" -gt "$MAX_TOTAL_BYTES" ]; then
+              emit "rejected-out-of-scope" "artifact exceeds total size bound"; exit 0
+            fi
+            # Byte-round-trip integrity: verify against the declared sha256 BEFORE committing.
+            want=$(jq -r --arg p "$path" '.files[] | select(.path==$p) | .sha256' "$meta")
+            got=$(sha256sum "$fp" | awk '{print $1}')
+            if [ "$want" != "$got" ]; then
+              emit "integrity-fail" "sha256 mismatch for ${path}"; exit 0
+            fi
+            # base64 of RAW bytes (never a UTF-8 string) so CRLF/BOM/trailing-newline survive.
+            b64=$(base64 -w0 "$fp")
+            blob_sha=$(jq -n --arg c "$b64" '{encoding:"base64", content:$c}' \
+              | gh api "repos/${REPO}/git/blobs" --input - --jq '.sha')
+            tree=$(jq -c --arg p "$path" --arg b "$blob_sha" \
+              '. + [{path:$p, mode:"100644", type:"blob", sha:$b}]' <<<"$tree")
+          done <<<"$declared"
+
+          # --- Build the commit: tree WITH mandatory base_tree (else whole-repo deletion) ---
+          new_tree=$(jq -n --arg bt "$base_tree" --argjson t "$tree" '{base_tree:$bt, tree:$t}' \
+            | gh api "repos/${REPO}/git/trees" --input - --jq '.sha')
+          commit_msg="fix(constraint-gates): auto-recover tripped L1 gate for #${PR_NUMBER}"
+          new_commit=$(jq -n --arg m "$commit_msg" --arg t "$new_tree" --arg p "$HEAD_SHA" \
+            '{message:$m, tree:$t, parents:[$p]}' \
+            | gh api "repos/${REPO}/git/commits" --input - --jq '.sha')
+
+          branch="soleur/fix-constraints/${PR_NUMBER}"
+          if existing_tip=$(gh api "repos/${REPO}/git/ref/heads/${branch}" --jq '.object.sha' 2>/dev/null); then
+            # Refuse to force-overwrite HUMAN commits on the bot branch — a maintainer may have
+            # pushed review fixes to the draft follow-up PR. Only force-replace a bot-authored
+            # tip; a non-bot login means manual work we must not clobber (surface it instead).
+            tip_author=$(gh api "repos/${REPO}/commits/${existing_tip}" --jq '.author.login // ""' 2>/dev/null || echo "")
+            if [ -n "$tip_author" ] && [ "$tip_author" != "github-actions[bot]" ]; then
+              emit "branch-has-manual-commits" "the auto-fix branch has manual commits — a newer fix is available but was not applied; reconcile manually"
+              exit 0
+            fi
+            jq -n --arg s "$new_commit" '{sha:$s, force:true}' \
+              | gh api -X PATCH "repos/${REPO}/git/refs/heads/${branch}" --input - >/dev/null
+          else
+            jq -n --arg r "refs/heads/${branch}" --arg s "$new_commit" '{ref:$r, sha:$s}' \
+              | gh api "repos/${REPO}/git/refs" --input - >/dev/null
+          fi
+
+          # --- Draft follow-up PR (human merge gate; NO "pre-verified green" claim) ---------
+          safe_ref=$(printf '%s' "$HEAD_REF" | sanitize)
+          bt='`'
+          file_list=$(printf '%s' "$declared" | sanitize | sed "s/^/- ${bt}/; s/\$/${bt}/")
+          title="fix(constraint-gates): auto-recover tripped gate for #${PR_NUMBER}"
+          body=$(printf '%s\n' \
+            "Ref #${PR_NUMBER}" \
+            "" \
+            "The L1 client→server-secret constraint-gate tripped on \`${safe_ref}\` (commit \`${HEAD_SHA}\`). Stage A (untrusted, no write token) dispatched the agent to fix the offending import and re-verified the gate green; Stage B applied the change here via the Git Data API." \
+            "" \
+            "**What Stage B attests:** it applied an allowlisted, byte-verified (per-file sha256), same-repo artifact on top of \`${HEAD_SHA}\`. Stage B does **not** re-run the gate — this is a delivery vehicle, not a green attestation. Review + merge to update the source PR." \
+            "" \
+            "Files changed:" \
+            "${file_list}" )
+
+          # Open the PR only if one isn't already open for this branch.
+          existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json url --jq '.[0].url // ""')
+          if [ -n "$existing" ]; then
+            pr_url="$existing"
+          else
+            pr_url=$(gh pr create --repo "$REPO" --draft \
+              --base "$HEAD_REF" --head "$branch" \
+              --title "$title" --body "$body")
+          fi
+          echo "pr_url=${pr_url}" >> "$GITHUB_OUTPUT"
+          emit "recovered" "opened follow-up PR ${pr_url}"
+
+      - name: Comment give-up feedback (red gate, no in-scope fix)
+        # Stage A produced a give-up marker instead of a recovery patch (no key, agent made no
+        # in-scope fix, still red, or greened out-of-scope). The founder must NEVER be left
+        # silently deadlocked, so post exactly one "maintainer needed" comment. Identity is
+        # resolved from the TRUSTED event head_sha (never the marker); this step only COMMENTS
+        # (no repo write), so it needs none of the artifact-apply gates.
+        if: steps.check.outputs.recovery == '0' && steps.check.outputs.giveup != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          sanitize() { LC_ALL=C sed $'s/[\x01-\x1f\x7f]//g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::notice::head_sha not a 40-hex SHA — cannot map to a PR"; exit 0; }
+          prs_json=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+            | jq --arg repo "$REPO" '[.[] | select(.state=="open") | {number, cross: (.head.repo.full_name != $repo)}]')
+          n=$(jq 'length' <<<"$prs_json")
+          [ "$n" = "1" ] || { echo "::notice::expected exactly one open PR for ${HEAD_SHA}, found ${n} — no comment"; exit 0; }
+          PR_NUMBER=$(jq -r '.[0].number' <<<"$prs_json")
+          IS_CROSS=$(jq -r '.[0].cross' <<<"$prs_json")
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || exit 0
+          reason=""
+          gd=$(find artifact -maxdepth 1 -type d -name 'fix-constraints-giveup-*' | head -1)
+          if [ -n "$gd" ] && [ -f "$gd/meta.json" ] && jq -e . "$gd/meta.json" >/dev/null 2>&1; then
+            reason=$(jq -r '.reason // ""' "$gd/meta.json" | sanitize)
+          fi
+          if [ "$IS_CROSS" != "false" ]; then
+            body="Auto-recovery can't run on a fork PR — the workflow's write token is scoped to this repository. A maintainer must run \`constraint-scaffold\` locally and push the fix."
+          else
+            body="⚠️ The L1 constraint-gate is red and auto-recovery could not deliver a fix (${reason:-no in-scope fix produced}). A maintainer needs to review this gate — it may be a real client→server-secret leak that must be fixed by hand (auto-recovery never grows the suppression baseline)."
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
+
+      - name: Comment the terminal outcome on the original PR
+        # Every non-happy terminal state posts exactly one deterministic comment; never silent.
+        if: always() && steps.apply.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.apply.outputs.pr_number }}
+          STATE: ${{ steps.apply.outputs.state }}
+          DETAIL: ${{ steps.apply.outputs.detail }}
+          PR_URL: ${{ steps.apply.outputs.pr_url }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          set -euo pipefail
+          case "$STATE" in
+            recovered)
+              body="✅ Auto-recovery: the constraint-gate fix is ready in a draft follow-up PR — ${PR_URL}. Review and merge it to update this PR's branch." ;;
+            fork-rejected)
+              body="Auto-recovery can't run on a fork PR — the workflow's write token is scoped to this repository. A maintainer must run \`constraint-scaffold\` locally and push the fix." ;;
+            rejected-out-of-scope)
+              body="Auto-recovery found a fix but it edits paths outside the allowlist (or exceeds size bounds) — not auto-applicable. A maintainer needs to review. Detail: ${DETAIL}" ;;
+            integrity-fail)
+              body="Auto-recovery aborted on an integrity check (artifact bytes did not verify against their declared hashes, or the file set was inconsistent) — nothing was written. A maintainer needs to act. Detail: ${DETAIL}" ;;
+            identity-mismatch)
+              body="Auto-recovery aborted: the recovery artifact's metadata did not match this PR's verified identity — nothing was written. Detail: ${DETAIL}" ;;
+            no-single-pr)
+              body="Auto-recovery could not map the fix to a single open PR (${DETAIL}) — nothing was written." ;;
+            branch-has-manual-commits)
+              body="Auto-recovery produced a newer fix, but the draft follow-up branch has manual (maintainer) commits — it was NOT overwritten to avoid discarding that work. Reconcile manually. Detail: ${DETAIL}" ;;
+            *)
+              body="Auto-recovery hit an unexpected error (apply step: ${APPLY_OUTCOME}) before it could finish — see the workflow run logs. A maintainer can run \`constraint-scaffold\` locally." ;;
+          esac
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"

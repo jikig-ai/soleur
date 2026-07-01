@@ -4,9 +4,10 @@ name: constraint-gates (L1 import boundary)
 # + internal path-check: the job fires on every PR and reports a real conclusion,
 # but exits 0 fast when the target app is untouched — so a required check never
 # deadlocks pending-forever on a `paths:` filter. The agent — never the founder —
-# owns this file. To recover a tripped gate, re-run the constraint-scaffold skill
-# (the agent fixes the import or runs `--refresh-baseline`); the
-# `/soleur fix constraints` comment-dispatcher is PLANNED (#5791), not yet wired.
+# owns this file. Recovery is automatic: when this gate trips on a PR, the two-stage
+# auto-recovery dispatcher (fix-constraints-stage-a/b, ADR-074) fixes the import and
+# opens a follow-up PR if it is auto-fixable; otherwise a maintainer re-runs the
+# constraint-scaffold skill locally (or runs `--refresh-baseline`).
 
 on:
   pull_request:

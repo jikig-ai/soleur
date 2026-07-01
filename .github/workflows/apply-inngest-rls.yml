@@ -9,10 +9,17 @@
 # direct catalog/grant query (the authoritative gate; the advisor count is
 # corroborating only — advisor lints can be served stale right after a DDL change).
 #
-# SELF-HEAL: the daily schedule: re-applies the idempotent SQL (no-op when clean).
-# Inngest adds tables across versions and a new table re-opens the anon hole until
-# RLS is enabled on it; the scheduled re-apply re-locks any new table with ZERO human
-# action, instead of deferring to "file an issue". This MUST be an external GH-Actions
+# SELF-HEAL: the hourly schedule re-applies the idempotent SQL (no-op when clean).
+# Inngest adds tables across versions. A new table does NOT re-open anon read access —
+# the ALTER DEFAULT PRIVILEGES revoke (see 0001 + ADR-030 I8) means a postgres-created
+# table is born with no anon/authenticated grant. What a new table DOES do is sit at
+# relrowsecurity=false until the next re-apply, so the cosmetic rls_disabled_in_public
+# advisor lint (CRITICAL email) recurs for up to one cron interval. Hourly (was daily,
+# 2026-07-01) shrinks that cosmetic window from <=24h to <=1h with ZERO human action and
+# zero new failure mode, instead of deferring to "file an issue". The CPO-rejected
+# alternative — a ddl_command_end event trigger (window -> ~0) — was declined because it
+# fires inside Inngest's own CREATE TABLE txn (migration-abort risk) to remove a merely
+# cosmetic email; see ADR-030 changelog 2026-07-01. This MUST be an external GH-Actions
 # cron, not an Inngest cron — an Inngest cron cannot watch the Inngest project's own
 # posture (same rationale as scheduled-inngest-health.yml).
 #
@@ -42,7 +49,7 @@ on:
       - 'apps/web-platform/infra/inngest-rls/**'
       - '.github/workflows/apply-inngest-rls.yml'
   schedule:
-    - cron: '17 4 * * *'   # daily — self-healing re-apply (no-op when clean). NOT the 15-min health watchdog cadence.
+    - cron: '17 * * * *'   # hourly — self-healing re-apply (no-op when clean). Shrinks the cosmetic rls_disabled_in_public advisor-recurrence window on a new Inngest table from <=24h to <=1h. NOT the 15-min health watchdog cadence.
   workflow_dispatch:
     inputs:
       reason:

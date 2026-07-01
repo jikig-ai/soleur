@@ -31,14 +31,19 @@ rejects the violation **before** the LLM-judged review layer — the product-cod
 instantiation of ADR-011 tier 1.
 
 **The agent — never the founder — owns gate maintenance, baseline refresh, and recovery.**
-The intended founder-hotfix recovery is one comment, `/soleur fix constraints` — but that
-recovery dispatcher is **planned (#5791), not yet wired**: no `issue_comment` handler for it
-exists in the repo today. Until #5791 lands, the agent owns recovery directly (re-run
-`constraint-scaffold`: fix the import, or `--refresh-baseline`), and the gate stays
-**informational / non-blocking** — it is NOT promoted to a required check. Promotion to a
-REQUIRED check is **blocked on #5791** (no agent-free recovery for a tripped required gate
-until the dispatcher exists) **and #5778** (monorepo/multi-stack follow-up). No override label,
-no `.cjs` edit, no second human required.
+Founder-hotfix recovery is **automatic and zero-touch** via the two-stage auto-recovery
+dispatcher (`fix-constraints-stage-a` → `fix-constraints-stage-b`, **ADR-074**): a tripped
+gate on a PR triggers a fix-only agent run that delivers the fix as a **draft follow-up PR**
+— no comment, no command, no head-push. (The held `/soleur fix constraints` comment-dispatcher
+that this superseded ran untrusted PR-head code in a privileged `issue_comment` trigger; ADR-074
+replaced it with an untrusted producer / privileged non-executing consumer split.) Auto-recovery
+is fix-only and never grows the suppression baseline; a real leak it cannot fix is surfaced for a
+maintainer (who re-runs `constraint-scaffold` locally: fix the import, or `--refresh-baseline`).
+The gate stays **informational / non-blocking** — it is NOT promoted to a required check.
+Promotion to a REQUIRED check is now **blocked only on #5778** (monorepo/multi-stack follow-up);
+the #5791 "no agent-free recovery for a tripped required gate" blocker is **satisfied by ADR-074**
+(auto-recovery is agent-free from the founder's perspective). No override label, no `.cjs` edit,
+no second human required.
 
 **Mechanism (Option D).** `dependency-cruiser` is the engine — it robustly owns `@/*`
 alias resolution (`tsConfig` + `tsPreCompilationDeps`), the type-only/value erasure, and the

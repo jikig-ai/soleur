@@ -38,18 +38,21 @@ changed yet) or for re-runs after a transient failure.
 
 ## Merge queue (#5780)
 
-> **Status (2026-07-01): reverted; NOT re-adopting now.** The first enablement
-> deadlocked `main` — GitHub CodeQL **default setup** does not post the required
-> `CodeQL` context on `merge_group` temp refs, so every queue entry stalled. The
-> queue was kill-switched (the `merge_queue` rule is REMOVED from this root and
-> from the live ruleset). It is **not being re-enabled**: the queue is an
-> optimization over `/ship`'s BEHIND-auto-sync loop (which already mitigates the
-> starvation #5780 targeted), and re-adoption requires a CodeQL default→advanced
-> migration that disrupts every in-flight PR + adds permanent codeql.yml
-> maintenance. See ADR-032 (2026-07-01 decision + incident note) + the PIR at
+> **Status (2026-07-01): reverted; blocked by a GitHub platform limitation.** The
+> first enablement deadlocked `main` — CodeQL does not report a status context on
+> `merge_group` temp refs ([`codeql-action#1537`](https://github.com/github/codeql-action/issues/1537),
+> open since 2023, no ETA), so the required `CodeQL` check never posts on a queued
+> entry. This is **NOT fixable by switching CodeQL to advanced setup** — the
+> status is unreported regardless of setup mode. The `merge_queue` rule is REMOVED
+> from this root and the live ruleset. **The queue and a blocking required CodeQL
+> check are mutually exclusive**; re-adoption is possible ONLY if GitHub resolves
+> #1537, OR CodeQL is deliberately dropped from `required_status_checks`
+> (advisory). The BEHIND-race #5780 targeted is already handled by `/ship`'s
+> auto-sync loop, so the queue is not worth de-requiring CodeQL. See ADR-032
+> (2026-07-01 decision + incident note) + the PIR at
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
-> The rest of this section describes the (currently inactive) target state and
-> serves as the re-adoption recipe should the auto-sync loop prove insufficient.
+> The rest of this section describes the (currently inactive) target state, valid
+> only once one of the two preconditions above holds.
 
 The ruleset carries a second rule sibling — a `merge_queue {}` block in
 `ruleset-ci-required.tf` — adopting a **GitHub merge queue** for `main`. It fixes
@@ -131,11 +134,14 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 ```
 
 Then verify the queue *functions*: open a trivial human PR, `gh pr merge --squash
---auto`, confirm it ENTERS the queue (not direct-merge), all 18 required contexts
-(16 CI Required + 2 CLA Required: `cla-check`, `cla-evidence`) report on the
-`merge_group` temp ref incl. `CodeQL`, and it merges without stalling. Then
-confirm a `rule-metrics-aggregate.yml` bot PR flows through (CLA synthetics cover
-its CLA contexts), and that `merge-queue-stall-check.yml` has run ≥1 green cycle.
+--auto`, confirm it ENTERS the queue (not direct-merge), all required contexts
+report on the `merge_group` temp ref, and it merges without stalling. **NOTE: as
+of 2026-07 this step is known to FAIL for `CodeQL` while it is a required check
+(codeql-action#1537) — that is exactly the deadlock. This canary is only runnable
+once CodeQL is either advisory or #1537 is fixed** (see the status note at the top
+of this section). Then confirm a `rule-metrics-aggregate.yml` bot PR flows through
+(CLA synthetics cover its CLA contexts), and that `merge-queue-stall-check.yml`
+has run ≥1 green cycle.
 When all pass, flip the ADR-032 amendment status `adopting → accepted`.
 
 ## Phase 0 -- Doppler setup (one-time, App-auth)
