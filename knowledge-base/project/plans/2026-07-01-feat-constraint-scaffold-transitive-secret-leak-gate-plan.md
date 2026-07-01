@@ -56,6 +56,16 @@ pinned version (reachable rules cannot filter type-only per-rule); the correct m
 `tsPreCompilationDeps:false`) + the per-origin baseline fail-open are the two load-bearing pivots,
 both verified against installed source.
 
+> **Phase-0 correction (2026-07-01, folded in at /work):** this plan was authored assuming **3**
+> value-safe reached modules. Phase 0.4's live scan found a **4th** —
+> `server/scope-grants/action-class-map.ts`, reached transitively via `lib/messages/action-class-copy.ts`
+> (a `"use client"` scope-grants row value-imports the copy helper, which value-imports
+> `isKnownActionClass`/`ACTION_CLASSES` from the map). It is genuinely value-safe (a code-static
+> action-class registry: 0 `process.env`, 0 value imports). So the shipped `VALUE_SAFE_PATH` and the
+> ADR-071 amendment carry **4** modules, and every "the 3 excluded modules …" statement below should
+> read **4** (`domain-leaders`, `providers`, `team-names-validation`, `scope-grants/action-class-map`).
+> This is exactly the "do NOT trust the v1 count — re-scan" condition Phase 0.4 exists to catch.
+
 ## Overview
 
 The v1 Layer-1 gate (`constraint-scaffold`, ADR-071, shipped in #5770) rejects a `"use client"`

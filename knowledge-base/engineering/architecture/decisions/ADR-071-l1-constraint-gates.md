@@ -110,11 +110,18 @@ source:
   a build-time-erased `import type` hop is to elide type-only edges from the graph GLOBALLY. With
   type-only edges gone, the direct rule no longer needs its `dependencyTypesNot:["type-only"]`
   filter — its violation set is **byte-identical** before and after the flip (proven empirically at
-  build time; locked permanently by a `boundary.test.sh` assertion that the direct baseline count
-  stays 10). Both rules therefore ignore type-only imports.
-- **The reachable baseline is kept EMPTY.** dependency-cruiser softens `reachability` violations
-  **per-origin** (`soften-known-violations.mjs` matches on `from` + rule name only, ignoring
-  `to`/`via`), so baselining even one value-safe transitive path would blind that client to EVERY
+  build time). Because a flip regression could only *shrink* the value-edge set (value edges are
+  never erased; only type-only edges are), a `boundary.test.sh` assertion floors the direct baseline
+  at **≥10** (a legitimate new value-safe direct import may grow it). Both rules therefore ignore
+  type-only imports.
+- **The reachable baseline is kept EMPTY.** The zero-baseline invariant is enforced by keying on the
+  transitive rule NAME, not on `type:"reachability"`: dependency-cruiser softens `reachability`
+  violations **per-origin** (`soften-known-violations.mjs` matches on `from` + rule name only,
+  ignoring `to`/`via` **and the entry `type`**), so a hand-authored `type:"module"` entry naming the
+  transitive rule suppresses it identically to a `type:"reachability"` entry. The runner guard and
+  `boundary.test.sh` both reject any baseline entry that is `type:"reachability"` OR names the
+  transitive rule (any type), and fail closed on a non-array baseline. So baselining even one
+  value-safe transitive path would blind that client to EVERY
   future transitive secret. Instead, the known value-safe server modules are excluded from the
   reachable **target** via `to.pathNot` (never from the `from` set — that would blind the client to
   all secrets), and any real transitive leak is FIXED, never grandfathered. A guard in the shared

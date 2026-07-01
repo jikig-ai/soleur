@@ -61,8 +61,12 @@ const SECRET_PATH = "^server/";
 // exclusion is enforced by LOCATION (deletes pathNot + the guard). Upgrade trigger: next
 // time one of the 4 is edited to add a runtime value, OR a 5th value-safe module would
 // need adding here. Tracked: #5850.
+// End-anchored to the exact module file (`\.<ext>$`) — a bare trailing `\.` would
+// prefix-match dot-suffixed SIBLINGS (`server/providers.server.ts`,
+// `server/domain-leaders.data.ts`) and silently exempt them from the transitive
+// rule too; those are natural Next.js names and must stay WATCHED.
 const VALUE_SAFE_PATH =
-  "^server/(domain-leaders|providers|team-names-validation|scope-grants/action-class-map)\\.";
+  "^server/(domain-leaders|providers|team-names-validation|scope-grants/action-class-map)\\.(?:[cm]?[jt]sx?)$";
 
 function walk(dir, acc) {
   let entries;
@@ -192,7 +196,8 @@ module.exports = {
       // No `dependencyTypesNot:["type-only"]` — type-only edges are elided globally
       // by `tsPreCompilationDeps:false` (see header), so this rule flags exactly the
       // value edges it flagged under v1's `true` + `dependencyTypesNot` (proven
-      // byte-identical; locked by boundary.test.sh's direct-count==10 assertion).
+      // byte-identical; a flip regression could only SHRINK the value-edge set, so
+      // boundary.test.sh floors the direct baseline at >=10).
       to: { path: SECRET_PATH },
     },
     {

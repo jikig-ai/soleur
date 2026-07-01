@@ -40,68 +40,134 @@ BASELINE="$APP/.dependency-cruiser-known-violations.json"
 # of the D2/D3/D4 invariants.
 # =============================================================================
 
-# --- AC4 (D3.1): committed baseline holds ZERO type:"reachability" entries -----
-# A reachability entry is never benign: dependency-cruiser softens reachability
-# per-ORIGIN (from+rule name only), so one baselined entry blinds that client to
-# every future transitive secret. The reachable baseline MUST stay empty.
-REACH_CT="$(node -e '
-  const fs = require("fs");
-  try { const b = JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
-    process.stdout.write(String((Array.isArray(b)?b:[]).filter(e=>e&&e.type==="reachability").length));
-  } catch(e){ process.stdout.write("-1"); }' "$BASELINE" 2>/dev/null)"
+# --- AC4 (D3.1): committed baseline suppresses the transitive rule NOWHERE -------
+# A baselined entry that names the transitive rule is never benign: dependency-cruiser
+# softens it per-ORIGIN (from+rule.name, ignoring `to`/`via` AND `type`), so one such
+# entry blinds that client to every future transitive secret. Key on the transitive
+# rule NAME (not just type:"reachability") — a hand-authored type:"module" entry
+# naming the rule suppresses it identically while a type-only count reads 0. A
+# non-array baseline => -1 => fails closed.
+TRANSITIVE_RULE="no-client-to-server-secret-transitive"
+count_suppressors() {  # $1 = baseline path; echoes count of transitive-suppressing entries, -1 on non-array/parse-err
+  node -e '
+    const fs = require("fs");
+    const RULE = process.argv[2];
+    try { const b = JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+      if (!Array.isArray(b)) { process.stdout.write("-1"); }
+      else process.stdout.write(String(b.filter(e => e && (e.type==="reachability" || (e.rule && e.rule.name===RULE))).length));
+    } catch(e){ process.stdout.write("-1"); }' "$1" "$TRANSITIVE_RULE" 2>/dev/null
+}
+REACH_CT="$(count_suppressors "$BASELINE")"
 if [[ "$REACH_CT" == "0" ]]; then
-  ok "AC4(D3.1): committed baseline has zero type:\"reachability\" entries"
+  ok "AC4(D3.1): committed baseline has zero transitive-rule-suppressing entries"
 else
-  bad "AC4(D3.1): committed baseline has $REACH_CT reachability entries (must be 0; parse err = -1)"
+  bad "AC4(D3.1): committed baseline has $REACH_CT transitive-suppressing entries (must be 0; non-array/parse err = -1)"
 fi
 
-# --- AC5b (D3.3): direct-rule non-regression — baseline type:"dependency" == 10 --
-# tsPreCompilationDeps:false makes the direct rule's edge set a strict subset of
-# v1's; this locks the one-time Phase-0.3 equivalence proof against future drift.
+# --- AC5b (D3.3): direct-rule non-regression floor ------------------------------
+# tsPreCompilationDeps:false makes the direct rule's value-edge set a strict SUBSET
+# of v1's (type-only edges are elided; value edges are never elided), so a flip
+# regression can only SHRINK the direct baseline below the recorded floor of 10 — a
+# legitimate NEW value-safe direct import GROWS it (still fine). Assert a lower bound,
+# not equality, so this plugin self-test does not false-fail on unrelated product
+# growth with a misleading "flip regression" message. REACH_CT==0 (above) is the
+# load-bearing security invariant; this is the flip-correctness tripwire.
 DEP_CT="$(node -e '
   const fs = require("fs");
   try { const b = JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
     process.stdout.write(String((Array.isArray(b)?b:[]).filter(e=>e&&e.type==="dependency").length));
   } catch(e){ process.stdout.write("-1"); }' "$BASELINE" 2>/dev/null)"
-if [[ "$DEP_CT" == "10" ]]; then
-  ok "AC5b(D3.3): direct-rule baseline count unchanged (10) after tsPreCompilationDeps flip"
+if [[ "$DEP_CT" =~ ^[0-9]+$ ]] && [[ "$DEP_CT" -ge 10 ]]; then
+  ok "AC5b(D3.3): direct-rule baseline count is $DEP_CT (>= floor 10; flip did not shrink the value-edge set)"
 else
-  bad "AC5b(D3.3): direct-rule baseline count is $DEP_CT (expected 10 — flip changed the direct set?)"
+  bad "AC5b(D3.3): direct-rule baseline count is $DEP_CT (< floor 10) — a tsPreCompilationDeps flip regression would shrink the direct value-edge set. If you LEGITIMATELY removed a client->value-safe-module direct import, lower this floor; otherwise investigate a flip regression."
 fi
 
 # --- AC5 (D4/D3c): VALUE_SAFE_PATH modules are drift-proof value-safe -----------
-# Each module the transitive rule excludes via to.pathNot MUST read no process.env
-# value and take no VALUE import/re-export edge (import type is erased -> safe). A
-# module silently gaining a secret while staying allowlisted is the deepest
-# fail-open (both direct baseline + transitive pathNot exempt it). Derive the list
-# FROM the .cjs VALUE_SAFE_PATH alternation so the two never drift.
+# Each module the transitive rule excludes via to.pathNot MUST NOT gain a secret,
+# because it is exempt from BOTH the direct baseline and the transitive pathNot (the
+# deepest fail-open). This is a best-effort content tripwire, NOT a full secret
+# scanner — #5850 (relocation out of server/**) is the structural fix. It flags:
+#   (a) a process.env read (dot OR bracket access) — dependency-cruiser cannot see
+#       this, so it is the guard's UNIQUE contribution;
+#   (b) a value import/re-export edge (single- OR multi-line; import type / export
+#       type are erased at build -> safe) — backstopped by the transitive rule for
+#       edges to NON-value-safe modules, checked here for defense in depth;
+#   (c) a hardcoded secret LITERAL (known token prefixes / PEM header) with no import
+#       and no env read — otherwise uncaught by anything.
+# Derive the module list FROM the .cjs VALUE_SAFE_PATH alternation so the two never drift.
 check_value_safe_drift() {  # returns 0 = value-safe, 1 = drift detected
   local f="$1"
-  grep -qE 'process\.env' "$f" && return 1
-  # any `import|export ... from` that is NOT `import type`/`export type` = a value edge
-  if grep -nE '^[[:space:]]*(import|export)[[:space:]]' "$f" \
-       | grep -vE '^[0-9]+:[[:space:]]*(import|export)[[:space:]]+type[[:space:]]' \
-       | grep -qE '(import|export)[[:space:]].*[[:space:]]from[[:space:]]'; then
+  # (a) process.env value read — dot (`process.env.X`) OR bracket (`process["env"]`, `process['env']`).
+  grep -qE 'process\.env|process[[:space:]]*\[[[:space:]]*["'\''`]env' "$f" && return 1
+  # (c) hardcoded secret literal (canonical token prefixes + PEM header). Same shape
+  # the repo-wide secret scanners use; a value-safe registry must hold no secret.
+  grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_(test|live)_[A-Za-z0-9]{20,}|sbp_[A-Za-z0-9]{20,}|xoxb-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{40,}' "$f" && return 1
+  # (b1) a value IMPORT statement: a line beginning with `import ` (the single-line
+  # form OR the opener of a multi-line import) that is NOT a whole-clause `import type`.
+  # A mixed `import { type A, realX }` opener begins with `import ` (not `import type`),
+  # so its value half is still flagged.
+  if grep -E '^[[:space:]]*import[[:space:]]' "$f" \
+       | grep -vE '^[[:space:]]*import[[:space:]]+type[[:space:]]' | grep -q .; then
     return 1
   fi
+  # (b2) a value RE-EXPORT edge: `export ... from "..."` that is NOT `export type ... from`.
+  # (Plain `export const/function/type X = …` declarations carry no `from` and are safe.)
+  if grep -E '^[[:space:]]*export[[:space:]].*[[:space:]]from[[:space:]]*["'\''`]' "$f" \
+       | grep -vE '^[[:space:]]*export[[:space:]]+type[[:space:]]' | grep -q .; then
+    return 1
+  fi
+  # (b3) dynamic `import(...)` / `require(...)` edge.
+  grep -qE '\b(import|require)[[:space:]]*\(' "$f" && return 1
   return 0
 }
-# Non-vacuity: a synthesized module that reads process.env MUST trip the guard, and
-# a synthesized import-type-only module MUST pass.
+# Non-vacuity: each drift class MUST trip the guard; a clean import-type-only module
+# MUST pass. Build the secret literal by concatenation so no contiguous token is
+# committed to this test file (GitHub push protection) while the runtime fixture holds
+# the real shape.
 DRIFT_TMP="$(mktemp -d)"
-printf 'export const X = process.env.SECRET_KEY;\n' > "$DRIFT_TMP/bad.ts"
-printf 'import type { T } from "@/lib/types";\nexport const Y: T = 1 as unknown as T;\n' > "$DRIFT_TMP/good.ts"
-if ! check_value_safe_drift "$DRIFT_TMP/bad.ts"; then
-  ok "AC5(D4): drift guard TRIPS on a module that reads process.env (non-vacuous)"
-else
-  bad "AC5(D4): drift guard did NOT trip on a process.env-reading module (vacuous!)"
-fi
+printf 'export const X = process.env.SECRET_KEY;\n' > "$DRIFT_TMP/bad-env-dot.ts"
+printf 'export const X = process["env"]["SECRET_KEY"];\n' > "$DRIFT_TMP/bad-env-bracket.ts"
+SK="sk_""live_"; printf 'export const K = "%s%s";\n' "$SK" "0123456789abcdefABCDEF0123456789" > "$DRIFT_TMP/bad-literal.ts"
+printf 'import {\n  SECRET_TOKEN,\n} from "@/server/secret";\nexport const g = () => SECRET_TOKEN;\n' > "$DRIFT_TMP/bad-multiline.ts"
+printf 'import { X } from "@/server/secret";\nexport const g = () => X;\n' > "$DRIFT_TMP/bad-import.ts"
+printf 'export { SECRET_TOKEN } from "@/server/secret";\n' > "$DRIFT_TMP/bad-reexport.ts"
+printf 'export const load = () => import("@/server/secret");\n' > "$DRIFT_TMP/bad-dynamic.ts"
+printf 'import type { T } from "@/lib/types";\nexport const LEADERS = ["a"] as const;\nexport function isX(s: string): s is T { return true; }\n' > "$DRIFT_TMP/good.ts"
+for bad in bad-env-dot bad-env-bracket bad-literal bad-multiline bad-import bad-reexport bad-dynamic; do
+  if ! check_value_safe_drift "$DRIFT_TMP/$bad.ts"; then
+    ok "AC5(D4): drift guard TRIPS on $bad (non-vacuous)"
+  else
+    bad "AC5(D4): drift guard did NOT trip on $bad (vacuous fail-open!)"
+  fi
+done
+# good.ts mirrors the real modules' shape: an `import type`, an `export const` array,
+# and an `export function` declaration — none are value edges.
 if check_value_safe_drift "$DRIFT_TMP/good.ts"; then
-  ok "AC5(D4): drift guard PASSES an import-type-only module (no false positive)"
+  ok "AC5(D4): drift guard PASSES a registry with import-type + export-const/function only (no false positive)"
 else
-  bad "AC5(D4): drift guard false-positived on an import-type-only module"
+  bad "AC5(D4): drift guard false-positived on a clean value-safe registry"
 fi
 rm -rf "$DRIFT_TMP"
+
+# --- P2 (VALUE_SAFE_PATH anchoring): dot-suffixed siblings are NOT excluded ------
+# The pathNot regex is end-anchored to the file extension; a bare trailing `\.` would
+# prefix-match `server/providers.server.ts` and silently exempt it from the transitive
+# rule. Read the RUNTIME pathNot value off the required config (avoids source-escaping
+# ambiguity) and assert sibling non-match + real-module match.
+if node -e '
+  const cfg = require(process.argv[1]);
+  const rule = (cfg.forbidden||[]).find(r=>r.name==="no-client-to-server-secret-transitive");
+  if (!rule || !rule.to || !rule.to.pathNot) process.exit(2);
+  const re = new RegExp(rule.to.pathNot);
+  const must    = ["server/providers.ts","server/scope-grants/action-class-map.ts"];
+  const mustNot = ["server/providers.server.ts","server/providers.keys.ts","server/domain-leaders.data.ts","server/providers-internal.ts"];
+  process.exit(must.every(p=>re.test(p)) && mustNot.every(p=>!re.test(p)) ? 0 : 1);
+' "$CFG" 2>/dev/null; then
+  ok "AC5(D4/P2): VALUE_SAFE_PATH matches real modules but NOT dot-suffixed siblings (end-anchored)"
+else
+  bad "AC5(D4/P2): VALUE_SAFE_PATH anchoring wrong — a dot-suffixed sibling (providers.server.ts) is excluded, or a real module is not matched"
+fi
 # Extract the module basenames from the .cjs VALUE_SAFE_PATH alternation and assert
 # each real server module is still value-safe.
 VS_MODULES="$(grep -E 'VALUE_SAFE_PATH[[:space:]]*=' -A1 "$CFG" | grep -oE '\([^)]*\)' | head -1 | tr -d '()' | tr '|' ' ')"
@@ -455,6 +521,43 @@ if [[ "$LEAKY_RC" -ne 0 ]] && printf '%s' "$LEAKY_OUT" | grep -q 'import-boundar
   ok "4.8: real runner fails closed (rc=$LEAKY_RC) on an un-baselined transitive leak"
 else
   bad "4.8: real runner did NOT fail on a transitive leak (rc=$LEAKY_RC): $LEAKY_OUT"
+fi
+
+# --- 4.10: runner rejects a type:"module" baseline entry naming the transitive rule
+# (P1 regression). dependency-cruiser softens the transitive rule per-origin on
+# from+rule.name IGNORING type, so a hand-authored type:"module" entry would suppress
+# a real transitive leak while a type:"reachability"-only guard reads 0. The runner
+# guard must key on the rule name and fail closed. This is the exact bypass a
+# careless/hostile baseline edit would use.
+MODENTRY="$BROKEN-modentry"
+mkdir -p "$MODENTRY/app" "$MODENTRY/components" "$MODENTRY/server" "$MODENTRY/scripts"
+ln -s "$NODE_MODULES" "$MODENTRY/node_modules"
+cp "$CFG" "$MODENTRY/.dependency-cruiser.cjs"
+cat > "$MODENTRY/.dependency-cruiser-known-violations.json" <<'JSON'
+[{"type":"module","from":"components/c/leak.tsx","to":"server/secret.ts","rule":{"severity":"error","name":"no-client-to-server-secret-transitive"}}]
+JSON
+MODENTRY_OUT="$( CONSTRAINT_GATES_DIR="$MODENTRY" bash "$RUNNER" 2>&1 )"
+MODENTRY_RC=$?
+if [[ "$MODENTRY_RC" -ne 0 ]] && printf '%s' "$MODENTRY_OUT" | grep -q 'suppress the transitive rule'; then
+  ok "4.10: runner rejects a type:\"module\" baseline entry naming the transitive rule (rc=$MODENTRY_RC)"
+else
+  bad "4.10: runner did NOT reject a type:\"module\" transitive-suppressing baseline entry (rc=$MODENTRY_RC) — P1 bypass open: $MODENTRY_OUT"
+fi
+
+# --- 4.11: runner fails closed on a non-array (but valid-JSON) baseline ----------
+# `{}` / `null` / `42` parse fine but are not an entry array; the guard must treat
+# them as -1 (fail closed), not as an empty array (0 -> pass).
+NONARRAY="$BROKEN-nonarray"
+mkdir -p "$NONARRAY/app" "$NONARRAY/components" "$NONARRAY/server" "$NONARRAY/scripts"
+ln -s "$NODE_MODULES" "$NONARRAY/node_modules"
+cp "$CFG" "$NONARRAY/.dependency-cruiser.cjs"
+printf '{}\n' > "$NONARRAY/.dependency-cruiser-known-violations.json"
+NONARRAY_OUT="$( CONSTRAINT_GATES_DIR="$NONARRAY" bash "$RUNNER" 2>&1 )"
+NONARRAY_RC=$?
+if [[ "$NONARRAY_RC" -ne 0 ]]; then
+  ok "4.11: runner fails closed on a non-array baseline (rc=$NONARRAY_RC)"
+else
+  bad "4.11: runner passed a non-array baseline (rc=$NONARRAY_RC) — fail-open: $NONARRAY_OUT"
 fi
 
 echo "---"
