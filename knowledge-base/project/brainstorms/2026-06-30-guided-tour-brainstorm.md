@@ -21,7 +21,7 @@ re-launchable on demand.
 | Scope | 6 steps: Welcome → Dashboard → Inbox → Workstream → Knowledge Base → Routines |
 | Rendering | **Build from scratch (no tour library)** — single-element box-shadow spotlight |
 | State | Dedicated `TourProvider` React context (mirrors `ShortcutsProvider`), `useTour()` |
-| Persistence | New `users.tour_completed_at` column (migration 118) via **service-role API route** |
+| Persistence | New `users.tour_completed_at` column (migration 119) via **service-role API route** |
 | Targeting | `data-tour-id={item.href}` on the sidebar `<Link>` (layout.tsx:396); attribute, not index |
 | Gating | New `guided-tour` runtime flag, default OFF / fail-closed |
 | Mobile (<md) | Centered cards for the 5 nav steps (rail is an off-screen drawer; spotlight skipped) |
@@ -52,8 +52,8 @@ re-launchable on demand.
 - Overlay root `fixed inset-0 z-[70]` (above support panel z-[60], bubble z-50).
 - `data-tour-id={item.href}` on the nav `<Link>` (layout.tsx:396, drill===null branch).
 - Flag: add `"guided-tour": "FLAG_GUIDED_TOUR"` to `RUNTIME_FLAGS` + `.env.example`.
-- Migration: `supabase/migrations/118_tour_completed_state.sql` (+ `.down.sql`) —
-  renumbered to 118 (114-117 taken by parallel migrations on main); MUST be the only `118_*`.
+- Migration: `supabase/migrations/119_tour_completed_state.sql` (+ `.down.sql`) —
+  renumbered to 119 (114-118 taken by parallel migrations on main); MUST be the only `119_*`.
 
 ## Step List
 
