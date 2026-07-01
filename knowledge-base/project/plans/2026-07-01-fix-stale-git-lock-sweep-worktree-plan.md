@@ -10,6 +10,33 @@ requires_cpo_signoff: true
 
 # 🐛 fix: age-guarded stale git-lock sweep in worktree tooling
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-01
+**Passes run:** CTO engineering domain review; verify-the-negative + implementation-realism
+(inline, single-file scope); empirical root-cause + anchor verification.
+
+### Key confirmations (all verified live, not from memory)
+
+1. **EEXIST wedge reproduced empirically.** In a scratch repo, planting a
+   `.git/config.lock` then running `git config --file .git/config test.key val`
+   yields `error: could not lock config file .git/config: File exists` (exit 255).
+   This confirms both the root cause (a residual on-disk lock) and that removing the
+   lock before the config write is the correct fix.
+2. **All cited anchors verified at exact lines:** first config write is
+   `worktree-manager.sh:144`; the clock-skew age-guard precedent is `:995`
+   (`if (( _delta < 0 || _delta < 600 ))`); `stat -c%s` already used at `:1186`;
+   `ensure_bare_config` defined at `:132`, called at `:452 / :513 / :535 / :589`
+   (create paths) and `:888` (cleanup-merged / session-start). Single chokepoint
+   confirmed.
+3. **`set -e` hardening applied** to the code snippet (arithmetic nested in `if`,
+   guarded `rm`/`stat`) per CTO — the real implementation risk for this fix.
+4. **Scope boundary verified:** no bwrap-layer file
+   (`agent-runner-sandbox-config.ts`, seccomp profile, SDK) appears in Files to
+   Edit — only in Overview/Non-Goals as context.
+5. **Test recipe portability verified:** `touch -d '120 seconds ago'` and
+   `touch -d '+120 seconds'` both work on GNU (the target/CI/dev platform).
+
 ## Overview
 
 Concierge worktree creation can be **permanently wedged** by a stale git lock file
@@ -350,6 +377,34 @@ Not applicable — no user-facing surface. No files under `components/**/*.tsx`,
 | `find -mmin +1 -delete` | Coarse whole-minute granularity; can't express a clean 60s threshold and has no clock-skew guard. mtime comparison mirrors the existing in-file pattern. |
 | Unconditional `rm -f config.lock` (no age guard) | Would clobber a legitimately in-flight concurrent config writer on a parallel Concierge session — the exact race the age-guard exists to prevent (brand-survival brake). |
 | Fix in the bwrap/sandbox layer | Out of scope — sandbox hardening is `feat-harden-agent-sandbox-5875` (ADR-075). This plan stays out of those files to avoid collision. |
+
+## Risks & Mitigations
+
+### Precedent-diff (age-guarded cleanup pattern)
+
+The age-guard is a lock/cleanup pattern with an established in-repo precedent —
+`cleanup_merged_worktrees:989-999`. The new sweep mirrors it:
+
+| Aspect | Precedent (`:989-999`, recent-commit skip) | New sweep (`sweep_stale_git_locks`) |
+|---|---|---|
+| Now source | `_now=$(date +%s)` | `now=$(date +%s)` |
+| mtime source | `git log -1 --format=%ct HEAD` | `stat -c %Y "$path"` |
+| Delta | `_delta=$(( _now - last_commit_age ))` | `age=$(( now - mtime ))` |
+| Clock-skew guard | `if (( _delta < 0 || _delta < 600 ))` → skip | `if (( age >= threshold ))` → remove (skips fresh AND negative/future-dated) |
+| set-e safety | arithmetic nested in `if` | arithmetic nested in `if` (same) |
+
+The sweep is the **inverse polarity** of the precedent (precedent *skips* fresh
+things; sweep *removes* stale things) but uses the identical now/mtime/delta/skew
+machinery. Not a novel pattern.
+
+### Other risks
+
+| Risk | Mitigation |
+|---|---|
+| Clobbering a live concurrent config writer | Age-guard: a real `git config` write holds the lock for single-digit ms, so its mtime always reads fresh (< 60s) and is skipped. CTO: no meaningful parallel-session race. |
+| `stat -c %Y` is GNU-only (BSD/macOS differ) | Acceptable — Concierge runs Linux containers, CI is ubuntu, dev is Linux; the file already depends on GNU `stat -c%s` at `:1186`. One-line comment notes the assumption. |
+| Lock vanishes between `stat` and `rm` (racing sibling) | `stat … 2>/dev/null || continue` and `rm -f … 2>/dev/null` guarded by `if` — both non-fatal under `set -e`. |
+| Empty lock set aborts under `set -e` | Fixed list + `[[ -f ]]` per-file guard (no glob); AC7 covers the no-lock no-op case. |
 
 ## Non-Goals
 
