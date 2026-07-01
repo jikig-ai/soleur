@@ -28,12 +28,12 @@ The incident class is fully closed by **two** load-bearing preventions: a **tagg
 
 (Observability ships first — it is the change that would have given signal for #5873, and it is independent. This is a preference, not a hard constraint; PR1 and PR2 could merge since the canary is non-blocking.)
 
-## Pre-PR Spike (Phase 0 — blocking)
+## Pre-PR Spike (Phase 0 — blocking) — RESOLVED 2026-07-01 (#5875 comment)
 
-The whole plan's shape rests on two unknowns; resolve them **before** implementing PR1, and record findings in #5875:
+Both unknowns resolved against the installed `@anthropic-ai/claude-agent-sdk@0.3.197`:
 
-1. **Error shape.** Read the installed `node_modules/@anthropic-ai/claude-agent-sdk/**` (`.d.ts` + sandbox builder). Determine exactly how a seccomp-startup EPERM surfaces: in `err.message` (which the current catch reads at `agent-runner.ts:2648`), or in a subprocess `.stderr` field the catch never inspects. **This decides the classifier's input** — a classifier validated only against a synthesized stderr fixture would false-green if the real signal lands in a field it doesn't read (the exact failure class this plan exists to kill).
-2. **No-model-round-trip.** Confirm the SDK can spawn a Bash sandbox and run a no-op tool **without** a live model turn. If yes, the CI canary is cheap and creds-free. If no, PR2/PR3 change shape (ANTHROPIC creds + network in CI; scope the full probe to SDK-bump PRs only).
+1. **Error shape — resolved favorably.** The bwrap/seccomp stderr (incl. `Operation not permitted`) is merged into the thrown `Error`'s **`.message`** (plain `Error`, no separate `.stderr`/`.cause`/`.data`); `agent-runner.ts:2648` already reads `err.message`, and `agent-runner-sandbox-config.test.ts:161-167` confirms the SDK writes sandbox failures to stderr→message (#2634). **→ PR1's classifier keyed on `.message` is correct**; it broadens the substring set beyond `"sandbox required but unavailable"` to also match the bwrap/unshare/seccomp/`Operation not permitted` signatures.
+2. **No-model-round-trip — resolved NO.** Sandbox init is gated behind `query()` (an Anthropic API call); `startup()` only pre-warms the subprocess (not sandbox validation); the internal Bash tool is always model-driven. **→ a faithful canary needs ANTHROPIC creds + network AND must handle model non-determinism.** This turns PR2's canary into a **mechanism fork routed to the CTO agent at PR2 kickoff** (work-skill architectural-fork gate): (a) *model-turn-driven* (faithful; creds+network; scope to SDK-bump PRs; handle non-determinism) vs (b) *capture-the-SDK-bwrap-argv-once-then-replay* creds-free (decouples faithfulness from the model turn; re-capture on each SDK bump). The chosen mechanism is recorded in ADR-077. PR1 (observability) is unaffected.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -222,7 +222,7 @@ Enumeration checked against all three `.c4` files: no new external human actor, 
 - [ ] ADR-077 flipped to `accepted`.
 
 ### Non-Functional
-- [ ] CI SDK-bump gate adds < ~2 min (one container start + no-op; no model round-trip in the default path per Phase 0).
+- [ ] CI SDK-bump gate runtime bounded per the CTO-chosen canary mechanism (Phase 0 Q2: a faithful probe needs a model turn → either a creds-gated model-turn run scoped to SDK-bump PRs, or a creds-free argv-replay after a one-time capture).
 - [ ] Extra redeploy fires only on an actual profile change (paths + `triggers_replace`), not on routine deploys.
 
 ### Review agents (run at review time — not ACs)

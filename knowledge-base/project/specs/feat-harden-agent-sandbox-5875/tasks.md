@@ -9,11 +9,13 @@ lane: cross-domain
 
 Derived from the finalized plan. Three PRs preceded by a blocking spike. Check #5875's boxes as each item lands.
 
-## Phase 0 — Spike (blocking, pre-PR)
+## Phase 0 — Spike (blocking, pre-PR) — DONE (see #5875 comment)
 
-- [ ] 0.1 Read installed `node_modules/@anthropic-ai/claude-agent-sdk/**` (`.d.ts` + sandbox builder); determine the exact field a seccomp-EPERM surfaces in (`err.message` vs subprocess `.stderr`).
-- [ ] 0.2 Confirm the SDK can spawn a Bash sandbox + run a no-op **without** a model round-trip (or record the scope-down: creds + network, SDK-bump-PRs only).
-- [ ] 0.3 Record both findings in #5875 — they gate PR1's classifier input and PR2/PR3's canary shape.
+- [x] 0.1 Read installed `node_modules/@anthropic-ai/claude-agent-sdk/**`. **Finding:** seccomp-EPERM stderr lands in `err.message` (plain `Error`, no `.stderr` field); `agent-runner.ts:2648` already reads it. → PR1 classifier keyed on `.message` is correct.
+- [x] 0.2 **Finding: NOT feasible.** Sandbox init is gated behind `query()` (Anthropic API call); `startup()` only pre-warms the subprocess; the Bash tool is always model-driven. → faithful canary needs creds + network + must handle model non-determinism.
+- [x] 0.3 Recorded both findings in #5875 (comment).
+
+**PR2/PR3 mechanism fork (route to `soleur:engineering:cto` at PR2 kickoff — work-skill architectural-fork gate):** Q2 means the plan's "SDK-driven, no-model-turn canary" is partially blocked. Two candidates: (a) model-turn-driven (faithful; creds+network; scope to SDK-bump PRs; handle non-determinism), (b) capture-the-SDK-bwrap-argv-once-then-replay creds-free (decouples faithfulness from the model turn; re-capture on each SDK bump). CTO picks the mechanism; record in ADR-077.
 
 ## Phase 1 — PR1: sandbox-start observability (item 2)
 
