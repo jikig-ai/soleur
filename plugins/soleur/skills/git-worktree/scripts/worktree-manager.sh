@@ -121,6 +121,46 @@ require_working_tree() {
   fi
 }
 
+# Remove stale git lock files left when a git process is killed mid-write
+# (e.g., the 2026-07-01 seccomp outage killed git under `unshare` EPERM, leaving
+# `.git/config.lock` on the mounted /workspaces volume; every later `git config`
+# write then fails EEXIST — "could not lock config file …: File exists" — forever).
+# Age-guarded: removes ONLY locks older than $threshold seconds, so a legitimately
+# in-flight sub-second config writer (lock lifetime is single-digit ms) is never
+# clobbered. Clock-skew guard: a future-dated lock (negative age) is treated as
+# fresh and preserved, matching cleanup_merged_worktrees' age check (~:995).
+# GNU-only `stat -c %Y` (Linux containers + CI ubuntu + dev; mirrors the existing
+# GNU `stat -c%s` at ~:1186). Idempotent; safe for parallel sessions — the
+# age-guard, not a flock, is the safety mechanism.
+sweep_stale_git_locks() {
+  local git_dir="$1"
+  local threshold="${2:-60}"   # seconds
+  [[ -d "$git_dir" ]] || return 0
+  local now lock path mtime age swept=0
+  now=$(date +%s)
+  # Scope: the common git_dir's config-write locks (the confirmed wedge) plus
+  # index/HEAD locks for completeness against the same stale-lock class. NOT the
+  # per-worktree lock dirs (.git/worktrees/*/index.lock) — a different failure
+  # class (a wedged checkout/rebase) with a larger blast radius.
+  for lock in config.lock config.worktree.lock index.lock HEAD.lock; do
+    path="$git_dir/$lock"
+    [[ -f "$path" ]] || continue
+    mtime=$(stat -c %Y "$path" 2>/dev/null) || continue
+    age=$(( now - mtime ))
+    # Remove only stale (age >= threshold). Skips fresh AND future-dated
+    # (age < 0, clock skew). Arithmetic nested in `if` so a false `(( ))`
+    # exit status never trips `set -e` (mirrors the guard at ~:995).
+    if (( age >= threshold )); then
+      if rm -f "$path" 2>/dev/null; then
+        swept=$(( swept + 1 ))
+      fi
+    fi
+  done
+  if (( swept > 0 )); then
+    echo -e "${YELLOW}Swept $swept stale git lock file(s) from $git_dir${NC}"
+  fi
+}
+
 # Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
 # Fixes TWO broken states that git worktree add creates on bare repos:
 #   1. core.bare=true in shared config — bleeds into worktrees, breaks git commit/push
@@ -135,6 +175,12 @@ ensure_bare_config() {
   if [[ ! -d "$git_dir" ]]; then
     git_dir="$GIT_ROOT"
   fi
+
+  # Self-heal: remove stale git locks BEFORE any config write below, or those
+  # writes fail EEXIST forever (2026-07-01 outage class). This chokepoint runs on
+  # every create path and on the session-start cleanup-merged path (:888), so an
+  # affected workspace self-heals on its next session — no operator SSH required.
+  sweep_stale_git_locks "$git_dir"
 
   local shared_config="$git_dir/config"
   local wt_config="$git_dir/config.worktree"

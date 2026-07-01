@@ -267,20 +267,20 @@ tests. Auto-discovered by `scripts/test-all.sh` via the
 
 ### Pre-merge (PR)
 
-- [ ] `sweep_stale_git_locks()` exists in `worktree-manager.sh` and is called from
+- [x] `sweep_stale_git_locks()` exists in `worktree-manager.sh` and is called from
       `ensure_bare_config()` **before** the first `git config --file` write.
-- [ ] Sweep removes only locks with `age >= threshold` (default 60s); fresh and
+- [x] Sweep removes only locks with `age >= threshold` (default 60s); fresh and
       future-dated locks are preserved (verified by AC2/AC4).
-- [ ] Sweep operates on the `git_dir` resolved by the existing bare/non-bare logic
+- [x] Sweep operates on the `git_dir` resolved by the existing bare/non-bare logic
       (no duplicated layout computation).
-- [ ] New test `plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh`
+- [x] New test `plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh`
       passes and is discovered by `bash scripts/test-all.sh`.
-- [ ] `bash -n plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
+- [x] `bash -n plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
       passes (and `shellcheck` clean if available).
-- [ ] The three sibling tests
+- [x] The three sibling tests
       (`create-from-origin-main`, `lease-protects-active`, `no-repo-fail-loud`)
       still pass (no regression to `ensure_bare_config`'s existing behavior).
-- [ ] No file outside `worktree-manager.sh` + the new test is modified (scope
+- [x] No file outside `worktree-manager.sh` + the new test is modified (scope
       boundary: bwrap layer untouched).
 
 ## Observability
