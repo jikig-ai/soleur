@@ -11,7 +11,7 @@ import {
 } from "@/server/inngest/functions/_cron-shared";
 import { setupEphemeralWorkspace } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
-// #5669 / ADR-076 — deploy-lease drain coordination.
+// #5669 / ADR-078 — deploy-lease drain coordination.
 // ci-deploy.sh writes ${CRON_WORKSPACE_ROOT}/.deploy-lease before it drains +
 // swaps the container; a FRESH lease means a deploy is mid-swap, so the cron
 // substrate must defer spawning claude (the imminent `docker stop` would kill

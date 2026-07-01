@@ -37,7 +37,7 @@ agents (repo-research, learnings, spec-flow-analyzer); live `gh`/`grep` citation
    in the ADR amendment as the accepted cost of the in_progress rejection.
 
 ### New Considerations Discovered
-- The deploy-kill (H2) remedy **already shipped** as ADR-076/#5686 (2026-06-29, after the window) —
+- The deploy-kill (H2) remedy **already shipped** as ADR-078/#5686 (2026-06-29, after the window) —
   so PR scope **branches on the Phase 0 verdict**; Phase 1/2 fix the throw/POST classes, not kills.
 - A SIGKILL has **no in-process fix** (no catch runs) — `missed` is honest for a killed run.
 - Precedent-diff (Phase 4.4): the `cron-stale-deferred-scope-outs.ts` flag/skip-on-non-final
@@ -74,7 +74,7 @@ slow or die, and it is delivered by a *fire-and-forget POST that swallows its ow
   Sentry event.
 - The run is long (claude-eval budget `MAX_TURN_DURATION_MS = 50 min` + depth-1 clone + commit/PR),
   and the deploy-lease drain that protects in-flight crons from container-swap **SIGKILL**
-  (ADR-076 / PR #5686) landed **2026-06-29 — AFTER the window**, so during 06-13→06-21 a merge
+  (ADR-078 / PR #5686) landed **2026-06-29 — AFTER the window**, so during 06-13→06-21 a merge
   landing in the 08:00–09:00 run window killed the container mid-run, dropping the heartbeat and
   triggering an Inngest retry that re-ran claude-eval (→ the **two-digest-issues/day** seen
   06-19→06-21).
@@ -92,7 +92,7 @@ one global winner (a single day can be H2+H3) — against live data before any c
 > `resolveOutputAwareOk` *returns* `false` (never throws) on no-output/non-zero-exit and the
 > heartbeat posts `?status=error`. So `missed` (not `error`) means the `sentry-heartbeat` step
 > **literally never executed** — exit-code is a red herring (already handled). And if Phase 0
-> shows **H2 (kill)** dominated, the real remediation **already shipped as ADR-076/#5686** and the
+> shows **H2 (kill)** dominated, the real remediation **already shipped as ADR-078/#5686** and the
 > Phase 1/2 code fixes a *different* (throw) class — **PR scope must branch on the Phase 0
 > verdict**, not assume the throw class.
 
@@ -121,12 +121,12 @@ robustness of the existing single-POST heartbeat**, not a check-in state-machine
 | --- | --- | --- |
 | Fix by adding an `in_progress` check-in so a slow run isn't "missed" | **ADR-033 I8 rejects** the `in_progress → ok/error` two-phase check-in; learning `2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md` warns the two-step is the silent-fail trap | **Do not** add `in_progress`. Close the gap I8 left (delivery guarantee for the single terminal POST). Amend I8 to record the gap-closure + reaffirm the rejection (Phase 4). |
 | margin "30→60 min" too tight on a slow run (H1) | `cron-monitors.tf:288-298` — `scheduled_community_monitor` margin **already 60**, max_runtime 55, schedule `0 8 * * *`. On `abortedByTimeout` the handler still reaches `verify-output`+`sentry-heartbeat` (posts, just late) | H1 is unlikely the dominant cause on healthy-digest days; Phase 0 measures `duration_ms` per run. Re-evaluate margin **only** if Phase 0 shows runs > 60 min — and never via `in_progress`. |
-| "crash before postSentryHeartbeat" (H2) | The inner `try` (`cron-community-monitor.ts:349-462`) has **no catch**; `claude-eval` (substrate `:846` returns `{exitCode:-1}` rather than throwing) and `safeCommitAndPr` (`_cron-safe-commit.ts` returns `failure(...)`, does not throw) rarely throw — but a **SIGKILL** (deploy swap, pre-ADR-076) bypasses every catch | Phase 2 adds a final-attempt `catch → ?status=error`. **SIGKILL has no in-process fix** — ADR-076/#5686 (landed 06-29) removes the dominant cause; "missed for a genuinely killed run is honest" is the accepted residual. |
+| "crash before postSentryHeartbeat" (H2) | The inner `try` (`cron-community-monitor.ts:349-462`) has **no catch**; `claude-eval` (substrate `:846` returns `{exitCode:-1}` rather than throwing) and `safeCommitAndPr` (`_cron-safe-commit.ts` returns `failure(...)`, does not throw) rarely throw — but a **SIGKILL** (deploy swap, pre-ADR-078) bypasses every catch | Phase 2 adds a final-attempt `catch → ?status=error`. **SIGKILL has no in-process fix** — ADR-078/#5686 (landed 06-29) removes the dominant cause; "missed for a genuinely killed run is honest" is the accepted residual. |
 | "swallowed OK POST" (H3) | `_cron-shared.ts:299-307` confirms POST failure is swallowed into `reportSilentFallback` (a Sentry event, not a check-in) | Phase 1 adds a **bounded retry** to the POST so a transient drop doesn't lose the only check-in; keep `reportSilentFallback` as the terminal fallback. |
 | dual digest issues/day 06-19→06-21 = a separate "non-scheduled path" | `retries: 1` + a mid-run kill that never completed `step.run("claude-eval")` → the retry **re-runs** claude-eval → second digest issue | Phase 0 reads `routine_runs.trigger_source` per run to confirm scheduled-vs-manual and pair the two issues to one fire's retry. |
-| deploy-kill already handled by ADR-076 | PR #5686 (deploy-lease drain) merged **2026-06-29**, *after* the 06-13→06-21 window | Note in plan: #5728 fix is **complementary** to #5686 (delivery robustness vs. fewer kills); neither subsumes the other. |
+| deploy-kill already handled by ADR-078 | PR #5686 (deploy-lease drain) merged **2026-06-29**, *after* the 06-13→06-21 window | Note in plan: #5728 fix is **complementary** to #5686 (delivery robustness vs. fewer kills); neither subsumes the other. |
 | (SpecFlow H4) only H1/H2/H3 exist | The function shares one `account` slot (`{ scope: "account", key: "cron-platform", limit: 1 }`, `:487-489`) across **all** `cron-*` — the 08:00 fire can queue behind another long cron and *start* 30–50 min late → posts `ok` past the 60-min margin with no kill/throw | Add **H4 dispatch/queue delay** to Phase 0; pull Inngest dispatch-vs-start latency. If H4 dominant, **margin sizing is mandatory** (Phase 3), not conditional. |
-| (SpecFlow Q2/G2) Phase 1+2 fix the missed-on-a-healthy-run | A killed/queued run whose retry posts `ok` **80–110 min** after the anchor lands past the margin; a standalone late `ok` **cannot retroactively clear** a `missed` period (no run-correlation ID — the very thing `in_progress` would give, which I8 rejects) | The late-finish-on-a-healthy-run class is **NOT** closed by Phase 1/2 — only margin/runtime (Phase 3) or kill-prevention (ADR-076) closes it. Record the `in_progress`-rejection **cost** in the Phase 4 ADR note (G2). |
+| (SpecFlow Q2/G2) Phase 1+2 fix the missed-on-a-healthy-run | A killed/queued run whose retry posts `ok` **80–110 min** after the anchor lands past the margin; a standalone late `ok` **cannot retroactively clear** a `missed` period (no run-correlation ID — the very thing `in_progress` would give, which I8 rejects) | The late-finish-on-a-healthy-run class is **NOT** closed by Phase 1/2 — only margin/runtime (Phase 3) or kill-prevention (ADR-078) closes it. Record the `in_progress`-rejection **cost** in the Phase 4 ADR note (G2). |
 | (H4, SpecFlow) the 08:00 fire ran on time | concurrency `{ scope: "account", key: "cron-platform", limit: 1 }` (`cron-community-monitor.ts:487-489`) is shared by ALL `cron-*` — the fire can queue behind another long cron and *start* late | Phase 0 pulls Inngest **dispatch-vs-start latency**; H4 confirmed if start ≫ 08:00 with no kill/throw. Remedy is margin sizing (Phase 3), not Phase 1/2. |
 | a late retry `?status=ok` clears the `missed` day | a standalone late `ok` does **not** retroactively clear a `missed` period (no run-correlation ID — the very thing `in_progress` would give, rejected by I8) | **Accepted residual** — recorded in the ADR amendment (Phase 4 G2): for a killed/late-finishing run, **margin/runtime is the only lever**; Phase 1/2 cannot close this. |
 
@@ -187,7 +187,7 @@ the same slug. Pin `<!-- verified: 2026-06-29 source: <url> -->` in the plan/PR 
 
 **Discrimination verdict (per-day, multiple may apply; decides which fix is load-bearing):**
 - **H2** (kill) if orphaned null-`ended_at`/`failed` rows + SIGKILL markers + dual run-group rows
-  06-19→06-21 (expected, pre-ADR-076). → **The remedy already shipped (ADR-076/#5686)**; Phase 1/2
+  06-19→06-21 (expected, pre-ADR-078). → **The remedy already shipped (ADR-078/#5686)**; Phase 1/2
   fix a *different* class. Say so in the PR; do not claim Phase 1/2 fixes the kill class.
 - **H3** (swallowed POST) if `completed` rows + a `cron-sentry-heartbeat/fetch` Sentry event the
   same minute. → Phase 1 is the load-bearing fix.
@@ -250,11 +250,11 @@ RAN and failed", disambiguated from "never fired"). **Use the FLAG pattern, NOT 
   a false-red. Only a throw on a run with **no** output posts `error`.
 - **Exclude `DeployInProgressError` from every error-posting catch (SpecFlow G1, HIGH).**
   `setupEphemeralWorkspace` throws `DeployInProgressError` (`_cron-shared.ts:98-109`) so Inngest
-  retries after the deploy (fail-SAFE skip, ADR-076). It must **rethrow bare with NO heartbeat**
+  retries after the deploy (fail-SAFE skip, ADR-078). It must **rethrow bare with NO heartbeat**
   (the non-final-attempt pattern), never `?status=error`. **Also fix the EXISTING first catch**
   (`cron-community-monitor.ts:332-347`): today it treats `DeployInProgressError` like any failure —
   `reportSilentFallback` + `postSentryHeartbeat({ok:false})` + `return` — which red-flags a benign
-  deploy-defer AND defeats the ADR-076 retry intent. Branch: `if (err instanceof
+  deploy-defer AND defeats the ADR-078 retry intent. Branch: `if (err instanceof
   DeployInProgressError) throw err;` before the error-heartbeat.
 - **Do not disturb the resolver carve-outs.** `resolveOutputAwareOk` (`:392-402`) + the `#4960`
   silence-hole fallback (`:439-460`) stay; `resolveBestEffortEvalOk`'s benign-non-zero-stays-GREEN
@@ -285,7 +285,7 @@ RAN and failed", disambiguated from "never fired"). **Use the FLAG pattern, NOT 
 Amend `ADR-033` I8 (via `/soleur:architecture`) to add a dated note: the `in_progress` two-phase
 check-in **remains rejected**; #5728's *missed-on-a-healthy-run* class is closed by **(i)** a
 guaranteed terminal `?status=error` on the throw path (final-attempt-gated), **(ii)** a bounded
-retry on the heartbeat POST for transient drops, and **(iii)** ADR-076/#5686 removing the dominant
+retry on the heartbeat POST for transient drops, and **(iii)** ADR-078/#5686 removing the dominant
 SIGKILL cause. Record the accepted residual: a *genuinely killed* run reads `missed` until a late
 retry, and `missed` is an honest signal for a killed run. **Explicitly record the `in_progress`-
 rejection COST (SpecFlow G2)** so a future reader does not re-open the I8 debate: because I8 forbids
@@ -321,7 +321,7 @@ duration).
   `start_lag` + null-`ended_at` SIGKILL signature + Inngest run-group join for the dual-issue days,
   Better Stack stdout, Sentry checkins) is in the PR body covering **H1/H2/H3/H4**; PR scope
   **branches** on the verdict (if H2/H4 dominate, state that Phase 1/2 are not the #5728 fix and the
-  remedy is ADR-076/#5686 + Phase 3 margin). Sentry check-in ingest contract WebFetch-verified with
+  remedy is ADR-078/#5686 + Phase 3 margin). Sentry check-in ingest contract WebFetch-verified with
   a pinned `<!-- verified: 2026-06-29 source: … -->` line.
 - [ ] `postSentryHeartbeat` **inspects `resp.ok`**, retries only **5xx/network/timeout** (NEVER a
   4xx) a bounded number of times (total wall-clock provably < the 60-min margin and the Inngest step
@@ -334,7 +334,7 @@ duration).
   replay**; a trailing `safe-commit-pr` throw on an **output-present** run stays GREEN.
   (test: cron-community-monitor.test.ts)
 - [ ] **`DeployInProgressError` is excluded from every error-posting catch** (rethrow bare, no
-  heartbeat) — including the **corrected existing first catch** (`:332-347`), so an ADR-076 deploy
+  heartbeat) — including the **corrected existing first catch** (`:332-347`), so an ADR-078 deploy
   defer is no longer posted as `?status=error` nor blocks the retry. (test: cron-community-monitor.test.ts)
 - [ ] The flag/skip wrapper is a **shared helper** in `_cron-shared.ts`; the output-aware cohort
   rollout list is enumerated AND **each handler's step ordering is grep-verified** so the
@@ -407,7 +407,7 @@ error_reporting:
 failure_modes:
   - { mode: "inner step throws on final attempt", detection: "new catch posts ?status=error → monitor RED (not silent missed)", alert_route: "Sentry cron monitor" }
   - { mode: "heartbeat POST transiently 5xx/timeout", detection: "bounded retry recovers; if all fail, reportSilentFallback event", alert_route: "Sentry issue feature:cron-sentry-heartbeat op:fetch" }
-  - { mode: "run SIGKILLed mid-flight (deploy swap/OOM)", detection: "no in-process signal possible — Sentry missed-checkin margin (honest for a killed run); frequency reduced by ADR-076/#5686", alert_route: "Sentry missed check-in + cron-inngest-cron-watchdog" }
+  - { mode: "run SIGKILLed mid-flight (deploy swap/OOM)", detection: "no in-process signal possible — Sentry missed-checkin margin (honest for a killed run); frequency reduced by ADR-078/#5686", alert_route: "Sentry missed check-in + cron-inngest-cron-watchdog" }
   - { mode: "run duration > 60-min margin (H1)", detection: "routine_runs.duration_ms (Phase 0 + ongoing)", alert_route: "Sentry missed check-in; margin re-eval if confirmed" }
 logs:
   where: "Better Stack (claude-eval stdout/stderr tail, table per runbooks/betterstack-log-query.md; query creds in Doppler prd_terraform) + routine_runs (Supabase, terminal row per run)"
@@ -435,7 +435,7 @@ discoverability_test:
 *exits* and assumed the run reaches the heartbeat step; #5728 is the orthogonal *never-delivered*
 case (kill / throw / dropped POST). The `in_progress → ok/error` two-phase check-in **remains
 rejected**; the gap is closed by (i) final-attempt error heartbeat on the throw path, (ii) bounded
-POST retry, (iii) ADR-076/#5686 reducing SIGKILLs. Accepted residual: a genuinely killed run reads
+POST retry, (iii) ADR-078/#5686 reducing SIGKILLs. Accepted residual: a genuinely killed run reads
 `missed` (honest). This is an amendment, not a new ADR — I8 is the heartbeat contract invariant.
 
 ### C4 views
@@ -503,4 +503,4 @@ None. `gh issue list --label code-review --state open` returned no open issue wh
 - **Verify the Sentry check-in ingest contract** (Phase 0.4 WebFetch) before writing POST code —
   do not assume the `?status=` enum or the non-2xx semantics from memory.
 - **SIGKILL has no in-process fix** — Phase 2's catch covers throws, not kills; the kill class is
-  ADR-076/#5686's job. Don't promise the catch fixes the deploy-kill case.
+  ADR-078/#5686's job. Don't promise the catch fixes the deploy-kill case.

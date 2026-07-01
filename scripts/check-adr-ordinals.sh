@@ -28,7 +28,7 @@ ADR_DIR=knowledge-base/engineering/architecture/decisions
 # When the cleanup issue lands, shrink this allowlist accordingly.
 #
 # ADR-068 was resolved (#5274 Phase 3): the graceful-cron-drain ADR was renumbered
-# to ADR-076-graceful-cron-drain-before-container-swap, leaving ADR-068 uniquely
+# to ADR-078-graceful-cron-drain-before-container-swap, leaving ADR-068 uniquely
 # the multi-host-workspaces coordinator ADR. Dropped from the allowlist here.
 ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
 

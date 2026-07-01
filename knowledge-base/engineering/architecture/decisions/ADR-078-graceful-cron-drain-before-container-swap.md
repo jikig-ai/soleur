@@ -1,4 +1,4 @@
-# ADR-076: Graceful cron drain before container swap; isolated cron-worker deferred
+# ADR-078: Graceful cron drain before container swap; isolated cron-worker deferred
 
 - **Status:** Accepted
 - **Date:** 2026-06-29

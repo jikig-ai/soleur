@@ -592,7 +592,7 @@ export async function setupEphemeralWorkspace(args: {
 }): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
   const { installationToken, cronName } = args;
 
-  // Deploy-lease drain gate (#5669 / ADR-076). If ci-deploy.sh is mid-swap it
+  // Deploy-lease drain gate (#5669 / ADR-078). If ci-deploy.sh is mid-swap it
   // has written a fresh ${CRON_WORKSPACE_ROOT}/.deploy-lease; defer BEFORE the
   // mkdtemp+clone so the imminent `docker stop` cannot kill this claude child
   // (the :706 spawn-cwd symptom). Single pre-spawn choke point — every heavy

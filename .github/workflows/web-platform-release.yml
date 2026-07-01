@@ -437,10 +437,10 @@ jobs:
     # bump (claude-code/playwright/node) forces a one-time FULL image re-pull on
     # the prod server, which a 900s ceiling cannot fit — see the v0.116.1 buildx
     # full-repull PIR (post-mortems/v0116-1-buildx-driver-full-repull-deploy-timeout).
-    # Ceiling raised 1800s→4800s (#5669 / ADR-076): the cron drain in ci-deploy.sh
+    # Ceiling raised 1800s→4800s (#5669 / ADR-078): the cron drain in ci-deploy.sh
     # can wait up to CRON_DRAIN_TIMEOUT=4200s (MAX per-function maxTurnDurationMs)
     # for an in-flight cron before swapping, so the deploy wall-clock must exceed
-    # drain + swap overhead (worst-case deploy ~80min). Trade-off named in ADR-076:
+    # drain + swap overhead (worst-case deploy ~80min). Trade-off named in ADR-078:
     # IN_FLIGHT_CEILING_S also gates the pre-rerun stale-lock probe below, so a
     # wedged prior deploy now reads as "alive" for ~80min and hung-deploy failure
     # surfaces ~80min slower.

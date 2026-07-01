@@ -3,8 +3,8 @@ title: "scheduled-community-monitor missed check-ins 2026-06-13→06-21 despite 
 date: 2026-06-30
 incident_pr: 5729
 incident_window: "2026-06-13 → 2026-06-21 (9 days)"
-recovery_at: "2026-06-22 (missed regime ended; durable delivery fix ships in PR #5729 + ADR-076/#5686)"
-suspected_change: "none — latent design defect (single terminal heartbeat with no pre-swap drain, pre-ADR-076)"
+recovery_at: "2026-06-22 (missed regime ended; durable delivery fix ships in PR #5729 + ADR-078/#5686)"
+suspected_change: "none — latent design defect (single terminal heartbeat with no pre-swap drain, pre-ADR-078)"
 brand_survival_threshold: aggregate pattern
 status: resolved
 triggers:
@@ -26,7 +26,7 @@ The `scheduled-community-monitor` Sentry cron monitor recorded **`missed`** chec
 
 ## Status
 
-resolved — the dominant cause (mid-run SIGKILL) is removed by ADR-076/#5686 (graceful cron drain, merged 2026-06-29); PR #5729 hardens the orthogonal throw/dropped-POST delivery classes fleet-wide as defense-in-depth; a 7-day post-deploy delivery soak is enrolled (#5731).
+resolved — the dominant cause (mid-run SIGKILL) is removed by ADR-078/#5686 (graceful cron drain, merged 2026-06-29); PR #5729 hardens the orthogonal throw/dropped-POST delivery classes fleet-wide as defense-in-depth; a 7-day post-deploy delivery soak is enrolled (#5731).
 
 ## Symptom
 
@@ -69,7 +69,7 @@ system — a mid-run container swap / deploy / OOM SIGKILLed the long (~50-min) 
 
 ## Resolution
 
-Dominant cause (SIGKILL) removed by ADR-076/#5686 (graceful cron drain before container swap, 2026-06-29). PR #5729 closes the remaining delivery classes fleet-wide: (1) `postSentryHeartbeat` inspects `resp.ok` + bounded-retries 5xx/network/timeout under a 25s budget (H3); (2) `finalizeOutputAwareHeartbeat` posts a loud terminal `?status=error` on a final-attempt throw instead of a silent `missed`, memoization-safe across `retries:1`. `in_progress` two-phase check-in remains ADR-033-I8-rejected.
+Dominant cause (SIGKILL) removed by ADR-078/#5686 (graceful cron drain before container swap, 2026-06-29). PR #5729 closes the remaining delivery classes fleet-wide: (1) `postSentryHeartbeat` inspects `resp.ok` + bounded-retries 5xx/network/timeout under a 25s budget (H3); (2) `finalizeOutputAwareHeartbeat` posts a loud terminal `?status=error` on a final-attempt throw instead of a silent `missed`, memoization-safe across `retries:1`. `in_progress` two-phase check-in remains ADR-033-I8-rejected.
 
 ## Recovery verification
 
@@ -83,14 +83,14 @@ Dominant cause (SIGKILL) removed by ADR-076/#5686 (graceful cron drain before co
 
 1. **Why did the monitor show `missed`?** The terminal `sentry-heartbeat` step never executed.
 2. **Why didn't it execute?** The ~50-min `claude-eval` was SIGKILLed mid-run (container swap/deploy/OOM) before reaching the heartbeat — and a throw inside the catch-less inner try would also have propagated past it.
-3. **Why was a mid-run kill possible?** No graceful drain protected in-flight crons from container swaps before ADR-076/#5686 (landed 2026-06-29, after the window).
+3. **Why was a mid-run kill possible?** No graceful drain protected in-flight crons from container swaps before ADR-078/#5686 (landed 2026-06-29, after the window).
 4. **Why was the kill silent (`missed` not `error`)?** The function posts exactly one check-in at the very end (no `in_progress` beacon, by ADR-033-I8 design), so any death during the eval window leaves no check-in at all.
 5. **Why was the throw/dropped-POST class also unprotected?** `postSentryHeartbeat` was fire-and-forget (never inspected `resp.ok`) and the inner try had no catch, so a transient 5xx or a pre-heartbeat throw produced a silent `missed`.
 
 ## Versions of Components
 
-- **Version(s) that triggered the outage:** pre-ADR-076 deploy substrate (no cron drain); `_cron-shared.ts` single fire-and-forget heartbeat.
-- **Version(s) that restored the service:** ADR-076/#5686 (drain) + PR #5729 (delivery hardening).
+- **Version(s) that triggered the outage:** pre-ADR-078 deploy substrate (no cron drain); `_cron-shared.ts` single fire-and-forget heartbeat.
+- **Version(s) that restored the service:** ADR-078/#5686 (drain) + PR #5729 (delivery hardening).
 
 ## Impact details
 

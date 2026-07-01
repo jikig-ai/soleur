@@ -12,7 +12,7 @@
 # HEALTH_POLL × INTERVAL == IN_FLIGHT_CEILING_S, so a future ceiling change
 # must update both files. Raised 900s→1800s (#5061) so a one-time FULL image
 # re-pull (build-driver switch / base-layer bump) fits — see the v0.116.1 PIR.
-# Raised 1800s→4800s (#5669 / ADR-076): the cron drain in ci-deploy.sh can wait
+# Raised 1800s→4800s (#5669 / ADR-078): the cron drain in ci-deploy.sh can wait
 # up to CRON_DRAIN_TIMEOUT=4200s (the MAX per-function maxTurnDurationMs) for an
 # in-flight cron, so the wall-clock must exceed drain + swap overhead or the
 # wrapper would SIGKILL ci-deploy.sh mid-drain (killing the very cron it protects).

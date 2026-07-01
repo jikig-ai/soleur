@@ -26,7 +26,7 @@ export function resolveCronWorkspaceRoot(): string {
   return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
 }
 
-// --- Deploy-lease drain coordination (#5669 / ADR-076) ----------------------
+// --- Deploy-lease drain coordination (#5669 / ADR-078) ----------------------
 //
 // Every merge that redeploys soleur-web-platform stops + swaps the container
 // (ci-deploy.sh `docker stop --time=12 soleur-web-platform`), which kills any
@@ -41,7 +41,7 @@ export function resolveCronWorkspaceRoot(): string {
 // this lease only closes the START-race (a new run launching claude into the
 // about-to-die container while the loop drains the current one).
 //
-// CTO ruling (ADR-076): lease over native `inngest pause`/`resume` — the lease
+// CTO ruling (ADR-078): lease over native `inngest pause`/`resume` — the lease
 // is verifiable from code (a unit test), gates ONLY the cron substrate (not all
 // server-global event-driven functions), and its failure mode is fail-SAFE (a
 // cron skips one fire) rather than fail-DANGEROUS (pause killing the in-flight
@@ -394,7 +394,7 @@ export async function postSentryHeartbeat(args: {
 //     the heartbeat so the heartbeat stays last and is never double-signalled.
 //
 // DeployInProgressError MUST be excluded by the caller BEFORE invoking this
-// helper (rethrow bare, no heartbeat — the ADR-076 fail-safe deploy defer).
+// helper (rethrow bare, no heartbeat — the ADR-078 fail-safe deploy defer).
 export async function finalizeOutputAwareHeartbeat(args: {
   step: HandlerArgs["step"];
   heartbeatOk: boolean;

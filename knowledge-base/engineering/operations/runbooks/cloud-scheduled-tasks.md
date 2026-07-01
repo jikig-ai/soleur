@@ -609,7 +609,7 @@ no-output/non-zero-exit and the heartbeat then posts `?status=error` — so a
   write is skipped too) while sibling crons logged normally + `missed`. **This is
   the dominant 2026-06-13→06-21 cause (#5728 Phase 0).** No in-process fix exists
   (no catch runs on a SIGKILL); the remedy is the **graceful cron drain before
-  container swap (ADR-076 / #5686)**, which reduces the kill frequency. `missed`
+  container swap (ADR-078 / #5686)**, which reduces the kill frequency. `missed`
   is an honest signal for a genuinely killed run.
 - **H11b — a throw before the heartbeat step.** A throw inside the handler body
   used to propagate out → the heartbeat step never ran → silent `missed`. **Fixed
@@ -655,7 +655,7 @@ first is the one most likely lying — see learning
    H11c without it.
 
 **Disambiguation summary:** absent `routine_runs` rows + `missed` ⇒ **H11a (kill)**
-→ ADR-076's job, not a code fix. `completed` row + POST-fetch Sentry event ⇒
+→ ADR-078's job, not a code fix. `completed` row + POST-fetch Sentry event ⇒
 **H11c** → #5728 Phase 1 retry. `duration_ms` > 60 min OR `start_lag` past margin ⇒
 **H11a-slow / H11d** → re-evaluate `checkin_margin_minutes` against the worst-case
 retry-chain + shared-slot queue wall-clock (never an `in_progress` two-phase

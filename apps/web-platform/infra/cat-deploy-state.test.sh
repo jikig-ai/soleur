@@ -100,7 +100,7 @@ RATE_OUT=$(CI_DEPLOY_STATE="$TMP/ok.state" CONTAINER_NAME="soleur-absent-test-xy
 assert "restart_rate_per_hour reads the monitor's persisted rate (7)" \
   "[[ \$(printf '%s' '$RATE_OUT' | jq -r .restart_rate_per_hour) == '7' ]]"
 
-# --- #5669 cron-drain observability fields (ADR-076) ---
+# --- #5669 cron-drain observability fields (ADR-078) ---
 # Absent drain-state file → safe sentinels (wait -1, timed_out false), so a
 # deploy that never reached the drain is distinguishable from a real 0-wait drain.
 CD_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" CRON_DRAIN_STATE_FILE="$TMP/no-drain.json" bash "$TARGET")

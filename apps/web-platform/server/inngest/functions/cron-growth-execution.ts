@@ -248,7 +248,7 @@ export async function cronGrowthExecutionHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-076): rethrow bare, no heartbeat.
+    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
     if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
@@ -362,7 +362,7 @@ export async function cronGrowthExecutionHandler({
         );
       }
     } catch (err) {
-      // #5728 G1 — a deploy-in-progress defer is benign (ADR-076/#5686): rethrow
+      // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
       // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
       // is a real failure — flag it; finalizeOutputAwareHeartbeat decides
       // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step

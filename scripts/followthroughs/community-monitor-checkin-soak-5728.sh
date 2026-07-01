@@ -6,7 +6,7 @@
 # even though the digest was produced — the single terminal Sentry check-in was
 # never DELIVERED (mid-eval SIGKILL / a throw before the heartbeat step / a
 # dropped POST). The fix hardens delivery (final-attempt error heartbeat on the
-# throw path + bounded POST retry) on top of ADR-076/#5686 (graceful cron drain,
+# throw path + bounded POST retry) on top of ADR-078/#5686 (graceful cron drain,
 # which removes the dominant SIGKILL cause).
 #
 # This soak asserts the heartbeat is now DELIVERED on every fire — i.e. ZERO
