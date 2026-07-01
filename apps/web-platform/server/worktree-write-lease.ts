@@ -16,11 +16,53 @@ import { reportSilentFallback } from "./observability";
  * PR B; this module provides only the lease primitives.
  */
 
-/** The single worktree id per workspace today — one tree per workspace
- *  (inflight-checkpoint.ts:14, ensure-workspace-repo.ts:75). A stable opaque
- *  constant; multi-worktree is Phase 3 (additive, non-breaking). Shared so the
- *  two turn-boundary lineages key the lease identically (no drift). */
-export const WORKTREE_ID_PRIMARY = "primary";
+// worktree_id names a lease row (migration 116 PK `(workspace_id, worktree_id)`),
+// a fence sidecar file on the git-data host (`fence/<worktree_id>.gen`), AND a
+// git-data ref namespace (`refs/soleur/worktrees/<worktree_id>/…`). So it must be
+// an opaque safe token at every boundary that builds a path or ref from it. The
+// allowlist mirrors `assertSafeWorkspaceId` (git-data-replication.ts) and the
+// host-side shell guard (git-data-pre-receive.sh:92-96) — CWE-22.
+const WORKTREE_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Assert `worktreeId` is a safe opaque token before it keys a lease row, names a
+ * fence sidecar, or builds a `refs/soleur/worktrees/<id>/…` refspec. Throws
+ * (fail-loud) on any unsafe value — defense-in-depth at the app boundary,
+ * symmetric to the host-side pre-receive validation. (Epic #5274 Phase 3 D0.)
+ */
+export function assertSafeWorktreeId(worktreeId: string): void {
+  if (
+    worktreeId === "" ||
+    worktreeId === "." ||
+    worktreeId === ".." ||
+    worktreeId.includes("/") ||
+    !WORKTREE_ID_RE.test(worktreeId)
+  ) {
+    throw new Error(
+      `worktree-write-lease: refusing unsafe worktree_id '${worktreeId}' (must ` +
+        `match ${WORKTREE_ID_RE} and not be a dot/slash path — CWE-22).`,
+    );
+  }
+}
+
+/**
+ * Resolve the PER-USER worktree id for `userId` (ADR-068 D0 amendment, epic
+ * #5274 Phase 3). Under user-sticky routing each user of a workspace gets their
+ * OWN worktree → own write-lease → own fence generation stream → own git-data
+ * ref namespace. Keying the worktree id off the user's own id gives two users of
+ * one workspace two distinct leases (routable to two hosts, ADR-068 G1) while
+ * two lineages of the SAME user (legacy agent-runner + cc-dispatcher) share one
+ * lease via migration-116's same-host carve-out.
+ *
+ * `userId` is a UUID, so it satisfies {@link assertSafeWorktreeId} natively; the
+ * assertion is still run (fail-loud) so a corrupted/non-UUID id never silently
+ * builds a bad ref path. This REPLACES the hardcoded `"primary"` constant — a
+ * lingering hardcoded worktree id would re-pin the whole workspace to one host.
+ */
+export function resolveWorktreeId(userId: string): string {
+  assertSafeWorktreeId(userId);
+  return userId;
+}
 
 /** The lease a host currently holds: its infra `host_id` + the fencing
  *  generation token it presents to the git-data host's pre-receive CAS. */
