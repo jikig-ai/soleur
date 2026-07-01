@@ -794,7 +794,7 @@
 				"unshare"
 			],
 			"action": "SCMP_ACT_ALLOW",
-			"comment": "Allow unshare of a NEW PID namespace (CLONE_NEWPID=0x20000000) WITHOUT CLONE_NEWUSER \u2014 companion to the mount-namespace rule above for the same #5849 split-unshare sequence (soleur #5873). Hardened: also requires CLONE_NEWUSER unset (arg0 & 0x10000000 == 0) so this rule matches ONLY the post-userns namespace unshare and cannot be used to smuggle a user-namespace creation (defense-in-depth; the userns unshare is already handled by the #1557 CLONE_NEWUSER rule).",
+			"comment": "Allow unshare of a NEW PID namespace (CLONE_NEWPID=0x20000000) WITHOUT CLONE_NEWUSER. FORWARD-LOOKING: the observed #5849 call is the COMBINED unshare(CLONE_NEWPID|CLONE_NEWNS)=0x20020000, which the mount-namespace rule above already matches (it gates on the NEWNS bit and ignores NEWPID). This rule additionally covers a hypothetical pid-only unshare(CLONE_NEWPID) the current SDK does not emit \u2014 do NOT assume the mount-ns rule is removable because this exists (soleur #5873).",
 			"args": [
 				{
 					"index": 0,
