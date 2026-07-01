@@ -183,7 +183,7 @@ One-time mode does not pass through Step 1 — all flags are mandatory at the co
    - Reject schedules more frequent than every 5 minutes
    - Note: GitHub Actions cron has ~15-minute variance in trigger timing
 
-4. **Model** — Which Claude model to use. Default: `claude-sonnet-4-6` (good balance of cost and capability). Accept any valid Anthropic model identifier.
+4. **Model** — Which Claude model to use. Default: `claude-sonnet-5` (good balance of cost and capability). Accept any valid Anthropic model identifier.
 
 5. **Timeout (minutes)** — Job-level timeout to prevent runaway billing. Default: 30. Validate: positive integer, minimum 5 minutes.
 

@@ -49,7 +49,7 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
     const opts = buildAgentQueryOptions(minArgs);
 
     expect(opts.cwd).toBe(WORKSPACE);
-    expect(opts.model).toBe("claude-sonnet-4-6");
+    expect(opts.model).toBe("claude-sonnet-5");
     expect(opts.permissionMode).toBe("default");
     expect(opts.settingSources).toEqual([]);
     expect(opts.includePartialMessages).toBe(true);
@@ -139,7 +139,7 @@ describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
     expect(opts.resume).toBeUndefined();
   });
 
-  it("threads model override (cc path uses claude-sonnet-4-6 too — same default)", () => {
+  it("threads model override (cc path uses claude-sonnet-5 too — same default)", () => {
     const opts = buildAgentQueryOptions({
       ...minArgs,
       model: "claude-opus-4-7",
@@ -269,7 +269,7 @@ describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
       JSON.stringify(
         {
           cwd: WORKSPACE,
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-5",
           permissionMode: "default",
           settingSources: [],
           includePartialMessages: true,

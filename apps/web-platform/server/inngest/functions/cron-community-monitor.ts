@@ -126,7 +126,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // Originally mirrored .github/workflows/scheduled-community-monitor.yml
 // `claude_args` (--max-turns 50). Raised to 80 on 2026-06-03 — see the
 // turn-budget rationale on MAX_TURN_DURATION_MS below.
-//   --model claude-sonnet-4-6
+//   --model claude-sonnet-5
 //   --max-turns 80
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep
 const CLAUDE_CODE_FLAGS = [

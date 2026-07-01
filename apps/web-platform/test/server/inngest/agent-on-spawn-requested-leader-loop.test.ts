@@ -459,8 +459,8 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(failureUpdates.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("AC10 cost_ceiling_exceeded: cumulative ≥ $2.00 → persist failure, no Anthropic call", async () => {
-    cumulativeCostCents = 250; // > PER_SPAWN_COST_CEILING_CENTS (200)
+  it("AC10 cost_ceiling_exceeded: cumulative ≥ $2.60 → persist failure, no Anthropic call", async () => {
+    cumulativeCostCents = 300; // > PER_SPAWN_COST_CEILING_CENTS (260)
     const { agentOnSpawnRequestedHandler } = await import(
       "@/server/inngest/functions/agent-on-spawn-requested"
     );

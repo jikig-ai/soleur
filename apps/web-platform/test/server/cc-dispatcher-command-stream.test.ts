@@ -49,7 +49,7 @@ function makeAssistant(
     message: {
       id: "msg_1",
       role: "assistant",
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       stop_reason: null,
       stop_sequence: null,
       type: "message",

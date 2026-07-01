@@ -471,7 +471,7 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
     prompt,
     options: {
       cwd,
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       permissionMode: "default",
       settingSources: [],
       maxTurns: 6,

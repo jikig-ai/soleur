@@ -8,7 +8,7 @@
  *   - Each module's systemPrompt enumerates its tool names verbatim
  *     (per learning 2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md).
  *   - All modules pin maxTurns + maxTokens to the registry constants.
- *   - SSOT constant `PER_SPAWN_COST_CEILING_CENTS = 200`.
+ *   - SSOT constant `PER_SPAWN_COST_CEILING_CENTS = 260`.
  */
 
 import { describe, it, expect } from "vitest";
@@ -93,9 +93,10 @@ describe("leader-prompt registry — AC2 sentinels", () => {
     expect(LEADER_PROMPTS["knowledge.kb_drift"].model).toBe(HAIKU_MODEL);
   });
 
-  it("PER_SPAWN_COST_CEILING_CENTS SSOT constant equals 200 ($2.00 USD)", () => {
-    // Brainstorm-locked Layer 2 cap (ADR-041).
-    expect(PER_SPAWN_COST_CEILING_CENTS).toBe(200);
+  it("PER_SPAWN_COST_CEILING_CENTS SSOT constant equals 260 ($2.60 USD)", () => {
+    // Layer 2 cap (ADR-041), raised from the brainstorm-locked $2.00 by ~30%
+    // for the Sonnet 5 tokenizer (see constants.ts rationale).
+    expect(PER_SPAWN_COST_CEILING_CENTS).toBe(260);
   });
 
   it("userPromptTemplate is callable for each class with a minimal ClassInput", () => {

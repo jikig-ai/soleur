@@ -20,7 +20,7 @@ const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 // that lives in a config-class path. Source of truth: claude-api skill table.
 const CURRENT_IDS = [
   "claude-opus-4-8",
-  "claude-sonnet-4-6",
+  "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5",
 ];
