@@ -199,6 +199,16 @@ export const WS_CLOSE_CODES = {
    *  sends a `workspace_removed` preamble (with `organizationName`) before
    *  closing so the client can render the terminal screen. */
   MEMBERSHIP_REVOKED: 4012,
+  /** #5274 Phase 3 (ADR-068 D0) — the owning host is draining/migrating this
+   *  user's session to another host. NON-TERMINAL: the client reconnects via the
+   *  CF ingress and is transparently re-proxied to the new owner (b2). The client
+   *  resets its resume cursor first (the turn re-materialises on the new owner;
+   *  ADR-059 replay buffer is Phase 4a — a brief re-render is acceptable, AC8). */
+  ROUTING_MIGRATED: 4013,
+  /** #5274 Phase 3 — a peer host owns this session's lease but its address is not
+   *  resolvable (not in SOLEUR_HOST_ROSTER / owner unreachable). Non-terminal:
+   *  the client retries; a transient roster/owner gap self-heals on reconnect. */
+  ROUTING_UNAVAILABLE: 4014,
   SERVER_GOING_AWAY: 1001,
 } as const;
 

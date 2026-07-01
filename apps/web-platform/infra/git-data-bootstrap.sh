@@ -118,7 +118,8 @@ fi
 git config --system core.hooksPath "$HOOKS_DIR"
 
 # 6b. Advertise push-options so the app-server's fence-guarded replication push
-#     can deliver `--push-option=lease-gen=<N> --push-option=worktree-id=primary`
+#     can deliver `--push-option=lease-gen=<N> --push-option=worktree-id=<id>`
+#     (worktree-id is PER-USER since Phase 3 / ADR-068 D0, no longer "primary")
 #     to the pre-receive CAS fence (ADR-068 amendment, PR B). WITHOUT this, git
 #     silently drops the options and the hook never sees the gen — the fence then
 #     fail-closed-rejects every push. Forward-compat: the Phase-2 replication push

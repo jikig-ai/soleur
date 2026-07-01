@@ -8,9 +8,19 @@
 // and returns local-serve / proxy-to-owner / owner-unresolved. It carries NO
 // state and forwards NO control ops — a conversation's abort/gate/grace resolve
 // LOCALLY on the owning host precisely because every frame for it routes there by
-// this same sticky decision. The decision is taken at the WS-UPGRADE handshake
-// (fly-replay discipline: never upgrade-then-redirect), so the ws-handler calls
-// resolveSessionRoute BEFORE `handleUpgrade`.
+// this same sticky decision.
+//
+// PLACEMENT HOOK POINT (ADR-068 amendment 2026-07-01, CTO ruling — b2): the
+// decision is taken at FIRST-MESSAGE AUTH (the earliest point `userId` exists
+// under our first-message-auth model), before `auth_ok` and before any session
+// bootstrap — NOT at the raw TCP `upgrade` event (where no token/userId exists).
+// A peer-owned session is then TRANSPARENTLY PROXIED to the owner over one-way
+// TLS with NO client-visible reconnect. The preserved fly-replay invariant is
+// "never upgrade-then-REDIRECT" (no client reconnect/blip) — not "decide before
+// the TCP upgrade", which is impossible under first-message auth and unnecessary
+// (a transparent socket relay preserves stream continuity). Gated on
+// isGitDataStoreEnabled() at the call site → entirely inert (no per-connection DB
+// read) until the 3.D cutover.
 //
 // The proxy transport is one-way TLS over the private net (proxy-tls.ts); the
 // owning host re-verifies membership before serving a proxied session (AP-2).
