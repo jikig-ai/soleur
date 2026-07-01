@@ -5,7 +5,12 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/webhook-deploy
-ExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
+# -ip 0.0.0.0 (was 127.0.0.1): the private-net peer must reach /hooks/deploy-peer
+# for the 2-host deploy fan-out (#5274 Phase 3, ADR-068). SAFE because
+# hcloud_firewall.web default-denies 9000 on the PUBLIC interface (only 22/80/443/
+# icmp are allowed) — so only loopback + the private net (10.0.1.0/24) can connect.
+# That default-deny is load-bearing; firewall-9000-deny.test.sh pins it.
+ExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 0.0.0.0
 Restart=on-failure
 RestartSec=5
 User=deploy

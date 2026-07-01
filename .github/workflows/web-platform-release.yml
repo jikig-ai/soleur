@@ -526,8 +526,15 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.release.outputs.version }}
+          # 2-host deploy fan-out (#5274 Phase 3, ADR-068). The receiving host
+          # forwards the deploy to these peer private IPs over the private net so
+          # one POST delivers to BOTH hosts; the host self-excludes at runtime.
+          # MUST equal var.web_hosts private_ips (variables.tf) — pinned by
+          # apps/web-platform/infra/web-hosts-fanout-parity.test.sh (single-user
+          # incident: a drift means web-2 silently misses deploys).
+          WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
         run: |
-          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s"}' "$VERSION")
+          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s","peers":"%s"}' "$VERSION" "$WEB_HOST_PRIVATE_IPS")
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
             --max-time 30 \

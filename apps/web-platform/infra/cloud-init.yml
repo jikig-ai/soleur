@@ -369,7 +369,11 @@ write_files:
       [Service]
       Type=simple
       EnvironmentFile=/etc/default/webhook-deploy
-      ExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
+      # -ip 0.0.0.0 (was 127.0.0.1): the private-net peer reaches /hooks/deploy-peer
+      # for the 2-host deploy fan-out (#5274 Phase 3, ADR-068). SAFE — hcloud_firewall.web
+      # default-denies 9000 on the public interface; only loopback + 10.0.1.0/24 connect.
+      # MUST stay in lockstep with webhook.service (infra-config delivers that to web-1).
+      ExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 0.0.0.0
       Restart=on-failure
       RestartSec=5
       User=deploy

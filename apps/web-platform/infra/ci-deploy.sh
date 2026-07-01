@@ -101,6 +101,61 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
+# After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
+# every PEER web host over the private net, so one webhook trigger delivers the
+# container to BOTH hosts. DORMANT at the single-host state: SOLEUR_DEPLOY_PEERS is
+# unset (the /hooks/deploy payload omits it until the release workflow renders the
+# peer list) or lists only this host → no-op → the deploy path is byte-identical to
+# pre-#5274. Loop-prevention: peers receive on /hooks/deploy-peer, which does NOT
+# pass SOLEUR_DEPLOY_PEERS, so a peer never re-fans (A→B never triggers B→A).
+# Re-signs with the SHARED webhook_deploy_secret read from hooks.json (root:deploy
+# 0640; ci-deploy runs as the deploy user) — no new secret. Fire-and-forget like
+# /hooks/deploy: a 202 means the peer ACCEPTED the trigger; per-host deploy SUCCESS
+# is soak-verified via the peer's deploy-status over the private net (AC5). Returns
+# non-zero if ANY peer forward was not accepted (folded into the deploy-status reason
+# so the release workflow surfaces "web-1 ok, web-2 down" without SSH).
+fan_out_to_peers() {
+  local peers_csv="${SOLEUR_DEPLOY_PEERS:-}"
+  [[ -n "$peers_csv" ]] || return 0
+
+  local self_ips
+  self_ips=" $(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ') "
+
+  local hooks_file="${SOLEUR_HOOKS_JSON:-/etc/webhook/hooks.json}"
+  local secret
+  secret=$(jq -r '.[] | select(.id=="deploy-peer") | .["trigger-rule"].match.secret' \
+    "$hooks_file" 2>/dev/null || true)
+  if [[ -z "$secret" || "$secret" == "null" ]]; then
+    logger -t "$LOG_TAG" "FANOUT: webhook secret unavailable ($hooks_file) — cannot forward to peers"
+    return 1
+  fi
+
+  local payload sig
+  payload=$(jq -cn --arg cmd "${SSH_ORIGINAL_COMMAND:-}" '{command:$cmd}')
+  sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | sed 's/.*= //')
+
+  local rc=0 peer code _peer_arr
+  IFS=',' read -ra _peer_arr <<< "$peers_csv"
+  for peer in "${_peer_arr[@]}"; do
+    peer="${peer//[[:space:]]/}"
+    [[ -n "$peer" ]] || continue
+    [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+      -X POST "http://${peer}:9000/hooks/deploy-peer" \
+      -H "Content-Type: application/json" \
+      -H "X-Signature-256: sha256=${sig}" \
+      --data-binary "$payload" 2>/dev/null || echo "000")
+    if [[ "$code" == "202" ]]; then
+      logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
+    else
+      logger -t "$LOG_TAG" "FANOUT: peer $peer NOT accepted (HTTP $code) — deploy-status will surface per-host state"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
 # -----------------------------------------------------------------------------
 # Cron drain (#5669 / ADR-076)
 # -----------------------------------------------------------------------------
@@ -965,7 +1020,15 @@ case "$COMPONENT" in
         fi
 
         echo "Deploy succeeded"
-        final_write_state 0 "ok"
+        # Local prod swap succeeded — now fan out to peer hosts (dormant/no-op at
+        # single-host state). A peer forward failure does NOT fail this host's
+        # deploy (it succeeded); it degrades the state reason so deploy-status
+        # surfaces "web-1 ok, web-2 down" (#5274 Phase 3, ADR-068).
+        if fan_out_to_peers; then
+          final_write_state 0 "ok"
+        else
+          final_write_state 0 "ok_peer_fanout_degraded"
+        fi
         exit 0
       else
         # Production start failed after canary success (infra issue, not app)

@@ -13,6 +13,39 @@
         "source": "payload",
         "name": "command",
         "envname": "SSH_ORIGINAL_COMMAND"
+      },
+      {
+        "source": "payload",
+        "name": "peers",
+        "envname": "SOLEUR_DEPLOY_PEERS"
+      }
+    ],
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "deploy-peer",
+    "execute-command": "/usr/local/bin/ci-deploy-wrapper.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": false,
+    "success-http-response-code": 202,
+    "response-message": "Peer deploy initiated",
+    "http-methods": ["POST"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "__comment": "2-host deploy fan-out target (#5274 Phase 3, ADR-068). A receiving host forwards the deploy here over the private net. DELIBERATELY does NOT pass `peers` → SOLEUR_DEPLOY_PEERS is unset here → ci-deploy.sh does NOT re-fan (A->B must never trigger B->A). Same HMAC secret as /hooks/deploy — the forwarder re-signs the peer payload with the shared webhook_deploy_secret.",
+    "pass-environment-to-command": [
+      {
+        "source": "payload",
+        "name": "command",
+        "envname": "SSH_ORIGINAL_COMMAND"
       }
     ],
     "trigger-rule": {

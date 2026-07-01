@@ -1351,6 +1351,37 @@ assert_soleur_host_id "web-platform: docker run has -e SOLEUR_HOST_ID on both ca
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
+echo "--- Deploy fan-out loop-prevention (#5274 Phase 3, ADR-068) ---"
+# The 2-host fan-out is loop-safe ONLY if the /hooks/deploy-peer hook does NOT
+# receive the peer list — otherwise a forwarded deploy would re-fan (A->B->A...).
+# The invariant lives in hooks.json.tmpl: /hooks/deploy passes SOLEUR_DEPLOY_PEERS,
+# /hooks/deploy-peer does NOT. Parsed structurally (jq over each hook's
+# pass-environment envnames) so a future edit that leaks peers into deploy-peer
+# fails CI. Template exprs (${jsonencode(...)}) are neutralised to valid JSON first.
+HOOKS_TMPL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hooks.json.tmpl"
+if [[ -f "$HOOKS_TMPL" ]]; then
+  rendered="$(sed -E 's/\$\{jsonencode\([^)]*\)\}/"REDACTED"/g' "$HOOKS_TMPL")"
+  deploy_env="$(printf '%s' "$rendered" | jq -r '.[] | select(.id=="deploy") | (.["pass-environment-to-command"] // [])[].envname' 2>/dev/null)"
+  peer_env="$(printf '%s' "$rendered" | jq -r '.[] | select(.id=="deploy-peer") | (.["pass-environment-to-command"] // [])[].envname' 2>/dev/null)"
+
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$deploy_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+    PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy passes SOLEUR_DEPLOY_PEERS (fan-out trigger)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy is missing SOLEUR_DEPLOY_PEERS — fan-out would never fire"
+  fi
+
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$peer_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy-peer passes SOLEUR_DEPLOY_PEERS — a forwarded deploy would RE-FAN (loop)"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy-peer does NOT pass SOLEUR_DEPLOY_PEERS (loop-prevented)"
+  fi
+else
+  echo "  SKIP: hooks.json.tmpl not found at $HOOKS_TMPL"
+fi
+
+echo ""
 echo "--- Bwrap canary sandbox check ---"
 
 assert_bwrap_canary_check() {
