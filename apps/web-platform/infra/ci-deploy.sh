@@ -67,6 +67,41 @@ readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
+# Host identity (#5274 Phase 3, ADR-068)
+# -----------------------------------------------------------------------------
+# Each web host injects its OWN stable infra id into the container as
+# SOLEUR_HOST_ID — the per-user worktree write-lease's placement authority
+# (host-identity.ts:resolveHostId, which fail-loud-THROWS in prod when the git-data
+# flag is on and this is unset). Resolved ON-HOST from the Hetzner metadata service
+# (the hcloud_server id — the SAME value terraform knows), with /etc/machine-id as
+# a reboot-stable fallback; NEVER a per-container hostname (that would self-lock
+# each recreate-deploy out of its own worktree). Best-effort: at flag-off the
+# container never calls resolveHostId(), so an empty value is harmless; when 3.D
+# flips the flag an unresolvable id fails the canary loud (the intended posture).
+# Test harness overrides via SOLEUR_HOST_ID_METADATA_URL / SOLEUR_HOST_ID_OVERRIDE.
+resolve_host_id() {
+  if [[ -n "${SOLEUR_HOST_ID_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_HOST_ID_OVERRIDE"
+    return 0
+  fi
+  local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
+  local id
+  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
+  if [[ "$id" =~ ^[0-9]+$ ]]; then
+    printf 'hetzner-%s' "$id"
+    return 0
+  fi
+  id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
+  if [[ -n "$id" ]]; then
+    printf 'machine-%s' "$id"
+    return 0
+  fi
+  return 1
+}
+HOST_ID="$(resolve_host_id || true)"
+readonly HOST_ID
+
+# -----------------------------------------------------------------------------
 # Cron drain (#5669 / ADR-076)
 # -----------------------------------------------------------------------------
 # Every prod swap stops the container (`docker stop --time=12 soleur-web-platform`
@@ -651,6 +686,7 @@ case "$COMPONENT" in
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -e CRON_WORKSPACE_ROOT=/workspaces \
+      -e SOLEUR_HOST_ID="$HOST_ID" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -876,6 +912,7 @@ case "$COMPONENT" in
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
         -e CRON_WORKSPACE_ROOT=/workspaces \
+        -e SOLEUR_HOST_ID="$HOST_ID" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \

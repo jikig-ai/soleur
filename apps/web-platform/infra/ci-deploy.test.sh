@@ -1298,6 +1298,59 @@ assert_cron_workspace_root "web-platform: docker run has -e CRON_WORKSPACE_ROOT=
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
+echo "--- SOLEUR_HOST_ID on docker run (#5274 Phase 3, ADR-068) ---"
+
+assert_soleur_host_id() {
+  # Verify EVERY docker run line (canary AND prod) carries -e SOLEUR_HOST_ID=<id> —
+  # the per-user worktree write-lease's placement authority (host-identity.ts). A
+  # canary/prod skew (one host-id-tagged, one not) would let a lease-mismatch ship
+  # silently once the git-data flag flips. Uses SOLEUR_HOST_ID_OVERRIDE so the id is
+  # deterministic (the on-host metadata/machine-id resolution is unit-tested in
+  # host-identity.test.ts; here we prove the INJECTION reaches both containers).
+  local description="$1"
+  local cmd="$2"
+  local expected="host-under-test-42"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output
+  output=$(
+    export MOCK_DOCKER_MODE="apparmor-trace"
+    export SOLEUR_HOST_ID_OVERRIDE="$expected"
+    run_deploy "$cmd" 2>&1
+  ) || true
+
+  local run_lines
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+
+  if [[ -z "$run_lines" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no DOCKER_RUN_ARGS lines found)"
+    return
+  fi
+
+  local all_have_id=true
+  while IFS= read -r line; do
+    if ! printf '%s\n' "$line" | grep -qF -- "-e SOLEUR_HOST_ID=${expected}"; then
+      all_have_id=false
+      break
+    fi
+  done <<< "$run_lines"
+
+  if [[ "$all_have_id" == "true" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (docker run missing -e SOLEUR_HOST_ID=${expected})"
+    printf '%s\n' "$run_lines" | head -5 | sed 's/^/    /'
+  fi
+}
+
+assert_soleur_host_id "web-platform: docker run has -e SOLEUR_HOST_ID on both canary and prod" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
 echo "--- Bwrap canary sandbox check ---"
 
 assert_bwrap_canary_check() {
