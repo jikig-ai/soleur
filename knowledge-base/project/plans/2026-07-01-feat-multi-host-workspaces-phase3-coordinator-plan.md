@@ -198,9 +198,13 @@ Maps tasks **3.2 + 3.4 + 3.5**.
   `git-data-pre-receive.sh`.
 - **`server/session-router.ts` (new):** co-located, stateless. Inbound WS → resolve the
   conversation's owning host from the per-user lease → **local ⇒ serve; remote ⇒ proxy**
-  over one-way-TLS private net. Decision at the **WS-upgrade handshake, not after**
-  (fly-replay: never upgrade-then-redirect). Owning host re-verifies the requester owns
-  the conversation by **membership** (CLO AP-2) before serving a proxied session.
+  over one-way-TLS private net. **Placement decided at first-message auth** — before
+  `auth_ok`, gated on `isGitDataStoreEnabled()` (inert until 3.D) — and the peer-owned
+  socket is **transparently relayed** to the owner with NO client reconnect (ADR-068 b2
+  hook-point amendment supersedes the original "WS-upgrade handshake" wording, which is
+  impossible under first-message auth; the preserved invariant is *never upgrade-then-
+  REDIRECT*). Owning host re-verifies the requester owns the conversation by
+  **membership** (CLO AP-2) before serving a proxied session.
 - **Local liveness lookup** `isConversationLiveHere` = `abortSession()>0 ||
   hasActiveCcQuery(convId)` — a **local** ownership check (no cross-host union-forward).
 - **Reconnect affinity (was 3.D):** reconnect routes back to the owning host (sticky),
@@ -372,9 +376,11 @@ tracker directive + `follow-through` label in `scheduled-followthrough-sweeper.y
   via cloud-init; cron-drain ADR renumbered (no ADR-068 collision).
 - **AC2 (3.B)** — two users on one workspace acquire **distinct per-user leases on distinct
   hosts** (D0); a control op for conv X **always resolves on X's owning host** (sticky, no
-  cross-host forward); placement decided **pre-upgrade** (negative: off-owner upgrade is
-  proxied before upgrade, P2-10); reconnect lands on the owner + grace cancel host-local;
-  membership re-verify **rejects** a cross-tenant proxied session (negative, AP-2).
+  cross-host forward); placement decided **at first-message auth, before `auth_ok`** (b2
+  amendment — negative: an off-owner session is proxied transparently BEFORE `auth_ok`,
+  asserting NO `ROUTING_MIGRATED`/reconnect close on the initial placement path, P2-10);
+  reconnect lands on the owner + grace cancel host-local; membership re-verify **rejects**
+  a cross-tenant proxied session (negative, AP-2).
 - **AC3 (3.C)** — a non-member session **cannot read** tenant-B git-data (negative);
   the **app-side write sentinel** rejects a push for a workspace the session-user isn't a
   member of (negative, fail-closed — D2 logic-bug boundary); non-member RPC→NULL→deny. (The
