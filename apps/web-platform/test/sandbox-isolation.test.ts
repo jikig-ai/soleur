@@ -484,13 +484,15 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
         enableWeakerNestedSandbox: true,
         network: { allowedDomains: [], allowManagedDomainsOnly: true },
         filesystem: {
+          // Mirror the prod fix (#5733 → per-sibling deny, #5848 follow-up):
+          // deny the SIBLING (rootB) explicitly, NOT the parent — so rootA
+          // (the session's own workspace) is never `--tmpfs`-shadowed and
+          // keeps read+WRITE via `allowWrite`, while rootB stays hidden. The
+          // cross-tenant leak assertions (rootB secret must not surface) still
+          // hold, and this now also mirrors that own-workspace writes work
+          // (the read-only `allowRead` re-bind of PR #5848 is gone).
           allowWrite: [pair.rootA],
-          denyRead: [pair.parent, "/workspaces", "/proc"],
-          // Mirror the prod fix (#5733): re-allow reading the session's OWN
-          // workspace within the deny region. rootB is NOT re-allowed, so
-          // the cross-tenant leak assertions still hold — this proves the
-          // read carve-out coexists with tenant isolation.
-          allowRead: [pair.rootA],
+          denyRead: [pair.rootB, "/proc"],
         },
       },
     },

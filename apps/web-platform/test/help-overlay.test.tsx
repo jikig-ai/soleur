@@ -10,14 +10,20 @@ import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 
+// next/navigation router — capture push() for go-to navigate-effect assertions.
+const routerPush = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({ push: routerPush, replace: vi.fn(), prefetch: vi.fn() }),
 }));
 vi.mock("@/lib/client-observability", () => ({ reportSilentFallback: vi.fn() }));
 
-function renderHelp() {
+function renderHelp(props: Partial<{ isAdmin: boolean }> = {}) {
   return render(
-    <ShortcutsProvider enabled isAdmin={false} onToggleSidebar={() => {}}>
+    <ShortcutsProvider
+      enabled
+      isAdmin={props.isAdmin ?? false}
+      onToggleSidebar={() => {}}
+    >
       <input data-testid="outside-input" />
       <HelpOverlay />
     </ShortcutsProvider>,
@@ -63,6 +69,7 @@ function pressKey(
 }
 
 beforeEach(() => {
+  routerPush.mockClear();
   Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("fetch", vi.fn());
   try {
@@ -77,7 +84,7 @@ afterEach(() => {
 });
 
 describe("HelpOverlay", () => {
-  it("opens on ⌘/ and lists only the working v1 shortcuts (no G-sequence rows)", async () => {
+  it("opens on ⌘/ and lists the chords, the go-to sequences, and the agent summon", async () => {
     renderHelp();
     pressKey("/", { meta: true });
     expect(
@@ -85,9 +92,45 @@ describe("HelpOverlay", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Open command palette")).toBeInTheDocument();
     expect(screen.getByText("Toggle sidebar")).toBeInTheDocument();
-    // NG2-deferred nav sequences must NOT be documented.
-    expect(screen.queryByText(/then/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Go to/i)).not.toBeInTheDocument();
+    // #5636 go-to sequences are now un-deferred and documented.
+    expect(screen.getByText("Go to Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Go to Inbox")).toBeInTheDocument();
+    expect(screen.getByText("Go to Knowledge Base")).toBeInTheDocument();
+    expect(screen.getByTestId("help-row-G D")).toBeInTheDocument();
+    // The agent summon is grouped as an action (G C), not navigation.
+    expect(screen.getByTestId("help-row-G C")).toHaveTextContent("Ask an agent");
+    // Admin-only Analytics row is absent for a non-admin.
+    expect(screen.queryByText("Go to Analytics")).not.toBeInTheDocument();
+  });
+
+  it("shows the Go to Analytics row only for an admin", async () => {
+    renderHelp({ isAdmin: true });
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    expect(screen.getByText("Go to Analytics")).toBeInTheDocument();
+    expect(screen.getByTestId("help-row-G A")).toBeInTheDocument();
+  });
+
+  it("selecting a go-to row navigates and closes the overlay", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    fireEvent.click(screen.getByTestId("help-row-G D"));
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+    expect(
+      screen.queryByLabelText("Search keyboard shortcuts"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selecting the agent row opens chat and closes the overlay", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    fireEvent.click(screen.getByTestId("help-row-G C"));
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/chat/new");
+    expect(
+      screen.queryByLabelText("Search keyboard shortcuts"),
+    ).not.toBeInTheDocument();
   });
 
   it("opens on a bare ? from the body", async () => {
