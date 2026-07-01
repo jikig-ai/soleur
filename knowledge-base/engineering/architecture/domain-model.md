@@ -12,8 +12,20 @@
 > here in the same PR. **Wired today:** the `architecture` skill's `create` step
 > (an ADR that records/changes a business rule must update this register).
 > **Fast-follow (not yet mechanically gated):** plan-time flagging, a review
-> drift-check, and a ship block — tracked alongside the `/soleur:sync
-> --domain-model` auto-fill in #5754.
+> drift-check, and a ship block — tracked in #5871.
+>
+> **Auto-fill + drift-check (live, #5754).** `/soleur:sync domain-model` runs a
+> deterministic analyzer (`scripts/domain-model-drift.sh`) that drift-checks this
+> register against the repo's migrations/RLS/guards and, with per-row operator
+> approval, proposes rows into `## Auto-inferred (unreviewed)` below. See
+> [`ADR-076`](./decisions/ADR-076-domain-model-drift-extraction.md).
+>
+> **Completeness disclaimer.** This register + any drift report are **best-effort
+> structural extraction; NOT a security audit or access-control attestation.**
+> Absence from the register does not imply an invariant is unenforced, and presence
+> does not imply it is correctly enforced. Dynamic RLS (`EXECUTE format`/`DO $$`),
+> function-body logic, and un-merged `ALTER POLICY` are disclosed as blind spots,
+> not analyzed.
 
 ## Entities
 
@@ -38,8 +50,19 @@
 | BR-REPO-2 | Active-workspace path resolution | The agent resolves its cwd from the user's ACTIVE workspace (`user_session_state.current_workspace_id` → membership-verified → fail-closed to solo). This keying can diverge from reconcile's `(install, repo)` keying — the **keying-divergence trust boundary**. | ADR-044 (2026-06-30 amendment) |
 | BR-REPO-3 | Readiness is rev-parse-aware | A workspace is "ready" when its `.git` is a self-contained valid dir OR a non-escaping in-workspace pointer. An **escaping** `.git` FILE pointer strands the agent's in-bwrap `git rev-parse` and is re-cloned self-contained. | ADR-044 (2026-06-30 amendment); #5733 |
 
+## Auto-inferred (unreviewed)
+
+> Rows proposed by `/soleur:sync domain-model` (operator-approved, not yet curated).
+> This section is **machine-appended** and is NEVER a source of truth. Promote a row
+> to a curated `## Business Rules` rule by a deliberate human edit: assign a `BR-*`
+> id, refine the statement, and keep the source anchor (the anchor is the dedup key,
+> so a promoted row is never re-proposed). Do not hand-edit the table shape.
+
+| Anchor | Candidate statement |
+|---|---|
+
 ## How to maintain this register
 
-- **A PR that changes a business rule** (a new/changed migration constraint, RLS policy, ownership/access invariant, or resolver-guard semantics) updates the affected row(s) + cites the new source. Wired today via the `architecture` skill's `create` step (ADR → register); plan-flagging, a review drift-check, and a ship block are fast-follows (#5754).
-- **Auto-population (#5754):** `/soleur:sync --domain-model` derives candidate rules from migrations (tables / FKs / UNIQUE+CHECK constraints / RLS) and guard functions, reconciles against this register, and flags drift (a register rule with no backing source, or a source-level invariant with no register row).
+- **A PR that changes a business rule** (a new/changed migration constraint, RLS policy, ownership/access invariant, or resolver-guard semantics) updates the affected row(s) + cites the new source. Wired today via the `architecture` skill's `create` step (ADR → register); plan-flagging, a review drift-check, and a ship block are fast-follows (#5871).
+- **Auto-population (#5754):** `/soleur:sync domain-model` derives candidate rules from migrations (tables / FKs / UNIQUE+CHECK constraints / RLS) and guard functions, reconciles against this register, and flags drift (a register rule with no backing source, or a source-level invariant with no register row).
 - **Rule IDs are immutable** (mirrors `cq-rule-ids-are-immutable`): retire a row by marking it superseded + linking the superseding row, never by reusing an ID.
