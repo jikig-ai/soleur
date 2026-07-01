@@ -94,7 +94,10 @@ export function createToolAttemptCollector(): ToolAttemptCollector {
     } catch (err) {
       // Fail-open: never throw into the SDK turn. STATIC message — no
       // model-controlled value enters the error path.
-      log.warn({ err }, "tool-attempt telemetry hook failed (fail-open)");
+      log.warn(
+        { err, traceId: state.randomId },
+        "tool-attempt telemetry hook failed (fail-open)",
+      );
       reportSilentFallback(err, {
         feature: "tool-attempt-telemetry",
         op: "preToolUseHook",
@@ -113,7 +116,10 @@ export function createToolAttemptCollector(): ToolAttemptCollector {
         .insert({ counts: state.counts });
       if (error) throw error;
     } catch (err) {
-      log.warn({ err }, "tool-attempt telemetry flush failed (fail-open)");
+      log.warn(
+        { err, traceId: state.randomId },
+        "tool-attempt telemetry flush failed (fail-open)",
+      );
       reportSilentFallback(err, {
         feature: "tool-attempt-telemetry",
         op: "flush",
