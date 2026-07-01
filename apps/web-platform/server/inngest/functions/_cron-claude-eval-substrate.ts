@@ -919,5 +919,9 @@ export async function spawnClaudeEval(args: {
     });
   } finally {
     clearTimeout(timer);
+    // #5766 — guarantee the heartbeat interval is cleared even if the Promise
+    // executor threw synchronously (spawn/buildSpawnEnv config error) before
+    // finish() ran. clearInterval on an already-cleared handle is a safe no-op.
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
   }
 }

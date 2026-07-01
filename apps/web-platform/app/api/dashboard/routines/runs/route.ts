@@ -71,13 +71,14 @@ export async function GET(request: Request) {
     });
 
     // In-flight live rows belong at the top and only exist "now", so they are
-    // fetched on the FIRST page only, and only when the status filter permits a
-    // live status. Then: drop any whose run_id is already terminal in this page
-    // (terminal wins — DI-Q3), apply routineId/since/status filters to the live
-    // set, and exclude live rows entirely under a triggerSource filter (the
-    // attribution-free table has no trigger_source).
+    // fetched on the FIRST page only. Skipped entirely under a triggerSource
+    // filter (the attribution-free table has no trigger_source) or a terminal-only
+    // status filter — avoiding a wasted query. Terminal-wins dedup (DI-Q3) drops
+    // any live row whose run_id already appears in this page; since a just-finished
+    // run's terminal row is the newest, it is always on page 1, so first-page dedup
+    // is sufficient. routineId/status/since filters re-apply to the live set.
     let live: LiveRun[] = [];
-    if (!cursor && (!status || LIVE_STATUS.has(status))) {
+    if (!cursor && !triggerSource && (!status || LIVE_STATUS.has(status))) {
       live = await listLiveRuns(supabase as never, Date.now());
       const terminalRunIds = new Set(
         page.runs.map((r) => r.run_id).filter((x): x is string => Boolean(x)),
@@ -89,7 +90,6 @@ export async function GET(request: Request) {
       } else if (status === "resumed") {
         live = live.filter((l) => l.resumed);
       }
-      if (triggerSource) live = [];
       if (since) {
         live = live.filter((l) => Date.parse(l.started_at) >= Date.parse(since));
       }

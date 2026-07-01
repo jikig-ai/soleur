@@ -121,7 +121,8 @@ const STATUS_COLOR: Record<string, string> = {
   running: "text-blue-400",
   // #5766 — stuck (evicted, stale heartbeat) is deliberately DISTINCT from
   // running (amber vs blue) so a dead run never reads as healthy. `never` is
-  // explicit so it doesn't share the muted fallback with unknown statuses.
+  // listed explicitly (self-documenting) though its value equals the muted
+  // fallback below — a marker that "Never" is an intended status, not unknown.
   stuck: "text-amber-400",
   never: "text-soleur-text-muted",
 };
