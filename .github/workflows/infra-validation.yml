@@ -105,6 +105,20 @@ jobs:
           terraform validate
         working-directory: ${{ matrix.directory }}
 
+      # Any infra root that ships tests/*.tftest.hcl gets `terraform test` run
+      # after validate. Used by apps/web-platform/infra for the credential-free
+      # var.web_hosts EU-residency negative tests (CLO T-1) via mock_provider —
+      # variable validation is proven WITHOUT a Hetzner token or the R2 backend.
+      - name: Terraform test (if tests/ present)
+        run: |
+          if compgen -G "tests/*.tftest.hcl" > /dev/null; then
+            echo "→ terraform test"
+            terraform test
+          else
+            echo "No tests/*.tftest.hcl in this directory; skipping."
+          fi
+        working-directory: ${{ matrix.directory }}
+
       # Optional per-app lint hook: any infra root that ships a `main.test.sh`
       # gets it executed after fmt/validate. Used by apps/cla-evidence/infra
       # to assert content invariants (Governance mode, 3650-day retention,
