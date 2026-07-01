@@ -2,15 +2,23 @@
 
 Migration: `apps/web-platform/supabase/migrations/118_tool_attempts.sql` (+ `.down.sql`)
 
-## dev apply — done
+## dev apply — done (schema + ledger consistent)
 
-Validated live on `soleur-dev` (ref `mlwiodleouzwniehynfz`) via Supabase MCP `execute_sql`
-during /work Phase 1, then **reverted** (table dropped, cron unscheduled) so dev returns to
-the pristine "118-pending" state CI's `run-migrations.sh --verify` expects. Verified at apply time:
+Applied on `soleur-dev` (ref `mlwiodleouzwniehynfz`) and recorded in the
+`public._schema_migrations` ledger (`content_sha fed11540…` matches
+`git hash-object 118_tool_attempts.sql`). CI's tenant-integration suite runs
+`run-migrations.sh` against dev, so 118 is applied+ledgered there as part of every
+branch CI run; this checklist reflects that consistent state. Verified live:
 
 - 3 columns: `id uuid`, `created_at timestamptz`, `counts jsonb` — NO session/user/conversation column (CRITICAL-2 anonymity).
 - RLS ENABLED with 0 policies → default-deny for anon/authenticated; `service_role` (BYPASSRLS) is the sole reader/writer.
 - pg_cron `tool_attempts_retention` scheduled `0 4 * * *`, command `DELETE ... WHERE created_at < now() - interval '90 days'`.
+- `to_regclass('public.tool_attempts')` non-null AND ledger row present AND `content_sha` matches → the schema-vs-ledger consistency gate passes.
+
+**Do NOT drop the dev table to "keep dev pristine"** — once CI has ledgered 118,
+dropping the table without deleting the ledger row creates schema-vs-ledger drift
+(the tenant-integration `Preflight schema-vs-ledger consistency check` fails
+"ledger claims applied, but table is missing"). Leave the applied state as-is.
 
 ## prd apply — deferred
 

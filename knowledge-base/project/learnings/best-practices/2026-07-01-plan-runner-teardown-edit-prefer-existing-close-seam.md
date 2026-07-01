@@ -75,6 +75,20 @@ and drains on every close — that distinction is what makes the mirror safe.
   rebase-before-applying on an already-pushed branch — reach for
   `--force-with-lease` (never bare `--force`) immediately after any local rebase
   of a pushed feature branch; no rule change needed.
+- **Dropping an out-of-band `execute_sql` dev-apply "to keep dev pristine" CAUSED a
+  schema-vs-ledger drift CI failure.** During /work I applied migration 118 to dev
+  via Supabase MCP `execute_sql` (validation), then at review-time dropped the table
+  to resolve a *hypothetical* "ledger-absent" drift the data-integrity agent flagged
+  (P3-a). But CI's `tenant-integration` suite runs `run-migrations.sh` against dev on
+  every branch push, which had ALREADY applied 118 and written the
+  `public._schema_migrations` ledger row. My drop removed the table but not the ledger
+  row \u2192 the `Preflight schema-vs-ledger consistency check` failed at merge time
+  ("ledger claims 118 applied, but public.tool_attempts is missing"). Recovery:
+  re-created the table on dev (idempotent migration body) so schema+ledger+content_sha
+  agree again. Prevention: an out-of-band `execute_sql` migration apply on dev is NOT
+  "pristine-revertible" once CI has ledgered it \u2014 LEAVE the applied state (CI keeps dev
+  applied anyway), or reconcile BOTH the ledger row AND the table together, never the
+  table alone. See `knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md`.
 - **`\u2028`/`\u2029` regex escapes materialized as literal U+2028/U+2029 bytes**
   when authoring `lib/tool-name-sanitize.ts` via both Write and Edit (confirmed
   with `grep … | cat -v` showing `M-bM-^@M-(`). Recovery: rewrote the line with a
