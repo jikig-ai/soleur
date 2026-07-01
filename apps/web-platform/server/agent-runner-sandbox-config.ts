@@ -1,5 +1,5 @@
 import { readdirSync, realpathSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 
 import logger from "./logger";
 import { reportSilentFallback } from "./observability";
@@ -41,7 +41,7 @@ import { reportSilentFallback } from "./observability";
 //     is simultaneously writable-own AND tenant-isolated is to deny each
 //     SIBLING individually (so the own workspace is never under a `--tmpfs`
 //     and its `allowWrite --bind` survives), computed at dispatch by
-//     `enumerateSiblingDenyPaths`. ADR-<pending>; durable TOCTOU closer is
+//     `enumerateSiblingDenyPaths`. ADR-075; durable TOCTOU closer is
 //     the vendored SDK bwrap-arg reorder (tracked follow-up).
 
 const WORKSPACES_ROOT_DEFAULT = "/workspaces";
@@ -73,13 +73,15 @@ function safeRealpath(p: string): string {
  * basename string, so a symlinked workspace cannot be misclassified as a
  * sibling (which would deny the agent its own repo) or vice-versa.
  *
- * FAIL-CLOSED (strand-over-leak): if the root cannot be enumerated for any
- * reason OTHER than ENOENT (permissions, I/O), fall back to the BROAD parent
- * deny `[root, "/proc"]` and flag `degraded`. That makes the workspace
+ * FAIL-CLOSED (strand-over-leak): if the root cannot be enumerated, fall back
+ * to the BROAD parent deny `[root, "/proc"]`. That makes the workspace
  * read-only (the agent strands) but CANNOT leak a sibling — the correct
- * security failure mode. ENOENT means "no mounted volume" (local dev / CI /
- * fresh provisioning): expected, no Sentry page, and there are no siblings to
- * leak, so the broad deny is harmless there.
+ * security failure mode. A non-ENOENT error (permissions, I/O) is always
+ * `degraded` + Sentry-mirrored. ENOENT is benign ONLY outside production
+ * (local dev / CI / fresh provisioning — no mounted volume, no siblings to
+ * leak); in PRODUCTION the volume is bind-mounted at boot, so ENOENT means it
+ * VANISHED at runtime — a real fault that also flags `degraded` + pages,
+ * instead of masking the strand as expected local-dev absence.
  */
 export function enumerateSiblingDenyPaths(workspacePath: string): {
   denyRead: string[];
@@ -93,19 +95,26 @@ export function enumerateSiblingDenyPaths(workspacePath: string): {
       .filter((p) => safeRealpath(p) !== ownReal);
     return { denyRead: [...siblings, "/proc"], degraded: false };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      // Real enumeration failure — mirror to Sentry
-      // (cq-silent-fallback-must-mirror-to-sentry) and fail closed to the
-      // broad parent deny. strand-over-leak.
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // ENOENT is benign ONLY in dev/CI (no mounted volume). In production the
+    // volume is bind-mounted at boot, so ENOENT means it vanished at runtime —
+    // a real fault. Any other error is always a real fault. Both fail closed to
+    // the broad parent deny + `degraded` + Sentry mirror
+    // (cq-silent-fallback-must-mirror-to-sentry); strand-over-leak. `workspace`
+    // (the own UUID) is the join key back to the #5733 strand telemetry so an
+    // operator can attribute the degraded event to the session it stranded.
+    const benignEnoent =
+      code === "ENOENT" && process.env.NODE_ENV !== "production";
+    if (!benignEnoent) {
       reportSilentFallback(err, {
         feature: "agent-sandbox",
         op: "enumerateSiblingDenyPaths",
-        extra: { workspacesRoot: root },
+        extra: { workspacesRoot: root, workspace: basename(ownReal) },
       });
       return { denyRead: [root, "/proc"], degraded: true };
     }
-    // ENOENT: no mounted volume (local/CI). No siblings exist; deny the root
-    // broadly as the safe default. Not `degraded` — it is an expected env.
+    // Benign ENOENT (dev/CI): no siblings exist; deny the root broadly as the
+    // safe default. Not `degraded` — it is an expected env.
     return { denyRead: [root, "/proc"], degraded: false };
   }
 }
@@ -170,6 +179,9 @@ export function buildAgentSandboxConfig(
       feature: "agent-sandbox",
       op: "sibling-deny",
       workspacesRoot: workspacesRoot(),
+      // Own workspace UUID — the join key so this isolation decision is
+      // attributable to a session (every sibling shares `workspacesRoot`).
+      workspace: basename(workspacePath),
       deniedCount: denyRead.length,
       degraded,
     },

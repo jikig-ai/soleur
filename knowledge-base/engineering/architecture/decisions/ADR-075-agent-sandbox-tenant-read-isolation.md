@@ -1,7 +1,7 @@
 ---
 adr: ADR-075
 title: "Agent bwrap tenant read-isolation: per-sibling deny now, SDK bwrap-arg reorder as durable fix"
-status: accepted-with-residual
+status: accepted
 date: 2026-07-01
 supersedes_pr: 5848
 ---
@@ -65,7 +65,14 @@ The **exit criterion** for this residual is Option C.
 
 - The agent regains read+write of its own workspace; every existing sibling stays hidden.
 - `buildAgentSandboxConfig` now performs a `readdirSync(WORKSPACES_ROOT)` per dispatch (was pure).
-- A structured `feature=agent-sandbox op=sibling-deny {deniedCount, degraded}` log makes the
-  isolation decision observable without SSH (`observability-coverage-reviewer` §Step 4.6).
-- Residual TOCTOU remains until Option C (#5862) lands; this ADR stays `accepted-with-residual` with
-  C as the exit criterion. Option B (#5863) is the longer-term end-state.
+- A structured `feature=agent-sandbox op=sibling-deny {workspace, deniedCount, degraded}` log makes
+  the isolation decision observable without SSH (`observability-coverage-reviewer` §Step 4.6); the
+  `workspace` UUID is the join key that attributes a degraded broad-deny to the session it stranded.
+- The log/Sentry signal reflects the COMPUTED deny decision, not the REALIZED bwrap mount state: if a
+  future SDK bump re-orders the binds and shadows the write plane (the #5848 class), the signal still
+  reads healthy while the agent strands. Closing that intent-vs-effect gap needs an in-sandbox
+  writability probe (assert the `.git/` ASKPASS write succeeds, emit `op=writability-probe {ok}`) —
+  tracked as a follow-up, not shipped here.
+- Residual TOCTOU remains until Option C (#5862) lands; this ADR is accepted with C as the exit
+  criterion, and the residual read-only window is currently **undetectable** (no telemetry fires if
+  it is ever exploited). Option B (#5863) is the longer-term end-state.
