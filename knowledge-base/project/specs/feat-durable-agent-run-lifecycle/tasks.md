@@ -13,12 +13,12 @@ Derived from the finalized (post-review) plan. Writer model: `spawnClaudeEval` o
 
 ## Phase 0 — Preconditions (verify before code)
 
-- [ ] 0.1 F1 build-vs-join gate: confirm the Inngest run-state API (`lib/inngest/list-runs.ts`) does NOT already expose per-routine in-flight liveness with SIGKILL-fast detection. If it does → collapse to a read-path join and stop.
+- [x] 0.1 F1 build-vs-join gate: **VERDICT — BUILD.** `list-runs.ts` queries `/v1/events` + `/v1/events/{id}/runs` (event-specific terminal history only; no query-by-fn-name, no in-flight liveness, no heartbeat). Table justified.
 - [ ] 0.2 Confirm migration `120` free; grep BOTH `ADR-075-*` filename AND `adr:` frontmatter (duplicate-number hazard).
 - [ ] 0.3 Read `spawnClaudeEval` (`_cron-claude-eval-substrate.ts:732`): confirm it can host `upsertProgress` + a periodic tick; callers close over `ctx.runId`+`attempt`.
 - [ ] 0.4 Confirm the two heavy bypass crons (`cron-daily-triage.ts:149`, `cron-follow-through-monitor.ts:246`) are the only heavy non-`spawnClaudeEval` crons → NG9 (out of v1).
 - [ ] 0.5 Confirm `run-log.ts transformOutput` early returns (`:148`, `:166`).
-- [ ] 0.6 Verify same-routine concurrency (DI-P1-A): can a heavy cron double-fire (scheduled + manual-trigger, or concurrency>1)? The staleness-guarded delete-stale is safe either way; confirm the guard is present.
+- [x] 0.6 Same-routine concurrency (DI-P1-A): **VERDICT — NO double-fire.** All 15 heavy crons carry `concurrency: [{scope:"fn",limit:1},{scope:"account",key:"cron-platform",limit:1}]` on both scheduled + manual-trigger paths. Delete-stale is defense-in-depth, not correctness-critical (keep it, guarded).
 
 ## Phase 1 — Schema
 
