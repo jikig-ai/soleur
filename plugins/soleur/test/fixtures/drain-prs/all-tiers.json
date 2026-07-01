@@ -1,0 +1,88 @@
+[
+  {
+    "number": 9001,
+    "title": "ready green pr",
+    "headRefName": "feat-ready",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [],
+    "author": { "login": "octocat" },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      { "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS" },
+      { "name": "build", "status": "COMPLETED", "conclusion": "SUCCESS" }
+    ]
+  },
+  {
+    "number": 9002,
+    "title": "bump some dep",
+    "headRefName": "dependabot/npm_and_yarn/some-dep",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [ { "name": "dependencies" }, { "name": "javascript" } ],
+    "author": { "login": "app/dependabot" },
+    "createdAt": "2026-06-29T10:00:00Z",
+    "statusCheckRollup": [
+      { "name": "lockfile-sync", "status": "COMPLETED", "conclusion": "FAILURE" },
+      { "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS" }
+    ]
+  },
+  {
+    "number": 9003,
+    "title": "conflicting feature",
+    "headRefName": "feat-conflicting",
+    "isDraft": false,
+    "mergeable": "CONFLICTING",
+    "reviewDecision": "",
+    "labels": [],
+    "author": { "login": "octocat" },
+    "createdAt": "2026-06-28T10:00:00Z",
+    "statusCheckRollup": [
+      { "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS" }
+    ]
+  },
+  {
+    "number": 9004,
+    "title": "bot fix needs review",
+    "headRefName": "bot-fix/1234-some-fix",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [ { "name": "bot-fix/review-required" } ],
+    "author": { "login": "app/soleur-ai" },
+    "createdAt": "2026-06-27T10:00:00Z",
+    "statusCheckRollup": [
+      { "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS" }
+    ]
+  },
+  {
+    "number": 9005,
+    "title": "WIP draft",
+    "headRefName": "feat-wip",
+    "isDraft": true,
+    "mergeable": "UNKNOWN",
+    "reviewDecision": "",
+    "labels": [],
+    "author": { "login": "octocat" },
+    "createdAt": "2026-06-26T10:00:00Z",
+    "statusCheckRollup": []
+  },
+  {
+    "number": 9006,
+    "title": "broken conflicting pr",
+    "headRefName": "feat-broken",
+    "isDraft": false,
+    "mergeable": "CONFLICTING",
+    "reviewDecision": "",
+    "labels": [],
+    "author": { "login": "octocat" },
+    "createdAt": "2026-06-25T10:00:00Z",
+    "statusCheckRollup": [
+      { "name": "test", "status": "COMPLETED", "conclusion": "FAILURE" },
+      { "name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE" },
+      { "name": "build", "status": "COMPLETED", "conclusion": "FAILURE" }
+    ]
+  }
+]
