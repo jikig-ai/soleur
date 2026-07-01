@@ -4,8 +4,8 @@ Plan: `knowledge-base/project/plans/2026-07-01-feat-tr3-tool-attempt-telemetry-p
 Issue: #5843 · Branch: feat-tr3-tool-attempt-telemetry · Lane: cross-domain · Threshold: single-user incident
 _Revised after 3-agent plan-review (DHH/Kieran/simplicity): 3 CRITICALs + value-linchpin folded in._
 
-## Phase 0 — Preconditions + VALUE-LINCHPIN GATE (BLOCKING, no code)
-- [ ] 0.1 **GATE (HIGH-4):** prove per-phase work tool calls (Bash/Edit/MCP/Task) traverse the SAME instrumented cc `query()` — not a separate `agent-runner.ts startAgentSession` sub-session. Trace `cc-dispatcher.ts:1064-1097` → `soleur-go-runner.ts`. If separate: STOP / re-scope (instrument the routed session or move the point).
+## Phase 0 — Preconditions + VALUE-LINCHPIN GATE
+- [x] 0.1 **GATE (HIGH-4) — RESOLVED (verdict A, cc path):** Skill-routed sub-skill tool calls route through the cc query's parent `options.hooks` (`agent-runner-query-options.ts:212-214`; sandbox PreToolUse matcher already lists Write/Edit). Legacy `startAgentSession` (verdict B) is the null-`active_workflow` path, never called by `soleur-go-runner.ts`. Feature is buildable.
 - [ ] 0.2 Confirm `closeQuery()` (`soleur-go-runner.ts:1972`) fires once per ActiveQuery across reused turns.
 - [ ] 0.3 Pick a PreToolUse matcher that captures `Skill`/`Task`/`mcp__*` (shipped hooks use narrow matchers).
 - [ ] 0.4 Enumerate SDK built-in default toolset from `sdk.d.ts`; define `available(cc) = built-ins − (CANONICAL_DISALLOWED_TOOLS ∪ cc [Edit,Write]) + registered MCP`.
@@ -14,14 +14,14 @@ _Revised after 3-agent plan-review (DHH/Kieran/simplicity): 3 CRITICALs + value-
 - [ ] 1.1 `<NNN>_tool_attempts.sql`: `(id uuid pk, created_at, counts jsonb)` — NO session_id column joinable to a user (CRITICAL-2); `counts = {phase|unrouted: {tool: int}}`. RLS service-role-only.
 - [ ] 1.2 pg_cron purge `< now() - 90d` (mirror 103); guarded `cron.unschedule` DO block. `.down.sql` drops + unschedules.
 
-## Phase 2 — Collector module (closure accumulator + hooks + flush)
-- [ ] 2.1 `apps/web-platform/server/tool-attempt-telemetry.ts` `createToolAttemptCollector()` factory → `{preToolUseHook, postSkillPhaseHook, flush}` closing over `{randomId: crypto.randomUUID(), phase:"unrouted", counts}` (HIGH-5).
-- [ ] 2.2 Extract shared `skillToPhase(skill)` from `phase-surface-hook.ts` (DHH-2); `postSkillPhaseHook` sets phase; pre-Skill tools → `"unrouted"` (HIGH-6).
-- [ ] 2.3 `preToolUseHook`: `sanitizeToolNameForLog` + increment; NEVER read `tool_input`.
+## Phase 2 — Collector module (closure accumulator + ONE PreToolUse hook + flush)
+- [ ] 2.1 `apps/web-platform/server/tool-attempt-telemetry.ts` `createToolAttemptCollector()` factory → `{preToolUseHook, flush}` closing over `{randomId: crypto.randomUUID(), phase:"unrouted", counts}` (HIGH-5).
+- [ ] 2.2 Single PreToolUse hook: when `tool_name==="Skill"` → `phase = skillToPhase(tool_input.skill)` (way-IN, fixes off-by-one; the sole permitted `tool_input` read, same as shipped lever-1 hook). Extract shared `skillToPhase` from `phase-surface-hook.ts` (DHH-2). Pre-first-Skill tools → `"unrouted"` (HIGH-6).
+- [ ] 2.3 Otherwise: `sanitizeToolNameForLog(tool_name)` + `counts[phase][tool]++`; NEVER read `tool_input` for non-Skill tools.
 - [ ] 2.4 `flush()`: one JSONB row insert; try-catch → `reportSilentFallback` (op `tool-attempt-telemetry:flush`); never throw.
 
 ## Phase 3 — Wire opt-in + flush site
-- [ ] 3.1 `agent-runner-query-options.ts`: add `enableToolAttemptTelemetry?`; register PreToolUse as SEPARATE gated entry (mirror `enablePhaseSurfaceHint:239-241`, don't touch sandbox matcher) + PostToolUse(Skill) phase hook.
+- [ ] 3.1 `agent-runner-query-options.ts`: add `enableToolAttemptTelemetry?`; register the SINGLE PreToolUse hook as a SEPARATE gated entry with a matcher capturing `Skill`+full surface (mirror `enablePhaseSurfaceHint:239-241`, don't touch sandbox matcher). No PostToolUse(Skill) telemetry hook.
 - [ ] 3.2 `soleur-go-runner.ts`: `collector.flush()` from `closeQuery()` (`:1972`) (CRITICAL-3).
 - [ ] 3.3 `cc-dispatcher.ts` opts in; legacy passes nothing (AC5 byte-unchanged).
 

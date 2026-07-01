@@ -96,14 +96,19 @@ discoverability_test:
 
 ## Implementation Phases
 
-### Phase 0 — Preconditions + VALUE-LINCHPIN GATE (verify, no code) — BLOCKING
-- **0.1 (HIGH-4, gate hardest).** Confirm per-phase *work* tool calls (Bash/Edit/MCP/Task) traverse the
-  **same instrumented cc `query()`** whose PreToolUse hooks fire — NOT a separate non-opted-in
-  `agent-runner.ts startAgentSession` sub-session. Trace `cc-dispatcher.ts:1064-1097` ("routed sub-skills
-  load their own toolset via the legacy domain-leader path") through `soleur-go-runner.ts` dispatch. **If
-  routed work runs in a separate session, STOP** — the instrumentation point must move (instrument the
-  routed session too) or the feature is re-scoped. Do not build until this is shown, not assumed. (Lever-1
-  phase-hint ships on this path and is treated as meaningful — corroborating but not proof.)
+### Phase 0 — Preconditions + VALUE-LINCHPIN GATE (verify, no code)
+- **0.1 (HIGH-4) — RESOLVED 2026-07-01 (verdict A for the cc path; feature is buildable).** Code-trace
+  confirmed: on the cc-soleur-go path (unconditional prod default since Stage 8/#3270), the SDK **Skill**
+  tool runs the routed sub-skill (brainstorm/plan/work/review) within the **same subprocess/`query()`**, and
+  its Bash/Edit/Grep/Write calls **route through the parent query's `options.hooks`** — evidence:
+  `agent-runner-query-options.ts:212-214` (subagent tool calls currently route through parent `canUseTool`),
+  and the sandbox PreToolUse matcher already includes `Write`/`Edit` (tools only sub-skills can request).
+  Agent-tool sub-agents (domain leaders/research) on the cc path also route through parent hooks. The
+  separate `agent-runner.ts startAgentSession` (verdict B) is the **legacy null-`active_workflow` path**,
+  which `soleur-go-runner.ts` never calls — NOT our target. ⇒ A PreToolUse hook on the cc query captures real
+  per-phase tool usage. **Also confirmed:** SDK `PreToolUse` hooks fire at tool-execution time, distinct from
+  `state.events.onToolUse` (which only sees the router's own `assistant` messages) — so the hook is NOT
+  subject to the `msg.type==="assistant"` guard and DOES see sub-skill tool calls.
 - 0.2 Confirm the abort-covering flush chokepoint `closeQuery()` (`soleur-go-runner.ts:1972`) fires once per
   ActiveQuery even across reused turns (`:2496`) → one row/session.
 - 0.3 Confirm a wildcard/empty PreToolUse matcher captures `Skill`/`Task`/`mcp__*` (shipped hooks use narrow
@@ -120,23 +125,28 @@ discoverability_test:
 - pg_cron purge `< now() - interval '90 days'` (mirror `103_github_events_retention_7day`); guarded
   `cron.unschedule` `DO` block. `.down.sql` drops table + unschedules.
 
-### Phase 2 — Collector module (closure accumulator + hooks + flush) [merged 2+3]
+### Phase 2 — Collector module (closure accumulator + ONE PreToolUse hook + flush) [merged 2+3]
 - `apps/web-platform/server/tool-attempt-telemetry.ts` exports a **factory** `createToolAttemptCollector()`
-  (mirrors `createPhaseSurfaceHook()`): returns `{ preToolUseHook, postSkillPhaseHook, flush }` all closing
-  over ONE per-query object `{ randomId: crypto.randomUUID(), phase: "unrouted", counts }` (HIGH-5 —
-  no module-level Map, no SDK session_id).
-  - `postSkillPhaseHook` reuses a shared `skillToPhase(skill)` extracted from `phase-surface-hook.ts` (DHH-2);
-    sets `phase`. Tools before the first Skill land under `"unrouted"` (HIGH-6).
-  - `preToolUseHook` `sanitizeToolNameForLog(tool_name)` then `counts[phase][tool]++`. tool_name + phase ONLY;
-    NEVER read `tool_input`.
-  - `flush()` builds one JSONB row, inserts, wrapped in try-catch → `reportSilentFallback(err,
-    {feature:"tool-attempt-telemetry", op:"flush"})`; never throws.
+  (mirrors `createPhaseSurfaceHook()`): returns `{ preToolUseHook, flush }` both closing over ONE per-query
+  object `{ randomId: crypto.randomUUID(), phase: "unrouted", counts }` (HIGH-5 — no module-level Map, no SDK
+  session_id).
+- **Single PreToolUse hook, phase tracked on the way IN (off-by-one fix — the trace showed PostToolUse(Skill)
+  fires AFTER the routed skill runs, misattributing that skill's own tools to the PREVIOUS phase):**
+  - When `tool_name === "Skill"`: `phase = skillToPhase(tool_input.skill)` — reading the skill-NAME enum from
+    `tool_input.skill` is the exact safe normalization the shipped lever-1 hook uses (a known map key, not
+    free-form content); this is the sole permitted `tool_input` read and does NOT violate NO-ECHO. `skillToPhase`
+    is a shared helper extracted from `phase-surface-hook.ts` (DHH-2).
+  - Otherwise: `sanitizeToolNameForLog(tool_name)` then `counts[phase][tool]++`. Tools before the first
+    `Skill` land under `"unrouted"` (HIGH-6). Never read/persist `tool_input` for non-Skill tools.
+- `flush()` builds one JSONB row, inserts, wrapped in try-catch → `reportSilentFallback(err,
+  {feature:"tool-attempt-telemetry", op:"flush"})`; never throws.
 
 ### Phase 3 — Wire opt-in + flush site
 - `agent-runner-query-options.ts`: add `enableToolAttemptTelemetry?: boolean`; when set, register the
-  collector's PreToolUse as a **separate, gated hook entry** (do NOT modify the sandbox `PreToolUse` matcher;
-  mirror how `enablePhaseSurfaceHint` conditionally adds its hook at `:239-241`) + the PostToolUse(Skill) phase
-  hook (or extend the existing phase-surface PostToolUse registration — resolve at work time per DHH-2).
+  collector's SINGLE PreToolUse hook as a **separate, gated hook entry** with a matcher that captures the full
+  surface incl. `Skill` (do NOT modify the sandbox `PreToolUse` matcher; mirror how `enablePhaseSurfaceHint`
+  conditionally adds its hook at `:239-241`). No PostToolUse(Skill) hook needed for telemetry (phase is tracked
+  on the PreToolUse(Skill) way-in).
 - `soleur-go-runner.ts`: call `collector.flush()` from `closeQuery()` (`:1972`) — the single abort-covering
   teardown chokepoint (CRITICAL-3).
 - `cc-dispatcher.ts`: opt in via the new arg. Legacy runner passes nothing → byte-unchanged (AC5).
@@ -189,7 +199,8 @@ orthogonal; **#3242** (tool_use WS raw name) — Acknowledge, different surface 
 - AC9. Phase-0.1 linchpin confirmed in prod: a real multi-phase cc run yields non-`unrouted` tool counts (proves work tools traverse the instrumented session).
 
 ## Sharp Edges
-- **HIGH-4 is the gate.** If routed work runs in a separate non-instrumented session, `counts` will be all-`unrouted`/router-only and the dataset is useless — Phase 0.1 must prove otherwise before any code.
+- **HIGH-4 (RESOLVED).** Verified: Skill-routed sub-skill tool calls DO route through the cc query's parent hooks on the cc-soleur-go path — the feature captures real per-phase usage. The dataset would only be router-only on the legacy null-`active_workflow` path, which the cc runner never uses.
+- **Phase attribution is on the PreToolUse(Skill) way-IN, never PostToolUse(Skill).** PostToolUse(Skill) fires AFTER the routed skill runs, so it would attribute that skill's own tools to the prior phase (off-by-one). Reading `tool_input.skill` (a known enum key) at PreToolUse to set phase is the sole permitted `tool_input` read and matches the shipped lever-1 hook — it does NOT violate NO-ECHO (which forbids capturing arbitrary tool_input for non-Skill tools).
 - Flush at `closeQuery` (`soleur-go-runner.ts:1972`), NOT SessionEnd (unreliable under session reuse) nor `agent-runner.ts` (legacy runner never opts in).
 - Closure-scoped accumulator with a minted random id — NOT a module-level `Map<sessionId>` (re-identification + leak + unbounded growth).
 - `sanitizeToolNameForLog` on every tool_name before serialization (MCP names carry config/model-influenced bytes).
