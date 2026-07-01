@@ -448,3 +448,72 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
     expect(existsSync(keyPathDuringCall)).toBe(false); // finally still ran
   });
 });
+
+describe("sshWithPrivateKeyAuth (git-data provision forced-command, #5817)", () => {
+  const KEY =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLXByb3Zpc2lvbg==\n-----END OPENSSH PRIVATE KEY-----";
+
+  test("invokes ssh with -i keyfile (0600, real bytes, cleaned up), TOFU opts, and the workspace_id as the sole opaque remote arg", async () => {
+    const capturedCalls: ExecFileMockArgs[] = [];
+    let keyPathDuringCall = "";
+    let keyModeDuringCall = 0;
+    let keyContentDuringCall = "";
+    mockExecFile(capturedCalls, (call) => {
+      const iIdx = call.args.indexOf("-i");
+      if (iIdx >= 0) {
+        keyPathDuringCall = call.args[iIdx + 1];
+        const fd = openSync(keyPathDuringCall, "r");
+        try {
+          keyModeDuringCall = fstatSync(fd).mode & 0o777;
+          keyContentDuringCall = readFileSync(fd, "utf8");
+        } finally {
+          closeSync(fd);
+        }
+      }
+      call.cb(null, { stdout: Buffer.from("ok"), stderr: Buffer.from("") });
+    });
+
+    const { sshWithPrivateKeyAuth } = await import("../server/git-auth");
+    const out = await sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY, {
+      timeout: 30_000,
+    });
+    expect(out.toString()).toBe("ok");
+
+    const args = capturedCalls[0].args;
+    expect(capturedCalls[0].cmd).toBe("ssh");
+    // TOFU / batch options.
+    expect(args).toContain("IdentitiesOnly=yes");
+    expect(args).toContain("StrictHostKeyChecking=accept-new");
+    expect(args.some((a) => a.startsWith("UserKnownHostsFile="))).toBe(true);
+    expect(args).toContain("BatchMode=yes");
+    // The destination + the SINGLE opaque remote arg (→ SSH_ORIGINAL_COMMAND).
+    expect(args).toContain("git@10.0.1.20");
+    expect(args[args.length - 1]).toBe("ws-uuid-123");
+
+    // Key material on disk 0600 during the call; never in argv; removed after.
+    expect(keyModeDuringCall).toBe(0o600);
+    expect(keyContentDuringCall).toContain("BEGIN OPENSSH PRIVATE KEY");
+    expect(existsSync(keyPathDuringCall)).toBe(false);
+    expect(args.join(" ")).not.toContain("BEGIN OPENSSH PRIVATE KEY");
+  });
+
+  test("cleans up the key file even when ssh fails", async () => {
+    const capturedCalls: ExecFileMockArgs[] = [];
+    let keyPathDuringCall = "";
+    mockExecFile(capturedCalls, (call) => {
+      const iIdx = call.args.indexOf("-i");
+      if (iIdx >= 0) keyPathDuringCall = call.args[iIdx + 1];
+      call.cb(
+        Object.assign(new Error("ssh: connect to host failed"), { code: 255 }),
+        { stdout: Buffer.from(""), stderr: Buffer.from("") },
+      );
+    });
+
+    const { sshWithPrivateKeyAuth } = await import("../server/git-auth");
+    await expect(
+      sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY),
+    ).rejects.toThrow(/connect to host failed/);
+    expect(keyPathDuringCall).not.toBe("");
+    expect(existsSync(keyPathDuringCall)).toBe(false);
+  });
+});

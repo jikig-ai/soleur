@@ -147,6 +147,7 @@ import {
 // the gate (short-circuit-guard-must-sit-after-the-recovery-it-gates).
 import { resolveRepoReadinessWithSelfHeal } from "./repo-readiness-self-heal";
 import { resolveActiveWorkspace, isGitDataStoreEnabled } from "./workspace-resolver";
+import { replicateToGitData } from "./git-data-replication";
 import { resolveHostId } from "./host-identity";
 import {
   acquireAndHoldWorktreeLease,
@@ -1252,33 +1253,78 @@ export function markConversationAcked(
 // handle is stashed here keyed by (userId, conversationId), mirroring the
 // `_ccAutonomousAckPosture` registry. Empty when the lease path is gated off.
 // ---------------------------------------------------------------------------
-const _ccWorktreeLeases = new Map<string, WorktreeLeaseHandle>();
+// The stashed record carries the workspacePath + workspaceId alongside the handle
+// so the close hook can run the git-data REPLICATION push (which needs both) before
+// releasing the lease — `handleCcCloseQuery` has neither in scope (#5817 PR B pt 2).
+interface HeldCcWorktreeLease {
+  handle: WorktreeLeaseHandle;
+  workspacePath: string;
+  workspaceId: string;
+}
+const _ccWorktreeLeases = new Map<string, HeldCcWorktreeLease>();
 
 function makeWorktreeLeaseKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
 }
 
-/** Stash the held lease for the conversation (call after a successful acquire
- *  in the cold-Query factory). */
+/** Stash the held lease (+ the workspace path/id the replication push needs) for
+ *  the conversation (call after a successful acquire in the cold-Query factory). */
 function registerCcWorktreeLease(
   userId: string,
   conversationId: string,
   handle: WorktreeLeaseHandle,
+  workspacePath: string,
+  workspaceId: string,
 ): void {
-  _ccWorktreeLeases.set(makeWorktreeLeaseKey(userId, conversationId), handle);
+  _ccWorktreeLeases.set(makeWorktreeLeaseKey(userId, conversationId), {
+    handle,
+    workspacePath,
+    workspaceId,
+  });
 }
 
-/** Release + drop the conversation's lease (call from the close hook). No-op
- *  when none is held (gated off, or already released). Never throws. */
+/** Release + drop the conversation's lease WITHOUT replicating. Used by the
+ *  factory-throw cleanup (F1) — a startup throw means no session ran, so there is
+ *  nothing to replicate. No-op when none is held. Never throws. */
 async function releaseCcWorktreeLease(
   userId: string,
   conversationId: string,
 ): Promise<void> {
   const key = makeWorktreeLeaseKey(userId, conversationId);
-  const handle = _ccWorktreeLeases.get(key);
-  if (!handle) return;
+  const record = _ccWorktreeLeases.get(key);
+  if (!record) return;
   _ccWorktreeLeases.delete(key);
-  await handle.release();
+  await record.handle.release();
+}
+
+/** Session-end path (#5817 PR B pt 2): replicate the workspace's refs to the
+ *  shared git-data bare store (fenced by the held lease generation) and THEN
+ *  release + drop the lease. Called from `handleCcCloseQuery`. NO-OP at flag-off.
+ *  The replication failure is mirrored to Sentry inside `replicateToGitData` and
+ *  swallowed here so the close hook never throws (it is `void`ed by the caller). */
+async function replicateAndReleaseCcWorktreeLease(
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  const key = makeWorktreeLeaseKey(userId, conversationId);
+  const record = _ccWorktreeLeases.get(key);
+  if (!record) return;
+  _ccWorktreeLeases.delete(key);
+  try {
+    if (isGitDataStoreEnabled()) {
+      await replicateToGitData({
+        workspacePath: record.workspacePath,
+        workspaceId: record.workspaceId,
+        leaseGeneration: record.handle.leaseGeneration,
+        userId,
+      });
+    }
+  } catch {
+    // Already reported (feature: worktree_lease) inside replicateToGitData;
+    // swallow so a replication failure never wedges the lease release below.
+  } finally {
+    await record.handle.release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,11 +1561,15 @@ export function handleCcCloseQuery({
   // per ActiveQuery (closeQuery is `state.closed`-guarded at every call site);
   // fire-and-forget + fail-open (never throws, mirrors to Sentry on DB failure).
   flushCcToolAttemptCollector(userId, conversationId);
-  // #5274 PR B — release the worktree write-lease held for this conversation
-  // (stops the heartbeat, unregisters from the SIGTERM drain, frees the row).
-  // Fire-and-forget: the close hook is synchronous and the release never throws.
-  // No-op when the lease path was gated off or already lost mid-session.
-  void releaseCcWorktreeLease(userId, conversationId);
+  // #5274 PR B — this is the cc lineage's session-end SYNC POINT. Replicate the
+  // workspace's refs to the shared git-data bare store (fenced by the held lease
+  // generation), THEN release the worktree write-lease (stops the heartbeat,
+  // unregisters from the SIGTERM drain, frees the row). Fire-and-forget: the close
+  // hook is synchronous and the helper never throws (its replication failure is
+  // mirrored to Sentry inside). No-op when the lease path was gated off / already
+  // released. The push-options ride the git-data push ONLY (never the in-sandbox
+  // agent's GitHub origin push).
+  void replicateAndReleaseCcWorktreeLease(userId, conversationId);
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
       userId,
@@ -2548,7 +2598,13 @@ export const realSdkQueryFactory: QueryFactory = async (
         );
         throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
       }
-      registerCcWorktreeLease(args.userId, args.conversationId, worktreeLeaseHandle);
+      registerCcWorktreeLease(
+        args.userId,
+        args.conversationId,
+        worktreeLeaseHandle,
+        workspacePath,
+        activeWorkspaceId,
+      );
     }
 
     // TR3 (#5843) — mint the per-query tool-attempt collector and stash it so
@@ -2644,6 +2700,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `handleCcCloseQuery` never fires. Drop it here (flush is a harmless no-op —
     // no tools ran yet). Never throws.
     flushCcToolAttemptCollector(args.userId, args.conversationId);
+    // #5817 F4 — the ack-posture cell is registered earlier in this factory (before
+    // the lease acquire above), but on a factory throw the close hook that normally
+    // drains it (`_ccAutonomousAckPosture.delete` in the per-conversation cleanup)
+    // never runs → the cell leaks. Fold its cleanup into this same F1 cleanup path.
+    // No-op when the ack posture was never registered (e.g. threw before line ~1734).
+    _ccAutonomousAckPosture.delete(makeAckPostureKey(args.userId, args.conversationId));
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).

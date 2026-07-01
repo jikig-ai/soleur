@@ -388,6 +388,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server_network.git_data",
   "tls_private_key.git_transport",
   "doppler_secret.git_transport_ssh_private_key",
+  // #5817 PR B part 2 — the SECOND (provision) keypair + its prd secret ride the
+  // SAME one-time git-data apply as git_transport above (ADR-068 amendment "PR B
+  // bare-repo provisioning"). Operator-applied, never per-PR — the same class as
+  // the transport keypair, not the #5566 silent-un-applied class.
+  "tls_private_key.git_provision",
+  "doppler_secret.git_provision_ssh_private_key",
   "hcloud_server.git_data",
   "hcloud_volume.git_data",
   "hcloud_volume_attachment.git_data",

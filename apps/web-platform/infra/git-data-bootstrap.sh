@@ -89,6 +89,17 @@ mkdir -p "$REPO_ROOT" "$HOOKS_DIR"
 chown "$GIT_USER:$GIT_USER" "$REPO_ROOT" "$HOOKS_DIR"
 chmod 0750 "$REPO_ROOT" "$HOOKS_DIR"
 
+# 4b. Repo-root reconcile (ADR-068 amendment 2026-07-01 "PR B bare-repo
+#     provisioning"). The git-shell TRANSPORT resolves push URL paths relative to
+#     the git user's HOME ($GIT_HOME), while the PROVISION wrapper writes absolute
+#     paths under $REPO_ROOT (/mnt/git-data/repositories). Symlink so a push URL of
+#     `.../repositories/<id>.git` and the provisioned `/mnt/git-data/repositories/
+#     <id>.git` resolve to the IDENTICAL $GIT_DIR the fence keys on — otherwise the
+#     transport would push to a different repo than the one provisioned/fenced.
+#     `ln -sfn` is idempotent (re-point, never nest a link inside an existing dir).
+ln -sfn "$REPO_ROOT" "$GIT_HOME/repositories"
+chown -h "$GIT_USER:$GIT_USER" "$GIT_HOME/repositories"
+
 # 5. Install the FAIL-CLOSED placeholder pre-receive. Staged to /tmp by cloud-init
 #    (base64). core.hooksPath (step 6) points every per-workspace bare repo at it,
 #    so a push is rejected until the real fence hook lands via the deploy pipeline.
@@ -133,4 +144,12 @@ mountpoint -q "$GIT_DATA_ROOT" || {
   log "FATAL: receive.advertisePushOptions not advertised — push-option fence unreachable"
   exit 1
 }
-log "bootstrap complete: volume mounted, git+flock present, bare-repo root $REPO_ROOT, fail-closed placeholder hook active, push-options advertised"
+[[ "$(readlink -f "$GIT_HOME/repositories" 2>/dev/null)" == "$(readlink -f "$REPO_ROOT")" ]] || {
+  log "FATAL: $GIT_HOME/repositories does not resolve to $REPO_ROOT — transport push URL and provisioned/fenced repo would diverge"
+  exit 1
+}
+[[ -x /usr/local/bin/git-data-provision.sh ]] || {
+  log "FATAL: git-data-provision.sh missing/not executable — bare repos cannot be provisioned before first push"
+  exit 1
+}
+log "bootstrap complete: volume mounted, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
