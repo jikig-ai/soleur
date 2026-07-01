@@ -392,6 +392,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       filesystem: {
         allowWrite: [WORKSPACE_PATH],
         denyRead: ["/workspaces", "/proc"],
+        allowRead: [WORKSPACE_PATH],
       },
     });
     mockQuery.mockReturnValue(makeFakeQuery());

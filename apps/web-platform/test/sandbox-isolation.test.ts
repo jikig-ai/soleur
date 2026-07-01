@@ -486,6 +486,11 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
         filesystem: {
           allowWrite: [pair.rootA],
           denyRead: [pair.parent, "/workspaces", "/proc"],
+          // Mirror the prod fix (#5733): re-allow reading the session's OWN
+          // workspace within the deny region. rootB is NOT re-allowed, so
+          // the cross-tenant leak assertions still hold — this proves the
+          // read carve-out coexists with tenant isolation.
+          allowRead: [pair.rootA],
         },
       },
     },

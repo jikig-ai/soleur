@@ -2325,10 +2325,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` (above)
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
   // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
-  // verified sandbox-readable allowWrite dir is `workspacePath`
-  // (`buildAgentSandboxConfig` allowWrite:[workspacePath] +
-  // `createSandboxHook` realpath-containment); `$HOME`/`/tmp` bwrap-visibility
-  // is unverifiable. We write the helper into the repo's `.git/` directory
+  // sandbox-readable dir is `workspacePath` — read visibility comes from
+  // `buildAgentSandboxConfig` allowRead:[workspacePath] (which re-binds it
+  // over the `/workspaces` denyRead tmpfs; allowWrite alone grants WRITE
+  // only, not read — see #5733) plus `createSandboxHook` realpath-containment;
+  // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into
+  // the repo's `.git/` directory
   // (under `workspacePath`, so the SAME containment guarantees sandbox
   // readability) rather than the working-tree root, for two reasons:
   //   1. `.git/` is outside the working tree, so the agent's own
