@@ -53,8 +53,8 @@ Derived from the plan. Resolve the Domain-Review carried gap checklist (G1–G19
 
 ## Phase 6 — ADR + tracking issue
 
-- [ ] 6.1 Create ADR-068 via /soleur:architecture (Decision, Alternatives w/ Option-2 deferred + re-eval (a)-(e), named loosening trade-offs, C4 no-impact enumeration).
-- [ ] 6.2 File Option-2 (isolated cron-worker) tracking issue with ADR-068 re-eval criteria; verified-existing label.
+- [ ] 6.1 Create ADR-078 via /soleur:architecture (Decision, Alternatives w/ Option-2 deferred + re-eval (a)-(e), named loosening trade-offs, C4 no-impact enumeration).
+- [ ] 6.2 File Option-2 (isolated cron-worker) tracking issue with ADR-078 re-eval criteria; verified-existing label.
 
 ## Post-merge (automated, no-SSH)
 

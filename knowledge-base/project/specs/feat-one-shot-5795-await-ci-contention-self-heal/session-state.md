@@ -11,7 +11,7 @@ None fatal. First planning subagent hit the Anthropic session usage limit (reset
 - Core fix = adaptive CI-signal wait: poll ci.yml workflow-RUN liveness instead of the `missing` synthetic `test` check-run, which isn't created until queued shards finish (root cause of the fixed-900s timeout). Fail-closed only when CI concludes non-success / never registers / a raised adaptive ceiling hits.
 - Phase B in scope: gate `migrate` on `await-ci` (leading `always() &&`) so migrations don't apply ahead of a fail-closed gate. Superseded-SHA "Phase C" guard designed and rejected by 3 reviewers; folded into option-3 tracking issue.
 - Fail-open invariant pinned: ci.yml run `.conclusion` NEVER authorizes `exit 0` (only `test` check-run `conclusion==success`). Added `notify-gated` push signal to fix the "silent" half of #5795 (existing release job sends misleading "released!" on a gated deploy).
-- ADR-072 is a plan deliverable (raised-ceiling trade-off, ADR-068 precedent). Threshold = single-user incident → requires_cpo_signoff + user-impact-reviewer at review.
+- ADR-072 is a plan deliverable (raised-ceiling trade-off, ADR-078 precedent). Threshold = single-user incident → requires_cpo_signoff + user-impact-reviewer at review.
 - AC discipline fixes: AC10 step-scoped + distinct token (file-wide grep false-green); AC5 worst-case includes reconciliation grace; cut stale-attempt timestamp reconciliation as YAGNI.
 
 ### Components Invoked

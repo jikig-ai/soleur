@@ -40,6 +40,19 @@ resource "tls_private_key" "git_provision" {
   algorithm = "ED25519"
 }
 
+# --- In-band REMOVE keypair (ED25519) ---------------------------------------
+# A THIRD, dedicated key — SEPARATE from git_transport AND git_provision (#5274
+# Phase 3, ADR-068 GDPR Art. 17 / CLO DL-1). Its cloud-init forced command is the
+# FIXED `git-data-remove.sh` (idempotent `rm -rf <id>.git`), NEVER git-shell.
+# Provisioning, ref-write, and ERASURE authority are three separate credentials
+# with separate blast radii (ADR-068 §6): a leaked transport/provision key cannot
+# delete repos, and a leaked remove key cannot write refs. Same OS `git` user
+# (per-key command= overrides the login shell). Same throwaway-shape as the
+# siblings; Phase 3's per-workspace_id posture replaces all three.
+resource "tls_private_key" "git_remove" {
+  algorithm = "ED25519"
+}
+
 locals {
   # trimspace() strips the trailing newline tls_private_key.public_key_openssh
   # carries — without it the cloud-init authorized_keys line renders with a
@@ -47,6 +60,7 @@ locals {
   # local.ci_ssh_pubkey (ci-ssh-key.tf).
   git_transport_pubkey = trimspace(tls_private_key.git_transport.public_key_openssh)
   git_provision_pubkey = trimspace(tls_private_key.git_provision.public_key_openssh)
+  git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)
 }
 
 # Private half → Doppler. Consumed at RUNTIME by the web host's git-auth.ts, which
@@ -76,6 +90,17 @@ resource "doppler_secret" "git_provision_ssh_private_key" {
   visibility = "masked"
 }
 
+# Remove key private half → Doppler `prd` (RUNTIME key; same rationale as the
+# siblings). Consumed by account-delete.ts / workspace-delete (3.D) to reach the
+# `git-data-remove.sh` forced command over the private net for Art. 17 erasure.
+resource "doppler_secret" "git_remove_ssh_private_key" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "GIT_REMOVE_SSH_PRIVATE_KEY"
+  value      = tls_private_key.git_remove.private_key_openssh
+  visibility = "masked"
+}
+
 # --- The git-data host -------------------------------------------------------
 resource "hcloud_server" "git_data" {
   name        = "soleur-git-data"
@@ -101,9 +126,13 @@ resource "hcloud_server" "git_data" {
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision_b64 = base64encode(file("${path.module}/git-data-provision.sh"))
+    # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
+    # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
+    git_data_remove_b64 = base64encode(file("${path.module}/git-data-remove.sh"))
     # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
     git_transport_pubkey = local.git_transport_pubkey
     git_provision_pubkey = local.git_provision_pubkey
+    git_remove_pubkey    = local.git_remove_pubkey
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = hcloud_volume.git_data.id

@@ -10,7 +10,7 @@ pr: 5686
 
 # Learning: two review-phase traps — session-limit empties and exact-equality on a timing-derived value
 
-Captured from the `/soleur:go 5669` one-shot (graceful cron drain before container swap, ADR-068).
+Captured from the `/soleur:go 5669` one-shot (graceful cron drain before container swap, ADR-078).
 
 ## Problem
 

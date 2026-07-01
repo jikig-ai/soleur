@@ -67,7 +67,97 @@ readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
-# Cron drain (#5669 / ADR-068)
+# Host identity (#5274 Phase 3, ADR-068)
+# -----------------------------------------------------------------------------
+# Each web host injects its OWN stable infra id into the container as
+# SOLEUR_HOST_ID — the per-user worktree write-lease's placement authority
+# (host-identity.ts:resolveHostId, which fail-loud-THROWS in prod when the git-data
+# flag is on and this is unset). Resolved ON-HOST from the Hetzner metadata service
+# (the hcloud_server id — the SAME value terraform knows), with /etc/machine-id as
+# a reboot-stable fallback; NEVER a per-container hostname (that would self-lock
+# each recreate-deploy out of its own worktree). Best-effort: at flag-off the
+# container never calls resolveHostId(), so an empty value is harmless; when 3.D
+# flips the flag an unresolvable id fails the canary loud (the intended posture).
+# Test harness overrides via SOLEUR_HOST_ID_METADATA_URL / SOLEUR_HOST_ID_OVERRIDE.
+resolve_host_id() {
+  if [[ -n "${SOLEUR_HOST_ID_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_HOST_ID_OVERRIDE"
+    return 0
+  fi
+  local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
+  local id
+  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
+  if [[ "$id" =~ ^[0-9]+$ ]]; then
+    printf 'hetzner-%s' "$id"
+    return 0
+  fi
+  id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
+  if [[ -n "$id" ]]; then
+    printf 'machine-%s' "$id"
+    return 0
+  fi
+  return 1
+}
+HOST_ID="$(resolve_host_id || true)"
+readonly HOST_ID
+
+# 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
+# After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
+# every PEER web host over the private net, so one webhook trigger delivers the
+# container to BOTH hosts. DORMANT at the single-host state: SOLEUR_DEPLOY_PEERS is
+# unset (the /hooks/deploy payload omits it until the release workflow renders the
+# peer list) or lists only this host → no-op → the deploy path is byte-identical to
+# pre-#5274. Loop-prevention: peers receive on /hooks/deploy-peer, which does NOT
+# pass SOLEUR_DEPLOY_PEERS, so a peer never re-fans (A→B never triggers B→A).
+# Re-signs with the SHARED webhook_deploy_secret read from hooks.json (root:deploy
+# 0640; ci-deploy runs as the deploy user) — no new secret. Fire-and-forget like
+# /hooks/deploy: a 202 means the peer ACCEPTED the trigger; per-host deploy SUCCESS
+# is soak-verified via the peer's deploy-status over the private net (AC5). Returns
+# non-zero if ANY peer forward was not accepted (folded into the deploy-status reason
+# so the release workflow surfaces "web-1 ok, web-2 down" without SSH).
+fan_out_to_peers() {
+  local peers_csv="${SOLEUR_DEPLOY_PEERS:-}"
+  [[ -n "$peers_csv" ]] || return 0
+
+  local self_ips
+  self_ips=" $(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ') "
+
+  local hooks_file="${SOLEUR_HOOKS_JSON:-/etc/webhook/hooks.json}"
+  local secret
+  secret=$(jq -r '.[] | select(.id=="deploy-peer") | .["trigger-rule"].match.secret' \
+    "$hooks_file" 2>/dev/null || true)
+  if [[ -z "$secret" || "$secret" == "null" ]]; then
+    logger -t "$LOG_TAG" "FANOUT: webhook secret unavailable ($hooks_file) — cannot forward to peers"
+    return 1
+  fi
+
+  local payload sig
+  payload=$(jq -cn --arg cmd "${SSH_ORIGINAL_COMMAND:-}" '{command:$cmd}')
+  sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | sed 's/.*= //')
+
+  local rc=0 peer code _peer_arr
+  IFS=',' read -ra _peer_arr <<< "$peers_csv"
+  for peer in "${_peer_arr[@]}"; do
+    peer="${peer//[[:space:]]/}"
+    [[ -n "$peer" ]] || continue
+    [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+      -X POST "http://${peer}:9000/hooks/deploy-peer" \
+      -H "Content-Type: application/json" \
+      -H "X-Signature-256: sha256=${sig}" \
+      --data-binary "$payload" 2>/dev/null || echo "000")
+    if [[ "$code" == "202" ]]; then
+      logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
+    else
+      logger -t "$LOG_TAG" "FANOUT: peer $peer NOT accepted (HTTP $code) — deploy-status will surface per-host state"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# -----------------------------------------------------------------------------
+# Cron drain (#5669 / ADR-078)
 # -----------------------------------------------------------------------------
 # Every prod swap stops the container (`docker stop --time=12 soleur-web-platform`
 # below), killing any in-flight cron `claude` child — the
@@ -199,7 +289,7 @@ trap 'trap - TERM INT; final_write_state 124 "timeout"; pkill -TERM -P $$ 2>/dev
 # via journalctl -u webhook, not the HTTP response.
 trap 'echo "DEPLOY_ERROR: ci-deploy.sh failed at line $LINENO (exit $?)" >&2' ERR
 
-# --- Cron drain helpers (#5669 / ADR-068) ------------------------------------
+# --- Cron drain helpers (#5669 / ADR-078) ------------------------------------
 #
 # cron_in_flight: pool-agnostic in-flight detection. claude-eval runs in the
 # cron-platform pool (limit:1) AND the agent-runtime pool (limit:50,
@@ -651,6 +741,7 @@ case "$COMPONENT" in
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -e CRON_WORKSPACE_ROOT=/workspaces \
+      -e SOLEUR_HOST_ID="$HOST_ID" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -797,7 +888,7 @@ case "$COMPONENT" in
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
 
-      # --- Cron drain gate (#5669 / ADR-068) --------------------------------
+      # --- Cron drain gate (#5669 / ADR-078) --------------------------------
       # Tear the canary down FIRST (free its CANARY_MEMORY_CAP) so the drain
       # wait does NOT hold canary + old-prod + cron resident (~6.9GB) for up to
       # ~70min on the 8GB host (platform-strategist memory-dwell fix). The canary
@@ -876,6 +967,7 @@ case "$COMPONENT" in
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
         -e CRON_WORKSPACE_ROOT=/workspaces \
+        -e SOLEUR_HOST_ID="$HOST_ID" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -886,7 +978,7 @@ case "$COMPONENT" in
         # (memory-dwell fix), so no teardown is needed here on the success path.
 
         # Clear the deploy lease so the new container's crons resume immediately
-        # (#5669 / ADR-068). Best-effort: the substrate's TTL fail-open is the
+        # (#5669 / ADR-078). Best-effort: the substrate's TTL fail-open is the
         # real backstop if a crash skips this clear, but clearing now avoids
         # deferring the next cron fire.
         rm -f "$CRON_DEPLOY_LEASE_FILE" 2>/dev/null || true
@@ -928,7 +1020,15 @@ case "$COMPONENT" in
         fi
 
         echo "Deploy succeeded"
-        final_write_state 0 "ok"
+        # Local prod swap succeeded — now fan out to peer hosts (dormant/no-op at
+        # single-host state). A peer forward failure does NOT fail this host's
+        # deploy (it succeeded); it degrades the state reason so deploy-status
+        # surfaces "web-1 ok, web-2 down" (#5274 Phase 3, ADR-068).
+        if fan_out_to_peers; then
+          final_write_state 0 "ok"
+        else
+          final_write_state 0 "ok_peer_fanout_degraded"
+        fi
         exit 0
       else
         # Production start failed after canary success (infra issue, not app)

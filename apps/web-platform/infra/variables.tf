@@ -59,6 +59,34 @@ variable "cf_api_token" {
   sensitive   = true
 }
 
+# --- Epic #5274 Phase 3 (ADR-068) — multi-host web cluster -------------------
+# Keyed map of web hosts. `web-1` is the PRE-EXISTING host; its config MUST match
+# current state (location=hel1, server_type=cx33, private_ip=10.0.1.10) so the
+# for_each `moved` migration is 0-destroy — changing web-1's location/server_type
+# would force-REPLACE the live prod host (single-user incident). Keys are IMMUTABLE
+# post-migration (`moved`-block for_each keys; never rename). EU-location-pinned for
+# GDPR residency (CLO T-1, GA-blocking).
+variable "web_hosts" {
+  description = "Web-host cluster (multi-host /workspaces, ADR-068 Phase 3). web-1 = pre-existing host; keys immutable post-migration; EU-location-pinned (CLO T-1)."
+  type = map(object({
+    location    = string
+    private_ip  = string
+    server_type = optional(string, "cx33")
+  }))
+  default = {
+    "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11" }
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
+    error_message = "web_hosts location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU web host or placement group is rejected before web-2 serves."
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : can(regex("^10\\.0\\.1\\.[0-9]{1,3}$", h.private_ip))])
+    error_message = "web_hosts private_ip must be a host address in the 10.0.1.0/24 private subnet (network.tf)."
+  }
+}
+
 # --- Epic #5274 Phase 2 PR B (ADR-068) — git-data host -----------------------
 # No no-default operator-mint TF_VAR is added: the transport key is tls-generated
 # (tls_private_key.git_transport, git-data.tf) and the betterstack/doppler tokens

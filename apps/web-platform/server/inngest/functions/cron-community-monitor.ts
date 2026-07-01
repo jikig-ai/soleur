@@ -372,7 +372,7 @@ export async function cronCommunityMonitorHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
-    // #5728 G1 — a deploy-in-progress defer (ADR-068/#5686) is a benign fail-SAFE
+    // #5728 G1 — a deploy-in-progress defer (ADR-078/#5686) is a benign fail-SAFE
     // skip, NOT a failure. Rethrow it bare with NO heartbeat so Inngest retries
     // after the container swap; posting ?status=error here would red-flag a
     // benign defer AND defeat the retry intent.
@@ -488,7 +488,7 @@ export async function cronCommunityMonitorHandler({
         );
       }
     } catch (err) {
-      // #5728 G1 — a deploy-in-progress defer is benign (ADR-068/#5686): rethrow
+      // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
       // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
       // is a real failure — flag it; finalizeOutputAwareHeartbeat decides
       // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step

@@ -8,7 +8,7 @@ date: 2026-06-30
 # ADR-072: Adaptive CI-signal wait for the prod deploy gate
 
 - **Deciders:** Jean (operator), CPO sign-off (single-user-incident threshold), CTO agent (mechanism assessment), deepen-plan review (architecture-strategist, code-simplicity-reviewer, kieran-rails-reviewer, security-sentinel, observability-coverage-reviewer)
-- **Relates to:** #5795 (this change), #5052 / PR #5051 (the original `await-ci` CI-gate, shipped with no ADR), ADR-068 (precedent for recording a raised-ceiling named trade-off as an ADR), #5752 (admin-merge deploy-skip — distinct: admin-bypass skipping CI entirely)
+- **Relates to:** #5795 (this change), #5052 / PR #5051 (the original `await-ci` CI-gate, shipped with no ADR), ADR-078 (precedent for recording a raised-ceiling named trade-off as an ADR), #5752 (admin-merge deploy-skip — distinct: admin-bypass skipping CI entirely)
 
 ## Context
 
@@ -149,5 +149,5 @@ dropped):
    only residual is a `migrate`-without-`deploy`, inside the expand/contract window named in
    Consequence #5.
 
-Cross-reference: ADR-068 (raised-ceiling named-trade-off ADR precedent); ADR-011 (the
+Cross-reference: ADR-078 (raised-ceiling named-trade-off ADR precedent); ADR-011 (the
 fail-closed-gate discipline this extends).

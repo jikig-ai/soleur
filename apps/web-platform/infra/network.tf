@@ -37,9 +37,10 @@ resource "hcloud_network_subnet" "private" {
 # does NOT replace hcloud_server.web (that would drop production). subnet_id (not
 # network_id) so Terraform orders this AFTER the subnet exists.
 resource "hcloud_server_network" "web" {
-  server_id = hcloud_server.web.id
+  for_each  = var.web_hosts
+  server_id = hcloud_server.web[each.key].id
   subnet_id = hcloud_network_subnet.private.id
-  ip        = "10.0.1.10"
+  ip        = each.value.private_ip
 }
 
 # Attach the git-data host at a stable private IP. git-auth.ts (web host, runtime)

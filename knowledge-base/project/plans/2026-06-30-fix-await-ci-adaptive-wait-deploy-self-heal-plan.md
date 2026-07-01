@@ -116,7 +116,7 @@ review). One is pulled into scope (Phase B); the other is deferred with the risk
   `status=missing` mechanism in the incident log.
 - ADR-corpus grep for the mechanism: the original gate (#5052 / PR #5051,
   `2026-06-08-feat-cd-deploy-ci-gate-and-build-cache-plan.md`) shipped with **no ADR**; the
-  *deploy* poll-ceiling changes WERE recorded as ADR-068 because raising a ceiling introduced a
+  *deploy* poll-ceiling changes WERE recorded as ADR-078 because raising a ceiling introduced a
   named trade-off. Adaptive await-ci introduces a structurally identical named trade-off →
   warrants an ADR (see Architecture Decision section). Not a rejected-alternative collision.
 
@@ -422,7 +422,7 @@ an un-migrated schema); **out-of-order/superseded deploy (MED-HIGH)** → a guar
 **rejected** by the deepen-plan panel (false-skips nearly every deploy; no checkout in the deploy
 job; step-level `exit 0` reddens the run) and **deferred to the option-3 issue**, which fixes it
 structurally. Wrong-run selection (LOW-MED) mitigated by `event==push` + `per_page=1`. CTO
-recommends a lightweight ADR (ADR-068 precedent: a raised ceiling with a named trade-off was
+recommends a lightweight ADR (ADR-078 precedent: a raised ceiling with a named trade-off was
 recorded) and option-3 as a deferred tracking issue. Edge cases folded into Phase A ACs (blocklist
 not allowlist; bounded reconciliation grace; API-retry-not-false-zero-run; ceiling+grace<timeout).
 Observability review surfaced that fail-closed is pull-only today and the release job sends a
@@ -440,7 +440,7 @@ UI-surface override. This is CD-orchestration tooling, not a user-facing surface
 
 This plan changes a fail-closed deploy-gate **timing semantic** (fixed window → adaptive on the
 real CI signal) and introduces a named trade-off (held-runner contention; >ceiling cliff deferred).
-Per `wg-architecture-decision-is-a-plan-deliverable` and the ADR-068 precedent (a raised deploy
+Per `wg-architecture-decision-is-a-plan-deliverable` and the ADR-078 precedent (a raised deploy
 ceiling with a named trade-off was recorded as an ADR), this warrants an ADR — a future maintainer
 would otherwise "optimize" the ceiling back down. The ADR write is an in-scope task of THIS plan,
 not a follow-up.
@@ -611,7 +611,7 @@ static + extracted-snippet execution (do not introduce bats/pytest):
   after ci flips to `completed/success` can see the `test` check-run not-yet-surfaced and
   instant-fail-close a healthy build (spec-flow P0). It is a *bounded* re-poll, not an unbounded
   wait.
-- **ADR ordinal collision:** the corpus has duplicate ordinals (two ADR-033, two ADR-068); `git
+- **ADR ordinal collision:** the corpus has duplicate ordinals (two ADR-033, two ADR-078); `git
   ls-files | grep -i ADR-072` before naming and bump if taken.
 - **A file-wide grep AC over a multi-job workflow is false-green.** `web-platform-release.yml`
   already contains `elapsed=`/`::error::`/`::warning::` in the `deploy` and `live-verify` jobs, so a
@@ -660,5 +660,5 @@ static + extracted-snippet execution (do not introduce bats/pytest):
   — re-measure ceilings against real durations; elapsed-time annotation to catch ceiling drift.
 - `knowledge-base/project/learnings/best-practices/2026-06-30-github-merge-queue-adoption-wire-all-ruleset-producers.md`
   — merge-queue synthetic refs; filter `event==push` when selecting the run for `head_sha`.
-- ADR-068 (`…-graceful-cron-drain-before-container-swap.md`) — precedent for recording a
+- ADR-078 (`…-graceful-cron-drain-before-container-swap.md`) — precedent for recording a
   raised-ceiling named trade-off as an ADR.

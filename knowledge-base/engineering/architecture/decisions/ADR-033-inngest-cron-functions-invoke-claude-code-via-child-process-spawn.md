@@ -69,7 +69,7 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
   (`routine_runs` + Sentry checkins; Better Stack aged out) found the 2026-06-13→
   06-21 window was **SIGKILL-dominant** (zero `routine_runs` terminal rows while
   sibling crons logged normally) — whose remedy is the **graceful cron drain before
-  container swap (ADR-068 / #5686)**, NOT a heartbeat-code change. The #5728 code fix
+  container swap (ADR-078 / #5686)**, NOT a heartbeat-code change. The #5728 code fix
   closes the *delivery* gap for the throw/dropped-POST classes (defense-in-depth) via
   (i) a final-attempt-gated, memoization-safe terminal `?status=error` on the throw
   path (`finalizeOutputAwareHeartbeat`, adopted fleet-wide by the output-aware cohort),
@@ -83,7 +83,7 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
   does NOT retroactively clear a `missed`. Therefore for the slow/late/killed class,
   **`checkin_margin_minutes` (sized against the worst-case retry-chain + shared
   `account` `limit:1` queue wall-clock, not single-run duration) and kill-prevention
-  (ADR-068) are the ONLY levers** — Phase 1/2 delivery-hardening cannot close it.
+  (ADR-078) are the ONLY levers** — Phase 1/2 delivery-hardening cannot close it.
   **Accepted residual:** a genuinely killed run reads `missed` until a late retry, and
   `missed` is an honest signal for a killed run. Runbook H11 carries the per-day
   H11a–d discrimination recipe. (For #5728 the verdict was kill-dominant with H1/H4

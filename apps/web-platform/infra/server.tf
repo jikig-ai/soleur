@@ -19,12 +19,25 @@ resource "hcloud_ssh_key" "default" {
 }
 
 resource "hcloud_server" "web" {
-  name        = "soleur-web-platform"
-  server_type = var.server_type
-  location    = var.location
+  # Multi-host web cluster (#5274 Phase 3, ADR-068). web-1 is the PRE-EXISTING
+  # host; its name/server_type/location come from var.web_hosts pinned to current
+  # state so the `moved` migration below is 0-destroy (a location change would
+  # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
+  # cloud-init at boot (the 11 SSH provisioners below stay web-1-scoped, mirroring
+  # the git-data host's cloud-init-only shape, so a web-2 that is not yet
+  # SSH-reachable never hangs the merge-triggered auto-apply).
+  for_each    = var.web_hosts
+  name        = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
+  server_type = each.value.server_type
+  location    = each.value.location
   image       = "ubuntu-24.04"
   keep_disk   = true
   ssh_keys    = [hcloud_ssh_key.default.id]
+
+  # Spread across distinct physical hosts within the EU location (HA). Attaching to
+  # the RUNNING web-1 forces a power-off → maintenance-window apply (an in-place
+  # reboot, NOT a replace — verify `0 to destroy` in the plan before applying).
+  placement_group_id = hcloud_placement_group.web_spread.id
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
     image_name                            = var.image_name
@@ -88,7 +101,7 @@ resource "terraform_data" "disk_monitor_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -128,7 +141,7 @@ resource "terraform_data" "resource_monitor_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -172,7 +185,7 @@ resource "terraform_data" "container_restart_monitor_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -219,7 +232,7 @@ resource "terraform_data" "fail2ban_tuning" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -297,7 +310,7 @@ resource "terraform_data" "journald_persistent" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -464,7 +477,7 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
   # 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -693,12 +706,12 @@ resource "terraform_data" "docker_seccomp_config" {
   # whenever the host is replaced.
   triggers_replace = {
     seccomp_profile = sha256(file("${path.module}/seccomp-bwrap.json"))
-    server_id       = hcloud_server.web.id
+    server_id       = hcloud_server.web["web-1"].id
   }
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -749,7 +762,7 @@ resource "terraform_data" "apparmor_bwrap_profile" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -778,7 +791,7 @@ resource "terraform_data" "orphan_reaper_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -831,12 +844,12 @@ resource "terraform_data" "cron_egress_firewall" {
       # no-ops (the block lived in the 2nd remote-exec, outside this hash).
       file("${path.module}/cron-egress-postapply-assert.sh"),
     ]))
-    server_id = hcloud_server.web.id
+    server_id = hcloud_server.web["web-1"].id
   }
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -923,10 +936,16 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+# Per-host local worktree volume (multi-host /workspaces, #5274 Phase 3). Each web
+# host has its OWN /workspaces block volume (per-user worktrees live host-local on
+# NVMe — ADR-068 §1). web-1 keeps its exact current name/location so the `moved`
+# migration below is 0-destroy (a volume location change would force-replace and
+# drop the live data).
 resource "hcloud_volume" "workspaces" {
-  name     = "soleur-web-platform-data"
+  for_each = var.web_hosts
+  name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
-  location = var.location
+  location = each.value.location
   format   = "ext4"
 
   labels = {
@@ -935,6 +954,7 @@ resource "hcloud_volume" "workspaces" {
 }
 
 resource "hcloud_volume_attachment" "workspaces" {
-  volume_id = hcloud_volume.workspaces.id
-  server_id = hcloud_server.web.id
+  for_each  = var.web_hosts
+  volume_id = hcloud_volume.workspaces[each.key].id
+  server_id = hcloud_server.web[each.key].id
 }

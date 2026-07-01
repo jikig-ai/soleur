@@ -225,7 +225,7 @@ fixes for every per-step plan:
    (IaC option (c)), which proxies to the lease-holder over the private net.
 
 6. **Cross-tenant isolation is per-`workspace_id`, enforced at every new boundary.**
-   The bwrap `denyRead:["/workspaces"]` guard (`agent-runner-sandbox-config.ts:94`)
+   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts:106`, per-sibling since ADR-075)
    does **not** cover remote git-data — the bare-repo fetch runs in the Node process,
    outside the sandbox. Network access to git-data MUST carry a per-`workspace_id`
    credential / mTLS (reuse the `resolve_workspace_installation_id` membership-RPC
@@ -236,6 +236,117 @@ fixes for every per-step plan:
    + TTL ≤ conversation retention. Coordinator↔host is mTLS and the **owning host
    re-verifies** the requester owns the target conversation/lease before honoring any
    forwarded op (defense-in-depth, never trust-the-coordinator).
+
+> **Amendment (operator decision + CTO ruling, 2026-07-01, Phase 3 GA — routing).**
+> §4's "stateless coordinator that **forwards control ops** cross-host" and §5's
+> tunnel-`service`→coordinator ingress are **superseded by USER-STICKY routing**
+> (operator chose the GA D0 fork). `worktree_id` becomes **per-user** (it was
+> hardcoded `"primary"`, `worktree-write-lease.ts:23`); the migration-116 PK
+> `(workspace_id, worktree_id)` already supports it, so this is **zero schema
+> change**. A session routes to the host holding **that user's** worktree lease; two
+> users of one workspace hold **two leases** → **two hosts** (ADR-068 G1 satisfied).
+> Because each conversation's control ops are **sticky to its owning host**, there is
+> **no cross-host control-op forwarding plane, no two-registry union-forward, no
+> mTLS-RPC**: the §4 `abortSession` found-count "lives-elsewhere" discriminator and
+> the RPC-forward-on-not-found reduce to a **local** ownership lookup
+> (`abortSession()>0 || hasActiveCcQuery(convId)` on the arriving host). The
+> "coordinator" (§4/C4 `coordinator`) is redefined as a **co-located stateless
+> reverse-proxy in the web-host process** (no separate coordinator box / cloud-init):
+> inbound WS on any host → resolve the conversation's owning host from the per-user
+> lease → local ⇒ serve, remote ⇒ proxy over the private net. The routing decision is
+> taken at the **WS-upgrade handshake, not after** (never upgrade-then-redirect;
+> fly-replay shape). The owning host **re-verifies membership** before serving a
+> proxied session (§6 defense-in-depth, preserved).
+> **D0-ref — distinct per-user refs.** Each worktree pushes ONLY to
+> `refs/soleur/worktrees/<worktree_id>/heads/*` (+ `/tags/*`) — sole writer of its
+> namespace, so `--force` stays safe and the per-`(workspace,worktree)` fence aligns
+> 1:1 with the namespace. The **current** `replicateToGitData` refspec
+> (`refs/heads/*:refs/heads/*` `--force`, `worktree-id=primary`,
+> `git-data-replication.ts:195-207`) is safe only at `replicas=1`; under a 2nd writer
+> it **silently clobbers a peer user's commits** (the fence guards monotonicity
+> *within* a gen-stream, not last-writer-wins *across* streams). So the namespaced
+> refspec + per-user `worktree_id` are a **hard prerequisite** of the flip, plus a
+> **namespace-ownership check** in `git-data-pre-receive.sh` (`worktree-id=W` may write
+> only `refs/soleur/worktrees/W/`) and app-side CWE-22 validation of `worktree_id`
+> (symmetric to `assertSafeWorkspaceId`). Cross-user visibility = `git fetch` the peer
+> namespace; reconciliation = explicit user merge; **GitHub `origin/main` stays
+> canonical** (rehydration intact). **Rejected:** (A) **workspace-sticky** — re-scopes
+> G1 (a workspace's users can no longer span hosts); (B) **coordinator-forwarding** —
+> the §4-drafted cross-host control plane + two-registry union-forward + mTLS-RPC, an
+> over-built substrate for a goal user-sticky meets with a local lookup (CTO/DHH/
+> simplicity converged). (C) a **shared** git-data ref serialized across users —
+> re-introduces the last-writer-wins clobber the fence cannot prevent across streams.
+> The `coordinator` C4 description is refined to "co-located stateless sticky router";
+> the `tunnel -> coordinator` ingress relation is corrected by the TLS/cred amendment.
+
+> **Amendment (CTO ruling, 2026-07-01, Phase 3 GA — TLS + credential + D2).**
+> §6's "**mTLS** coordinator↔host" and "per-`workspace_id` credential / mTLS ... never
+> a cluster-wide cred" are concretized for the 2-host owned line:
+> **(a) One-way TLS on the host↔host WS proxy.** A long-lived self-signed **server**
+> cert per host (`tls_private_key`/`tls_self_signed_cert`, cloud-init + Doppler); the
+> proxying client **pins our self-signed CA** (`rejectUnauthorized:true`, never
+> `false` — MITM). **Mutual / client certs are dropped** (over-built for 2 hosts we own
+> — DHH/simplicity); a multi-year cert ⇒ **no rotation cron** (startup `notAfter` log +
+> Sentry handshake-error + one Better Stack cert-expiry monitor). Encryption-in-transit
+> (NFR-026) is satisfied by the one-way channel. **(b) The git-data cross-tenant
+> credential is a MEMBERSHIP SHAPE, not a new per-workspace secret.**
+> `resolve_workspace_installation_id` is reused for its **NULL-for-non-member** shape;
+> 3.C adds a **membership-gated fetch authorization** on the existing single
+> cluster-wide transport key (de-inflation — the bwrap `denyRead:["/workspaces"]`
+> (`agent-runner-sandbox-config.ts`) cannot cover the in-Node fetch). **(c) D2 push-key
+> trust — split by threat case.** The **logic-bug** cross-tenant write is **CLOSED** by
+> an app-side fail-closed **write-boundary membership sentinel** on the push path
+> (`git-data-replication.ts`, making the optional `userId` mandatory + authorizing when
+> `isGitDataStoreEnabled()`, keyed on the exact `workspaceId` that builds the push URL —
+> `hr-write-boundary-sentinel-sweep-all-write-sites`); it **gates the flip**. The
+> **host-compromise** (transport-key abuse) cross-tenant write is an **accepted GA
+> residual**, mirroring §8's shared-git-data-host SPOF acceptance — per-workspace push
+> keys are disproportionate for a 2-host GA line (a full web-host breach already
+> dominates via the DB service-role + GitHub App key), named as the **post-GA closer**
+> with a tracking issue + a promotion tripwire (any key-leak/host-compromise incident,
+> or workspace count crossing a blast-radius threshold). Cheap non-gating host-side
+> hardening: a receive/upload-pack allowlist wrapper on the transport key. **Rejected:**
+> mutual TLS + per-workspace push keys at GA (same proportionality bar that downgraded
+> mTLS). **Status:** this ADR flips `adopting`→`accepted` when the GA cutover lands in
+> prod (3.D — **only after LUKS-at-rest + one-way-TLS are verified**, NFR-026).
+
+> **Amendment (CTO ruling, 2026-07-01, Phase 3 GA — deploy fan-out).** With the web
+> host `for_each`'d to a 2-host cluster, deploys must deterministically **deliver the
+> container to BOTH hosts** (drain-both, deliver-both). Today the release workflow
+> POSTs an HMAC-signed webhook to `deploy.soleur.ai` → the single Cloudflare tunnel
+> (`cloudflared.web`); both hosts run cloudflared on that ONE tunnel, so a POST
+> load-balances to ONE connector non-deterministically. **Chosen: Option B — a
+> receiving-host private-net fan-out.** One POST lands on host A; A deploys itself AND
+> forwards the same HMAC-signed payload to each peer over the private net
+> (`10.0.1.x:9000`), so one trigger reaches both. This is the deploy-path expression
+> of the co-located-router decision already made (§4 user-sticky amendment) and reuses
+> the git-data host's "second host that only exists post-apply, verified by a
+> web-host-driven private-net script — never CI, never the merge-apply"
+> precedent (`hr-fresh-host-provisioning-reachable-from-terraform-apply`). The webhook
+> listener binds `0.0.0.0:9000` (was loopback) so the peer is reachable; this is safe
+> because `hcloud_firewall.web` default-denies 9000 on the public interface — making
+> that default-deny **load-bearing for webhook exposure**, so a drift-guard assertion
+> pins it (a future firewall edit opening 9000 must fail CI). The peer list is
+> **declarative** — the other hosts' `private_ip`s rendered from `var.web_hosts` into
+> each host's config; empty at one host ⇒ the fan-out is a no-op ⇒ the single-host
+> deploy path is byte-identical. **Binding constraints:** (a) the peer receives on a
+> distinct `/hooks/deploy-peer` hook that runs `ci-deploy.sh` **without re-fanning**
+> (A→B must never trigger B→A); (b) the forward result folds into the webhook's HTTP
+> response so the release workflow's existing status check catches "web-1 ok, web-2
+> down" (`ci-deploy.sh` is idempotent + flock-serialized → a full retry re-delivers to
+> both); (c) AC5's per-host state verification is **private-net + peer-driven** (query
+> `10.0.1.11:9000`, no SSH — `hr-no-ssh-fallback-in-runbooks`), and the peer-forward
+> failure path reaches Sentry/Better Stack from the RECEIVING host
+> (`hr-observability-layer-citation`). **Rejected:** (A) **per-host tunnels** —
+> `for_each`-ing `cloudflared.web` risks REPLACING the live tunnel (import artifact,
+> `config_src` forces replacement) = deploy-path outage; cannot be dormant (rewrites
+> `deploy.soleur.ai` at merge, before web-2 exists); collides with 3.D's ingress
+> rewire; its only edge (clean per-host CI status) is recovered in B via the
+> synchronous forward result. (C) **per-host SSH deploy** — same tunnel restructure as
+> A plus a new host-to-host key surface (the 11 SSH provisioners are all
+> `web-1`-scoped). (D) **defer** — ships a maintenance-window apply that creates web-2
+> which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
+> single-user-incident trap the threshold exists to prevent.
 
 7. **Self-host the session-Redis on EU Hetzner; secrets via `random_password`.**
    Hetzner has no managed Redis. A self-hosted dedicated EU Redis adds **no new
@@ -340,7 +451,7 @@ Redis tier exists at Hetzner.
   actually relaxes), not at this ADR's authoring.
 - **AP-001 (Terraform-only infrastructure).** Aligned — every new host/network/Redis
   node is `hcloud_*` / `hcloud_network` in `apps/web-platform/infra/`; lease state is a
-  Supabase migration (114), not TF. Every new TF root carries a `terraform validate`
+  Supabase migration (116), not TF. Every new TF root carries a `terraform validate`
   CI gate.
 - **AP-006 (All knowledge in committed repo files).** Aligned — the staged decision,
   the GA line, and the rejected alternatives live in this committed ADR + the epic
@@ -360,7 +471,7 @@ is clean and all four new elements render in the Container view.
 
 | C4 id | Kind | Phase it ships | Role |
 |---|---|---|---|
-| `coordinator` | container | 3 (GA path) | Stateless lease-keyed router + control-op forwarder; N replicas behind the one tunnel |
+| `coordinator` | container | 3 (GA path) | Co-located stateless **sticky** router (in each web-host process; user-sticky amendment 2026-07-01) — routes to the per-user lease-holder at WS-upgrade, proxies over one-way TLS; control ops are host-local (no cross-host forwarder) |
 | `gitDataStore` | database | 2 (GA path) | Shared bare repos (objects/refs) over the private net; writer-side CAS fence (reject `gen < max`) |
 | `scheduler` | container | 4a (post-GA) | Nomad — placement / health-reschedule / rolling deploy |
 | `sessionStore` | database | 4a (post-GA) | Self-hosted EU Redis — ADR-059 replay buffer; DISTINCT from the loopback Inngest Redis |

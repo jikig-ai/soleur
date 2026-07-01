@@ -741,7 +741,7 @@ assert_canary_trace_order() {
 #   bwrap sandbox check (docker exec) → stop(canary) → rm(canary) [#5669 memory-dwell:
 #   torn down BEFORE the drain] → stop(old) → rm(old) →
 #   ps(ADR-027 single-replica assertion) → run(prod)
-# (#5669/ADR-068: the post-success canary teardown was removed — the canary is now
+# (#5669/ADR-078: the post-success canary teardown was removed — the canary is now
 #  torn down before the cron drain gate, so it no longer appears after run(prod).)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
@@ -1296,6 +1296,90 @@ assert_cron_workspace_root() {
 
 assert_cron_workspace_root "web-platform: docker run has -e CRON_WORKSPACE_ROOT=/workspaces" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
+echo "--- SOLEUR_HOST_ID on docker run (#5274 Phase 3, ADR-068) ---"
+
+assert_soleur_host_id() {
+  # Verify EVERY docker run line (canary AND prod) carries -e SOLEUR_HOST_ID=<id> —
+  # the per-user worktree write-lease's placement authority (host-identity.ts). A
+  # canary/prod skew (one host-id-tagged, one not) would let a lease-mismatch ship
+  # silently once the git-data flag flips. Uses SOLEUR_HOST_ID_OVERRIDE so the id is
+  # deterministic (the on-host metadata/machine-id resolution is unit-tested in
+  # host-identity.test.ts; here we prove the INJECTION reaches both containers).
+  local description="$1"
+  local cmd="$2"
+  local expected="host-under-test-42"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output
+  output=$(
+    export MOCK_DOCKER_MODE="apparmor-trace"
+    export SOLEUR_HOST_ID_OVERRIDE="$expected"
+    run_deploy "$cmd" 2>&1
+  ) || true
+
+  local run_lines
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+
+  if [[ -z "$run_lines" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no DOCKER_RUN_ARGS lines found)"
+    return
+  fi
+
+  local all_have_id=true
+  while IFS= read -r line; do
+    if ! printf '%s\n' "$line" | grep -qF -- "-e SOLEUR_HOST_ID=${expected}"; then
+      all_have_id=false
+      break
+    fi
+  done <<< "$run_lines"
+
+  if [[ "$all_have_id" == "true" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (docker run missing -e SOLEUR_HOST_ID=${expected})"
+    printf '%s\n' "$run_lines" | head -5 | sed 's/^/    /'
+  fi
+}
+
+assert_soleur_host_id "web-platform: docker run has -e SOLEUR_HOST_ID on both canary and prod" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
+echo "--- Deploy fan-out loop-prevention (#5274 Phase 3, ADR-068) ---"
+# The 2-host fan-out is loop-safe ONLY if the /hooks/deploy-peer hook does NOT
+# receive the peer list — otherwise a forwarded deploy would re-fan (A->B->A...).
+# The invariant lives in hooks.json.tmpl: /hooks/deploy passes SOLEUR_DEPLOY_PEERS,
+# /hooks/deploy-peer does NOT. Parsed structurally (jq over each hook's
+# pass-environment envnames) so a future edit that leaks peers into deploy-peer
+# fails CI. Template exprs (${jsonencode(...)}) are neutralised to valid JSON first.
+HOOKS_TMPL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hooks.json.tmpl"
+if [[ -f "$HOOKS_TMPL" ]]; then
+  rendered="$(sed -E 's/\$\{jsonencode\([^)]*\)\}/"REDACTED"/g' "$HOOKS_TMPL")"
+  deploy_env="$(printf '%s' "$rendered" | jq -r '.[] | select(.id=="deploy") | (.["pass-environment-to-command"] // [])[].envname' 2>/dev/null)"
+  peer_env="$(printf '%s' "$rendered" | jq -r '.[] | select(.id=="deploy-peer") | (.["pass-environment-to-command"] // [])[].envname' 2>/dev/null)"
+
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$deploy_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+    PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy passes SOLEUR_DEPLOY_PEERS (fan-out trigger)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy is missing SOLEUR_DEPLOY_PEERS — fan-out would never fire"
+  fi
+
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$peer_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy-peer passes SOLEUR_DEPLOY_PEERS — a forwarded deploy would RE-FAN (loop)"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy-peer does NOT pass SOLEUR_DEPLOY_PEERS (loop-prevented)"
+  fi
+else
+  echo "  SKIP: hooks.json.tmpl not found at $HOOKS_TMPL"
+fi
 
 echo ""
 echo "--- Bwrap canary sandbox check ---"
@@ -2319,7 +2403,7 @@ else
 fi
 
 echo ""
-echo "--- Cron drain (#5669 / ADR-068) ---"
+echo "--- Cron drain (#5669 / ADR-078) ---"
 
 # This section drives real (mocked) deploys whose runners return non-zero on the
 # negative paths (L2) and uses grep|head extractions that SIGPIPE under

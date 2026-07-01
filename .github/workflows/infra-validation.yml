@@ -105,6 +105,20 @@ jobs:
           terraform validate
         working-directory: ${{ matrix.directory }}
 
+      # Any infra root that ships tests/*.tftest.hcl gets `terraform test` run
+      # after validate. Used by apps/web-platform/infra for the credential-free
+      # var.web_hosts EU-residency negative tests (CLO T-1) via mock_provider —
+      # variable validation is proven WITHOUT a Hetzner token or the R2 backend.
+      - name: Terraform test (if tests/ present)
+        run: |
+          if compgen -G "tests/*.tftest.hcl" > /dev/null; then
+            echo "→ terraform test"
+            terraform test
+          else
+            echo "No tests/*.tftest.hcl in this directory; skipping."
+          fi
+        working-directory: ${{ matrix.directory }}
+
       # Optional per-app lint hook: any infra root that ships a `main.test.sh`
       # gets it executed after fmt/validate. Used by apps/cla-evidence/infra
       # to assert content invariants (Governance mode, 3650-day retention,
@@ -172,6 +186,12 @@ jobs:
       - name: Run server.tf remote-exec set -e drift-guard
         run: bash apps/web-platform/infra/server-tf-set-e.test.sh
 
+      - name: Run deploy fan-out peer-list parity drift-guard
+        run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
+
+      - name: Run firewall port-9000 deny drift-guard
+        run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
+
       # Host monitor family (#5417 registered these; resource-monitor +
       # cat-deploy-state were pre-existing orphan suites CI never ran).
       - name: Run container-restart-monitor.sh tests
@@ -213,6 +233,9 @@ jobs:
 
       - name: Run git-data bare-repo provisioner tests
         run: bash apps/web-platform/infra/git-data-provision.test.sh
+
+      - name: Run git-data bare-repo erasure (Art. 17) tests
+        run: bash apps/web-platform/infra/git-data-remove.test.sh
 
   check-secrets:
     runs-on: ubuntu-24.04

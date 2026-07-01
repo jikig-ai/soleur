@@ -437,10 +437,10 @@ jobs:
     # bump (claude-code/playwright/node) forces a one-time FULL image re-pull on
     # the prod server, which a 900s ceiling cannot fit — see the v0.116.1 buildx
     # full-repull PIR (post-mortems/v0116-1-buildx-driver-full-repull-deploy-timeout).
-    # Ceiling raised 1800s→4800s (#5669 / ADR-068): the cron drain in ci-deploy.sh
+    # Ceiling raised 1800s→4800s (#5669 / ADR-078): the cron drain in ci-deploy.sh
     # can wait up to CRON_DRAIN_TIMEOUT=4200s (MAX per-function maxTurnDurationMs)
     # for an in-flight cron before swapping, so the deploy wall-clock must exceed
-    # drain + swap overhead (worst-case deploy ~80min). Trade-off named in ADR-068:
+    # drain + swap overhead (worst-case deploy ~80min). Trade-off named in ADR-078:
     # IN_FLIGHT_CEILING_S also gates the pre-rerun stale-lock probe below, so a
     # wedged prior deploy now reads as "alive" for ~80min and hung-deploy failure
     # surfaces ~80min slower.
@@ -526,8 +526,15 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.release.outputs.version }}
+          # 2-host deploy fan-out (#5274 Phase 3, ADR-068). The receiving host
+          # forwards the deploy to these peer private IPs over the private net so
+          # one POST delivers to BOTH hosts; the host self-excludes at runtime.
+          # MUST equal var.web_hosts private_ips (variables.tf) — pinned by
+          # apps/web-platform/infra/web-hosts-fanout-parity.test.sh (single-user
+          # incident: a drift means web-2 silently misses deploys).
+          WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
         run: |
-          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s"}' "$VERSION")
+          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s","peers":"%s"}' "$VERSION" "$WEB_HOST_PRIVATE_IPS")
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
             --max-time 30 \

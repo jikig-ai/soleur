@@ -154,7 +154,7 @@ container_restart_json() {
       restart_rate_per_hour: $rate, oom_journal_tail: $oom_tail}'
 }
 
-# Cron-drain observability (#5669 / ADR-068). The no-SSH surface for the
+# Cron-drain observability (#5669 / ADR-078). The no-SSH surface for the
 # graceful-drain fix: how long the last deploy waited for an in-flight cron
 # before swapping the container (cron_drain_wait_secs), and whether the drain
 # timed out and killed the cron anyway (cron_drain_timed_out — the only path
