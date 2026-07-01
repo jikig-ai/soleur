@@ -137,7 +137,9 @@ jobs:
           set +e
           bash apps/web-platform/scripts/constraint-gates.sh
           echo "rc=$?" >> "$GITHUB_OUTPUT"
-          if git diff --quiet; then
+          # `git status --porcelain` (not `git diff`) so a fix that CREATES a new in-scope
+          # file (untracked) counts as changed — `git diff` ignores untracked files.
+          if [ -z "$(git status --porcelain)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -158,17 +160,26 @@ jobs:
           set -euo pipefail
           staging="${RUNNER_TEMP}/fix-constraints-patch"
           rm -rf "$staging"; mkdir -p "$staging/files"
-          # NUL-delimited so any filename survives; post-image (working-tree) contents.
-          mapfile -d '' changed < <(git diff --name-only -z)
+          # Stage ALL agent changes (tracked edits AND new untracked in-scope files; git add
+          # respects .gitignore so node_modules etc. are excluded), then enumerate them
+          # NUL-delimited so any filename survives. Out-of-scope edits are still enumerated
+          # here so the allowlist below can ABORT on them (never silently ship a partial fix).
+          git add -A
+          mapfile -d '' changed < <(git diff --cached --name-only -z)
           if [ "${#changed[@]}" -eq 0 ]; then
             echo "::notice::no changed files — nothing to deliver"; exit 0
           fi
-          allow_re='^apps/web-platform/(app|components|server)/'
+          # Positive-charset, end-anchored allowlist + explicit absolute/`..` reject (matches
+          # Stage B's validator; defense-in-depth so the producer's scope boundary does not rely
+          # on a git-diff normalization invariant).
+          allow_re='^apps/web-platform/(app|components|server)/[A-Za-z0-9._/-]+$'
           files_json='[]'
           for f in "${changed[@]}"; do
-            if [[ ! "$f" =~ $allow_re ]]; then
+            if [[ "$f" == /* ]] || [[ "$f" == *".."* ]] || [[ ! "$f" =~ $allow_re ]]; then
               echo "::error::agent edited an out-of-scope path (${f}) — auto-recovery is fix-only and in-scope-only; no artifact produced. A maintainer must review."
-              exit 0   # no artifact => Stage B no-ops; the give-up IS the feedback
+              # Record the give-up reason so the marker step (below) can tell Stage B to comment.
+              echo "giveup_reason=edited an out-of-scope path" >> "$GITHUB_OUTPUT"
+              exit 0   # no recovery artifact => a give-up marker is produced instead
             fi
             dest="$staging/files/$f"
             mkdir -p "$(dirname "$dest")"
@@ -189,5 +200,49 @@ jobs:
         with:
           name: fix-constraints-patch-${{ github.event.pull_request.number }}
           path: ${{ steps.artifact.outputs.dir }}
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Build give-up marker (red gate, no in-scope fix delivered)
+        # The gate was RED but no recovery artifact was produced (no key, agent didn't run,
+        # made no edits, still red after the fix, or greened via an out-of-scope path). Emit a
+        # tiny marker so the privileged Stage B can post ONE "maintainer needed" comment on the
+        # PR — the founder is NEVER left silently deadlocked (plan AC: no terminal state is
+        # silent). No marker when the gate was already green (nothing tripped → no comment).
+        if: steps.gate.outputs.rc != '0' && steps.artifact.outputs.produced != 'true'
+        id: giveup
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREFLIGHT_OK: ${{ steps.preflight.outputs.ok }}
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          VERIFY_RC: ${{ steps.verify.outputs.rc }}
+          ARTIFACT_REASON: ${{ steps.artifact.outputs.giveup_reason }}
+        run: |
+          set -euo pipefail
+          if [ "${PREFLIGHT_OK}" != 'true' ]; then
+            reason="the fix agent could not run (API key unavailable or a fork PR)"
+          elif [ -n "${ARTIFACT_REASON}" ]; then
+            reason="${ARTIFACT_REASON}"
+          elif [ "${AGENT_OUTCOME}" != 'success' ]; then
+            reason="the fix agent did not complete"
+          elif [ "${VERIFY_RC}" != '0' ]; then
+            reason="the gate was still red after the agent's attempt"
+          else
+            reason="the agent made no edits — this gate may not be auto-fixable"
+          fi
+          staging="${RUNNER_TEMP}/fix-constraints-giveup"
+          rm -rf "$staging"; mkdir -p "$staging"
+          jq -n --arg pr "$PR_NUMBER" --arg sha "$HEAD_SHA" --arg r "$reason" \
+            '{pr_number: ($pr|tonumber), head_sha: $sha, reason: $r}' > "$staging/meta.json"
+          echo "dir=${staging}" >> "$GITHUB_OUTPUT"
+          echo "produced=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload give-up marker
+        if: steps.giveup.outputs.produced == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fix-constraints-giveup-${{ github.event.pull_request.number }}
+          path: ${{ steps.giveup.outputs.dir }}
           retention-days: 1
           if-no-files-found: error

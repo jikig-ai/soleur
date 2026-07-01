@@ -54,24 +54,28 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          count=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" \
-            --jq '[.artifacts[] | select(.name | startswith("fix-constraints-patch-"))] | length')
-          echo "count=${count}" >> "$GITHUB_OUTPUT"
-          if [ "${count}" = "0" ]; then
-            echo "::notice::Stage A produced no recovery artifact (gate green / no fix / out-of-scope) — nothing to apply."
+          arts=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq '[.artifacts[].name]')
+          recovery=$(jq '[.[] | select(startswith("fix-constraints-patch-"))] | length' <<<"$arts")
+          giveup=$(jq '[.[] | select(startswith("fix-constraints-giveup-"))] | length' <<<"$arts")
+          echo "recovery=${recovery}" >> "$GITHUB_OUTPUT"
+          echo "giveup=${giveup}" >> "$GITHUB_OUTPUT"
+          if [ "${recovery}" = "0" ] && [ "${giveup}" = "0" ]; then
+            echo "::notice::Stage A produced no artifact (gate was green — nothing to apply)."
           fi
 
-      - name: Download the Stage A artifact
-        if: steps.check.outputs.count != '0'
+      - name: Download the Stage A artifact(s)
+        if: steps.check.outputs.recovery != '0' || steps.check.outputs.giveup != '0'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: fix-constraints-patch-*
+          # Matches BOTH the recovery patch and the give-up marker; excludes the Stage A run's
+          # separate `api-spend-*` artifact.
+          pattern: fix-constraints-*
           path: artifact
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
       - name: Resolve identity, validate artifact, apply via Git Data API
-        if: steps.check.outputs.count != '0'
+        if: steps.check.outputs.recovery != '0'
         id: apply
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,10 +88,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          emit() { echo "state=$1" >> "$GITHUB_OUTPUT"; echo "detail=$2" >> "$GITHUB_OUTPUT"; }
           # Strip control chars + unicode line/para separators as escape sequences (never
           # literal chars) before embedding any string in a comment / PR body (log-injection).
           sanitize() { LC_ALL=C sed $'s/[\x01-\x1f\x7f]//g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+          # `detail` interpolates attacker-controlled artifact data (meta.json fields, rejected
+          # paths); a `jq -r`-decoded newline would otherwise inject extra `state=`/`pr_url=`
+          # lines into $GITHUB_OUTPUT and forge a success comment. sanitize() strips \n/\r, so
+          # emit() is the single choke point that neutralizes it.
+          emit() { echo "state=$1" >> "$GITHUB_OUTPUT"; echo "detail=$(printf '%s' "$2" | sanitize)" >> "$GITHUB_OUTPUT"; }
 
           # --- Identity from the event; validate SHA shape BEFORE any use ------------------
           if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -117,10 +125,15 @@ jobs:
 
           # --- Locate the single artifact dir ----------------------------------------------
           art_dir=$(find artifact -maxdepth 1 -type d -name 'fix-constraints-patch-*' | head -1)
-          if [ -z "$art_dir" ] || [ ! -f "$art_dir/meta.json" ]; then
-            emit "integrity-fail" "artifact missing or has no meta.json"; exit 0
+          if [ -z "$art_dir" ] || [ ! -f "$art_dir/meta.json" ] || [ ! -d "$art_dir/files" ]; then
+            emit "integrity-fail" "artifact missing, or has no meta.json / files dir"; exit 0
           fi
           meta="$art_dir/meta.json"
+          # A malformed (non-JSON) meta.json must fail as integrity-fail, not crash to the
+          # generic "unexpected error" branch — validate it parses before any jq read.
+          if ! jq -e . "$meta" >/dev/null 2>&1; then
+            emit "integrity-fail" "meta.json is not valid JSON"; exit 0
+          fi
 
           # --- Cross-check meta.json against the trusted identity (meta is a cross-check only) --
           m_pr=$(jq -r '.pr_number' "$meta")
@@ -186,7 +199,15 @@ jobs:
             | gh api "repos/${REPO}/git/commits" --input - --jq '.sha')
 
           branch="soleur/fix-constraints/${PR_NUMBER}"
-          if gh api "repos/${REPO}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+          if existing_tip=$(gh api "repos/${REPO}/git/ref/heads/${branch}" --jq '.object.sha' 2>/dev/null); then
+            # Refuse to force-overwrite HUMAN commits on the bot branch — a maintainer may have
+            # pushed review fixes to the draft follow-up PR. Only force-replace a bot-authored
+            # tip; a non-bot login means manual work we must not clobber (surface it instead).
+            tip_author=$(gh api "repos/${REPO}/commits/${existing_tip}" --jq '.author.login // ""' 2>/dev/null || echo "")
+            if [ -n "$tip_author" ] && [ "$tip_author" != "github-actions[bot]" ]; then
+              emit "branch-has-manual-commits" "the auto-fix branch has manual commits — a newer fix is available but was not applied; reconcile manually"
+              exit 0
+            fi
             jq -n --arg s "$new_commit" '{sha:$s, force:true}' \
               | gh api -X PATCH "repos/${REPO}/git/refs/heads/${branch}" --input - >/dev/null
           else
@@ -221,6 +242,40 @@ jobs:
           echo "pr_url=${pr_url}" >> "$GITHUB_OUTPUT"
           emit "recovered" "opened follow-up PR ${pr_url}"
 
+      - name: Comment give-up feedback (red gate, no in-scope fix)
+        # Stage A produced a give-up marker instead of a recovery patch (no key, agent made no
+        # in-scope fix, still red, or greened out-of-scope). The founder must NEVER be left
+        # silently deadlocked, so post exactly one "maintainer needed" comment. Identity is
+        # resolved from the TRUSTED event head_sha (never the marker); this step only COMMENTS
+        # (no repo write), so it needs none of the artifact-apply gates.
+        if: steps.check.outputs.recovery == '0' && steps.check.outputs.giveup != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          sanitize() { LC_ALL=C sed $'s/[\x01-\x1f\x7f]//g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::notice::head_sha not a 40-hex SHA — cannot map to a PR"; exit 0; }
+          prs_json=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+            | jq --arg repo "$REPO" '[.[] | select(.state=="open") | {number, cross: (.head.repo.full_name != $repo)}]')
+          n=$(jq 'length' <<<"$prs_json")
+          [ "$n" = "1" ] || { echo "::notice::expected exactly one open PR for ${HEAD_SHA}, found ${n} — no comment"; exit 0; }
+          PR_NUMBER=$(jq -r '.[0].number' <<<"$prs_json")
+          IS_CROSS=$(jq -r '.[0].cross' <<<"$prs_json")
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || exit 0
+          reason=""
+          gd=$(find artifact -maxdepth 1 -type d -name 'fix-constraints-giveup-*' | head -1)
+          if [ -n "$gd" ] && [ -f "$gd/meta.json" ] && jq -e . "$gd/meta.json" >/dev/null 2>&1; then
+            reason=$(jq -r '.reason // ""' "$gd/meta.json" | sanitize)
+          fi
+          if [ "$IS_CROSS" != "false" ]; then
+            body="Auto-recovery can't run on a fork PR — the workflow's write token is scoped to this repository. A maintainer must run \`constraint-scaffold\` locally and push the fix."
+          else
+            body="⚠️ The L1 constraint-gate is red and auto-recovery could not deliver a fix (${reason:-no in-scope fix produced}). A maintainer needs to review this gate — it may be a real client→server-secret leak that must be fixed by hand (auto-recovery never grows the suppression baseline)."
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
+
       - name: Comment the terminal outcome on the original PR
         # Every non-happy terminal state posts exactly one deterministic comment; never silent.
         if: always() && steps.apply.outputs.pr_number != ''
@@ -247,6 +302,8 @@ jobs:
               body="Auto-recovery aborted: the recovery artifact's metadata did not match this PR's verified identity — nothing was written. Detail: ${DETAIL}" ;;
             no-single-pr)
               body="Auto-recovery could not map the fix to a single open PR (${DETAIL}) — nothing was written." ;;
+            branch-has-manual-commits)
+              body="Auto-recovery produced a newer fix, but the draft follow-up branch has manual (maintainer) commits — it was NOT overwritten to avoid discarding that work. Reconcile manually. Detail: ${DETAIL}" ;;
             *)
               body="Auto-recovery hit an unexpected error (apply step: ${APPLY_OUTCOME}) before it could finish — see the workflow run logs. A maintainer can run \`constraint-scaffold\` locally." ;;
           esac

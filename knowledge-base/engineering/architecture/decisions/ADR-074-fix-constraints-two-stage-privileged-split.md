@@ -111,6 +111,31 @@ needs a maintainer — possible real leak." Failure asymmetry favors this: over-
 status-quo deadlock; under-blocking ships a secret to the browser bundle. Baseline growth stays a
 maintainer-only local `constraint-scaffold --refresh-baseline`.
 
+### No terminal state is silent — the give-up marker
+
+The founder must never be left silently deadlocked (a red gate with no PR feedback is the exact
+failure this feature exists to prevent). Stage A produces a recovery patch *only* when it ships an
+in-scope fix, so the give-up cases (no key, agent made no edit, still red after the attempt, or
+greened via an out-of-scope path) would otherwise leave Stage B with nothing to comment on. Stage A
+therefore emits a **second artifact type** — `fix-constraints-giveup-<pr>` (`meta.json` =
+`{pr_number, head_sha, reason}`) — whenever the gate was RED but no recovery patch shipped. Stage B,
+seeing a give-up marker and no recovery patch, resolves identity from the trusted `head_sha` and
+posts exactly one deterministic "a maintainer needs to review this gate" comment (or the fork
+message for a cross-repo PR). No marker is emitted when the gate was already green (nothing tripped →
+no comment, no spam on healthy PRs). This give-up path only reads + comments — it never touches the
+write token.
+
+### Concurrency keying (accepted bounded staleness)
+
+Stage B's `concurrency.group` is keyed on `github.event.workflow_run.head_sha`, not `pr_number` —
+`pr_number` is resolved by an in-job API call and is not available at workflow-level `concurrency`
+evaluation. Consequence: two Stage A completions on the *same PR* at *different* head SHAs can both
+force-update the single `soleur/fix-constraints/<pr>` bot branch, so a slower stale-SHA run may leave
+it at an older fix. Bounded and non-security: the branch is a human-reviewed **draft** PR, each Stage
+B commit is rebuilt fresh on `base_tree` = its own `head_sha` (no stale accumulation), and Stage B
+refuses to force-overwrite a branch whose tip is a **non-bot** commit (a maintainer's review commits
+are never silently clobbered — it comments `branch-has-manual-commits` instead).
+
 ### UX change — comment trigger dropped; recovery is zero-touch
 
 The `/soleur fix constraints` comment trigger is **removed**. Recovery becomes automatic on any PR

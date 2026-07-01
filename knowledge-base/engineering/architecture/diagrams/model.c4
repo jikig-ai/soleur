@@ -239,7 +239,7 @@ model {
   // Relationships — preserved 1:1 from the three Mermaid sources.
   // ======================================================================
 
-  // ---- C4 L1 (System Context) — 12 relationships -------------------------
+  // ---- C4 L1 (System Context) — 17 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }
   webapp -> supabase "Auth and data" { technology "HTTPS" }
