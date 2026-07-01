@@ -63,6 +63,6 @@
 
 ## How to maintain this register
 
-- **A PR that changes a business rule** (a new/changed migration constraint, RLS policy, ownership/access invariant, or resolver-guard semantics) updates the affected row(s) + cites the new source. Wired today via the `architecture` skill's `create` step (ADR → register); plan-flagging, a review drift-check, and a ship block are fast-follows (#5754).
-- **Auto-population (#5754):** `/soleur:sync --domain-model` derives candidate rules from migrations (tables / FKs / UNIQUE+CHECK constraints / RLS) and guard functions, reconciles against this register, and flags drift (a register rule with no backing source, or a source-level invariant with no register row).
+- **A PR that changes a business rule** (a new/changed migration constraint, RLS policy, ownership/access invariant, or resolver-guard semantics) updates the affected row(s) + cites the new source. Wired today via the `architecture` skill's `create` step (ADR → register); plan-flagging, a review drift-check, and a ship block are fast-follows (#5871).
+- **Auto-population (#5754):** `/soleur:sync domain-model` derives candidate rules from migrations (tables / FKs / UNIQUE+CHECK constraints / RLS) and guard functions, reconciles against this register, and flags drift (a register rule with no backing source, or a source-level invariant with no register row).
 - **Rule IDs are immutable** (mirrors `cq-rule-ids-are-immutable`): retire a row by marking it superseded + linking the superseding row, never by reusing an ID.

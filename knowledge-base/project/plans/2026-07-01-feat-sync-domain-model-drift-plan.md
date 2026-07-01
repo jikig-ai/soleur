@@ -132,7 +132,9 @@ product C4; the register is documentation, not a runtime container.
 - **If this lands broken, the user experiences:** a wrong/empty drift report — a maintainer trusts "no drift"
   while an undocumented structural invariant exists, OR an auto-inferred row misstates a rule.
 - **If this leaks, the user's data/workflow is exposed via:** false confidence — the register mis-cited as a
-  governance control while dynamic/function-body invariants sit unrecorded.
+  governance control while dynamic/function-body invariants sit unrecorded. **Named false-negative (review, fixed):**
+  a repo whose migrations dir moved/renamed would yield an empty extract; the drift report now fails LOUD
+  (`## Source not analyzable`, exit 2) instead of reading identical to a clean repo (the #2887 fail-open shape).
 - **Brand-survival threshold:** single-user incident.
 
 Mitigations: deterministic drift (no hallucinated drift, no LLM in the detection path); the guarantee is bounded to

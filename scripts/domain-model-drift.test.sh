@@ -16,19 +16,7 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $*" >&2; }
 
-# --- fixture builder -------------------------------------------------------
-# make_repo <migrations-subdir-relative-to-supabase> — prints a fresh repo root.
-make_repo() {
-  local root mig
-  root="$(mktemp -d)"
-  mig="$root/apps/web-platform/supabase/migrations"
-  mkdir -p "$mig"
-  printf '%s' "$mig"
-}
-
 # --- Test 1: base-migration constraint + policy extraction -----------------
-t1_root="$(dirname "$(make_repo)")"; t1_root="$(cd "$t1_root/../../.." && pwd)"
-# (make_repo returns the migrations dir; recompute the repo root cleanly)
 t1_repo="$(mktemp -d)"; t1_mig="$t1_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t1_mig"
 cat > "$t1_mig/001_base.sql" <<'SQL'
 CREATE TABLE workspace_members (
@@ -132,10 +120,11 @@ cat > "$t9_reg" <<'MD'
 MD
 out9="$(bash "$DRIFT" drift --repo "$t9_repo" --register "$t9_reg" 2>/dev/null)"
 rc9=$?
-# a synthesized non-existent symbol is flagged stale
-echo "$out9" | grep -q "resolveGoneSymbol" && pass || fail "T9: stale citation (resolveGoneSymbol) not flagged"
-# the LIVE resolveActiveWorkspace (exists in the cited file) is NOT flagged stale
-echo "$out9" | awk '/[Ss]tale/{f=1} f' | grep -q "resolveActiveWorkspace" && fail "T9: live resolveActiveWorkspace wrongly flagged stale" || pass
+# Positive control: EXACTLY ONE stale citation — proves the gone symbol was flagged
+# AND the live resolveActiveWorkspace citation was parsed-and-cleared (not vacuously
+# absent). A parser that never saw BR-1/BR-2 would not report "(1)".
+echo "$out9" | grep -qE 'Stale register citations \(1\)' && pass || fail "T9: expected exactly 1 stale citation (positive control)"
+echo "$out9" | grep -q "resolveGoneSymbol" && pass || fail "T9: the flagged stale citation is not resolveGoneSymbol"
 # drift found → exit 1
 [[ "$rc9" -eq 1 ]] && pass || fail "T9: drift-found exit=$rc9 (want 1)"
 
@@ -178,43 +167,84 @@ mk_register() {
 |---|---|
 MD
 }
+# write-row confines --register under --repo, so each call passes --repo = the
+# register's own dir (bare mktemp lands in TMPDIR; dirname is that dir).
+wr() { local reg="$1"; shift; bash "$DRIFT" write-row --repo "$(dirname "$reg")" --register "$reg" "$@"; }
+
 t12_reg="$(mktemp)"; mk_register "$t12_reg"
-bash "$DRIFT" write-row --register "$t12_reg" --anchor "001.sql › t.pol" --statement "policy pol on t" >/dev/null 2>&1
+before12="$(grep '| BR-1 | Curated' "$t12_reg")"
+wr "$t12_reg" --anchor "001.sql › t.pol" --statement "policy pol on t" >/dev/null 2>&1
 rc12=$?
 [[ "$rc12" -eq 0 ]] && pass || fail "T12: write-row exit=$rc12"
 grep -q "001.sql › t.pol" "$t12_reg" && pass || fail "T12: row not appended"
-# curated BR-1 row untouched
-grep -q "| BR-1 | Curated | Hand-written. | ADR-1 |" "$t12_reg" && pass || fail "T12: curated row mutated"
+# curated BR-1 row byte-identical (side-effect: curated table untouched)
+[[ "$(grep '| BR-1 | Curated' "$t12_reg")" == "$before12" ]] && pass || fail "T12: curated row mutated"
 # row landed under Auto-inferred, not Business Rules
 awk '/## Auto-inferred/{f=1} f && /001.sql/{print "OK"; exit}' "$t12_reg" | grep -q OK && pass || fail "T12: row not under Auto-inferred heading"
 
-# --- Test 13: markdown-injection safe (pipe escaped, BR-/## rejected) ---
-t13_reg="$(mktemp)"; mk_register "$t13_reg"
-bash "$DRIFT" write-row --register "$t13_reg" --anchor "a › b" --statement 'evil | col ## BR-WS-9' >/dev/null 2>&1
-# a literal forged BR- row must NOT appear as a structural row
-grep -qE '^\| BR-WS-9' "$t13_reg" && fail "T13: forged BR- row injected" || pass
-# raw unescaped pipe must not create extra columns in the statement cell
-grep -q 'evil \\| col' "$t13_reg" && pass || fail "T13: pipe not escaped"
+# --- Test 13: markdown-injection safe — exercise the REAL neutralization branch ---
+# (a) field-LEADING forged curated ID in the ANCHOR (column 1, where BR-NNN lives)
+t13a_reg="$(mktemp)"; mk_register "$t13a_reg"
+wr "$t13a_reg" --anchor 'BR-042' --statement "forged id attempt" >/dev/null 2>&1
+grep -qE '^\| BR-042 ' "$t13a_reg" && fail "T13a: forged ascii BR- id survived in anchor col" || pass
+grep -q '001.sql' "$t13a_reg" 2>/dev/null; grep -q 'BR‑042' "$t13a_reg" && pass || fail "T13a: leading BR- not neutralized to unicode hyphen"
+# (b) field-LEADING heading marker in the STATEMENT
+t13b_reg="$(mktemp)"; mk_register "$t13b_reg"
+wr "$t13b_reg" --anchor "a › b" --statement '## injected heading' >/dev/null 2>&1
+grep -q '\\#\\# injected' "$t13b_reg" && pass || fail "T13b: leading ## not neutralized"
+# (c) pipe escaped mid-cell
+t13c_reg="$(mktemp)"; mk_register "$t13c_reg"
+wr "$t13c_reg" --anchor "a › b" --statement 'left | right' >/dev/null 2>&1
+grep -q 'left \\| right' "$t13c_reg" && pass || fail "T13c: pipe not escaped"
 
 # --- Test 14: content-anchor dedup — same anchor not re-proposed ---
 t14_reg="$(mktemp)"; mk_register "$t14_reg"
-bash "$DRIFT" write-row --register "$t14_reg" --anchor "x › y.z" --statement "first" >/dev/null 2>&1
-bash "$DRIFT" write-row --register "$t14_reg" --anchor "x › y.z" --statement "second" >/dev/null 2>&1
+wr "$t14_reg" --anchor "x › y.z" --statement "first" >/dev/null 2>&1
+wr "$t14_reg" --anchor "x › y.z" --statement "second" >/dev/null 2>&1
 n14="$(grep -c 'x › y.z' "$t14_reg")"
 [[ "$n14" -eq 1 ]] && pass || fail "T14: anchor duplicated ($n14 rows)"
 
-# --- Test 15: TOCTOU — missing Auto-inferred heading aborts (no curated corruption) ---
+# --- Test 15: TOCTOU — missing Auto-inferred heading aborts (register unchanged) ---
 t15_reg="$(mktemp)"; printf '# Register\n## Business Rules\n| ID | Rule |\n|---|---|\n| BR-1 | x |\n' > "$t15_reg"
 before15="$(cat "$t15_reg")"
-bash "$DRIFT" write-row --register "$t15_reg" --anchor "a › b" --statement "s" >/dev/null 2>&1
+wr "$t15_reg" --anchor "a › b" --statement "s" >/dev/null 2>&1
 rc15=$?
 [[ "$rc15" -ne 0 ]] && pass || fail "T15: missing heading should abort"
 [[ "$(cat "$t15_reg")" == "$before15" ]] && pass || fail "T15: register mutated despite abort"
 
-# --- Test 16: write-row fail-closed on secret-shaped statement ---
+# --- Test 16: write-row fail-closed on secret-shaped statement (+ register unchanged) ---
 t16_reg="$(mktemp)"; mk_register "$t16_reg"
-bash "$DRIFT" write-row --register "$t16_reg" --anchor "a › b" --statement "token sk-ant-$(printf api03)-XXXX" >/dev/null 2>&1
-[[ $? -ne 0 ]] && pass || fail "T16: secret-shaped statement not refused"
+before16="$(cat "$t16_reg")"
+wr "$t16_reg" --anchor "a › b" --statement "token sk-ant-$(printf api03)-XXXX" >/dev/null 2>&1
+rc16=$?
+[[ "$rc16" -eq 3 ]] && pass || fail "T16: secret statement exit=$rc16 (want 3)"
+[[ "$(cat "$t16_reg")" == "$before16" ]] && pass || fail "T16: register mutated on secret-refuse"
+
+# --- Test 16b: drift path also fail-closes on a secret in a migration predicate ---
+t16b_repo="$(mktemp -d)"; t16b_mig="$t16b_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t16b_mig"
+printf 'CREATE POLICY leaky ON t FOR SELECT USING (k = %s);\n' "'sk-ant-$(printf api03)-YYYYYYYYYYYYYYYY'" > "$t16b_mig/001.sql"
+t16b_reg="$t16b_repo/register.md"; printf '# R\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n' > "$t16b_reg"
+bash "$DRIFT" drift --repo "$t16b_repo" --register "$t16b_reg" >/dev/null 2>&1
+[[ $? -eq 3 ]] && pass || fail "T16b: drift did not fail-closed on secret in migration"
+
+# --- Test 17: drift FAIL-OPEN guard — no migrations dir → exit 2, loud banner ---
+t17_repo="$(mktemp -d)"; mkdir -p "$t17_repo/src"; echo "x" > "$t17_repo/src/a.go"
+t17_reg="$t17_repo/register.md"; printf '# R\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n' > "$t17_reg"
+out17="$(bash "$DRIFT" drift --repo "$t17_repo" --register "$t17_reg" 2>/dev/null)"; rc17=$?
+[[ "$rc17" -eq 2 ]] && pass || fail "T17: unsupported-stack drift exit=$rc17 (want 2, not a false-clean 0)"
+echo "$out17" | grep -qi "Source not analyzable" && pass || fail "T17: fail-open banner missing"
+
+# --- Test 18: fail-safe-to-blind — quoted policy name + \$tag\$ SECURITY DEFINER ---
+t18_repo="$(mktemp -d)"; t18_mig="$t18_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t18_mig"
+cat > "$t18_mig/001.sql" <<'SQL'
+CREATE POLICY "Users can view own profile" ON profiles FOR SELECT USING (auth.uid() = id);
+CREATE FUNCTION guard_fn(p uuid) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $function$ BEGIN RETURN true; END; $function$;
+SQL
+out18="$(bash "$DRIFT" extract --repo "$t18_repo" 2>/dev/null)"
+# quoted multi-word policy name is EITHER extracted OR disclosed as a blind_spot — never silently gone
+echo "$out18" | jq -e '([.facts[]|select(.kind=="policy")]|length) + ([.blind_spots[]|select(.detail|contains("POLICY"))]|length) >= 1' >/dev/null 2>&1 && pass || fail "T18: quoted policy name silently dropped (neither fact nor blind_spot)"
+# $function$-bodied SECURITY DEFINER guard is captured (not hidden by the dollar-tag body)
+echo "$out18" | jq -e '[.facts[]|select(.kind=="guard" and .object=="guard_fn")]|length == 1' >/dev/null 2>&1 && pass || fail "T18: \$function\$ SECURITY DEFINER guard missed"
 
 echo "domain-model-drift.test.sh: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

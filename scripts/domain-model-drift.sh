@@ -7,8 +7,10 @@
 # (knowledge-base/engineering/architecture/domain-model.md).
 #
 # Modes:
-#   extract [--repo <path>]                 → JSON of live structural facts (stdout)
-#   drift   [--repo <path>] [--register <path>] → two-way markdown drift report (stdout)
+#   extract   [--repo <path>]                        → JSON of live structural facts (stdout)
+#   drift     [--repo <path>] [--register <path>]    → two-way markdown drift report (stdout)
+#   write-row --register <path> --anchor <a> --statement <s>
+#                                                    → approval-gated append to ## Auto-inferred
 #
 # The `extract` JSON is INTERNAL/UNSTABLE (carries schema_version); the consumer
 # contract for the #5871 enforcement gates is finalized when #5871 constrains it.
@@ -28,7 +30,7 @@ SCHEMA_VERSION=1
 DISCLAIMER="Best-effort structural extraction from migrations/RLS/types; NOT a security audit or access-control attestation. Absence from this report does not imply an invariant is unenforced, and presence does not imply it is correctly enforced. Dynamic SQL and function-body logic are disclosed as blind_spots, not analyzed."
 
 die() { echo "domain-model-drift: $*" >&2; exit 2; }
-usage() { echo "usage: domain-model-drift.sh <extract|drift> [--repo <path>] [--register <path>]" >&2; exit 2; }
+usage() { echo "usage: domain-model-drift.sh <extract|drift|write-row> [--repo <path>] [--register <path>] [--anchor <a>] [--statement <s>]" >&2; exit 2; }
 
 # --- arg parsing (--terminated, quoted; no flag can arrive from file content) ---
 MODE="${1:-}"; shift || true
@@ -124,6 +126,21 @@ emit_drift_report() {
   local extract_json
   extract_json="$(emit_extract_json)" || exit $?
 
+  # FAIL-OPEN GUARD (user-impact P1): if no Supabase migrations dir resolved, the
+  # extract is empty and a naive report reads identical to a fully-documented repo
+  # (0 stale / 0 undocumented / exit 0). Surface the zero-source condition loudly
+  # and exit 2 (error) — a register cannot be drift-checked against unanalyzable source.
+  if [[ "$(printf '%s' "$extract_json" | jq -r '.stack')" == "unsupported" ]]; then
+    echo "# Domain-model drift report"
+    echo
+    echo "> $DISCLAIMER"
+    echo
+    echo "## Source not analyzable"
+    echo
+    echo "_No Supabase migrations directory resolved under \`$REPO\` — **0 source facts analyzed**. This is NOT a clean result: the register could not be drift-checked. (Generic/unsupported stack, or a moved/renamed migrations dir.)_"
+    exit 2
+  fi
+
   # STALE: register code-citations whose symbol no longer resolves in the cited file.
   local stale=""
   while IFS=$'\t' read -r _ cfile csym; do
@@ -180,6 +197,9 @@ write_row() {
   [[ -n "$ANCHOR" && -n "$STATEMENT" ]] || die "write-row needs --anchor and --statement"
   local reg="$REGISTER"
   reg="$(realpath -e -- "$reg" 2>/dev/null)" || die "--register does not resolve to an existing file"
+  # confine the write target under the repo root — parity with drift mode (security P2).
+  # (REPO defaults to the resolved cwd; the sync command passes the repo-relative register.)
+  case "$reg" in "$REPO"/*) ;; *) die "--register must resolve under --repo" ;; esac
 
   # fail-closed secret-shape scan on BOTH fields before any write
   if dm_secret_scan "$ANCHOR$STATEMENT"; then
@@ -190,12 +210,16 @@ write_row() {
   case "$ANCHOR$STATEMENT" in
     *$'\n'*) die "candidate row contains a newline" ;;
   esac
-  # escape markdown-table hazards: pipes, control chars, unicode line separators
+  # escape markdown-table hazards: pipes, ALL C0 control chars (except tab \011;
+  # newline \012 already rejected above), DEL, and unicode line separators
+  # U+0085/U+2028/U+2029 (security P2 — full control-char class).
   local esc_anchor esc_stmt
-  esc_anchor="$(printf '%s' "$ANCHOR"     | tr -d '\r\177' | sed 's/|/\\|/g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-  esc_stmt="$(printf '%s' "$STATEMENT"    | tr -d '\r\177' | sed 's/|/\\|/g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-  # neutralize a forged row/heading marker at the start of a field
-  esc_anchor="${esc_anchor/#\#\#/\\#\\#}"; esc_stmt="${esc_stmt/#BR-/BR‑}"; esc_stmt="${esc_stmt/#\#\#/\\#\\#}"
+  esc_anchor="$(printf '%s' "$ANCHOR"    | tr -d '\000-\010\013\014\016-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_stmt="$(printf '%s' "$STATEMENT"   | tr -d '\000-\010\013\014\016-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  # neutralize a forged row/heading marker at the START of EITHER field — the anchor
+  # is column 1, exactly where curated `BR-NNN` IDs live (security P2).
+  esc_anchor="${esc_anchor/#BR-/BR‑}"; esc_anchor="${esc_anchor/#\#\#/\\#\\#}"
+  esc_stmt="${esc_stmt/#BR-/BR‑}"; esc_stmt="${esc_stmt/#\#\#/\\#\\#}"
 
   # TOCTOU: re-read the register NOW and locate exactly one Auto-inferred heading
   local hn
@@ -211,7 +235,7 @@ write_row() {
   local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
   awk -v row="| $esc_anchor | $esc_stmt |" '
     { print }
-    /^## Auto-inferred \(unreviewed\)/ { insec = 1; next_after_header = 0 }
+    /^## Auto-inferred \(unreviewed\)/ { insec = 1 }
     insec && /^\|---/ { print row; insec = 0 }
   ' "$reg" > "$tmp"
   # verify the row actually landed (guard against a header without a table separator)
