@@ -12,8 +12,11 @@ the server-only tree (`server/**`) — i.e. a server secret leaking into the bro
 runs in CI and rejects the violation *before* the LLM-judged review layer (`soleur:review`). See
 ADR-071 (mechanism = Option D) and `knowledge-base/project/plans/2026-06-30-feat-constraint-scaffold-l1-gate-generator-plan.md`.
 
-v1 = this one gate only, CI-only, direct-edge only, Next.js-only. Naming / contract / pre-commit /
-multi-stack / transitive coverage are deferred (ADR-071 Consequences).
+This gate covers this one boundary only, CI-only, Next.js-only. It catches BOTH direct
+client→server-secret value imports AND transitive ones (a `"use client"` module reaching a
+server secret through a chain of value imports, e.g. a non-client `lib/` helper) — the transitive
+`reachable` rule was added in the 2026-07-01 #5777 amendment (ADR-071 §Amendment). Naming /
+contract / pre-commit / multi-stack coverage remain deferred (ADR-071 Consequences).
 
 ## Agent-owns-gates recovery model (load-bearing)
 
@@ -79,3 +82,10 @@ bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --
 via the `@/server/…` alias FAILS, an `import type` of the same PASSES, route-group/metacharacter
 paths are matched (regex-escaping), an empty from-set while `"use client"` files exist is a hard
 error, and a broken `.cjs` fails the runner closed.
+
+- **Sharp edge (transitive rule):** the "reachable baseline stays empty" guard MUST key on the
+  transitive rule NAME, never on `type:"reachability"` — dependency-cruiser softens the reachable
+  rule per-origin on `from`+`rule.name` IGNORING entry `type`, so a `type:"module"` baseline entry
+  naming the rule suppresses a real leak while a type-count reads 0 (a `--refresh-baseline` capture
+  never emits that shape, so the regression fixture must inject it by hand). See
+  `knowledge-base/project/learnings/security-issues/2026-07-01-depcruise-reachability-baseline-softens-per-rule-name-ignoring-type.md`.
