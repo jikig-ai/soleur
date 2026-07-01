@@ -253,6 +253,13 @@ Maps task **3.3** + §6 fetch boundary + D2.
 
 Maps **cutover** + **3.1 tunnel** + GA. **Gated on D1 + D2.**
 
+- **Owner-side relay completion (from 3.B, b2 amendment):** boot the private-net TLS
+  proxy listener (`session-proxy.ts` `createProxyServer`) in `server/index.ts` and wire
+  its `onProxiedSession` to a native-session **attach** (bind a proxied socket into the
+  ws-handler session lifecycle — register/bind/idle/heartbeat + `handleMessage`). 3.B
+  landed the router decision, the b2 transport, the proxying-side hook, and the AP-2
+  acceptor (all inert); this is the owner-side half, exercisable only once the 2nd host +
+  roster (`SOLEUR_HOST_ROSTER`) exist — soak-validated by AC7/AC8.
 - **Ingress→router rewire (D1 resolved):** edit **`dns.tf`** (`cloudflare_record.app`) +
   **`firewall.tf`** — a Cloudflare Load Balancer (or two proxied A records) across both
   hosts' co-located routers, CF-IP firewall rule extended to `web-2`. **Not `tunnel.tf`**
