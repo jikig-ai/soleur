@@ -34,10 +34,14 @@ usage() { echo "usage: domain-model-drift.sh <extract|drift> [--repo <path>] [--
 MODE="${1:-}"; shift || true
 REPO="."
 REGISTER=""
+ANCHOR=""
+STATEMENT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo)     REPO="${2:-}"; shift 2 ;;
-    --register) REGISTER="${2:-}"; shift 2 ;;
+    --repo)      REPO="${2:-}"; shift 2 ;;
+    --register)  REGISTER="${2:-}"; shift 2 ;;
+    --anchor)    ANCHOR="${2:-}"; shift 2 ;;
+    --statement) STATEMENT="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) usage ;;
   esac
@@ -165,8 +169,62 @@ emit_drift_report() {
   [[ $stale_n -gt 0 || $undoc_n -gt 0 ]] && exit 1 || exit 0
 }
 
+# ---------------------------------------------------------------------------
+# write-row: the approval-gated write primitive. The /soleur:sync command calls
+# this ONCE PER operator-approved candidate. It never touches the curated
+# `## Business Rules` table; it appends an escaped, secret-scanned, deduped row
+# to `## Auto-inferred (unreviewed)` via an atomic whole-file rewrite.
+# Exit: 0 = written (or deduped no-op), 2 = error/abort, 3 = secret-refuse.
+# ---------------------------------------------------------------------------
+write_row() {
+  [[ -n "$ANCHOR" && -n "$STATEMENT" ]] || die "write-row needs --anchor and --statement"
+  local reg="$REGISTER"
+  reg="$(realpath -e -- "$reg" 2>/dev/null)" || die "--register does not resolve to an existing file"
+
+  # fail-closed secret-shape scan on BOTH fields before any write
+  if dm_secret_scan "$ANCHOR$STATEMENT"; then
+    echo "domain-model-drift: secret-shaped substring in candidate row; refusing to write" >&2
+    exit 3
+  fi
+  # reject structural-breakout content outright (a forged BR-/heading row)
+  case "$ANCHOR$STATEMENT" in
+    *$'\n'*) die "candidate row contains a newline" ;;
+  esac
+  # escape markdown-table hazards: pipes, control chars, unicode line separators
+  local esc_anchor esc_stmt
+  esc_anchor="$(printf '%s' "$ANCHOR"     | tr -d '\r\177' | sed 's/|/\\|/g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_stmt="$(printf '%s' "$STATEMENT"    | tr -d '\r\177' | sed 's/|/\\|/g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  # neutralize a forged row/heading marker at the start of a field
+  esc_anchor="${esc_anchor/#\#\#/\\#\\#}"; esc_stmt="${esc_stmt/#BR-/BR‑}"; esc_stmt="${esc_stmt/#\#\#/\\#\\#}"
+
+  # TOCTOU: re-read the register NOW and locate exactly one Auto-inferred heading
+  local hn
+  hn="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$reg")"
+  [[ "$hn" -eq 1 ]] || die "register has $hn '## Auto-inferred (unreviewed)' headings (want exactly 1) — aborting"
+
+  # content-anchor dedup: never re-propose an anchor already present anywhere
+  if grep -qF "$ANCHOR" "$reg"; then
+    exit 0  # already known (curated or previously accepted) — no-op
+  fi
+
+  # atomic whole-file rewrite (mktemp + mv), inserting the row after the heading's table
+  local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+  awk -v row="| $esc_anchor | $esc_stmt |" '
+    { print }
+    /^## Auto-inferred \(unreviewed\)/ { insec = 1; next_after_header = 0 }
+    insec && /^\|---/ { print row; insec = 0 }
+  ' "$reg" > "$tmp"
+  # verify the row actually landed (guard against a header without a table separator)
+  if ! grep -qF "$esc_anchor" "$tmp"; then
+    die "could not locate the Auto-inferred table separator — aborting (register unchanged)"
+  fi
+  mv "$tmp" "$reg"
+  trap - EXIT
+}
+
 case "$MODE" in
-  extract) emit_extract_json ;;
-  drift)   emit_drift_report ;;
+  extract)   emit_extract_json ;;
+  drift)     emit_drift_report ;;
+  write-row) write_row ;;
   *) usage ;;
 esac

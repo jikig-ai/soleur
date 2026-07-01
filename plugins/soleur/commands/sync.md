@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|project|rule-prune|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|rule-prune|domain-model|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,12 +17,18 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `domain-model`, `all` (default)
 
 **Note on `rule-prune`:** This area is excluded from `all` dispatch. It files
 GitHub issues for AGENTS.md rules with zero recorded hits; it should be run
 intentionally (weekly or monthly), not as part of every `/soleur:sync` call.
 Append `--weeks=<n>` (default 8) to override the staleness threshold.
+
+**Note on `domain-model`:** This area is excluded from `all` dispatch (like
+`rule-prune`). It drift-checks the business-rules register
+(`knowledge-base/engineering/architecture/domain-model.md`) against a repo's
+migrations/RLS/guards and optionally proposes newly-inferred rows for approval. It
+targets a specific register and should be run intentionally, not on every sync.
 
 ## Execution Flow
 
@@ -66,7 +72,7 @@ Based on the area specified (or `all` if none):
 
 **1.1 Parse Area Filter**
 
-If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` (it must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below.
+If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` AND `domain-model` (both must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below. If the argument is `domain-model`, skip all other phases and jump straight to Domain Model Analysis below.
 
 **1.2 Codebase Analysis**
 
@@ -161,6 +167,49 @@ Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules
 4. **Report** the candidate count and list of filed issue URLs. No constitution / learnings promotion paths apply.
 
 Skip Phase 2 through Phase 4 when the area is `rule-prune` — the gh issue filing IS the output.
+
+#### Domain Model Analysis
+
+Runs only when `<sync_area>` is literally `domain-model` (#5754). Drift-checks the business-rules
+register at `knowledge-base/engineering/architecture/domain-model.md` against the repo's data model
+and, with per-row operator approval, proposes newly-inferred rows. All extraction is deterministic
+(a bash analyzer); the LLM only phrases candidate statements at approval time — never in the
+drift-detection or write path. **Guarantee is bounded to structural documentation coverage, NOT
+semantic access-control correctness** — dynamic RLS, function-body logic, and un-merged `ALTER POLICY`
+are disclosed as blind spots, never counted.
+
+1. **Emit the drift report** (read-only). Run:
+
+   ```bash
+   bash scripts/domain-model-drift.sh drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   ```
+
+   Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
+   to the operator — it has three sections: **stale register citations** (a cited symbol/migration no longer
+   resolves), **undocumented source facts** (a table with RLS/constraints the register never names), and a
+   **blind-spots** disclosure line. Every report carries the completeness disclaimer.
+
+2. **Approval-gated write (optional).** For each `undocumented` table the operator wants to record, extract a
+   candidate anchor + statement from the drift output and run the accept/skip/edit review (reuse the Phase 2
+   AskUserQuestion machinery — this is a self-contained reuse of the review UX, NOT a Phase-2 re-entry). For each
+   **accepted** candidate, append it via the safe primitive:
+
+   ```bash
+   bash scripts/domain-model-drift.sh write-row \
+     --register knowledge-base/engineering/architecture/domain-model.md \
+     --anchor "<migration-file › table.object>" --statement "<candidate statement>"
+   ```
+
+   The primitive writes into the `## Auto-inferred (unreviewed)` section only — it NEVER touches the curated
+   `## Business Rules` table, NEVER mints a `BR-*` id, escapes markdown hazards, refuses secret-shaped content
+   (fail-closed), dedups by content anchor (an already-known anchor is a no-op, so accepted rows are not
+   re-proposed on re-run), and writes atomically. Promotion of an `Auto-inferred` row to a curated `BR-*` rule
+   is a deliberate human edit (assign an id + keep the source anchor).
+
+3. **Report** the drift counts (stale / undocumented / blind-spots) and any rows written. No constitution /
+   learnings promotion paths apply.
+
+Skip Phase 2 through Phase 4 when the area is `domain-model` — the drift report + approval-gated write ARE the output.
 
 **1.3 Assign Confidence Scores**
 
@@ -346,7 +395,7 @@ Scan accumulated learnings against skill, agent, and command definitions. Propos
 
 Skip Phase 4 with an info message if any of these conditions are true:
 
-- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`) -- Phase 4 only runs when area is `all` or unspecified
+- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `domain-model`) -- Phase 4 only runs when area is `all` or unspecified
 - `knowledge-base/project/learnings/` directory does not exist
 - `plugins/soleur/` directory does not exist
 

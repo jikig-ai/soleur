@@ -163,5 +163,58 @@ printf '# Register\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|
 out11="$(bash "$DRIFT" drift --repo "$t11_repo" --register "$t11_reg" 2>/dev/null)"
 echo "$out11" | grep -q "undocumented_table" && pass || fail "T11: undocumented table not surfaced"
 
+# --- Test 12: write-row appends to ## Auto-inferred, curated table untouched ---
+mk_register() {
+  local r="$1"
+  cat > "$r" <<'MD'
+# Register
+## Business Rules
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+| BR-1 | Curated | Hand-written. | ADR-1 |
+
+## Auto-inferred (unreviewed)
+| Anchor | Candidate statement |
+|---|---|
+MD
+}
+t12_reg="$(mktemp)"; mk_register "$t12_reg"
+bash "$DRIFT" write-row --register "$t12_reg" --anchor "001.sql › t.pol" --statement "policy pol on t" >/dev/null 2>&1
+rc12=$?
+[[ "$rc12" -eq 0 ]] && pass || fail "T12: write-row exit=$rc12"
+grep -q "001.sql › t.pol" "$t12_reg" && pass || fail "T12: row not appended"
+# curated BR-1 row untouched
+grep -q "| BR-1 | Curated | Hand-written. | ADR-1 |" "$t12_reg" && pass || fail "T12: curated row mutated"
+# row landed under Auto-inferred, not Business Rules
+awk '/## Auto-inferred/{f=1} f && /001.sql/{print "OK"; exit}' "$t12_reg" | grep -q OK && pass || fail "T12: row not under Auto-inferred heading"
+
+# --- Test 13: markdown-injection safe (pipe escaped, BR-/## rejected) ---
+t13_reg="$(mktemp)"; mk_register "$t13_reg"
+bash "$DRIFT" write-row --register "$t13_reg" --anchor "a › b" --statement 'evil | col ## BR-WS-9' >/dev/null 2>&1
+# a literal forged BR- row must NOT appear as a structural row
+grep -qE '^\| BR-WS-9' "$t13_reg" && fail "T13: forged BR- row injected" || pass
+# raw unescaped pipe must not create extra columns in the statement cell
+grep -q 'evil \\| col' "$t13_reg" && pass || fail "T13: pipe not escaped"
+
+# --- Test 14: content-anchor dedup — same anchor not re-proposed ---
+t14_reg="$(mktemp)"; mk_register "$t14_reg"
+bash "$DRIFT" write-row --register "$t14_reg" --anchor "x › y.z" --statement "first" >/dev/null 2>&1
+bash "$DRIFT" write-row --register "$t14_reg" --anchor "x › y.z" --statement "second" >/dev/null 2>&1
+n14="$(grep -c 'x › y.z' "$t14_reg")"
+[[ "$n14" -eq 1 ]] && pass || fail "T14: anchor duplicated ($n14 rows)"
+
+# --- Test 15: TOCTOU — missing Auto-inferred heading aborts (no curated corruption) ---
+t15_reg="$(mktemp)"; printf '# Register\n## Business Rules\n| ID | Rule |\n|---|---|\n| BR-1 | x |\n' > "$t15_reg"
+before15="$(cat "$t15_reg")"
+bash "$DRIFT" write-row --register "$t15_reg" --anchor "a › b" --statement "s" >/dev/null 2>&1
+rc15=$?
+[[ "$rc15" -ne 0 ]] && pass || fail "T15: missing heading should abort"
+[[ "$(cat "$t15_reg")" == "$before15" ]] && pass || fail "T15: register mutated despite abort"
+
+# --- Test 16: write-row fail-closed on secret-shaped statement ---
+t16_reg="$(mktemp)"; mk_register "$t16_reg"
+bash "$DRIFT" write-row --register "$t16_reg" --anchor "a › b" --statement "token sk-ant-$(printf api03)-XXXX" >/dev/null 2>&1
+[[ $? -ne 0 ]] && pass || fail "T16: secret-shaped statement not refused"
+
 echo "domain-model-drift.test.sh: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
