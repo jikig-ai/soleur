@@ -37,13 +37,15 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # TWO keys for the `git` user, each pinned to a FIXED forced-command (ADR-068
-  # amendment 2026-07-01 "PR B bare-repo provisioning"):
+  # THREE keys for the `git` user, each pinned to a FIXED forced-command (ADR-068
+  # amendment 2026-07-01 "PR B bare-repo provisioning" + #5274 Phase 3 Art. 17):
   #   1. TRANSPORT (git-shell): can ONLY run git-shell against SSH_ORIGINAL_COMMAND
   #      (git-receive-pack / git-upload-pack) — never an interactive shell.
   #   2. PROVISION (git-data-provision.sh): a FIXED wrapper that idempotently
   #      `git init --bare`s ONE per-workspace repo (git-shell -c cannot run init).
-  # Separate keys ⇒ provisioning authority and ref-write authority have separate
+  #   3. REMOVE (git-data-remove.sh): a FIXED wrapper that idempotently
+  #      `rm -rf`s ONE per-workspace repo + its in-repo fence (GDPR Art. 17).
+  # Separate keys ⇒ provisioning, ref-write, and erasure authority have separate
   # blast radii. A bare dollar-var (no braces) is left literal by terraform
   # templatefile() — only dollar-brace interpolates. `defer: true` writes after the
   # `git` user exists; git-data-bootstrap.sh fixes the .ssh perms so sshd accepts.
@@ -51,6 +53,7 @@ write_files:
     content: |
       command="git-shell -c \"$SSH_ORIGINAL_COMMAND\"",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
       command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
+      command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
     owner: git:git
     permissions: '0600'
     defer: true
@@ -67,6 +70,15 @@ write_files:
   - path: /usr/local/bin/git-data-provision.sh
     encoding: b64
     content: ${git_data_provision_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # The FIXED erasure forced-command wrapper (GDPR Art. 17). Installed to
+  # /usr/local/bin so the remove key's authorized_keys command= resolves it. Runs
+  # as the `git` user; the app-side call (account/workspace delete) lands in 3.D.
+  - path: /usr/local/bin/git-data-remove.sh
+    encoding: b64
+    content: ${git_data_remove_b64}
     owner: root:root
     permissions: '0755'
 

@@ -214,6 +214,9 @@ jobs:
       - name: Run git-data bare-repo provisioner tests
         run: bash apps/web-platform/infra/git-data-provision.test.sh
 
+      - name: Run git-data bare-repo erasure (Art. 17) tests
+        run: bash apps/web-platform/infra/git-data-remove.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
