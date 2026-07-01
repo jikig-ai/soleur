@@ -365,10 +365,16 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
     expect(paths.length).toBeGreaterThan(0);
   });
 
-  test("paths filter equals TRIGGER_FILES ∪ {server.tf} (set equality)", () => {
+  test("paths filter equals TRIGGER_FILES ∪ {server.tf, seccomp-bwrap.json} (set equality)", () => {
     const expected = new Set([
       ...TRIGGER_FILES,
       "apps/web-platform/infra/server.tf",
+      // #5873 — seccomp-bwrap.json is hashed by docker_seccomp_config's OWN
+      // triggers_replace (server.tf), NOT by deploy_pipeline_fix, so it is
+      // deliberately absent from TRIGGER_FILES. The workflow still applies
+      // docker_seccomp_config (see the seccomp coupling describe below), so a
+      // profile-only edit must fire this workflow — hence it IS in paths:.
+      "apps/web-platform/infra/seccomp-bwrap.json",
     ]);
     expect(new Set(paths)).toEqual(expected);
   });
@@ -492,5 +498,50 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     const inner = blockMatch![1];
     expect(inner).toContain('file("${path.module}/infra-config-apply.sh")');
     expect(inner).toContain("local.hooks_json");
+  });
+});
+
+// #5873 — the seccomp coupling triangle. The container seccomp profile
+// (seccomp-bwrap.json) is delivered by terraform_data.docker_seccomp_config,
+// a DIFFERENT resource from deploy_pipeline_fix. For a profile-only edit to
+// reach prod, three facts must hold together — and terraform-target-parity.test.ts
+// does NOT guard them for THIS workflow (docker_seccomp_config is also covered by
+// apply-web-platform-infra.yml's union, so dropping it here fails no existing test).
+// This closes that gap the same way #5505/#5515 did for deploy_pipeline_fix.
+describe("seccomp profile auto-apply coupling (#5873)", () => {
+  test("apply-deploy-pipeline-fix.yml co-targets docker_seccomp_config in BOTH plan and apply", () => {
+    expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
+    const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
+    const planIdx = yml.indexOf("terraform plan -target=");
+    const applyIdx = yml.indexOf("terraform apply -target=");
+    expect(planIdx).toBeGreaterThanOrEqual(0);
+    expect(applyIdx).toBeGreaterThanOrEqual(0);
+    // Bound each invocation to its own -target= run of lines (generous 800 chars).
+    expect(yml.slice(planIdx, planIdx + 800)).toContain(
+      "-target=terraform_data.docker_seccomp_config",
+    );
+    expect(yml.slice(applyIdx, applyIdx + 800)).toContain(
+      "-target=terraform_data.docker_seccomp_config",
+    );
+  });
+
+  test("docker_seccomp_config triggers_replace hashes seccomp-bwrap.json (edit re-fires the apply)", () => {
+    expect(existsSync(SERVER_TF)).toBe(true);
+    const serverTf = readFileSync(SERVER_TF, "utf8");
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "docker_seccomp_config"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+    expect(resourceBlock).toContain(
+      'sha256(file("${path.module}/seccomp-bwrap.json"))',
+    );
   });
 });
