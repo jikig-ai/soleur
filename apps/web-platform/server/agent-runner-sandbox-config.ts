@@ -1,3 +1,14 @@
+import { readdirSync, realpathSync } from "fs";
+import { basename, join } from "path";
+
+import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
+
+// Match the agent-runner logging convention (`createChildLogger` — see
+// agent-runner.ts / agent-runner-query-options.ts) so the shared test mocks
+// that stub `createChildLogger` (not the default export) keep working.
+const log = createChildLogger("agent-sandbox");
+
 // Sandbox config helper extracted from agent-runner.ts so two consumers
 // — `startAgentSession` (legacy domain-leader path) and the cc-soleur-go
 // `realSdkQueryFactory` in `cc-dispatcher.ts` — share the same literal
@@ -19,19 +30,99 @@
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `GITHUB_EGRESS_DOMAINS` (entitled-token
 //     sessions only — derived from `ghToken` presence at the consumer).
-//   - `filesystem.allowWrite: [workspacePath]` + `denyRead` +
-//     `allowRead: [workspacePath]` — workspace-confined writes; deny reads
-//     outside; RE-ALLOW reads of the agent's OWN workspace within the
-//     `denyRead: ["/workspaces"]` region. Critical (#5733): `allowWrite`
-//     grants WRITE only — per the SDK, reading within a `denyRead` region
-//     requires an explicit `allowRead` (which "takes precedence over
-//     denyRead"). Without it, the bwrap builder tmpfs-obscures the whole
-//     `/workspaces` tree and nothing re-binds the workspace for read, so the
-//     agent cannot `git rev-parse`/`ls` its own repo and strands on "not a
-//     git repository" (Sentry WEB-PLATFORM-46: gitKind=dir-valid,
-//     gitRevParseValid=false). `allowRead` re-binds ONLY `workspacePath`
-//     (read-only, on top of the tmpfs), so sibling tenants' `/workspaces/<other>`
-//     stay hidden — cross-tenant isolation is preserved.
+//   - `filesystem.allowWrite: [workspacePath]` + PER-SIBLING `denyRead` —
+//     the agent gets full READ+WRITE of its OWN `/workspaces/<uuid>` while
+//     every OTHER tenant workspace is hidden. Critical history (#5733):
+//     the `@anthropic-ai/claude-agent-sdk` (v0.2.85) bwrap builder emits
+//     the write-plane binds FIRST, then the read-plane LAST (`--tmpfs
+//     <denyRead-dir>`, then `--ro-bind` for each `allowRead` child). So a
+//     broad `denyRead: ["/workspaces"]` `--tmpfs`-obscures the whole tree
+//     AFTER the `allowWrite --bind`, and the ONLY post-tmpfs re-bind the
+//     SDK offers (`allowRead`) is READ-ONLY — which shadows the rw bind and
+//     makes the workspace read-only (PR #5848 shipped exactly that and
+//     turned the "not a git repository" strand into "read-only file
+//     system"; verified locally with bwrap 0.11.1). There is no
+//     "allowWrite-within-deny" knob. The only SDK-expressible config that
+//     is simultaneously writable-own AND tenant-isolated is to deny each
+//     SIBLING individually (so the own workspace is never under a `--tmpfs`
+//     and its `allowWrite --bind` survives), computed at dispatch by
+//     `enumerateSiblingDenyPaths`. ADR-075; durable TOCTOU closer is
+//     the vendored SDK bwrap-arg reorder (tracked follow-up).
+
+const WORKSPACES_ROOT_DEFAULT = "/workspaces";
+
+/** Resolve WORKSPACES_ROOT at call time so tests can stub the env per-case. */
+function workspacesRoot(): string {
+  return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
+}
+
+/** Canonicalize a path, tolerating a missing target (returns the input). */
+function safeRealpath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Compute the sandbox `denyRead` list for the agent whose workspace is
+ * `workspacePath`: every OTHER entry under `WORKSPACES_ROOT` (each tenant
+ * workspace, plus infra siblings like `.cron` / `.orphaned-*` the agent has
+ * no business reading) is denied, PLUS `/proc`. The agent's OWN workspace is
+ * deliberately NOT in the deny set — so the SDK never `--tmpfs`-obscures it
+ * and its `allowWrite --bind` keeps it read+write (see the module header for
+ * why a broad `denyRead: ["/workspaces"]` cannot do this).
+ *
+ * Own-vs-sibling is decided on CANONICALIZED paths (`realpathSync`), never a
+ * basename string, so a symlinked workspace cannot be misclassified as a
+ * sibling (which would deny the agent its own repo) or vice-versa.
+ *
+ * FAIL-CLOSED (strand-over-leak): if the root cannot be enumerated, fall back
+ * to the BROAD parent deny `[root, "/proc"]`. That makes the workspace
+ * read-only (the agent strands) but CANNOT leak a sibling — the correct
+ * security failure mode. A non-ENOENT error (permissions, I/O) is always
+ * `degraded` + Sentry-mirrored. ENOENT is benign ONLY outside production
+ * (local dev / CI / fresh provisioning — no mounted volume, no siblings to
+ * leak); in PRODUCTION the volume is bind-mounted at boot, so ENOENT means it
+ * VANISHED at runtime — a real fault that also flags `degraded` + pages,
+ * instead of masking the strand as expected local-dev absence.
+ */
+export function enumerateSiblingDenyPaths(workspacePath: string): {
+  denyRead: string[];
+  degraded: boolean;
+} {
+  const root = workspacesRoot();
+  const ownReal = safeRealpath(workspacePath);
+  try {
+    const siblings = readdirSync(root)
+      .map((name) => join(root, name))
+      .filter((p) => safeRealpath(p) !== ownReal);
+    return { denyRead: [...siblings, "/proc"], degraded: false };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // ENOENT is benign ONLY in dev/CI (no mounted volume). In production the
+    // volume is bind-mounted at boot, so ENOENT means it vanished at runtime —
+    // a real fault. Any other error is always a real fault. Both fail closed to
+    // the broad parent deny + `degraded` + Sentry mirror
+    // (cq-silent-fallback-must-mirror-to-sentry); strand-over-leak. `workspace`
+    // (the own UUID) is the join key back to the #5733 strand telemetry so an
+    // operator can attribute the degraded event to the session it stranded.
+    const benignEnoent =
+      code === "ENOENT" && process.env.NODE_ENV !== "production";
+    if (!benignEnoent) {
+      reportSilentFallback(err, {
+        feature: "agent-sandbox",
+        op: "enumerateSiblingDenyPaths",
+        extra: { workspacesRoot: root, workspace: basename(ownReal) },
+      });
+      return { denyRead: [root, "/proc"], degraded: true };
+    }
+    // Benign ENOENT (dev/CI): no siblings exist; deny the root broadly as the
+    // safe default. Not `degraded` — it is an expected env.
+    return { denyRead: [root, "/proc"], degraded: false };
+  }
+}
 
 // SDK's `SandboxSettings` is a Zod-inferred type with `[x: string]: unknown`
 // index signature. Our helper returns a structurally-compatible object
@@ -51,7 +142,6 @@ export type AgentSandboxConfig = {
   filesystem: {
     allowWrite: string[];
     denyRead: string[];
-    allowRead: string[];
   };
 } & { [x: string]: unknown };
 
@@ -68,10 +158,10 @@ const GITHUB_EGRESS_DOMAINS = Object.freeze([
 ] as const);
 
 /**
- * Build the canonical sandbox options block. Output is deep-equal to the
- * inline literal previously inlined at the `query({ options: { sandbox: ... } })`
- * call site in `agent-runner.ts`. Drift here propagates to BOTH the
- * legacy domain-leader runner AND the cc-soleur-go factory.
+ * Build the canonical sandbox options block. Drift here propagates to BOTH
+ * the legacy domain-leader runner AND the cc-soleur-go factory (they both
+ * call this helper), so the per-sibling deny stays byte-identical across
+ * paths automatically.
  *
  * `opts.allowGithubEgress` widens ONLY `network.allowedDomains` to the
  * exact GitHub hosts. Callers must derive it from entitled-token
@@ -83,6 +173,25 @@ export function buildAgentSandboxConfig(
   workspacePath: string,
   opts?: { allowGithubEgress?: boolean },
 ): AgentSandboxConfig {
+  const { denyRead, degraded } = enumerateSiblingDenyPaths(workspacePath);
+  // Structured, no-SSH observability of the isolation decision per dispatch
+  // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
+  // agent sandbox). `degraded: true` is the fail-closed broad-deny path a
+  // reviewer/operator can alert on; `deniedCount` makes the deny-set size
+  // queryable per session.
+  log.info(
+    {
+      feature: "agent-sandbox",
+      op: "sibling-deny",
+      workspacesRoot: workspacesRoot(),
+      // Own workspace UUID — the join key so this isolation decision is
+      // attributable to a session (every sibling shares `workspacesRoot`).
+      workspace: basename(workspacePath),
+      deniedCount: denyRead.length,
+      degraded,
+    },
+    "agent-sandbox: computed per-sibling denyRead",
+  );
   return {
     enabled: true,
     // Refuse to start if sandbox deps (bubblewrap, socat) are missing.
@@ -102,14 +211,13 @@ export function buildAgentSandboxConfig(
       allowManagedDomainsOnly: true,
     },
     filesystem: {
+      // Full read+write of the agent's OWN workspace: it is NOT in denyRead,
+      // so the base `--ro-bind / /` grants read and this `--bind` grants
+      // write — no read-only `--ro-bind` shadow (the PR #5848 regression).
       allowWrite: [workspacePath],
-      denyRead: ["/workspaces", "/proc"],
-      // Re-allow reading the agent's OWN workspace within the `/workspaces`
-      // deny region (#5733). `allowWrite` grants write only; without this
-      // the agent cannot read its own repo and strands on "not a git
-      // repository". Scoped to `workspacePath` alone — sibling workspaces
-      // stay denied (cross-tenant isolation).
-      allowRead: [workspacePath],
+      // Per-sibling deny (NOT the broad "/workspaces" parent) so the own
+      // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
+      denyRead,
     },
   };
 }
