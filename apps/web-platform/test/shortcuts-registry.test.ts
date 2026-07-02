@@ -4,8 +4,10 @@ import {
   buildCommands,
   resolveShortcut,
   resolveSequence,
+  resolveNavChord,
   formatSeqHint,
   ASK_AGENT_SEQ,
+  ASK_AGENT_ACCEL,
   SEQUENCE_WINDOW_MS,
   readShortcutsEnabled,
   writeShortcutsEnabled,
@@ -178,6 +180,81 @@ describe("resolveSequence", () => {
   });
 });
 
+// resolveNavChord — the metaKey-ONLY Super/Meta accelerator resolver, sibling of
+// resolveSequence. Reads e.metaKey EXCLUSIVELY (never ctrlKey), DOM-free.
+describe("resolveNavChord", () => {
+  const admin = { isAdmin: true };
+  const nonAdmin = { isAdmin: false };
+
+  it("exposes ASK_AGENT_ACCEL as the ⌘C letter", () => {
+    expect(ASK_AGENT_ACCEL).toBe("c");
+  });
+
+  it("arms nav destinations on meta+letter (AC1): d/i/r → navigate, c → openChat", () => {
+    expect(resolveNavChord(key("d", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard",
+    });
+    expect(resolveNavChord(key("i", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/inbox",
+    });
+    expect(resolveNavChord(key("r", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/routines",
+    });
+    expect(resolveNavChord(key("c", { meta: true }), nonAdmin)).toEqual({
+      kind: "openChat",
+    });
+  });
+
+  it("upper-case letters resolve too (case-insensitive)", () => {
+    expect(resolveNavChord(key("D", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard",
+    });
+  });
+
+  it("gates ⌘A (Analytics) on ctx.isAdmin (AC2)", () => {
+    expect(resolveNavChord(key("a", { meta: true }), admin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/admin/analytics",
+    });
+    expect(resolveNavChord(key("a", { meta: true }), nonAdmin)).toBeNull();
+  });
+
+  it("returns null for the deliberately-unbound ⌘W and ⌘K (AC3)", () => {
+    expect(resolveNavChord(key("w", { meta: true }), admin)).toBeNull();
+    expect(resolveNavChord(key("k", { meta: true }), admin)).toBeNull();
+  });
+
+  it("never arms on ctrl+letter — metaKey ONLY (AC4)", () => {
+    expect(resolveNavChord(key("d", { ctrl: true }), admin)).toBeNull();
+    expect(resolveNavChord(key("a", { ctrl: true }), admin)).toBeNull();
+    expect(resolveNavChord(key("c", { ctrl: true }), admin)).toBeNull();
+  });
+
+  it("rejects the shift variant, editable focus, and auto-repeat (AC5)", () => {
+    expect(
+      resolveNavChord(key("d", { meta: true, shift: true }), admin),
+    ).toBeNull();
+    expect(
+      resolveNavChord(key("d", { meta: true, target: { tagName: "INPUT" } }), admin),
+    ).toBeNull();
+    expect(
+      resolveNavChord({ ...key("d", { meta: true }), repeat: true }, admin),
+    ).toBeNull();
+  });
+
+  it("returns null when no modifier is held (falls through to the g-arm)", () => {
+    expect(resolveNavChord(key("d"), admin)).toBeNull();
+  });
+
+  it("returns null for an unmapped letter (x)", () => {
+    expect(resolveNavChord(key("x", { meta: true }), admin)).toBeNull();
+  });
+});
+
 describe("seq single-source (AC7) + formatSeqHint", () => {
   it("upcases a sequence for display (g d -> G D)", () => {
     expect(formatSeqHint("g d")).toBe("G D");
@@ -198,6 +275,40 @@ describe("seq single-source (AC7) + formatSeqHint", () => {
     // The ask hero shows its GLOBAL summon binding, not the palette-only ⌘↵.
     expect(byId(cmds, "ask-agent")?.keys).toBe("G C");
     expect(byId(cmds, "ask-agent")?.keys).not.toBe("⌘↵");
+  });
+});
+
+// AC11 — the accelerator hint (accelKeys) is Apple-ONLY. Off-mac `modChord`
+// would advertise an unreachable "Ctrl+D" (binding is metaKey-only), so every
+// accelKeys is undefined off-mac. `keys` (the G-seq) is unchanged in both.
+describe("buildCommands — accelKeys (Apple-only accelerator hint)", () => {
+  it("populates ⌘-glyph accelKeys on bound rows when isApplePlatform", () => {
+    const cmds = buildCommands({ isAdmin: true }, { isApplePlatform: true });
+    expect(byId(cmds, "nav:/dashboard")?.accelKeys).toBe("⌘D");
+    expect(byId(cmds, "nav:/dashboard/inbox")?.accelKeys).toBe("⌘I");
+    expect(byId(cmds, "nav:/dashboard/routines")?.accelKeys).toBe("⌘R");
+    expect(byId(cmds, "nav:/dashboard/admin/analytics")?.accelKeys).toBe("⌘A");
+    expect(byId(cmds, "ask-agent")?.accelKeys).toBe("⌘C");
+    // Intentionally-unbound destinations carry no accel.
+    expect(byId(cmds, "nav:/dashboard/workstream")?.accelKeys).toBeUndefined();
+    expect(byId(cmds, "nav:/dashboard/kb")?.accelKeys).toBeUndefined();
+  });
+
+  it("emits NO accelKeys off-mac (default and explicit isApplePlatform:false)", () => {
+    for (const cmds of [
+      buildCommands({ isAdmin: true }),
+      buildCommands({ isAdmin: true }, { isApplePlatform: false }),
+    ]) {
+      for (const c of cmds) expect(c.accelKeys).toBeUndefined();
+    }
+  });
+
+  it("leaves the g-seq `keys` hint unchanged regardless of platform", () => {
+    const mac = buildCommands({ isAdmin: true }, { isApplePlatform: true });
+    expect(byId(mac, "nav:/dashboard")?.keys).toBe("G D");
+    expect(byId(mac, "ask-agent")?.keys).toBe("G C");
+    const pc = buildCommands({ isAdmin: true }, { isApplePlatform: false });
+    expect(byId(pc, "nav:/dashboard")?.keys).toBe("G D");
   });
 });
 

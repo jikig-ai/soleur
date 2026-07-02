@@ -163,6 +163,38 @@ describe("HelpOverlay", () => {
   });
 });
 
+describe("HelpOverlay — accelerator hint is Apple-only (AC12)", () => {
+  it("renders ONLY the G-seq on happy-dom's non-Apple default", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    const row = screen.getByTestId("help-row-G D");
+    expect(row).toHaveTextContent("G D");
+    expect(row).not.toHaveTextContent("⌘D");
+  });
+
+  it("renders BOTH ⌘D and G D on Apple; Workstream stays G-seq only", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    });
+    renderHelp();
+    // Provider reads the platform in a mount effect — let it settle.
+    await act(async () => {});
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    const dash = screen.getByTestId("help-row-G D");
+    expect(dash).toHaveTextContent("⌘D");
+    expect(dash).toHaveTextContent("G D");
+    // Ask-agent row (G C) also shows its ⌘C accel on Apple.
+    expect(screen.getByTestId("help-row-G C")).toHaveTextContent("⌘C");
+    // Workstream has no accel — only its G-seq.
+    const work = screen.getByTestId("help-row-G W");
+    expect(work).toHaveTextContent("G W");
+    expect(work).not.toHaveTextContent("⌘W");
+  });
+});
+
 describe("HelpOverlay — rows run their command (not just close)", () => {
   it("selecting the ⌘K row opens the command palette and closes the overlay", async () => {
     renderHelpAndPalette();

@@ -289,6 +289,11 @@ export function CommandPalette() {
                     data-testid="cmd-ask-agent"
                   >
                     {trimmed ? `Ask an agent about “${trimmed}”` : askCmd.label}
+                    {/* Accel + g-seq hints share the `!trimmed` gate (Kieran
+                        P2b) so neither renders once the user types a query. */}
+                    {!trimmed && askCmd.accelKeys && (
+                      <span className="cmdk-keys"> {askCmd.accelKeys}</span>
+                    )}
                     {!trimmed && askCmd.keys && (
                       <span className="cmdk-keys"> {askCmd.keys}</span>
                     )}
@@ -304,6 +309,11 @@ export function CommandPalette() {
                     onSelect={() => onSelectCommand(cmd)}
                   >
                     {cmd.label}
+                    {/* Accelerator glyph FIRST (Apple-only), then the g-seq —
+                        both muted, flush-right, no separator (wireframe). */}
+                    {cmd.accelKeys && (
+                      <span className="cmdk-keys"> {cmd.accelKeys}</span>
+                    )}
                     {cmd.keys && <span className="cmdk-keys"> {cmd.keys}</span>}
                   </Command.Item>
                 ))}
