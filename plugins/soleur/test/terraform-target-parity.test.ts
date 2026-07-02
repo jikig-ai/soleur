@@ -352,10 +352,14 @@ function extractAllResources(stripped: string): string[] {
   return out;
 }
 
-/** Every `-target=<type>.<name>` address (any resource type) in a workflow. */
+/** Every `-target=<type>.<name>` address (any resource type) in a workflow.
+ *  Comment-strip FIRST so a DISABLED (commented-out) `-target=` line is NOT counted
+ *  as covered — otherwise a `# -target=sentry_issue_alert.foo` would mask a real
+ *  un-applied resource, the exact inert-target class this guard exists to catch.
+ *  Verified no-op against the current workflows (no live target sits in a comment). */
 function extractAllTargets(workflowText: string): Set<string> {
   const set = new Set<string>();
-  for (const m of workflowText.matchAll(
+  for (const m of stripComments(workflowText).matchAll(
     /-target=([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
   )) {
     set.add(m[1]);
@@ -594,9 +598,17 @@ describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884
   beforeAll(() => {
     expect(existsSync(SENTRY_INFRA_DIR)).toBe(true);
     expect(existsSync(SENTRY_WORKFLOW)).toBe(true);
-    sentryResources = listSentryTfFiles()
-      .flatMap((f) => extractAllResources(stripComments(readFileSync(f, "utf8"))))
-      .filter((a) => a.startsWith("sentry_"));
+    // NOTE: infra/sentry/ is a FLAT directory applied by a SINGLE workflow —
+    // listSentryTfFiles is non-recursive and only apply-sentry-infra.yml is scanned.
+    // No filter on resource TYPE: EVERY managed resource discovered under
+    // infra/sentry/ must be reachable by a -target line (mirrors the #5566 block).
+    // A future non-sentry_ resource (random_password, doppler_secret) added here
+    // must fail CLOSED — filtering to `sentry_` would silently skip it, re-opening
+    // the #5566 un-applied class. (`data "sentry_project"` is already excluded:
+    // extractAllResources matches `resource "…"`, not `data "…"`.)
+    sentryResources = listSentryTfFiles().flatMap((f) =>
+      extractAllResources(stripComments(readFileSync(f, "utf8"))),
+    );
     sentryTargets = extractAllTargets(readFileSync(SENTRY_WORKFLOW, "utf8"));
   });
 
@@ -621,6 +633,15 @@ describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884
     ).toBe(true);
   });
 
+  test("the #5884 regression anchor (github_webhook_founder_ambiguous) stays targeted", () => {
+    // The apply-created alert whose missing -target line this PR fixed — the exact
+    // resource that surfaced the guard's third real inert-alert instance. Pin it so
+    // a future workflow edit cannot silently re-drop it back to inert.
+    expect(
+      sentryTargets.has("sentry_issue_alert.github_webhook_founder_ambiguous"),
+    ).toBe(true);
+  });
+
   test("the 4 import-only auth_* placeholders are present in .tf yet NOT targeted", () => {
     for (const a of SENTRY_IMPORT_ONLY_EXCLUSIONS) {
       expect(sentryResources).toContain(a);
@@ -630,9 +651,7 @@ describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884
 
   test("guard FAILS on a synthetic un-targeted apply-created alert (non-vacuity)", () => {
     const synthetic = `resource "sentry_issue_alert" "synthetic_forgotten_alert" { project = "x" }`;
-    const parsed = extractAllResources(stripComments(synthetic)).filter((a) =>
-      a.startsWith("sentry_"),
-    );
+    const parsed = extractAllResources(stripComments(synthetic));
     expect(parsed).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
     const uncovered = parsed.filter(
       (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
