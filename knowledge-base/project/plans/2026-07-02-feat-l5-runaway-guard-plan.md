@@ -1,5 +1,5 @@
 ---
-plan: L5 Runaway Guard — doom-loop detection + token/cost circuit breaker
+plan: L5 Runaway Guard — notification + working pause (safety floor)
 issue: 5767
 branch: feat-l5-runaway-guard
 draft_pr: 5881
@@ -8,278 +8,205 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 status: draft
 created: 2026-07-02
+revised: 2026-07-02 (v2 — simplified after 5-agent plan-review)
 brainstorm: knowledge-base/project/brainstorms/2026-07-01-l5-runaway-guard-brainstorm.md
 spec: knowledge-base/project/specs/feat-l5-runaway-guard/spec.md
 ---
 
-# ✨ Plan: L5 Runaway Guard
+# ✨ Plan: L5 Runaway Guard — safety floor (v2)
 
-Full-scope L5 "agent-as-process safety" layer, staged as a dependency-ordered multi-PR train. Stops an
-unattended autonomous run from silently burning a non-technical founder's own BYOK credits.
+Make the *existing* cost-guard actually protect a non-technical founder: (1) fix the silently-broken
+pause so a tripped cap really stops spending and can be resumed, and (2) notify the founder when it trips.
+Everything else the brainstorm imagined is deferred as honestly-scoped follow-ups — the 5-agent
+plan-review panel + CFO converged that the safety value lives here and the rest is over-build.
 
 ## Overview
 
-Six gaps from the brainstorm, re-scoped after plan-time verification against ADR-041/042/077 + the CFO
-consult. Much of the "circuit breaker" is **already built** (see Research Reconciliation); the genuine,
-high-value work is **notification on trip**, a **founder-facing 24h budget ceiling**, a **pre-run
-estimate**, a **doom-loop detector**, and **cron-substrate token metering**.
+**v1 → v2 simplification.** The original 4-PR train (24h window, estimate+HITL, doom-loop, cron metering)
+was cut after plan-review. Verified facts that drove the cut:
+- The cost caps **already exist** (ADR-041 3-layer model). The gap is that they're **silent** and — newly
+  discovered — that the **pause they set is cosmetic**.
+- **`runtime_paused_at` is a write-only flag** (arch-strategist P0-A): zero readers, zero clearers repo-wide.
+  The RPC trips `kill_tripped` only on the NULL→set transition, so an already-paused founder's next spawn
+  returns `kill_tripped=false` and **keeps spending**; nothing clears the flag, so "resume" has no code.
+- The **cron substrate writes nothing to `audit_byok_use`** (Kieran P0-1), so no dollar cap — existing or
+  new — can see the surface where the overnight-burn threat mostly lives. A new 24h window would not fix
+  this. → deferred as the real threat-surface follow-up.
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec/brainstorm claim | Verified reality | Plan response |
 |---|---|---|
-| "No run-wide cost ceiling exists" | **False.** `record_byok_use_and_check_cap` (`apps/web-platform/supabase/migrations/061_byok_audit_workspace_id_rpcs.sql:81-148`) enforces a per-founder **rolling-1h** cap vs `users.runtime_cost_cap_cents`, sets `runtime_paused_at` on breach | Do NOT rebuild. PR-A adds a **founder-facing rolling-24h budget** window alongside the internal 1h safety valve (operator decision 2026-07-02) |
-| "Ceiling is not operator-tunable" | Partial — `runtime_cost_cap_cents` (per-founder) exists; no settings UI confirmed | PR-A surfaces + makes tunable; adds a distinct 24h-window column (do NOT overload the 1h column — CFO) |
-| "No notification when a ceiling trips" | **True.** Both the cap RPC and `persistFailure` (`agent-on-spawn-requested.ts:913-962`) are silent (Sentry-only) | PR-A: core deliverable — wire `notifyOfflineUser` + new `cost_breaker_tripped` type |
-| "Per-turn Inngest step checks cumulative tokens" (issue framing) | Misconception for crons: `_cron-claude-eval-substrate.ts:818` spawns opaque `claude --print`. The **leader loop** (`agent-on-spawn-requested.ts:323-399`) does meter per-turn (3-layer guard) | PR-D switches crons to `stream-json`; PR-A/C extend the leader loop |
-| Pre-run estimate / doom-loop detection | **Both MISSING** (confirmed) | PR-B (estimate), PR-C (doom-loop) |
-| ADR needed for enforcement topology | ADR-041 explicitly isolates cap-policy changes; ADR-042 = loop topology; ADR-077 = live-state | **Amend ADR-041** (not a new ADR) + note C4 |
+| "No run-wide cost ceiling exists" | Per-founder rolling-1h cap exists (`migrations/061:...`, sums `audit_byok_use` over `interval '1 hour'`, sets `runtime_paused_at`) | Do not rebuild |
+| Pause actually stops the run | **False** — `runtime_paused_at` has no reader/clearer; RPC trips transition-only (`061:136`) | **PR-A fixes this** (the core work) |
+| "No notification on trip" | True — cap RPC + `persistFailure` (`agent-on-spawn-requested.ts:913-962`) are silent (Sentry-only) | **PR-A wires it** |
+| Caps cover the overnight-burn surface | **False** — crons (`_cron-claude-eval-substrate.ts:818` `claude --print`, BYOK key injected) write nothing to `audit_byok_use` | Deferred: **cron cost-enforcement** follow-up |
+| Counter lives in `routine_run_progress` | Wrong surface — that table is cron-only (ADR-077 §2); the leader loop uses `action_sends` | N/A (doom-loop deferred) |
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** the agent-run supervisor
-(`agent-on-spawn-requested.ts`) fails to halt or fails to notify — an unattended run keeps spending the
-founder's own Anthropic credits with no signal.
-**If this leaks, the user's money is exposed via:** a silent overnight doom-loop / runaway consuming the
-founder's BYOK credits (hundreds/thousands of dollars) with no artifact shipped and no notice.
+**If this lands broken, the user experiences:** a tripped cost cap that still doesn't stop the run, or a
+halt with no notice — the founder keeps losing BYOK dollars unattended.
+**If this leaks, the user's money is exposed via:** a runaway consuming the founder's own Anthropic
+credits with no working brake and no alert.
 **Brand-survival threshold:** single-user incident.
 
-> **Residual risk (operator-accepted 2026-07-02):** PR-A ships a rolling-**24h-per-founder** window, not a
-> per-**run** ceiling. A single runaway run can still legitimately consume the entire 24h budget in one
-> overnight event before the window resets. The per-run guard (CFO-recommended, default $20) is deferred
-> as a tracked follow-up (see Non-Goals) — not silently dropped.
+> **Named residual (Non-Goal, tracked):** PR-A fixes the *leader-loop* pause + notification. The **cron
+> surface remains uninsured** (writes nothing to `audit_byok_use`) — the largest real overnight-burn
+> surface. This is filed as the top-priority follow-up (Kieran P0-1), not silently dropped.
 
-CPO sign-off carried forward from brainstorm (`USER_BRAND_CRITICAL=true`, triad spawned). `user-impact-reviewer`
-runs at review time (review/SKILL.md conditional-agent block).
+CPO sign-off carried forward (`USER_BRAND_CRITICAL=true`); `user-impact-reviewer` runs at review time.
 
 ## Goals
 
-1. **Notification on any cost/loop halt** (core) — reuse `notifications.ts` WS→Push→Email; new
-   `cost_breaker_tripped` payload type; wire into `persistFailure` AND the cap-RPC breach path.
-2. **Founder-facing rolling-24h budget ceiling** — new per-founder 24h-window column, operator-tunable
-   (dollars), notified, coexisting with the internal rolling-1h safety valve.
-3. **Pre-run cost estimate** — always shown at kickoff, derived from `audit_byok_use` history per
-   `agent_role`; **opt-in** HITL approval for founder-armed high-cost routines (no blanket gate — honors
-   `wg-verified-work-ships-without-asking`).
-4. **Doom-loop detector** — nudge→halt on repeated no-progress edits; web leader loop + CC plugin; reuse
-   `stop-hook.sh` hash+Jaccard math.
-5. **Cron-substrate token metering** — switch heavy crons to `--output-format stream-json --verbose`;
-   tally cumulative tokens in `routine_run_progress`.
-6. **Legal/architecture reconciliation** — amend ToS §3a.5/§11, Article 30 register, `/soleur:gdpr-gate`,
-   amend ADR-041.
+1. **Make the pause real** — a spawn-entry gate that refuses when `runtime_paused_at IS NOT NULL`, an
+   operator-resume action that clears it, and a contract that cap-checks **set but never clear** it.
+2. **Notify on trip** — `notifyOfflineUser` + a new `cost_breaker_tripped` payload, wired into
+   `persistFailure` at **one** site; honest dollar copy.
+3. **Legal/architecture reconciliation** — ToS §3a.5/§11, ADR-041 amend, ADR-042 frontmatter fix, Art.30.
 
-## Non-Goals
+## Non-Goals (all filed as tracked follow-up issues)
 
-- **Per-run cost ceiling** (CFO-recommended, default $20). Deferred to a tracked follow-up issue — the
-  rolling-24h-per-founder window was chosen instead (operator, 2026-07-02). Re-eval when overnight-burn
-  telemetry shows a single-run event consuming the full 24h budget.
-- A single unified runtime primitive across web + CC — surfaces diverge on enforcement (web = pre-emptive
-  kill; CC = best-effort at tool/Stop boundaries). Share policy schema + hash math only.
-- Blanket per-kickoff HITL approval gate.
-- A new per-edit-event table (WAL-budget risk — fold counters into `routine_run_progress`).
-- Metering the two crons that bypass `spawnClaudeEval` (`cron-daily-triage`, `cron-follow-through-monitor`)
-  — deferred per ADR-077 v1 (never false-stuck).
+- **Cron cost-enforcement** (Kieran P0-1) — make crons write `audit_byok_use` / share the cap RPC so a
+  dollar ceiling covers them. **Top-priority follow-up** — the real threat surface.
+- **Rolling-24h founder budget** — product/tunability increment (operator chose it 2026-07-02, but it is
+  not the safety floor and can't see crons). Follow-up.
+- **Per-run cost ceiling** (CFO, default $20) — follow-up.
+- **Pre-run cost estimate** (avg, not p95; no HITL modal) — follow-up.
+- **Doom-loop detector** — web-only, own ADR, behind telemetry proving the cap misses real loops. Follow-up.
+- **Resume-from-checkpoint apparatus** — v2 uses **terminal-halt**: operator resumes by clearing the pause
+  and starting a fresh run. No checkpoint/re-bill/cycle-cap machinery.
 
-## Build Sequence (multi-PR train)
+## Files to Edit / Create
 
-### PR-A — Safety floor (notification + 24h budget) — MVP
-**Files to Edit / Create:**
-- `apps/web-platform/supabase/migrations/<next>_runtime_daily_cost_cap.sql` (**create**) — add
-  `users.runtime_daily_cost_cap_cents int` (default 2000 = $20; tunable) + a rolling-24h SUM check helper
-  (mirror the mig-061 RPC window pattern, `ts > now() - interval '24 hours'`). **gdpr-gate (Phase 2.7):**
-  annotate the column `-- LAWFUL_BASIS: Art. 6(1)(b) contract performance — operator's own spend-control
-  preference`; if the `cost_breaker_tripped` event is persisted (beyond ephemeral WS/Push/Email), declare
-  Art. 5(1)(e) retention on that row. No Art. 9 / no new FK-to-`users` / no new non-EEA vendor.
-- `apps/web-platform/server/notifications.ts:72-91` — extend `NotificationPayload` union with
-  `CostBreakerNotificationPayload { type: "cost_breaker_tripped"; reason: <failure_reason subset>; context: {...cents} }`; add push body (`:224-250`) + email template (`:314-344`).
-- `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts:913-962` — call
-  `notifyOfflineUser(founderId, payload)` from `persistFailure` for cost/loop reasons, BEFORE the row
-  UPDATE (mirror the existing Sentry-mirror ordering). **Return terminal `ok:false`; never throw** (TR1).
-- `apps/web-platform/server/byok-cap-rpc.ts` — wire notification on `killTripped` / `runtime_paused_at`.
-- Settings UI (dollars) surfacing `runtime_cost_cap_cents` (existing) + `runtime_daily_cost_cap_cents`
-  (new). UI files per wireframes.
-- `docs/legal/terms-and-conditions.md` §3a.5 + §11 (clo-attestation); `knowledge-base/legal/article-30-register.md`.
-- `knowledge-base/engineering/architecture/decisions/ADR-041-byok-cap-enforcement-model.md` (amend).
-
-### PR-B — Pre-run estimate + opt-in HITL
-- Estimate: query `audit_byok_use` p95/avg `unit_cost_cents` per `agent_role` over 30d × max-turns.
-- Kickoff surface renders the estimate (dollars); opt-in HITL modal for armed high-cost routines.
-- Wireframes: `knowledge-base/product/design/runaway-guard/screenshots/01-*`, `02-*`.
-
-### PR-C — Doom-loop detector (web + CC)
-- Extract `stop-hook.sh:88-258` hash+Jaccard+repeat logic into a shared helper.
-- Web: per-target `(file_path+diff)` hash counter in `routine_run_progress` (`progress_counters jsonb`);
-  nudge → halt after N; terminal `ok:false` (TR1).
-- CC: PostToolUse(Edit|Write) hook (template: `.claude/hooks/agent-token-tee.sh`); best-effort.
-
-### PR-D — Cron-substrate token metering (gated)
-- `_cron-claude-eval-substrate.ts:818` → prepend `--output-format stream-json --verbose`; parse per-line
-  JSON in the readline loop (`:828-846`); redact within `.message`/`.content` before logging; tally
-  `usage` into `routine_run_progress.cumulative_tokens`.
-- **Go/no-go gate:** touches redaction + bounded-tail; if not approved, cron cost control stays coarse
-  (wall-clock + `--max-turns`) and this PR degrades to a documented limitation.
-
-### ADR / C4
-- Amend ADR-041 `## Decision` + `## Alternatives Considered` (24h founder-facing window, notification
-  layer, per-run guard deferral rationale).
-- C4: notification reuses the existing `webapp → resend` outbound edge + `founder` actor
-  (`model.c4:8,234,258`); web-push is the one candidate new edge — verify against all three `.c4` files
-  at work time and add the edge + `views.c4` include only if genuinely unmodeled.
+- `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`
+  - **Spawn-entry pause gate** (before the turn loop, ~`:319`): read `users.runtime_paused_at`; if set,
+    halt immediately via `persistFailure(reason: "byok_cap_exceeded")` (or a new `run_paused` reason) —
+    do NOT enter the loop. Closes P0-A consequence #1.
+  - **Notification** in `persistFailure` (`:913-962`), the **single** site: call `notifyOfflineUser(founderId, {type:"cost_breaker_tripped", ...})` BEFORE the `action_sends` UPDATE (mirror the existing Sentry-mirror ordering). Fire ONLY for the enumerated cost/loop subset — `cost_ceiling_exceeded | byok_cap_exceeded | leader_max_turns_exceeded` — and a new distinct **`cap_check_unavailable`** reason (P2-H) so a transient DB error does NOT send a false "budget exceeded" alert. **Never** notify on `cancelled_by_operator`.
+  - Terminal contract unchanged: returns `{acknowledged:false, failureReason}`, never throws (already true, `:925/:961` — TR1 for this surface; `ok:false` is the *cron* shape, do not use it here).
+- `apps/web-platform/server/byok-cap-rpc.ts` — do **NOT** add notification here (P1-4: it already funnels
+  through `persistFailure`; double-notify + violates the pure-RPC-wrapper single responsibility).
+- `apps/web-platform/supabase/migrations/061_...` follow-up migration — make the cap RPC return
+  `kill_tripped = true` whenever `runtime_paused_at IS NOT NULL` (not transition-only), so a paused
+  founder's next spawn re-blocks even if the entry-gate is bypassed. Defense-in-depth for P0-A.
+- **Operator-resume clearer** — a route/action that sets `runtime_paused_at = NULL` (the only clearer);
+  reachable from the halt banner/email CTA. Wireframe `03a`/`03c` "Resume" now means "clear pause + start
+  a fresh run" (terminal-halt).
+- `apps/web-platform/server/notifications.ts:72-91` — extend `NotificationPayload` with
+  `CostBreakerNotificationPayload { type:"cost_breaker_tripped"; reason: <subset>; which_window: "spawn"|"cap-1h"; context:{cumulativeCents, ceilingCents} }` (P2-G `which_window`); add push body (`:224-250`) + email template (`:314-344`).
+- `docs/legal/terms-and-conditions.md` §3a.5 (already false in prod) + §11 (clo-attestation).
+- `knowledge-base/legal/article-30-register.md`.
+- `knowledge-base/engineering/architecture/decisions/ADR-041-...md` — amend `## Decision` (notification
+  layer + working-pause contract) + reconcile the stale "daily soft $20/hard $50/monthly $500" prose vs
+  the SQL `interval '1 hour'` (P2-9).
+- `knowledge-base/engineering/architecture/decisions/ADR-042-...md` — fix frontmatter `adr: 040` → `042`
+  + title (P2-I, pre-existing bug).
 
 ## Acceptance Criteria
 
-### Pre-merge (per PR)
-- **AC1 (PR-A):** A cost/loop halt calls `notifyOfflineUser` with `type: "cost_breaker_tripped"` BEFORE
-  the `action_sends` UPDATE — assert via unit test capturing call order.
-- **AC2 (PR-A):** New `runtime_daily_cost_cap_cents` column exists, default 2000; a rolling-24h SUM ≥ cap
-  sets `runtime_paused_at` and fires the notification. Verify: `BEGIN; SELECT rpc(...); ROLLBACK;` on a
-  seeded row (DEV only — never prod, per `hr-dev-prd-distinct-supabase-projects`).
-- **AC3 (PR-A):** Halt notification payload contains dollars (not tokens), amount-vs-ceiling, reason,
-  what-shipped, one next action (matches wireframe copy).
-- **AC4 (PR-A):** ToS §3a.5 no longer states "does not include a Jikigai-provided cost ceiling"; §11
-  overage carve-out cross-references the breaker. Art.30 register updated. `/soleur:gdpr-gate` clean.
-- **AC5 (PR-A):** ADR-041 amended; drift-guard test (`expect(src).not.toMatch(/\b20\b.../)` scope) still passes.
-- **AC6 (PR-B):** Kickoff shows an estimate derived from `audit_byok_use`; no approval prompt unless the
-  routine is opted-in high-cost.
-- **AC7 (PR-C):** A synthetic run repeating an identical `(file_path+diff)` N times emits a nudge then
-  halts terminally (returns `ok:false`, no Inngest replay). Test drives the reducer directly (LLM removed
-  from the assertion path).
-- **AC8 (PR-D, if go):** A cron run records non-zero `routine_run_progress.cumulative_tokens`; redaction
-  still strips secrets from stream-json lines.
-
-- **AC9 (PR-A, P0-1):** Resume from a paused run does NOT re-bill completed steps — assert a resumed run's
-  `audit_byok_use` sum for pre-halt turns is unchanged (DEV repro).
-- **AC10 (PR-A, P0-3 SAFETY):** A paused run does NOT auto-resume when the rolling-24h window clears — assert
-  `runtime_paused_at` remains set after the window elapses until an explicit operator resume. (Blocking — the
-  feature's safety promise.)
+### Pre-merge
+- **AC1 — pause is real (blocking, SAFETY):** a spawn whose founder has `runtime_paused_at` set halts at
+  the entry gate WITHOUT entering the turn loop (no Anthropic call). DEV repro: seed a paused founder,
+  invoke, assert zero `audit_byok_use` rows added.
+- **AC2 — resume clears (blocking):** the operator-resume action is the ONLY code path that sets
+  `runtime_paused_at = NULL`; cap-check steps never clear it. Grep-assert no other clearer exists.
+- **AC3 — notify one site, right reasons:** `notifyOfflineUser({type:"cost_breaker_tripped"})` fires from
+  `persistFailure` for `cost_ceiling_exceeded|byok_cap_exceeded|leader_max_turns_exceeded|cap_check_unavailable`
+  and NOT for `cancelled_by_operator`; fires BEFORE the `action_sends` UPDATE; fires from no other site
+  (grep-assert single call site). `cap_check_unavailable` is a distinct reason (P2-H).
+- **AC4 — honest copy (matches wireframe `03a`/`03c`):** payload carries dollars (not tokens), amount-vs-
+  ceiling, `which_window`, and never implies the run completed.
+- **AC5 — legal/ADR:** ToS §3a.5 no longer claims "no Jikigai-provided cost ceiling"; §11 overage
+  carve-out present; ADR-041 amended + daily/monthly prose reconciled; ADR-042 frontmatter fixed; Art.30
+  updated; `/soleur:gdpr-gate` clean (no Art.9).
 
 ### Post-merge (operator)
-- **AC11:** `Ref #5767` (NOT `Closes` — multi-PR train); close #5767 after PR-D (or its deferral) lands.
+- **AC6:** `Closes #5767` (v2 is a single PR — the follow-ups get their own issues). Confirm the 5
+  follow-up issues exist and are linked before marking ready.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: cost_breaker_tripped notifications + routine_run_progress rows
-  cadence: per-halt (event-driven) + 30s heartbeat (existing)
-  alert_target: Sentry (existing reportSilentFallback op) + operator WS/Push/Email
-  configured_in: apps/web-platform/infra/sentry/*.tf (extend), notifications.ts
+  what: cost_breaker_tripped notifications + runtime_paused_at state
+  cadence: per-halt (event-driven)
+  alert_target: Sentry (reportSilentFallback op) + operator WS/Push/Email
+  configured_in: notifications.ts; agent-on-spawn-requested.ts persistFailure
 error_reporting:
   destination: Sentry via reportSilentFallback (agent-on-spawn-requested.ts:927)
-  fail_loud: notification-send failure mirrors to Sentry (cq-silent-fallback-must-mirror-to-sentry); never swallow
+  fail_loud: notification-send failure mirrors to Sentry (cq-silent-fallback-must-mirror-to-sentry); never swallowed
 failure_modes:
   - {mode: notification send fails, detection: Sentry op=notify-cost-breaker fail_loud, alert_route: Sentry issue alert}
-  - {mode: 24h-cap RPC read error, detection: fail-closed THROW → Sentry, alert_route: Sentry}
-  - {mode: doom-loop counter false-positive (halts real work), detection: in-surface structured event source/editHash/repeatCount, alert_route: Sentry}
-  - {mode: cron stream-json parse error (PR-D), detection: in-surface parse-fail event emitted from the cron, alert_route: Sentry}
+  - {mode: pause set but never blocks (P0-A regression), detection: cap-RPC returns kill_tripped when paused + entry-gate test, alert_route: CI (AC1) + Sentry}
+  - {mode: transient cap-check DB error mis-notified, detection: distinct cap_check_unavailable reason, alert_route: Sentry (not a false user alert)}
 logs:
-  where: pino structured (existing) + routine_run_progress
+  where: pino structured (existing)
   retention: existing
 discoverability_test:
-  command: "gh api / supabase execute_sql read-only: SELECT count(*) FROM routine_run_progress; + Sentry op query — NO ssh"
-  expected_output: non-empty on active run; halt events queryable in Sentry
+  command: "supabase execute_sql read-only: SELECT count(*) FROM users WHERE runtime_paused_at IS NOT NULL; + Sentry op query — NO ssh"
+  expected_output: paused founders enumerable; halt events queryable in Sentry
 ```
-
-**2.9.2 affected-surface:** the doom-loop detector + cron metering touch blind surfaces (Inngest
-worker, agent-run dispatch). Each `failure_mode.detection` above names an **in-surface** probe emitting
-discriminating structured fields (`source`/`editHash`/`repeatCount` for the loop; `parse_ok`/`token_delta`
-for the cron), not just a host-side gate — per `hr-observability-as-plan-quality-gate` +
-`observability-coverage-reviewer` §4.6.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-Amend **ADR-041** (`## Decision` + `## Alternatives Considered`): add the founder-facing rolling-24h
-window as a new cap layer, the notification layer, and record the per-run-ceiling deferral + rationale.
-Cap-policy changes isolate to ADR-041 by its own design (no new ADR; ADR-042 loop topology untouched).
+Amend **ADR-041** (`## Decision` + `## Alternatives Considered`): the notification layer + the
+working-pause contract (set-never-clear; entry-gate reader; RPC returns kill_tripped while paused).
+Reconcile the stale daily/monthly prose. Cap-policy changes isolate to ADR-041 by its own design — **no
+new ADR** (doom-loop / enforcement-topology deferred with PR-C, so ADR-042's per-turn topology is
+untouched by v2 except the pre-existing frontmatter bug fix).
 
 ### C4 views
-Enumerated against all three `.c4` files: `founder` actor (`model.c4:8`), `anthropic` + `resend` systems
-(`:206,234`), `webapp/api → resend` outbound-email edge (`:258,291`) — all already modeled. The
-notification reuses these. **One candidate new edge:** web-push (VAPID) delivery — verify at work time
-whether a push endpoint/system is modeled; if not, add the element + `#external` tag + edge +
-`views.c4` include, and run `apps/web-platform/test/c4-*.test.ts`. No new external human actor.
-
-### Sequencing
-ADR-041 amendment ships in PR-A (describes target state; per-run deferral noted as a tracked follow-up).
+Checked against all three `.c4` files: `founder` actor (`model.c4:8`), `resend` system + `webapp/api →
+resend` outbound edge (`:234,258,291`) already model the notification path. **One candidate new edge:**
+web-push (VAPID) — verify at work time; add element + `#external` tag + edge + `views.c4` include only if
+genuinely unmodeled, then run `apps/web-platform/test/c4-*.test.ts`. No new external actor.
 
 ## Domain Review
 
 **Domains relevant:** Engineering, Product, Legal, Finance
 
-### Engineering (CTO — carry-forward from brainstorm)
-**Status:** reviewed. Hard-halt only via the `AbortController` SIGTERM→SIGKILL seam; terminal `ok:false`
-never throw (replay-safety); counters in `routine_run_progress`, not a new table; surfaces diverge, share
-policy+hash. ADR-041 amendment.
-
-### Product (CPO — carry-forward)
-**Status:** reviewed. Table-stakes; conservative default-on tunable; honest halt copy (dollars, never
-imply completion); roadmap flag — prerequisite for Phase-4 unattended cohort (#1442).
+### Engineering (CTO carry-forward + arch-strategist plan-review)
+**Status:** reviewed. Terminal `{acknowledged:false}` return (never throw) — TR1 for the leader loop.
+Working-pause contract (P0-A) is the core. Notify one site. ADR-041 amend (not new ADR).
 
 ### Product/UX Gate
-**Tier:** blocking (UI surfaces: estimate panel, HITL modal, halt banner, halt email).
-**Decision:** reviewed (brainstorm carry-forward — wireframes PRODUCED, not just idea-validated).
-**Agents invoked:** ux-design-lead (brainstorm Phase 3.55), spec-flow-analyzer (plan-time, BLOCKING).
-**spec-flow findings:** 4 P0 recovery-flow gaps (resume semantics, doom-loop resume paradox, 24h-reset
-auto-resume safety, HITL-modal-vs-per-run-deferral conflict) + 9 P1 — captured in `## Flow Gaps` above.
+**Tier:** blocking. **Decision:** reviewed. **Agents invoked:** ux-design-lead (brainstorm), spec-flow-analyzer (plan).
+**Pencil available:** yes — `.pen` committed. **Surfaces in v2 scope:** halt banner `03a` + halt email `03c`
+(notification). `01` estimate, `02` HITL modal, `03b` doom-loop banner defer with their features.
+**spec-flow:** its 4 P0 recovery-flow gaps are **dissolved** by terminal-halt (no resume apparatus) — the
+recovery story is "halt → notify → operator clears pause + starts fresh."
 **Skipped specialists:** none.
-**Pencil available:** yes — `.pen` committed at `knowledge-base/product/design/runaway-guard/l5-runaway-guard-surfaces.pen`, referenced in FR2/FR4/FR5.
 
-### Legal (CLO — carry-forward)
-**Status:** reviewed. **P0:** ToS §3a.5 already false in prod (per-founder cap shipped) — amend §3a.5/§11
-in PR-A (clo-attestation, counsel-review gate). Notification payload minimized to cost aggregates + run-id.
-Art.30 + DPD + GDPR Policy lockstep. `/soleur:gdpr-gate` at Phase 2.7.
+### Legal (CLO carry-forward)
+**Status:** reviewed. **P0:** ToS §3a.5 already false in prod — amend §3a.5/§11 in PR-A (clo-attestation).
+Notification payload minimized to cost aggregates + run-id (TR5). Art.30 + DPD + GDPR Policy lockstep.
 
-### Finance (CFO — plan-time consult, 2026-07-02)
-**Status:** reviewed. Recommended a per-**run** ceiling (default $20, range $5–$50) nested below existing
-aggregate caps; operator chose the rolling-24h-per-founder window instead. Per-run guard recorded as a
-tracked deferral (Non-Goals). For the 24h window, default $20 (aligns with the existing daily soft-cap
-anchor), tunable in dollars.
+### Finance (CFO plan-time)
+**Status:** reviewed. Recommended a per-run $20 ceiling; deferred as a follow-up. No new default value
+needed in v2 (no new cap column ships).
+
+## Plan Review (5-agent panel, 2026-07-02)
+
+Ran DHH + Kieran + code-simplicity + architecture-strategist + spec-flow (single-user-incident → 5-agent).
+**Outcome: major simplification (v1→v2).** All five converged on cutting the 24h window + doom-loop +
+resume apparatus and shipping notification-on-existing-caps as the MVP. Load-bearing correctness catches
+folded in: P0-A broken-pause (arch), P0-1 cron-blindness (Kieran, → top follow-up), wrong-table counter
+(→ N/A, doom-loop deferred), double-notify (→ one site), TR1 return-shape per surface, PR-D redaction
+fail-open (→ deferred with cron work), ADR routing + ADR-042 frontmatter, `which_window`, `cap_check_unavailable`.
 
 ## Risks & Mitigations
-
-- **Replay-loop on throw** (TR1): a doom-loop/budget halt that throws re-enters `spawnClaudeEval` on
-  Inngest replay and loops the runaway → **return terminal `ok:false`, check counter on entry.**
-- **Counter reset per attempt** (ADR-077): `routine_run_progress` upsert resets on `attempt>1`; counters
-  that must survive retries need idempotency-keyed accumulation, not reset. Verify at work time.
-- **Two windows coexist:** internal 1h safety valve (`runtime_cost_cap_cents`) + new founder-facing 24h
-  budget — whichever is tighter trips first; document both in settings copy so the founder isn't confused.
-- **Notification-send failure** must fail loud to Sentry, never swallow (`cq-silent-fallback-must-mirror-to-sentry`).
-
-## Flow Gaps (spec-flow-analyzer) — resolve before /work
-
-The kickoff + halt-notification surfaces are solid; the **recovery half of the journey** is where a
-non-technical founder's money is at stake and it is under-specified. Recommended resolutions (⚠ = needs
-operator decision):
-
-- **P0-1 Resume semantics** (spec open-Q). Recommend: **resume from checkpoint** (no re-bill of completed
-  steps — BYOK dollars); "Raise limit & resume" opens an amount input defaulting to a **one-time bump for
-  this run** (NOT a standing-limit change — see P1-13 ratchet risk). Reflect on button copy ("Resume from
-  where it stopped — finished work isn't re-charged").
-- **P0-2 Doom-loop resume paradox.** Recommend: resume **resets the loop counter AND injects a
-  fresh-approach directive**; cap total resume cycles (e.g. 2) to prevent infinite re-loop/re-notify burn.
-- **⚠ P0-3 Ignore / 24h-window-reset behavior (SAFETY-CRITICAL).** The rolling-24h window means a paused
-  run's aggregate spend drops below the ceiling ~24h later. Recommend **stay paused; NEVER silent
-  auto-resume** (auto-resume resurrects the overnight-burn this feature exists to prevent) + a re-notify
-  reminder after N hours. This is the crux of the safety promise — **operator must confirm no-auto-resume.**
-- **⚠ P0-4 HITL modal vs per-run deferral.** Wireframe `02` advertises a per-run "$25 spending ceiling"
-  that the plan **defers** (Non-Goals). Recommend: **relabel modal `02` to the 24h budget** ("this routine
-  may consume up to $X of your daily budget") + add an arm/disarm + per-routine control to a new Settings →
-  Spending wireframe. Alternative: **restore the per-run ceiling to scope** (reverses the 2026-07-02
-  deferral). **Operator decides** at handoff.
-
-**P1 gaps folded into Open Questions / follow-ups:** mid-run overrun alert (P1-5), abandon-outcome +
-partial-work fate + "view changes" affordance (P1-6/P1-7), 1h-cap-trip notification copy + doom-loop email
-variant (P1-8/P1-10), cross-cap re-halt on resume (P1-9), email deep-link-through-auth (P1-11), multi-run
-halt fan-out (P1-12), raise-limit ratchet confirmation (P1-13). Wireframe the **Settings → Spending** +
-**1h-cap trip** + **doom-loop email** variants (currently missing).
+- **Pause-gate bypass:** defense-in-depth — entry-gate reader AND RPC-returns-kill_tripped-while-paused
+  (two independent blocks) so a missed gate still can't spend.
+- **Notification-send failure** fails loud to Sentry, never swallowed (`cq-silent-fallback-must-mirror-to-sentry`).
+- **Terminal-halt re-does work on a fresh run** (re-spends BYOK) — accepted: the founder is explicitly in
+  control at resume; simpler and safer than a checkpoint state machine that fights the attempt-reset model.
 
 ## Open Code-Review Overlap
-
-None. Checked all 61 open `code-review` issues against the 6 planned files
-(`agent-on-spawn-requested.ts`, `notifications.ts`, `byok-cap-rpc.ts`,
-`_cron-claude-eval-substrate.ts`, `routine-run-progress`, `stop-hook.sh`) — zero matches.
+None. Checked all 61 open `code-review` issues against the planned files — zero matches.
 
 ## Sharp Edges
-- A plan whose `## User-Brand Impact` section is empty/`TBD` fails `deepen-plan` Phase 4.6 — filled above.
-- Per-run guard deferral must produce a tracking issue (Step 6 deferral check) — not silent.
+- `## User-Brand Impact` filled (deepen-plan Phase 4.6 gate).
+- The 5 follow-up issues MUST be filed before PR-ready (Step 6 deferral check) — cron cost-enforcement is
+  top-priority; it is the real overnight-burn surface.
