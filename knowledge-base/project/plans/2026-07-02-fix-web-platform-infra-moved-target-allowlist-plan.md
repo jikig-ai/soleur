@@ -20,6 +20,21 @@ date: 2026-07-02
 
 > Spec lacks a `lane:` (no spec.md authored for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-02
+**Sections enhanced:** Hypotheses (network-outage deep-dive), Risks (precedent-diff + verify-the-negative), Phase 1 guard design, Domain Review, Test Scenarios, Deferral Tracking, Apply path.
+**Agents used:** CTO (plan-phase), architecture-strategist + code-simplicity-reviewer (deepen-phase). Deepen gates run: 4.4 precedent-diff, 4.45 verify-the-negative, 4.5 network-outage, 4.6 user-brand-impact (pass), 4.7 observability (pass), 4.8 PAT-shape (clean), 4.9 UI-wireframe (n/a).
+
+### Key Improvements
+1. **Central decision hardened and independently confirmed:** reject the issue's literal `-target` extension (it would reboot prod web-1 unattended) — verified sound + no-P0 by architecture-strategist, with the reboot evidence (server.tf:40 `placement_group_id` + `for_each`) and the destroy-guard's blindness to in-place reboots (verify-the-negative: filter is `delete`-only + Cloudflare-scoped) both confirmed against the tree.
+2. **Guard design reconciled across two reviewers:** keep the separate `MOVED_OPERATOR_CONSUMED` set (forced-acknowledgment ledger) + add a `⊆ OPERATOR_APPLIED_EXCLUSIONS` subset test to close the sync-drift hazard; flat-regex parser; cut the tautological regression-anchor.
+3. **Residual blind spot recorded:** deferred follow-up for a reboot-aware apply guard (destroy-guard is blind to reboot-forcing `update` on `hcloud_server.*`).
+
+### New Considerations Discovered
+- Blast radius: `apply-deploy-pipeline-fix.yml` is wedged on the same R2 state; one cutover unwedges both. `scheduled-terraform-drift.yml` (full plan) is not wedged and is the working backstop.
+- The 4th moved block (`hcloud_server_network.web`) is not runtime-reported only because its Phase-2 resource is not yet in state; the guard accounts for all four.
+
 ## Overview
 
 `.github/workflows/apply-web-platform-infra.yml` auto-applies `apps/web-platform/infra/*.tf` on every merge to `main`, using a **target-scoped** `terraform plan -target=<addr>` allow-list (one `-target=` line per resource that is *intended* to be applied per-PR). It has been **red on every run since 2026-07-01 18:03** (#5877, Phase 3 Sub-PR 3.A), which added four `moved {}` blocks to `apps/web-platform/infra/placement-group.tf`. Terraform rejects a targeted plan when a pending `moved` source/target base address is excluded from the `-target` set:
@@ -63,6 +78,17 @@ This plan therefore delivers two independent, safe workstreams:
 
 **Network-outage / SSH gate (plan Phase 1.4):** evaluated and **does not fire**. The failure is a Terraform *plan-time move-targeting* error, not an SSH/connectivity/handshake failure. The moved resources (`hcloud_server.web`, `hcloud_volume.workspaces`, `hcloud_volume_attachment.workspaces`) have no `provisioner`/`connection { ssh }` block in their own definitions (the SSH-provisioned `terraform_data.*` siblings are separate resources applied over the CF Tunnel bridge in a later, separate step). No L3→L7 firewall/egress diagnosis is in scope; the `hr-ssh-diagnosis-verify-firewall` checklist is not required here.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The Phase 4.5 keyword trigger matched (the plan text mentions "SSH" / "handshake" / "connection" when describing the CF Tunnel bridge and when *excluding* the SSH gate). Layer-by-layer verification confirms this is **not** a connectivity outage:
+
+- **L3 firewall allow-list / egress IP:** N/A — the failing step is `terraform plan`, which reaches only the R2 state backend + provider APIs, not the host over SSH. The CF-Tunnel SSH apply step never runs (the plan step aborts the job first). No egress-IP drift is implicated.
+- **L3 DNS / routing:** N/A — no host dial occurs at the failing step.
+- **L7 TLS / proxy:** N/A — not an HTTPS/handshake failure; the error is a Terraform config-graph validation (`Moved resource instances excluded by targeting`).
+- **L7 application:** the "application" here is Terraform's move-processing under `-target`; the fix is at that layer (sequencing the migration + a CI guard), not a network layer.
+
+Verification artifact: the confirmed failure signature is the Terraform plan-step error, reproduced across 5 consecutive runs (28537711578 … 28581854943), each ~34-66s (fails fast at plan, before any SSH step). `hr-ssh-diagnosis-verify-firewall` telemetry emitted (gate consulted, concluded N/A).
+
 ## Implementation Phases
 
 ### Phase 0 — Preconditions (verify before editing)
@@ -72,17 +98,18 @@ This plan therefore delivers two independent, safe workstreams:
 4. Do NOT run `terraform plan/apply` from the agent (no prd_terraform creds / R2 state in-session). The migration dry-run/apply is an operator maintenance-window step (Phase 3).
 
 ### Phase 1 — Extend the `moved`/`-target` parity guard (the recurrence fix)
-Edit `plugins/soleur/test/terraform-target-parity.test.ts` (add a new `describe` block; do not disturb the existing SSH and #5566 blocks):
-- Add a `parseMovedBlocks(stripped)` helper: match `moved\s*\{ … from = <addr> … to = <addr> … \}`, extract both endpoints, reduce each to its **base address** (strip a trailing `["…"]` index).
-- Add a documented `MOVED_OPERATOR_CONSUMED` set — the four #5877 bases, each with a one-line rationale mirroring `OPERATOR_APPLIED_EXCLUSIONS` discipline: *"consumed by the ADR-068 Phase-3 maintenance-window apply; a routine per-PR `-target` add would reboot/replace the running host — see #5887."*
-- Assert: every moved base ∈ (`allTargets` ∪ `MOVED_OPERATOR_CONSUMED`). Uncovered ⟹ fail.
-- Add a **non-vacuity / synthetic-forgotten-moved-block** test mirroring the existing `synthetic_untargeted_ssh` pattern (lines 278-333): a synthetic `moved` block whose base is in neither set must be flagged uncovered (proves the guard bites).
-- Add a **regression anchor**: assert the four #5877 bases are each in `MOVED_OPERATOR_CONSUMED` (so a later un-accounting fails loudly).
-- Comment the WHY: the existing #5566 test treats "in `OPERATOR_APPLIED_EXCLUSIONS`" as sufficient coverage, which is **orthogonal** to Terraform's plan-time move-processing requirement — hence a new `moved`-keyed dimension, not a tweak to the existing check.
+Edit `plugins/soleur/test/terraform-target-parity.test.ts` (add a new `describe` block; do not disturb the existing SSH and #5566 blocks). Minimal shape (post code-simplicity review — 1 helper + 1 set + 2 tests):
+- Add a `parseMovedBlocks(stripped)` helper: **flat regex** `/moved\s*\{[^}]*\}/g` (the four `moved` blocks are flat — no nested braces — so the heavy `extractTerraformDataResources` depth-counter is NOT needed here), then two `from\s*=\s*<addr>` / `to\s*=\s*<addr>` captures per block; reduce each endpoint to its **base address** (strip a trailing `["…"]` index).
+- Add a documented `MOVED_OPERATOR_CONSUMED` set — the four #5877 bases, each with a one-line rationale mirroring `OPERATOR_APPLIED_EXCLUSIONS` discipline: *"consumed by the ADR-068 Phase-3 maintenance-window apply; a routine per-PR `-target` add would reboot/replace the running host — see #5887."* Add a cross-reference comment on BOTH `MOVED_OPERATOR_CONSUMED` and `OPERATOR_APPLIED_EXCLUSIONS` noting the four addresses live in two hand-maintained sets that must move in lockstep on a resource rename (dual-maintenance hazard flagged at review).
+- **Test 1 (coverage):** every moved base ∈ (`allTargets` ∪ `MOVED_OPERATOR_CONSUMED`). Uncovered ⟹ fail. This test IS the regression anchor — removing a #5877 base from the set turns it red (the base is not in `allTargets`), so a **separate** "the four bases are in the set" tautology test is redundant and is NOT added.
+- **Test 2 (non-vacuity):** a synthetic forgotten `moved` block (base in neither set) must be flagged uncovered — mirrors the existing `synthetic_untargeted_ssh` pattern (lines 278-333); proves the guard bites.
+- **Test 3 (drift guard — reconciles the two reviewers):** assert `MOVED_OPERATOR_CONSUMED ⊆ OPERATOR_APPLIED_EXCLUSIONS`. This is NOT the tautological regression-anchor that was cut — it closes the dual-maintenance sync-drift hazard the architecture review flagged (P1): a separate `MOVED_OPERATOR_CONSUMED` set keeps the forced-acknowledgment ledger value (code-simplicity), and the subset assertion guarantees the two hand-maintained sets can never diverge on a rename. Any address in `MOVED_OPERATOR_CONSUMED` that is not also operator-excluded fails loudly.
+- (Optional, trimmable) a "permit a genuinely `-target`ed move" positive-branch test is YAGNI today (no current targeted-move case) — omit unless a reviewer wants union-branch documentation.
+- Comment the WHY: the existing #5566 test treats "in `OPERATOR_APPLIED_EXCLUSIONS`" as sufficient coverage, which is **orthogonal** to Terraform's plan-time move-processing requirement (exclusion-membership is the wedge *precondition*, not evidence of safe handling) — hence a new `moved`-keyed set, not a reuse of `OPERATOR_APPLIED_EXCLUSIONS`. Reusing it would rubber-stamp the exact #5877 pattern green. **Known limitation (state in the comment):** this guard is a review-surfacing *accounting* check on the repo, not a mechanical safety interlock — it forces a conscious classification but cannot stop an author from making it pass the *wrong* way (adding a reboot-bearing base to `-target`); and it checks the repo, not live R2 state (an already-wedged state is caught by the drift cron + follow-through, not here).
 
 ### Phase 2 — ADR-068 amendment + learning (capture the sequencing rule)
 - Amend `knowledge-base/engineering/architecture/decisions/ADR-068-*.md` (append an `> **Amendment (2026-07-02, #5887)**` note under the existing Phase-3 amendment section): record that a `moved` block re-addressing a resource in `OPERATOR_APPLIED_EXCLUSIONS` **wedges every targeted CI apply** until an operator full apply consumes it; such migrations must ship **with** the operator cutover, never as a routine `-target` allow-list edit. Do NOT change the ADR's `status:` (still `adopting`).
-- Write a learning `knowledge-base/project/learnings/<topic>.md` (author picks date at write-time; directory = `knowledge-base/project/learnings/` root or `bug-fixes/`): "a singleton→`for_each` `moved` migration on an operator-excluded resource red-lines target-scoped CI applies; unblock via operator cutover + a moved/`-target` guard, not an allow-list edit."
+- Write a **concise** learning `knowledge-base/project/learnings/<topic>.md` (author picks date at write-time; directory = `knowledge-base/project/learnings/` root or `bug-fixes/`) that is a **pointer to the ADR-068 amendment**, not a restatement of it (code-simplicity Q2: the ADR is the authoritative, `git grep 5887`-discoverable record). One-paragraph capture: "a singleton→`for_each` `moved` migration on an operator-excluded resource red-lines target-scoped CI applies (`Moved resource instances excluded by targeting`); the fix is the maintenance-window cutover + a moved/`-target` guard, NOT an allow-list edit — see ADR-068 §Amendment (#5887)." This satisfies the compound/learnings convention without duplicating the rule prose.
 
 ### Phase 3 — Operator cutover runbook (post-merge, maintenance window)
 Author a `### Post-merge (operator)` runbook (below) for the Phase-3 migration apply. This clears the wedge. It is operator-gated (supervised prod reboot). Provide the canonical Doppler `tf-var` invocation triplet verbatim (per the drift-runbook Sharp Edge). Enroll a `follow-through` tracker so issue closure is gated on the apply succeeding (not on merge).
@@ -152,13 +179,17 @@ None. `gh issue list --label code-review --state open` (61 open) — no open sco
 
 Key CTO findings folded in: (a) Terraform move coverage is all-or-nothing (can't add the 2 safe bases and omit the reboot-bearing server); (b) targeting the server transitively drags in `hcloud_placement_group.web_spread`; (c) blast radius includes `apply-deploy-pipeline-fix.yml`; (d) guard must key on a new `moved` dimension (the #5566 exclusion check is orthogonal to plan-time move processing). No capability gaps.
 
+**Deepen-plan reviewers (architecture-strategist + code-simplicity-reviewer):** VERDICT **sound, no P0**. Both verified every load-bearing claim against the tree (reboot evidence server.tf:37-40; 4 moved blocks; destroy-guard delete-only + Cloudflare-scoped; guard CI-wired at `scripts/test-all.sh:180`). Folded in: (1) architecture P1 + simplicity Q1 reconciled — keep the separate `MOVED_OPERATOR_CONSUMED` set (forced-acknowledgment ledger) AND add a `⊆ OPERATOR_APPLIED_EXCLUSIONS` subset test (closes sync-drift); (2) simplicity — flat-regex `parseMovedBlocks` (blocks are flat), cut the tautological regression-anchor, ADR-authoritative / learning-as-pointer; (3) architecture P2 — reboot-aware apply guard deferred to a follow-up issue; (4) architecture P2c — dispatch-gated alternative recorded as consciously declined.
+
 ## Infrastructure (IaC)
 
 ### Terraform changes
 No `.tf` files are edited. This plan changes **who applies** the Phase-3 moved migration (operator maintenance window) and adds a CI **guard** — it introduces no new resource, provider, or `TF_VAR_*`.
 
 ### Apply path
-(c-variant: taint/replace-class → here, an operator maintenance-window apply) The singleton→`for_each` migration + placement-group attach is an **operator maintenance-window `terraform apply`** (supervised, expected web-1 power-off reboot; possible web-2 create per `var.web_hosts`). It is NOT routed through the per-PR auto-apply `-target` path, because that path is unattended and this change reboots the running host. Expected downtime: one web-1 reboot cycle within the operator's window. After the apply, no pending moves remain → the per-PR target-scoped plan self-heals with no workflow change.
+(c-variant: taint/replace-class → here, an operator maintenance-window apply) The singleton→`for_each` migration + placement-group attach is an **operator maintenance-window `terraform apply`** (supervised, expected web-1 power-off reboot; possible web-2 create per `var.web_hosts`). It is NOT routed through the per-PR auto-apply `-target` path, because that path is unattended and this change reboots the running host. Expected downtime: one web-1 reboot cycle within the maintenance window. After the apply, no pending moves remain → the per-PR target-scoped plan self-heals with no workflow change.
+
+**Consciously-declined alternative (architecture review P2c):** a `workflow_dispatch`-gated full apply (a human gates the go/no-go decision; CI runs the terraform mechanics behind the SSH bridge) would be more automation-aligned than the local supervised apply. It is declined here because the go/no-go on a supervised production power-cycle is a genuine risk-acceptance judgment best made at the keyboard watching the live plan, and the copy-paste runbook already satisfies the "don't label mechanics as manual" hard rule (the mechanics ARE scripted). The dispatch-gated shape is recorded as the preferred path IF this cutover recurs.
 
 ### Distinctness / drift safeguards
 `dev != prd`: this is prd (`prd_terraform`). The `moved` migration is 0-destroy **only if** web-1's `name`/`server_type`/`location` in `var.web_hosts` match current state (a location change force-REPLACES the live host — server.tf comment). The dry-run `terraform plan` MUST show `0 to destroy` before apply. `scheduled-terraform-drift.yml` (full plan) is the 12h backstop and is already surfacing this as drift (working as designed). State lands in the encrypted R2 backend (`use_lockfile = false` — the shared GHA concurrency group is the serializer, not relevant to an operator-local apply).
@@ -210,11 +241,11 @@ ADR-068 already recorded the multi-host C4 impact (its `## C4 impact` section, A
 
 ## Test Scenarios
 
-1. **Guard passes on current tree:** the four #5877 moved bases are covered by `MOVED_OPERATOR_CONSUMED` → suite green.
+1. **Guard passes on current tree:** the four #5877 moved bases are covered by `MOVED_OPERATOR_CONSUMED` → suite green (this test IS the regression anchor — dropping a base turns it red via the `allTargets` miss).
 2. **Guard fails on a forgotten moved block:** synthetic `moved { from = hcloud_foo.bar; to = hcloud_foo.bar["k"] }` with base in neither set → flagged uncovered (non-vacuity).
-3. **Guard permits a genuinely per-PR-targeted move:** a synthetic moved base that IS in `allTargets` → covered (does not false-fail).
+3. **Drift guard:** `MOVED_OPERATOR_CONSUMED ⊆ OPERATOR_APPLIED_EXCLUSIONS` — a base in the moved set but absent from the exclusion set fails loudly (closes the dual-maintenance sync-drift hazard).
 4. **No workflow drift:** `git diff .github/workflows/apply-web-platform-infra.yml` is empty.
-5. **Full suite:** `bun test plugins/soleur/test/` green (destroy-guard/parity siblings unaffected).
+5. **Full suite:** `bun test plugins/soleur/test/` green (destroy-guard/parity siblings unaffected). CI wiring: `scripts/test-all.sh:180` auto-discovers `plugins/soleur/**/*.test.ts`, so the new guard fires pre-merge.
 
 ## Risks & Mitigations
 
@@ -222,6 +253,14 @@ ADR-068 already recorded the multi-host C4 impact (its `## C4 impact` section, A
 - **R2 — Operator cutover not run → workflows stay red.** Drift accumulates (issue's stated impact); the 12h drift cron is the backstop and is already surfacing it. **Mitigation:** `follow-through` tracker + `Ref #5887` (close only after apply).
 - **R3 — Cutover apply shows unexpected destroy/replace.** A `var.web_hosts` web-1 attribute drift (location/server_type) would force-replace the live host. **Mitigation:** mandatory dry-run showing `0 to destroy` before apply (server.tf comment + ADR-068 NFR-016).
 - **R4 — 4th moved block (`hcloud_server_network.web`) joins the pending set later.** When the operator provisions the Phase-2 private network, its move becomes pending. **Mitigation:** the operator full apply consumes it in the same cutover; the guard already accounts for it via `MOVED_OPERATOR_CONSUMED`.
+
+### Precedent-diff — `-target` allow-list guard artifacts (deepen-plan Phase 4.4)
+
+The `-target=` allow-list / apply-safety surface for this root is asserted by several sibling artifacts:
+- `plugins/soleur/test/terraform-target-parity.test.ts` — SSH parity (#4844) + non-SSH `-target` coverage (#5566). **← the only file this plan edits.**
+- `tests/scripts/lib/destroy-guard-filter-web-platform.jq` + `tests/scripts/test-destroy-guard-counter-web-platform.sh` — count **destroys**, scoped to 5 Cloudflare resource types (verified: filter header lines 1-18; no `hcloud`/`moved` handling).
+
+**Determination:** only the parity test needs editing. The destroy-guard filter/counter count *destroys*, and a `moved` block is a state re-address (0 destroy) — out of their scope by construction. This plan also does **not** mutate the workflow `-target` list, so no counter/filter re-sync is required. The Sentry root has a dedicated `test-destroy-guard-sentry-scope-guard.sh` orphan suite; the web-platform root has **no** such scope-guard sibling, so there is no orphan suite to sweep here (unlike the #4591 case the `-target`-allowlist Sharp Edge warns about).
 
 ## Sharp Edges
 
@@ -233,4 +272,4 @@ ADR-068 already recorded the multi-host C4 impact (its `## C4 impact` section, A
 ## Deferral Tracking
 
 - The operator maintenance-window cutover is tracked via `Ref #5887` (stays open until applied) + a `follow-through` tracker — not a separate deferral issue (it IS the remediation, not out-of-scope).
-- No "Alternative Approaches / Non-Goals" items are deferred beyond the operator apply.
+- **Deferred follow-up (architecture review P2) — reboot-aware apply guard.** After this fix, the destroy-guard remains provably blind to reboot-forcing in-place `update` actions on `hcloud_server.*` (it counts only `delete` + 5 Cloudflare nested-block surfaces). The moved/`-target` parity guard is a review-surfacing accounting check, not a mechanical interlock against a misclassification that adds a reboot-bearing base to `-target`. File a follow-up issue (`domain/engineering`, `priority/p2-medium`, re-eval when the multi-host cluster stabilizes): extend the web-platform destroy-guard to flag `update` actions on `hcloud_server.*` that change reboot-forcing attributes (`placement_group_id`, `server_type`, `location`), gated by an `[ack-destroy]`-style acknowledgement. Out of scope for THIS PR; the parity guard + ADR amendment are the acceptable interim.
