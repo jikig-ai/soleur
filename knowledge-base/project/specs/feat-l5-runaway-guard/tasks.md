@@ -44,7 +44,7 @@ issues (see Phase 5).
 ## Phase 4 — Verify
 
 - [x] 4.1 Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] 4.2 Tests via package runner (check `package.json scripts.test` / vitest include globs — do NOT
+- [x] 4.2 Tests via package runner (check `package.json scripts.test` / vitest include globs — do NOT
   assume `bun test`).
 - [x] 4.3 C4: verify web-push edge against all three `.c4` files; add + `views.c4` include if unmodeled;
   run `apps/web-platform/test/c4-*.test.ts`.
