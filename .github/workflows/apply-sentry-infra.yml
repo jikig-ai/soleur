@@ -256,6 +256,7 @@ jobs:
             -target=sentry_issue_alert.repo_resolver_divergence \
             -target=sentry_issue_alert.disk_io_wal_concentration \
             -target=sentry_issue_alert.sandbox_startup_failure \
+            -target=sentry_issue_alert.github_webhook_founder_ambiguous \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
