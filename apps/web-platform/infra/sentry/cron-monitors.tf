@@ -92,6 +92,25 @@ resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   timezone                = "UTC"
 }
 
+# Executor liveness for the weekly domain-model register drift cron (#5872).
+# Dispatched by apps/web-platform/server/inngest/functions/cron-domain-model-drift.ts
+# (workflow_dispatch); the GHA scheduled-domain-model-drift.yml executor POSTs
+# the heartbeat (ok on analyzer rc 0/1, error on rc 2/3 or an empty-stale
+# anomaly). Own monitor (not Design A) because weekly-cadence absence-based
+# liveness is too weak — a broken executor that files nothing would be invisible
+# for up to 7 days. Margin 60 min matches the Inngest-dispatch cohort convention.
+resource "sentry_cron_monitor" "scheduled_domain_model_drift" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-domain-model-drift"
+  schedule                = { crontab = "0 8 * * 1" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # TR9 PR-3 (closes #4211): Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`. The GHA
 # scheduled-oauth-probe workflow was deleted in the same commit per TR9 I-13

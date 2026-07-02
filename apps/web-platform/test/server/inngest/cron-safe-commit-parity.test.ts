@@ -80,6 +80,17 @@ const EXEMPT: Record<string, string> = {
 // sweep sees this dependent acknowledged when EXPECTED_CRON_FUNCTIONS grows.
 const READ_ONLY_PROBES = ["cron-anthropic-credit-probe.ts"];
 
+// Dispatch-hybrid crons (#5872 acknowledgment) — a fourth implicit class beyond
+// MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`
+// and `cron-domain-model-drift` are SCHEDULERS ONLY: the dispatcher mints a
+// short-lived installation token and POSTs a `workflow_dispatch`, holding no git
+// and opening no PR (the git-touching / issue-filing work runs in the ephemeral
+// GHA executor, not the Node dispatcher). Like READ_ONLY_PROBES the safe-commit
+// invariant does not apply — they carry no persistence path — so they need no
+// list entry and are covered by invariant 1's directory walk. Documented here so
+// the cron-tier2-parity sibling-set sweep sees this dependent acknowledged when
+// EXPECTED_CRON_FUNCTIONS grows with a new dispatch-hybrid cron.
+
 const cronFiles = readdirSync(FUNCTIONS_DIR).filter((f) =>
   /^(cron|event)-.*\.ts$/.test(f),
 );

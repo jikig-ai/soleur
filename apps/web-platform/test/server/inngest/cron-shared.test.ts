@@ -171,6 +171,13 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
   it("cron-architecture-diagram-sync is live — not Tier-2 deferred (#5631)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-architecture-diagram-sync")).toBe(false);
   });
+
+  it("cron-domain-model-drift is live — not Tier-2 deferred (#5872)", () => {
+    // New dispatch-hybrid drift cron added to EXPECTED_CRON_FUNCTIONS; it is not
+    // a deferred Tier-2 cron (the set is retired/empty), so it participates in
+    // the watchdog purview immediately.
+    expect(TIER2_DEFERRED_CRONS.has("cron-domain-model-drift")).toBe(false);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {
