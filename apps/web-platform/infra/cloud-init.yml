@@ -86,26 +86,15 @@ write_files:
     owner: root:root
     permissions: '0440'
 
-  # Pinned root-run escalation helper for infra-config-apply.sh (#4827). The
-  # webhook handler runs as the deploy user and cannot mktemp inside the
-  # root:root 0755 destination dirs; it stages each payload in a deploy-writable
-  # dir then escalates the atomic install to this helper via the
-  # INFRA_CONFIG_INSTALL sudoers grant. Kept OUT of the webhook FILE_MAP (the
-  # handler can't deliver the helper it depends on); delivered via cloud-init
-  # (fresh hosts) + terraform_data.infra_config_handler_bootstrap (existing host).
-  - path: /usr/local/bin/infra-config-install
-    encoding: b64
-    content: ${infra_config_install_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Disk space monitoring script -- alerts via email (Resend) at 80%/95% thresholds (#1409).
-  # Content injected from disk-monitor.sh via Terraform base64encode(file()).
-  - path: /usr/local/bin/disk-monitor.sh
-    encoding: b64
-    content: ${disk_monitor_script_b64}
-    owner: root:root
-    permissions: '0755'
+  # NOTE (#5921): 22 bootstrap scripts + hooks.json were REMOVED from write_files: here
+  # (infra-config-install, disk/resource/container-restart-monitor.sh + units, all
+  # cron-egress artifacts, ci-deploy*/cat-deploy-state/canary/infra-config-apply/
+  # cat-infra-config-state, and hooks.json). As base64 blobs they pushed the rendered
+  # user_data ~8.6x over Hetzner's 32,768-byte cap. They are now baked into
+  # ${image_name} at /opt/soleur/host-scripts/ and extracted by the "host-script
+  # extraction" runcmd block below (docker cp → combined-hash verify → per-file install).
+  # The keep-inline set (sshd hardening, sudoers, the /etc/default/* secret env files,
+  # disk/resource-monitor .service/.timer, webhook.service, fail2ban/journald) stays here.
 
   # Disk monitor environment file (API key, chmod 600 for secrets).
   - path: /etc/default/disk-monitor
@@ -143,15 +132,6 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # Resource (CPU/RAM/sessions) monitoring script -- alerts via email (Resend)
-  # at 80%/95% memory and 85% CPU thresholds (#1052). Mirrors disk-monitor.sh.
-  # Content injected from resource-monitor.sh via Terraform base64encode(file()).
-  - path: /usr/local/bin/resource-monitor.sh
-    encoding: b64
-    content: ${resource_monitor_script_b64}
-    owner: root:root
-    permissions: '0755'
-
   # Resource monitor environment file (API key, chmod 600 for secrets).
   - path: /etc/default/resource-monitor
     content: |
@@ -188,16 +168,6 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # Container restart/OOM churn monitor (#5417). Host-level detector for the
-  # soleur-web-platform container's RestartCount / OOMKilled — resource-monitor.sh
-  # samples HOST RAM% only and cannot see container restarts. Content injected
-  # from container-restart-monitor.{sh,service,timer} via base64encode(file()).
-  - path: /usr/local/bin/container-restart-monitor.sh
-    encoding: b64
-    content: ${container_restart_monitor_script_b64}
-    owner: root:root
-    permissions: '0755'
-
   # Doppler-less Resend fallback (the .service prefers doppler prd, which also
   # supplies SENTRY_*). chmod 600 for the secret.
   - path: /etc/default/container-restart-monitor
@@ -206,157 +176,11 @@ write_files:
     owner: root:root
     permissions: '0600'
 
-  - path: /etc/systemd/system/container-restart-monitor.service
-    encoding: b64
-    content: ${container_restart_monitor_service_b64}
-    owner: root:root
-    permissions: '0644'
-
-  - path: /etc/systemd/system/container-restart-monitor.timer
-    encoding: b64
-    content: ${container_restart_monitor_timer_b64}
-    owner: root:root
-    permissions: '0644'
-
-  # Container egress firewall (#5046 PR-2) — fresh-host mirror of
-  # terraform_data.cron_egress_firewall in server.tf. Contents injected via
-  # Terraform base64encode(file()). Keep both apply paths in sync; the SSH
-  # provisioner is the sole LIVE apply path (ignore_changes=[user_data]).
-  - path: /usr/local/bin/cron-egress-nftables.sh
-    encoding: b64
-    content: ${cron_egress_nftables_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  - path: /usr/local/bin/cron-egress-resolve.sh
-    encoding: b64
-    content: ${cron_egress_resolve_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  - path: /usr/local/bin/cron-egress-alarm.sh
-    encoding: b64
-    content: ${cron_egress_alarm_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  - path: /etc/soleur/cron-egress-allowlist.txt
-    encoding: b64
-    content: ${cron_egress_allowlist_b64}
-    owner: root:root
-    permissions: '0644'
-
-  - path: /etc/soleur/cron-egress-allowlist-cidr.txt
-    encoding: b64
-    content: ${cron_egress_allowlist_cidr_b64}
-    owner: root:root
-    permissions: '0644'
-
-  - path: /etc/systemd/system/cron-egress-firewall.service
-    encoding: b64
-    content: ${cron_egress_firewall_service_b64}
-    owner: root:root
-    permissions: '0644'
-
-  - path: /etc/systemd/system/cron-egress-resolve.service
-    encoding: b64
-    content: ${cron_egress_resolve_service_b64}
-    owner: root:root
-    permissions: '0644'
-
-  - path: /etc/systemd/system/cron-egress-resolve.timer
-    encoding: b64
-    content: ${cron_egress_resolve_timer_b64}
-    owner: root:root
-    permissions: '0644'
-
-  - path: /etc/systemd/system/cron-egress-alarm@.service
-    encoding: b64
-    content: ${cron_egress_alarm_unit_b64}
-    owner: root:root
-    permissions: '0644'
-
-  # #5289 fresh-host artifact-parity for the extracted post-apply assertion
-  # script. NOT executed by cloud-init: at fresh-host time no container exists,
-  # so the enforcement probes would WARN-skip; the SSH remote-exec is the sole
-  # LIVE execution path (the script self-handles the no-container case).
-  - path: /usr/local/bin/cron-egress-postapply-assert.sh
-    encoding: b64
-    content: ${cron_egress_postapply_assert_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # CI deploy script invoked by the webhook listener.
-  # Content injected from ci-deploy.sh via Terraform base64encode(file()).
-  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
-  - path: /usr/local/bin/ci-deploy.sh
-    encoding: b64
-    content: ${ci_deploy_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Wall-clock cap wrapper that exec's ci-deploy.sh with `timeout 900s` so a
-  # wedged deploy releases flock and the workflow polling step sees a
-  # terminal state instead of perpetual "running" (#3704, #2207). hooks.json
-  # routes /hooks/deploy through this wrapper, not ci-deploy.sh directly.
-  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf.
-  - path: /usr/local/bin/ci-deploy-wrapper.sh
-    encoding: b64
-    content: ${ci_deploy_wrapper_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Deploy state reporter for /hooks/deploy-status (#2185).
-  # Content injected from cat-deploy-state.sh via Terraform base64encode(file()).
-  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
-  - path: /usr/local/bin/cat-deploy-state.sh
-    encoding: b64
-    content: ${cat_deploy_state_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Canary Layer 3 — inlined-JWT bundle claim check invoked by ci-deploy.sh.
-  # Content injected from canary-bundle-claim-check.sh via Terraform
-  # base64encode(file()). Keep in sync with terraform_data.deploy_pipeline_fix
-  # in server.tf (#3033). Without this entry, fresh servers provisioned from
-  # cloud-init would miss the script and Layer 3 would silently skip.
-  - path: /usr/local/bin/canary-bundle-claim-check.sh
-    encoding: b64
-    content: ${canary_bundle_claim_check_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Infra-config webhook handler — receives base64-encoded file payloads via
-  # /hooks/infra-config and writes them atomically to their hardcoded
-  # destinations (#3756). Replaces the SSH provisioner code path.
-  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf.
-  - path: /usr/local/bin/infra-config-apply.sh
-    encoding: b64
-    content: ${infra_config_apply_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Infra-config state reporter for /hooks/infra-config-status (#4554).
-  # Returns the JSON written by infra-config-apply.sh, with sentinels for
-  # missing/corrupt state. Keep in sync with terraform_data.deploy_pipeline_fix.
-  - path: /usr/local/bin/cat-infra-config-state.sh
-    encoding: b64
-    content: ${cat_infra_config_state_script_b64}
-    owner: root:root
-    permissions: '0755'
-
-  # Webhook configuration for adnanh/webhook.
-  # Validates HMAC-SHA256 signature, sets SSH_ORIGINAL_COMMAND from payload,
-  # and invokes ci-deploy.sh asynchronously (#968).
-  # Fire-and-forget: returns 202 immediately, deploy runs in background.
-  # CI verifies success by polling /hooks/deploy-status (#2185) then /health.
-  # Content rendered from hooks.json.tmpl by Terraform (webhook_deploy_secret is
-  # interpolated at plan time; cat-deploy-state.sh serves GET /hooks/deploy-status).
-  - path: /etc/webhook/hooks.json
-    encoding: b64
-    content: ${hooks_json_b64}
-    owner: root:deploy
-    permissions: '0640'
+  # (#5921) container-restart-monitor.{sh,service,timer}, all cron-egress artifacts,
+  # ci-deploy*/cat-deploy-state/canary/infra-config-apply/cat-infra-config-state, and
+  # hooks.json were removed from write_files: here and are extracted from the image by
+  # the host-script extraction runcmd block below. The container-restart-monitor
+  # /etc/default secret env file above stays inline (secret, consumed by the .service).
 
   # Hardened systemd unit for the webhook listener.
   # Runs as deploy user (docker group) on localhost:9000.
@@ -418,16 +242,10 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # systemd-journald persistent + bounded storage drop-in (#4792, #4773).
-  # Content injected from journald-soleur.conf via Terraform base64encode(file())
-  # so this fresh-host copy is byte-identical to the one terraform_data.
-  # journald_persistent pushes to the existing host. Keep in sync with
-  # terraform_data.journald_persistent in server.tf (both read journald-soleur.conf).
-  - path: /etc/systemd/journald.conf.d/00-soleur.conf
-    encoding: b64
-    content: ${journald_soleur_conf_b64}
-    owner: root:root
-    permissions: '0644'
+  # (#5921) The journald persistent drop-in was moved out of inline write_files: (its 2.4 KB
+  # base64 blob was the biggest remaining user_data expansion). It is now baked and installed
+  # by soleur-host-bootstrap.sh, which also applies it — safe because its only consumer, the
+  # terminal --log-driver journald app container, starts after extraction.
 
 runcmd:
   # Apply SSH hardening immediately (drop-in written by write_files above).
@@ -475,18 +293,10 @@ runcmd:
   # picks up the bantime.maxtime cap before any login activity is recorded.
   - systemctl reload fail2ban || systemctl restart fail2ban
 
-  # Make systemd-journald persistent + bounded BEFORE any container starts with
-  # `--log-driver journald` (#4792, #4773). The drop-in at
-  # /etc/systemd/journald.conf.d/00-soleur.conf was written by write_files above.
-  # Creating /var/log/journal + restarting journald switches it from volatile
-  # (RAM under /run, lost on reboot) to persistent, so Vector's 3 journald
-  # sources read a durable journal from first container start. Idempotent:
-  # mkdir -p / restart / flush are all safe to re-run. Mirrors
-  # terraform_data.journald_persistent in server.tf (the existing-host path).
-  - mkdir -p /var/log/journal
-  - systemd-tmpfiles --create --prefix /var/log/journal
-  - systemctl restart systemd-journald
-  - journalctl --flush
+  # (#5921) journald persistence (mkdir /var/log/journal + systemd-tmpfiles + restart +
+  # journalctl --flush) moved into soleur-host-bootstrap.sh — it runs after the host-script
+  # extraction but before the terminal --log-driver journald app container, and `flush`
+  # migrates this early boot's volatile journal into the persistent store (no logs lost).
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
   - |
@@ -524,6 +334,63 @@ runcmd:
     }
     DOCKEREOF
   - systemctl restart docker
+
+  # BEGIN host-script extraction (#5921) — verify + launch the baked bootstrap installer.
+  # The 22 scripts + hooks.json.tmpl + soleur-host-bootstrap.sh were removed from write_files:
+  # above (as base64 blobs they blew Hetzner's 32,768-byte user_data cap) and baked into
+  # ${image_name} at /opt/soleur/host-scripts/. This minimal launcher — after `systemctl
+  # restart docker` (docker is up) and BEFORE the first consumer — `docker cp`s the baked
+  # assets, recomputes the combined content-hash, compares it to the Terraform-computed
+  # host_scripts_content_hash, and ONLY THEN runs the now-trusted soleur-host-bootstrap.sh
+  # (which installs everything + writes the fail-closed /run/soleur-hostscripts.ok sentinel).
+  # The heavy install/assert ceremony lives in the baked script so it costs zero user_data.
+  # runcmd is NOT under top-level `set -e`; the sentinel gate on the terminal `docker run` is
+  # the fail-closed mechanism. Pre-verify failures (pull/extract/hash mismatch) emit a
+  # discriminating Sentry event here; install-stage failures emit from the bootstrap.
+  - |
+    set -e
+    IMAGE_REF='${image_name}'
+    HOST_SCRIPTS_HASH='${host_scripts_content_hash}'
+    STAGE=pull
+    HOST_ID=$(cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname)
+    on_err() {
+      trap - EXIT
+      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+      ( set +e
+        . /etc/default/webhook-deploy 2>/dev/null || true
+        DSN=$(doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+               || doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
+        if [ -n "$DSN" ]; then
+          KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+          SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+          PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+          BODY=$(printf '{"message":"soleur-hostscript-seed failed","level":"fatal","tags":{"stage":"%s","image_ref":"%s","host_id":"%s"}}' "$STAGE" "$IMAGE_REF" "$HOST_ID")
+          curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+            -H 'Content-Type: application/json' \
+            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
+            -d "$BODY" >/dev/null 2>&1 || true
+        fi ) || true
+      exit 1
+    }
+    trap on_err EXIT
+    for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+    N=0; until docker pull "$IMAGE_REF"; do N=$((N+1)); [ "$N" -ge 3 ] && exit 1; sleep 5; done
+    STAGE=extract
+    docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
+    SEED=$(mktemp -d)
+    docker cp soleur-hostscript-seed:/opt/soleur/host-scripts/. "$SEED/"
+    docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+    # Integrity: recompute the combined content-hash and compare BEFORE running any baked
+    # code. Matches local.host_scripts_content_hash = sha256(join("", sort([filesha256(f)]))).
+    STAGE=verify
+    GOT=$(cd "$SEED" && find . -type f -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' | sha256sum | awk '{print $1}')
+    [ "$GOT" = "$HOST_SCRIPTS_HASH" ] || exit 1
+    # Verified — run the now-trusted baked installer (it writes /run/soleur-hostscripts.ok).
+    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
+    rm -rf "$SEED"
+    trap - EXIT
+  # END host-script extraction (#5921)
 
   # Mount volume for workspaces (Hetzner pre-formats with ext4 via Terraform)
   - mkdir -p /mnt/data
@@ -666,6 +533,13 @@ runcmd:
 
   - |
     set -e
+    # Fail-closed gate (#5921): the host-script extraction block above writes
+    # /run/soleur-hostscripts.ok ONLY after hash-verify + all installs + all assertions
+    # pass. runcmd is NOT under a top-level set -e, so a failed extraction still reaches
+    # here — refuse to bring the app up (which would serve with an unconfigured egress
+    # firewall / missing deploy scripts) and poweroff so the host is visibly absent to the
+    # provision-armed Better Stack uptime check.
+    test -f /run/soleur-hostscripts.ok || { echo "FATAL: host-script extraction incomplete; refusing to start app" >&2; poweroff -f; }
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
     set -a; . /etc/default/webhook-deploy; set +a
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)

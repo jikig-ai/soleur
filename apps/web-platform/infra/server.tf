@@ -5,6 +5,57 @@ locals {
   hooks_json = templatefile("${path.module}/hooks.json.tmpl", {
     webhook_deploy_secret = var.webhook_deploy_secret
   })
+
+  # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
+  # at first boot (#5921). These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init
+  # write_files: — as base64 blobs they pushed the rendered Hetzner user_data to ~282 KB,
+  # ~8.6x over the 32,768-byte cap. KEEP THIS LIST IN LOCKSTEP with the COPY into
+  # /opt/soleur/host-scripts/ in apps/web-platform/Dockerfile (cloud-init-user-data-
+  # size.test.ts asserts the two sets are identical). Running hosts continue to receive
+  # these files via the unchanged SSH/webhook terraform_data provisioners below.
+  host_script_files = [
+    "ci-deploy.sh",
+    "ci-deploy-wrapper.sh",
+    "cat-deploy-state.sh",
+    "canary-bundle-claim-check.sh",
+    "disk-monitor.sh",
+    "resource-monitor.sh",
+    "container-restart-monitor.sh",
+    "container-restart-monitor.service",
+    "container-restart-monitor.timer",
+    "infra-config-apply.sh",
+    "infra-config-install.sh",
+    "cat-infra-config-state.sh",
+    "cron-egress-nftables.sh",
+    "cron-egress-resolve.sh",
+    "cron-egress-alarm.sh",
+    "cron-egress-allowlist.txt",
+    "cron-egress-allowlist-cidr.txt",
+    "cron-egress-firewall.service",
+    "cron-egress-resolve.service",
+    "cron-egress-resolve.timer",
+    "cron-egress-alarm@.service",
+    "cron-egress-postapply-assert.sh",
+    "hooks.json.tmpl",
+    # journald drop-in — moved out of inline write_files: (its 2.4 KB base64 blob was the
+    # biggest remaining user_data expansion). Still delivered to the running host byte-for-byte
+    # by terraform_data.journald_persistent below (which reads the same on-disk file).
+    "journald-soleur.conf",
+    # The baked installer that cloud-init's minimal launcher runs AFTER the combined-hash
+    # verify (moving the ~90-line install/verify/assert ceremony out of user_data — #5921).
+    "soleur-host-bootstrap.sh",
+  ]
+
+  # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
+  # (no separator), hashed again. Injected into user_data (~64 B) and re-verified at boot
+  # BEFORE install — a stale/mis-built/compromised image aborts the boot loudly instead of
+  # silently installing old scripts (turns the ADR-080 image-bake stale trap into a loud
+  # failure). The boot recompute is the shell equivalent in cloud-init.yml's extraction
+  # block: `find … -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' |
+  # sha256sum`.
+  host_scripts_content_hash = sha256(join("", sort([
+    for f in local.host_script_files : filesha256("${path.module}/${f}")
+  ])))
 }
 
 resource "hcloud_ssh_key" "default" {
@@ -39,37 +90,29 @@ resource "hcloud_server" "web" {
   # reboot, NOT a replace — verify `0 to destroy` in the plan before applying).
   placement_group_id = hcloud_placement_group.web_spread.id
 
+  # #5921 — the 22 bootstrap scripts + hooks.json were REMOVED from this map (they blew
+  # the 32,768-byte Hetzner user_data cap). They are now baked into var.image_name and
+  # extracted at boot by cloud-init.yml (see local.host_script_files above). ONLY the
+  # keep-inline set (fail2ban/journald, consumed pre-Docker) + non-file args remain, plus
+  # host_scripts_content_hash for the boot integrity check. hooks.json is rendered on-host
+  # from the baked hooks.json.tmpl with webhook_deploy_secret injected at boot.
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name                            = var.image_name
-    ci_deploy_script_b64                  = base64encode(file("${path.module}/ci-deploy.sh"))
-    ci_deploy_wrapper_script_b64          = base64encode(file("${path.module}/ci-deploy-wrapper.sh"))
-    cat_deploy_state_script_b64           = base64encode(file("${path.module}/cat-deploy-state.sh"))
-    canary_bundle_claim_check_script_b64  = base64encode(file("${path.module}/canary-bundle-claim-check.sh"))
-    disk_monitor_script_b64               = base64encode(file("${path.module}/disk-monitor.sh"))
-    resource_monitor_script_b64           = base64encode(file("${path.module}/resource-monitor.sh"))
-    container_restart_monitor_script_b64  = base64encode(file("${path.module}/container-restart-monitor.sh"))
-    container_restart_monitor_service_b64 = base64encode(file("${path.module}/container-restart-monitor.service"))
-    container_restart_monitor_timer_b64   = base64encode(file("${path.module}/container-restart-monitor.timer"))
-    fail2ban_sshd_local_b64               = base64encode(file("${path.module}/fail2ban-sshd.local"))
-    journald_soleur_conf_b64              = base64encode(file("${path.module}/journald-soleur.conf"))
-    hooks_json_b64                        = base64encode(local.hooks_json)
-    infra_config_apply_script_b64         = base64encode(file("${path.module}/infra-config-apply.sh"))
-    infra_config_install_script_b64       = base64encode(file("${path.module}/infra-config-install.sh"))
-    cat_infra_config_state_script_b64     = base64encode(file("${path.module}/cat-infra-config-state.sh"))
-    cron_egress_nftables_script_b64       = base64encode(file("${path.module}/cron-egress-nftables.sh"))
-    cron_egress_resolve_script_b64        = base64encode(file("${path.module}/cron-egress-resolve.sh"))
-    cron_egress_alarm_script_b64          = base64encode(file("${path.module}/cron-egress-alarm.sh"))
-    cron_egress_allowlist_b64             = base64encode(file("${path.module}/cron-egress-allowlist.txt"))
-    cron_egress_allowlist_cidr_b64        = base64encode(file("${path.module}/cron-egress-allowlist-cidr.txt"))
-    cron_egress_firewall_service_b64      = base64encode(file("${path.module}/cron-egress-firewall.service"))
-    cron_egress_resolve_service_b64       = base64encode(file("${path.module}/cron-egress-resolve.service"))
-    cron_egress_resolve_timer_b64         = base64encode(file("${path.module}/cron-egress-resolve.timer"))
-    cron_egress_alarm_unit_b64            = base64encode(file("${path.module}/cron-egress-alarm@.service"))
-    cron_egress_postapply_assert_b64      = base64encode(file("${path.module}/cron-egress-postapply-assert.sh"))
-    tunnel_token                          = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret                 = var.webhook_deploy_secret
-    doppler_token                         = var.doppler_token
-    resend_api_key                        = var.resend_api_key
+    image_name = var.image_name
+    # Keep-inline: fail2ban is reloaded early (at the package-audit stage, before Docker) so
+    # its drop-in cannot come from the post-Docker image extraction. journald was ALSO inline
+    # historically, but its 2.4 KB base64 blob was the biggest remaining user_data expansion,
+    # so #5921 moved it into the baked set (its only consumer, the --log-driver journald app
+    # container, starts last — safe to configure post-extraction). fail2ban's b64 arg stays;
+    # journald's was removed (dropping it while cloud-init.yml still interpolated the var would
+    # fail templatefile()).
+    fail2ban_sshd_local_b64   = base64encode(file("${path.module}/fail2ban-sshd.local"))
+    host_scripts_content_hash = local.host_scripts_content_hash
+    tunnel_token              = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
+    # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
+    webhook_deploy_secret = var.webhook_deploy_secret
+    doppler_token         = var.doppler_token
+    resend_api_key        = var.resend_api_key
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.

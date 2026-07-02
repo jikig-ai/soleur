@@ -177,3 +177,67 @@ image-baked-plugin seed model (originated in #3045).
 - The inner change-detection gate can no longer silently default to skip on error.
 - The `path_filter` reusable-workflow input is now a space-separated git-pathspec
   list (documented in its `description:`), consumed under `set -f`.
+
+## Amendment (2026-07-02): fresh-host cloud-init bootstrap delivery (#5921)
+
+This ADR's scope — *host-run assets are baked into the web-platform image and
+`docker cp`-seeded* — extends to the **fresh-host cloud-init bootstrap** path.
+The motivating bug (#5921): a fresh Hetzner web host (`hcloud_server.web["web-2"]`)
+could not be provisioned because `server.tf` rendered 22 bootstrap scripts +
+`hooks.json` as base64 into the cloud-init `templatefile()` map, blowing Hetzner's
+**32,768-byte `user_data` cap** (rendered ~282 KB, ~8.6× over). gzip is
+insufficient (measured 140,856 B). The fix bakes those assets into the image and
+extracts them at boot — the same image-bake + `docker cp` model this ADR records.
+
+**Two-path delivery contract (both install byte-identical content from the same
+on-disk source files):**
+
+- **Fresh host (cloud-init):** a minimal launcher runcmd pulls `var.image_name`,
+  `docker cp`s `/opt/soleur/host-scripts/.` to a temp dir, verifies the combined
+  `host_scripts_content_hash`, then runs the baked `soleur-host-bootstrap.sh`
+  which installs each file with an authoritative mode + writes the fail-closed
+  `/run/soleur-hostscripts.ok` sentinel. The install ceremony lives in the baked
+  script (not inline) so it costs zero `user_data` bytes.
+- **Running host (unchanged):** the SSH/webhook `terraform_data` provisioners
+  (`deploy_pipeline_fix`, `infra_config_handler_bootstrap`, `journald_persistent`,
+  `cron_egress_firewall`, …) still deliver the same files to `web-1`
+  (`ignore_changes=[user_data]`), so a code merge is inert on the live host.
+
+**Recorded decisions:**
+
+1. **Scripts ride `var.image_name`, no separate pinned tag** — avoids the
+   inngest-bootstrap-style pin-drift; the baked assets are version-coherent with
+   the image by construction.
+2. **`host_scripts_content_hash` boot integrity + image↔config coherence** —
+   Terraform computes `sha256(join("", sort([filesha256(f) for f in
+   local.host_script_files])))` at plan time; the boot recompute (`find … |
+   sha256sum | sort | … | sha256sum`) must match before any baked code runs. A
+   stale/mis-built/tampered image aborts the boot **loudly** — this converts the
+   image-bake stale-image trap this ADR otherwise carries into a hard boot
+   failure, not a silent old-script install.
+3. **32,768-byte budget enforced** by `plugins/soleur/test/cloud-init-user-data-size.test.ts`
+   (web sub-cap budget 30,500 B; measured ~29,290 B). AC11's live `terraform plan`
+   is the byte-exact source of truth.
+4. **GHCR is public / auth-free at boot** — no `docker login` in runcmd; the
+   extraction pull is the first critical-path pull, hardened with a bounded
+   `--retry` loop.
+5. **Fail-closed** — cloud-init `runcmd` is NOT under a top-level `set -e`, so the
+   sentinel gate on the terminal `docker run` (`poweroff -f` on absence) is the
+   real fail-closed mechanism; a failed extraction can never bring the app up with
+   an unconfigured egress firewall (#5046).
+
+**Scope boundary — the git-data host is NOT covered.** git-data runs no docker and
+pulls no image, so this bake-and-extract mechanism does not apply. Post-#5918
+(LUKS/transport/remove/provision) its `user_data` is ~41.7 KB — OVER the same cap
+— a distinct-mechanism fix (gzip-first) tracked in **#5927**, a hard blocker on
+ADR-068 Phase 2 git-data provisioning. The size guard pins git-data at a
+no-further-growth ceiling until #5927 lands.
+
+### C4 impact (this amendment)
+
+Adds one external system `ghcr` ("GitHub Container Registry") + one edge
+`hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot"` to
+`model.c4`, included in the L1/L2 views. The change makes the host↔image coupling
+load-bearing for fresh-host bootstrap, which was previously unmodeled. (The base
+ADR's "C4 impact: None" still holds for the CI-trigger decision; this amendment's
+delivery-path change is what introduces the `ghcr` element.)
