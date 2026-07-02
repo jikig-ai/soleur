@@ -9,8 +9,6 @@
     "--unshare-uts",
     "--new-session",
     "--die-with-parent",
-    "--proc", "/proc",
-    "--dev", "/dev",
     "--bind", "/", "/"
   ],
   "prepDirs": []

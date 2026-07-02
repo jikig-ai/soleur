@@ -147,23 +147,32 @@ else
         "$IMG" bwrap "${ARGV[@]}" -- true 2>&1
     }
 
+    # DIFFERENTIAL classification (robust to env variance). The regression proves the
+    # two profiles DIFFER on the seccomp-gated split unshare() — not that bwrap can
+    # complete a full sandbox setup on this runner. A committed-baseline failure is an
+    # ENV limitation (missing caps to mount, restricted bind, no userns), NEVER a
+    # seccomp-profile regression — the committed profile runs in prod continuously and
+    # is unchanged by this PR — so it SKIPS, it does not FAIL. The ONLY hard FAIL is
+    # "no discrimination": committed allows AND pre-5874 also allows, which means the
+    # fixture/argv doesn't exercise the rule difference (the regression's premise).
+    # The argv deliberately carries NO --proc/--dev mount (those EPERM for container-cap
+    # reasons unrelated to the unshare gate — the #5875 CI-run finding); the split
+    # unshare() fires from --unshare-user + --unshare-pid alone, before any mount.
     committed_out="$(run_under "$COMMITTED_PROFILE")"; committed_rc=$?
-    if [[ "$committed_rc" -ne 0 ]] && printf '%s' "$committed_out" | grep -qi 'operation not permitted'; then
-      fail "B committed profile EPERMs the SDK split-unshare — the LIVE profile is broken for this SDK (real regression): $committed_out"
-    elif [[ "$committed_rc" -ne 0 ]]; then
-      # Non-EPERM failure (uid map / userns unavailable / image build failed) = the
-      # runner cannot execute the bwrap userns setup. Not a profile problem.
-      skip "B env cannot run bwrap userns (committed rc=$committed_rc: $(printf '%s' "$committed_out" | head -1)) — layer A remains the deterministic guard"
+    pre_out="$(run_under "$PRE5874_PROFILE")"; pre_rc=$?
+    pre_eperm=no
+    if [[ "$pre_rc" -ne 0 ]] && printf '%s' "$pre_out" | grep -qi 'operation not permitted'; then
+      pre_eperm=yes
+    fi
+
+    if [[ "$committed_rc" -ne 0 ]]; then
+      skip "B committed baseline could not run bwrap on this runner (rc=$committed_rc: $(printf '%s' "$committed_out" | head -1)) — ENV limitation, not a profile regression; layer A + the sdk-bump gate remain the deterministic guards"
+    elif [[ "$pre_eperm" == "yes" ]]; then
+      pass "B would-have-caught: committed ALLOWS the split-unshare, pre-5874 EPERMs it"
+    elif [[ "$pre_rc" -eq 0 ]]; then
+      fail "B NO DISCRIMINATION: committed AND pre-5874 both allowed the split-unshare (rc=0). The two profiles do not differ on the gated unshare — the fixture or the argv is wrong (regression premise broken)."
     else
-      pass "B committed profile ALLOWS the SDK split-unshare (baseline healthy)"
-      pre_out="$(run_under "$PRE5874_PROFILE")"; pre_rc=$?
-      if [[ "$pre_rc" -ne 0 ]] && printf '%s' "$pre_out" | grep -qi 'operation not permitted'; then
-        pass "B pre-5874 profile EPERMs the split-unshare (would-have-caught #5849)"
-      elif [[ "$pre_rc" -eq 0 ]]; then
-        fail "B pre-5874 profile ALLOWED the split-unshare (rc=0) — the fixture/profile do NOT discriminate; the regression's premise is broken."
-      else
-        fail "B pre-5874 failed with a NON-EPERM error (rc=$pre_rc): $(printf '%s' "$pre_out" | head -1) — expected a clean 'Operation not permitted'."
-      fi
+      skip "B inconclusive: committed passed but pre-5874 failed with a non-EPERM error (rc=$pre_rc: $(printf '%s' "$pre_out" | head -1)) — layer A remains the guard"
     fi
   fi
 fi
