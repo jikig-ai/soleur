@@ -138,3 +138,11 @@ No blocking conditions.
 ## Overall disposition
 
 **DISCHARGED.** All three artifacts signed off; PR #5881 clears the counsel-review CLO-attestation gate. One non-blocking, operator-favorable §3a.5 wording refinement is offered for optional adoption in-PR.
+
+---
+
+## Post-attestation reconciliation (2026-07-03, CTO fork #5767-vs-#5919)
+
+After this attestation, sibling PR #5919 merged an exactly-once (`v_tripped := FOUND`) rewrite of `record_byok_use_and_check_cap` to main. Per the CTO fork ruling, PR #5881's RPC-backstop migration (`121_byok_cap_kill_tripped_while_paused.sql`) was **deleted**, and the spawn-entry pause gate was made **fail-closed** (a `users`-read error now halts via `run_paused` instead of proceeding).
+
+**Legal impact: none.** The verdicts above are UNCHANGED. The working-pause guarantee the ToS §3a.5 / Article 30 PA-22(g)(12) disclosures rest on is *preserved and strengthened* (fail-closed is more protective, not less); the `cost_breaker_tripped` payload minimization (TR5) is untouched; no lawful-basis, consent, retention, or transfer analysis depended on the RPC backstop. Cross-references in this audit to "migration 121 (kill_tripped-while-paused)" now read as the entry-gate guard; the SHA/`TC_VERSION`/disclosure findings are unaffected.

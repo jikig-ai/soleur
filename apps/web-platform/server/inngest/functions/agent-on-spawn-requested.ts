@@ -324,36 +324,49 @@ export async function agentOnSpawnRequestedHandler({
   // Spawn-entry pause gate (feat-l5-runaway-guard PR-A, P0-A). Before the
   // turn loop — and therefore before ANY Anthropic call or audit_byok_use
   // row — refuse to run for a founder whose account is paused. This is the
-  // primary of the two defense-in-depth blocks; the cap RPC returning
-  // kill_tripped while paused (migration 121) is the backstop if this gate
-  // is ever bypassed. Fail-OPEN on a read error: we don't halt every spawn
-  // on a transient users-read blip, because the very next step (turn-1
-  // cap-check) row-locks users and re-reads runtime_paused_at, so a paused
-  // founder is still refused before any spend.
-  const pauseState = await step.run("check-runtime-pause", async () => {
-    const sb = getServiceClient();
-    const { data, error } = await sb
-      .from("users")
-      .select("runtime_paused_at, runtime_cost_cap_cents")
-      .eq("id", founderId)
-      .maybeSingle();
-    if (error) {
-      reportSilentFallback(new Error(error.message), {
-        feature: "spawn-agent",
-        op: "check-runtime-pause",
-        message: "runtime-pause read failed; failing open (cap-check backstops)",
-        extra: { founderId, actionSendId },
-      });
-      return { pausedAt: null as string | null, capCents: null as number | null };
-    }
-    const row = data as
-      | { runtime_paused_at: string | null; runtime_cost_cap_cents: number | null }
-      | null;
-    return {
-      pausedAt: row?.runtime_paused_at ?? null,
-      capCents: row?.runtime_cost_cap_cents ?? null,
-    };
-  });
+  // SOLE working-pause guard: the cap RPC does NOT backstop the paused case
+  // (#5919 made its kill_tripped exactly-once via `FOUND`, which correctly
+  // does not re-trip an already-paused caller). So this gate FAILS CLOSED on
+  // a users-read error (CTO ruling on the #5767-vs-#5919 fork) — matching the
+  // fail-closed posture of the two adjacent steps (turn-1 cap-check throws on
+  // RPC error; precheck-cost-ceiling fail-closes on cumulative-read error).
+  let pauseState: { pausedAt: string | null; capCents: number | null };
+  try {
+    pauseState = await step.run("check-runtime-pause", async () => {
+      const sb = getServiceClient();
+      const { data, error } = await sb
+        .from("users")
+        .select("runtime_paused_at, runtime_cost_cap_cents")
+        .eq("id", founderId)
+        .maybeSingle();
+      if (error) {
+        // Fail-closed: an unverifiable pause state must not admit a possibly-
+        // paused founder into the loop.
+        throw new Error(`check-runtime-pause read failed: ${error.message}`);
+      }
+      const row = data as
+        | { runtime_paused_at: string | null; runtime_cost_cap_cents: number | null }
+        | null;
+      return {
+        pausedAt: row?.runtime_paused_at ?? null,
+        capCents: row?.runtime_cost_cap_cents ?? null,
+      };
+    });
+  } catch (err) {
+    // Read error → halt (fail-closed). run_paused keeps the Resume-button UX;
+    // persistFailure's reportSilentFallback mirrors it to Sentry (observable
+    // without SSH, cq-silent-fallback-must-mirror-to-sentry).
+    return persistFailure(step, {
+      actionSendId,
+      reason: "run_paused",
+      err,
+      founderId,
+      messageId,
+      actionClass,
+      sourceRef,
+      logger,
+    });
+  }
   if (pauseState.pausedAt) {
     // No cost-breaker notification here (F3): the founder was already paged by
     // the byok_cap_exceeded breach that SET the pause; the Today card renders

@@ -573,6 +573,27 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
   });
 
+  it("AC1 fail-closed: a users-read error at the entry gate HALTS (run_paused), never enters the loop", async () => {
+    // CTO ruling (#5767-vs-#5919): the pause gate is the SOLE working-pause
+    // guard (the cap RPC no longer backstops the paused case), so it must fail
+    // CLOSED — an unverifiable pause state must not admit a possibly-paused
+    // founder into the loop.
+    usersSelectResult = { data: null, error: { message: "connection reset" } };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "run_paused" });
+    expect(recordByokUseAndCheckCapSpy).not.toHaveBeenCalled();
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+    // Mirrored to Sentry (via persistFailure's reportSilentFallback).
+    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+  });
+
   it("cap_check_unavailable: a transient cap-check RPC error is NOT reported as byok_cap_exceeded", async () => {
     capRpcThrows = new Error("connection reset by peer");
     const { agentOnSpawnRequestedHandler } = await import(
