@@ -147,8 +147,14 @@ runs at review time (review/SKILL.md conditional-agent block).
 - **AC8 (PR-D, if go):** A cron run records non-zero `routine_run_progress.cumulative_tokens`; redaction
   still strips secrets from stream-json lines.
 
+- **AC9 (PR-A, P0-1):** Resume from a paused run does NOT re-bill completed steps — assert a resumed run's
+  `audit_byok_use` sum for pre-halt turns is unchanged (DEV repro).
+- **AC10 (PR-A, P0-3 SAFETY):** A paused run does NOT auto-resume when the rolling-24h window clears — assert
+  `runtime_paused_at` remains set after the window elapses until an explicit operator resume. (Blocking — the
+  feature's safety promise.)
+
 ### Post-merge (operator)
-- **AC9:** `Ref #5767` (NOT `Closes` — multi-PR train); close #5767 after PR-D (or its deferral) lands.
+- **AC11:** `Ref #5767` (NOT `Closes` — multi-PR train); close #5767 after PR-D (or its deferral) lands.
 
 ## Observability
 
@@ -213,7 +219,9 @@ imply completion); roadmap flag — prerequisite for Phase-4 unattended cohort (
 ### Product/UX Gate
 **Tier:** blocking (UI surfaces: estimate panel, HITL modal, halt banner, halt email).
 **Decision:** reviewed (brainstorm carry-forward — wireframes PRODUCED, not just idea-validated).
-**Agents invoked:** ux-design-lead (brainstorm Phase 3.55), spec-flow-analyzer (Phase 3, below).
+**Agents invoked:** ux-design-lead (brainstorm Phase 3.55), spec-flow-analyzer (plan-time, BLOCKING).
+**spec-flow findings:** 4 P0 recovery-flow gaps (resume semantics, doom-loop resume paradox, 24h-reset
+auto-resume safety, HITL-modal-vs-per-run-deferral conflict) + 9 P1 — captured in `## Flow Gaps` above.
 **Skipped specialists:** none.
 **Pencil available:** yes — `.pen` committed at `knowledge-base/product/design/runaway-guard/l5-runaway-guard-surfaces.pen`, referenced in FR2/FR4/FR5.
 
@@ -237,6 +245,34 @@ anchor), tunable in dollars.
 - **Two windows coexist:** internal 1h safety valve (`runtime_cost_cap_cents`) + new founder-facing 24h
   budget — whichever is tighter trips first; document both in settings copy so the founder isn't confused.
 - **Notification-send failure** must fail loud to Sentry, never swallow (`cq-silent-fallback-must-mirror-to-sentry`).
+
+## Flow Gaps (spec-flow-analyzer) — resolve before /work
+
+The kickoff + halt-notification surfaces are solid; the **recovery half of the journey** is where a
+non-technical founder's money is at stake and it is under-specified. Recommended resolutions (⚠ = needs
+operator decision):
+
+- **P0-1 Resume semantics** (spec open-Q). Recommend: **resume from checkpoint** (no re-bill of completed
+  steps — BYOK dollars); "Raise limit & resume" opens an amount input defaulting to a **one-time bump for
+  this run** (NOT a standing-limit change — see P1-13 ratchet risk). Reflect on button copy ("Resume from
+  where it stopped — finished work isn't re-charged").
+- **P0-2 Doom-loop resume paradox.** Recommend: resume **resets the loop counter AND injects a
+  fresh-approach directive**; cap total resume cycles (e.g. 2) to prevent infinite re-loop/re-notify burn.
+- **⚠ P0-3 Ignore / 24h-window-reset behavior (SAFETY-CRITICAL).** The rolling-24h window means a paused
+  run's aggregate spend drops below the ceiling ~24h later. Recommend **stay paused; NEVER silent
+  auto-resume** (auto-resume resurrects the overnight-burn this feature exists to prevent) + a re-notify
+  reminder after N hours. This is the crux of the safety promise — **operator must confirm no-auto-resume.**
+- **⚠ P0-4 HITL modal vs per-run deferral.** Wireframe `02` advertises a per-run "$25 spending ceiling"
+  that the plan **defers** (Non-Goals). Recommend: **relabel modal `02` to the 24h budget** ("this routine
+  may consume up to $X of your daily budget") + add an arm/disarm + per-routine control to a new Settings →
+  Spending wireframe. Alternative: **restore the per-run ceiling to scope** (reverses the 2026-07-02
+  deferral). **Operator decides** at handoff.
+
+**P1 gaps folded into Open Questions / follow-ups:** mid-run overrun alert (P1-5), abandon-outcome +
+partial-work fate + "view changes" affordance (P1-6/P1-7), 1h-cap-trip notification copy + doom-loop email
+variant (P1-8/P1-10), cross-cap re-halt on resume (P1-9), email deep-link-through-auth (P1-11), multi-run
+halt fan-out (P1-12), raise-limit ratchet confirmation (P1-13). Wireframe the **Settings → Spending** +
+**1h-cap trip** + **doom-loop email** variants (currently missing).
 
 ## Open Code-Review Overlap
 
