@@ -96,3 +96,13 @@ The fast-follow enforcement gates this ADR anticipated are now built. Design of 
    citation-parser false-positive risk is covered by an actionable `stale>0` FAIL message.
 5. The `name_after()` `public.` default-schema strip (`scripts/lib/domain-model-lib.sh`) **enforces
    item 3** — anchors are `<table>.<object>`, not the previously-corrupt `public.<table>.public.<object>`.
+
+### Scheduled drift cron (2026-07-02 amendment, #5872)
+
+The scheduled drift cron anticipated in `related: [5872]` is now built (dispatch-hybrid per ADR-033:
+weekly Inngest cron `cron-domain-model-drift.ts` → `workflow_dispatch` executor
+`scheduled-domain-model-drift.yml`). It consumes this ADR's contract unchanged — it gates on the
+**stale-citation sub-count** (not the raw exit code, which is 1 on `main` by design from undocumented
+facts) using the preflight Check 11 parser verbatim, and files a single idempotent GitHub issue only
+when `stale > 0`. No new analyzer behaviour; consume-only. Undocumented facts / blind spots remain
+advisory-only.
