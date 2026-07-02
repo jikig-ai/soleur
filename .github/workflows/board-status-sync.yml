@@ -1,0 +1,119 @@
+# Move cards on the canonical GitHub Project v2 board "Soleur Kanban"
+# (jikig-ai/projects/2) as issues/PRs move through their lifecycle — the single
+# writer of board Status (ADR-075). All board logic lives in
+# scripts/board/set-board-status.sh (unit-tested with a mocked gh:
+# scripts/board/set-board-status.test.sh) — a new workflow cannot be
+# workflow_dispatch-tested from a feature branch, so the logic is tested
+# out-of-band and this YAML stays a thin driver.
+#
+# Auth: the Soleur GitHub App (id in Doppler prd_terraform), minted to an
+# installation token per hr-github-app-auth-not-pat — the default GITHUB_TOKEN
+# is repo-scoped and CANNOT write an org Project v2. The App must be granted
+# `organization_projects: Read and write` (operator + org-owner consent); until
+# then this workflow FAILS LOUD (403) rather than silently no-op.
+#
+# `issue closed -> Done` is left to GitHub's built-in Project workflow.
+#
+# Untrusted input (issue/PR body, label names) is only ever read via jq inside
+# the script from $GITHUB_EVENT_PATH — never interpolated into run: blocks.
+
+name: Board status sync
+
+on:
+  issues:
+    types: [reopened, labeled, unlabeled]
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+
+# Serialize per issue/PR so rapid label toggles can't race on the same card.
+concurrency:
+  group: board-status-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SOLEUR_KANBAN_ORG: jikig-ai
+  SOLEUR_KANBAN_PROJECT_NUMBER: "2"
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Mint App token and sync board Status
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
+          INSTALLATION_ID: "122213433"
+        run: |
+          set -euo pipefail
+
+          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
+          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
+            echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$APP_ID"
+          # $GITHUB_ENV/log does NOT auto-mask a multi-line secret — mask each PEM line.
+          while IFS= read -r pem_line; do
+            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
+          done <<< "$PEM"
+
+          umask 077
+          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
+          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
+          chmod 600 "$APP_PEM_FILE"
+          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
+          # Catch a corrupted PEM (literal \n, BOM, partial paste) HERE with a
+          # routable error rather than a generic openssl "unable to load Private Key".
+          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
+            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
+
+          b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
+
+          now=$(date +%s)
+          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+          payload=$(jq -nc \
+            --argjson iss "$APP_ID" \
+            --argjson iat "$((now - 60))" \
+            --argjson exp "$((now + 540))" \
+            '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+          unsigned="${header}.${payload}"
+          signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+          JWT="${unsigned}.${signature}"
+          [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
+          echo "::add-mask::$JWT"
+
+          INSTALL_TOKEN=$(curl -sS -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+            | jq -r '.token // empty')
+          [[ -n "$INSTALL_TOKEN" ]] || {
+            echo "::error::Installation-token exchange returned empty token (App permission or installation_id mismatch)."; exit 1; }
+          echo "::add-mask::$INSTALL_TOKEN"
+
+          # GITHUB_EVENT_NAME + GITHUB_EVENT_PATH are provided by the runner; the
+          # script reads the event payload from disk (no untrusted interpolation).
+          GH_TOKEN="$INSTALL_TOKEN" bash scripts/board/set-board-status.sh dispatch
