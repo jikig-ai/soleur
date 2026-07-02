@@ -49,6 +49,9 @@ const DEFAULT_FIXTURE_URL = new URL(
  * "Operation not permitted" (EPERM — the #5873 seccomp/userns-denial shape) is
  * `sandbox_broken`; a missing binary, OOM, or any other non-zero exit is
  * `canary_infra_error` (non-blocking — never rolls back).
+ *
+ * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
+ * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
  */
 export function classifyReplayVerdict({
   bwrapExitCode,
