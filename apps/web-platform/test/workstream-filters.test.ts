@@ -47,20 +47,19 @@ function ghInput(over: Partial<BoardIssueInput> = {}): BoardIssueInput {
 }
 
 describe("isClosed / CLOSED_STATUSES", () => {
-  it("done and cancelled are closed; the other five are open", () => {
+  it("done is closed; the other six are open", () => {
     expect(isClosed(issue({ status: "done" }))).toBe(true);
-    expect(isClosed(issue({ status: "cancelled" }))).toBe(true);
-    for (const s of ["backlog", "todo", "in_progress", "in_review", "blocked"] as const) {
+    for (const s of ["backlog", "ready", "in_progress", "in_review", "blocked", "pending"] as const) {
       expect(isClosed(issue({ status: s }))).toBe(false);
     }
   });
 
   it("round-trip: every status deriveColumn yields for a closed GitHub issue is in CLOSED_STATUSES", () => {
-    // closed completed → done; closed not_planned → cancelled; both ∈ CLOSED_STATUSES
-    const done = deriveColumn(ghInput({ state: "closed", state_reason: "completed" }));
-    const cancelled = deriveColumn(ghInput({ state: "closed", state_reason: "not_planned" }));
-    expect(CLOSED_STATUSES.has(done)).toBe(true);
-    expect(CLOSED_STATUSES.has(cancelled)).toBe(true);
+    // every closed issue folds to done (board has no Cancelled column, ADR-075)
+    const completed = deriveColumn(ghInput({ state: "closed", state_reason: "completed" }));
+    const notPlanned = deriveColumn(ghInput({ state: "closed", state_reason: "not_planned" }));
+    expect(CLOSED_STATUSES.has(completed)).toBe(true);
+    expect(CLOSED_STATUSES.has(notPlanned)).toBe(true);
     // open never lands in a closed status
     for (const s of STATUS_ORDER) {
       const open = deriveColumn(ghInput({ state: "open", labels: [] }));
@@ -94,7 +93,7 @@ describe("matchesFilters", () => {
   });
 
   it("status tri-state: all/open/closed", () => {
-    const open = issue({ status: "todo" });
+    const open = issue({ status: "ready" });
     const closed = issue({ status: "done" });
     expect(matchesFilters(open, { ...emptyFilters(), status: "all" })).toBe(true);
     expect(matchesFilters(closed, { ...emptyFilters(), status: "all" })).toBe(true);
@@ -137,9 +136,9 @@ describe("matchesFilters", () => {
       priorities: new Set(["urgent"] as const),
       status: "open" as const,
     };
-    expect(matchesFilters(issue({ priority: "urgent", status: "todo" }), f)).toBe(true);
+    expect(matchesFilters(issue({ priority: "urgent", status: "ready" }), f)).toBe(true);
     expect(matchesFilters(issue({ priority: "urgent", status: "done" }), f)).toBe(false); // fails status
-    expect(matchesFilters(issue({ priority: "low", status: "todo" }), f)).toBe(false); // fails priority
+    expect(matchesFilters(issue({ priority: "low", status: "ready" }), f)).toBe(false); // fails priority
   });
 });
 
