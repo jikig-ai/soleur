@@ -22,8 +22,8 @@ lane: cross-domain
 - [x] 1.7 `bun test plugins/soleur/test/terraform-target-parity.test.ts` green.
 
 ## Phase 2 — ADR amendment + learning
-- [ ] 2.1 Append `> **Amendment (2026-07-02, #5877/#5887)**` to ADR-068 (sequencing rule; do NOT change `status: adopting`).
-- [ ] 2.2 Write CONCISE learning under `knowledge-base/project/learnings/` (date picked at write-time) as a **pointer to the ADR amendment**, not a restatement.
+- [x] 2.1 Append `> **Amendment (2026-07-02, #5877/#5887)**` to ADR-068 (sequencing rule; do NOT change `status: adopting`).
+- [x] 2.2 Write CONCISE learning under `knowledge-base/project/learnings/` (date picked at write-time) as a **pointer to the ADR amendment**, not a restatement.
 
 ## Phase 3 — Full suite + PR
 - [ ] 3.1 `bun test plugins/soleur/test/` green (no sibling suite regresses).
