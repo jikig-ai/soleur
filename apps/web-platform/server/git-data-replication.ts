@@ -22,6 +22,12 @@ import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
 import { reportSilentFallback } from "./observability";
 import { assertSafeWorktreeId } from "./worktree-write-lease";
+// D2 write-boundary sentinel (ADR-068 §6, epic #5274 Sub-PR 3.C). The membership
+// authority is shared with the fetch side (git-data-client.ts) so a single check
+// gates both directions. Imported for call-time use only — the two modules form a
+// runtime-safe ESM cycle (git-data-client → gitDataRemoteUrl/assertSafeWorkspaceId
+// here; here → authorizeGitDataAccess there); neither is referenced at module-eval.
+import { authorizeGitDataAccess, GitDataAuthorizationError } from "./git-data-client";
 
 const log = createChildLogger("git-data-replication");
 
@@ -181,12 +187,35 @@ export async function replicateToGitData(params: {
    */
   worktreeId: string;
   leaseGeneration: number;
-  userId?: string;
+  /**
+   * The session user on whose behalf the push runs. MANDATORY + authorizing when
+   * `isGitDataStoreEnabled()` (D2 resolution, `hr-write-boundary-sentinel-sweep-all-write-sites`):
+   * the push is refused unless this user is a member of `workspaceId`, keyed on the
+   * EXACT `workspaceId` that builds the push URL (no re-derivation). Closes the
+   * logic-bug cross-tenant WRITE (TS-1). Both call sites (agent-runner,
+   * cc-dispatcher) already thread the session userId.
+   */
+  userId: string;
 }): Promise<void> {
   if (!isGitDataStoreEnabled()) return;
   const { workspacePath, workspaceId, worktreeId, leaseGeneration, userId } = params;
   assertSafeWorkspaceId(workspaceId);
   assertSafeWorktreeId(worktreeId);
+
+  // D2 write-boundary sentinel — authorize BEFORE any provision/remote/push so a
+  // cross-tenant write never touches the transport. Fail-closed: a non-member,
+  // an indeterminate RPC, or a missing userId denies. The deny telemetry (security
+  // vs error) is emitted inside authorizeGitDataAccess; throw here so the push is
+  // skipped. Placed OUTSIDE the push try/catch below so a DENY is not mislabeled
+  // as a generic "git_data_replication_push" transport failure.
+  const authorized = await authorizeGitDataAccess({ userId, workspaceId, op: "write" });
+  if (!authorized) {
+    throw new GitDataAuthorizationError(
+      "write",
+      "not-member",
+      `git-data push refused for workspace ${workspaceId} (membership denied — D2)`,
+    );
+  }
 
   try {
     await provisionGitDataRepo(workspaceId);
@@ -232,7 +261,7 @@ export async function replicateToGitData(params: {
     reportSilentFallback(err, {
       feature: "worktree_lease",
       op: "git_data_replication_push",
-      extra: { workspaceId, leaseGeneration, ...(userId ? { userId } : {}) },
+      extra: { workspaceId, leaseGeneration, userId },
       message:
         "git-data replication push failed — a fence reject (stale lease-gen) or " +
         "transport error; the workspace's objects were NOT replicated to the shared store",
