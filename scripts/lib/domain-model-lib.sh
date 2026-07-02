@@ -57,10 +57,13 @@ dm_tokenize() {
       }
       # extract a policy/table/function NAME token: quoted ("Any words") or bare
       # (schema-qualified). Returns the unquoted inner text, or "" if unparseable.
+      # The Postgres default schema `public.` is stripped from the bare form so anchors
+      # are `<table>.<object>` per ADR-076 item 3 (#5871); non-default schemas the
+      # register cites verbatim (storage., auth.) are preserved.
       function name_after(s, kw,   m, tok) {
         # kw is a regex fragment like "CREATE[ \t]+POLICY" or "ON"
         if (match(s, kw "[ \t]+\"[^\"]+\"")) { tok = substr(s, RSTART, RLENGTH); sub(kw "[ \t]+\"", "", tok); sub(/\"$/, "", tok); return tok }
-        if (match(s, kw "[ \t]+[A-Za-z0-9_.]+"))  { tok = substr(s, RSTART, RLENGTH); sub(kw "[ \t]+", "", tok); return tok }
+        if (match(s, kw "[ \t]+[A-Za-z0-9_.]+"))  { tok = substr(s, RSTART, RLENGTH); sub(kw "[ \t]+", "", tok); sub(/^public\./, "", tok); return tok }
         return ""
       }
       BEGIN { indq = 0; dqtag = ""; stmt = "" }
