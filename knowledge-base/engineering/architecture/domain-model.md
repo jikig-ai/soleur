@@ -9,10 +9,12 @@
 > **Maintenance contract.** When a PR introduces or changes a business rule (an
 > entity invariant, ownership/access model, or relationship encoded in a migration
 > constraint / RLS policy / resolver-guard), it MUST update the affected row(s)
-> here in the same PR. **Wired today:** the `architecture` skill's `create` step
-> (an ADR that records/changes a business rule must update this register).
-> **Fast-follow (not yet mechanically gated):** plan-time flagging, a review
-> drift-check, and a ship block — tracked in #5871.
+> here in the same PR. **Wired:** (1) the `architecture` skill's `create` step
+> (an ADR that records/changes a business rule must update this register); (2) the
+> preflight **stale-citation ship block** (`Check 11`, diff-scoped — blocks a PR that
+> makes a cited migration/symbol unresolvable); (3) an **advisory review note**
+> surfacing drift counts + `/soleur:sync domain-model` (#5871, ADR-076). Plan-time
+> flagging was intentionally not built — no diff exists at plan time.
 >
 > **Auto-fill + drift-check (live, #5754).** `/soleur:sync domain-model` runs a
 > deterministic analyzer (`scripts/domain-model-drift.sh`) that drift-checks this
@@ -68,7 +70,7 @@
 
 ## How to maintain this register
 
-- **A PR that changes a business rule** (a new/changed migration constraint, RLS policy, ownership/access invariant, or resolver-guard semantics) updates the affected row(s) + cites the new source. Wired today via the `architecture` skill's `create` step (ADR → register); plan-flagging, a review drift-check, and a ship block are fast-follows (#5871).
+- **A PR that changes a business rule** (a new/changed migration constraint, RLS policy, ownership/access invariant, or resolver-guard semantics) updates the affected row(s) + cites the new source. Wired via the `architecture` skill's `create` step (ADR → register), the preflight stale-citation ship block (`Check 11`), and an advisory review note (#5871, ADR-076). Plan-time flagging was intentionally not built (no diff at plan time).
 - **Auto-population (#5754):** `/soleur:sync domain-model` derives candidate rules from migrations (tables / FKs / UNIQUE+CHECK constraints / RLS) and guard functions, reconciles against this register, and flags drift (a register rule with no backing source, or a source-level invariant with no register row).
 - **Rule IDs are immutable** (mirrors `cq-rule-ids-are-immutable`): retire a row by marking it superseded + linking the superseding row, never by reusing an ID.
 - **Curating a drift finding into a `BR-*` row (learned #5882):** cite migration files as *unbackticked* prose (`migration 075_conversation_visibility.sql`), never backticked — the drift analyzer's stale-citation check cross-products every backticked `.sql`/`.ts` file × every backticked bare identifier on the SAME table row and greps the file for the symbol, so a backticked filename beside an unrelated identifier fabricates a false stale citation. Grep-validate each factual claim (column name, RLS/REVOKE semantics, `ON DELETE` behavior, GDPR article) against the migration body before promoting. A dup-`BR-ID` check must anchor to definition rows (`^\| BR-…`) so legitimate cross-references don't false-flag. See [`learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md`](../../project/learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md).
