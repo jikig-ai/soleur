@@ -12,7 +12,7 @@
 //   5. `user` field — a PERSON distinct from the role assignee
 
 // Column vocabulary mirrors the canonical GitHub Project v2 board "Soleur Kanban"
-// (ADR-075): Backlog, Ready, In progress, In review, Blocked, Pending, Done.
+// (ADR-080): Backlog, Ready, In progress, In review, Blocked, Pending, Done.
 // The board has no Cancelled column, so closed issues fold to `done`.
 export type WorkstreamStatus =
   | "backlog"
@@ -249,6 +249,11 @@ export interface BoardIssueInput {
   state_reason: string | null;
   created_at: string;
   updated_at: string;
+  /** Canonical GitHub Project v2 board Status option name (Phase 2, ADR-080) —
+   *  e.g. "In progress"/"Pending". When present AND mappable it OVERRIDES the
+   *  label/state derivation below; absent (issue not on the board, or the board
+   *  read degraded) falls back to derivation. */
+  boardStatus?: string;
 }
 
 /** `domain/*` label → role chip. First matching label (in issue order) wins. */
@@ -271,18 +276,44 @@ export const PRIORITY_LABEL_TO_PRIORITY: Record<string, WorkstreamPriority> = {
   "priority/p3-low": "low",
 };
 
+/** Canonical GitHub board Status option name → app column (ADR-080). Keyed
+ *  lowercase so "In progress"/"In Progress" both map. Unknown → null (fall back
+ *  to label/state derivation). */
+const BOARD_STATUS_TO_WORKSTREAM: Record<string, WorkstreamStatus> = {
+  backlog: "backlog",
+  ready: "ready",
+  "in progress": "in_progress",
+  "in review": "in_review",
+  blocked: "blocked",
+  pending: "pending",
+  done: "done",
+};
+
+/** Map a GitHub Project v2 board Status option name to the app column, or null
+ *  when the name isn't one of the 7 canonical columns. */
+export function boardStatusToWorkstreamStatus(
+  name: string,
+): WorkstreamStatus | null {
+  return BOARD_STATUS_TO_WORKSTREAM[name.trim().toLowerCase()] ?? null;
+}
+
 /**
- * Derive the kanban column from state + labels. FALLBACK ONLY — when the GitHub
- * Project v2 board Status is present it is preferred over this (ADR-075; see
- * boardStatusToWorkstreamStatus + get-workstream-issues, Phase 2). The board has
- * no Cancelled column, so every closed issue folds to `done` (not_planned /
- * duplicate closed issues render under Done).
- * Precedence (open):
+ * Derive the kanban column. The canonical GitHub Project v2 board Status WINS
+ * when present + mappable (ADR-080); the state+label derivation below is the
+ * FALLBACK for issues not on the board (or when the board read degraded). The
+ * board has no Cancelled column, so every closed issue folds to `done`
+ * (not_planned / duplicate closed issues render under Done).
+ * Fallback precedence (open):
  *   `blocked` → blocked; else `pending` → pending; else `in-progress` →
  *   in_progress; else `review`/`needs-review` → in_review; else `ready`/`todo`
  *   → ready; else backlog.
  */
 export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
+  // Board Status is canonical when present and recognized.
+  if (input.boardStatus) {
+    const mapped = boardStatusToWorkstreamStatus(input.boardStatus);
+    if (mapped) return mapped;
+  }
   const labels = input.labels;
   if (input.state === "closed") {
     // Board has no Cancelled column — all closed issues fold to done.
@@ -366,7 +397,7 @@ export function githubIssueToWorkstreamIssue(
 /** Statuses that read as "closed" — the single source of truth shared by
  *  `isClosed` and the Status filter (arch review D4; mirrors `deriveColumn`'s
  *  closed branch, which now maps every closed GitHub issue to `done` since the
- *  board has no Cancelled column, ADR-075). */
+ *  board has no Cancelled column, ADR-080). */
 export const CLOSED_STATUSES: ReadonlySet<WorkstreamStatus> = new Set([
   "done",
 ]);
