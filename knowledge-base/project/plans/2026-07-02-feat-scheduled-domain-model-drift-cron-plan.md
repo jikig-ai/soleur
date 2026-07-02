@@ -225,7 +225,7 @@ Per the routine-authoring directive (`apps/web-platform/server/routine-authoring
   `cronDomainModelDrift,` to the `functions: [ … ]` array.
 - `apps/web-platform/server/inngest/cron-manifest.ts` — add `"cron-domain-model-drift",` to
   `EXPECTED_CRON_FUNCTIONS` (alphabetical). (Auto-derives the manual-trigger allowlist + watchdog purview.)
-- `apps/web-platform/server/inngest/routine-metadata.ts` — add a `"cron-domain-model-drift": { description, domain: "engineering", ownerRole, scheduleLabel: "Weekly (Mon 08:00 UTC)", manualTrigger: "allowed" }` entry.
+- `apps/web-platform/server/inngest/routine-metadata.ts` — add a `"cron-domain-model-drift": { description, domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Weekly (Mon 08:00 UTC)", manualTrigger: "allowed" }` entry (capitalization matches sibling `:59`).
 
 ### Phase 4 — Sentry monitor IaC
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — add the `sentry_cron_monitor` resource (Phase = IaC section above).
@@ -349,6 +349,80 @@ capability gaps.
 - **Heartbeat status = ok on rc∈{0,1}, error on rc∈{2,3}** — issue-filing is orthogonal to status.
 - **Confirm #5754 artifacts are on `origin/main`** before first dispatch (executor checks out `main`).
   (Folded into Phase 0.)
+
+## Deepen-Plan Research Insights (2026-07-02)
+
+**Halt-gates:** 4.6 User-Brand Impact ✓ (threshold `none` + scope-out reason), 4.7 Observability ✓
+(all 5 fields, no `ssh` in `discoverability_test`), 4.8 PAT-shaped-var ✓ (none), 4.9 UI-wireframe ✓
+(no UI surface — skipped). 4.4 Scheduled-work precedent check ✓ (44 `cron-*.ts` Inngest functions
+exist → Inngest is canonical; GHA `schedule:` is the rejected mechanism).
+
+**Every load-bearing concrete fact verified against `main` (2026-07-02):**
+- `apps/web-platform/test/server/inngest/function-registry-count.test.ts:135` = `expect(routeEntries.length).toBe(58)` → bump to **59**. `NON_INNGEST_MONITORS` set at **line 109** (the GHA-fired slug must be added there — test (c2) at line 175 reds otherwise).
+- `EXPECTED_CRON_FUNCTIONS` array (`cron-manifest.ts:22`) contains `"cron-dev-migration-drift"` (:36), `"cron-terraform-drift"` (:62) — insert `"cron-domain-model-drift"` alphabetically.
+- `route.ts`: import at top (pattern `import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";` :35) + array entry (`cronDevMigrationDrift,` :134).
+- **Monitor resource — exact template (`cron-monitors.tf:83-92`, verbatim shape):**
+  ```hcl
+  resource "sentry_cron_monitor" "scheduled_domain_model_drift" {
+    organization            = var.sentry_org
+    project                 = data.sentry_project.web_platform.slug
+    name                    = "scheduled-domain-model-drift"
+    schedule                = { crontab = "0 8 * * 1" }
+    checkin_margin_minutes  = 60
+    max_runtime_minutes     = 15
+    failure_issue_threshold = 1
+    recovery_threshold      = 1
+    timezone                = "UTC"
+  }
+  ```
+  `apply-sentry-infra.yml` `-target=` list starts at **line 197** (add the new resource there).
+- **`routine-metadata.ts` entry — match sibling capitalization exactly** (`:59`): `domain: "Engineering"`
+  (capital E, not `engineering`), `ownerRole: "CTO"`, `manualTrigger: "allowed"`,
+  `scheduleLabel: "Weekly (Mon 08:00 UTC)"`.
+- `sentry-heartbeat` composite action: `monitor-slug` input is `required: true`; the executor forwards
+  `secrets.SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` / `SENTRY_PUBLIC_KEY` (as `scheduled-terraform-drift.yml:257-259`).
+
+**Precedent-diff (executor idempotency):** the create/update-issue block mirrors
+`scheduled-terraform-drift.yml:131-197` — exact-title match via
+`gh issue list --label <l> --state open --json number,title --jq '.[] | select(.title=="<T>") | .number' | head -1`,
+comment if found else create. No novel pattern.
+
+## Deepen-Plan Research Insights (2026-07-02)
+
+**Halt-gates:** 4.6 User-Brand Impact ✓ (threshold none + scope-out reason), 4.7 Observability ✓ (all 5
+fields, no ssh in discoverability_test), 4.8 PAT-shaped variable ✓ (none), 4.9 UI-wireframe ✓ (no
+UI-surface file — skip). Precedent-diff §4.4 scheduled-work check: 44 `cron-*.ts` Inngest functions
+exist → Inngest dispatch is canonical (ADR-033). ✓
+
+**Load-bearing facts verified live against `main`:**
+- `function-registry-count.test.ts:135` — `expect(routeEntries.length).toBe(58)` → bump to **59**.
+- `NON_INNGEST_MONITORS` set at `function-registry-count.test.ts:109` (used at `:175`) — add
+  `"scheduled-domain-model-drift"` (heartbeat comes from a GHA executor, not an Inngest slug, else parity
+  test (c2) reds).
+- `EXPECTED_CRON_FUNCTIONS` at `cron-manifest.ts:22` (array of strings; `"cron-dev-migration-drift"`
+  `:36`, `"cron-terraform-drift"` `:62`) — add `"cron-domain-model-drift"` alphabetically.
+- `route.ts` — import at `:35` (`import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";`) + array entry at `:134`. Mirror for the new fn.
+- **Sentry monitor block (copy `cron-monitors.tf:83-92` verbatim; substitute name/crontab):**
+  ```hcl
+  resource "sentry_cron_monitor" "scheduled_domain_model_drift" {
+    organization            = var.sentry_org
+    project                 = data.sentry_project.web_platform.slug
+    name                    = "scheduled-domain-model-drift"
+    schedule                = { crontab = "0 8 * * 1" }
+    checkin_margin_minutes  = 60
+    max_runtime_minutes     = 15
+    failure_issue_threshold = 1
+    recovery_threshold      = 1
+    timezone                = "UTC"
+  }
+  ```
+- `apply-sentry-infra.yml` `-target=` list starts `:197` — append `-target=sentry_cron_monitor.scheduled_domain_model_drift`.
+- `sentry-heartbeat` composite action requires input `monitor-slug` (`.github/actions/sentry-heartbeat/action.yml`) — pass `scheduled-domain-model-drift`.
+
+**Correction (routine-metadata shape):** sibling entry is
+`"cron-dev-migration-drift": { description, domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Every 6h (:15)", manualTrigger: "allowed" }` (`routine-metadata.ts:59`). Use `domain: "Engineering"`
+(capital E) + `ownerRole: "CTO"` + `scheduleLabel: "Weekly (Mon 08:00 UTC)"` to match the parity test's
+casing expectations.
 
 ## Sharp Edges
 - **The stale-count gate is the whole feature.** Do not "simplify" the executor to gate on `rc`/exit code

@@ -27,7 +27,7 @@ Derived from the plan. Phase order is dependency-directed (contract → consumer
 ## Phase 3 — Registration + parity
 - [ ] 3.1 `apps/web-platform/app/api/inngest/route.ts` — add import + `cronDomainModelDrift,` in `functions:[…]`.
 - [ ] 3.2 `apps/web-platform/server/inngest/cron-manifest.ts` — add `"cron-domain-model-drift",` to `EXPECTED_CRON_FUNCTIONS` (alphabetical).
-- [ ] 3.3 `apps/web-platform/server/inngest/routine-metadata.ts` — add `"cron-domain-model-drift"` entry (`domain: engineering`, `scheduleLabel: "Weekly (Mon 08:00 UTC)"`, `manualTrigger: "allowed"`).
+- [ ] 3.3 `apps/web-platform/server/inngest/routine-metadata.ts` — add `"cron-domain-model-drift"` entry (`domain: "Engineering"`, `ownerRole: "CTO"`, `scheduleLabel: "Weekly (Mon 08:00 UTC)"`, `manualTrigger: "allowed"` — match sibling capitalization at :59).
 
 ## Phase 4 — Sentry monitor IaC
 - [ ] 4.1 `apps/web-platform/infra/sentry/cron-monitors.tf` — add `sentry_cron_monitor "scheduled_domain_model_drift"` (name `scheduled-domain-model-drift`, crontab `0 8 * * 1`, margin 120, max_runtime 15) modeled on `scheduled_terraform_drift`.
