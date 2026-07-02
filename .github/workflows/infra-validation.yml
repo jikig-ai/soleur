@@ -135,7 +135,10 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # 8 (was 5): the #5875 sandbox-canary regression below builds a small alpine+
+    # bubblewrap image and runs two docker bwrap probes on top of the existing bash
+    # suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
+    timeout-minutes: 8
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -206,6 +209,20 @@ jobs:
       # Faithful sandbox canary soak accumulator (#5875 / ADR-079).
       - name: Run sandbox-canary-soak.sh tests
         run: bash apps/web-platform/infra/sandbox-canary-soak.test.sh
+
+      # #5875 item 3 / ADR-079 — docker-run bwrap would-have-caught proof. Sets the
+      # userns sysctl (ephemeral GH-hosted runner ONLY, guardrail 3 — re-gate if CI
+      # moves to a persistent/self-hosted runner) and runs the synthesized
+      # split-unshare argv under BOTH the committed and the synthesized pre-5874
+      # seccomp profiles: the committed profile must ALLOW it, the pre-5874 profile
+      # must EPERM it (proving the profile would have caught #5849). Self-validating:
+      # SKIPs (never false-fails) if the runner cannot execute the bwrap userns setup.
+      # The structural layer (always-on) and the sdk-bump gate are the deterministic
+      # blocking guards; this is the higher-fidelity runtime confirmation.
+      - name: Run sandbox-canary would-have-caught regression (docker bwrap)
+        env:
+          SDK_SANDBOX_REGRESSION_DOCKER: "1"
+        run: bash apps/web-platform/scripts/sandbox-canary-regression.test.sh
 
       # No-SSH inngest cutover orchestration (#5450).
       - name: Run inngest-enumerate-reminders.sh tests

@@ -145,22 +145,71 @@ classify as `canary_infra_error` (never `sandbox_broken`).
 
 ### 3. SDK-bump guard + profile→redeploy coupling (PR3)
 
-- A `pull_request` CI job detects a resolved-version change of the two
-  `@anthropic-ai/*` SDK packages in **`package-lock.json`** (deploy-authoritative
-  via `npm ci`) — plus a `bun.lock`↔`package-lock.json` parity assertion — and
-  runs the faithful canary via `docker run` on the *committed* profile (blocking
-  at PR-time).
-- The **apply workflow itself** redeploys after applying the seccomp/apparmor
-  profile (a sequenced step, not a shared concurrency group — which serializes
-  but does not order), then asserts the running container's
-  `seccomp_profile_sha256` equals `sha256(committed)` + canary pass; fail loud
-  (`::error::` + `exit 1` + Sentry) otherwise. `flock` in `ci-deploy.sh` dedupes
-  the concurrent release deploy (idempotent, ADR-078-drained). No self-healing
-  control loop.
-- AppArmor apply-parity: `terraform_data.apparmor_bwrap_profile` is folded into
-  the workflow's `-target=` set + `on.push.paths` (identical bug class).
+- The **profile→redeploy coupling (item 4)** ships in full. The **apply workflow
+  itself** redeploys after applying the seccomp/apparmor profile (a sequenced
+  `if: success()` step — not a shared concurrency group, which serializes but does
+  not order), then asserts the running container's `seccomp_profile_sha256`
+  (recorded by `ci-deploy.sh` at container start, surfaced on `/hooks/deploy-status`
+  by `cat-deploy-state.sh`) equals `sha256(committed)`; fail loud (`::error::` +
+  `exit 1`) otherwise. `flock` in `ci-deploy.sh` dedupes the concurrent release
+  deploy (idempotent, ADR-078-drained). No self-healing control loop. The redeploy
+  is conditional-by-construction (loaded==committed → no-op), so it fires only on an
+  actual seccomp change. AppArmor needs no redeploy — `apparmor_parser -r` at apply
+  reloads the kernel profile for the running container; only seccomp is bound at
+  `docker run`.
+- **AppArmor apply-parity:** `terraform_data.apparmor_bwrap_profile` is folded into
+  the workflow's `-target=` set + `on.push.paths` (identical auto-apply bug class as
+  the #5873 seccomp gap).
 
-Flip this ADR to `accepted` in PR3.
+### Interim mechanism (PR3, option (b) — binding CTO ruling)
+
+The higher-fidelity claim *"the committed profile is valid for the newly-bumped
+SDK's **real** argv"* requires a model turn (Phase-0: no no-model-round-trip path)
+and was **NOT** forced into the merge-blocking path as a paid, non-deterministic,
+`ANTHROPIC_API_KEY`-dependent gate — that is the exact failure mode the #4932 lesson
+and the deterministic-LLM-SDK-invocation learning warn against. Instead PR3 closes
+the incident **class** deterministically:
+
+- **BLOCKING (deterministic, no creds/model):** resolved-version bump-detection +
+  `bun.lock`↔`package-lock.json` parity for both SDK packages
+  (`apps/web-platform/scripts/sdk-bump-sandbox-gate.sh`, run in the required
+  `lockfile-sync` job). On a detected bump, the merge is gated on a maintainer
+  `sdk-bump-verified:` acknowledgement (guardrail 2 — **no silent green**; a silent
+  skip would re-create #5849). This alone forces a human to look at every SDK bump,
+  which is the whole failure the #5849 class was.
+- **Would-have-caught regression:** a **structural** proof (always-on, blocking via
+  the `test` shard) that the synthesized `seccomp-pre-5874.json` fixture is exactly
+  the committed profile minus the two #5874 rules, plus a **runtime** `docker run`
+  bwrap discrimination (`sandbox-canary-regression.test.sh`, opt-in from
+  `infra-validation.yml` on profile changes; sets `apparmor_restrict_unprivileged_userns=0`
+  on the ephemeral GH-hosted runner ONLY — guardrail 3) that replays a synthesized
+  split-unshare argv (a file **distinct** from the prod `sandbox-canary-argv.json`,
+  which stays `status:"uncaptured"` — guardrail 1) and asserts EPERM under pre-5874
+  but pass under committed. The runtime layer is self-validating (SKIPs rather than
+  false-fails where the runner cannot do bwrap userns).
+
+### Deferred (tracked) and Adopting → Accepted criteria
+
+Two load-bearing pieces remain **open**, so this ADR **stays `adopting`** (it is NOT
+flipped to `accepted` in PR3):
+
+- **Deferral B — creds-gated real `--capture` wiring** (drives the real SDK
+  `query()` + `buildAgentSandboxConfig()` to populate `sandbox-canary-argv.json`).
+  New follow-up issue. **Trigger:** confirm `ANTHROPIC_API_KEY` availability in CI +
+  design non-determinism bounding for the model turn. B is a **hard prerequisite of
+  A**: per #5889, the dark-launch soak counter holds at 0 (`fixture_uncaptured`)
+  until the real fixture lands, so no green soak verdict can accrue without B.
+- **Deferral A — promote the `ci-deploy.sh` faithful canary to BLOCKING**
+  (`sandbox_broken` → rollback). Owned by **#5889** (soak: 5 green verdicts / ≥3
+  days). Its `earliest=2026-07-06` is necessary-but-not-sufficient — promotion also
+  requires B to land first (ordering: **B → soak → A**). Because the canary is still
+  non-blocking dark-launch, item 4's redeploy assert treats `pass` /
+  `canary_infra_error` / `fixture_uncaptured` as pass-through and fails loud ONLY on
+  a faithful `sandbox_broken` (or a loaded≠committed hash mismatch) — NOT on a
+  literal "canary pass".
+
+**Flip to `accepted`** only when BOTH land: real-capture wired (B) AND the canary
+promoted-to-blocking after #5889's soak proves green (A), citing both tracking issues.
 
 ## Consequences
 
