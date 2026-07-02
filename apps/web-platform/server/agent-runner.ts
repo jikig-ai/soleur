@@ -74,7 +74,7 @@ import { replicateToGitData } from "./git-data-replication";
 import { resolveHostId } from "./host-identity";
 import {
   acquireAndHoldWorktreeLease,
-  WORKTREE_ID_PRIMARY,
+  resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
 import { resolveInstallationId } from "./resolve-installation-id";
@@ -1127,7 +1127,7 @@ export async function startAgentSession(
       const hostId = resolveHostId();
       worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
         activeWorkspaceId,
-        WORKTREE_ID_PRIMARY,
+        resolveWorktreeId(userId),
         hostId,
         () => {
           reportSilentFallback(
@@ -2360,6 +2360,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               await replicateToGitData({
                 workspacePath,
                 workspaceId: activeWorkspaceId,
+                worktreeId: resolveWorktreeId(userId),
                 leaseGeneration: worktreeLeaseHandle.leaseGeneration,
                 userId,
               });

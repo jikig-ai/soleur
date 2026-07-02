@@ -58,7 +58,11 @@ import {
   getWorkspaceForUserInOrganization,
   readWorkspaceIdFromDb,
   workspacePathForWorkspaceId,
+  isGitDataStoreEnabled,
 } from "./workspace-resolver";
+import { resolveHostId } from "./host-identity";
+import { resolveSessionRoute } from "./session-router";
+import { proxyClientToOwner } from "./session-proxy";
 import {
   restoreInflightCheckpoint,
   CHECKPOINT_REFUSED_MESSAGE,
@@ -2880,6 +2884,8 @@ export function setupWebSocket(server: HTTPServer) {
         // sibling sessions in the user's other workspaces). user_session_state
         // (migration 060) is the source of truth; the lookup translates
         // org_id → workspace_id once at WS open.
+        // Resolved once here, reused by the session-router placement hook below.
+        let boundWorkspaceId: string | null = null;
         try {
           const orgId = await resolveCurrentOrganizationId(
             user.id,
@@ -2910,6 +2916,7 @@ export function setupWebSocket(server: HTTPServer) {
             }
           }
           if (workspaceId) setUserWorkspace(user.id, workspaceId);
+          boundWorkspaceId = workspaceId;
         } catch (workspaceBindErr) {
           // Silent fallback per cq-silent-fallback-must-mirror-to-sentry: the
           // session still opens (the binding is for SIGTERM precision, not
@@ -2952,6 +2959,63 @@ export function setupWebSocket(server: HTTPServer) {
             void touchSlot(userId!, convId);
           }
         }, 30_000);
+
+        // --- User-sticky session placement (epic #5274 Phase 3, ADR-068 D0 / CTO
+        //     ruling b2) -----------------------------------------------------------
+        // GATED on isGitDataStoreEnabled(): entirely inert (no per-connection DB
+        // read) until the 3.D cutover — at flag-off this whole block is skipped and
+        // the connection serves locally, byte-identical to pre-#5274. When on: read
+        // this user's live worktree-lease holder; if a PEER host owns it,
+        // TRANSPARENTLY proxy the socket to the owner over one-way TLS BEFORE
+        // auth_ok (no client-visible reconnect — the fly-replay invariant). At a
+        // single host every route resolves `local`, so this stays inert until a 2nd
+        // host + roster come online at 3.D.
+        if (isGitDataStoreEnabled() && boundWorkspaceId) {
+          let route;
+          try {
+            route = await resolveSessionRoute({
+              workspaceId: boundWorkspaceId,
+              userId,
+              myHostId: resolveHostId(),
+            });
+          } catch (routeErr) {
+            // Fail-safe: a routing error degrades to local-serve (the lease acquire
+            // on the write path is itself fail-closed, and the git-data fence is the
+            // ultimate write guard) — never a wrong proxy dial. Mirror to Sentry.
+            reportSilentFallback(routeErr, {
+              feature: "ws-handler",
+              op: "resolveSessionRoute",
+              extra: { userId, workspaceId: boundWorkspaceId },
+            });
+            route = { decision: "local" as const, reason: "cold" as const };
+          }
+          if (ws.readyState !== WebSocket.OPEN) return; // closed during the await
+          if (route.decision === "owner-unresolved") {
+            // A peer owns the lease but its address is not resolvable — fail loud
+            // (already Sentry'd in the router). Non-transient close → the client
+            // reconnects and self-heals once the roster/owner recovers.
+            ws.close(WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "session owner unreachable");
+            return;
+          }
+          if (route.decision === "proxy") {
+            // b2: relay this authenticated socket to the owner; the relay owns the
+            // socket lifecycle from here (frames + close forwarded both ways). Tear
+            // down the local pre-session state we set up above so this host holds no
+            // stale binding for a session it is not serving.
+            clearTimeout(authTimer);
+            if (pingInterval) clearInterval(pingInterval);
+            sessions.delete(userId);
+            clearUserWorkspace(userId);
+            void proxyClientToOwner({
+              clientWs: ws,
+              ownerAddress: route.ownerAddress,
+              userId,
+              workspaceId: boundWorkspaceId,
+            });
+            return;
+          }
+          // decision === "local" → fall through and serve here.
+        }
 
         ws.send(JSON.stringify({ type: "auth_ok" }));
         return;

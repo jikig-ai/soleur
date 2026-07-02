@@ -56,10 +56,12 @@ reject() {
   exit 1
 }
 
-# Drain stdin (the <old> <new> <ref> lines). The fence is per-(workspace,worktree)
-# — one lease-gen per push — so we do not need per-ref data; draining avoids a
-# SIGPIPE on the sender.
-cat >/dev/null 2>&1 || true
+# Capture stdin (the `<old> <new> <ref>` lines). The fence CAS is per-push (one
+# lease-gen), but the D0-ref namespace-ownership check below is per-REF, so we
+# read the ref list rather than draining it. Reading it all up front also avoids a
+# SIGPIPE on the sender. Empty stdin (e.g. option-only invocations) → zero refs →
+# the namespace loop is a no-op.
+ref_lines="$(cat 2>/dev/null || true)"
 
 # --- Parse push-options (git sets GIT_PUSH_OPTION_COUNT + GIT_PUSH_OPTION_<i>) ---
 count="${GIT_PUSH_OPTION_COUNT:-0}"
@@ -94,6 +96,28 @@ case "$worktree_id" in
   (*[!A-Za-z0-9._-]*) reject "worktree-id has unsafe characters: '$worktree_id'" ;;
   (*/*) reject "worktree-id contains a slash: '$worktree_id'" ;;
 esac
+
+# --- D0-ref namespace-ownership (epic #5274 Phase 3, ADR-068 D0 amendment) ---
+# A writer presenting worktree-id=W may ONLY write refs under
+# `refs/soleur/worktrees/W/` — its own per-user namespace. This is the host-side
+# enforcement of the app-side namespaced refspec (git-data-replication.ts): it
+# stops a buggy OR compromised writer from clobbering a PEER user's namespace (or
+# the canonical `refs/heads/*`) even though all writers share one transport key
+# (the cluster-wide-key cross-tenant-write residual, D2 — this closes the
+# logic-bug half at the resource server). Runs BEFORE the CAS lock/advance so an
+# out-of-namespace push is rejected whole, before any sidecar mutation.
+#
+# `worktree_id` is already validated to [A-Za-z0-9._-] (no glob metachars, no
+# slash), so it is a safe literal in the case glob below.
+while IFS=' ' read -r _old _new ref; do
+  [ -n "$ref" ] || continue
+  case "$ref" in
+    ("refs/soleur/worktrees/${worktree_id}/"*) : ;; # in-namespace — allowed
+    (*) reject "ref '$ref' is outside this worktree's namespace refs/soleur/worktrees/${worktree_id}/ (worktree-id=${worktree_id} may only write its own namespace — D0 namespace-ownership)" ;;
+  esac
+done <<REF_EOF
+${ref_lines}
+REF_EOF
 
 # --- Locate the per-workspace bare repo's fence dir ---
 gd="${GIT_DIR:-$(git rev-parse --git-dir 2>/dev/null || echo .)}"

@@ -16,17 +16,123 @@ import { reportSilentFallback } from "./observability";
  * PR B; this module provides only the lease primitives.
  */
 
-/** The single worktree id per workspace today — one tree per workspace
- *  (inflight-checkpoint.ts:14, ensure-workspace-repo.ts:75). A stable opaque
- *  constant; multi-worktree is Phase 3 (additive, non-breaking). Shared so the
- *  two turn-boundary lineages key the lease identically (no drift). */
-export const WORKTREE_ID_PRIMARY = "primary";
+// worktree_id names a lease row (migration 116 PK `(workspace_id, worktree_id)`),
+// a fence sidecar file on the git-data host (`fence/<worktree_id>.gen`), AND a
+// git-data ref namespace (`refs/soleur/worktrees/<worktree_id>/…`). So it must be
+// an opaque safe token at every boundary that builds a path or ref from it. The
+// allowlist mirrors `assertSafeWorkspaceId` (git-data-replication.ts) and the
+// host-side shell guard (git-data-pre-receive.sh:92-96) — CWE-22.
+const WORKTREE_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Assert `worktreeId` is a safe opaque token before it keys a lease row, names a
+ * fence sidecar, or builds a `refs/soleur/worktrees/<id>/…` refspec. Throws
+ * (fail-loud) on any unsafe value — defense-in-depth at the app boundary,
+ * symmetric to the host-side pre-receive validation. (Epic #5274 Phase 3 D0.)
+ */
+export function assertSafeWorktreeId(worktreeId: string): void {
+  if (
+    worktreeId === "" ||
+    worktreeId === "." ||
+    worktreeId === ".." ||
+    worktreeId.includes("/") ||
+    !WORKTREE_ID_RE.test(worktreeId)
+  ) {
+    throw new Error(
+      `worktree-write-lease: refusing unsafe worktree_id '${worktreeId}' (must ` +
+        `match ${WORKTREE_ID_RE} and not be a dot/slash path — CWE-22).`,
+    );
+  }
+}
+
+/**
+ * Resolve the PER-USER worktree id for `userId` (ADR-068 D0 amendment, epic
+ * #5274 Phase 3). Under user-sticky routing each user of a workspace gets their
+ * OWN worktree → own write-lease → own fence generation stream → own git-data
+ * ref namespace. Keying the worktree id off the user's own id gives two users of
+ * one workspace two distinct leases (routable to two hosts, ADR-068 G1) while
+ * two lineages of the SAME user (legacy agent-runner + cc-dispatcher) share one
+ * lease via migration-116's same-host carve-out.
+ *
+ * `userId` is a UUID, so it satisfies {@link assertSafeWorktreeId} natively; the
+ * assertion is still run (fail-loud) so a corrupted/non-UUID id never silently
+ * builds a bad ref path. This REPLACES the hardcoded `"primary"` constant — a
+ * lingering hardcoded worktree id would re-pin the whole workspace to one host.
+ */
+export function resolveWorktreeId(userId: string): string {
+  assertSafeWorktreeId(userId);
+  return userId;
+}
 
 /** The lease a host currently holds: its infra `host_id` + the fencing
  *  generation token it presents to the git-data host's pre-receive CAS. */
 export interface WorktreeLease {
   hostId: string;
   leaseGeneration: number;
+}
+
+/** Liveness window for a read-only holder lookup (session routing). Mirrors the
+ *  migration-116 lease expiry: a lease whose `heartbeat_at` is older than this is
+ *  reclaimable (acquire bumps gen past 120s of silence) and is NOT a live owner —
+ *  a `release` tombstones by ageing the heartbeat out, so an expired/tombstoned
+ *  row reads as "no live holder" (cold → the placing host acquires). */
+export const LEASE_LIVENESS_WINDOW_MS = 120_000;
+
+/** The LIVE holder of a `(workspaceId, worktreeId)` lease, as read by the session
+ *  router to place an inbound session. */
+export interface WorktreeLeaseHolder {
+  hostId: string;
+  leaseGeneration: number;
+  heartbeatAt: string;
+}
+
+/**
+ * Read the CURRENT LIVE holder of the `(workspaceId, worktreeId)` lease, or
+ * `null` when there is none — the row is absent (cold session) OR its heartbeat
+ * is older than {@link LEASE_LIVENESS_WINDOW_MS} (a tombstoned/expired lease the
+ * next acquire will reclaim). READ-ONLY: no acquire side effect, so the router
+ * can decide local-serve vs proxy-to-owner without stealing the lease. Uses the
+ * service client (the lease table is operational state; this bypasses RLS to read
+ * any tenant's row for routing — never returns tenant CONTENT, only a host id +
+ * gen).
+ *
+ * Fail-QUIET to `null` on a DB read error (mirrored to Sentry): the placing host
+ * then treats the session as cold and acquires — and `acquireWorktreeLease` is
+ * itself fail-CLOSED (returns null if another host truly holds it live), with the
+ * git-data fence as the ultimate write guard. So a routing read-error degrades to
+ * honest-reconnect affinity loss, never a cross-tenant write.
+ */
+export async function readWorktreeLeaseHolder(
+  workspaceId: string,
+  worktreeId: string,
+): Promise<WorktreeLeaseHolder | null> {
+  const { data, error } = await supabase
+    .from("worktree_write_lease")
+    .select("host_id, lease_generation, heartbeat_at")
+    .eq("workspace_id", workspaceId)
+    .eq("worktree_id", worktreeId)
+    .maybeSingle();
+  if (error) {
+    reportSilentFallback(error, {
+      feature: "worktree_lease",
+      op: "readWorktreeLeaseHolder",
+      extra: { workspaceId, worktreeId },
+    });
+    return null;
+  }
+  const row = data as
+    | { host_id: string; lease_generation: number; heartbeat_at: string }
+    | null;
+  if (!row) return null;
+  const heartbeatMs = Date.parse(row.heartbeat_at);
+  if (Number.isNaN(heartbeatMs) || Date.now() - heartbeatMs > LEASE_LIVENESS_WINDOW_MS) {
+    return null; // tombstoned / expired — no live owner (cold → local acquire)
+  }
+  return {
+    hostId: row.host_id,
+    leaseGeneration: Number(row.lease_generation),
+    heartbeatAt: row.heartbeat_at,
+  };
 }
 
 // Lazy-init: this module may be imported transitively by route files that
@@ -205,10 +311,13 @@ export interface HeldWorktreeLease {
 }
 
 // #5817 F3 — the registry is keyed PER-HANDLE (a monotonic token), NOT by
-// `(workspaceId, worktreeId)`. `worktreeId` is always the `"primary"` constant, and
-// migration-116's same-host carve-out (`where wl.host_id = excluded.host_id`, keep
-// gen) lets TWO lineages on ONE host (legacy agent-runner + cc-dispatcher, or two
-// concurrent cc conversations) both acquire+hold a lease for the SAME workspace.
+// `(workspaceId, worktreeId)`. Since Phase 3 (ADR-068 D0) `worktreeId` is PER-USER
+// (`resolveWorktreeId(userId)`), so a single user's TWO lineages on ONE host
+// (legacy agent-runner + cc-dispatcher, or two concurrent cc conversations for the
+// same user) share the SAME `(workspaceId, worktreeId)` key and both acquire+hold a
+// lease for it via migration-116's same-host carve-out (`where wl.host_id =
+// excluded.host_id`, keep gen). (Two DIFFERENT users get distinct worktreeIds →
+// distinct leases → routable to distinct hosts — the whole point of D0.)
 // Under the old `(workspaceId, worktreeId)` key the second register OVERWROTE the
 // first and the first `release()` then DELETED the shared entry out from under the
 // still-live second handle — dropping the survivor from the SIGTERM drain. Keying
