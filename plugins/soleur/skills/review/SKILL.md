@@ -267,6 +267,10 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `gdpr-gate`: Deterministic Art. 9 / RoPA / lawful-basis pattern checks. Output is advisory-only; Critical findings (Art. 9) escalate to operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
 
+**If the diff touches a domain-model business-rule surface (#5871):**
+
+17. Domain-model register drift note — run when `git diff main...HEAD --name-only` matches `(^|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^|/)knowledge-base/engineering/architecture/domain-model\.md$` (same surface as preflight Check 11). Run `bash scripts/domain-model-drift.sh drift --repo . --register knowledge-base/engineering/architecture/domain-model.md` and surface **one informational line** in the review summary: `domain-model register: N stale citation(s), M undocumented table(s) — see /soleur:sync domain-model`. Purely informational — the blocking enforcement is preflight Check 11 (stale-only); the non-redundant value here is the **undocumented-facts** pointer, which the ship gate deliberately does not surface (the register is a curated subset). Never blocks; no coordination logic.
+
 #### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel {#boundaries}
 
 Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws AND multi-org / workspace boundary integrity (the R1–R6 checklist — RLS routing through `is_workspace_member()`, JWT `current_organization_id` consumption, attestation owner-checks, SECURITY DEFINER `search_path` pinning, write-boundary sentinel on workspace_id-bearing tables). The three reviewers complement each other and may all fire on the same migration PR — each owns a distinct lens. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.

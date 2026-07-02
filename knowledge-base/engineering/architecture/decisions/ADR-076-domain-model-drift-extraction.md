@@ -76,3 +76,23 @@ extraction conventions those consumers depend on.
 
 None. The analyzer is operator-run dev tooling that READS the product model; it adds no external
 actor/system/container and changes no ownership/tenancy relationship in `model.c4`/`views.c4`/`spec.c4`.
+
+## Enforcement gates (2026-07-02 amendment, #5871)
+
+The fast-follow enforcement gates this ADR anticipated are now built. Design of record:
+
+1. **Gate on the stale-citation sub-count, NOT the raw exit code.** `drift` exits 1 on
+   `stale_n>0 OR undoc_n>0`. The register is a *curated subset* (item 5), so "undocumented source
+   facts" flags ~every un-curated table (~50) by design — a blocking gate on it would demand
+   documenting every table, contradicting the curation-preserving intent. Enforcement therefore keys
+   on **stale register citations** (0 on a healthy register, high-signal, ratchet-safe); undocumented
+   facts stay **advisory-only**.
+2. **Single blocking chokepoint at preflight `Check 11`** (ship inherits via preflight Phase 5.4);
+   an advisory review note carries the undocumented-facts pointer to `/soleur:sync domain-model`.
+   Plan-time flagging was intentionally not built (no diff at plan time → unenforceable nudge).
+3. **Diff-scoped at the gate, not the analyzer** (no `--since` mode added — consistent with the
+   bounded structural scope of item 4). Trigger = migrations + `workspace-resolver.ts` + the register.
+4. **Ships blocking directly** (stale=0 on `main`; no advisory-first rollout apparatus). The residual
+   citation-parser false-positive risk is covered by an actionable `stale>0` FAIL message.
+5. The `name_after()` `public.` default-schema strip (`scripts/lib/domain-model-lib.sh`) **enforces
+   item 3** — anchors are `<table>.<object>`, not the previously-corrupt `public.<table>.public.<object>`.
