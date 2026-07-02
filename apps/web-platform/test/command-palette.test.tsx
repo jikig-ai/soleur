@@ -551,6 +551,35 @@ describe("CommandPalette — Super/Meta accelerators (⌘D/⌘I/⌘R/⌘A/⌘C)"
   });
 });
 
+describe("CommandPalette — accelerator hint is Apple-only (AC12)", () => {
+  it("renders ONLY the g-seq (no accel chip) on happy-dom's non-Apple default", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    expect(screen.getByText("G D")).toBeInTheDocument(); // Dashboard g-seq
+    expect(screen.getByText("G W")).toBeInTheDocument(); // Workstream g-seq
+    // No accelerator chip off-mac (would be an unreachable "Ctrl+D").
+    expect(screen.queryByText("⌘D")).not.toBeInTheDocument();
+  });
+
+  it("renders BOTH ⌘D and G D on Apple; Workstream stays g-seq-only", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    });
+    renderPalette();
+    // Provider reads the platform in a mount effect — let it settle.
+    await act(async () => {});
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    expect(screen.getByText("⌘D")).toBeInTheDocument(); // Dashboard accel
+    expect(screen.getByText("G D")).toBeInTheDocument(); // Dashboard g-seq
+    // Workstream has no accel — only its g-seq.
+    expect(screen.getByText("G W")).toBeInTheDocument();
+    expect(screen.queryByText("⌘W")).not.toBeInTheDocument();
+  });
+});
+
 describe("CommandPalette — empty state", () => {
   it("shows an 'Ask an agent about <q>' fallback that opens chat with the query", async () => {
     renderPalette();

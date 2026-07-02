@@ -13,6 +13,7 @@ import {
   useShortcuts,
   formatSeqHint,
   ASK_AGENT_SEQ,
+  ASK_AGENT_ACCEL,
   type CommandEffect,
 } from "./use-shortcuts";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "./nav-items";
@@ -48,12 +49,20 @@ function buildChords(isApple: boolean): ReadonlyArray<ChordRow> {
 
 // "Go to" sequence rows — derived from the single-source `seq` field. Each runs
 // its navigate effect. Admin rows render only when the operator is an admin.
-type SeqRow = { keys: string; label: string; effect: CommandEffect };
+// `accel` is the raw, platform-independent letter (rendered as a ⌘-chord only on
+// Apple — see the row render below).
+type SeqRow = {
+  keys: string;
+  label: string;
+  effect: CommandEffect;
+  accel?: string;
+};
 
 const NAV_ROWS: readonly SeqRow[] = NAV_ITEMS.filter((i) => i.seq).map((i) => ({
   keys: formatSeqHint(i.seq as string),
   label: `Go to ${i.label}`,
   effect: { kind: "navigate", href: i.href },
+  accel: i.accel,
 }));
 
 const ADMIN_NAV_ROWS: readonly SeqRow[] = ADMIN_NAV_ITEMS.filter((i) => i.seq).map(
@@ -61,6 +70,7 @@ const ADMIN_NAV_ROWS: readonly SeqRow[] = ADMIN_NAV_ITEMS.filter((i) => i.seq).m
     keys: formatSeqHint(i.seq as string),
     label: `Go to ${i.label}`,
     effect: { kind: "navigate", href: i.href },
+    accel: i.accel,
   }),
 );
 
@@ -70,6 +80,7 @@ const AGENT_ROW: SeqRow = {
   keys: formatSeqHint(ASK_AGENT_SEQ),
   label: "Ask an agent",
   effect: { kind: "openChat" },
+  accel: ASK_AGENT_ACCEL,
 };
 
 export function HelpOverlay() {
@@ -145,6 +156,11 @@ export function HelpOverlay() {
             data-testid={`help-row-${AGENT_ROW.keys}`}
           >
             <span className="cmdk-help-label">{AGENT_ROW.label}</span>
+            {AGENT_ROW.accel && isApplePlatform && (
+              <kbd className="cmdk-keys">
+                {modChord(AGENT_ROW.accel.toUpperCase(), true)}
+              </kbd>
+            )}
             <kbd className="cmdk-keys">{AGENT_ROW.keys}</kbd>
           </Command.Item>
         </Command.Group>
@@ -157,6 +173,13 @@ export function HelpOverlay() {
               data-testid={`help-row-${s.keys}`}
             >
               <span className="cmdk-help-label">{s.label}</span>
+              {/* Accelerator glyph (Apple-only) BEFORE the G-seq kbd; the testid
+                  stays keyed on the G-seq so existing selectors still pass. */}
+              {s.accel && isApplePlatform && (
+                <kbd className="cmdk-keys">
+                  {modChord(s.accel.toUpperCase(), true)}
+                </kbd>
+              )}
               <kbd className="cmdk-keys">{s.keys}</kbd>
             </Command.Item>
           ))}

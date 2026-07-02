@@ -33,6 +33,13 @@ export type Command = {
   readonly group: CommandGroup;
   /** Optional keyboard hint shown in the palette/overlay (display only). */
   readonly keys?: string;
+  /**
+   * Optional Super/Meta accelerator hint (`⌘D`), display-only, sibling of `keys`.
+   * Named `accelKeys` to disambiguate from nav-items' single-letter `accel`.
+   * Populated ONLY on Apple (off-mac the metaKey-only binding would advertise an
+   * unreachable "Ctrl+D" — a false affordance). Never folded into `keys`.
+   */
+  readonly accelKeys?: string;
   /** Returns a serializable effect the UI interprets — never a side-effecting closure. */
   run(): CommandEffect;
 };
@@ -298,6 +305,11 @@ export function buildCommands(
       group: "Navigation" as const,
       // Key hint derived from the single-source `seq` field (`"g d"` → `G D`).
       ...(item.seq ? { keys: formatSeqHint(item.seq) } : {}),
+      // Accelerator hint (`⌘D`) derived from the single-source `accel` field —
+      // Apple-ONLY (off-mac it would be an unreachable "Ctrl+D" false affordance).
+      ...(item.accel && isApple
+        ? { accelKeys: modChord(item.accel.toUpperCase(), true) }
+        : {}),
       run: () => ({ kind: "navigate" as const, href: item.href }),
     }),
   );
@@ -317,6 +329,8 @@ export function buildCommands(
       // Show the GLOBAL summon binding (`G C`), not the palette-only `⌘↵` — the
       // latter only fires with the palette already open.
       keys: formatSeqHint(ASK_AGENT_SEQ),
+      // Apple-only ⌘C accelerator hint (mirrors ASK_AGENT_ACCEL).
+      ...(isApple ? { accelKeys: modChord("C", true) } : {}),
       run: () => ({ kind: "openChat" as const }),
     },
     {

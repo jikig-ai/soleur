@@ -278,6 +278,40 @@ describe("seq single-source (AC7) + formatSeqHint", () => {
   });
 });
 
+// AC11 — the accelerator hint (accelKeys) is Apple-ONLY. Off-mac `modChord`
+// would advertise an unreachable "Ctrl+D" (binding is metaKey-only), so every
+// accelKeys is undefined off-mac. `keys` (the G-seq) is unchanged in both.
+describe("buildCommands — accelKeys (Apple-only accelerator hint)", () => {
+  it("populates ⌘-glyph accelKeys on bound rows when isApplePlatform", () => {
+    const cmds = buildCommands({ isAdmin: true }, { isApplePlatform: true });
+    expect(byId(cmds, "nav:/dashboard")?.accelKeys).toBe("⌘D");
+    expect(byId(cmds, "nav:/dashboard/inbox")?.accelKeys).toBe("⌘I");
+    expect(byId(cmds, "nav:/dashboard/routines")?.accelKeys).toBe("⌘R");
+    expect(byId(cmds, "nav:/dashboard/admin/analytics")?.accelKeys).toBe("⌘A");
+    expect(byId(cmds, "ask-agent")?.accelKeys).toBe("⌘C");
+    // Intentionally-unbound destinations carry no accel.
+    expect(byId(cmds, "nav:/dashboard/workstream")?.accelKeys).toBeUndefined();
+    expect(byId(cmds, "nav:/dashboard/kb")?.accelKeys).toBeUndefined();
+  });
+
+  it("emits NO accelKeys off-mac (default and explicit isApplePlatform:false)", () => {
+    for (const cmds of [
+      buildCommands({ isAdmin: true }),
+      buildCommands({ isAdmin: true }, { isApplePlatform: false }),
+    ]) {
+      for (const c of cmds) expect(c.accelKeys).toBeUndefined();
+    }
+  });
+
+  it("leaves the g-seq `keys` hint unchanged regardless of platform", () => {
+    const mac = buildCommands({ isAdmin: true }, { isApplePlatform: true });
+    expect(byId(mac, "nav:/dashboard")?.keys).toBe("G D");
+    expect(byId(mac, "ask-agent")?.keys).toBe("G C");
+    const pc = buildCommands({ isAdmin: true }, { isApplePlatform: false });
+    expect(byId(pc, "nav:/dashboard")?.keys).toBe("G D");
+  });
+});
+
 describe("shortcutsEnabled storage", () => {
   beforeEach(() => {
     try {
