@@ -10,12 +10,14 @@ import {
   render,
   screen,
   fireEvent,
+  createEvent,
   waitFor,
   cleanup,
   act,
 } from "@testing-library/react";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import { CommandPalette } from "@/components/command-palette/command-palette";
+import { HelpOverlay } from "@/components/command-palette/help-overlay";
 
 // next/navigation router — capture push() for navigate-effect assertions.
 const routerPush = vi.hoisted(() => vi.fn());
@@ -134,6 +136,32 @@ function pressKey(
       metaKey: opts.meta ?? false,
     });
   });
+}
+
+// Like pressKey but returns the dispatched event so `ev.defaultPrevented` (the
+// preventDefault flag) is assertable. `fireEvent` self-wraps in act, so the act
+// wrap flushes runEffect's state update — it is NOT what makes the boolean
+// readable (that is synchronous). Reads the flag directly (test-design review).
+function pressKeyEvent(
+  key: string,
+  opts: {
+    meta?: boolean;
+    ctrl?: boolean;
+    shift?: boolean;
+    target?: Element | Document;
+  } = {},
+) {
+  const target = opts.target ?? document.body;
+  const ev = createEvent.keyDown(target, {
+    key,
+    metaKey: opts.meta ?? false,
+    ctrlKey: opts.ctrl ?? false,
+    shiftKey: opts.shift ?? false,
+  });
+  act(() => {
+    fireEvent(target, ev);
+  });
+  return ev;
 }
 
 beforeEach(() => {
@@ -364,6 +392,161 @@ describe("CommandPalette — direct go-to sequences (FR1/FR2/AC2/AC3/AC9)", () =
     renderPalette({ enabled: false });
     pressKey("g");
     pressKey("d");
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+});
+
+describe("CommandPalette — Super/Meta accelerators (⌘D/⌘I/⌘R/⌘A/⌘C)", () => {
+  // AC7 — meta+letter navigates AND cancels the native action (preventDefault).
+  it.each([
+    ["d", "/dashboard"],
+    ["i", "/dashboard/inbox"],
+    ["r", "/dashboard/routines"],
+  ] as const)("⌘%s navigates to %s and cancels the native action", (k, href) => {
+    routerPush.mockClear();
+    renderPalette();
+    const ev = pressKeyEvent(k, { meta: true });
+    expect(routerPush).toHaveBeenCalledWith(href);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  // AC7b — ⌘C yields to native copy when a non-empty selection exists.
+  it("⌘C with NO selection opens chat and cancels", () => {
+    vi.stubGlobal("getSelection", () => ({
+      isCollapsed: true,
+      toString: () => "",
+    }));
+    renderPalette();
+    const ev = pressKeyEvent("c", { meta: true });
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/chat/new");
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("⌘C with an active non-editable selection yields to native copy (not canceled)", () => {
+    vi.stubGlobal("getSelection", () => ({
+      isCollapsed: false,
+      toString: () => "picked text",
+    }));
+    renderPalette();
+    const ev = pressKeyEvent("c", { meta: true });
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  // AC8 — admin gate owns ⌘A: inert (native select-all preserved) for a
+  // non-admin; navigates + cancels for an admin.
+  it("⌘A is inert (native select-all preserved) for a non-admin", () => {
+    renderPalette({ isAdmin: false });
+    const ev = pressKeyEvent("a", { meta: true });
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it("⌘A navigates to Analytics and cancels for an admin", () => {
+    renderPalette({ isAdmin: true });
+    const ev = pressKeyEvent("a", { meta: true });
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/admin/analytics");
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  // AC9 — suppression matrix. Each condition: ⌘D is inert (no routerPush).
+  it("is inert when focus is in an editable element (native ⌘D preserved)", () => {
+    renderPalette();
+    const input = screen.getByTestId("outside-input");
+    pressKeyEvent("d", { meta: true, target: input });
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("is inert while an app modal (role=dialog aria-modal) is open", () => {
+    renderPalette();
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(modal);
+    try {
+      const ev = pressKeyEvent("d", { meta: true });
+      expect(routerPush).not.toHaveBeenCalled();
+      // Native action preserved under a modal (we did not preventDefault).
+      expect(ev.defaultPrevented).toBe(false);
+    } finally {
+      document.body.removeChild(modal);
+    }
+  });
+
+  it("is inert while the palette is open (focus on body proves the guard)", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    await screen.findByLabelText("Command palette search");
+    routerPush.mockClear();
+    pressKeyEvent("d", { meta: true });
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("is inert while the help overlay is open (focus on body proves the guard)", async () => {
+    render(
+      <ShortcutsProvider enabled isAdmin={false} onToggleSidebar={() => {}}>
+        <HelpOverlay />
+        <CommandPalette />
+      </ShortcutsProvider>,
+    );
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    routerPush.mockClear();
+    pressKeyEvent("d", { meta: true });
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("is inert when the command-palette flag is off (enabled=false)", () => {
+    renderPalette({ enabled: false });
+    pressKeyEvent("d", { meta: true });
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("is inert when shortcutsEnabled=false (WCAG turn-off)", async () => {
+    localStorage.setItem("soleur:shortcuts.enabled", "0");
+    renderPalette();
+    await act(async () => {});
+    pressKeyEvent("d", { meta: true });
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  // AC10 — precedence: resolveShortcut wins ⌘K; the g-leader still works.
+  it("⌘K still opens the palette (not intercepted by resolveNavChord)", async () => {
+    renderPalette();
+    pressKey("k", { meta: true });
+    expect(
+      await screen.findByLabelText("Command palette search"),
+    ).toBeInTheDocument();
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("`g d` still navigates (g-leader unchanged)", () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("d");
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+  });
+
+  // AC10b — armed-prefix × Super-chord hand-off (real timers). The pre-existing
+  // :459 prefix-clear consumes `g` before the accelerator branch runs, so ⌘D
+  // navigates exactly once and a subsequent bare `d` does NOT re-navigate.
+  it("armed `g` then ⌘D navigates once; a following bare `d` does not re-navigate", () => {
+    renderPalette();
+    pressKey("g");
+    pressKeyEvent("d", { meta: true });
+    expect(routerPush).toHaveBeenCalledTimes(1);
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+    pressKeyEvent("d");
+    expect(routerPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("armed `g` then ⌘K opens the palette (no navigation)", async () => {
+    renderPalette();
+    pressKey("g");
+    pressKey("k", { meta: true });
+    expect(
+      await screen.findByLabelText("Command palette search"),
+    ).toBeInTheDocument();
     expect(routerPush).not.toHaveBeenCalled();
   });
 });

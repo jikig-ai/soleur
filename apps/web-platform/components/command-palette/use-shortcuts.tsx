@@ -574,6 +574,42 @@ export function ShortcutsProvider({
         return;
       }
 
+      // --- Super/Meta accelerators (metaKey-only). AFTER resolveShortcut so
+      // ⌘K=palette / ⌘B=sidebar stay authoritative; BEFORE the g-leader arm.
+      // NEW flag-gated bindings → gated on `enabled`; suppressed while the
+      // palette/help overlay is open. ---
+      if (s.enabled && !s.paletteOpen && !s.helpOpen) {
+        // Resolve FIRST (pure, exits instantly on !metaKey for ordinary typing);
+        // the DOM query then runs ONLY on an actual accelerator match — matching
+        // the g-arm's "cheap, only on match" discipline (DHH #1 + code-simplicity).
+        const navEffect = resolveNavChord(e, { isAdmin: s.isAdmin });
+        if (navEffect) {
+          // ⌘C YIELDS to native copy when the user has an ACTIVE selection —
+          // copying agent/KB/code output is a core reading gesture and isEditable
+          // does NOT cover a selection in a plain <p>/<div> (focus on body). No
+          // selection → ⌘C opens chat as bound. The resolver stays DOM-free; this
+          // selection read lives in the listener (CPO #1 / Kieran P1 / spec-flow /
+          // user-impact). Scoped to openChat (⌘C) only. `!isCollapsed` (not
+          // `toString() !== ""`) so a NON-text selection (image / rich node) also
+          // yields to native copy (user-impact Finding 2).
+          const sel =
+            typeof window !== "undefined" ? window.getSelection() : null;
+          const yieldToCopy =
+            navEffect.kind === "openChat" && !!sel && !sel.isCollapsed;
+          // Suppress under any app modal (a nav-away would discard unsaved input)
+          // — parity with the g-arm guard. preventDefault stops the native
+          // ⌘D/⌘R/⌘A/⌘C data-loss action.
+          if (
+            !yieldToCopy &&
+            !document.querySelector('[role="dialog"][aria-modal="true"]')
+          ) {
+            e.preventDefault();
+            s.runEffect(navEffect);
+            return;
+          }
+        }
+      }
+
       // --- Arm a new go-to prefix on `g`. Gated on the command-palette flag
       // (`enabled`) — these are new flag-gated bindings — AND suppressed while the
       // palette/help overlay is open. ---
