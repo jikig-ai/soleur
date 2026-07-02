@@ -352,10 +352,14 @@ function extractAllResources(stripped: string): string[] {
   return out;
 }
 
-/** Every `-target=<type>.<name>` address (any resource type) in a workflow. */
+/** Every `-target=<type>.<name>` address (any resource type) in a workflow.
+ *  Comment-strip FIRST so a DISABLED (commented-out) `-target=` line is NOT counted
+ *  as covered — otherwise a `# -target=sentry_issue_alert.foo` would mask a real
+ *  un-applied resource, the exact inert-target class this guard exists to catch.
+ *  Verified no-op against the current workflows (no live target sits in a comment). */
 function extractAllTargets(workflowText: string): Set<string> {
   const set = new Set<string>();
-  for (const m of workflowText.matchAll(
+  for (const m of stripComments(workflowText).matchAll(
     /-target=([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
   )) {
     set.add(m[1]);
@@ -548,6 +552,122 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredSha256).not.toBeNull();
     expect(wpi.cloudflaredVersion).toBe(dpf.cloudflaredVersion);
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
+  });
+});
+
+// ─── Sentry infra -target parity (#5884) ────────────────────────────────────
+// `apps/web-platform/infra/sentry/*.tf` is applied by apply-sentry-infra.yml via
+// an EXPLICIT `-target=` list (not a whole-directory apply), exactly like the
+// #5566 web-platform case above. A new sentry_issue_alert / sentry_cron_monitor /
+// sentry_uptime_monitor added to a .tf file but forgotten in that `-target` list
+// ships in code, passes `terraform validate`, and is NEVER applied to Sentry — an
+// inert alert/monitor with zero runtime signal. This bug has bitten twice already
+// (learning 2026-06-12-detector-cron-must-route-…; again in #5875's
+// sandbox_startup_failure). The #5566 guard above reads only the MAIN
+// apps/web-platform/infra/ tree + its two workflows; it never sees infra/sentry/
+// or apply-sentry-infra.yml. This block extends the identical mechanism
+// (extractAllResources ∪ extractAllTargets + a frozen exclusion Set) to the Sentry
+// apply pipeline. Reuses stripComments / extractAllResources / extractAllTargets.
+
+const SENTRY_INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra/sentry");
+const SENTRY_WORKFLOW = resolve(
+  REPO_ROOT,
+  ".github/workflows/apply-sentry-infra.yml",
+);
+
+// Import-only sentry_issue_alert placeholders (conditions_v2 = []), created in
+// Sentry via `terraform import` of the legacy configure-sentry-alerts.sh rules
+// (see issue-alerts.tf header + learning 2026-06-12-detector-cron-must-route-…).
+// They are DELIBERATELY absent from apply-sentry-infra.yml's -target set — a
+// target-scoped apply would try to CREATE a duplicate live rule. FROZEN: do NOT
+// grow. A NEW apply-created alert (real conditions_v2) must be TARGETED in the
+// workflow, never added here.
+const SENTRY_IMPORT_ONLY_EXCLUSIONS = new Set<string>([
+  "sentry_issue_alert.auth_callback_no_code_burst",
+  "sentry_issue_alert.auth_exchange_code_burst",
+  "sentry_issue_alert.auth_per_user_loop",
+  "sentry_issue_alert.auth_signout_burst",
+]);
+
+// Floor sentinel — 67 managed resources today (44 cron + 4 uptime + 19 alert).
+// `>=` (not `===`) so adding a resource raises the count without a brittle edit;
+// the parity assertion enforces correctness, this only guards a parser collapse
+// (regex/path regression that silently discovers zero resources).
+const SENTRY_MIN_RESOURCES = 60;
+
+function listSentryTfFiles(): string[] {
+  return readdirSync(SENTRY_INFRA_DIR)
+    .filter((f) => f.endsWith(".tf"))
+    .map((f) => resolve(SENTRY_INFRA_DIR, f))
+    .sort();
+}
+
+describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884)", () => {
+  let sentryResources: string[];
+  let sentryTargets: Set<string>;
+
+  beforeAll(() => {
+    expect(existsSync(SENTRY_INFRA_DIR)).toBe(true);
+    expect(existsSync(SENTRY_WORKFLOW)).toBe(true);
+    // NOTE: infra/sentry/ is a FLAT directory applied by a SINGLE workflow —
+    // listSentryTfFiles is non-recursive and only apply-sentry-infra.yml is scanned.
+    // No filter on resource TYPE: EVERY managed resource discovered under
+    // infra/sentry/ must be reachable by a -target line (mirrors the #5566 block).
+    // A future non-sentry_ resource (random_password, doppler_secret) added here
+    // must fail CLOSED — filtering to `sentry_` would silently skip it, re-opening
+    // the #5566 un-applied class. (`data "sentry_project"` is already excluded:
+    // extractAllResources matches `resource "…"`, not `data "…"`.)
+    sentryResources = listSentryTfFiles().flatMap((f) =>
+      extractAllResources(stripComments(readFileSync(f, "utf8"))),
+    );
+    sentryTargets = extractAllTargets(readFileSync(SENTRY_WORKFLOW, "utf8"));
+  });
+
+  test(`discovers >= ${SENTRY_MIN_RESOURCES} managed sentry resources (non-vacuity)`, () => {
+    expect(sentryResources.length).toBeGreaterThanOrEqual(SENTRY_MIN_RESOURCES);
+  });
+
+  test("every apply-created sentry resource is targeted (or a documented import-only exclusion)", () => {
+    const uncovered = sentryResources.filter(
+      (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
+    );
+    // A non-empty list means a new sentry resource was added without a -target
+    // line (the inert-alert class) — add the -target to apply-sentry-infra.yml,
+    // or (only for a genuine import-only placeholder) add it to
+    // SENTRY_IMPORT_ONLY_EXCLUSIONS.
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the #5875 regression anchor (sandbox_startup_failure) stays targeted", () => {
+    expect(
+      sentryTargets.has("sentry_issue_alert.sandbox_startup_failure"),
+    ).toBe(true);
+  });
+
+  test("the #5884 regression anchor (github_webhook_founder_ambiguous) stays targeted", () => {
+    // The apply-created alert whose missing -target line this PR fixed — the exact
+    // resource that surfaced the guard's third real inert-alert instance. Pin it so
+    // a future workflow edit cannot silently re-drop it back to inert.
+    expect(
+      sentryTargets.has("sentry_issue_alert.github_webhook_founder_ambiguous"),
+    ).toBe(true);
+  });
+
+  test("the 4 import-only auth_* placeholders are present in .tf yet NOT targeted", () => {
+    for (const a of SENTRY_IMPORT_ONLY_EXCLUSIONS) {
+      expect(sentryResources).toContain(a);
+      expect(sentryTargets.has(a)).toBe(false);
+    }
+  });
+
+  test("guard FAILS on a synthetic un-targeted apply-created alert (non-vacuity)", () => {
+    const synthetic = `resource "sentry_issue_alert" "synthetic_forgotten_alert" { project = "x" }`;
+    const parsed = extractAllResources(stripComments(synthetic));
+    expect(parsed).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
+    const uncovered = parsed.filter(
+      (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
+    );
+    expect(uncovered).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
   });
 });
 
