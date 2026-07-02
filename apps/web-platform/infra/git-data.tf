@@ -126,6 +126,9 @@ resource "hcloud_server" "git_data" {
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision_b64 = base64encode(file("${path.module}/git-data-provision.sh"))
+    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
+    # git-shell forced command; delivered to /usr/local/bin like the others.
+    git_data_transport_wrapper_b64 = base64encode(file("${path.module}/git-data-transport-wrapper.sh"))
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
     git_data_remove_b64 = base64encode(file("${path.module}/git-data-remove.sh"))
@@ -136,6 +139,15 @@ resource "hcloud_server" "git_data" {
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = hcloud_volume.git_data.id
+    # The FRESH LUKS-at-rest cutover volume (Sub-PR 3.D, git-data-luks.tf). Guest-side
+    # cryptsetup luksOpens + mounts it at /mnt/git-data-luks. by-id like the plaintext one.
+    git_data_luks_volume_id = hcloud_volume.git_data_luks.id
+    # Doppler service token → 0600 root env file so the boot-time `doppler run` can
+    # read GIT_DATA_LUKS_KEY. SCOPED read-only token for the `prd_git_data` config
+    # (only GIT_DATA_LUKS_KEY) — NOT the full-prd var.doppler_token (3.D security review
+    # MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
+    # GIT_REMOVE / PROXY_TLS material). The passphrase itself is NEVER in this user_data.
+    doppler_token = doppler_service_token.git_data.key
   })
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. The web host carries it

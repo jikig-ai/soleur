@@ -10,7 +10,11 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WS_CLOSE_CODES } from "@/lib/types";
-import { proxyClientToOwner } from "@/server/session-proxy";
+import {
+  proxyClientToOwner,
+  normalizeProxyPeerAddress,
+  parseProxyPeerAllowlist,
+} from "@/server/session-proxy";
 
 const TEST_CERT = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
 
@@ -32,6 +36,44 @@ beforeEach(() => {
   vi.stubEnv("PROXY_TLS_CERT", TEST_CERT);
 });
 afterEach(() => vi.unstubAllEnvs());
+
+// CTO ruling (3.D security): the owner proxy listener carries a token-less
+// pre-authed session, and Hetzner cloud firewalls do NOT filter the private net
+// (git-data.tf:182-186), so any 10.0.1.0/24 host — including the LESS-privileged
+// git-data host — could open port 8443 and take over any account. The load-bearing
+// control is a guest-side peer-origin allowlist (the infra firewall can't do it).
+// These lock the pure decision the connection handler uses.
+describe("proxy peer-origin allowlist (3.D CTO ruling — account-takeover defense)", () => {
+  test("normalizeProxyPeerAddress strips the IPv4-mapped IPv6 prefix so peers compare equal", () => {
+    expect(normalizeProxyPeerAddress("::ffff:10.0.1.10")).toBe("10.0.1.10");
+    expect(normalizeProxyPeerAddress("10.0.1.10")).toBe("10.0.1.10");
+    expect(normalizeProxyPeerAddress(undefined)).toBe("");
+    expect(normalizeProxyPeerAddress(null)).toBe("");
+  });
+
+  test("parseProxyPeerAllowlist parses trimmed, non-empty CSV entries", () => {
+    const set = parseProxyPeerAllowlist(" 10.0.1.10 , 10.0.1.11 ,");
+    expect(set.has("10.0.1.10")).toBe(true);
+    expect(set.has("10.0.1.11")).toBe(true);
+    expect(set.size).toBe(2); // trailing comma / blank dropped
+  });
+
+  test("an UNSET/empty allowlist is empty (→ createProxyServer fails closed)", () => {
+    expect(parseProxyPeerAllowlist(undefined).size).toBe(0);
+    expect(parseProxyPeerAllowlist("").size).toBe(0);
+    expect(parseProxyPeerAllowlist("  ,  ").size).toBe(0);
+  });
+
+  test("the git-data host (10.0.1.20) is NOT a web-host peer → rejected; web hosts pass", () => {
+    const allow = parseProxyPeerAllowlist("10.0.1.10,10.0.1.11");
+    // The takeover vector the ruling closes: a connection from the git-data host.
+    expect(allow.has(normalizeProxyPeerAddress("::ffff:10.0.1.20"))).toBe(false);
+    expect(allow.has(normalizeProxyPeerAddress("10.0.1.20"))).toBe(false);
+    // Legit peer web hosts pass.
+    expect(allow.has(normalizeProxyPeerAddress("::ffff:10.0.1.10"))).toBe(true);
+    expect(allow.has(normalizeProxyPeerAddress("10.0.1.11"))).toBe(true);
+  });
+});
 
 describe("proxyClientToOwner", () => {
   test("no pinned CA → closes the client non-transiently and never dials (never MITM)", async () => {

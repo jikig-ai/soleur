@@ -176,6 +176,27 @@ rc=$(run_hook_refs "$g" 1 wt-a $'0000 1111 refs/soleur/worktrees/wt-a/heads/main
 if [ "$rc" = "1" ]; then pass; else fail "T14 mixed in+peer namespace push: expected reject (1), got $rc"; fi
 rm -rf "$g"
 
+# --- T15: cutover write-freeze active → receive-pack DENIED (Sub-PR 3.D) ---
+# With the freeze sentinel present, an otherwise-valid push (gen=1, in-namespace)
+# must be rejected fail-closed so a straggler cannot land on the stale source.
+g=$(fresh_gitdir)
+freeze=$(mktemp "${TMPDIR:-/tmp}/fence-freeze.XXXXXX")
+rc=$(printf '%s\n' '0000 1111 refs/soleur/worktrees/wt-a/heads/main' \
+  | env -i PATH="$PATH" GIT_DIR="$g" GIT_DATA_CUTOVER_FREEZE="$freeze" \
+    GIT_PUSH_OPTION_COUNT=2 GIT_PUSH_OPTION_0=lease-gen=1 GIT_PUSH_OPTION_1=worktree-id=wt-a \
+    bash "$HOOK" >/dev/null 2>&1; echo $?)
+if [ "$rc" = "1" ]; then pass; else fail "T15 freeze-active push: expected reject (1), got $rc"; fi
+rm -rf "$g" "$freeze"
+
+# --- T16: freeze ABSENT → the same push is accepted (proves the gate is the cause) ---
+g=$(fresh_gitdir)
+rc=$(printf '%s\n' '0000 1111 refs/soleur/worktrees/wt-a/heads/main' \
+  | env -i PATH="$PATH" GIT_DIR="$g" GIT_DATA_CUTOVER_FREEZE="${TMPDIR:-/tmp}/fence-freeze-absent.$$" \
+    GIT_PUSH_OPTION_COUNT=2 GIT_PUSH_OPTION_0=lease-gen=1 GIT_PUSH_OPTION_1=worktree-id=wt-a \
+    bash "$HOOK" >/dev/null 2>&1; echo $?)
+if [ "$rc" = "0" ]; then pass; else fail "T16 freeze-absent push: expected accept (0), got $rc"; fi
+rm -rf "$g"
+
 # --- Verify-the-verifier (non-vacuity guard): a hook that ALWAYS exits 0 must fail
 #     the stale-reject assertion T3 — proves the suite distinguishes fence-present
 #     from fence-absent, not just that the real hook happens to pass. ---
@@ -191,8 +212,8 @@ rm -rf "$g" "$stub"
 # --- Minimum-cardinality guard: if zero assertions ran, the suite is malformed
 #     (a silent set-e abort / empty loop would otherwise exit 0 with no coverage). ---
 total=$((passes + fails))
-if [ "$total" -lt 22 ]; then
-  echo "FAIL: ran only ${total} assertions (<22) — suite did not execute fully" >&2
+if [ "$total" -lt 24 ]; then
+  echo "FAIL: ran only ${total} assertions (<24) — suite did not execute fully" >&2
   exit 1
 fi
 

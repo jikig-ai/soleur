@@ -1,7 +1,16 @@
+# Multi-host app ingress (#5274 Phase 3, Sub-PR 3.D / ADR-068). One proxied A record
+# per web host, all with name "app" → Cloudflare round-robins across the cluster's
+# origins (web-1, web-2, …). for_each over var.web_hosts keeps this in lockstep with
+# the hcloud_server.web fan-out (server.tf) — a new host in the map adds its A record
+# automatically. proxied = true preserves the CF edge (WAF/bot-management/edge-TLS);
+# the origin firewall already covers every host via hcloud_firewall_attachment.web's
+# for_each (firewall.tf) — do NOT edit firewall.tf.
 resource "cloudflare_record" "app" {
+  for_each = var.web_hosts
+
   zone_id = var.cf_zone_id
   name    = "app"
-  content = hcloud_server.web["web-1"].ipv4_address
+  content = hcloud_server.web[each.key].ipv4_address
   type    = "A"
   proxied = true
   ttl     = 1 # Auto when proxied

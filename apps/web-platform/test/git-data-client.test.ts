@@ -121,14 +121,22 @@ describe("fetchFromGitData — authorized read", () => {
     expect(gitTransport).not.toHaveBeenCalled();
   });
 
-  it("a confirmed member fetches ONLY its own worktree namespace back to local heads/tags", async () => {
+  it("a confirmed member fetches its own worktree namespace into REMOTE-TRACKING refs (never local heads — 3.D data-loss guard)", async () => {
     rpcMock.mockResolvedValue({ data: true, error: null });
     await fetchFromGitData({ userId: USER_A, workspaceId: WS_A, worktreeId: WT, workspacePath: "/tmp/ws" });
     expect(gitTransport).toHaveBeenCalledTimes(1);
     const argv = gitTransport.mock.calls[0][0] as string[];
     expect(argv).toContain("fetch");
-    expect(argv).toContain(`+refs/soleur/worktrees/${WT}/heads/*:refs/heads/*`);
+    // CTO ruling (3.D): the fetch lands in refs/remotes/git-data/* — a remote-
+    // tracking namespace git can NEVER refuse and that can never discard a
+    // checked-out branch. The caller (ensure-workspace-repo fresh-graft) does a
+    // guarded `reset --hard refs/remotes/git-data/<primary>` to overlay the tip.
+    expect(argv).toContain(`+refs/soleur/worktrees/${WT}/heads/*:refs/remotes/git-data/*`);
     expect(argv).toContain(`+refs/soleur/worktrees/${WT}/tags/*:refs/tags/*`);
+    // NEGATIVE (the data-loss hazard the retarget closes): NO refspec destination
+    // may map into a local branch — a `+…:refs/heads/*` force-fetch into a live
+    // checked-out branch discards local-only commits.
+    expect(argv.some((a) => a.includes(":refs/heads/"))).toBe(false);
     // The transport target MUST be the EXPLICIT URL built from the authorized
     // workspaceId — never a local remote NAME that could point at another tenant.
     expect(argv).toContain(`ssh://git@10.0.1.20/repositories/${WS_A}.git`);
