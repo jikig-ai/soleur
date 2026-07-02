@@ -145,6 +145,17 @@ assert "sandbox_canary.reason read from state file" \
   "[[ \$(printf '%s' '$SC_PRESENT' | jq -r .sandbox_canary.reason) == 'bwrap_operation_not_permitted' ]]"
 assert "sandbox_canary.sdk_version read from state file" \
   "[[ \$(printf '%s' '$SC_PRESENT' | jq -r .sandbox_canary.sdk_version) == '0.3.197' ]]"
+# Soak accumulators (consecutive_pass / first_pass_at) surface for the follow-through.
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000500,"consecutive_pass":5,"first_pass_at":1750740500}' > "$TMP/soak-canary.json"
+SC_SOAK=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/soak-canary.json" bash "$TARGET")
+assert "sandbox_canary.consecutive_pass surfaced (5)" \
+  "[[ \$(printf '%s' '$SC_SOAK' | jq -r .sandbox_canary.consecutive_pass) == '5' ]]"
+assert "sandbox_canary.first_pass_at surfaced" \
+  "[[ \$(printf '%s' '$SC_SOAK' | jq -r .sandbox_canary.first_pass_at) == '1750740500' ]]"
+# Absent-file sentinels include the soak accumulators at 0.
+assert "sandbox_canary.consecutive_pass sentinel 0 when no state file" \
+  "[[ \$(printf '%s' '$SC_ABSENT' | jq -r .sandbox_canary.consecutive_pass) == '0' ]]"
+
 # Malformed checked_at → falls back to numeric sentinel 0 (never a non-numeric).
 echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-a-number"}' > "$TMP/bad-canary.json"
 SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-canary.json" bash "$TARGET")

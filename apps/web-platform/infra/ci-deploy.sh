@@ -353,12 +353,42 @@ write_cron_drain_state() {
 # deploy-status surface (#5875 / ADR-079). Always returns 0 — the canary is
 # NON-BLOCKING (dark-launch), so a state-write failure must never abort a deploy.
 # jq builds the JSON so the reason/sdk_version strings are always escaped.
+#
+# Accumulates the soak signal on the host (deploy-state is the source of truth),
+# so the canary-promotion follow-through is a single stateless GET rather than an
+# issue-comment ledger:
+#   - `pass`          → increment `consecutive_pass`; pin `first_pass_at` on the
+#                       first green (self-pins the soak window strictly after this
+#                       deploy — no operator timestamp to hand-pin).
+#   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
+#   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
+#                       dark-launch `fixture_uncaptured` state is a non-signal).
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp
+  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp now prior_pass prior_first
+  now="$(date +%s)"
+  prior_pass=0; prior_first=0
+  if [[ -f "$SANDBOX_CANARY_STATE_FILE" ]]; then
+    prior_pass="$(jq -r '.consecutive_pass // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
+    prior_first="$(jq -r '.first_pass_at // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
+    [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
+    [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+  fi
+  local consecutive_pass first_pass_at
+  case "$verdict" in
+    pass)
+      consecutive_pass=$((prior_pass + 1))
+      if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
+      ;;
+    sandbox_broken)
+      consecutive_pass=0; first_pass_at=0 ;;
+    *)
+      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
+  esac
   tmp="$(mktemp "${SANDBOX_CANARY_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
-    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$(date +%s)" \
-    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts}' \
+    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$now" \
+    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv "$tmp" "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0

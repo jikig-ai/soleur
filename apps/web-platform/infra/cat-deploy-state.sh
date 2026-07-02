@@ -188,16 +188,20 @@ cron_drain_json() {
 sandbox_canary_json() {
   local f="${SANDBOX_CANARY_STATE_FILE:-/var/run/ci-deploy-sandbox-canary.json}"
   if [[ -f "$f" ]]; then
-    local v r s c
+    local v r s c cp fp
     v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
     r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
     s="$(jq -r '.sdk_version // ""' "$f" 2>/dev/null || echo '')"
     c="$(jq -r '.checked_at // 0' "$f" 2>/dev/null || echo 0)"
+    cp="$(jq -r '.consecutive_pass // 0' "$f" 2>/dev/null || echo 0)"
+    fp="$(jq -r '.first_pass_at // 0' "$f" 2>/dev/null || echo 0)"
     [[ "$c" =~ ^[0-9]+$ ]] || c=0
-    jq -nc --arg v "$v" --arg r "$r" --arg s "$s" --argjson c "$c" \
-      '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$c}'
+    [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
+    [[ "$fp" =~ ^[0-9]+$ ]] || fp=0
+    jq -nc --arg v "$v" --arg r "$r" --arg s "$s" --argjson c "$c" --argjson cp "$cp" --argjson fp "$fp" \
+      '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$c, consecutive_pass:$cp, first_pass_at:$fp}'
   else
-    echo '{"verdict":"unknown","reason":"","sdk_version":"","checked_at":0}'
+    echo '{"verdict":"unknown","reason":"","sdk_version":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
   fi
 }
 
