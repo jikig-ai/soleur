@@ -177,6 +177,16 @@ export async function authorizeGitDataAccess(params: {
  * `destPath` must already be a git work tree with a configured `git-data` remote
  * (see `ensureGitDataRemote`). Retains `origin`→GitHub untouched — GitHub stays
  * the canonical rehydration source (ADR-068 §1; never orphan).
+ *
+ * PRECONDITION (3.D, CTO ruling): FRESH-GRAFT-ONLY — do NOT call on a live worktree.
+ * The fetch lands worktree heads in remote-tracking `refs/remotes/git-data/*` (never
+ * a local branch), but the `+…tags/*:refs/tags/*` force-fetch would clobber a
+ * local-only tag on a live tree. The sole caller wires this on the fresh-clone path
+ * (ensure-workspace-repo, past the `isValidGitWorkTree` early-return), where by
+ * construction no local-only refs exist. git-data ⊇ GitHub origin in committed-ref
+ * completeness (syncPush only auto-commits `knowledge-base/**` + reroutes protected
+ * pushes to a PR branch; replicateToGitData force-pushes ALL refs), so rehydration =
+ * clone(GitHub) → overlay(git-data).
  */
 export async function fetchFromGitData(params: {
   userId: string;
@@ -214,15 +224,23 @@ export async function fetchFromGitData(params: {
   // workspace could otherwise pull tenant-B objects while authz passed for tenant-A.
   const remoteUrl = gitDataRemoteUrl(workspaceId);
 
-  // Map this user's OWN namespace back to local heads + tags. `+` allows a
-  // non-fast-forward local update (the fence, not ref ancestry, is the ordering
-  // authority — symmetric to the write's `--force`). Cross-user visibility is a
-  // separate explicit fetch of the peer namespace (ADR-068 D0-ref), not this call.
+  // Map this user's OWN namespace into REMOTE-TRACKING refs (`refs/remotes/git-data/*`),
+  // NOT local `refs/heads/*` (3.D, CTO ruling). A `+…:refs/heads/*` force-fetch would
+  // target the destination clone's CHECKED-OUT branch — which git refuses, or under
+  // force discards local-only commits (silent user-data loss). Landing in a
+  // remote-tracking namespace is one git can never refuse and can never overwrite a
+  // live branch; the fresh-graft caller (ensure-workspace-repo) then does a guarded
+  // `reset --hard refs/remotes/git-data/<primary>` to overlay the latest tip. Tags
+  // keep `refs/tags/*` — safe ONLY because this is a fresh-graft-only call (see the
+  // precondition in the doc comment above; a live worktree could hold local-only tags).
+  // The fence, not ref ancestry, is the ordering authority — symmetric to the write's
+  // `--force`. Cross-user visibility is a separate explicit fetch of the peer namespace
+  // (ADR-068 D0-ref), not this call.
   await gitWithPrivateKeyAuth(
     [
       "fetch",
       remoteUrl,
-      `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/heads/*`,
+      `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
       `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
     ],
     transportKey,

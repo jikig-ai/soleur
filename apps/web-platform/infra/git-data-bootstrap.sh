@@ -50,6 +50,47 @@ if ! mountpoint -q "$GIT_DATA_ROOT"; then
   exit 1
 fi
 
+# 1b. Fresh LUKS-at-rest volume (Sub-PR 3.D cutover target). cloud-init already
+#     luksOpened + mounted it at /mnt/git-data-luks under `doppler run`; re-assert
+#     IDEMPOTENTLY here — if a boot race left the mapper closed, luksOpen it (the
+#     LUKS device is the attached volume that `cryptsetup isLuks` recognizes; the
+#     passphrase arrives ONLY as the Doppler-injected GIT_DATA_LUKS_KEY env, piped
+#     via stdin, never argv). FAIL LOUD if the key env is absent or the volume is
+#     not mounted — the LUKS volume is git-data-cutover.sh's FRESH_ROOT (rsync
+#     target); NEVER fall back to an unencrypted mount (NFR-026).
+LUKS_ROOT="/mnt/git-data-luks"
+LUKS_MAPPER="/dev/mapper/git-data"
+mkdir -p "$LUKS_ROOT"
+if ! mountpoint -q "$LUKS_ROOT"; then
+  if [[ ! -e "$LUKS_MAPPER" ]]; then
+    [[ -n "${GIT_DATA_LUKS_KEY:-}" ]] || {
+      log "FATAL: GIT_DATA_LUKS_KEY empty — refusing to unlock the LUKS cutover volume unencrypted"
+      exit 1
+    }
+    luks_dev=""
+    for dev in /dev/disk/by-id/scsi-0HC_Volume_*; do
+      [[ -e "$dev" ]] || continue
+      if cryptsetup isLuks "$dev"; then
+        luks_dev="$dev"
+        break
+      fi
+    done
+    [[ -n "$luks_dev" ]] || {
+      log "FATAL: no LUKS-formatted volume found among attached block volumes"
+      exit 1
+    }
+    printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$luks_dev" git-data || {
+      log "FATAL: luksOpen failed for $luks_dev"
+      exit 1
+    }
+  fi
+  mount "$LUKS_MAPPER" "$LUKS_ROOT" || true
+fi
+if ! mountpoint -q "$LUKS_ROOT"; then
+  log "FATAL: fresh LUKS cutover volume is not mounted at $LUKS_ROOT — refusing to continue"
+  exit 1
+fi
+
 # 2. git + flock (util-linux) + git-shell. cloud-init `packages:` installs git;
 #    assert + self-heal idempotently so a transient apt drop on first boot fails
 #    LOUD, not silent.
@@ -133,6 +174,10 @@ mountpoint -q "$GIT_DATA_ROOT" || {
   log "FATAL: volume unmounted post-bootstrap"
   exit 1
 }
+mountpoint -q "$LUKS_ROOT" || {
+  log "FATAL: LUKS cutover volume unmounted post-bootstrap"
+  exit 1
+}
 [[ -x "$PRE_RECEIVE" ]] || {
   log "FATAL: pre-receive hook missing/not executable"
   exit 1
@@ -153,4 +198,4 @@ mountpoint -q "$GIT_DATA_ROOT" || {
   log "FATAL: git-data-provision.sh missing/not executable — bare repos cannot be provisioned before first push"
   exit 1
 }
-log "bootstrap complete: volume mounted, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
+log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted at $LUKS_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"

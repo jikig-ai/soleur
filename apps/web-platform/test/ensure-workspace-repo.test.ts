@@ -16,6 +16,10 @@ const {
   mockIsEmptyCorrupt,
   mockProbeShape,
   mockRm,
+  mockIsGitDataStoreEnabled,
+  mockFetchFromGitData,
+  mockResolveWorktreeId,
+  mockLocalGit,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
   mockGraftRepoClone: vi.fn(),
@@ -26,6 +30,11 @@ const {
   mockIsEmptyCorrupt: vi.fn(),
   mockProbeShape: vi.fn(),
   mockRm: vi.fn(),
+  // Sub-PR 3.D — clone-from-git-data read-source overlay seams.
+  mockIsGitDataStoreEnabled: vi.fn(),
+  mockFetchFromGitData: vi.fn(),
+  mockResolveWorktreeId: vi.fn(),
+  mockLocalGit: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({ existsSync: mockExistsSync }));
@@ -65,10 +74,22 @@ vi.mock("@/server/repo-resolver-divergence", () => ({
 vi.mock("@/server/logger", () => ({
   createChildLogger: () => ({ info: mockLogInfo, warn: vi.fn(), error: vi.fn() }),
 }));
+// Sub-PR 3.D — the clone-from-git-data overlay: flag gate, membership-gated
+// fetch into refs/remotes/git-data/*, and the per-user worktree id resolver.
+vi.mock("@/server/workspace-resolver", () => ({
+  isGitDataStoreEnabled: mockIsGitDataStoreEnabled,
+}));
+vi.mock("@/server/git-data-client", () => ({
+  fetchFromGitData: mockFetchFromGitData,
+}));
+vi.mock("@/server/worktree-write-lease", () => ({
+  resolveWorktreeId: mockResolveWorktreeId,
+}));
 
 import {
   ensureWorkspaceRepoCloned,
   __setGraftForTests,
+  __setLocalGitForTests,
 } from "@/server/ensure-workspace-repo";
 
 const REPO = "https://github.com/acme/widget";
@@ -88,6 +109,14 @@ beforeEach(() => {
   // mockIsEmptyCorrupt). The file-pointer test below overrides per-call.
   mockProbeShape.mockReturnValue({ kind: "dir-invalid" });
   mockRm.mockResolvedValue(undefined);
+  // Sub-PR 3.D overlay seams. Flag OFF by default so the legacy cases above are
+  // wholly unaffected (overlay dormant). Local git seam resolves benignly; the
+  // per-test overrides drive the overlay behavior under test.
+  __setLocalGitForTests(mockLocalGit);
+  mockIsGitDataStoreEnabled.mockReturnValue(false);
+  mockFetchFromGitData.mockResolvedValue(undefined);
+  mockResolveWorktreeId.mockImplementation((userId: string) => `wt-${userId}`);
+  mockLocalGit.mockResolvedValue({ stdout: "" });
 });
 
 describe("ensureWorkspaceRepoCloned", () => {
@@ -337,5 +366,126 @@ describe("ensureWorkspaceRepoCloned", () => {
       ...mockReportSilentFallback.mock.calls.map((c) => c[1]),
     ]);
     expect(ctxArgs).not.toMatch(/ghs_|x-access-token|GIT_INSTALLATION_TOKEN/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Sub-PR 3.D (#5274 Phase 3, ADR-068) — clone-from-git-data read-source
+  // overlay. Rehydration = clone(GitHub) → overlay(git-data). git-data ⊇ GitHub
+  // origin in committed-ref completeness, so after a FRESH graft we overlay the
+  // user's latest committed tip from refs/remotes/git-data/<primary>.
+  //
+  // SAFETY INVARIANT (the CTO's proof): the overlay/reset is reachable ONLY on
+  // the fresh-graft path, which sits AFTER the early-return
+  // `if (isValidGitWorkTree) return "ok"`. So any LIVE worktree that could hold
+  // local-only commits returns BEFORE the overlay — by construction zero
+  // local-only commits exist at the reset point.
+  // -------------------------------------------------------------------------
+  describe("clone-from-git-data overlay", () => {
+    const primaryRef = (b: string) => `refs/remotes/git-data/${b}`;
+
+    // (a) LIVE worktree → early-return fires FIRST → no fetch, no reset. Proves
+    // the overlay can never discard local-only commits from a live worktree.
+    it("VALID (live) worktree → early-return before overlay: NO fetch, NO reset (no discard of local-only commits)", async () => {
+      mockIsGitDataStoreEnabled.mockReturnValue(true); // flag ON — overlay eligible
+      mockExistsSync.mockReturnValue(true);
+      mockIsValid.mockReturnValue(true); // live worktree → early return "ok"
+      const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+      expect(out).toBe("ok");
+      expect(mockGraftRepoClone).not.toHaveBeenCalled();
+      expect(mockFetchFromGitData).not.toHaveBeenCalled();
+      expect(mockLocalGit).not.toHaveBeenCalled(); // no rev-parse / show-ref / reset
+    });
+
+    // (b) fresh-graft + flag ON + ref PRESENT → fetch with derived ids, then
+    // reset --hard onto the git-data tip.
+    it("fresh graft, flag ON, git-data ref PRESENT → fetch(derived ids) + reset --hard onto the git-data tip", async () => {
+      mockIsGitDataStoreEnabled.mockReturnValue(true);
+      mockExistsSync.mockReturnValue(false); // no .git → fresh graft path
+      // Gate (line ~208) sees invalid → proceeds; the under-lock re-check sees a
+      // now-valid grafted worktree → the reset runs.
+      mockIsValid.mockReturnValueOnce(false).mockReturnValue(true);
+      mockLocalGit.mockImplementation(async (args: string[]) => {
+        if (args[0] === "rev-parse") return { stdout: "main\n" };
+        return { stdout: "" }; // show-ref present (resolves) + reset
+      });
+
+      const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+
+      expect(out).toBe("ok");
+      expect(mockGraftRepoClone).toHaveBeenCalledTimes(1);
+      // fetch called with the basename-derived workspaceId + resolveWorktreeId(userId).
+      expect(mockFetchFromGitData).toHaveBeenCalledTimes(1);
+      expect(mockFetchFromGitData).toHaveBeenCalledWith({
+        userId: "u1",
+        workspaceId: "ws-uuid", // basename(WS)
+        worktreeId: "wt-u1", // resolveWorktreeId(userId)
+        workspacePath: WS,
+      });
+      expect(mockResolveWorktreeId).toHaveBeenCalledWith("u1");
+      // rev-parse resolved primary, show-ref verified the ref, reset overlaid it.
+      expect(mockLocalGit).toHaveBeenCalledWith(["rev-parse", "--abbrev-ref", "HEAD"], WS);
+      expect(mockLocalGit).toHaveBeenCalledWith(
+        ["show-ref", "--verify", "--quiet", primaryRef("main")],
+        WS,
+      );
+      expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
+    });
+
+    // (c) fresh-graft + flag ON + ref ABSENT (empty git-data / first-ever
+    // session) → NO reset; keep the GitHub clone; still "ok".
+    it("fresh graft, flag ON, git-data ref ABSENT → NO reset (keep GitHub clone), outcome 'ok'", async () => {
+      mockIsGitDataStoreEnabled.mockReturnValue(true);
+      mockExistsSync.mockReturnValue(false);
+      mockIsValid.mockReturnValueOnce(false).mockReturnValue(true);
+      mockLocalGit.mockImplementation(async (args: string[]) => {
+        if (args[0] === "rev-parse") return { stdout: "main\n" };
+        if (args[0] === "show-ref") throw new Error("ref absent (exit 1)"); // git-data empty
+        return { stdout: "" };
+      });
+
+      const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+
+      expect(out).toBe("ok");
+      expect(mockFetchFromGitData).toHaveBeenCalledTimes(1);
+      // No reset ran (ref absent → keep the fresh GitHub clone).
+      const resetCalls = mockLocalGit.mock.calls.filter((c) => c[0][0] === "reset");
+      expect(resetCalls).toHaveLength(0);
+    });
+
+    // (d) flag OFF → the overlay is wholly dormant: no fetch, no local git.
+    it("flag OFF → NO fetch, NO reset (unchanged pre-3.D behavior)", async () => {
+      mockIsGitDataStoreEnabled.mockReturnValue(false);
+      mockExistsSync.mockReturnValue(false);
+      const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+      expect(out).toBe("ok");
+      expect(mockGraftRepoClone).toHaveBeenCalledTimes(1);
+      expect(mockFetchFromGitData).not.toHaveBeenCalled();
+      expect(mockLocalGit).not.toHaveBeenCalled();
+    });
+
+    // (e) a fetch/overlay error is FAIL-SOFT: outcome still "ok" + mirrored to
+    // Sentry via reportSilentFallback (git-data is an overlay, not a hard dep;
+    // the GitHub clone is a valid fallback).
+    it("fetch/overlay error → still 'ok' + reportSilentFallback (fail-soft; git-data blip must not fail the clone)", async () => {
+      mockIsGitDataStoreEnabled.mockReturnValue(true);
+      mockExistsSync.mockReturnValue(false);
+      mockIsValid.mockReturnValueOnce(false).mockReturnValue(true);
+      mockFetchFromGitData.mockRejectedValue(new Error("git-data unreachable"));
+
+      const out = await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+
+      expect(out).toBe("ok"); // fail-soft: the GitHub clone stands
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          feature: "ensure-workspace-repo",
+          op: "git-data-overlay",
+          extra: { userId: "u1" },
+        }),
+      );
+      // The error was swallowed BEFORE any reset.
+      const resetCalls = mockLocalGit.mock.calls.filter((c) => c[0][0] === "reset");
+      expect(resetCalls).toHaveLength(0);
+    });
   });
 });

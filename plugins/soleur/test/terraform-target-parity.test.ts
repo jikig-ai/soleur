@@ -424,6 +424,17 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key
+  // ride the operator's MAINTENANCE-WINDOW cutover apply (the volume attaches to the
+  // RUNNING git-data host; guest-side cryptsetup unlocks it at boot), NOT the #5566
+  // per-PR-CI class. Same class as hcloud_volume.git_data + the git-data doppler_secrets
+  // above. (`doppler_service_token.git_data` is the CI-published token type the test
+  // forces to be targeted — it gets a `-target` line in apply-web-platform-infra.yml,
+  // NOT this exclusion set.)
+  "random_password.git_data_luks",
+  "doppler_secret.git_data_luks_key",
+  "hcloud_volume.git_data_luks",
+  "hcloud_volume_attachment.git_data_luks",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry

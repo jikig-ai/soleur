@@ -11,6 +11,7 @@ package_update: true
 packages:
   - git
   - util-linux # provides flock for the per-(workspace,worktree) fence lock
+  - cryptsetup # guest-side LUKS-at-rest for the fresh cutover volume (Sub-PR 3.D)
 
 # Dedicated transport user for git over the private net. Its login shell is
 # git-shell (no arbitrary commands), and the authorized_keys forced-command below
@@ -39,8 +40,10 @@ write_files:
 
   # THREE keys for the `git` user, each pinned to a FIXED forced-command (ADR-068
   # amendment 2026-07-01 "PR B bare-repo provisioning" + #5274 Phase 3 Art. 17):
-  #   1. TRANSPORT (git-shell): can ONLY run git-shell against SSH_ORIGINAL_COMMAND
-  #      (git-receive-pack / git-upload-pack) — never an interactive shell.
+  #   1. TRANSPORT (git-data-transport-wrapper.sh, Sub-PR 3.D): an allowlist forced
+  #      command that permits ONLY git-upload-pack / git-receive-pack and adds the
+  #      CWE-22 canonicalize-under-root fence git-shell lacks — never an interactive
+  #      shell (replaces the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"`).
   #   2. PROVISION (git-data-provision.sh): a FIXED wrapper that idempotently
   #      `git init --bare`s ONE per-workspace repo (git-shell -c cannot run init).
   #   3. REMOVE (git-data-remove.sh): a FIXED wrapper that idempotently
@@ -51,7 +54,7 @@ write_files:
   # `git` user exists; git-data-bootstrap.sh fixes the .ssh perms so sshd accepts.
   - path: /home/git/.ssh/authorized_keys
     content: |
-      command="git-shell -c \"$SSH_ORIGINAL_COMMAND\"",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
+      command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
       command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
       command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
     owner: git:git
@@ -70,6 +73,16 @@ write_files:
   - path: /usr/local/bin/git-data-provision.sh
     encoding: b64
     content: ${git_data_provision_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D). Installed to
+  # /usr/local/bin so the transport key's authorized_keys command= resolves it.
+  # Permits only git-upload-pack/git-receive-pack + CWE-22 canonicalizes the repo
+  # path under the bare-repo root. Runs as the `git` user.
+  - path: /usr/local/bin/git-data-transport-wrapper.sh
+    encoding: b64
+    content: ${git_data_transport_wrapper_b64}
     owner: root:root
     permissions: '0755'
 
@@ -94,14 +107,72 @@ runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
 
-  # Mount the git-data block volume by id BEFORE the bootstrap runs (the bootstrap
-  # fails closed if it is not mounted). Matches the by-id mount pattern server.tf /
-  # cloud-init.yml uses for hcloud_volume.workspaces. `nofail` so a volume hiccup
-  # does not wedge boot; the bootstrap's mount assert is the real gate.
+  # Mount the PLAINTEXT (Phase-2) git-data volume by id at /mnt/git-data. This is the
+  # cutover SOURCE (git-data-cutover.sh OLD_ROOT) — it stays mounted ALONGSIDE the
+  # fresh LUKS volume during the additive rsync-then-flag-flip cutover. Matches the
+  # by-id mount pattern server.tf / cloud-init.yml use for hcloud_volume.workspaces.
+  # `nofail` so a volume hiccup does not wedge boot; the bootstrap's mount assert is
+  # the real gate.
   - mkdir -p /mnt/git-data
   - mount /dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data ext4 defaults,nofail 0 2' >> /etc/fstab
 
-  # Run the idempotent bootstrap (installs git substrate, bare-repo root, fence
-  # placeholder, core.hooksPath; asserts liveness / fails loud).
-  - bash /usr/local/bin/git-data-bootstrap.sh
+  # --- Doppler CLI (arm64) — the ONLY channel for the LUKS passphrase -----------
+  # The LUKS key is NEVER baked into this user_data (retrievable via the hcloud
+  # metadata API/console) and NEVER an argv positional. It is delivered ONLY as the
+  # Doppler-injected env GIT_DATA_LUKS_KEY at boot. cax11 is ARM64, so this is the
+  # linux_arm64 build + its checksum (the web host, cloud-init.yml, installs amd64).
+  # Egress (github release download) is open — git-data.tf denies only PUBLIC ingress.
+  - |
+    DOPPLER_VERSION="3.75.3"
+    DOPPLER_SHA256="f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143"
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_arm64.tar.gz" -o /tmp/doppler.tar.gz
+    echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
+    tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
+    chmod +x /usr/local/bin/doppler
+    rm /tmp/doppler.tar.gz
+  # Restricted (0600 root) env file with the Doppler service token — NOT written to
+  # world-readable /etc/environment (mirrors the web host's /etc/default/webhook-deploy).
+  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/git-data-doppler
+  - chmod 600 /etc/default/git-data-doppler
+
+  # --- FRESH LUKS-at-rest volume (Sub-PR 3.D cutover target) --------------------
+  # Guest-side LUKS (NOT an hcloud attribute): the fresh block volume is a PLAIN
+  # hcloud_volume; cryptsetup runs HERE, unlocked by GIT_DATA_LUKS_KEY. IDEMPOTENT
+  # (isLuks / mapper-exists / blkid guards) so a 2nd cloud-init run is a no-op.
+  # The passphrase is piped via stdin (`--key-file -`) — NEVER an argv token.
+  # Mounted at /mnt/git-data-luks (git-data-cutover.sh FRESH_ROOT), ALONGSIDE the
+  # plaintext source. FAIL LOUD if GIT_DATA_LUKS_KEY is empty — NEVER an unencrypted
+  # fallback (NFR-026). `${git_data_luks_volume_id}` is terraform-interpolated;
+  # $GIT_DATA_LUKS_KEY / $DEV (no braces) are left literal for the doppler-run shell.
+  - |
+    set -a
+    . /etc/default/git-data-doppler
+    set +a
+    doppler run --project soleur --config prd -- bash -s <<'LUKSEOF'
+    set -euo pipefail
+    DEV="/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}"
+    [ -n "$GIT_DATA_LUKS_KEY" ] || { echo "[git-data-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing unencrypted mount"; exit 1; }
+    if ! cryptsetup isLuks "$DEV"; then
+      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV"
+    fi
+    if [ ! -e /dev/mapper/git-data ]; then
+      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data
+    fi
+    if ! blkid /dev/mapper/git-data >/dev/null 2>&1; then
+      mkfs.ext4 -q /dev/mapper/git-data
+    fi
+    mkdir -p /mnt/git-data-luks
+    mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks
+    grep -q '/dev/mapper/git-data' /etc/fstab || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab
+    LUKSEOF
+
+  # Run the idempotent bootstrap UNDER doppler run (so its LUKS re-assert has
+  # GIT_DATA_LUKS_KEY). Installs git substrate + bare-repo root + fence placeholder +
+  # core.hooksPath on the plaintext volume, re-asserts the LUKS mapper is open +
+  # mounted at /mnt/git-data-luks, and fails loud on any unmet invariant.
+  - |
+    set -a
+    . /etc/default/git-data-doppler
+    set +a
+    doppler run --project soleur --config prd -- bash /usr/local/bin/git-data-bootstrap.sh

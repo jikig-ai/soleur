@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import { gitWithInstallationAuth, sanitizeGitStderr } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
@@ -14,8 +16,42 @@ import {
   isStrandingFilePointer,
 } from "@/server/git-worktree-validity";
 import { withWorkspacePermissionLock } from "@/server/workspace-permission-lock";
+import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
+import { fetchFromGitData } from "@/server/git-data-client";
+import { resolveWorktreeId } from "@/server/worktree-write-lease";
 
 const log = createChildLogger("ensure-workspace-repo");
+const execFileAsync = promisify(execFile);
+
+// Sub-PR 3.D (#5274 Phase 3, ADR-068) — the clone-from-git-data overlay runs a
+// handful of LOCAL, network-free git ops (rev-parse / show-ref / reset --hard)
+// against the freshly-cloned workspace. These are deliberately NOT routed
+// through `gitWithInstallationAuth`: that helper injects the GitHub App
+// installation token via GIT_ASKPASS for the AUTHED clone, but these ops touch
+// only the local object store / refs — no network, no credentials. A plain
+// `execFile` array form (no shell → no argv/flag-smuggling) with cwd pinned to
+// the workspace is the correct, least-authority tool (mirrors the local,
+// token-free rev-parse probe in git-worktree-validity.ts).
+type LocalGitFn = (args: string[], cwd: string) => Promise<{ stdout: string }>;
+
+const realLocalGit: LocalGitFn = async (args, cwd) => {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    timeout: 30_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+  return { stdout: stdout.toString() };
+};
+
+let localGitFn: LocalGitFn = realLocalGit;
+
+/** @internal test seam — the local (network-free) git exec used by the git-data
+ * overlay, injectable so show-ref present/absent is controllable without a live
+ * git or real refs. */
+export function __setLocalGitForTests(fn: LocalGitFn): void {
+  localGitFn = fn;
+}
 
 // Strict github.com HTTPS allowlist. The clone arg is also `--`-guarded against
 // argv flag-smuggling; this format check is defense-in-depth so a malformed /
@@ -262,6 +298,70 @@ export async function ensureWorkspaceRepoCloned(
 
   try {
     await graftFn(workspacePath, repoUrl, installationId);
+
+    // Sub-PR 3.D (#5274 Phase 3, ADR-068) — clone-from-git-data read-source
+    // OVERLAY. Rehydration = clone(GitHub) → overlay(git-data). git-data ⊇ the
+    // GitHub origin in committed-ref completeness (syncPush only auto-commits
+    // knowledge-base/** + reroutes protected-branch pushes to a PR branch, while
+    // replicateToGitData force-pushes ALL refs), so a fresh GitHub clone can be
+    // strictly BEHIND the user's latest committed tip on git-data. After a fresh
+    // graft we fetch the user's worktree namespace into refs/remotes/git-data/*
+    // and, if the primary branch has a git-data tip, reset --hard onto it.
+    //
+    // SAFETY INVARIANT (the CTO's proof): this block is reachable ONLY on the
+    // fresh-graft path, which sits AFTER the early-return
+    // `if (isValidGitWorkTree(workspacePath)) return "ok"` above. Any LIVE
+    // worktree that could hold local-only commits returns BEFORE reaching here —
+    // by construction zero local-only commits exist at the reset point, so the
+    // reset can never discard user work.
+    //
+    // FAIL-SOFT: git-data is an OVERLAY, not a hard dependency — the GitHub clone
+    // is a valid standalone fallback. A git-data reachability blip must NEVER
+    // fail the clone, so the whole overlay is wrapped and any error is mirrored
+    // to Sentry (cq-silent-fallback-must-mirror-to-sentry) while we still
+    // `return "ok"`.
+    if (isGitDataStoreEnabled()) {
+      try {
+        const workspaceId = basename(workspacePath);
+        const worktreeId = resolveWorktreeId(userId); // validates + returns per-user id
+        await fetchFromGitData({ userId, workspaceId, worktreeId, workspacePath });
+
+        // Resolve the freshly-cloned primary branch (LOCAL, network-free).
+        const { stdout } = await localGitFn(
+          ["rev-parse", "--abbrev-ref", "HEAD"],
+          workspacePath,
+        );
+        const primary = stdout.trim();
+        const dataRef = `refs/remotes/git-data/${primary}`;
+
+        // Does git-data hold a tip for this branch? `show-ref --verify --quiet`
+        // exits non-zero (rejects) when the ref is absent (empty git-data /
+        // first-ever session) — in which case we keep the GitHub clone as-is.
+        let refPresent = true;
+        try {
+          await localGitFn(["show-ref", "--verify", "--quiet", dataRef], workspacePath);
+        } catch {
+          refPresent = false;
+        }
+
+        if (refPresent) {
+          // Overlay the git-data tip. Re-check validity UNDER THE WORKSPACE LOCK
+          // (mirror the corrupt-rm block above) as defense-in-depth against a
+          // concurrent graft: only reset a still-valid worktree.
+          await withWorkspacePermissionLock(workspacePath, async () => {
+            if (!isValidGitWorkTree(workspacePath)) return;
+            await localGitFn(["reset", "--hard", dataRef], workspacePath);
+          });
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "ensure-workspace-repo",
+          op: "git-data-overlay",
+          extra: { userId },
+        });
+        // fall through — the GitHub clone stands; overlay is best-effort.
+      }
+    }
     // No raw `userId` on this direct-logger breadcrumb — the advisory
     // userid-bypass-lint guard (#3698) scans source for `logger({ userId })`
     // sites. Runtime is already safe (pino formatters.log hashes top-level
