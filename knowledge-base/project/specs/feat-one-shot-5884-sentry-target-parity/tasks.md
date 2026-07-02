@@ -14,33 +14,33 @@ Note: no `spec.md` exists for this branch; lane classified `single-domain`
 
 ## Phase 1 — RED: Sentry parity describe block (test first)
 
-- [ ] 1.1 In `plugins/soleur/test/terraform-target-parity.test.ts`, add module-scope
+- [x] 1.1 In `plugins/soleur/test/terraform-target-parity.test.ts`, add module-scope
       constants `SENTRY_INFRA_DIR`, `SENTRY_WORKFLOW`, `SENTRY_MIN_RESOURCES` (60), and
       the frozen `SENTRY_IMPORT_ONLY_EXCLUSIONS` set (the 4 `auth_*` placeholder addresses).
-- [ ] 1.2 Add `listSentryTfFiles()` walker over `SENTRY_INFRA_DIR` (`*.tf`, sorted).
-- [ ] 1.3 Add the `describe("terraform -target parity — Sentry infra … (#5884)")` block
+- [x] 1.2 Add `listSentryTfFiles()` walker over `SENTRY_INFRA_DIR` (`*.tf`, sorted).
+- [x] 1.3 Add the `describe("terraform -target parity — Sentry infra … (#5884)")` block
       reusing `stripComments` / `extractAllResources` (filtered to `sentry_` prefix) /
       `extractAllTargets`, with tests: non-vacuity floor, parity (`uncovered === []`),
       #5875 regression anchor, import-only-excluded assertion, synthetic-miss non-vacuity.
-- [ ] 1.4 Run `bun test plugins/soleur/test/terraform-target-parity.test.ts` from the
+- [x] 1.4 Run `bun test plugins/soleur/test/terraform-target-parity.test.ts` from the
       **worktree** path — confirm the parity test FAILS reporting
       `["sentry_issue_alert.github_webhook_founder_ambiguous"]` (RED).
 
 ## Phase 2 — GREEN: register the missing apply-created alert
 
-- [ ] 2.1 Re-grep `-target=sentry_issue_alert.sandbox_startup_failure` + `-no-color` in
+- [x] 2.1 Re-grep `-target=sentry_issue_alert.sandbox_startup_failure` + `-no-color` in
       `.github/workflows/apply-sentry-infra.yml` to locate the insertion point (don't
       trust line numbers).
-- [ ] 2.2 Insert `-target=sentry_issue_alert.github_webhook_founder_ambiguous \` inside
+- [x] 2.2 Insert `-target=sentry_issue_alert.github_webhook_founder_ambiguous \` inside
       the backslash-continued `terraform plan` command, before `-no-color` (no adjacent
       comment — mid-continuation comment → exit 127).
-- [ ] 2.3 Verify the `terraform apply` step reuses saved `tfplan` (does not re-declare
+- [x] 2.3 Verify the `terraform apply` step reuses saved `tfplan` (does not re-declare
       its own `-target` list); if it does, add the same line there.
-- [ ] 2.4 Re-run the test → all Sentry-block tests GREEN.
+- [x] 2.4 Re-run the test → all Sentry-block tests GREEN.
 
 ## Phase 3 — Regression + docs
 
-- [ ] 3.1 Run the full `terraform-target-parity.test.ts` suite + broader plugin bun-test
+- [x] 3.1 Run the full `terraform-target-parity.test.ts` suite + broader plugin bun-test
       surface; confirm no sibling regression.
 - [ ] 3.2 PR body: `## Changelog` + `semver:patch` + `Closes #5884` + note the guard
       surfaced & fixed a live inert alert (`github_webhook_founder_ambiguous`).
