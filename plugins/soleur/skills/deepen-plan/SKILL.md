@@ -351,6 +351,19 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "When a plan addresses an SSH/network-connectivity s"
 ```
 
+### 4.55. Downtime & Cutover Halt — Zero-Downtime-First (Conditional)
+
+Soleur users are a live single-operator surface; an unexpected outage of the web/Concierge platform is a `single-user incident` (brand-survival). So a plan whose change would take a serving surface offline MUST **default to a zero-downtime cutover** and prove it in the plan — not treat downtime as the baseline.
+
+**Trigger — fire when the plan's Files-to-Edit or Overview implies a downtime-inducing operation.** Any of:
+- **Infra reboot/replace class:** a change to a running host that Hetzner/the provider applies via power-off or replace — `placement_group_id` attach, `server_type`/`location`/`datacenter` change, `image` change, a `-/+`/`must be replaced` on any `hcloud_server`/volume/attachment, or a singleton→`for_each`/cluster cutover of a serving resource.
+- **Database lock class:** a migration with lock-taking or table-rewriting DDL on a hot table — `ALTER TABLE … ADD COLUMN … NOT NULL DEFAULT` (rewrite), `ALTER COLUMN … TYPE`, a non-`CONCURRENTLY` index, `ADD CONSTRAINT` without `NOT VALID`, or a backfill that holds a long transaction.
+- **Deploy/router class:** a change that drops in-flight requests — a single-host container swap without drain, a tunnel/router restructure, a connector restart on the sole serving connector.
+
+**Rule.** On trigger, the plan MUST contain a `## Downtime & Cutover` section that (1) names the exact offline-inducing operation and the surface it affects, (2) evaluates a **zero-downtime path** — blue-green (provision the new resource fresh, drain, cut over, retire the old), rolling, expand-contract (add-nullable → backfill → enforce → drop-old), `terraform state mv`/state-only re-address, `CREATE INDEX CONCURRENTLY`, drain-then-act — and **defaults to it**, and (3) accepts residual downtime ONLY with an explicit justification + a **bounded maintenance window** + operator sign-off. HALT if the trigger fires and the section is absent or is boilerplate (no concrete cutover mechanism, no per-stage verification/rollback). This is the deepen-plan companion to Phase 4.6 (user-brand impact) and 4.5 (network-outage), scoped to availability during the change itself.
+
+**Why:** #5887 — a `moved`-block migration was framed as a rebooting full `terraform apply`; the actual wedge cleared with a **zero-downtime `terraform state mv`** (state-only re-address, no reboot), and the real web-2 cutover is blue-green (a fresh host is born into the placement group with no reboot; only the old host needs a power-off, done while drained). The rebooting path was the *default* only because no gate forced a zero-downtime evaluation first. See `knowledge-base/project/learnings/2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover.md`.
+
 ### 4.6. User-Brand Impact Halt (Always)
 
 Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every plan MUST contain a `## User-Brand Impact` section before deepen-plan can proceed. This phase is a hard gate — no deepen agents fan out until the section exists and contains concrete content.
