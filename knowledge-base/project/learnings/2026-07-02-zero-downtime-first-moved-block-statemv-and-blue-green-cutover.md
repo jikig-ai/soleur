@@ -31,4 +31,6 @@ For any change that would take a serving surface offline — a host reboot/repla
 
 ## Key insight
 
-The reboot was the default only because nothing forced a zero-downtime evaluation first. The moment you ask "what's the state-only / blue-green / concurrent version?", the answer usually exists — and for a live single-operator brand surface, that question is mandatory, not optional. See ADR-068 §Amendment (2026-07-02, #5877/#5887).
+The reboot was the default only because nothing forced a zero-downtime evaluation first. The moment you ask "what's the state-only / blue-green / concurrent version?", the answer usually exists — and for a live single-operator brand surface, that question is mandatory, not optional.
+
+**Reconciliation with ADR-068 §Amendment (2026-07-02, #5877/#5887):** that amendment frames the fix as "ship the migration WITH the operator maintenance-window cutover apply." That remains correct for the **GA go-live** (web-2/git-data provisioning + the web-1 placement reboot). This learning refines the narrower case: to clear ONLY the CI *wedge* (consume the pending moves), a `terraform state mv` is the zero-downtime path — no apply, no reboot — decoupled from the reboot and the GA. The two are compatible (both consume the pending moves); the `state mv` is the availability-preserving way to do just the wedge-clearing half.
