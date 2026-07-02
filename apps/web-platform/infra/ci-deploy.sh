@@ -179,6 +179,12 @@ CRON_DRAIN_PROBE_TIMEOUT="${CRON_DRAIN_PROBE_TIMEOUT:-10}"
 # Test harness overrides both paths to a tmpdir.
 CRON_DEPLOY_LEASE_FILE="${CRON_DEPLOY_LEASE_FILE:-/mnt/data/workspaces/.deploy-lease}"
 CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.json}"
+# Faithful sandbox canary verdict (#5875 / ADR-079). Written per deploy, surfaced
+# on /hooks/deploy-status by cat-deploy-state.sh (sandbox_canary_json). Separate
+# small state file — same pattern as CRON_DRAIN_STATE_FILE.
+SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/var/run/ci-deploy-sandbox-canary.json}"
+# Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
+SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 
 # -----------------------------------------------------------------------------
 # Deploy state observability (#2185)
@@ -340,6 +346,79 @@ write_cron_drain_state() {
   printf '{"cron_drain_wait_secs":%d,"cron_drain_timed_out":%s}\n' \
     "$wait_secs" "$timed_out" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv "$tmp" "$CRON_DRAIN_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  return 0
+}
+
+# write_sandbox_canary_state: persist the faithful-canary verdict for the no-SSH
+# deploy-status surface (#5875 / ADR-079). Always returns 0 — the canary is
+# NON-BLOCKING (dark-launch), so a state-write failure must never abort a deploy.
+# jq builds the JSON so the reason/sdk_version strings are always escaped.
+write_sandbox_canary_state() {
+  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp
+  tmp="$(mktemp "${SANDBOX_CANARY_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  jq -nc \
+    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$(date +%s)" \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts}' \
+    > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  return 0
+}
+
+# sandbox_canary_sentry_event: loud, no-SSH page on a faithful-canary FAIL — the
+# signal #5873 lacked (hr-no-ssh-fallback-in-runbooks: never journald-only). Best-
+# effort + env-guarded, mirrors report_cron_drain_timeout. Fail-open under set -e.
+sandbox_canary_sentry_event() {
+  local verdict="$1" reason="$2" sdk_version="${3:-}"
+  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (faithful canary; legacy probe gated the deploy)"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" \
+      '{message: ("faithful sandbox canary " + $v + " (" + $r + ") — SDK " + $s),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
+        extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "SANDBOX_CANARY: Sentry POST failed"
+  fi
+}
+
+# run_faithful_sandbox_canary: NON-BLOCKING dark-launch (#5875 / ADR-079). Runs
+# the SDK-captured bwrap argv INSIDE the canary container via the baked-in mjs,
+# records the verdict to deploy-state, and pages Sentry on a faithful FAIL — but
+# NEVER rolls back (the legacy probe stays the gate during dark-launch; a
+# "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
+# Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
+# canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
+run_faithful_sandbox_canary() {
+  local verdict reason sdk_version exec_rc out
+  # set +o pipefail so the classification below reads docker exec's own rc, not
+  # a downstream pipe member's (load-bearing under set -euo — mirrors the
+  # canary_layer3 logger block).
+  set +o pipefail
+  out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>/dev/null)"
+  exec_rc=$?
+  set -o pipefail
+  if [[ "$exec_rc" -ne 0 ]]; then
+    # docker/exec/node failure (125 daemon, 126/127 not-exec/not-found) — infra,
+    # never a sandbox verdict.
+    verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}"; sdk_version=""
+  else
+    verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
+    sdk_version="$(printf '%s' "$out" | jq -r '.sdk_version // ""' 2>/dev/null || echo '')"
+  fi
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"
+  echo "Faithful sandbox canary (non-blocking): verdict=$verdict reason=$reason"
+  # Page only on a faithful FAIL (sandbox_broken) — the disagreement signal.
+  # canary_infra_error is expected during dark-launch (fixture not yet captured)
+  # and must not page.
+  if [[ "$verdict" == "sandbox_broken" ]]; then
+    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" || true
+  fi
   return 0
 }
 
@@ -882,6 +961,13 @@ case "$COMPONENT" in
         exit 1
       fi
       echo "Sandbox OK"
+
+      # Faithful sandbox canary (#5875 / ADR-079) — NON-BLOCKING dark-launch.
+      # Runs the SDK-captured split-unshare argv the legacy probe above does NOT
+      # exercise (that gap is why #5849 shipped green). Records a verdict + pages
+      # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
+      # keeps a canary hiccup from aborting the deploy under set -e.
+      run_faithful_sandbox_canary || true
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then

@@ -129,6 +129,28 @@ assert "malformed cron_drain_wait_secs falls back to sentinel -1" \
 assert "malformed cron_drain_timed_out falls back to sentinel false" \
   "[[ \$(printf '%s' '$CD_BAD' | jq -r .cron_drain_timed_out) == 'false' ]]"
 
+# Faithful sandbox canary verdict (#5875 / ADR-079) surfaced under sandbox_canary.
+# Absent state file → verdict "unknown" sentinel (a deploy that never ran the canary).
+SC_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/no-canary.json" bash "$TARGET")
+assert "sandbox_canary.verdict sentinel 'unknown' when no canary state file" \
+  "[[ \$(printf '%s' '$SC_ABSENT' | jq -r .sandbox_canary.verdict) == 'unknown' ]]"
+assert "deploy exit_code preserved alongside sandbox_canary (not clobbered)" \
+  "[[ \$(printf '%s' '$SC_ABSENT' | jq -r .exit_code) == '0' ]]"
+# Present state file → fields reflect the recorded canary verdict.
+echo '{"verdict":"sandbox_broken","reason":"bwrap_operation_not_permitted","sdk_version":"0.3.197","checked_at":1751000000}' > "$TMP/canary.json"
+SC_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/canary.json" bash "$TARGET")
+assert "sandbox_canary.verdict read from state file (sandbox_broken)" \
+  "[[ \$(printf '%s' '$SC_PRESENT' | jq -r .sandbox_canary.verdict) == 'sandbox_broken' ]]"
+assert "sandbox_canary.reason read from state file" \
+  "[[ \$(printf '%s' '$SC_PRESENT' | jq -r .sandbox_canary.reason) == 'bwrap_operation_not_permitted' ]]"
+assert "sandbox_canary.sdk_version read from state file" \
+  "[[ \$(printf '%s' '$SC_PRESENT' | jq -r .sandbox_canary.sdk_version) == '0.3.197' ]]"
+# Malformed checked_at → falls back to numeric sentinel 0 (never a non-numeric).
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-a-number"}' > "$TMP/bad-canary.json"
+SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-canary.json" bash "$TARGET")
+assert "malformed sandbox_canary.checked_at falls back to sentinel 0" \
+  "[[ \$(printf '%s' '$SC_BAD' | jq -r .sandbox_canary.checked_at) == '0' ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

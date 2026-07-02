@@ -178,6 +178,29 @@ cron_drain_json() {
     '{cron_drain_wait_secs: $w, cron_drain_timed_out: $t}'
 }
 
+# Faithful sandbox canary verdict (#5875 / ADR-079). The no-SSH surface for the
+# dark-launched canary: the last deploy's verdict (pass | sandbox_broken |
+# canary_infra_error), its reason, and the SDK version it ran against. Read from
+# the small state file ci-deploy.sh writes (write_sandbox_canary_state). Safe
+# sentinel (verdict "unknown") when the file is absent because a deploy never ran
+# the canary. Best-effort + read-only. The canary-promotion follow-through
+# (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
+sandbox_canary_json() {
+  local f="${SANDBOX_CANARY_STATE_FILE:-/var/run/ci-deploy-sandbox-canary.json}"
+  if [[ -f "$f" ]]; then
+    local v r s c
+    v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
+    r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
+    s="$(jq -r '.sdk_version // ""' "$f" 2>/dev/null || echo '')"
+    c="$(jq -r '.checked_at // 0' "$f" 2>/dev/null || echo 0)"
+    [[ "$c" =~ ^[0-9]+$ ]] || c=0
+    jq -nc --arg v "$v" --arg r "$r" --arg s "$s" --argjson c "$c" \
+      '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$c}'
+  else
+    echo '{"verdict":"unknown","reason":"","sdk_version":"","checked_at":0}'
+  fi
+}
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
 # inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
@@ -198,6 +221,7 @@ INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
+SANDBOX_CANARY="$(sandbox_canary_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -222,7 +246,8 @@ jq -nc \
   --argjson js "$JOURNALD_STORAGE" \
   --argjson cr "$CONTAINER_RESTART" \
   --argjson cd "$CRON_DRAIN" \
-  '$base + $cr + $cd + {journald_storage: $js, services: (($base.services // {}) + {
+  --argjson sc "$SANDBOX_CANARY" \
+  '$base + $cr + $cd + {sandbox_canary: $sc, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
