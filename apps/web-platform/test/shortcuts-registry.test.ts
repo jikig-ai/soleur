@@ -4,8 +4,10 @@ import {
   buildCommands,
   resolveShortcut,
   resolveSequence,
+  resolveNavChord,
   formatSeqHint,
   ASK_AGENT_SEQ,
+  ASK_AGENT_ACCEL,
   SEQUENCE_WINDOW_MS,
   readShortcutsEnabled,
   writeShortcutsEnabled,
@@ -175,6 +177,81 @@ describe("resolveSequence", () => {
     expect(
       resolveSequence(true, key("d", { target: { tagName: "TEXTAREA" } }), admin),
     ).toBeNull();
+  });
+});
+
+// resolveNavChord — the metaKey-ONLY Super/Meta accelerator resolver, sibling of
+// resolveSequence. Reads e.metaKey EXCLUSIVELY (never ctrlKey), DOM-free.
+describe("resolveNavChord", () => {
+  const admin = { isAdmin: true };
+  const nonAdmin = { isAdmin: false };
+
+  it("exposes ASK_AGENT_ACCEL as the ⌘C letter", () => {
+    expect(ASK_AGENT_ACCEL).toBe("c");
+  });
+
+  it("arms nav destinations on meta+letter (AC1): d/i/r → navigate, c → openChat", () => {
+    expect(resolveNavChord(key("d", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard",
+    });
+    expect(resolveNavChord(key("i", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/inbox",
+    });
+    expect(resolveNavChord(key("r", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/routines",
+    });
+    expect(resolveNavChord(key("c", { meta: true }), nonAdmin)).toEqual({
+      kind: "openChat",
+    });
+  });
+
+  it("upper-case letters resolve too (case-insensitive)", () => {
+    expect(resolveNavChord(key("D", { meta: true }), nonAdmin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard",
+    });
+  });
+
+  it("gates ⌘A (Analytics) on ctx.isAdmin (AC2)", () => {
+    expect(resolveNavChord(key("a", { meta: true }), admin)).toEqual({
+      kind: "navigate",
+      href: "/dashboard/admin/analytics",
+    });
+    expect(resolveNavChord(key("a", { meta: true }), nonAdmin)).toBeNull();
+  });
+
+  it("returns null for the deliberately-unbound ⌘W and ⌘K (AC3)", () => {
+    expect(resolveNavChord(key("w", { meta: true }), admin)).toBeNull();
+    expect(resolveNavChord(key("k", { meta: true }), admin)).toBeNull();
+  });
+
+  it("never arms on ctrl+letter — metaKey ONLY (AC4)", () => {
+    expect(resolveNavChord(key("d", { ctrl: true }), admin)).toBeNull();
+    expect(resolveNavChord(key("a", { ctrl: true }), admin)).toBeNull();
+    expect(resolveNavChord(key("c", { ctrl: true }), admin)).toBeNull();
+  });
+
+  it("rejects the shift variant, editable focus, and auto-repeat (AC5)", () => {
+    expect(
+      resolveNavChord(key("d", { meta: true, shift: true }), admin),
+    ).toBeNull();
+    expect(
+      resolveNavChord(key("d", { meta: true, target: { tagName: "INPUT" } }), admin),
+    ).toBeNull();
+    expect(
+      resolveNavChord({ ...key("d", { meta: true }), repeat: true }, admin),
+    ).toBeNull();
+  });
+
+  it("returns null when no modifier is held (falls through to the g-arm)", () => {
+    expect(resolveNavChord(key("d"), admin)).toBeNull();
+  });
+
+  it("returns null for an unmapped letter (x)", () => {
+    expect(resolveNavChord(key("x", { meta: true }), admin)).toBeNull();
   });
 });
 

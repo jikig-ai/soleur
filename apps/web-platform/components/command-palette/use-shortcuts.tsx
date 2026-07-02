@@ -137,6 +137,10 @@ export const SEQUENCE_PREFIX = "g";
  * `g`-family — `c` = chat, the closest surviving letter. */
 export const ASK_AGENT_SEQ = "g c";
 
+/** The Ask-an-agent Super/Meta accelerator (⌘C). Mirrors ASK_AGENT_SEQ; not a
+ * nav route so it lives here, not on a nav array. */
+export const ASK_AGENT_ACCEL = "c";
+
 /** Window between the two keystrokes of a sequence (GitHub `hotkey`'s value). */
 export const SEQUENCE_WINDOW_MS = 1500;
 
@@ -202,6 +206,70 @@ export function resolveSequence(
   const navEffect = NAV_SEQUENCE_EFFECTS[k];
   if (navEffect) return navEffect;
   const adminEffect = ADMIN_SEQUENCE_EFFECTS[k];
+  if (adminEffect) return ctx.isAdmin ? adminEffect : null;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Super/Meta accelerators (⌘D/⌘I/⌘R/⌘A/⌘C) — the metaKey-only companion layer to
+// the `g`-leader, additive and never replacing it. The `accel` field on
+// NAV_ITEMS/ADMIN_NAV_ITEMS is the SINGLE source for the accelerator letter: the
+// resolver map, the palette accel hint, and the `?` overlay accel row all derive
+// from it. Module-private (like NAV_SEQUENCE_EFFECTS) — asserted via behavior.
+// ---------------------------------------------------------------------------
+
+// letter → effect, derived once from the single-source `accel` fields.
+const NAV_ACCEL_EFFECTS: Readonly<Record<string, CommandEffect>> = {
+  ...Object.fromEntries(
+    NAV_ITEMS.filter((i) => i.accel).map((i) => [
+      (i.accel as string).toLowerCase(),
+      { kind: "navigate", href: i.href } as CommandEffect,
+    ]),
+  ),
+  [ASK_AGENT_ACCEL]: { kind: "openChat" },
+};
+
+// Admin-only accelerator letters (⌘A → Analytics), resolved only when isAdmin.
+const ADMIN_ACCEL_EFFECTS: Readonly<Record<string, CommandEffect>> =
+  Object.fromEntries(
+    ADMIN_NAV_ITEMS.filter((i) => i.accel).map((i) => [
+      (i.accel as string).toLowerCase(),
+      { kind: "navigate", href: i.href } as CommandEffect,
+    ]),
+  );
+
+/**
+ * Pure Super/Meta accelerator resolver — the `metaKey`-only sibling of
+ * `resolveSequence`. Reads `e.metaKey` EXCLUSIVELY (never `ctrlKey` — Ctrl+letter
+ * on Win/Linux is a hostile hijack of native shortcuts and must NOT arm; this is
+ * the whole point of the guarded design, distinct from `resolveShortcut`'s
+ * `metaKey || ctrlKey` union). Rejects the shift variant (⌘⇧D is a distinct
+ * chord), editable focus (native ⌘C/⌘A/⌘R survive in inputs), and auto-repeat.
+ * `⌘A` (Analytics) is admin-gated, mirroring `resolveSequence`. Returns the
+ * CommandEffect (the caller `preventDefault`s + runs it) or null (fall through to
+ * the g-leader arm). Stays DOM-free — the ⌘C selection-yield lives in the LISTENER.
+ *
+ * NOTE on ⌥/Alt: on macOS Option transforms `e.key` (⌘⌥D → "∂") so an Alt chord
+ * never matches a letter here; on Win/Linux Alt does NOT transform the key, so
+ * `Meta+Alt+D` would technically match — but that combo is harmless (navigates, no
+ * data-loss) and, since the accelerators are a macOS feature in practice
+ * (Win+letter / Super+letter are OS/WM-reserved, which is WHY the HINT is gated to
+ * Apple), it is accepted-unguarded, not silently wrong. No `altKey` widening.
+ * NOTE on ⌘R: `preventDefault` stops the SOFT reload; ⌘⇧R (hard reload) still
+ * fires — an acceptable escape hatch, not a gap.
+ */
+export function resolveNavChord(
+  e: ShortcutKeyEvent,
+  ctx: ShortcutContext,
+): CommandEffect | null {
+  if (isEditable(e.target)) return null; // native ⌘C/⌘A/⌘R survive in inputs
+  if (e.repeat) return null;
+  if (!e.metaKey) return null; // metaKey ONLY, never ctrlKey
+  if (e.shiftKey) return null; // ⌘⇧<letter> is a distinct chord
+  const k = e.key.toLowerCase();
+  const navEffect = NAV_ACCEL_EFFECTS[k];
+  if (navEffect) return navEffect;
+  const adminEffect = ADMIN_ACCEL_EFFECTS[k];
   if (adminEffect) return ctx.isAdmin ? adminEffect : null;
   return null;
 }
