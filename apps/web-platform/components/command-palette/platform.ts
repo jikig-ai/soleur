@@ -37,3 +37,12 @@ export function isApplePlatform(nav?: NavigatorLike | null): boolean {
 export function modChord(letter: string, isApple: boolean): string {
   return isApple ? `⌘${letter}` : `Ctrl+${letter}`;
 }
+
+/**
+ * Format a modifier+Shift chord for DISPLAY: `⌘⇧L` on Apple, `Ctrl+Shift+L`
+ * elsewhere. Used for the KB "Quote in chat" shortcut, which binds on
+ * `(meta || ctrl) + shift + <letter>` cross-platform.
+ */
+export function modShiftChord(letter: string, isApple: boolean): string {
+  return isApple ? `⌘⇧${letter}` : `Ctrl+Shift+${letter}`;
+}

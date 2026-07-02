@@ -19,6 +19,7 @@ import {
 import {
   isApplePlatform,
   modChord,
+  modShiftChord,
 } from "@/components/command-palette/platform";
 
 function byId(cmds: Command[], id: string): Command | undefined {
@@ -237,9 +238,10 @@ describe("isApplePlatform", () => {
     expect(isApplePlatform({ platform: "Linux x86_64", userAgent: "X11; Linux" })).toBe(false);
     expect(isApplePlatform({ platform: "Linux armv8l", userAgent: "CrOS" })).toBe(false);
   });
-  it("returns false (stable SSR default) when no navigator is available", () => {
+  it("returns false (stable SSR default) when navigator is null", () => {
+    // Passing `null` explicitly exercises the no-navigator branch (the
+    // `undefined` arm would instead fall through to the ambient navigator).
     expect(isApplePlatform(null)).toBe(false);
-    expect(isApplePlatform(undefined as unknown as null)).toBe(false);
   });
 });
 
@@ -251,6 +253,15 @@ describe("modChord", () => {
   it("renders Ctrl+ on non-Apple", () => {
     expect(modChord("K", false)).toBe("Ctrl+K");
     expect(modChord("B", false)).toBe("Ctrl+B");
+  });
+});
+
+describe("modShiftChord", () => {
+  it("renders ⌘⇧<letter> on Apple", () => {
+    expect(modShiftChord("L", true)).toBe("⌘⇧L");
+  });
+  it("renders Ctrl+Shift+<letter> on non-Apple", () => {
+    expect(modShiftChord("L", false)).toBe("Ctrl+Shift+L");
   });
 });
 

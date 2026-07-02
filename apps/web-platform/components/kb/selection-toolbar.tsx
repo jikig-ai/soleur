@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import {
+  isApplePlatform,
+  modShiftChord,
+} from "@/components/command-palette/platform";
 
 export interface SelectionToolbarProps {
   articleRef: RefObject<HTMLElement | null>;
@@ -58,6 +62,9 @@ export function SelectionToolbar({
 }: SelectionToolbarProps) {
   const [pill, setPill] = useState<PillState | null>(null);
   const [mounted, setMounted] = useState(false);
+  // SSR-safe: init non-Apple (→ `Ctrl+Shift+L`), read the real platform on
+  // mount so Windows/Linux users see the key they actually press.
+  const [isApple, setIsApple] = useState(false);
   const pillRef = useRef<HTMLButtonElement | null>(null);
   // One TextEncoder per instance — `new Blob([text]).size` allocates a
   // full Blob per keystroke during drag-select; encode().byteLength reads
@@ -68,7 +75,10 @@ export function SelectionToolbar({
     return encoderRef.current.encode(text).byteLength;
   }
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    setIsApple(isApplePlatform());
+  }, []);
 
   // Subscribe to selectionchange and compute pill state. `selectionchange`
   // fires at mousemove frequency during drag-select; coalesce setPill via
@@ -233,7 +243,7 @@ export function SelectionToolbar({
         aria-hidden="true"
         className="ml-1 rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-1 py-0.5 text-[10px] text-soleur-text-secondary"
       >
-        ⌘⇧L
+        {modShiftChord("L", isApple)}
       </span>
     </button>
   );
