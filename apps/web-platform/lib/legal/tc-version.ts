@@ -48,6 +48,6 @@ export const TC_DOCUMENT_SHA =
  */
 export const TC_BUMP_METADATA = {
   lastUpdated: "July 2, 2026",
-  substantiveChange: "§3a.5 BYOK best-effort cost ceiling + overage allocation",
+  substantiveChange: "BYOK best-effort cost ceiling and operator overage allocation",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;
