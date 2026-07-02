@@ -1,0 +1,156 @@
+# git-data LUKS cutover — epic #5274 Phase 3, Sub-PR 3.D / ADR-068.
+#
+# workflow_dispatch-only. Runs apps/web-platform/infra/git-data-cutover.sh
+# OFF the app host with cloud-admin/Doppler creds held here in GitHub secrets
+# (learning 2026-06-02: never hold cloud-admin creds inline on a prod host; the
+# cutover script itself carries no creds — this workflow injects them).
+#
+# Reach model: the GH runner egress IP is not in var.admin_ips, so it cannot dial
+# either host's :22 directly. Host reach is over the CF Tunnel SSH bridge
+# (.github/actions/cf-tunnel-ssh-bridge) — the SAME access path
+# apply-web-platform-infra.yml uses for its SSH-provisioned resources. The bridge
+# exports the ssh invocation the cutover script consumes via GIT_DATA_SSH /
+# WEB_HOST_SSH; the script holds no key material.
+#
+# Auth pattern mirrors apply-web-platform-infra.yml:
+#   - secrets.DOPPLER_TOKEN        — prd_terraform READ (backend creds, flag read)
+#   - secrets.DOPPLER_TOKEN_WRITE  — prd_terraform READ/WRITE (the ONE flag flip)
+#   - SHA-pinned actions; untrusted inputs routed through env, never interpolated
+#     into run: blocks.
+#
+# This workflow does NOT run terraform: the fresh LUKS volume is provisioned by a
+# maintenance-window apply-web-platform-infra.yml run BEFORE this is dispatched
+# (see knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md).
+#
+# Inngest-dispatches-GHA: when the cutover is SCHEDULED rather than run by hand,
+# an Inngest function dispatches this workflow via the GitHub API
+# (POST /repos/{owner}/{repo}/actions/workflows/git-data-cutover.yml/dispatches)
+# — the same "Inngest-dispatches-GHA" pattern used to keep cloud-admin creds off
+# the app host (plan §3.D.5). The typed `confirm` token below is still required in
+# the dispatch payload.
+
+name: git-data LUKS cutover (#5274 Phase 3 / ADR-068)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type CUTOVER-GIT-DATA to authorize the flip (typo-guard)."
+        required: true
+        type: string
+      dry_run:
+        description: "If true: preconditions + rsync + set-identity verify only; NO freeze, NO flip, NO wipe."
+        required: false
+        type: boolean
+        default: true
+      confirm_wipe:
+        description: "If true AND flip healthy: secure-wipe the old plaintext volume (DL-2). Leave false until post-soak."
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  # Serialize against the web-platform terraform applies: the cutover re-points the
+  # git-data mount that a concurrent apply could also touch. Shared literal string
+  # with apply-web-platform-infra.yml is NOT required (different resource), but a
+  # dedicated non-cancellable group prevents two cutover dispatches overlapping.
+  group: git-data-cutover
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  INFRA_DIR: apps/web-platform/infra
+  # cloudflared for the CF Tunnel SSH bridge — kept byte-identical to
+  # apply-web-platform-infra.yml so both install the same verified binary.
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+jobs:
+  cutover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Validate confirm token
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        # Untrusted input via env, compared as a literal — never interpolated
+        # into the condition.
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "CUTOVER-GIT-DATA" ]]; then
+            echo "::error::confirm token mismatch — type exactly CUTOVER-GIT-DATA to authorize."
+            exit 1
+          fi
+          echo "confirm token accepted."
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
+          [[ -n "$DOPPLER_TOKEN_WRITE_CHECK" ]] || { echo "::error::DOPPLER_TOKEN_WRITE not configured (needed for the flag flip)."; exit 1; }
+
+      # Establish the private-net SSH access path off the app host. The bridge
+      # exports the ssh invocation into the environment; the cutover script reads
+      # it via GIT_DATA_SSH / WEB_HOST_SSH and holds no key material itself.
+      - name: CF Tunnel SSH bridge
+        if: ${{ !inputs.dry_run }}
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
+      - name: Run git-data cutover
+        env:
+          # Read-scoped token for the flag READ (preconditions); write-scoped for
+          # the single flag FLIP. Cloud-admin creds stay in these secrets, never
+          # on the app host.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_WRITE: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          CONFIRM_WIPE: ${{ inputs.confirm_wipe && '1' || '0' }}
+        # The read path (preconditions) uses DOPPLER_TOKEN; the flip uses
+        # DOPPLER_TOKEN_WRITE. The script's set_flag/read_flag call `doppler` with
+        # an explicit -p/-c; we bind the write token for the process so the flip
+        # succeeds and keep the read token available. Because the script performs
+        # exactly one write (the flag), running it under the write-scoped token is
+        # acceptable and simplest; the read token remains for parity with the
+        # apply workflow's two-token model.
+        run: |
+          set -euo pipefail
+          chmod +x "${INFRA_DIR}/git-data-cutover.sh"
+          # Bind the write-capable token for the process (single-write script).
+          DOPPLER_TOKEN="${DOPPLER_TOKEN_WRITE}" \
+            bash "${INFRA_DIR}/git-data-cutover.sh"
+
+      - name: Cutover summary
+        if: always()
+        env:
+          ACTOR: ${{ github.actor }}
+          DRY: ${{ inputs.dry_run }}
+          WIPE: ${{ inputs.confirm_wipe }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## git-data LUKS cutover"
+            echo ""
+            echo "**Actor:** ${ACTOR}"
+            echo "**Dry run:** ${DRY}"
+            echo "**Confirm wipe:** ${WIPE}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "GA verdict is soak-gated — enroll scripts/followthroughs/phase3-ga-soak-5274.sh."
+          } >> "$GITHUB_STEP_SUMMARY"
