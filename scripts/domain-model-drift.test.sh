@@ -252,5 +252,26 @@ echo "$out18" | jq -e '([.facts[]|select(.kind=="policy")]|length) + ([.blind_sp
 # $function$-bodied SECURITY DEFINER guard is captured (not hidden by the dollar-tag body)
 echo "$out18" | jq -e '[.facts[]|select(.kind=="guard" and .object=="guard_fn")]|length == 1' >/dev/null 2>&1 && pass || fail "T18: \$function\$ SECURITY DEFINER guard missed"
 
+# --- Test 19: schema-qualified table tokens strip the `public.` default schema (#5871) ---
+# The `public.` default-schema qualifier must be stripped from table + derived-object
+# anchors (ADR-076 item 3: anchors are `<table>.<object>`), while NON-default schemas
+# (storage., auth.) that the register cites verbatim are PRESERVED.
+t19_repo="$(mktemp -d)"; t19_mig="$t19_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t19_mig"
+cat > "$t19_mig/001.sql" <<'SQL'
+CREATE TABLE public.bar (
+  id uuid PRIMARY KEY,
+  n int CHECK (n > 0)
+);
+CREATE POLICY bar_sel ON public.bar FOR SELECT USING (true);
+CREATE POLICY obj_sel ON storage.objects FOR SELECT USING (true);
+SQL
+out19="$(bash "$DRIFT" extract --repo "$t19_repo" 2>/dev/null)"
+# (a) no anchor retains the `public.` default-schema qualifier (table OR derived object)
+echo "$out19" | jq -e 'all(.facts[]; (.anchor | contains("public.")) | not)' >/dev/null 2>&1 && pass || fail "T19a: public. schema qualifier not stripped from anchors"
+# (b) the derived pkey object name is also clean (not public.bar.public.bar_pkey)
+echo "$out19" | jq -e '[.facts[] | select(.anchor | contains("› bar.bar_pkey"))] | length == 1' >/dev/null 2>&1 && pass || fail "T19b: derived pkey object still schema-qualified"
+# (c) non-default schema (storage.) is PRESERVED
+echo "$out19" | jq -e '[.facts[] | select(.anchor | contains("storage.objects"))] | length >= 1' >/dev/null 2>&1 && pass || fail "T19c: storage. schema wrongly stripped"
+
 echo "domain-model-drift.test.sh: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

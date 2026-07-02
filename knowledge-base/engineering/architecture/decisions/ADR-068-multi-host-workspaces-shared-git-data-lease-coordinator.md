@@ -498,6 +498,32 @@ fixes for every per-step plan:
 coordinator routing — GA)** → Phase 4a (Nomad + reclaim cron + Redis buffer) →
 Phase 4b (continuous checkpoint).
 
+> **Amendment (CTO ruling, 2026-07-02, #5877/#5887 — moved-block migration sequencing).** A
+> `moved {}` block that re-addresses a resource in `OPERATOR_APPLIED_EXCLUSIONS`
+> **wedges every target-scoped CI apply** (`apply-web-platform-infra.yml`,
+> `apply-deploy-pipeline-fix.yml`) until an operator full apply consumes the pending
+> move — Terraform requires every pending `moved` source/target base address to be
+> inside the `-target=` set on a targeted plan, or it aborts with `Error: Moved
+> resource instances excluded by targeting`. The Phase-3 GA singleton→`for_each`
+> migration (#5877) added four `moved` blocks to `placement-group.tf`
+> (`hcloud_server.web`, `hcloud_volume.workspaces`, `hcloud_volume_attachment.workspaces`,
+> `hcloud_server_network.web`) but shipped WITHOUT the cutover apply, so the targeted
+> CI plan went red on every run from 2026-07-01 18:03 (#5887). **Rule:** a
+> singleton→`for_each` migration on an operator-excluded host must ship **with** its
+> operator maintenance-window cutover, **never** as a routine per-PR `-target=`
+> allow-list edit — adding `hcloud_server.web` to the unattended per-PR target set
+> forces a power-off reboot of the running prod host (it carries `placement_group_id`
+> + `for_each`; see `server.tf`) and the Cloudflare-scoped, `delete`-only destroy-guard
+> is blind to that in-place reboot. After the operator apply consumes the moves, no
+> pending moves remain and the targeted CI plan self-heals with zero workflow change.
+> A recurrence guard lives in `plugins/soleur/test/terraform-target-parity.test.ts`
+> (`moved`/`-target` parity block, `MOVED_OPERATOR_CONSUMED`): a future migration that
+> re-addresses an operator-excluded resource fails at plan-review time instead of
+> silently wedging CI. (Residual, deferred to a follow-up: the destroy-guard remains
+> blind to reboot-forcing in-place `update` on `hcloud_server.*` — a reboot-aware
+> apply guard is the interim gap the parity accounting-check does not mechanically
+> close; tracked in #5911.)
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills
