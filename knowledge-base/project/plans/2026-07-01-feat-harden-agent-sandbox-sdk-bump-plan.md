@@ -204,9 +204,9 @@ Enumeration checked against all three `.c4` files: no new external human actor, 
 
 ### PR2 — faithful canary
 #### Pre-merge (PR)
-- [ ] `sandbox-canary.mjs` imports `agent-runner-sandbox-config.ts` (does not re-specify options); test lives under `apps/web-platform/test/` and is collected by vitest.
-- [ ] `ci-deploy.sh`: faithful canary runs **non-blocking**, legacy `:784` probe remains the gate; verdict written to deploy-state and surfaced on `/hooks/deploy-status`; Sentry event on faithful-FAIL; exit-code classification distinguishes `canary_infra_error` (125/126/127/ENOENT, non-blocking) from `sandbox_broken`.
-- [ ] Follow-through enrollment committed (script + tracker directive + label).
+- [x] `sandbox-canary.mjs` imports `agent-runner-sandbox-config.ts` (lazy, capture mode; does not re-specify options); test lives under `apps/web-platform/test/` and is collected by vitest (14 tests). **Mechanism = ADR-079 hybrid (capture-in-CI / replay-at-deploy); deploy-time runs in-container (host has no node).**
+- [x] `ci-deploy.sh`: faithful canary runs **non-blocking** (`run_faithful_sandbox_canary`), legacy probe remains the gate; verdict written to deploy-state and surfaced on `/hooks/deploy-status` (`sandbox_canary`); Sentry event on faithful-FAIL; exit-code classification distinguishes `canary_infra_error` (125/126/127/ENOENT, non-blocking) from `sandbox_broken`.
+- [x] Follow-through enrollment committed (script + sweeper secrets + soak accumulator). Directive/label enrolled on a **dedicated soak issue** Ref #5875 (not #5875 itself — sweeper closes-on-pass would prematurely close the umbrella before PR3).
 #### Post-merge (automation)
 - [ ] Follow-through sweeper promotes canary → blocking after **5 green non-blocking verdicts across ≥3 days of real deploys** (automated; see Enrollment).
 
