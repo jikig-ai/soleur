@@ -659,3 +659,126 @@ describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884
     expect(uncovered).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
   });
 });
+
+// ─── `moved`-block / -target parity (#5887) ─────────────────────────────────
+// Terraform processes EVERY `moved {}` block on any plan/apply. Under a
+// target-scoped plan (`terraform plan -target=<addr>`, the shape both
+// apply-web-platform-infra.yml and apply-deploy-pipeline-fix.yml use), Terraform
+// REJECTS the plan if a pending `moved` source/target base address is excluded
+// from the `-target=` set:
+//     Error: Moved resource instances excluded by targeting
+// #5877 (ADR-068 Phase 3) added four `moved {}` blocks to placement-group.tf,
+// re-addressing the singleton web host + its volume/attachment/network to the
+// `["web-1"]` for_each key. That wedged the targeted CI plan RED on every run.
+//
+// The fix is NOT to add these bases to the per-PR `-target=` allow-list:
+// `hcloud_server.web` carries `placement_group_id` + `for_each = var.web_hosts`
+// (server.tf), so targeting it in the UNATTENDED per-PR path forces a power-off
+// reboot of the running prod host (and transitively creates the placement group
+// / a second host). They are consumed by the operator's ADR-068 Phase-3
+// MAINTENANCE-WINDOW apply, after which no pending moves remain and the targeted
+// CI plan self-heals with zero workflow change. This guard therefore asserts
+// every `moved` endpoint is EITHER `-target=`ed OR documented as operator-consumed
+// — it must NOT encode "moved endpoint ⟹ must be in -target" (that would hard-code
+// the rejected, reboot-bearing fix as the required state). See #5887 + the
+// ADR-068 §Amendment (#5887).
+
+/**
+ * Every `moved { from = <addr> to = <addr> }` endpoint reduced to its BASE
+ * resource address (a trailing `["key"]` for_each/index is dropped — the
+ * `[a-z0-9_]+\.[A-Za-z0-9_]+` capture stops at the word boundary before `[`).
+ * The four #5877 blocks are FLAT (no nested braces), so a flat
+ * `moved\s*\{[^}]*\}` match is sufficient — the depth-counting
+ * `extractTerraformDataResources` walker is not needed here.
+ */
+function extractMovedBases(stripped: string): string[] {
+  const bases = new Set<string>();
+  for (const block of stripped.match(/(?:^|\n)\s*moved\s*\{[^}]*\}/g) ?? []) {
+    for (const m of block.matchAll(
+      /\b(?:from|to)\s*=\s*([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
+    )) {
+      bases.add(m[1]);
+    }
+  }
+  return [...bases];
+}
+
+// The four #5877 `moved` bases, consumed by the operator's ADR-068 Phase-3
+// maintenance-window apply (a routine per-PR `-target` add would reboot/replace
+// the running host — see #5887). The 4th (`hcloud_server_network.web`) is not in
+// the runtime error only because its Phase-2 resource is not yet in state → its
+// move is a no-op with nothing to move; the guard accounts for all four so a
+// future state-materialization does not re-wedge CI.
+//
+// DUAL-MAINTENANCE HAZARD: these four addresses also live in
+// OPERATOR_APPLIED_EXCLUSIONS above (they are operator-applied for the #5566
+// coverage guard too). The subset test below asserts the two hand-maintained
+// sets never diverge on a resource rename.
+const MOVED_OPERATOR_CONSUMED = new Set<string>([
+  "hcloud_server.web",
+  "hcloud_volume.workspaces",
+  "hcloud_volume_attachment.workspaces",
+  "hcloud_server_network.web",
+]);
+
+describe("terraform `moved`/-target parity — pending moves are accounted for (#5887)", () => {
+  let movedBases: string[];
+  let allTargets: Set<string>;
+
+  beforeAll(() => {
+    movedBases = listInfraTfFiles().flatMap((f) =>
+      extractMovedBases(stripComments(readFileSync(f, "utf8"))),
+    );
+    allTargets = new Set<string>([
+      ...extractAllTargets(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
+      ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
+    ]);
+  });
+
+  test("every `moved` endpoint base is `-target=`ed OR documented operator-consumed", () => {
+    // non-vacuity: the 4 #5877 bases. NOTE: once the operator ADR-068 Phase-3
+    // cutover completes and the `moved {}` blocks are cleaned out of
+    // placement-group.tf, this assertion red-lines BY DESIGN — drop it (and
+    // MOVED_OPERATOR_CONSUMED) in that cleanup PR.
+    expect(movedBases.length).toBeGreaterThan(0);
+    const uncovered = movedBases.filter(
+      (a) => !allTargets.has(a) && !MOVED_OPERATOR_CONSUMED.has(a),
+    );
+    // A non-empty list means a `moved {}` block re-addresses a resource that is
+    // NEITHER in the workflow `-target=` allow-list NOR classified as
+    // operator-consumed — i.e. it WEDGES every target-scoped CI apply with
+    // "Moved resource instances excluded by targeting" (the #5887 class). Fix:
+    // add a `-target=` line ONLY if the resource is safe to apply UNATTENDED
+    // per-PR; otherwise classify it into MOVED_OPERATOR_CONSUMED and ship the
+    // operator cutover WITH the migration. This test is also the regression
+    // anchor — dropping a #5877 base from MOVED_OPERATOR_CONSUMED turns it red
+    // (the base is not in allTargets), so no separate tautology test is added.
+    expect(uncovered).toEqual([]);
+  });
+
+  test("guard FAILS on a synthetic forgotten `moved` block (non-vacuity)", () => {
+    // Prove the guard bites: a moved block whose base is in NEITHER set is flagged.
+    const synthetic = `
+moved {
+  from = hcloud_foo.bar
+  to   = hcloud_foo.bar["k"]
+}
+`;
+    const parsed = extractMovedBases(stripComments(synthetic));
+    expect(parsed).toEqual(["hcloud_foo.bar"]); // base extracted, index stripped
+    const uncovered = parsed.filter(
+      (a) => !allTargets.has(a) && !MOVED_OPERATOR_CONSUMED.has(a),
+    );
+    expect(uncovered).toEqual(["hcloud_foo.bar"]);
+  });
+
+  test("MOVED_OPERATOR_CONSUMED is a subset of OPERATOR_APPLIED_EXCLUSIONS (dual-maintenance drift guard)", () => {
+    // Closes the sync-drift hazard: the four addresses live in two hand-maintained
+    // sets that must move in lockstep on a resource rename. Any moved-consumed base
+    // that is NOT also operator-excluded means the sets diverged.
+    const drifted = [...MOVED_OPERATOR_CONSUMED].filter(
+      (a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a),
+    );
+    expect(drifted).toEqual([]);
+  });
+});
