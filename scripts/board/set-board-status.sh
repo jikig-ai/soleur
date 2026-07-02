@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Single writer for the canonical GitHub Project v2 board "Soleur Kanban" Status
-# field (ADR-075). Moves the LINKED ISSUE's card (the Workstream tab reads
+# field (ADR-080). Moves the LINKED ISSUE's card (the Workstream tab reads
 # issues, not PRs) as issues/PRs move through their lifecycle.
 #
 # All board logic lives here (not in the workflow YAML) so it is unit-testable

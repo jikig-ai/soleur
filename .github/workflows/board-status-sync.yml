@@ -1,6 +1,6 @@
 # Move cards on the canonical GitHub Project v2 board "Soleur Kanban"
 # (jikig-ai/projects/2) as issues/PRs move through their lifecycle — the single
-# writer of board Status (ADR-075). All board logic lives in
+# writer of board Status (ADR-080). All board logic lives in
 # scripts/board/set-board-status.sh (unit-tested with a mocked gh:
 # scripts/board/set-board-status.test.sh) — a new workflow cannot be
 # workflow_dispatch-tested from a feature branch, so the logic is tested
