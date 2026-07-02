@@ -33,6 +33,13 @@ export type Command = {
   readonly group: CommandGroup;
   /** Optional keyboard hint shown in the palette/overlay (display only). */
   readonly keys?: string;
+  /**
+   * Optional Super/Meta accelerator hint (`⌘D`), display-only, sibling of `keys`.
+   * Named `accelKeys` to disambiguate from nav-items' single-letter `accel`.
+   * Populated ONLY on Apple (off-mac the metaKey-only binding would advertise an
+   * unreachable "Ctrl+D" — a false affordance). Never folded into `keys`.
+   */
+  readonly accelKeys?: string;
   /** Returns a serializable effect the UI interprets — never a side-effecting closure. */
   run(): CommandEffect;
 };
@@ -116,6 +123,7 @@ export function writeShortcutsEnabled(enabled: boolean): void {
 }
 
 import { NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEMS } from "./nav-items";
+import { isApplePlatform, modChord } from "./platform";
 
 // ---------------------------------------------------------------------------
 // Direct "go-to" keyboard sequences (`g` prefix + a letter) — #5636, the
@@ -135,6 +143,10 @@ export const SEQUENCE_PREFIX = "g";
  * copy/SIGINT conflict `isEditable` cannot protect) to the collision-free
  * `g`-family — `c` = chat, the closest surviving letter. */
 export const ASK_AGENT_SEQ = "g c";
+
+/** The Ask-an-agent Super/Meta accelerator (⌘C). Mirrors ASK_AGENT_SEQ; not a
+ * nav route so it lives here, not on a nav array. */
+export const ASK_AGENT_ACCEL = "c";
 
 /** Window between the two keystrokes of a sequence (GitHub `hotkey`'s value). */
 export const SEQUENCE_WINDOW_MS = 1500;
@@ -205,12 +217,84 @@ export function resolveSequence(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Super/Meta accelerators (⌘D/⌘I/⌘R/⌘A/⌘C) — the metaKey-only companion layer to
+// the `g`-leader, additive and never replacing it. The `accel` field on
+// NAV_ITEMS/ADMIN_NAV_ITEMS is the SINGLE source for the accelerator letter: the
+// resolver map, the palette accel hint, and the `?` overlay accel row all derive
+// from it. Module-private (like NAV_SEQUENCE_EFFECTS) — asserted via behavior.
+// ---------------------------------------------------------------------------
+
+// letter → effect, derived once from the single-source `accel` fields.
+const NAV_ACCEL_EFFECTS: Readonly<Record<string, CommandEffect>> = {
+  ...Object.fromEntries(
+    NAV_ITEMS.filter((i) => i.accel).map((i) => [
+      (i.accel as string).toLowerCase(),
+      { kind: "navigate", href: i.href } as CommandEffect,
+    ]),
+  ),
+  [ASK_AGENT_ACCEL]: { kind: "openChat" },
+};
+
+// Admin-only accelerator letters (⌘A → Analytics), resolved only when isAdmin.
+const ADMIN_ACCEL_EFFECTS: Readonly<Record<string, CommandEffect>> =
+  Object.fromEntries(
+    ADMIN_NAV_ITEMS.filter((i) => i.accel).map((i) => [
+      (i.accel as string).toLowerCase(),
+      { kind: "navigate", href: i.href } as CommandEffect,
+    ]),
+  );
+
+/**
+ * Pure Super/Meta accelerator resolver — the `metaKey`-only sibling of
+ * `resolveSequence`. Reads `e.metaKey` EXCLUSIVELY (never `ctrlKey` — Ctrl+letter
+ * on Win/Linux is a hostile hijack of native shortcuts and must NOT arm; this is
+ * the whole point of the guarded design, distinct from `resolveShortcut`'s
+ * `metaKey || ctrlKey` union). Rejects the shift variant (⌘⇧D is a distinct
+ * chord), editable focus (native ⌘C/⌘A/⌘R survive in inputs), and auto-repeat.
+ * `⌘A` (Analytics) is admin-gated, mirroring `resolveSequence`. Returns the
+ * CommandEffect (the caller `preventDefault`s + runs it) or null (fall through to
+ * the g-leader arm). Stays DOM-free — the ⌘C selection-yield lives in the LISTENER.
+ *
+ * NOTE on ⌥/Alt: on macOS Option transforms `e.key` (⌘⌥D → "∂") so an Alt chord
+ * never matches a letter here; on Win/Linux Alt does NOT transform the key, so
+ * `Meta+Alt+D` would technically match — but that combo is harmless (navigates, no
+ * data-loss) and, since the accelerators are a macOS feature in practice
+ * (Win+letter / Super+letter are OS/WM-reserved, which is WHY the HINT is gated to
+ * Apple), it is accepted-unguarded, not silently wrong. No `altKey` widening.
+ * NOTE on ⌘R: `preventDefault` stops the SOFT reload; ⌘⇧R (hard reload) still
+ * fires — an acceptable escape hatch, not a gap.
+ */
+export function resolveNavChord(
+  e: ShortcutKeyEvent,
+  ctx: ShortcutContext,
+): CommandEffect | null {
+  if (isEditable(e.target)) return null; // native ⌘C/⌘A/⌘R survive in inputs
+  if (e.repeat) return null;
+  if (!e.metaKey) return null; // metaKey ONLY, never ctrlKey
+  if (e.shiftKey) return null; // ⌘⇧<letter> is a distinct chord
+  const k = e.key.toLowerCase();
+  const navEffect = NAV_ACCEL_EFFECTS[k];
+  if (navEffect) return navEffect;
+  const adminEffect = ADMIN_ACCEL_EFFECTS[k];
+  if (adminEffect) return ctx.isAdmin ? adminEffect : null;
+  return null;
+}
+
 /**
  * The static command registry (navigation + hero actions). Routine and KB-doc
  * commands are async (fetched when the palette opens) and built in the palette
  * component — they are not part of this synchronous static set.
  */
-export function buildCommands(ctx: ShortcutContext): Command[] {
+export function buildCommands(
+  ctx: ShortcutContext,
+  // Display-only: picks the modifier glyph for chord hints (⌘ vs Ctrl). Defaults
+  // to non-Apple so SSR / no-navigator renders the stable `Ctrl` form the
+  // provider then syncs post-hydration. NOT part of ShortcutContext — the pure
+  // resolvers must never see platform.
+  opts?: { isApplePlatform?: boolean },
+): Command[] {
+  const isApple = opts?.isApplePlatform ?? false;
   // Primary nav + admin stay in the root "Navigation" group. Settings
   // destinations get their OWN "Settings" group, surfaced behind the palette's
   // Settings drill-in sub-page (not flat in the root) — see command-palette.tsx.
@@ -221,6 +305,11 @@ export function buildCommands(ctx: ShortcutContext): Command[] {
       group: "Navigation" as const,
       // Key hint derived from the single-source `seq` field (`"g d"` → `G D`).
       ...(item.seq ? { keys: formatSeqHint(item.seq) } : {}),
+      // Accelerator hint (`⌘D`) derived from the single-source `accel` field —
+      // Apple-ONLY (off-mac it would be an unreachable "Ctrl+D" false affordance).
+      ...(item.accel && isApple
+        ? { accelKeys: modChord(item.accel.toUpperCase(), true) }
+        : {}),
       run: () => ({ kind: "navigate" as const, href: item.href }),
     }),
   );
@@ -240,13 +329,15 @@ export function buildCommands(ctx: ShortcutContext): Command[] {
       // Show the GLOBAL summon binding (`G C`), not the palette-only `⌘↵` — the
       // latter only fires with the palette already open.
       keys: formatSeqHint(ASK_AGENT_SEQ),
+      // Apple-only ⌘C accelerator hint (mirrors ASK_AGENT_ACCEL).
+      ...(isApple ? { accelKeys: modChord("C", true) } : {}),
       run: () => ({ kind: "openChat" as const }),
     },
     {
       id: "toggle-sidebar",
       label: "Toggle sidebar",
       group: "General",
-      keys: "⌘B",
+      keys: modChord("B", isApple),
       run: () => ({ kind: "toggleSidebar" as const }),
     },
     {
@@ -297,6 +388,12 @@ export type ShortcutsContextValue = {
   closeHelp: () => void;
   isAdmin: boolean;
   shortcutsEnabled: boolean;
+  /**
+   * Whether the device is an Apple platform — DISPLAY ONLY (picks ⌘ vs Ctrl for
+   * key hints). SSR-safe: false on the server, synced post-hydration so the
+   * glyph never mismatches. Consumers pass it to `modChord` / `buildCommands`.
+   */
+  isApplePlatform: boolean;
   /** Interpret a serializable CommandEffect (navigate / chat / help / sidebar). */
   runEffect: (effect: CommandEffect) => void;
 };
@@ -335,12 +432,21 @@ export function ShortcutsProvider({
   // SSR-safe: init ON (matches server render), then sync the device-local pref
   // post-hydration so the ⌘ glyph / listener decision never mismatches.
   const [shortcutsEnabled, setShortcutsEnabled] = useState(true);
+  // SSR-safe: init non-Apple (→ `Ctrl` glyph, matches the server render), then
+  // read the real platform post-hydration. A one-frame `Ctrl`→`⌘` correction on
+  // Apple is acceptable and never the reverse, so no hydration mismatch warning.
+  const [applePlatform, setApplePlatform] = useState(false);
 
   useEffect(() => {
     const sync = () => setShortcutsEnabled(readShortcutsEnabled());
     sync();
     window.addEventListener(SHORTCUTS_CHANGED_EVENT, sync);
     return () => window.removeEventListener(SHORTCUTS_CHANGED_EVENT, sync);
+  }, []);
+
+  // Platform is stable for the session; read it once post-hydration.
+  useEffect(() => {
+    setApplePlatform(isApplePlatform());
   }, []);
 
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -482,6 +588,42 @@ export function ShortcutsProvider({
         return;
       }
 
+      // --- Super/Meta accelerators (metaKey-only). AFTER resolveShortcut so
+      // ⌘K=palette / ⌘B=sidebar stay authoritative; BEFORE the g-leader arm.
+      // NEW flag-gated bindings → gated on `enabled`; suppressed while the
+      // palette/help overlay is open. ---
+      if (s.enabled && !s.paletteOpen && !s.helpOpen) {
+        // Resolve FIRST (pure, exits instantly on !metaKey for ordinary typing);
+        // the DOM query then runs ONLY on an actual accelerator match — matching
+        // the g-arm's "cheap, only on match" discipline (DHH #1 + code-simplicity).
+        const navEffect = resolveNavChord(e, { isAdmin: s.isAdmin });
+        if (navEffect) {
+          // ⌘C YIELDS to native copy when the user has an ACTIVE selection —
+          // copying agent/KB/code output is a core reading gesture and isEditable
+          // does NOT cover a selection in a plain <p>/<div> (focus on body). No
+          // selection → ⌘C opens chat as bound. The resolver stays DOM-free; this
+          // selection read lives in the listener (CPO #1 / Kieran P1 / spec-flow /
+          // user-impact). Scoped to openChat (⌘C) only. `!isCollapsed` (not
+          // `toString() !== ""`) so a NON-text selection (image / rich node) also
+          // yields to native copy (user-impact Finding 2).
+          const sel =
+            typeof window !== "undefined" ? window.getSelection() : null;
+          const yieldToCopy =
+            navEffect.kind === "openChat" && !!sel && !sel.isCollapsed;
+          // Suppress under any app modal (a nav-away would discard unsaved input)
+          // — parity with the g-arm guard. preventDefault stops the native
+          // ⌘D/⌘R/⌘A/⌘C data-loss action.
+          if (
+            !yieldToCopy &&
+            !document.querySelector('[role="dialog"][aria-modal="true"]')
+          ) {
+            e.preventDefault();
+            s.runEffect(navEffect);
+            return;
+          }
+        }
+      }
+
       // --- Arm a new go-to prefix on `g`. Gated on the command-palette flag
       // (`enabled`) — these are new flag-gated bindings — AND suppressed while the
       // palette/help overlay is open. ---
@@ -513,6 +655,7 @@ export function ShortcutsProvider({
       closeHelp,
       isAdmin,
       shortcutsEnabled,
+      isApplePlatform: applePlatform,
       runEffect,
     }),
     [
@@ -525,6 +668,7 @@ export function ShortcutsProvider({
       closeHelp,
       isAdmin,
       shortcutsEnabled,
+      applePlatform,
       runEffect,
     ],
   );

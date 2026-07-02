@@ -103,6 +103,18 @@ describe("HelpOverlay", () => {
     expect(screen.queryByText("Go to Analytics")).not.toBeInTheDocument();
   });
 
+  it("renders Ctrl (not ⌘) glyphs on a non-Apple platform (happy-dom default) — FR2/AC2", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    // The chord rows are keyed by stable id; the visible <kbd> carries the
+    // platform-specific glyph. happy-dom's navigator is non-Apple → Ctrl.
+    expect(screen.getByTestId("help-row-palette")).toHaveTextContent("Ctrl+K");
+    expect(screen.getByTestId("help-row-sidebar")).toHaveTextContent("Ctrl+B");
+    expect(screen.getByTestId("help-row-palette")).not.toHaveTextContent("⌘");
+    expect(screen.getByTestId("help-row-sidebar")).not.toHaveTextContent("⌘");
+  });
+
   it("shows the Go to Analytics row only for an admin", async () => {
     renderHelp({ isAdmin: true });
     pressKey("/", { meta: true });
@@ -151,12 +163,44 @@ describe("HelpOverlay", () => {
   });
 });
 
+describe("HelpOverlay — accelerator hint is Apple-only (AC12)", () => {
+  it("renders ONLY the G-seq on happy-dom's non-Apple default", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    const row = screen.getByTestId("help-row-G D");
+    expect(row).toHaveTextContent("G D");
+    expect(row).not.toHaveTextContent("⌘D");
+  });
+
+  it("renders BOTH ⌘D and G D on Apple; Workstream stays G-seq only", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    });
+    renderHelp();
+    // Provider reads the platform in a mount effect — let it settle.
+    await act(async () => {});
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    const dash = screen.getByTestId("help-row-G D");
+    expect(dash).toHaveTextContent("⌘D");
+    expect(dash).toHaveTextContent("G D");
+    // Ask-agent row (G C) also shows its ⌘C accel on Apple.
+    expect(screen.getByTestId("help-row-G C")).toHaveTextContent("⌘C");
+    // Workstream has no accel — only its G-seq.
+    const work = screen.getByTestId("help-row-G W");
+    expect(work).toHaveTextContent("G W");
+    expect(work).not.toHaveTextContent("⌘W");
+  });
+});
+
 describe("HelpOverlay — rows run their command (not just close)", () => {
   it("selecting the ⌘K row opens the command palette and closes the overlay", async () => {
     renderHelpAndPalette();
     pressKey("/", { meta: true }); // open help overlay
     await screen.findByLabelText("Search keyboard shortcuts");
-    fireEvent.click(screen.getByTestId("help-row-⌘K"));
+    fireEvent.click(screen.getByTestId("help-row-palette"));
     // The command palette is now open…
     expect(
       await screen.findByLabelText("Command palette search"),
@@ -172,7 +216,7 @@ describe("HelpOverlay — rows run their command (not just close)", () => {
     renderHelpAndPalette(onToggleSidebar);
     pressKey("/", { meta: true });
     await screen.findByLabelText("Search keyboard shortcuts");
-    fireEvent.click(screen.getByTestId("help-row-⌘B"));
+    fireEvent.click(screen.getByTestId("help-row-sidebar"));
     expect(onToggleSidebar).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByLabelText("Search keyboard shortcuts"),

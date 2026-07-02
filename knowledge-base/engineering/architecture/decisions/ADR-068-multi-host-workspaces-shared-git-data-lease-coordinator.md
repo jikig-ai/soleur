@@ -279,6 +279,44 @@ fixes for every per-step plan:
 > The `coordinator` C4 description is refined to "co-located stateless sticky router";
 > the `tunnel -> coordinator` ingress relation is corrected by the TLS/cred amendment.
 
+> **Amendment (CTO ruling, 2026-07-01, Phase 3 GA — placement hook point / b2).**
+> The routing amendment above said the placement decision is "taken at the
+> **WS-upgrade handshake, not after**". That literal timing is **superseded**: it is
+> **impossible** under the codebase's first-message-auth model — the client connects
+> to `/ws` with **no** token and sends `{type:"auth",token}` as the FIRST WS message
+> (`ws-client.ts:757-765`), so `userId` does not exist at the raw TCP `upgrade` event
+> (`ws-handler.ts` `server.on("upgrade")`); the router needs `(workspaceId, userId)`
+> to read the per-user lease. **New hook point (b2):** placement is decided at
+> **first-message auth** — the earliest point `userId` exists — **before `auth_ok`**
+> and before any session bootstrap, gated on `isGitDataStoreEnabled()` (inert, no
+> per-connection DB read, until the 3.D flip). A peer-owned session is then
+> **transparently proxied** to the owner over one-way TLS with **NO client-visible
+> reconnect** (`session-proxy.ts`): the proxying host relays the authenticated socket
+> and forwards frames + close codes both ways; the owner runs `verifyProxiedSession
+> Membership` (AP-2, fail-closed) before serving. **The preserved fly-replay invariant
+> is "never upgrade-then-REDIRECT"** (no client reconnect / no blip) — NOT "decide
+> before the TCP upgrade", which is unnecessary because a transparent socket relay
+> preserves end-to-end stream continuity (so no ADR-059 replay buffer is pulled from
+> Phase 4a). **Rejected:** (A) move auth into the handshake (token in URL/subprotocol)
+> — a net-new credential-exposure surface (CF edge access logs are not app-scrubbed)
+> and it perturbs the hottest, deliberately-TOCTOU-safe first-message-auth path for
+> zero functional gain over b2; (b1) close-code + owner-hint reconnect — the browser
+> only ever dials the CF ingress (not lease-aware; edge sticky-affinity was the
+> rejected Option D) and the owner's address is a **private-net** address the browser
+> cannot dial → reconnect-loop. A **forced drain/migration** still uses a non-transient
+> close code (`ROUTING_MIGRATED`) → the client reconnects via the CF ingress → is
+> re-proxied by b2 to the new owner (coexists with b2 placement). **AC2's negative
+> test** is reframed: *a peer-owned session is proxied transparently to the owner
+> before `auth_ok` — assert NO `ROUTING_MIGRATED`/reconnect close on the initial
+> placement path, and the owner runs `verifyProxiedSessionMembership`* (asserted at the
+> router/handler entry, never via an LLM prompt). **Scope note:** Sub-PR 3.B lands the
+> data-correctness core (per-user `worktree_id` + namespaced refspec + pre-receive
+> namespace check), the router decision, the b2 transport (`session-proxy.ts`), the
+> proxying-side hook, and the owner-side AP-2 acceptor — all inert until 3.D. The
+> owner-side **native-session attach** (binding a proxied socket into the session
+> lifecycle) + the private-net listener **boot** land with the 3.D 2nd-host bring-up,
+> where the relay is first exercisable and soak-validated (AC7/AC8).
+
 > **Amendment (CTO ruling, 2026-07-01, Phase 3 GA — TLS + credential + D2).**
 > §6's "**mTLS** coordinator↔host" and "per-`workspace_id` credential / mTLS ... never
 > a cluster-wide cred" are concretized for the 2-host owned line:
@@ -471,7 +509,7 @@ is clean and all four new elements render in the Container view.
 
 | C4 id | Kind | Phase it ships | Role |
 |---|---|---|---|
-| `coordinator` | container | 3 (GA path) | Co-located stateless **sticky** router (in each web-host process; user-sticky amendment 2026-07-01) — routes to the per-user lease-holder at WS-upgrade, proxies over one-way TLS; control ops are host-local (no cross-host forwarder) |
+| `coordinator` | container | 3 (GA path) | Co-located stateless **sticky** router (in each web-host process; user-sticky amendment 2026-07-01) — routes to the per-user lease-holder at **first-message auth** (b2 hook-point amendment), transparently proxies over one-way TLS; control ops are host-local (no cross-host forwarder) |
 | `gitDataStore` | database | 2 (GA path) | Shared bare repos (objects/refs) over the private net; writer-side CAS fence (reject `gen < max`) |
 | `scheduler` | container | 4a (post-GA) | Nomad — placement / health-reschedule / rolling deploy |
 | `sessionStore` | database | 4a (post-GA) | Self-hosted EU Redis — ADR-059 replay buffer; DISTINCT from the loopback Inngest Redis |

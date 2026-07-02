@@ -30,13 +30,13 @@ Derived from the finalized plan. Three PRs preceded by a blocking spike. Check #
 
 ## Phase 2 — PR2: faithful canary, dark-launch (item 1)
 
-- [ ] 2.1 Create `apps/web-platform/scripts/sandbox-canary.mjs` — import `agent-runner-sandbox-config.ts` (do not re-specify options), feed into the SDK, start a Bash sandbox, run a no-op; honor the Phase-0 no-model-turn finding.
-- [ ] 2.2 Create `apps/web-platform/test/sandbox-canary.test.ts` (under `test/` so vitest globs collect it — not `scripts/`).
-- [ ] 2.3 Wire the faithful canary into `ci-deploy.sh` **non-blocking**; keep the legacy `:784` probe as the gate; write the verdict to deploy-state.
-- [ ] 2.4 Exit-code classification: `125/126/127/ENOENT` ⇒ `canary_infra_error` (non-blocking); `bwrap … Operation not permitted` ⇒ `sandbox_broken`. Bash traps: `set +o pipefail` around `| logger`, `awk '!seen[$0]++'`.
-- [ ] 2.5 `cat-deploy-state.sh` surfaces the canary verdict on `/hooks/deploy-status`; emit a Sentry event on faithful-FAIL (no journald-only signal).
-- [ ] 2.6 Create `scripts/followthroughs/canary-promotion-5875.sh` (exit 0 after 5 green verdicts over ≥3 days, `start=` pinned after PR2 deploy); add the tracker directive + `follow-through` label on #5875; wire secrets into `scheduled-followthrough-sweeper.yml`.
-- [ ] 2.7 `tsc --noEmit`. PR body: `Ref #5875` (item 1).
+- [x] 2.1 Create `apps/web-platform/scripts/sandbox-canary.mjs`. **Mechanism = ADR-079 hybrid (CTO-ruled):** `--capture`/`--verify` (CI/PR3) import `agent-runner-sandbox-config.ts` (lazy dynamic import; does not re-specify options) + drive the SDK to snapshot the argv; `--replay` (deploy-time, default) replays the captured SETUP argv creds-free inside the canary container. Runs in-container (`docker exec <canary> node …`) — the host has no node.
+- [x] 2.2 Create `apps/web-platform/test/sandbox-canary.test.ts` (14 tests, vitest-collected; classifier/fixture/invocation + source-contract, no LLM).
+- [x] 2.3 Wire the faithful canary into `ci-deploy.sh` **non-blocking** (`run_faithful_sandbox_canary` after the legacy probe, which stays the gate); verdict → `write_sandbox_canary_state` → deploy-state. Baked into the image via Dockerfile COPY.
+- [x] 2.4 Exit-code classification (`docker exec` 125/126/127/ENOENT ⇒ `canary_infra_error`; `bwrap … Operation not permitted` ⇒ `sandbox_broken`) in the mjs + host wrapper; `set +o pipefail` around the logger/exec block.
+- [x] 2.5 `cat-deploy-state.sh` surfaces `sandbox_canary` on `/hooks/deploy-status` (+ soak accumulators); `sandbox_canary_sentry_event` on faithful-FAIL (never journald-only).
+- [x] 2.6 Create `scripts/followthroughs/canary-promotion-5875.sh` (single stateless GET; PASS after `consecutive_pass ≥ 5` over ≥3d, self-pinned via host-accumulated `first_pass_at`); wire secrets into `scheduled-followthrough-sweeper.yml`. **Deviation:** the `follow-through` directive is enrolled on a **dedicated soak issue #5889** that Refs #5875 (NOT #5875 itself) — the sweeper CLOSES on soak-pass, which would prematurely close the umbrella #5875 before PR3 (items 3+4). Soak accumulation lives host-side in `write_sandbox_canary_state` (increment/reset/hold), tested by `sandbox-canary-soak.test.sh` (11 cases, registered in infra-validation.yml).
+- [x] 2.7 `tsc --noEmit` (canary is `.mjs` + shell — no TS surface); vitest 14/14 + infra shells green. PR body: `Ref #5875` (item 1).
 
 ## Phase 3 — PR3: SDK-bump guard + profile→redeploy (items 3 + 4)
 

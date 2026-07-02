@@ -342,3 +342,14 @@ apps/web-platform/server/auto-sync-trigger.ts
 # client. No per-tenant key — the row is anonymous (NO session/user/conversation
 # column, CRITICAL-2) and RLS is service-role-only (no authenticated write path).
 apps/web-platform/server/tool-attempt-telemetry.ts
+
+# Cross-host WS proxy AP-2 membership re-verify (#5274 Sub-PR 3.B, ADR-068):
+# session-proxy.ts hands createServiceClient() to verifyProxiedSessionMembership
+# (session-router.ts), which reads workspace_members cross-tenant to confirm a
+# peer-supplied (userId, workspaceId) before the owner host serves a proxied
+# session. This runs on the private-net host↔host relay leg where there is NO
+# user JWT to mint a tenant client from (the owner acts on a claimed identity
+# received from a trusted cluster peer over one-way-TLS). Fail-closed (deny on
+# error / no-row). Same trusted-server injected-service-client shape as
+# resolve-installation-id-for-workspace.ts / workspace-identity-resolver.ts.
+apps/web-platform/server/session-proxy.ts
