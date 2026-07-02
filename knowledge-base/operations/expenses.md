@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-17
+last_updated: 2026-07-02
 ---
 
 # Expenses
@@ -13,7 +13,7 @@ last_updated: 2026-06-17
 | Hetzner Volume (20 GB) | Hetzner | hosting | 0.88 | active | 2026-04-01 | Persistent storage for /workspaces, hel1 (web platform) |
 | Hetzner CAX11 (git-data) | Hetzner | hosting | 4.10 | active | 2026-08-01 | 2 vCPU ARM64/Ampere, 4 GB RAM, hel1. Bare git-data store host for the multi-host /workspaces split (#5274 Phase 2, ADR-068). Provisions on this PR's merge via apply-web-platform-infra.yml. ~EUR 3.79/mo — VERIFY actual draw on the next Hetzner invoice. DPA: covered by the existing Hetzner DPA (same account, no new sub-processor) |
 | Hetzner Primary IPv4 (git-data) | Hetzner | hosting | 0.54 | active | 2026-08-01 | Egress-only public IPv4 for the git-data host (apt/GitHub during cloud-init; a no-public-IP host has no NAT). Public ingress is deny-all by firewall. ~EUR 0.50/mo — VERIFY on invoice |
-| Hetzner Volume (git-data, 10 GB) | Hetzner | hosting | 0.48 | active | 2026-08-01 | Bare-repo block volume for the git-data store (objects/refs + the per-worktree fence sidecar/lock), hel1 (#5274). ~EUR 0.44/mo — VERIFY on invoice |
+| Hetzner Volume (git-data, 10 GB, LUKS) | Hetzner | hosting | 0.48 | active | 2026-08-01 | Bare-repo block volume for the git-data store (objects/refs + the per-worktree fence sidecar/lock), hel1 (#5274). ~EUR 0.44/mo — VERIFY on invoice. **#5274 Phase-3 (3.D) cutover:** converted to encryption-at-rest — the git-data store now lives on a fresh **LUKS-encrypted** block volume that replaces the original unencrypted git-data volume. Transient dual-existence during the cutover (old + new volume both attached while data is copied over); the old unencrypted volume is decommissioned post-cutover per DL-2. **No net-new recurring cost** — LUKS is same-size block encryption of the same logical volume (replacement, not an addition) |
 | Hetzner CX33 (web-2) | Hetzner | hosting | 15.37 | active | 2026-08-01 | 2nd web host (4 vCPU, 8 GB RAM, 160 GB SSD, hel1) for the multi-host /workspaces GA line (#5274 Phase 3, ADR-068). Same spec as the existing web CX33; joins the `for_each` cluster + `hcloud_placement_group` spread. Provisions on the 3.A maintenance-window apply (placement-group attach reboots web-1). DPA: covered by the existing Hetzner DPA (same account, no new sub-processor). VERIFY actual draw on the next Hetzner invoice |
 | Hetzner Volume (web-2, 20 GB) | Hetzner | hosting | 0.88 | active | 2026-08-01 | Per-host /workspaces block volume for web-2 (host-local NVMe worktrees — ADR-068 §1), hel1 (#5274 Phase 3). Same spec as the existing web /workspaces volume. VERIFY on invoice |
 | Hetzner Primary IPv4 (web-2) | Hetzner | hosting | 0.54 | active | 2026-08-01 | Public IPv4 for web-2 (egress + Cloudflare-fronted app ingress once 3.D rewires DNS; public ingress is deny-all except CF/admin by firewall). ~EUR 0.50/mo — VERIFY on invoice. Placement group itself is free (Hetzner) |
