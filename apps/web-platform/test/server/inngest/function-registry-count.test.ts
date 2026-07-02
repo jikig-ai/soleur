@@ -108,6 +108,11 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // #5872: GHA-fired executor (scheduled-domain-model-drift.yml) POSTs the
+  // heartbeat; the cron-domain-model-drift.ts dispatcher declares no
+  // SENTRY_MONITOR_SLUG, so this monitor maps to no Inngest slug — same class
+  // as scheduled-terraform-drift.
+  "scheduled-domain-model-drift",
   "scheduled-realtime-probe",
   // #5046 PR-2: HOST-systemd-fired (cron-egress-resolve.timer pings the
   // check-in from cron-egress-resolve.sh) — not an Inngest function and not
@@ -132,7 +137,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(58);
+    expect(routeEntries.length).toBe(59);
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only
