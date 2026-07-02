@@ -35,9 +35,9 @@ the existing `command-palette` Flagsmith flag. `resolveShortcut`'s line-88
 
 - [ ] 3.1 Insert accelerator branch AFTER `resolveShortcut`'s `if (action){…return}`, BEFORE the g-arm. Gate on `s.enabled` + `!paletteOpen && !helpOpen`.
 - [ ] 3.2 Resolve FIRST, then run the modal `querySelector` ONLY on a truthy effect (invert — DHH#1 / code-simplicity). `preventDefault` + `runEffect` on match.
-- [ ] 3.3 ⌘C selection-yield in the LISTENER: `navEffect.kind==="openChat" && window.getSelection()?.toString() !== ""` → return without preventDefault (native copy). Scoped to ⌘C only.
+- [ ] 3.3 ⌘C selection-yield in the LISTENER: `const sel = window.getSelection(); navEffect.kind==="openChat" && !!sel && !sel.isCollapsed` → return without preventDefault (native copy; `!isCollapsed` covers text AND non-text selections — user-impact Finding 2). Scoped to ⌘C only. NO prefix-clear needed here (the pending-prefix block at `use-shortcuts.tsx:459` already clears it before this branch).
 - [ ] 3.4 Confirm WCAG `!s.shortcutsEnabled` early-return (listener top) already disables this branch.
-- [ ] 3.5 Tests (`command-palette.test.tsx`, dom): add returning `pressKeyReturning` capturing the cancel boolean INSIDE `act()` (Kieran P2a). Cover AC7 (D/I/R/A preventDefault), AC7b (⌘C no-selection→chat+cancel; ⌘C with stubbed selection→native copy, not canceled), AC8 (admin gate + not-canceled for non-admin), AC9 (suppression matrix incl. palette/help-open), AC10 (⌘K→palette, g d intact), AC10b (armed-g × ⌘D one-nav + prefix cleared; g × ⌘K → palette).
+- [ ] 3.5 Tests (`command-palette.test.tsx`, dom): assert preventDefault via `createEvent.keyDown` + `act(fireEvent)` + `ev.defaultPrevented` (test-design review — not `=== false`). Cover AC7 (D/I/R via `it.each` + `mockClear`), AC7b (⌘C no-selection→chat+cancel; ⌘C with stubbed `getSelection` `{isCollapsed:false}`→native copy, not canceled), AC8 (admin gate owns ⌘A + not-canceled for non-admin), AC9 (suppression matrix incl. palette/help-open, focus on body), AC10 (⌘K→palette, g d intact), AC10b (real timers: armed-g × ⌘D → routerPush times(1) + bare-d no re-nav; g × ⌘K → palette). Route `getSelection`/`navigator` stubs through `vi.stubGlobal` (no file-scope `vi.mock` of platform).
 
 ## Phase 4 — Hint rendering (Apple-only)
 

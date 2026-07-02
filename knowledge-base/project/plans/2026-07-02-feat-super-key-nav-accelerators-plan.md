@@ -11,6 +11,25 @@ flag: command-palette # rides the existing Flagsmith flag — NO new flag
 
 # ✨ feat: Super/Meta-key navigation accelerators (additive to the `g`-leader)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-02
+**Gates passed:** 4.6 User-Brand ✓ · 4.7 Observability (5-field schema added) ✓ · 4.8 PAT-shape ✓ · 4.9 UI-wireframe (`.pen` committed) ✓
+**Review agents (plan + deepen):** spec-flow-analyzer, cpo, dhh, kieran, code-simplicity, ux-design-lead, user-impact-reviewer, test-design-reviewer.
+
+### Key improvements folded in
+
+1. **⌘C yields to native copy on an active selection** (CPO#1 / Kieran P1 / spec-flow / user-impact) — guard uses `!selection.isCollapsed` so text AND non-text (image) selections yield; lives in the listener (resolver stays DOM-free). Closes the residual single-user-incident copy-hijack vector.
+2. **Accelerator hint is Apple-only** (CPO#2) — off-mac `modChord` would show an unreachable "Ctrl+D" (binding is metaKey-only; Win/Super+letter OS-reserved). Dual-hint on mac, g-seq-only off-mac; removes the false affordance + off-mac clutter.
+3. **Modal `querySelector` inverted** (DHH#1 / code-simplicity) — resolve first, DOM-query only on a metaKey match (was: DOM walk on every keystroke).
+4. **Admin ⌘A residual honestly weighed** (user-impact Finding 1) — a symmetric selection-yield does NOT fit select-all (it starts from no selection); the operator-approved binding's two harms are now enumerated + bounded (isEditable-suppression in fields, `g a` fallback, WCAG toggle, admin-only blast radius).
+5. **Test mechanics hardened** (Kieran P2a/b/c + test-design review) — `createEvent`+`defaultPrevented` (not `=== false`); `vi.stubGlobal` for `getSelection`/`navigator` (no file-scope `vi.mock`); `it.each` de-bundling + `mockClear`; single-source asserted via behavior, not the private map; ask-hero accel gated on `!trimmed`.
+
+### New considerations discovered
+
+- The armed-`g` × ⌘D hand-off does NOT double-navigate: the pre-existing pending-prefix block (`use-shortcuts.tsx:459`) clears the prefix before the new accelerator branch runs (AC10b verifies end-to-end, on real timers).
+- Precedent-diff (gate 4.4): the `resolveShortcut`/`resolveSequence` sibling pair IS the canonical resolver precedent — `resolveNavChord` mirrors it (`NAV_ACCEL_EFFECTS` ↔ `NAV_SEQUENCE_EFFECTS`, admin-map split, DOM-free purity). No novel pattern.
+
 ## Overview
 
 Add a **new, additive** Super/Meta-key accelerator layer to the command-palette
@@ -80,10 +99,31 @@ selection exists** (reviewers CPO #1 / Kieran P1 / spec-flow) — closes the res
 was rebound away from in #5636; (g) the accelerator HINT is Apple-only so no
 non-mac user is shown an unreachable "Ctrl+D" false affordance (CPO #2).
 
-*Accepted residual:* admin ⌘A (select-all) still `preventDefault`s page
-select-all with an active selection — accepted (admin-only, replaces rather than
-destroys a selection, no data-loss) and covered by the `user-impact-reviewer`
-review-time pass.
+*Accepted residuals* (weighed by `user-impact-reviewer`, deepen pass):
+
+1. **admin ⌘A shadows native select-all** (Finding 1). ⌘A cannot take the ⌘C
+   selection-yield: select-all's purpose is to select-all *from no selection*, so
+   "yield when a selection already exists" doesn't fit the gesture — the ambiguity
+   between "select all page text" and "go to Analytics" is intrinsic to binding
+   ⌘A, which the operator approved knowing it shadows select-all. Two harms, both
+   bounded: (i) *select-all-then-copy of page text* is broken for admins on body
+   focus — mitigated: a precise select-drag + ⌘C still copies (⌘C yields), and the
+   `g a` leader is unaffected; (ii) *nav-away discarding an unsaved non-modal form*
+   — mitigated: ⌘A inside a form FIELD is `isEditable`-suppressed (native
+   select-all), so the hijack only fires with focus on `body`, and the WCAG
+   turn-off + `g a` fallback remain. Admin-only, so the blast radius is the
+   operator + admins, not the general user.
+2. **⌘C on a non-TEXT selection** (Finding 2) — RESOLVED: the guard uses
+   `!selection.isCollapsed` (not `toString() !== ""`), so an image / rich-node
+   selection also yields to native copy.
+3. **off-mac binding is live but hint-less** (Finding 3) — accepted `g`-leader
+   parity. On a permissive Linux WM, Super+letter still resolves (hint hidden by
+   the Apple gate), but this is *surprise-navigation only, NOT a native-action
+   hijack*: off-mac native copy/reload/select-all are bound to **Ctrl**, and
+   `resolveNavChord` reads `metaKey` only — so mitigation (a) fully holds off-mac.
+   Same data-loss class as the already-shipped `g`-leader.
+
+`user-impact-reviewer` re-runs at review-time against the diff.
 
 > **Sharp Edge (plan-quality gate):** a plan whose `## User-Brand Impact` section
 > is empty, `TBD`, or omits the threshold fails `deepen-plan` Phase 4.6. This
@@ -225,16 +265,18 @@ disables this branch too (Rule 8).
         // DOM on every keystroke).
         const navEffect = resolveNavChord(e, { isAdmin: s.isAdmin });
         if (navEffect) {
-          // ⌘C YIELDS to native copy when the user has a non-empty selection —
+          // ⌘C YIELDS to native copy when the user has an ACTIVE selection —
           // copying agent/KB/code output is a core reading gesture and isEditable
-          // does NOT cover selected text in a plain <p>/<div> (focus on body).
+          // does NOT cover a selection in a plain <p>/<div> (focus on body).
           // No selection → ⌘C opens chat as bound. resolver stays DOM-free; this
           // selection read lives in the listener (reviewers CPO #1 / Kieran P1 /
-          // spec-flow). Scoped to openChat (⌘C) only — the sole accelerator whose
-          // native action captures the current selection.
+          // spec-flow / user-impact). Scoped to openChat (⌘C) only. Use
+          // `!isCollapsed` (not `toString() !== ""`) so a NON-text selection —
+          // image / rich node — also yields to native copy (user-impact Finding 2).
+          const sel =
+            typeof window !== "undefined" ? window.getSelection() : null;
           const yieldToCopy =
-            navEffect.kind === "openChat" &&
-            (window.getSelection()?.toString() ?? "") !== "";
+            navEffect.kind === "openChat" && !!sel && !sel.isCollapsed;
           // Suppress under any app modal (a nav-away would discard unsaved input)
           // — parity with the g-arm guard. preventDefault stops the native
           // ⌘D/⌘R/⌘A/⌘C data-loss action.
@@ -251,6 +293,14 @@ disables this branch too (Rule 8).
 
       // --- Arm a new go-to prefix on `g`. …UNCHANGED… (a metaKey chord never
       // arms: resolveSequence(false, …) returns null when mod is set) ---
+
+      // NOTE (test-design review — armed-`g` × ⌘D): no prefix-clear is needed IN
+      // this branch. The pre-existing pending-prefix block at the TOP of the
+      // handler (use-shortcuts.tsx:459) sets `pendingPrefixRef.current = null` as
+      // its FIRST statement — it runs BEFORE this accelerator branch — so by the
+      // time ⌘D resolves here the `g` prefix is already consumed. A subsequent
+      // bare `d` finds no armed prefix → no double-navigation. AC10b verifies this
+      // end-to-end.
 ```
 
 ### Phase 4 — Hint rendering: help overlay + palette (Rule 10)
@@ -330,14 +380,14 @@ pass; the accel `<kbd>` is additive and mac-only.
 - [ ] AC4 — `resolveNavChord(key("d",{ctrl:true}), admin)` → `null` (Rule 1 — Ctrl+letter never arms).
 - [ ] AC5 — `resolveNavChord(key("d",{meta:true,shift:true}), admin)` → `null`; and with editable target (`{tagName:"INPUT"}`) → `null` (Rule 6); and with `repeat:true` → `null`.
 - [ ] AC6 — Regression: `resolveShortcut(key("k",{ctrl:true}))` still `"openPalette"` and `resolveShortcut(key("b",{ctrl:true}))` still `"toggleSidebar"` (Rule 2 — line 88 union intact on non-mac).
-- [ ] AC7 — In `command-palette.test.tsx`, pressing `key:"d", metaKey:true` on `document.body` calls `routerPush("/dashboard")` **and** the dispatched event was canceled (`preventDefault` fired). Assert the cancel via a returning-`pressKey` variant that captures `fireEvent.keyDown(...) === false` **inside `act()`** (Kieran P2a — `dispatchEvent` is synchronous so the boolean is available before `act` flushes; capturing inside `act` avoids the React not-wrapped-in-act warning). One assertion per bound accel: D, I, R, and A(admin). (Rule 5.) The C case is split into AC7b.
-- [ ] AC7b — ⌘C **with no selection** (`window.getSelection().toString()===""`) opens chat (`routerPush("/dashboard/chat/new")`) + event canceled. ⌘C **with a non-empty non-editable selection** (stub `window.getSelection` → `{toString: () => "picked text"}`) performs NATIVE copy: `routerPush` NOT called AND event NOT canceled (`fireEvent.keyDown(...) === true`). (Reviewers CPO #1 / Kieran P1 / spec-flow — the residual-vector guard.)
+- [ ] AC7 — In `command-palette.test.tsx`, pressing `key:"d", metaKey:true` on `document.body` calls `routerPush("/dashboard")` **and** the dispatched event was canceled (`preventDefault` fired). Assert the cancel via `const ev = createEvent.keyDown(document.body, {key, metaKey:true}); act(() => fireEvent(document.body, ev)); expect(ev.defaultPrevented).toBe(true)` — reads the flag directly, clearer than the `=== false` idiom (test-design review; `fireEvent` self-wraps in `act`, so the wrap flushes `runEffect`'s state update, not the boolean). Use `it.each` over `[D→/dashboard, I→/inbox, R→/routines]` with `routerPush.mockClear()` per case so a red bar names the failing accel (Granular). A(admin) is owned by AC8; C by AC7b. (Rule 5.)
+- [ ] AC7b — ⌘C **with no selection** (stub `getSelection` → `{isCollapsed:true, toString:()=>""}`) opens chat (`routerPush("/dashboard/chat/new")`) + `ev.defaultPrevented===true`. ⌘C **with an active non-editable selection** (stub `getSelection` → `{isCollapsed:false, toString:()=>"picked text"}`) performs NATIVE copy: `routerPush` NOT called AND `ev.defaultPrevented===false`. Route the stub through `vi.stubGlobal("getSelection", …)` so the suite's existing `afterEach(vi.unstubAllGlobals)` restores it (test-design review — a direct `window.getSelection =` assignment leaks a selection into sibling tests). (Reviewers CPO #1 / Kieran P1 / spec-flow / user-impact — the residual-vector guard.)
 - [ ] AC8 — Super+A is inert (no `routerPush`, event NOT canceled — native select-all preserved) for a non-admin; navigates + cancels for an admin. (Distinct from AC2's resolver-null check: this asserts the *listener* does not `preventDefault*.)
-- [ ] AC9 — Super+letter is inert (no `routerPush`) when focus is in `outside-input` (native ⌘C/⌘A/⌘R preserved), when a `[role=dialog][aria-modal=true]` node is present, **when the palette or help overlay is open** (spec-flow GAP2), when `enabled=false` (flag off), and when `soleur:shortcuts.enabled="0"` (WCAG turn-off). (Rules 6, 8, 9.)
+- [ ] AC9 — Super+letter is inert (no `routerPush`), one `it.each` case per condition (Granular): focus in `outside-input` (native ⌘C/⌘A/⌘R preserved), a `[role=dialog][aria-modal=true]` node present, the palette OR help overlay open (spec-flow GAP2 — assert with focus on `document.body` so the `!s.paletteOpen` guard is what's proven, not the incidental editable-focus of the palette input, per test-design review), `enabled=false` (flag off), `soleur:shortcuts.enabled="0"` (WCAG turn-off). (Rules 6, 8, 9.)
 - [ ] AC10 — `⌘K` still opens the palette (not intercepted by resolveNavChord — precedence: resolveShortcut first); `g d` still navigates (g-leader unchanged).
-- [ ] AC10b — Armed-prefix × Super-chord hand-off (spec-flow GAP1): `g` then `⌘D` fires exactly ONE `routerPush("/dashboard")` and clears the pending prefix (a subsequent bare `d` does NOT re-navigate); `g` then `⌘K` opens the palette (no `routerPush`).
+- [ ] AC10b — Armed-prefix × Super-chord hand-off (spec-flow GAP1): on **real timers**, `g` then `⌘D` calls `routerPush` `toHaveBeenCalledTimes(1)` with `"/dashboard"`, and a subsequent bare `d` does NOT re-navigate (proves the pre-existing `:459` prefix-clear consumed `g`, not window expiry — keep the two presses immediate); `g` then `⌘K` opens the palette (no `routerPush`).
 - [ ] AC11 — Hint is **Apple-only**. `buildCommands({isAdmin:true},{isApplePlatform:true})`: Dashboard `accelKeys==="⌘D"`, Analytics `"⌘A"`, ask-agent `"⌘C"`; Workstream/KB `accelKeys===undefined`. `buildCommands({isAdmin:true},{isApplePlatform:false})` (and the default no-opts call): **every** `accelKeys===undefined`. `keys` unchanged (`"G D"` …) in both — the existing AC7/seq single-source test (`shortcuts-registry.test.ts:196`) stays green.
-- [ ] AC12 — On happy-dom (non-Apple default): palette Navigation rows render ONLY the g-seq (`G D`, `G W`), no accel chip; help overlay "Go to Dashboard" renders ONLY `G D`. With `isApplePlatform` stubbed true: Dashboard palette row + help row render BOTH `⌘D` and `G D`; Workstream renders only `G W` (no `accel`). (Mac-only hint, CPO #2.)
+- [ ] AC12 — On happy-dom (non-Apple default): palette Navigation rows render ONLY the g-seq (`G D`, `G W`), no accel chip; help overlay "Go to Dashboard" renders ONLY `G D`. For the Apple case, stub via **per-test `vi.stubGlobal("navigator", {platform:"MacIntel", userAgent:"…Macintosh…"})`** (NOT a file-scope `vi.mock` of `platform.ts` — that would flip every default-non-Apple assertion in the file, incl. the existing FR2 Ctrl+K/Ctrl+B help tests, per test-design review); restored by the existing `afterEach(vi.unstubAllGlobals)`. Then Dashboard palette row + help row render BOTH `⌘D` and `G D`; Workstream renders only `G W`. (Mac-only hint, CPO #2.)
 - [ ] AC13 — `apps/web-platform` `tsc --noEmit` clean; full `test/shortcuts-registry.test.ts`, `test/command-palette.test.tsx`, `test/help-overlay.test.tsx` green (run from `apps/web-platform/` via `./node_modules/.bin/vitest run …`).
 - [ ] AC14 — `knowledge-base/product/design/command-palette/super-key-accelerators.pen` committed (non-empty) and referenced here (satisfies `wg-ui-feature-requires-pen-wireframe` / deepen-plan Phase 4.9).
 
@@ -352,15 +402,17 @@ adding an export would exceed Files-to-Edit — reviewer Kieran P2c). `buildComm
 accelKeys assertions for both `isApplePlatform` values (AC11).
 
 Component (dom): a `describe("CommandPalette — Super/Meta accelerators")` covering
-AC7–AC10b. Add a returning `pressKeyReturning(key, opts)` helper that captures the
-cancel boolean **inside `act()`**: `let cancelled; act(() => { cancelled =
-fireEvent.keyDown(target, {...}) === false; }); return cancelled;` (Kieran P2a —
-`false` ⇔ `preventDefault` fired; capturing inside `act` avoids the React
-not-wrapped warning that `runEffect`'s `setPaletteOpen(false)` would otherwise
-trigger). For AC7b, stub `window.getSelection`. Help-overlay hint test: default
-(non-Apple) renders only the g-seq; with `isApplePlatform` stubbed, the mac accel
-`<kbd>` appears (AC12). Use `waitFor` before negative (`not.toHaveBeenCalled`)
-assertions where an async effect could race.
+AC7–AC10b. Assert `preventDefault` via `createEvent.keyDown` + `act(() =>
+fireEvent(target, ev))` + `ev.defaultPrevented` (test-design review — clearer than
+the `=== false` idiom; `fireEvent` already self-wraps in `act`, so the wrap flushes
+`runEffect`'s state update, not the boolean). De-bundle multi-case ACs with
+`it.each` + `routerPush.mockClear()` per case (Granular/Atomic); render admin
+separately for the ⌘A case. Route BOTH new stubs through `vi.stubGlobal` —
+`getSelection` (AC7b) and `navigator` (AC12 Apple case) — so the suite's existing
+`afterEach(vi.unstubAllGlobals)` restores them; do NOT `vi.mock` `platform.ts` at
+file scope. Assert the accel single-source via `resolveNavChord` behavior, NOT by
+importing the module-private `NAV_ACCEL_EFFECTS` (Kieran P2c). Use `waitFor` before
+negative (`not.toHaveBeenCalled`) assertions where an async effect could race.
 
 ## Domain Review
 
@@ -414,13 +466,37 @@ kept per Rule 3.
 
 ## Observability
 
-**Gate 2.9 status:** does NOT fire — Files-to-Edit are all under
-`apps/web-platform/components/` and `apps/web-platform/test/`, none under
-`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/`, and no
-new infrastructure surface. This is a pure client-side keydown handler that adds
-**no new error path, log call, or failure mode** reaching Sentry/Better Stack.
-Discoverability is the vitest suite (`vitest run …`, NO ssh). Client-observability
-(`reportSilentFallback`) is untouched — no new emit site, so no monitor darkens.
+Client-only keydown handler: no server/infra surface, no new error path reaching
+Sentry/Better Stack, `reportSilentFallback` untouched (no monitor darkens). The
+observable surface is behavioral (does the accelerator fire + `preventDefault`),
+verified without SSH by the vitest suite. Schema:
+
+```yaml
+liveness_signal:
+  what: "resolveNavChord + listener branch exercised green in CI on every push"
+  cadence: "per-PR + per-push (vitest job in ci.yml)"
+  alert_target: "CI red → GitHub Checks (PR blocked); no runtime pager (client-only)"
+  configured_in: "apps/web-platform/vitest.config.ts (node + happy-dom projects)"
+error_reporting:
+  destination: "existing client Sentry via reportSilentFallback — UNCHANGED (no new emit site)"
+  fail_loud: "n/a — feature adds no throw/catch; a resolver regression surfaces as a red vitest AC, not a runtime error"
+failure_modes:
+  - mode: "accelerator hijacks a native action (⌘C copy / ⌘R reload / ⌘A select-all) it should have yielded"
+    detection: "vitest AC7/AC7b/AC8/AC9 (preventDefault + selection-yield assertions) go red"
+    alert_route: "CI Checks on the PR; post-merge, user-report via support surface"
+  - mode: "resolveShortcut regression — ⌘K/⌘B stop firing (line-88 union broken)"
+    detection: "existing shortcuts-registry.test.ts ⌘K/⌘B-on-ctrl assertions + AC6 go red"
+    alert_route: "CI Checks on the PR"
+  - mode: "hint drift — accel glyph shown off-mac (false affordance) or keys/accelKeys desync"
+    detection: "vitest AC11/AC12 (mac-only hint) + the seq single-source test go red"
+    alert_route: "CI Checks on the PR"
+logs:
+  where: "browser devtools console in development only; no server logs emitted"
+  retention: "n/a — no persisted log surface"
+discoverability_test:
+  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/shortcuts-registry.test.ts test/command-palette.test.tsx test/help-overlay.test.tsx"
+  expected_output: "all suites pass (resolveNavChord + accelerator + hint + regression ACs green); NO ssh required"
+```
 
 ## Architecture Decision (ADR/C4)
 
@@ -487,10 +563,17 @@ secret, vendor, cron, or persistent runtime process introduced.
   without `aria-modal` is not suppressed; this is a pre-existing g-leader
   characteristic accepted here, not a new gap (spec-flow GAP3). App modals set
   `aria-modal="true"` (confirmed in Phase 0).
-- **`preventDefault` cancel-boolean must be captured inside `act()`** (Kieran P2a).
-  The existing `pressKey` wraps `fireEvent` in `act` and drops the return; the new
-  returning variant keeps the `act` wrap and captures the sync `dispatchEvent`
-  result inside it — otherwise `runEffect`'s state update logs a React act warning.
+- **Assert `preventDefault` via `createEvent` + `ev.defaultPrevented`, not the
+  `fireEvent(...) === false` idiom** (Kieran P2a + test-design review). Correction
+  to an earlier draft: `fireEvent` ALREADY self-wraps in `act`, so the wrap flushes
+  `runEffect`'s `setPaletteOpen(false)` state update (silencing the not-wrapped
+  warning) — it is NOT what makes the cancel boolean readable (that's synchronous).
+  `const ev = createEvent.keyDown(el,{...}); act(() => fireEvent(el, ev));
+  expect(ev.defaultPrevented).toBe(true)` reads the flag directly and is clearer.
+- **New test stubs (`getSelection`, `navigator`) MUST go through `vi.stubGlobal`**
+  so the suite's `afterEach(vi.unstubAllGlobals)` restores them; a file-scope
+  `vi.mock("…/platform")` would flip every default-non-Apple assertion in the file
+  (incl. the existing FR2 Ctrl+K/Ctrl+B help tests) to Apple and break them.
 - **Do NOT fold `accel` into `Command.keys`.** `shortcuts-registry.test.ts:196`
   asserts `cmd.keys === formatSeqHint(seq)` exactly; the accel lives in a new
   `accelKeys` field. Folding it in breaks AC7.
