@@ -68,6 +68,16 @@ has a concrete hole (`plugins/soleur/CLAUDE.md` → `@AGENTS.md` and `AGENTS.md`
 are runtime instruction files an allowlist excludes). A denylist is
 failure-mode-complete: new runtime dirs deploy by default.
 
+**Invariant (guard the one latent hole):** the two excluded dirs are anchored at
+top-level `plugins/soleur/{docs,test}/` only. This is safe today (verified:
+`docs/` is Eleventy docs-site source, `test/` is `.test.ts`/`.test.sh` only, and
+no runtime hook/skill/script sources anything from either). It stays safe ONLY as
+long as those two top-level dirs remain **runtime-free** — a runtime helper ever
+placed under top-level `docs/` or `test/` would silently NOT trigger a redeploy
+(the incident class, re-opened). Keep runtime code out of them; put test-only
+helpers under `plugins/soleur/skills/*/test/` (nested — not excluded, deploys by
+default, harmless) rather than top-level `test/`.
+
 ## Why Option B (host-direct re-seed) is disqualified
 
 Option B — a dedicated workflow that pushes the plugin tree straight to the host
