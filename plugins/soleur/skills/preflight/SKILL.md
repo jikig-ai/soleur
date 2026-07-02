@@ -882,7 +882,7 @@ The grep MUST exit 0 — the canary must reject any rendered HTML containing the
 
 Enforces the domain-model register's maintenance contract (#5871): a PR that changes a
 business rule must not leave the register with a **stale citation** (a cited migration/symbol
-that no longer resolves). Consumes the deterministic analyzer `scripts/domain-model-drift.sh`
+that no longer resolves). Consumes the deterministic analyzer `domain-model-drift.sh`
 (#5754, ADR-076). The register (`knowledge-base/engineering/architecture/domain-model.md`) is a
 **curated subset**, so "undocumented source facts" is ~every un-curated table by design — it is
 **advisory-only, never a FAIL input**. This check gates on **stale citations only**.
