@@ -96,6 +96,15 @@ on:
       # for a profile change to take effect — sequence apply→redeploy explicitly
       # (do not rely on the concurrent web-platform-release run winning the race).
       - "apps/web-platform/infra/seccomp-bwrap.json"
+      # #5875 apply-parity — the container apparmor profile is delivered by the
+      # apparmor_bwrap_profile SSH provisioner (server.tf), whose triggers_replace
+      # hashes this file. Before #5875 it was in deploy_pipeline_fix's depends_on
+      # but NOT co-`-target`ed here nor in this paths filter, so an apparmor-only
+      # edit did not auto-apply at all (identical gap to the #5873 seccomp case).
+      # The RUNNING container only loads a new --security-opt apparmor at
+      # `docker run`, so the sequenced apply→redeploy below applies to it too.
+      # Kept in sync with the #5505 paths-union test in ship-deploy-pipeline-fix-gate.ts.
+      - "apps/web-platform/infra/apparmor-soleur-bwrap.profile"
       - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
@@ -168,7 +177,14 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 90 min (was 15) because the #5875 item-4 "Redeploy to load applied profile"
+    # step below can trigger ONE graceful ci-deploy.sh swap, which inherits the
+    # ADR-078 cron drain (CRON_DRAIN_TIMEOUT=4200s ≈ 70 min worst case). This is a
+    # CEILING, not a duration: the redeploy only fires when the running container's
+    # loaded seccomp profile differs from committed (a rare profile change), so a
+    # routine script/server.tf-only apply skips the swap and finishes in minutes.
+    # Matches web-platform-release.yml's deploy job (also 90).
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -239,6 +255,7 @@ jobs:
             terraform plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
             -target=terraform_data.docker_seccomp_config \
+            -target=terraform_data.apparmor_bwrap_profile \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -no-color -input=false
 
@@ -254,6 +271,7 @@ jobs:
             terraform apply -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
             -target=terraform_data.docker_seccomp_config \
+            -target=terraform_data.apparmor_bwrap_profile \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -auto-approve -input=false
 
@@ -425,6 +443,155 @@ jobs:
             cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
             exit 1
           fi
+
+      - name: Redeploy to load applied profile and assert loaded==committed (#5875 item 4)
+        if: success()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        # "Applied ≠ loaded" gap closer (#5875 item 4 / ADR-079). The terraform
+        # apply above delivered the seccomp profile to the HOST
+        # (/etc/docker/seccomp-profiles/soleur-bwrap.json), but the RUNNING container
+        # only loads a new `--security-opt seccomp=<file>` at `docker run`. The
+        # concurrent web-platform-release deploy is UNORDERED on the same merge
+        # (different concurrency groups), so the fix deploy can run the STALE profile
+        # and go green while every tenant stays broken — worst during a #5874-style
+        # RECOVERY. This step sequences the redeploy AFTER the apply and fails loud
+        # unless the running container's LOADED seccomp hash equals the committed one.
+        #
+        # AppArmor needs NO redeploy: apparmor_bwrap_profile runs `apparmor_parser -r`
+        # at apply (server.tf), which reloads the kernel profile for the running
+        # confined container immediately. Only seccomp is bound at container start.
+        #
+        # Conditional-by-construction (AC "fires only on an actual profile change"):
+        # if the running container's loaded hash already equals committed (a
+        # script/server.tf/apparmor-only apply, OR an already-current profile), this
+        # step no-ops without a swap. Only a seccomp change (loaded != committed)
+        # triggers ONE graceful, canary-validated, ADR-078-cron-drained swap via
+        # /hooks/deploy (ci-deploy.sh); `flock -n` in ci-deploy.sh dedupes any
+        # concurrent release deploy (idempotent). No drift-poll/retrigger loop.
+        run: |
+          set -euo pipefail
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+
+          STATUS_URL="https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status"
+          DEPLOY_URL="https://deploy.${APP_DOMAIN_BASE}/hooks/deploy"
+
+          # Committed profile hash — sha256 of the in-repo file at this merge commit.
+          COMMITTED_SHA=$(sha256sum seccomp-bwrap.json | cut -d' ' -f1)
+          echo "Committed seccomp profile sha256: ${COMMITTED_SHA}"
+
+          # GET /hooks/deploy-status (HMAC over empty body + CF-Access).
+          get_status() {
+            local sig
+            sig=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            curl -s --max-time 15 -o /tmp/redeploy-status.json -w '%{http_code}' \
+              -X GET \
+              -H "X-Signature-256: sha256=${sig}" \
+              -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+              -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+              "$STATUS_URL" 2>/dev/null || echo "000"
+          }
+
+          # --- Read current loaded profile + running tag + baseline start_ts ---
+          HTTP=$(get_status)
+          if [[ "$HTTP" != "200" ]]; then
+            echo "::error::Cannot read /hooks/deploy-status (HTTP $HTTP) — refusing to assert loaded profile blind."
+            cat /tmp/redeploy-status.json >&2 2>/dev/null || true
+            exit 1
+          fi
+          LOADED_SHA=$(jq -r '.seccomp_profile_sha256 // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+          CURRENT_TAG=$(jq -r '.tag // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+          PRIOR_START=$(jq -r '.start_ts // 0' /tmp/redeploy-status.json 2>/dev/null || echo 0)
+          [[ "$PRIOR_START" =~ ^[0-9]+$ ]] || PRIOR_START=0
+          echo "Running container loaded seccomp sha256: '${LOADED_SHA:-<none>}' (tag='${CURRENT_TAG}')"
+
+          # --- Fast path: already loaded → no swap needed ---
+          if [[ "$LOADED_SHA" == "$COMMITTED_SHA" ]]; then
+            echo "Loaded profile already equals committed — no profile change to load; skipping redeploy."
+            exit 0
+          fi
+
+          echo "Loaded ('${LOADED_SHA:-<none>}') != committed ('${COMMITTED_SHA}') — a seccomp change is applied but not loaded. Redeploying to load it."
+
+          # Validate the tag we will redeploy (server-supplied state, but pinned to a
+          # safe charset before it reaches the payload — no shell/JSON injection).
+          if [[ -z "$CURRENT_TAG" || "$CURRENT_TAG" == "?" || ! "$CURRENT_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Cannot determine a valid current image tag from /hooks/deploy-status (.tag='${CURRENT_TAG}'). Trigger a normal web-platform deploy, then re-run this apply."
+            exit 1
+          fi
+
+          # POST /hooks/deploy — redeploy the SAME image so the container restarts and
+          # loads the applied profile. No `peers` (single-host reload; fan-out is a
+          # dormant no-op at single-host, ADR-068). ci-deploy.sh's flock dedupes any
+          # concurrent web-platform-release deploy.
+          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s"}' "$CURRENT_TAG")
+          POST_SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${POST_SIG}" \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+            -d "$PAYLOAD" \
+            "$DEPLOY_URL" 2>/dev/null || echo "000")
+          if [[ "$POST_CODE" != "202" ]]; then
+            echo "::error::Redeploy webhook rejected (HTTP $POST_CODE) — profile is applied but NOT loaded."
+            exit 1
+          fi
+          echo "Redeploy initiated (HTTP 202). Polling for completion (bounded by the ADR-078 cron drain)..."
+
+          # Poll until a deploy that STARTED after our trigger reaches a terminal
+          # exit_code (>=0). 160 × 30s = 4800s, inside the 90-min job ceiling and
+          # ≥ CRON_DRAIN_TIMEOUT (4200s). exit_code -1 == running (ci-deploy #2205).
+          FINAL_EXIT=""
+          FINAL_LOADED=""
+          FINAL_VERDICT=""
+          for attempt in $(seq 1 160); do
+            sleep 30
+            HTTP=$(get_status)
+            [[ "$HTTP" == "200" ]] || { echo "Attempt $attempt: status HTTP $HTTP"; continue; }
+            EXIT=$(jq -r '.exit_code // -99' /tmp/redeploy-status.json 2>/dev/null || echo -99)
+            START=$(jq -r '.start_ts // 0' /tmp/redeploy-status.json 2>/dev/null || echo 0)
+            [[ "$START" =~ ^[0-9]+$ ]] || START=0
+            if [[ "$EXIT" =~ ^-?[0-9]+$ ]] && [[ "$EXIT" -ge 0 ]] && [[ "$START" -gt "$PRIOR_START" ]]; then
+              FINAL_EXIT="$EXIT"
+              FINAL_LOADED=$(jq -r '.seccomp_profile_sha256 // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+              FINAL_VERDICT=$(jq -r '.sandbox_canary.verdict // "unknown"' /tmp/redeploy-status.json 2>/dev/null || echo unknown)
+              echo "Redeploy terminal after ${attempt} poll(s): exit_code=${FINAL_EXIT} loaded=${FINAL_LOADED} canary=${FINAL_VERDICT}"
+              break
+            fi
+            echo "Attempt $attempt/160: exit_code=${EXIT} start_ts=${START} (waiting for a post-trigger terminal state)..."
+          done
+
+          # --- Fail-loud adjudication ---
+          if [[ -z "$FINAL_EXIT" ]]; then
+            echo "::error::Redeploy did not reach a terminal state within the poll window — profile load UNVERIFIED. Check /hooks/deploy-status + the ci-deploy.sh journald log."
+            exit 1
+          fi
+          if [[ "$FINAL_EXIT" != "0" ]]; then
+            echo "::error::Redeploy failed (exit_code=${FINAL_EXIT}). The applied seccomp profile was NOT loaded. See /hooks/deploy-status .reason."
+            cat /tmp/redeploy-status.json >&2 2>/dev/null || true
+            exit 1
+          fi
+          if [[ "$FINAL_LOADED" != "$COMMITTED_SHA" ]]; then
+            echo "::error::LOADED != COMMITTED after redeploy: loaded='${FINAL_LOADED}' committed='${COMMITTED_SHA}'. The running container is NOT enforcing the committed seccomp profile (the exact 'applied ≠ loaded' failure #5875 item 4 exists to catch)."
+            exit 1
+          fi
+          # Per ADR-079 the faithful canary is still NON-BLOCKING dark-launch: pass /
+          # canary_infra_error / fixture_uncaptured are all acceptable here; only a
+          # faithful sandbox_broken (a real bwrap EPERM against the committed profile)
+          # is fatal. Promotion of the canary to a blocking gate is soak-owned (#5889).
+          if [[ "$FINAL_VERDICT" == "sandbox_broken" ]]; then
+            echo "::error::Faithful sandbox canary verdict=sandbox_broken after redeploy — the committed seccomp profile EPERMs the real SDK bwrap argv. Do NOT leave this profile live."
+            exit 1
+          fi
+          echo "Loaded == committed (${COMMITTED_SHA}); canary verdict=${FINAL_VERDICT} (not sandbox_broken). Profile is live."
 
       - name: Check whether #4804 is still open (scopes the one-time self-heal verification)
         id: check_4804
