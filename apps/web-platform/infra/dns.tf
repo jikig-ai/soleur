@@ -1,16 +1,19 @@
-# Multi-host app ingress (#5274 Phase 3, Sub-PR 3.D / ADR-068). One proxied A record
-# per web host, all with name "app" → Cloudflare round-robins across the cluster's
-# origins (web-1, web-2, …). for_each over var.web_hosts keeps this in lockstep with
-# the hcloud_server.web fan-out (server.tf) — a new host in the map adds its A record
-# automatically. proxied = true preserves the CF edge (WAF/bot-management/edge-TLS);
-# the origin firewall already covers every host via hcloud_firewall_attachment.web's
-# for_each (firewall.tf) — do NOT edit firewall.tf.
+# App ingress → the single live web host (web-1). Proxied A record; CF edge terminates
+# TLS (WAF/bot-management/edge-TLS) and the origin firewall gates 443 to CF IPs.
+#
+# MULTI-HOST DNS REWIRE IS DEFERRED TO THE OPERATOR CUTOVER (#5274 Phase 3, 3.D). The
+# for_each-over-var.web_hosts version (one proxied A record per host, CF round-robin)
+# CANNOT ride the per-PR merge-apply: web-2 does not exist until the operator's
+# maintenance-window apply, and converting this resource to for_each is a
+# destroy+recreate of the LIVE app record (no `moved` block spans the singleton→keyed
+# address change here — the CF record has no stable import id to move). It is applied
+# in the SAME maintenance window that provisions web-2, as a FULL operator apply (not
+# the -target CI path). See knowledge-base/engineering/operations/runbooks/
+# git-data-luks-cutover-5274.md §"Multi-host DNS rewire".
 resource "cloudflare_record" "app" {
-  for_each = var.web_hosts
-
   zone_id = var.cf_zone_id
   name    = "app"
-  content = hcloud_server.web[each.key].ipv4_address
+  content = hcloud_server.web["web-1"].ipv4_address
   type    = "A"
   proxied = true
   ttl     = 1 # Auto when proxied
