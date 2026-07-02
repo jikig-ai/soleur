@@ -97,7 +97,11 @@ accurate by Kieran review. Paths are `apps/web-platform/server/*`.
 
 _Carried from the brainstorm (threshold set with CPO/CLO/CTO)._
 - **If broken:** fresh-session greeting mid-work; a silent abort (turn survives on the
-  wrong host); "workspace unavailable" on reconnect — the #5240 regressions.
+  wrong host); "workspace unavailable" on reconnect — the #5240 regressions. **Also (3.D
+  review):** a proxy-migrated **paid** user wrongly throttled to the free concurrency cap
+  and hard-closed with a spurious upgrade modal — the migrated session must hydrate real
+  plan/subscription state inline before any `start_session`, not default to `free` for the
+  refresh interval.
 - **If it leaks:** cross-tenant git-data **read** or **write** (D2), or cleartext
   host↔host proxy traffic.
 - **Threshold: single-user incident.** `requires_cpo_signoff: true` (CPO approved the

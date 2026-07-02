@@ -123,6 +123,38 @@ export async function provisionGitDataRepo(workspaceId: string): Promise<void> {
 }
 
 /**
+ * Art. 17 (right to erasure) — tear down the per-workspace bare repo on the
+ * git-data host (epic #5274 Sub-PR 3.D, CLO DL-1 / Kieran P0-1 / AC9). Dials the
+ * dedicated REMOVE forced command (`git-data-remove.sh`, shipped by 3.A cloud-init)
+ * with its own key — a THIRD authority distinct from provision/transport, so a
+ * transport-key compromise cannot delete repos. The wrapper reads `workspaceId`
+ * from `SSH_ORIGINAL_COMMAND` (one opaque argv element) and canonicalizes it
+ * host-side (CWE-22). NO-OP when the store is disabled — at flag-off there is no
+ * git-data repo to erase (the working tree is purged by `deleteWorkspace`).
+ *
+ * Called from the account/workspace deletion path (best-effort, mirroring the
+ * chat-attachments purge) so the shared-store copy is erased alongside the
+ * host-local working tree — closing the DL-1 bare-repo erasure gap.
+ */
+export async function removeGitDataRepo(workspaceId: string): Promise<void> {
+  assertSafeWorkspaceId(workspaceId);
+  // NOT gated on isGitDataStoreEnabled() (data-integrity review LOW): a bare repo
+  // provisioned during a flag-ON window PERSISTS on the git-data host after a
+  // rollback flips the flag OFF (dual-existence). Gating erasure on the LIVE flag
+  // would silently strand that user's PII — an Art. 17 gap in exactly the
+  // rollback/cutover window this epic introduces. Gate instead on whether the
+  // REMOVE key is configured: absent ⇒ this env never had git-data (nothing to
+  // erase, skip silently — no Sentry noise on every delete in a non-git-data env);
+  // present ⇒ the store is (or was) in play, so attempt the erase regardless of the
+  // flag. The host-side wrapper is idempotent — a remove of a non-existent repo is
+  // a no-op — so an over-eager call is harmless.
+  const removeKey = process.env.GIT_REMOVE_SSH_PRIVATE_KEY?.trim();
+  if (!removeKey) return;
+  const host = resolveGitDataSshHost();
+  await sshWithPrivateKeyAuth(host, workspaceId, removeKey, { timeout: 30_000 });
+}
+
+/**
  * Additively add (or re-point) the `git-data` remote on the workspace clone,
  * retaining `origin`→GitHub untouched (orphaning GitHub would collapse the
  * rehydration story — ADR-068 §1). Local-only git config; no network.
