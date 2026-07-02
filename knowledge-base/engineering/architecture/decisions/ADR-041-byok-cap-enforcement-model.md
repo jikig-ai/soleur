@@ -24,7 +24,8 @@ Lands in the same PR as ADR-042 and migration 069. ADR-042 documents the loop to
 
 PR-B introduces the first autonomous-AI runtime in `apps/web-platform/server/`. The operator (`ops@jikigai.com`) funds every Anthropic API call via BYOK. Three cost-control surfaces already exist or are introduced by PR-B:
 
-1. **BYOK daily/monthly caps** (existing infra, mig 053 + `record_byok_use_and_check_cap` at `mig 061:81-148`). Per-operator: daily soft $20 / hard $50 / monthly hard $500. Enforced via SQL RPC with `FOR UPDATE` lock on `public.users`.
+1. **BYOK per-founder rolling cap** (existing infra, mig 053 + `record_byok_use_and_check_cap` at `mig 061:81-148`). Enforced via SQL RPC with `FOR UPDATE` lock on `public.users`.
+   - **Reconciliation note (feat-l5-runaway-guard / #5767, P2-9):** the *shipped* RPC enforces a single **rolling 1-hour cumulative-spend cap per founder** — it `SUM`s `audit_byok_use` over `now() - interval '1 hour'` and compares against `users.runtime_cost_cap_cents`. The earlier prose in this ADR ("daily soft $20 / hard $50 / monthly hard $500") described an aspirational tiered model that was **never implemented in the RPC**; the daily/monthly tiers are deferred (rolling-24h founder budget is tracked as a follow-up, #5903). Treat the rolling-1-hour `runtime_cost_cap_cents` cap as the authoritative Layer-1 mechanism.
 2. **Per-spawn cost ceiling** (PR-B-new, $2.00 USD). Bounds worst-case operator-side spend on a single Today-card click. Independent of (1).
 3. **Max-turns ceiling** (PR-B-new, flat 8 turns × 4096 max_tokens). Physical upper bound on loop runtime.
 
@@ -59,11 +60,11 @@ export async function recordByokUseAndCheckCap(args: {
 }): Promise<{ cumulativeCents: number; killTripped: boolean }>;
 ```
 
-The RPC returns `killTripped: true` when the cumulative spend crosses the operator's daily/monthly cap. On trip:
+The RPC returns `killTripped: true` when the cumulative spend crosses the operator's rolling 1-hour cap (`users.runtime_cost_cap_cents`), **or whenever `runtime_paused_at IS NOT NULL`** (the PR-A working-pause fix below). On trip:
 
 - The loop short-circuits with `failure_reason = "byok_cap_exceeded"`.
 - The Anthropic call is NEVER issued.
-- `users.runtime_paused_at` is flipped by the RPC (existing behavior).
+- `users.runtime_paused_at` is flipped by the RPC on first breach (idempotent — only NULL→now()).
 
 **Fail-closed semantics**: any RPC error THROWS in the wrapper rather than returning `killTripped: false`. A transient DB error must NOT allow an uncapped Anthropic call. This is the explicit contract of the wrapper unit test:
 
@@ -109,6 +110,19 @@ At max-turns: → Layer 3 → "leader_max_turns_exceeded"
 
 `step.run("turn-${n}-cancel-check", …)` is independent of the cap/ceiling layers — it fires between Layer 2 and the Anthropic call. Cancellation (`cancellation_requested_at IS NOT NULL`) short-circuits with `failure_reason = "cancelled_by_operator"`. The in-flight turn ALWAYS completes before cancellation is honored (mid-turn cancellation not supported); the next turn's cancel-check fires the short-circuit. The plan's AC10 operator copy explicitly surfaces the in-flight turn cost on the "Stopped" card so the operator isn't surprised by a non-zero cost.
 
+### Layer 0 — Spawn-entry pause gate + working-pause contract (PR-A, feat-l5-runaway-guard #5767)
+
+The original three-layer model shipped a **cosmetic pause**: `runtime_paused_at` had zero readers/clearers repo-wide, and the RPC set `killTripped` only on the NULL→set *transition*. So an already-paused founder's next spawn re-ran the cap-check, found `runtime_paused_at` already stamped, took neither branch, returned `killTripped=false`, and **kept spending**. Nothing cleared the flag, so "resume" had no code. PR-A closes this with a two-block defense-in-depth working-pause contract:
+
+1. **Spawn-entry pause gate (primary).** Before the turn loop — and therefore before any Anthropic call or `audit_byok_use` row — the handler reads `users.runtime_paused_at`. If set, it halts immediately via `persistFailure(reason: "run_paused")` and never enters the loop. Fail-open on a read error (the Layer-1 cap-check re-reads under `FOR UPDATE` and is the backstop).
+2. **RPC returns `kill_tripped` while paused (backstop, mig 121).** `record_byok_use_and_check_cap` now returns `kill_tripped = true` whenever `runtime_paused_at IS NOT NULL` (not just on the transition), so a paused founder re-blocks even if the entry gate is bypassed. Body-only `CREATE OR REPLACE` — signature/return type unchanged for rolling-deploy safety.
+3. **Set-never-clear contract.** The cap RPC and the entry gate only *read* or *set* the pause; they NEVER clear it. The **only** clearer is the operator-resume route (`POST /api/dashboard/runtime/resume`, sets `runtime_paused_at = NULL` scoped to the caller's own id). Terminal-halt model: clearing the pause lets the founder start a **fresh** run — no checkpoint/re-bill machinery.
+4. **`cap_check_unavailable` (distinct reason, P2-H).** A transient cap-check DB error is no longer misreported as `byok_cap_exceeded`; it raises `cap_check_unavailable` so the operator alert reads "we couldn't verify your budget", not a false "you exceeded your cap". Fail-closed (no Anthropic call) is preserved.
+
+### Notification layer (PR-A, feat-l5-runaway-guard #5767)
+
+Cap/loop/pause halts were previously silent (Sentry-only). PR-A wires `notifyOfflineUser` into `persistFailure` at the **single** deadletter site, fired BEFORE the `action_sends` UPDATE (mirroring the Sentry-mirror-first ordering), for the enumerated subset `{cost_ceiling_exceeded, byok_cap_exceeded, leader_max_turns_exceeded, cap_check_unavailable, run_paused}` and **never** for `cancelled_by_operator` (operator-initiated stops are not surprises). The `cost_breaker_tripped` payload carries dollar aggregates (`cumulativeCents`/`ceilingCents`), `which_window` (`"spawn" | "cap-1h"`), and the reason — no prompt/response content, no PII beyond the founder's own account id (TR5). Copy is honest by construction: it never implies the run completed, denominates in dollars, and quotes an amount only when one exists. A notification-send failure is swallowed by `notifyOfflineUser` (which mirrors its own failures to Sentry), so it can never mask the terminal state write.
+
 ## Consequences
 
 ### Positive
@@ -148,6 +162,9 @@ At max-turns: → Layer 3 → "leader_max_turns_exceeded"
 3. **Drop Layer 2 (per-spawn ceiling)** — rejected; brainstorm-locked. Layer 1's daily cap alone is too coarse for the operator's per-spawn UX promise.
 4. **Drop Layer 3 (max-turns)** — rejected; physical bound is necessary for Haiku classes where token cost arithmetic under-counts model convergence failures.
 5. **Fold cap-enforcement into ADR-042** — rejected; cap-policy churn would force re-opening loop-topology decisions every cap-policy change.
+6. **Resume-from-checkpoint apparatus (PR-A)** — rejected; the terminal-halt model (operator clears the pause + starts a fresh run) is simpler and safer than a checkpoint/re-bill state machine that would fight ADR-042's attempt-reset determinism. Accepted trade-off: a fresh run re-does work and re-spends BYOK, but the operator is explicitly in control at resume.
+7. **Notify at the cap RPC layer (PR-A)** — rejected; the RPC is a pure wrapper and already funnels through `persistFailure`. Notifying there would double-notify and violate the single-responsibility of the RPC. Notification lives at the one `persistFailure` deadletter site.
+8. **Fail-closed the spawn-entry pause read (PR-A)** — rejected; halting every spawn on a transient `users`-read blip is too aggressive. The gate fails OPEN because the Layer-1 cap-check re-reads `runtime_paused_at` under `FOR UPDATE` and re-blocks a paused founder before any spend — a strictly-later but equally-safe backstop.
 
 ## References
 
