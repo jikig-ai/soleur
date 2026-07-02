@@ -6,7 +6,7 @@ type: feat
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-status: DECISION REQUIRED — do not /work until the operator signs off on an option
+status: SIGNED OFF 2026-07-02 — operator chose Option A′ (keep g-leader + platform-aware glyph fix). Implement the shippable scope (FR1/FR2/FR3/FR4); the Option B/C Appendix does NOT materialize.
 related:
   - PR #5867 (feat-palette-page-shortcuts — the g-leader this plan would rebind)
   - PR #5633 (feat-web-app-shortcuts — the ⌘K palette + ? overlay foundation)

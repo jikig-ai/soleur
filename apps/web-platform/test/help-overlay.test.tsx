@@ -103,6 +103,18 @@ describe("HelpOverlay", () => {
     expect(screen.queryByText("Go to Analytics")).not.toBeInTheDocument();
   });
 
+  it("renders Ctrl (not ⌘) glyphs on a non-Apple platform (happy-dom default) — FR2/AC2", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    // The chord rows are keyed by stable id; the visible <kbd> carries the
+    // platform-specific glyph. happy-dom's navigator is non-Apple → Ctrl.
+    expect(screen.getByTestId("help-row-palette")).toHaveTextContent("Ctrl+K");
+    expect(screen.getByTestId("help-row-sidebar")).toHaveTextContent("Ctrl+B");
+    expect(screen.getByTestId("help-row-palette")).not.toHaveTextContent("⌘");
+    expect(screen.getByTestId("help-row-sidebar")).not.toHaveTextContent("⌘");
+  });
+
   it("shows the Go to Analytics row only for an admin", async () => {
     renderHelp({ isAdmin: true });
     pressKey("/", { meta: true });
@@ -156,7 +168,7 @@ describe("HelpOverlay — rows run their command (not just close)", () => {
     renderHelpAndPalette();
     pressKey("/", { meta: true }); // open help overlay
     await screen.findByLabelText("Search keyboard shortcuts");
-    fireEvent.click(screen.getByTestId("help-row-⌘K"));
+    fireEvent.click(screen.getByTestId("help-row-palette"));
     // The command palette is now open…
     expect(
       await screen.findByLabelText("Command palette search"),
@@ -172,7 +184,7 @@ describe("HelpOverlay — rows run their command (not just close)", () => {
     renderHelpAndPalette(onToggleSidebar);
     pressKey("/", { meta: true });
     await screen.findByLabelText("Search keyboard shortcuts");
-    fireEvent.click(screen.getByTestId("help-row-⌘B"));
+    fireEvent.click(screen.getByTestId("help-row-sidebar"));
     expect(onToggleSidebar).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByLabelText("Search keyboard shortcuts"),

@@ -22,15 +22,15 @@ status: BLOCKED — operator decision required (see plan Decision Matrix)
 
 ## Phase 1 — Shippable scope (Option A′; FR1/FR2 — the one unambiguous improvement)
 
-- [ ] 1.1 Create `apps/web-platform/components/command-palette/platform.ts` — pure,
+- [x] 1.1 Create `apps/web-platform/components/command-palette/platform.ts` — pure,
   SSR-safe `isApplePlatform()` (inject nav shape; novel — no existing helper). (FR1)
-- [ ] 1.2 Fold `isApplePlatform()` unit tests (true/false/no-navigator) into
+- [x] 1.2 Fold `isApplePlatform()` unit tests (true/false/no-navigator) into
   `test/shortcuts-registry.test.ts` — no separate `platform.test.ts`. (AC3)
-- [ ] 1.3 Platform-aware glyphs as a DISPLAY substitution (no `seq`/`formatSeqHint` change):
+- [x] 1.3 Platform-aware glyphs as a DISPLAY substitution (no `seq`/`formatSeqHint` change):
   `help-overlay.tsx` `CHORDS` (`:31-35`) + `command-palette.tsx` hints + `use-shortcuts.tsx`
   `⌘B` literal (`:249`) → `⌘`/`Ctrl`. Render off hydrated state via the provider's
   init-default-then-`useEffect`-sync pattern (`:335-344`); SSR default = `Ctrl`. (FR2, AC2)
-- [ ] 1.4 Extend `test/help-overlay.test.tsx` to assert `Ctrl` on non-Apple nav shape. (AC2)
+- [x] 1.4 Extend `test/help-overlay.test.tsx` to assert `Ctrl` on non-Apple nav shape. (AC2)
 
 ## Phase 2 — APPENDIX: accelerator model + resolver (ONLY if operator picks B/C)
 

@@ -116,6 +116,7 @@ export function writeShortcutsEnabled(enabled: boolean): void {
 }
 
 import { NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEMS } from "./nav-items";
+import { isApplePlatform, modChord } from "./platform";
 
 // ---------------------------------------------------------------------------
 // Direct "go-to" keyboard sequences (`g` prefix + a letter) — #5636, the
@@ -210,7 +211,15 @@ export function resolveSequence(
  * commands are async (fetched when the palette opens) and built in the palette
  * component — they are not part of this synchronous static set.
  */
-export function buildCommands(ctx: ShortcutContext): Command[] {
+export function buildCommands(
+  ctx: ShortcutContext,
+  // Display-only: picks the modifier glyph for chord hints (⌘ vs Ctrl). Defaults
+  // to non-Apple so SSR / no-navigator renders the stable `Ctrl` form the
+  // provider then syncs post-hydration. NOT part of ShortcutContext — the pure
+  // resolvers must never see platform.
+  opts?: { isApplePlatform?: boolean },
+): Command[] {
+  const isApple = opts?.isApplePlatform ?? false;
   // Primary nav + admin stay in the root "Navigation" group. Settings
   // destinations get their OWN "Settings" group, surfaced behind the palette's
   // Settings drill-in sub-page (not flat in the root) — see command-palette.tsx.
@@ -246,7 +255,7 @@ export function buildCommands(ctx: ShortcutContext): Command[] {
       id: "toggle-sidebar",
       label: "Toggle sidebar",
       group: "General",
-      keys: "⌘B",
+      keys: modChord("B", isApple),
       run: () => ({ kind: "toggleSidebar" as const }),
     },
     {
@@ -297,6 +306,12 @@ export type ShortcutsContextValue = {
   closeHelp: () => void;
   isAdmin: boolean;
   shortcutsEnabled: boolean;
+  /**
+   * Whether the device is an Apple platform — DISPLAY ONLY (picks ⌘ vs Ctrl for
+   * key hints). SSR-safe: false on the server, synced post-hydration so the
+   * glyph never mismatches. Consumers pass it to `modChord` / `buildCommands`.
+   */
+  isApplePlatform: boolean;
   /** Interpret a serializable CommandEffect (navigate / chat / help / sidebar). */
   runEffect: (effect: CommandEffect) => void;
 };
@@ -335,12 +350,21 @@ export function ShortcutsProvider({
   // SSR-safe: init ON (matches server render), then sync the device-local pref
   // post-hydration so the ⌘ glyph / listener decision never mismatches.
   const [shortcutsEnabled, setShortcutsEnabled] = useState(true);
+  // SSR-safe: init non-Apple (→ `Ctrl` glyph, matches the server render), then
+  // read the real platform post-hydration. A one-frame `Ctrl`→`⌘` correction on
+  // Apple is acceptable and never the reverse, so no hydration mismatch warning.
+  const [applePlatform, setApplePlatform] = useState(false);
 
   useEffect(() => {
     const sync = () => setShortcutsEnabled(readShortcutsEnabled());
     sync();
     window.addEventListener(SHORTCUTS_CHANGED_EVENT, sync);
     return () => window.removeEventListener(SHORTCUTS_CHANGED_EVENT, sync);
+  }, []);
+
+  // Platform is stable for the session; read it once post-hydration.
+  useEffect(() => {
+    setApplePlatform(isApplePlatform());
   }, []);
 
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -513,6 +537,7 @@ export function ShortcutsProvider({
       closeHelp,
       isAdmin,
       shortcutsEnabled,
+      isApplePlatform: applePlatform,
       runEffect,
     }),
     [
@@ -525,6 +550,7 @@ export function ShortcutsProvider({
       closeHelp,
       isAdmin,
       shortcutsEnabled,
+      applePlatform,
       runEffect,
     ],
   );

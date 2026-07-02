@@ -72,7 +72,7 @@ type AsyncState =
   | { phase: "needsReconnect" };
 
 export function CommandPalette() {
-  const { enabled, paletteOpen, closePalette, isAdmin, runEffect } =
+  const { enabled, paletteOpen, closePalette, isAdmin, isApplePlatform, runEffect } =
     useShortcuts();
 
   const [query, setQuery] = useState("");
@@ -206,7 +206,7 @@ export function CommandPalette() {
 
   if (!enabled) return null;
 
-  const statics = buildCommands({ isAdmin });
+  const statics = buildCommands({ isAdmin }, { isApplePlatform });
   const navCmds = statics.filter((c) => c.group === "Navigation");
   const settingsCmds = statics.filter((c) => c.group === "Settings");
   const askCmd = statics.find((c) => c.id === "ask-agent");

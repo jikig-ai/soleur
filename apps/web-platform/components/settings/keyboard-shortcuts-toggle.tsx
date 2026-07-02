@@ -14,6 +14,7 @@ import {
   writeShortcutsEnabled,
   SHORTCUTS_CHANGED_EVENT,
 } from "@/components/command-palette/use-shortcuts";
+import { isApplePlatform, modChord } from "@/components/command-palette/platform";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 export function KeyboardShortcutsToggle() {
@@ -21,9 +22,13 @@ export function KeyboardShortcutsToggle() {
   // SSR-safe: init ON (matches the server render + the pref default), then sync
   // the device-local value post-hydration.
   const [enabled, setEnabled] = useState(true);
+  // SSR-safe: init non-Apple (→ `Ctrl` glyph) then read the real platform on
+  // mount, so a Windows/Linux user is not shown a `⌘` they don't have (FR2).
+  const [isApple, setIsApple] = useState(false);
 
   useEffect(() => {
     setEnabled(readShortcutsEnabled());
+    setIsApple(isApplePlatform());
   }, []);
 
   if (!flagOn) return null;
@@ -49,8 +54,9 @@ export function KeyboardShortcutsToggle() {
           Enable keyboard shortcuts
         </span>
         <span className="text-xs text-soleur-text-muted">
-          Use <kbd>⌘K</kbd> to open the command palette, <kbd>⌘/</kbd> for the
-          shortcut list, and <kbd>⌘B</kbd> to toggle the sidebar. Turn off to
+          Use <kbd>{modChord("K", isApple)}</kbd> to open the command palette,{" "}
+          <kbd>{modChord("/", isApple)}</kbd> for the shortcut list, and{" "}
+          <kbd>{modChord("B", isApple)}</kbd> to toggle the sidebar. Turn off to
           disable all keyboard shortcuts on this device.
         </span>
       </div>
