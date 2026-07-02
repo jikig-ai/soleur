@@ -386,6 +386,61 @@ fixes for every per-step plan:
 > which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
 > single-user-incident trap the threshold exists to prevent.
 
+> **Amendment (CTO ruling, 2026-07-02, Phase 3 GA — cutover + read-source overlay, Sub-PR 3.D).**
+> The GA cutover to the shared git-data store is a hardened, coordinated operation, and
+> the rehydration contract (§1) is refined for the multi-host read side:
+> **(a) LUKS-at-rest cutover.** The cutover target is a FRESH **guest-side LUKS** git-data
+> volume (`cryptsetup`, not an `hcloud_volume` attribute; idempotent `isLuks` guard so a
+> 2nd cloud-init run is a no-op; key delivered via Doppler-env at boot, NEVER argv —
+> #5560; mount `/dev/mapper/git-data`). This is the load-bearing NFR-027 at-rest control
+> for user git-data, NOVEL to the infra (no prior `cryptsetup`).
+> **(b) Set-identity cutover, not count-match.** A two-pass **freeze-rsync** (bulk with
+> writers live, then a delta under a git-data write-freeze — the real writers are per-turn
+> `syncPush`/`replicateToGitData`, not just crons) copies old→fresh volume; identity is
+> verified by `git for-each-ref` diff **and** `git rev-list --all | sort | sha256sum`
+> equal per bare repo (a ref-count match is insufficient). The flip is **coordinated
+> across both hosts** (drain+reload together — Doppler propagation to two containers is
+> not atomic). The `terraform apply` + cutover run **Inngest-dispatches-GHA** off-host
+> (cloud-admin creds never on the app host); the placement-group attach reboots `web-1`,
+> so it is a **maintenance-window** apply. **Rollback = flag off + re-drain**, which loses
+> post-flip git-data writes — acceptable ONLY because pushed refs are also on GitHub
+> `origin` (rehydration); this dependency is stated, not implicit. The old unencrypted
+> volume is decommissioned/wiped only after a confirmed-healthy flip (CLO DL-2), and
+> Art. 17 erasure hits BOTH volumes during dual-existence.
+> **(c) Owner-side relay completion.** 3.B landed the proxying-host half (inert); 3.D boots
+> the private-net TLS proxy listener on the OWNER host and attaches a pre-authed proxied
+> socket into the native session lifecycle (register→bind→idle→heartbeat→`auth_ok`,
+> skipping the auth + placement blocks) — a drain/deploy-migrated session must NOT greet
+> fresh (AC8).
+> **(d) Read-source overlay — rehydration = clone(GitHub) → overlay(git-data).** §1 said
+> GitHub `origin` is the canonical rehydration source; it remains the canonical **clone
+> base + durable long-term history and is never orphaned**, but git-data is authoritative
+> for the **most-recent per-user worktree tip**. Rationale: git-data ⊇ GitHub origin in
+> committed-ref completeness — `syncPush` auto-commits only `knowledge-base/**` and reroutes
+> a protected-default push to a `soleur/kb-sync` PR branch, so the agent's real commits
+> never land on origin's default branch, while `replicateToGitData` `--force`-pushes ALL
+> `refs/heads/*` + `refs/tags/*`. So a fresh GitHub clone can be strictly behind the user's
+> latest tip. **Mechanism:** `fetchFromGitData` fetches the worktree namespace into
+> remote-tracking `refs/remotes/git-data/*` (NEVER local `refs/heads/*`), then the
+> fresh-graft path (`ensure-workspace-repo.ts`, past the `isValidGitWorkTree` early-return
+> that guarantees zero local-only commits) does a guarded `reset --hard
+> refs/remotes/git-data/<primary>` when that ref exists (else keeps the GitHub clone).
+> Fail-soft: a git-data blip mirrors to Sentry and keeps the GitHub clone. **Rejected:**
+> (Option 3) refs-only, no working-tree overlay — leaves git-data's newer tip in an unread
+> ref, so the user silently resumes on stale state (single-user brand trap); (Option 1)
+> detach-HEAD + fetch into `refs/heads/*` + re-checkout — same end state but keeps a
+> destructive `:refs/heads/*` refspec one bad guard away from clobbering a live branch,
+> plus a detach/re-checkout dance and shallow-vs-branch ambiguity. Follow-ups (LOW,
+> post-GA, non-blocking): `--unshallow` for full-history parity; last-checked-out-branch
+> restoration (needs the HEAD symref, not currently replicated).
+> **(e) Host-side hardening (non-gating).** The transport key's bare `git-shell -c` is
+> replaced by a receive/upload-pack **allowlist wrapper** + CWE-22 path canonicalization.
+> **Status:** UNCHANGED — this ADR stays `adopting` and flips `adopting`→`accepted` only at
+> the Phase-3 GA soak (AC11: ≥7 days both hosts owning live per-user leases, zero fence
+> false-rejects, zero cross-tenant denials) AND after LUKS-at-rest + one-way-TLS are
+> verified in prod (NFR-026/027). It does NOT flip at 3.D merge (the flag ships OFF; the
+> cutover is post-merge).
+
 7. **Self-host the session-Redis on EU Hetzner; secrets via `random_password`.**
    Hetzner has no managed Redis. A self-hosted dedicated EU Redis adds **no new
    sub-processor / DPA** (the deciding GDPR reason over Upstash/Aiven). It is a
