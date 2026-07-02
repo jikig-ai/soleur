@@ -96,6 +96,7 @@ export function LeaderLoopStatus({
   const [optimisticStopping, setOptimisticStopping] = useState(false);
   const [undoState, setUndoState] = useState<UndoState>({ kind: "idle" });
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchRowRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const refreshCostRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -287,6 +288,26 @@ export function LeaderLoopStatus({
     }
   }
 
+  // feat-l5-runaway-guard PR-A: clear the founder's runtime pause. This is
+  // the in-product reach for the operator-resume route (the plan's "reachable
+  // from the halt banner/email CTA"). Terminal-halt: clearing the pause lets
+  // the founder start a FRESH run; it does not resume this halted spawn.
+  async function onResume() {
+    setResumeError(null);
+    try {
+      const res = await fetch("/api/dashboard/runtime/resume", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        setResumeError(`Resume failed (${res.status})`);
+        return;
+      }
+      fetchRow();
+    } catch {
+      setResumeError("Resume failed — network error");
+    }
+  }
+
   if (!row) {
     // Pre-fetch first-render — agent just acknowledged at the route,
     // action_sends row not yet readable via the tenant client. Render the
@@ -424,7 +445,25 @@ export function LeaderLoopStatus({
             Retry
           </button>
         ) : null}
+
+        {state.showResume ? (
+          <button
+            type="button"
+            onClick={onResume}
+            data-action="leader-resume"
+            className="min-h-[44px] rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white"
+            aria-label="Resume run — clear pause"
+          >
+            Resume
+          </button>
+        ) : null}
       </div>
+
+      {resumeError ? (
+        <p className="text-xs text-red-600" role="alert">
+          {resumeError}
+        </p>
+      ) : null}
     </div>
   );
 }

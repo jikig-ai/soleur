@@ -26,7 +26,10 @@ export type FailureReason =
   | "leader_response_truncated"
   | "leader_tool_invalid"
   | "leader_class_disabled"
-  | "cancelled_by_operator";
+  | "cancelled_by_operator"
+  // feat-l5-runaway-guard PR-A reasons.
+  | "run_paused"
+  | "cap_check_unavailable";
 
 export interface FailureReasonRow {
   /**
@@ -125,6 +128,21 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
     // injected by the consumer (see today-card.tsx state-matrix row).
     copy:
       "Stopped. The current turn finished before stopping. Undo any artifacts below.",
+    retryEligible: false,
+  },
+  // feat-l5-runaway-guard PR-A reasons.
+  run_paused: {
+    // The founder's account is paused (a cost cap tripped earlier). No
+    // spend on this attempt. Recovery is out-of-band: clear the pause.
+    copy:
+      "Your account is paused because a spending cap was reached earlier. Clear the pause from the halt banner to start a fresh run.",
+    retryEligible: false,
+  },
+  cap_check_unavailable: {
+    // A transient budget-check failure — NOT a budget breach (P2-H). Honest
+    // copy: temporary, try again shortly.
+    copy:
+      "We couldn't check your spending against your cap due to a temporary issue, so the run was stopped as a precaution. Try again in a moment.",
     retryEligible: false,
   },
 };

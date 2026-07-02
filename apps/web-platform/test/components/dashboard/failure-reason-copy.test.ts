@@ -27,6 +27,9 @@ const ALL_REASONS: FailureReason[] = [
   "leader_tool_invalid",
   "leader_class_disabled",
   "cancelled_by_operator",
+  // feat-l5-runaway-guard PR-A.
+  "run_paused",
+  "cap_check_unavailable",
 ];
 
 describe("FAILURE_REASON_COPY", () => {
@@ -86,6 +89,24 @@ describe("FAILURE_REASON_COPY", () => {
       FAILURE_REASON_COPY.acknowledgment_persist_failed.retryEligible,
     ).toBe(false);
     expect(FAILURE_REASON_COPY.leader_class_disabled.retryEligible).toBe(false);
+    // feat-l5-runaway-guard: a paused account must be cleared out-of-band
+    // (operator resume), and a failed cap-check needs a wait — neither shows
+    // an inline Retry.
+    expect(FAILURE_REASON_COPY.run_paused.retryEligible).toBe(false);
+    expect(FAILURE_REASON_COPY.cap_check_unavailable.retryEligible).toBe(false);
+  });
+
+  it("run_paused copy points the operator to resume, not retry", () => {
+    expect(FAILURE_REASON_COPY.run_paused.copy).toMatch(/paused|resume/i);
+  });
+
+  it("cap_check_unavailable copy reads as transient, not a budget breach", () => {
+    expect(FAILURE_REASON_COPY.cap_check_unavailable.copy).not.toMatch(
+      /exceeded|over your (cap|budget|limit)/i,
+    );
+    expect(FAILURE_REASON_COPY.cap_check_unavailable.copy).toMatch(
+      /again|moment|temporar/i,
+    );
   });
 
   it("byok_cap_exceeded copy directs operator to raise cap (m4 fix)", () => {
