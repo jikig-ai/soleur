@@ -19,6 +19,52 @@ Closes #5884.
      "operator" reference is a read-only Sentry audit + `gh workflow run` (no SSH, no
      manual install). See ## Infrastructure (IaC). -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-02
+**Depth:** proportionate — 2-file test-infra chore with strong local context; halt-gates
+(4.6/4.7/4.8/4.9) verified, precedent-diff (4.4) resolved, all load-bearing factual
+claims re-verified live against the worktree. Full 40-agent fan-out deliberately not
+run (disproportionate for a source-static test-parity guard; #5566 is the exact,
+already-shipped precedent).
+
+**Halt-gate status:** ✅ 4.6 User-Brand Impact (threshold `none` + reason) · ✅ 4.7
+Observability (5 fields, no-ssh) · ✅ 4.8 PAT-shaped (no hits) · ✅ 4.9 UI-wireframe
+(no UI surface) · N/A 4.5 network-outage (no SSH/network trigger; the sentry root has
+no `provisioner`/`connection` block).
+
+### Key improvements over the base plan
+
+1. **Precedent-diff resolved (4.4):** the guard pattern is a *verbatim structural
+   clone* of the in-file #5566 non-SSH block (`extractAllResources` +
+   `extractAllTargets` + a frozen exclusion `Set`) — not a novel pattern. See
+   "Precedent-Diff" below.
+2. **Live re-verification:** `github_webhook_founder_ambiguous` confirmed still absent
+   from the workflow `-target` set (the miss holds), `sandbox_startup_failure` (#5875)
+   and the apply-created sibling `egress_blocked` confirmed present.
+3. **Parser-safety note added:** `main.tf`'s `data "sentry_project"` source is
+   correctly excluded (regex matches `resource "…"`, not `data "…"`), so the
+   `.startsWith("sentry_")` filter yields exactly the 67 managed resources.
+
+### Precedent-Diff (deepen Phase 4.4)
+
+Pattern-bound behavior: "static source-vs-workflow `-target=` parity guard." **Precedent
+exists** and is the canonical form — the #5566 block in the *same file*
+(`terraform-target-parity.test.ts` lines 336-505):
+
+| Aspect | #5566 non-SSH block (precedent) | This #5884 Sentry block |
+|---|---|---|
+| resource discovery | `extractAllResources(stripComments(read(f)))` over `listInfraTfFiles()` | same helpers over `listSentryTfFiles()` |
+| target extraction | `extractAllTargets(workflowText)` | same helper, `apply-sentry-infra.yml` |
+| exclusion model | frozen `OPERATOR_APPLIED_EXCLUSIONS` `Set` (operator-applied, never per-PR) | frozen `SENTRY_IMPORT_ONLY_EXCLUSIONS` `Set` (operator-imported placeholders) |
+| non-vacuity | synthetic `github_actions_secret` flagged uncovered | synthetic `sentry_issue_alert` flagged uncovered |
+| floor sentinel | (implicit via CI-publish subset) | `SENTRY_MIN_RESOURCES` ≥ 60 |
+
+The only shape-difference is the exclusion *rationale* (operator-applied host resources
+vs import-only Sentry placeholders); the mechanism is identical. This is intentional
+consistency, not duplication to refactor — the helpers are already shared module-scope
+functions in the same file.
+
 ## Overview
 
 `apps/web-platform/infra/sentry/*.tf` is applied by `.github/workflows/apply-sentry-infra.yml`
