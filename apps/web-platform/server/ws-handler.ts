@@ -3126,10 +3126,12 @@ export async function attachProxiedSession(
   // Supersede any existing socket for this user (mirrors the native path).
   supersedeExistingUserSocket(userId);
 
-  // A proxied attach carries no token, so the plan/subscription caches are not
-  // read inline here — `startSubscriptionRefresh` hydrates them from the DB on
-  // its first tick. Default to the conservative free-tier cap until then so a
-  // pre-refresh `start_session` can never over-grant concurrency.
+  // Register with a conservative free-tier PLACEHOLDER cap, then hydrate the real
+  // subscription state inline BELOW before any message (hence any start_session)
+  // is wired. Registering before the DB await mirrors the native path so the
+  // owning-host grace-abort guard sees this OPEN socket if a supersede-armed
+  // grace timer fires during the read. The free default is never consumed: no
+  // message handler and no heartbeat run until after hydration completes.
   const session: ClientSession = {
     ws,
     lastActivity: Date.now(),
@@ -3142,8 +3144,72 @@ export async function attachProxiedSession(
   // worktree lease) so workspace-membership revocation SIGTERMs precisely.
   setUserWorkspace(userId, workspaceId);
 
-  // This attach IS the reconnect — cancel any armed disconnect grace-abort so a
-  // migrated in-flight turn is not aborted out from under the resumed session.
+  // Hydrate the migrated session's REAL plan/cap inline, BEFORE wiring
+  // message→handleMessage (i.e. before any start_session can run). #5274 3.D
+  // user-impact: a coordinated drain migrates many PAID users at once; without
+  // this read they would be capped at the free placeholder (=1) until the first
+  // ~60s subscription-refresh tick, so a start_session while already holding a
+  // slot would spuriously cap_hit → hard-close the just-resumed session + pop an
+  // upgrade modal at a paying customer (brand-fatal). Also populates
+  // stripeSubscriptionId so the Stripe webhook-lag rescue path is reachable
+  // (the native handshake sets it; the old free literal did not). Mirrors the
+  // native read (subscription_status / plan_tier / concurrency_override /
+  // stripe_subscription_id). Fail-open: on any DB failure keep the conservative
+  // free default (mirrored to Sentry) — startSubscriptionRefresh still hydrates
+  // on its next tick.
+  try {
+    const tenant = await tenantFor(userId, "attachProxiedSession");
+    if (tenant) {
+      const { data, error } = await tenant
+        .from("users")
+        .select(
+          "tc_accepted_version, subscription_status, plan_tier, concurrency_override, stripe_subscription_id",
+        )
+        .eq("id", userId)
+        .single();
+      if (error || !data) {
+        reportSilentFallback(
+          error ?? new Error("proxied-attach subscription read returned no row"),
+          {
+            feature: "control_plane_route",
+            op: "proxied-attach.subscription-read",
+            extra: { userId },
+          },
+        );
+      } else {
+        const row = data as {
+          tc_accepted_version?: string | null;
+          subscription_status?: string | null;
+          plan_tier?: PlanTier | null;
+          concurrency_override?: number | null;
+          stripe_subscription_id?: string | null;
+        };
+        session.subscriptionStatus = row.subscription_status ?? undefined;
+        session.planTier = row.plan_tier ?? "free";
+        session.concurrencyOverride = row.concurrency_override ?? null;
+        session.stripeSubscriptionId = row.stripe_subscription_id ?? null;
+        session.tcVersionAtHandshake = row.tc_accepted_version ?? null;
+      }
+    }
+    // `tenant === null` → tenantFor already mirrored to Sentry; keep free default.
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "control_plane_route",
+      op: "proxied-attach.subscription-read",
+      extra: { userId },
+    });
+  }
+
+  // Socket may have closed during the read — tear down the registration we made
+  // above (grace-abort is a no-op: no conversation is active on a fresh attach).
+  if (ws.readyState !== WebSocket.OPEN) {
+    teardownAuthedSessionOnClose(userId, ws);
+    return;
+  }
+
+  // This attach IS the reconnect — cancel any armed disconnect grace-abort (incl.
+  // one armed by the supersede above) so a migrated in-flight turn is not aborted
+  // out from under the resumed session.
   for (const [key, timer] of pendingDisconnects) {
     if (key.startsWith(`${userId}:`)) {
       clearTimeout(timer);

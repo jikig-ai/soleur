@@ -25,15 +25,39 @@ process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
 
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+
+// Mutable handshake-read fixture — the owner's inline subscription read that
+// hydrates the migrated session's real plan/cap (mirrors the native handshake
+// read). Tests flip `.value` / `.error` to exercise the paid + DB-failure paths.
+const { subRead } = vi.hoisted(() => ({
+  subRead: {
+    value: {
+      tc_accepted_version: "2025-01-01",
+      subscription_status: "active",
+      plan_tier: "pro",
+      concurrency_override: null,
+      stripe_subscription_id: "sub_paid_123",
+    } as Record<string, unknown> | null,
+    error: null as unknown,
+  },
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({ from: vi.fn(), auth: { getUser: vi.fn() } }),
   serverUrl: "https://test.supabase.co",
 }));
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => ({ data: subRead.value, error: subRead.error }),
+        }),
+      }),
+    }),
+  })),
   getMyRevocationStatus: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
@@ -75,6 +99,7 @@ import {
 } from "../server/agent-session-registry";
 import { resolveSessionRoute } from "../server/session-router";
 import { proxyClientToOwner } from "../server/session-proxy";
+import { reportSilentFallback } from "../server/observability";
 
 const USER = "u-proxied-1";
 const WS_ID = "ws-proxied-1";
@@ -95,6 +120,18 @@ class FakeWs extends EventEmitter {
     this.readyState = WebSocket.CLOSED;
   }
 }
+
+beforeEach(() => {
+  // Reset the handshake-read fixture to the paid-user default before each test.
+  subRead.value = {
+    tc_accepted_version: "2025-01-01",
+    subscription_status: "active",
+    plan_tier: "pro",
+    concurrency_override: null,
+    stripe_subscription_id: "sub_paid_123",
+  };
+  subRead.error = null;
+});
 
 afterEach(() => {
   sessions.delete(USER);
@@ -148,6 +185,35 @@ describe("attachProxiedSession — owner-side pre-authed relay (#5274 Phase 3 3.
     await attachProxiedSession(ws as never, { userId: USER, workspaceId: WS_ID });
     expect(resolveSessionRoute).not.toHaveBeenCalled();
     expect(proxyClientToOwner).not.toHaveBeenCalled();
+  });
+
+  it("hydrates a migrated PAID user's real plan + Stripe id inline (no spurious free=1 cap_hit)", async () => {
+    // Brand-fatal single-user incident guard (#5274 3.D user-impact review): a
+    // proxy-migrated paying user must NOT be capped at free=1 for the ~60s until
+    // the first subscription-refresh tick. The owner reads the real state inline
+    // BEFORE start_session can run, so the resumed session carries the right cap
+    // AND the Stripe webhook-lag rescue path is reachable (stripeSubscriptionId
+    // is populated — the native path sets it; the old free-literal did not).
+    const ws = new FakeWs();
+    await attachProxiedSession(ws as never, { userId: USER, workspaceId: WS_ID });
+    const s = sessions.get(USER);
+    expect(s?.planTier).toBe("pro");
+    expect(s?.planTier).not.toBe("free");
+    expect(s?.stripeSubscriptionId).toBe("sub_paid_123");
+    expect(s?.subscriptionStatus).toBe("active");
+    expect(s?.concurrencyOverride).toBe(null);
+  });
+
+  it("DB read failure → conservative free fallback + Sentry mirror (fail-open)", async () => {
+    subRead.value = null;
+    subRead.error = { message: "boom" };
+    const ws = new FakeWs();
+    await attachProxiedSession(ws as never, { userId: USER, workspaceId: WS_ID });
+    const s = sessions.get(USER);
+    expect(s?.planTier).toBe("free");
+    // Session still opens (fail-open) and the drift is mirrored to Sentry.
+    expect(sessions.get(USER)?.ws).toBe(ws);
+    expect(reportSilentFallback).toHaveBeenCalled();
   });
 
   it("close tears down the registered session (grace-abort teardown parity)", async () => {
