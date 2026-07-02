@@ -7,19 +7,19 @@ lane: cross-domain
 # Tasks — fix(infra) #5887 moved-block wedge + moved/`-target` guard
 
 ## Phase 0 — Preconditions
-- [ ] 0.1 `grep -n '^moved' apps/web-platform/infra/*.tf` — confirm 4 moved bases (server, volume, volume_attachment, server_network) are the complete set.
-- [ ] 0.2 Confirm all 4 bases are in `OPERATOR_APPLIED_EXCLUSIONS` (terraform-target-parity.test.ts:370-423).
-- [ ] 0.3 Baseline green: `bun test plugins/soleur/test/terraform-target-parity.test.ts`.
-- [ ] 0.4 Do NOT run terraform from the agent (no prd creds / R2 state in-session).
+- [x] 0.1 `grep -n '^moved' apps/web-platform/infra/*.tf` — confirm 4 moved bases (server, volume, volume_attachment, server_network) are the complete set.
+- [x] 0.2 Confirm all 4 bases are in `OPERATOR_APPLIED_EXCLUSIONS` (terraform-target-parity.test.ts:370-423).
+- [x] 0.3 Baseline green: `bun test plugins/soleur/test/terraform-target-parity.test.ts`.
+- [x] 0.4 Do NOT run terraform from the agent (no prd creds / R2 state in-session).
 
 ## Phase 1 — moved/`-target` parity guard (recurrence fix) — minimal shape: 1 helper + 1 set + 3 tests
-- [ ] 1.1 Add `parseMovedBlocks(stripped)` helper — **flat regex** `/moved\s*\{[^}]*\}/g` (blocks are flat; no brace-matcher) + `from`/`to` captures, reduce to base address (strip `["…"]`).
-- [ ] 1.2 Add documented `MOVED_OPERATOR_CONSUMED` set with the 4 #5877 bases + per-entry rationale; add cross-ref comment on BOTH it and `OPERATOR_APPLIED_EXCLUSIONS` (dual-maintenance / lockstep-on-rename).
-- [ ] 1.3 Test 1 (coverage + regression anchor in one): every moved base ∈ (`allTargets` ∪ `MOVED_OPERATOR_CONSUMED`); uncovered → fail.
-- [ ] 1.4 Test 2 (non-vacuity): synthetic-forgotten-moved-block flagged uncovered (mirror `synthetic_untargeted_ssh`, lines 278-333).
-- [ ] 1.5 Test 3 (drift guard): assert `MOVED_OPERATOR_CONSUMED ⊆ OPERATOR_APPLIED_EXCLUSIONS` (closes sync-drift; replaces the cut tautological anchor).
-- [ ] 1.6 Comment WHY the #5566 exclusion check is orthogonal to plan-time move processing + the known-limitation note (accounting check, not interlock; repo not live state).
-- [ ] 1.7 `bun test plugins/soleur/test/terraform-target-parity.test.ts` green.
+- [x] 1.1 Add `parseMovedBlocks(stripped)` helper — **flat regex** `/moved\s*\{[^}]*\}/g` (blocks are flat; no brace-matcher) + `from`/`to` captures, reduce to base address (strip `["…"]`).
+- [x] 1.2 Add documented `MOVED_OPERATOR_CONSUMED` set with the 4 #5877 bases + per-entry rationale; add cross-ref comment on BOTH it and `OPERATOR_APPLIED_EXCLUSIONS` (dual-maintenance / lockstep-on-rename).
+- [x] 1.3 Test 1 (coverage + regression anchor in one): every moved base ∈ (`allTargets` ∪ `MOVED_OPERATOR_CONSUMED`); uncovered → fail.
+- [x] 1.4 Test 2 (non-vacuity): synthetic-forgotten-moved-block flagged uncovered (mirror `synthetic_untargeted_ssh`, lines 278-333).
+- [x] 1.5 Test 3 (drift guard): assert `MOVED_OPERATOR_CONSUMED ⊆ OPERATOR_APPLIED_EXCLUSIONS` (closes sync-drift; replaces the cut tautological anchor).
+- [x] 1.6 Comment WHY the #5566 exclusion check is orthogonal to plan-time move processing + the known-limitation note (accounting check, not interlock; repo not live state).
+- [x] 1.7 `bun test plugins/soleur/test/terraform-target-parity.test.ts` green.
 
 ## Phase 2 — ADR amendment + learning
 - [ ] 2.1 Append `> **Amendment (2026-07-02, #5877/#5887)**` to ADR-068 (sequencing rule; do NOT change `status: adopting`).
