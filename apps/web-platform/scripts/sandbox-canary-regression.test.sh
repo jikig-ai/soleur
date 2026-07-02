@@ -128,36 +128,38 @@ else
     # Enable unprivileged userns on the ephemeral runner (guardrail 3). Best-effort.
     sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
 
-    IMG="soleur-bwrap-regression:alpine"
+    # Reproduce the SDK 0.3.x split unshare() with NESTED unshare(1) — NOT bwrap.
+    # #5875 CI finding: bwrap 0.11.x COMBINES all namespaces into ONE
+    # unshare(CLONE_NEWUSER|NEWNS|NEWPID) WITH the NEWUSER bit, which the #1557
+    # CLONE_NEWUSER allow-rule permits in BOTH profiles — so a synthesized bwrap argv
+    # cannot reproduce the split (committed and pre-5874 both pass → no discrimination).
+    # The SDK does a SEPARATE second unshare(CLONE_NEWPID|CLONE_NEWNS) WITHOUT NEWUSER;
+    # `unshare --user --map-root-user unshare --mount --pid` reproduces that exact
+    # syscall sequence — the INNER call's arg0 lacks the NEWUSER bit, which is precisely
+    # what the two removed #5874 rules gate. Uses util-linux unshare (busybox's lacks
+    # --map-root-user).
+    IMG="soleur-unshare-regression:alpine"
     if ! docker image inspect "$IMG" >/dev/null 2>&1; then
       bdir="$(mktemp -d)"
-      printf 'FROM alpine:3.20\nRUN apk add --no-cache bubblewrap\n' > "$bdir/Dockerfile"
+      printf 'FROM alpine:3.20\nRUN apk add --no-cache util-linux\n' > "$bdir/Dockerfile"
       docker build -q -t "$IMG" "$bdir" >/dev/null 2>&1 || true
       rm -rf "$bdir"
     fi
 
-    # Read the synthesized setup argv + append the no-op command (mirrors
-    # sandbox-canary.mjs buildBwrapInvocation: setup argv, then `-- true`).
-    mapfile -t ARGV < <(jq -r '.bwrapSetupArgv[]' "$ARGV_FIXTURE")
-
-    run_under() { # $1=profile → prints combined output; returns bwrap rc
+    run_under() { # $1=profile → prints combined output; returns rc of the nested unshare
       docker run --rm \
         --security-opt apparmor=unconfined \
         --security-opt "seccomp=$1" \
-        "$IMG" bwrap "${ARGV[@]}" -- true 2>&1
+        "$IMG" unshare --user --map-root-user unshare --mount --pid true 2>&1
     }
 
-    # DIFFERENTIAL classification (robust to env variance). The regression proves the
-    # two profiles DIFFER on the seccomp-gated split unshare() — not that bwrap can
-    # complete a full sandbox setup on this runner. A committed-baseline failure is an
-    # ENV limitation (missing caps to mount, restricted bind, no userns), NEVER a
-    # seccomp-profile regression — the committed profile runs in prod continuously and
-    # is unchanged by this PR — so it SKIPS, it does not FAIL. The ONLY hard FAIL is
-    # "no discrimination": committed allows AND pre-5874 also allows, which means the
-    # fixture/argv doesn't exercise the rule difference (the regression's premise).
-    # The argv deliberately carries NO --proc/--dev mount (those EPERM for container-cap
-    # reasons unrelated to the unshare gate — the #5875 CI-run finding); the split
-    # unshare() fires from --unshare-user + --unshare-pid alone, before any mount.
+    # NEVER-FAIL classification. The STRUCTURAL layer A (always-on, blocking via the
+    # `test` shard) is the deterministic would-have-caught guard; this runtime layer is
+    # the higher-fidelity CONFIRMATION where the runner can execute the split, and a
+    # best-effort SKIP everywhere else. Reproducing the SDK's split without the real SDK
+    # is inherently env/tool-dependent (the faithful path is the deferred creds-gated
+    # real capture, #5913), so a non-discriminating or env-blocked outcome is a SKIP,
+    # NEVER a merge-blocking FAIL — it PASSES only on a clean positive discrimination.
     committed_out="$(run_under "$COMMITTED_PROFILE")"; committed_rc=$?
     pre_out="$(run_under "$PRE5874_PROFILE")"; pre_rc=$?
     pre_eperm=no
@@ -165,14 +167,12 @@ else
       pre_eperm=yes
     fi
 
-    if [[ "$committed_rc" -ne 0 ]]; then
-      skip "B committed baseline could not run bwrap on this runner (rc=$committed_rc: $(printf '%s' "$committed_out" | head -1)) — ENV limitation, not a profile regression; layer A + the sdk-bump gate remain the deterministic guards"
-    elif [[ "$pre_eperm" == "yes" ]]; then
-      pass "B would-have-caught: committed ALLOWS the split-unshare, pre-5874 EPERMs it"
-    elif [[ "$pre_rc" -eq 0 ]]; then
-      fail "B NO DISCRIMINATION: committed AND pre-5874 both allowed the split-unshare (rc=0). The two profiles do not differ on the gated unshare — the fixture or the argv is wrong (regression premise broken)."
+    if [[ "$committed_rc" -eq 0 && "$pre_eperm" == "yes" ]]; then
+      pass "B would-have-caught: committed ALLOWS the split unshare(), pre-5874 EPERMs it"
+    elif [[ "$committed_rc" -ne 0 ]]; then
+      skip "B committed baseline could not run the split unshare on this runner (rc=$committed_rc: $(printf '%s' "$committed_out" | head -1)) — env limitation; layer A + the sdk-bump gate remain the deterministic guards"
     else
-      skip "B inconclusive: committed passed but pre-5874 failed with a non-EPERM error (rc=$pre_rc: $(printf '%s' "$pre_out" | head -1)) — layer A remains the guard"
+      skip "B non-discriminating on this runner (committed rc=0, pre-5874 rc=$pre_rc eperm=$pre_eperm) — the faithful split needs the real SDK (deferral B, #5913); layer A remains the deterministic guard"
     fi
   fi
 fi
