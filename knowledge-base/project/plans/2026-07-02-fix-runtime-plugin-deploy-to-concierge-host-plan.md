@@ -255,18 +255,18 @@ matched; `<!-- soleur:followthrough … -->` + `follow-through` label). No secre
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] Outer `on.push.paths` contains `plugins/soleur/**`, `!plugins/soleur/docs/**`,
+- [x] Outer `on.push.paths` contains `plugins/soleur/**`, `!plugins/soleur/docs/**`,
   `!plugins/soleur/test/**` (grep).
-- [ ] Inner `check_changed` uses unquoted `$PATH_FILTER` under `set -f` + `set -euo pipefail`, with an
+- [x] Inner `check_changed` uses unquoted `$PATH_FILTER` under `set -f` + `set -euo pipefail`, with an
   explicit git rc check that fails loud (`::error::`), never defaulting to skip.
-- [ ] Inner pathspecs contain NO `**` token.
-- [ ] `path_filter` input `description:` documents the space-separated-pathspec-list contract.
-- [ ] Behavioral test green for all rows (AGENTS.md/CLAUDE.md/future-surface → `changed=true`;
+- [x] Inner pathspecs contain NO `**` token.
+- [x] `path_filter` input `description:` documents the space-separated-pathspec-list contract.
+- [x] Behavioral test green for all rows (AGENTS.md/CLAUDE.md/future-surface → `changed=true`;
   docs-only/test-only → `changed=false`), run with `force_run=false`.
-- [ ] `bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` still green.
-- [ ] `actionlint` clean on both workflows; `bash -c` on the extracted `check_changed` snippet.
-- [ ] ADR authored & committed (status may be `adopting`); cross-refs by slug.
-- [ ] PR body uses `Ref #N` (ops-remediation — closure is post-deploy).
+- [x] `bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` still green.
+- [x] `actionlint` clean on both workflows; `bash -c` on the extracted `check_changed` snippet.
+- [x] ADR authored & committed (status may be `adopting`); cross-refs by slug. (ADR-080)
+- [ ] PR body uses `Ref #N` (ops-remediation — closure is post-deploy). (ship phase)
 
 ### Post-merge (automated)
 - [ ] `web-platform-release` fires and `deploy` re-seeds the mount; verify via `/hooks/deploy-status`
