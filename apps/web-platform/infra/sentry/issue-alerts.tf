@@ -1194,3 +1194,76 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
     ignore_changes = [environment]
   }
 }
+
+# ── Sandbox-startup failure alert (#5875 / ADR-079) — APPLY-CREATED ──────────
+# Pages when the agent-sandbox startup path fails for ≥K DISTINCT tenants in a
+# rolling window. The 2026-07-01 P0 (#5873 — a seccomp EPERM on the SDK's split
+# unshare() after bump #5849) produced ZERO server-side signal: the catch sites
+# tagged only the SDK's missing-binary preflight substring, so the EPERM fell
+# through to a bare untagged captureException. PR1 tags EVERY sandbox-startup
+# failure (missing_binary + the #5873 seccomp/userns denial) with
+# feature="agent-sandbox", op="sdk-startup" via reportSilentFallback
+# (agent-runner.ts) / mirrorWithDebounce (cc-dispatcher.ts, per-user key). The
+# emit is per-USER (no global-key debounce) so the affected-users condition below
+# can distinguish a one-tenant blip from a fleet-wide outage (the #5873 class,
+# where every tenant's Bash sandbox is down at once).
+#
+# Native affected-users threshold (event_unique_user_frequency): fire when ≥3
+# distinct tenants hit a sandbox-startup failure within 1h. Verified against
+# jianyuan/sentry 0.15.0-beta2 via `terraform providers schema -json` (condition
+# type event_unique_user_frequency; comparison_type ∈ {count,percent}; interval
+# valid values incl. 1h). Distinct frequency=22 avoids Sentry POST-time
+# exact-duplicate dedup (keyed on action-shape + frequency + match — see the auth
+# rules' comment above).
+resource "sentry_issue_alert" "sandbox_startup_failure" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "sandbox-startup-failure"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 22
+
+  conditions_v2 = [
+    {
+      event_unique_user_frequency = {
+        comparison_type = "count"
+        value           = 3
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "agent-sandbox"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "sdk-startup"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors the sibling rules in this file): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the
+  # active founder + ops@soleur.ai. The event carries only a userIdHash (Recital
+  # 26 pseudonymized at the emit boundary) + bwrap/kernel stderr — no plaintext
+  # tenant PII — so the fallthrough does not over-disclose. Revisit recipient
+  # pinning (target_type="Member") before the first non-ops Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
