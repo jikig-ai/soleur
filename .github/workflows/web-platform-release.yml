@@ -3,7 +3,19 @@ name: Web Platform Release
 on:
   push:
     branches: [main]
-    paths: ['apps/web-platform/**']
+    # Runtime-plugin changes (skills/hooks/agents/scripts/commands/instructions the
+    # Concierge executes) must rebuild+deploy the image so the host mount re-seeds
+    # (plan 2026-07-02-fix-runtime-plugin-deploy-to-concierge-host, ADR-080).
+    # DENYLIST: everything under plugins/soleur/ EXCEPT docs/ (deploys via
+    # deploy-docs.yml) and test/ (does not affect the deployed runtime). This is
+    # the GitHub-Actions glob dialect (supports **/!); the inner check_changed gate
+    # in reusable-release.yml uses git-pathspec dialect (:(exclude), NO **) — the
+    # two dialects are deliberately different.
+    paths:
+      - 'apps/web-platform/**'
+      - 'plugins/soleur/**'
+      - '!plugins/soleur/docs/**'
+      - '!plugins/soleur/test/**'
   workflow_dispatch:
     inputs:
       bump_type:
@@ -30,7 +42,9 @@ jobs:
     with:
       component: web-platform
       component_display: "Soleur Web Platform"
-      path_filter: "apps/web-platform/"
+      # git-pathspec dialect (NO ** — check_changed runs under `set -f`). Mirrors
+      # the outer on.push.paths denylist: plugins/soleur/ minus docs/ and test/.
+      path_filter: "apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/ :(exclude)plugins/soleur/test/"
       tag_prefix: "web-v"
       docker_image: "ghcr.io/jikig-ai/soleur-web-platform"
       docker_context: "apps/web-platform"
