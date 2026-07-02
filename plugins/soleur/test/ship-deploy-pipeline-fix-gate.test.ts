@@ -570,12 +570,23 @@ describe("apparmor profile auto-apply parity (#5875)", () => {
     const planIdx = yml.indexOf("terraform plan -target=");
     const applyIdx = yml.indexOf("terraform apply -target=");
     expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // Bound each invocation to its own -target= run of lines (generous 800 chars).
-    expect(yml.slice(planIdx, planIdx + 800)).toContain(
+    expect(applyIdx).toBeGreaterThan(planIdx);
+    // Bound PRECISELY, not with a fixed window: the plan invocation ends where the
+    // apply invocation begins, and the apply invocation ends at the next step. A
+    // fixed 800-char window spills across the plan→apply boundary and — because
+    // apparmor_bwrap_profile is the LAST -target= in each list — could let the apply
+    // block's target satisfy the plan assertion, masking a dropped plan -target
+    // (pattern-review finding, #5875). This is the same precise bounding the
+    // loaded-verification describe uses.
+    const planBlock = yml.slice(planIdx, applyIdx);
+    const applyRest = yml.slice(applyIdx);
+    const applyStepEnd = applyRest.indexOf("\n      - name:");
+    const applyBlock =
+      applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
+    expect(planBlock).toContain(
       "-target=terraform_data.apparmor_bwrap_profile",
     );
-    expect(yml.slice(applyIdx, applyIdx + 800)).toContain(
+    expect(applyBlock).toContain(
       "-target=terraform_data.apparmor_bwrap_profile",
     );
   });
