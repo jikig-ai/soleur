@@ -43,20 +43,28 @@ jobs:
       - name: Run drift analyzer
         id: drift
         run: |
-          set +e
+          # The runner's default shell is `bash --noprofile --norc -eo pipefail`.
+          # Keep errexit AND pipefail OFF through the analyzer + parse: the
+          # analyzer exits 1 by design (drift), and each parse `grep` legitimately
+          # exits 1 on no-match. With pipefail on, a `grep | head` substitution
+          # inherits grep's exit code, so under errexit the assignment would abort
+          # the step at the parse line — BEFORE the empty-stale anomaly guard
+          # below — silently dropping status=error and, on a missing undoc heading
+          # with stale>0, suppressing a real drift issue. Guard every substitution
+          # with `|| var=""` (mirrors scheduled-realtime-probe.yml's pattern).
+          set +e +o pipefail
           bash scripts/domain-model-drift.sh drift --repo . \
             --register knowledge-base/engineering/architecture/domain-model.md \
             > "$RUNNER_TEMP/dm-drift.txt" 2>&1
           rc=$?
-          set -e
 
           # Parse the stale-citation sub-count — preflight Check 11 Step 11.2
           # parser VERBATIM. The `^`-anchor + `head -1` is load-bearing: an
           # unanchored grep can match a verbatim-SQL predicate line echoing the
           # substring, breaking the numeric read (ADR-076 / Check 11 note).
-          stale_line=$(grep -oE '^## Stale register citations \([0-9]+\)' "$RUNNER_TEMP/dm-drift.txt" | head -1)
-          stale=$(printf '%s' "$stale_line" | grep -oE '[0-9]+' | head -1)
-          undoc=$(grep -oE '^## Undocumented source facts \([0-9]+' "$RUNNER_TEMP/dm-drift.txt" | head -1 | grep -oE '[0-9]+' | head -1)
+          stale_line=$(grep -oE '^## Stale register citations \([0-9]+\)' "$RUNNER_TEMP/dm-drift.txt" | head -1) || stale_line=""
+          stale=$(printf '%s' "$stale_line" | grep -oE '[0-9]+' | head -1) || stale=""
+          undoc=$(grep -oE '^## Undocumented source facts \([0-9]+' "$RUNNER_TEMP/dm-drift.txt" | head -1 | grep -oE '[0-9]+' | head -1) || undoc=""
           undoc=${undoc:-0}
 
           # rc 2 (analyzer error) / rc 3 (secret-refuse): fail loud, file NO
@@ -137,7 +145,7 @@ jobs:
           # The stale section verbatim from the analyzer report (from the
           # '## Stale register citations' heading up to the next '## ' heading).
           awk '/^## Stale register citations/{f=1} f&&/^## /&&!/^## Stale register citations/{exit} f' \
-            "$RUNNER_TEMP/dm-drift.txt" > /tmp/stale-section.md || true
+            "$RUNNER_TEMP/dm-drift.txt" > "$RUNNER_TEMP/stale-section.md" || true
 
           EXISTING=$(gh issue list --label "domain-model-drift" --state open \
             --limit 100 \
@@ -152,14 +160,14 @@ jobs:
               echo "<details><summary>Stale register citations</summary>"
               echo ""
               echo '```'
-              cat /tmp/stale-section.md
+              cat "$RUNNER_TEMP/stale-section.md"
               echo '```'
               echo ""
               echo "</details>"
               echo ""
               echo "[Run #${RUN_NUMBER}](${RUN_URL})"
-            } > /tmp/issue-body.md
-            gh issue comment "$EXISTING" --body-file /tmp/issue-body.md
+            } > "$RUNNER_TEMP/issue-body.md"
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/issue-body.md"
             echo "Updated existing drift issue #$EXISTING"
           else
             {
@@ -174,7 +182,7 @@ jobs:
               echo "<details><summary>Stale register citations</summary>"
               echo ""
               echo '```'
-              cat /tmp/stale-section.md
+              cat "$RUNNER_TEMP/stale-section.md"
               echo '```'
               echo ""
               echo "</details>"
@@ -188,12 +196,12 @@ jobs:
               echo "> _Advisory:_ the analyzer's \"undocumented source facts\" count (currently ${UNDOC}) is expected-nonzero by design (the register is a curated subset — ADR-076 enforcement §1) and is **never** the trigger for this issue. Only stale citations are actionable here."
               echo ""
               echo "_Auto-created by the [domain-model-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-domain-model-drift.yml)._"
-            } > /tmp/issue-body.md
+            } > "$RUNNER_TEMP/issue-body.md"
             gh issue create \
               --title "$TITLE" \
               --label "domain-model-drift" \
               --milestone "Post-MVP / Later" \
-              --body-file /tmp/issue-body.md
+              --body-file "$RUNNER_TEMP/issue-body.md"
             echo "Created new domain-model drift issue"
           fi
 

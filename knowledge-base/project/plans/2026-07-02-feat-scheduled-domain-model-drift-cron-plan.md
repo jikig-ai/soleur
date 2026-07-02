@@ -112,7 +112,7 @@ container auto-restarts on merge; no provisioning step) and (b) **one Sentry cro
 ### Terraform changes
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — add `resource "sentry_cron_monitor"
   "scheduled_domain_model_drift"` (name/slug `"scheduled-domain-model-drift"`, `schedule.crontab`
-  matching the Inngest cron `0 8 * * 1`, `checkin_margin_minutes = 120`, `max_runtime_minutes = 15`,
+  matching the Inngest cron `0 8 * * 1`, `checkin_margin_minutes = 60`, `max_runtime_minutes = 15`,
   `failure_issue_threshold = 1`, `recovery_threshold = 1`, `timezone = "UTC"`). Model verbatim on the
   `scheduled_terraform_drift` block (`cron-monitors.tf:83-93`).
 - `.github/workflows/apply-sentry-infra.yml` — add `-target=sentry_cron_monitor.scheduled_domain_model_drift`
@@ -138,7 +138,7 @@ container auto-restarts on merge; no provisioning step) and (b) **one Sentry cro
 ```yaml
 liveness_signal:
   what: "scheduled-domain-model-drift Sentry cron monitor — heartbeat POSTed each executor run (ok on clean OR drift-filed; error on analyzer rc 2/3). Scheduler liveness also covered by cron-inngest-cron-watchdog via EXPECTED_CRON_FUNCTIONS."
-  cadence: "weekly (Mon 08:00 UTC); missed run pages within the 120-min check-in margin"
+  cadence: "weekly (Mon 08:00 UTC); missed run pages within the 60-min check-in margin"
   alert_target: "Sentry issues stream (monitor failure + failure_issue_threshold=1)"
   configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf (monitor) + .github/workflows/scheduled-domain-model-drift.yml (heartbeat step) + apps/web-platform/server/inngest/cron-manifest.ts (watchdog purview)"
 error_reporting:

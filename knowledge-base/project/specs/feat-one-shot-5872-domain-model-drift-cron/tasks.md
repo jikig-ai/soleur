@@ -30,7 +30,7 @@ Derived from the plan. Phase order is dependency-directed (contract → consumer
 - [x] 3.3 `apps/web-platform/server/inngest/routine-metadata.ts` — add `"cron-domain-model-drift"` entry (`domain: "Engineering"`, `ownerRole: "CTO"`, `scheduleLabel: "Weekly (Mon 08:00 UTC)"`, `manualTrigger: "allowed"` — match sibling capitalization at :59).
 
 ## Phase 4 — Sentry monitor IaC
-- [x] 4.1 `apps/web-platform/infra/sentry/cron-monitors.tf` — add `sentry_cron_monitor "scheduled_domain_model_drift"` (name `scheduled-domain-model-drift`, crontab `0 8 * * 1`, margin 120, max_runtime 15) modeled on `scheduled_terraform_drift`.
+- [x] 4.1 `apps/web-platform/infra/sentry/cron-monitors.tf` — add `sentry_cron_monitor "scheduled_domain_model_drift"` (name `scheduled-domain-model-drift`, crontab `0 8 * * 1`, margin 60, max_runtime 15) modeled on `scheduled_terraform_drift`.
 - [x] 4.2 `.github/workflows/apply-sentry-infra.yml` — add `-target=sentry_cron_monitor.scheduled_domain_model_drift` to the `-target=` allowlist.
 
 ## Phase 5 — Tests

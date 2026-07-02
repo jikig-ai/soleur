@@ -31,8 +31,11 @@
  *    (ok on rc 0/1, error on rc 2/3 or empty-stale anomaly). A weekly-cadence
  *    cron's absence-based liveness is too weak on its own, so this workflow
  *    provisions its own monitor (unlike Design A dev-migration-drift).
- *  - Dispatch error path: a token-mint / Octokit failure is reported loudly to
- *    the Sentry issues stream via `reportSilentFallback` (token redacted).
+ *  - Dispatch error path: an Octokit `workflow_dispatch` failure is caught and
+ *    reported loudly to the Sentry issues stream via `reportSilentFallback`
+ *    (token redacted). A token-mint failure occurs BEFORE the try/catch and
+ *    carries no token to leak — it surfaces via the Inngest sentry-correlation
+ *    middleware (Layer 1) after `retries: 1`.
  */
 import { inngest } from "@/server/inngest/client";
 import {
