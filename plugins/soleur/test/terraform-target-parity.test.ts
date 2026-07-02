@@ -352,10 +352,14 @@ function extractAllResources(stripped: string): string[] {
   return out;
 }
 
-/** Every `-target=<type>.<name>` address (any resource type) in a workflow. */
+/** Every `-target=<type>.<name>` address (any resource type) in a workflow.
+ *  Comment-strip FIRST so a DISABLED (commented-out) `-target=` line is NOT counted
+ *  as covered — otherwise a `# -target=sentry_issue_alert.foo` would mask a real
+ *  un-applied resource, the exact inert-target class this guard exists to catch.
+ *  Verified no-op against the current workflows (no live target sits in a comment). */
 function extractAllTargets(workflowText: string): Set<string> {
   const set = new Set<string>();
-  for (const m of workflowText.matchAll(
+  for (const m of stripComments(workflowText).matchAll(
     /-target=([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
   )) {
     set.add(m[1]);
@@ -537,5 +541,244 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredSha256).not.toBeNull();
     expect(wpi.cloudflaredVersion).toBe(dpf.cloudflaredVersion);
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
+  });
+});
+
+// ─── Sentry infra -target parity (#5884) ────────────────────────────────────
+// `apps/web-platform/infra/sentry/*.tf` is applied by apply-sentry-infra.yml via
+// an EXPLICIT `-target=` list (not a whole-directory apply), exactly like the
+// #5566 web-platform case above. A new sentry_issue_alert / sentry_cron_monitor /
+// sentry_uptime_monitor added to a .tf file but forgotten in that `-target` list
+// ships in code, passes `terraform validate`, and is NEVER applied to Sentry — an
+// inert alert/monitor with zero runtime signal. This bug has bitten twice already
+// (learning 2026-06-12-detector-cron-must-route-…; again in #5875's
+// sandbox_startup_failure). The #5566 guard above reads only the MAIN
+// apps/web-platform/infra/ tree + its two workflows; it never sees infra/sentry/
+// or apply-sentry-infra.yml. This block extends the identical mechanism
+// (extractAllResources ∪ extractAllTargets + a frozen exclusion Set) to the Sentry
+// apply pipeline. Reuses stripComments / extractAllResources / extractAllTargets.
+
+const SENTRY_INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra/sentry");
+const SENTRY_WORKFLOW = resolve(
+  REPO_ROOT,
+  ".github/workflows/apply-sentry-infra.yml",
+);
+
+// Import-only sentry_issue_alert placeholders (conditions_v2 = []), created in
+// Sentry via `terraform import` of the legacy configure-sentry-alerts.sh rules
+// (see issue-alerts.tf header + learning 2026-06-12-detector-cron-must-route-…).
+// They are DELIBERATELY absent from apply-sentry-infra.yml's -target set — a
+// target-scoped apply would try to CREATE a duplicate live rule. FROZEN: do NOT
+// grow. A NEW apply-created alert (real conditions_v2) must be TARGETED in the
+// workflow, never added here.
+const SENTRY_IMPORT_ONLY_EXCLUSIONS = new Set<string>([
+  "sentry_issue_alert.auth_callback_no_code_burst",
+  "sentry_issue_alert.auth_exchange_code_burst",
+  "sentry_issue_alert.auth_per_user_loop",
+  "sentry_issue_alert.auth_signout_burst",
+]);
+
+// Floor sentinel — 67 managed resources today (44 cron + 4 uptime + 19 alert).
+// `>=` (not `===`) so adding a resource raises the count without a brittle edit;
+// the parity assertion enforces correctness, this only guards a parser collapse
+// (regex/path regression that silently discovers zero resources).
+const SENTRY_MIN_RESOURCES = 60;
+
+function listSentryTfFiles(): string[] {
+  return readdirSync(SENTRY_INFRA_DIR)
+    .filter((f) => f.endsWith(".tf"))
+    .map((f) => resolve(SENTRY_INFRA_DIR, f))
+    .sort();
+}
+
+describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884)", () => {
+  let sentryResources: string[];
+  let sentryTargets: Set<string>;
+
+  beforeAll(() => {
+    expect(existsSync(SENTRY_INFRA_DIR)).toBe(true);
+    expect(existsSync(SENTRY_WORKFLOW)).toBe(true);
+    // NOTE: infra/sentry/ is a FLAT directory applied by a SINGLE workflow —
+    // listSentryTfFiles is non-recursive and only apply-sentry-infra.yml is scanned.
+    // No filter on resource TYPE: EVERY managed resource discovered under
+    // infra/sentry/ must be reachable by a -target line (mirrors the #5566 block).
+    // A future non-sentry_ resource (random_password, doppler_secret) added here
+    // must fail CLOSED — filtering to `sentry_` would silently skip it, re-opening
+    // the #5566 un-applied class. (`data "sentry_project"` is already excluded:
+    // extractAllResources matches `resource "…"`, not `data "…"`.)
+    sentryResources = listSentryTfFiles().flatMap((f) =>
+      extractAllResources(stripComments(readFileSync(f, "utf8"))),
+    );
+    sentryTargets = extractAllTargets(readFileSync(SENTRY_WORKFLOW, "utf8"));
+  });
+
+  test(`discovers >= ${SENTRY_MIN_RESOURCES} managed sentry resources (non-vacuity)`, () => {
+    expect(sentryResources.length).toBeGreaterThanOrEqual(SENTRY_MIN_RESOURCES);
+  });
+
+  test("every apply-created sentry resource is targeted (or a documented import-only exclusion)", () => {
+    const uncovered = sentryResources.filter(
+      (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
+    );
+    // A non-empty list means a new sentry resource was added without a -target
+    // line (the inert-alert class) — add the -target to apply-sentry-infra.yml,
+    // or (only for a genuine import-only placeholder) add it to
+    // SENTRY_IMPORT_ONLY_EXCLUSIONS.
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the #5875 regression anchor (sandbox_startup_failure) stays targeted", () => {
+    expect(
+      sentryTargets.has("sentry_issue_alert.sandbox_startup_failure"),
+    ).toBe(true);
+  });
+
+  test("the #5884 regression anchor (github_webhook_founder_ambiguous) stays targeted", () => {
+    // The apply-created alert whose missing -target line this PR fixed — the exact
+    // resource that surfaced the guard's third real inert-alert instance. Pin it so
+    // a future workflow edit cannot silently re-drop it back to inert.
+    expect(
+      sentryTargets.has("sentry_issue_alert.github_webhook_founder_ambiguous"),
+    ).toBe(true);
+  });
+
+  test("the 4 import-only auth_* placeholders are present in .tf yet NOT targeted", () => {
+    for (const a of SENTRY_IMPORT_ONLY_EXCLUSIONS) {
+      expect(sentryResources).toContain(a);
+      expect(sentryTargets.has(a)).toBe(false);
+    }
+  });
+
+  test("guard FAILS on a synthetic un-targeted apply-created alert (non-vacuity)", () => {
+    const synthetic = `resource "sentry_issue_alert" "synthetic_forgotten_alert" { project = "x" }`;
+    const parsed = extractAllResources(stripComments(synthetic));
+    expect(parsed).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
+    const uncovered = parsed.filter(
+      (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
+    );
+    expect(uncovered).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
+  });
+});
+
+// ─── `moved`-block / -target parity (#5887) ─────────────────────────────────
+// Terraform processes EVERY `moved {}` block on any plan/apply. Under a
+// target-scoped plan (`terraform plan -target=<addr>`, the shape both
+// apply-web-platform-infra.yml and apply-deploy-pipeline-fix.yml use), Terraform
+// REJECTS the plan if a pending `moved` source/target base address is excluded
+// from the `-target=` set:
+//     Error: Moved resource instances excluded by targeting
+// #5877 (ADR-068 Phase 3) added four `moved {}` blocks to placement-group.tf,
+// re-addressing the singleton web host + its volume/attachment/network to the
+// `["web-1"]` for_each key. That wedged the targeted CI plan RED on every run.
+//
+// The fix is NOT to add these bases to the per-PR `-target=` allow-list:
+// `hcloud_server.web` carries `placement_group_id` + `for_each = var.web_hosts`
+// (server.tf), so targeting it in the UNATTENDED per-PR path forces a power-off
+// reboot of the running prod host (and transitively creates the placement group
+// / a second host). They are consumed by the operator's ADR-068 Phase-3
+// MAINTENANCE-WINDOW apply, after which no pending moves remain and the targeted
+// CI plan self-heals with zero workflow change. This guard therefore asserts
+// every `moved` endpoint is EITHER `-target=`ed OR documented as operator-consumed
+// — it must NOT encode "moved endpoint ⟹ must be in -target" (that would hard-code
+// the rejected, reboot-bearing fix as the required state). See #5887 + the
+// ADR-068 §Amendment (#5887).
+
+/**
+ * Every `moved { from = <addr> to = <addr> }` endpoint reduced to its BASE
+ * resource address (a trailing `["key"]` for_each/index is dropped — the
+ * `[a-z0-9_]+\.[A-Za-z0-9_]+` capture stops at the word boundary before `[`).
+ * The four #5877 blocks are FLAT (no nested braces), so a flat
+ * `moved\s*\{[^}]*\}` match is sufficient — the depth-counting
+ * `extractTerraformDataResources` walker is not needed here.
+ */
+function extractMovedBases(stripped: string): string[] {
+  const bases = new Set<string>();
+  for (const block of stripped.match(/(?:^|\n)\s*moved\s*\{[^}]*\}/g) ?? []) {
+    for (const m of block.matchAll(
+      /\b(?:from|to)\s*=\s*([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
+    )) {
+      bases.add(m[1]);
+    }
+  }
+  return [...bases];
+}
+
+// The four #5877 `moved` bases, consumed by the operator's ADR-068 Phase-3
+// maintenance-window apply (a routine per-PR `-target` add would reboot/replace
+// the running host — see #5887). The 4th (`hcloud_server_network.web`) is not in
+// the runtime error only because its Phase-2 resource is not yet in state → its
+// move is a no-op with nothing to move; the guard accounts for all four so a
+// future state-materialization does not re-wedge CI.
+//
+// DUAL-MAINTENANCE HAZARD: these four addresses also live in
+// OPERATOR_APPLIED_EXCLUSIONS above (they are operator-applied for the #5566
+// coverage guard too). The subset test below asserts the two hand-maintained
+// sets never diverge on a resource rename.
+const MOVED_OPERATOR_CONSUMED = new Set<string>([
+  "hcloud_server.web",
+  "hcloud_volume.workspaces",
+  "hcloud_volume_attachment.workspaces",
+  "hcloud_server_network.web",
+]);
+
+describe("terraform `moved`/-target parity — pending moves are accounted for (#5887)", () => {
+  let movedBases: string[];
+  let allTargets: Set<string>;
+
+  beforeAll(() => {
+    movedBases = listInfraTfFiles().flatMap((f) =>
+      extractMovedBases(stripComments(readFileSync(f, "utf8"))),
+    );
+    allTargets = new Set<string>([
+      ...extractAllTargets(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
+      ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
+    ]);
+  });
+
+  test("every `moved` endpoint base is `-target=`ed OR documented operator-consumed", () => {
+    // non-vacuity: the 4 #5877 bases. NOTE: once the operator ADR-068 Phase-3
+    // cutover completes and the `moved {}` blocks are cleaned out of
+    // placement-group.tf, this assertion red-lines BY DESIGN — drop it (and
+    // MOVED_OPERATOR_CONSUMED) in that cleanup PR.
+    expect(movedBases.length).toBeGreaterThan(0);
+    const uncovered = movedBases.filter(
+      (a) => !allTargets.has(a) && !MOVED_OPERATOR_CONSUMED.has(a),
+    );
+    // A non-empty list means a `moved {}` block re-addresses a resource that is
+    // NEITHER in the workflow `-target=` allow-list NOR classified as
+    // operator-consumed — i.e. it WEDGES every target-scoped CI apply with
+    // "Moved resource instances excluded by targeting" (the #5887 class). Fix:
+    // add a `-target=` line ONLY if the resource is safe to apply UNATTENDED
+    // per-PR; otherwise classify it into MOVED_OPERATOR_CONSUMED and ship the
+    // operator cutover WITH the migration. This test is also the regression
+    // anchor — dropping a #5877 base from MOVED_OPERATOR_CONSUMED turns it red
+    // (the base is not in allTargets), so no separate tautology test is added.
+    expect(uncovered).toEqual([]);
+  });
+
+  test("guard FAILS on a synthetic forgotten `moved` block (non-vacuity)", () => {
+    // Prove the guard bites: a moved block whose base is in NEITHER set is flagged.
+    const synthetic = `
+moved {
+  from = hcloud_foo.bar
+  to   = hcloud_foo.bar["k"]
+}
+`;
+    const parsed = extractMovedBases(stripComments(synthetic));
+    expect(parsed).toEqual(["hcloud_foo.bar"]); // base extracted, index stripped
+    const uncovered = parsed.filter(
+      (a) => !allTargets.has(a) && !MOVED_OPERATOR_CONSUMED.has(a),
+    );
+    expect(uncovered).toEqual(["hcloud_foo.bar"]);
+  });
+
+  test("MOVED_OPERATOR_CONSUMED is a subset of OPERATOR_APPLIED_EXCLUSIONS (dual-maintenance drift guard)", () => {
+    // Closes the sync-drift hazard: the four addresses live in two hand-maintained
+    // sets that must move in lockstep on a resource rename. Any moved-consumed base
+    // that is NOT also operator-excluded means the sets diverged.
+    const drifted = [...MOVED_OPERATOR_CONSUMED].filter(
+      (a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a),
+    );
+    expect(drifted).toEqual([]);
   });
 });

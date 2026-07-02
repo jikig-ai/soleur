@@ -121,22 +121,50 @@ require_working_tree() {
   fi
 }
 
-# Remove stale git lock files left when a git process is killed mid-write
-# (e.g., the 2026-07-01 seccomp outage killed git under `unshare` EPERM, leaving
-# `.git/config.lock` on the mounted /workspaces volume; every later `git config`
-# write then fails EEXIST — "could not lock config file …: File exists" — forever).
-# Age-guarded: removes ONLY locks older than $threshold seconds, so a legitimately
-# in-flight sub-second config writer (lock lifetime is single-digit ms) is never
-# clobbered. Clock-skew guard: a future-dated lock (negative age) is treated as
-# fresh and preserved, matching cleanup_merged_worktrees' clock-skew age check.
-# GNU-only `stat -c%Y` (Linux containers + CI ubuntu + dev; mirrors the existing
-# GNU `stat -c%s` in cleanup_claude_tmp). Idempotent; safe for parallel sessions
-# — the age-guard, not a flock, is the safety mechanism.
+# Map GNU `rm` strerror text -> a stable errno label for the diagnostic sentinel.
+# (GNU rm prints "rm: cannot remove '<f>': <strerror>"; we match the strerror.)
+_rm_errno() {
+  case "$1" in
+    *"Device or resource busy"*) echo "EBUSY" ;;
+    *"Operation not permitted"*) echo "EPERM" ;;
+    *"Permission denied"*)       echo "EACCES" ;;
+    *"Read-only file system"*)   echo "EROFS" ;;
+    *)                           echo "OTHER" ;;
+  esac
+}
+
+# Instrument + self-heal the stale git config-write locks that wedge worktree
+# creation (e.g., the 2026-07-01 seccomp outage killed git under `unshare` EPERM,
+# leaving `.git/config.lock` on the mounted volume; every later `git config` write
+# then fails EEXIST — "could not lock config file …: File exists" — forever).
+#
+# The Concierge agent-sandbox is a BLIND surface (no interactive ls/stat/findmnt,
+# and asking the operator is a hard-rule violation), so this sweep IS the only
+# diagnostic instrument. For EVERY present lock it emits one grep-able
+# SOLEUR_GIT_LOCK_DIAG line on STDOUT (the stream the orchestrating agent greps —
+# stderr is invisible under `claude --bg`, mirroring the SOLEUR_FEATURE_PUSH_FAILED
+# precedent below) carrying type/owner/perms/mtime/age/mount. It then:
+#   - auto-removes ONLY a stale REGULAR lock (a config.lock is created by git via
+#     open(O_CREAT|O_EXCL) — always a regular file), age-guarded so an in-flight
+#     sub-second writer is never clobbered; clock-skew guard preserves future-dated;
+#   - on a non-regular lock (dir/symlink/mount) OR a regular lock whose rm fails
+#     (EBUSY/EPERM/EACCES/EROFS), emits a loud SOLEUR_GIT_LOCK_UNREMOVABLE line with
+#     the errno/reason and does NOT proceed — it never marches into the doomed
+#     `git config` write. Removal of non-regular locks is deferred to the targeted
+#     fix this probe informs (auto-`rm -rf` on a blind surface is out of scope).
+#
+# Returns non-zero iff a config-write lock remained present-and-unremovable, so
+# ensure_bare_config can short-circuit before the EEXIST write. GNU-only stat
+# (Linux containers + CI ubuntu + dev; mirrors the existing GNU `stat -c%s`).
+# Idempotent; safe for parallel sessions — the age-guard, not a flock, is the
+# safety mechanism. Every capture is set -e-safe (`|| default` / `if !`) so an
+# abort never pre-empts the loud sentinel on the exact case it exists for.
 sweep_stale_git_locks() {
   local git_dir="$1"
   local threshold="${2:-60}"   # seconds
   [[ -d "$git_dir" ]] || return 0
-  local now lock path mtime age swept=0
+  local now lock path mtime age swept=0 unremovable=0
+  local ftype owner perms mount rp rm_err rm_rc
   now=$(date +%s)
   # Scope: ONLY the config-write locks (`config.lock`, `config.worktree.lock`) —
   # the confirmed EEXIST wedge that blocks ensure_bare_config's writes below.
@@ -148,21 +176,82 @@ sweep_stale_git_locks() {
   # different failure class (a wedged checkout/rebase) with a larger blast radius.
   for lock in config.lock config.worktree.lock; do
     path="$git_dir/$lock"
-    [[ -f "$path" ]] || continue
-    mtime=$(stat -c%Y "$path" 2>/dev/null) || continue
-    age=$(( now - mtime ))
-    # Remove only stale (age >= threshold). Skips fresh AND future-dated
-    # (age < 0, clock skew). Arithmetic nested in `if` so a false `(( ))`
-    # exit status never trips `set -e` (mirrors cleanup_merged_worktrees).
-    if (( age >= threshold )); then
-      if rm -f "$path" 2>/dev/null; then
-        swept=$(( swept + 1 ))
+    # Type precedence is load-bearing: -L (symlink) FIRST because -e/-f/-d all
+    # dereference symlinks; mountpoint BEFORE -d because a mountpoint is also a dir.
+    if [[ -L "$path" ]]; then
+      ftype=symlink
+    elif [[ -e "$path" ]]; then
+      rp=$(realpath -- "$path" 2>/dev/null) || rp=""
+      # `stat -c%m` prints the file's mount root; == its own realpath iff the path
+      # IS a mountpoint. (Do NOT use bare `findmnt -T`: it exits 0 + prints the
+      # containing-fs SOURCE for every existing path and never yields "none".)
+      if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then
+        ftype=mount
+      elif [[ -d "$path" ]]; then
+        ftype=dir
+      elif [[ -f "$path" ]]; then
+        ftype=regular
+      else
+        ftype=other
+      fi
+    else
+      continue   # missing: nothing present to diagnose
+    fi
+
+    owner=$(stat -c '%u:%g' -- "$path" 2>/dev/null) || owner=unknown
+    perms=$(stat -c '%a' -- "$path" 2>/dev/null) || perms=unknown
+    mtime=$(stat -c '%Y' -- "$path" 2>/dev/null) || mtime=unknown
+    age=unknown
+    # Numeric guard: a non-numeric mtime flowing into $(( )) aborts under set -e.
+    if [[ "$mtime" =~ ^[0-9]+$ ]]; then age=$(( now - mtime )); fi
+    mount=none
+    if [[ "$ftype" == "mount" ]]; then
+      if command -v findmnt >/dev/null 2>&1; then
+        mount=$(findmnt -n -o SOURCE -T "$path" 2>/dev/null) || mount=unknown
+      else
+        mount=findmnt-unavailable
       fi
     fi
+    # Plain, color-free, STDOUT — color would break the agent's grep.
+    echo "SOLEUR_GIT_LOCK_DIAG file=$lock type=$ftype owner=$owner perms=$perms mtime=$mtime age=$age mount=$mount"
+
+    if [[ "$ftype" == "regular" ]]; then
+      # In-flight-writer safety applies ONLY to a regular lock (a real git writer
+      # holds a regular config.lock for single-digit ms): remove it only once stale
+      # (age >= threshold); fresh AND future-dated (clock skew) are left untouched —
+      # the DIAG line above already surfaced them. Arithmetic nested in `if` so a
+      # false `(( ))` never trips set -e (mirrors cleanup_merged_worktrees).
+      if [[ "$age" =~ ^[0-9]+$ ]] && (( age >= threshold )); then
+        rm_err=""; rm_rc=0
+        # 2>&1 >/dev/null order is load-bearing: capture stderr, discard stdout.
+        # LC_ALL=C pins strerror to English so _rm_errno maps the label reliably
+        # under a non-C operator/CI locale (else every failure degrades to OTHER).
+        rm_err=$(LC_ALL=C rm -f -- "$path" 2>&1 >/dev/null) || rm_rc=$?
+        if (( rm_rc == 0 )); then
+          swept=$(( swept + 1 ))   # assignment form, NOT (( swept++ )) — old value 0 -> rc 1 -> set -e abort
+        else
+          unremovable=1
+          echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=regular errno=$(_rm_errno "$rm_err") reason=rm-failed hint=\"git config write will fail EEXIST — targeted fix needed\""
+        fi
+      fi
+    else
+      # dir / symlink / mount / other: a config.lock is created by git via
+      # open(O_CREAT|O_EXCL) — ALWAYS a regular file. A non-regular lock is NEVER a
+      # legitimate in-flight writer and ALWAYS blocks the git config write (EEXIST)
+      # regardless of age, so flag it unremovable UNCONDITIONALLY (no staleness gate
+      # — that gate exists only for the regular in-flight-writer case above). Never
+      # auto-removed on a blind surface; the DIAG line above carries the forensic
+      # detail to design the targeted fix.
+      unremovable=1
+      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=$ftype errno=none reason=non-regular-lock hint=\"observed non-regular config lock — targeted fix required; not auto-removed\""
+    fi
   done
+  # Report progress BEFORE the return so a partial sweep (one lock removed, the
+  # other stuck) still surfaces its count.
   if (( swept > 0 )); then
     echo -e "${YELLOW}Swept $swept stale git lock file(s) from $git_dir${NC}"
   fi
+  (( unremovable == 0 ))   # non-zero iff a config-write lock remained unremovable
 }
 
 # Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
@@ -184,7 +273,14 @@ ensure_bare_config() {
   # writes fail EEXIST forever (2026-07-01 outage class). This chokepoint runs on
   # every create path and on the session-start cleanup_merged_worktrees path, so
   # an affected workspace self-heals on its next session — no operator SSH.
-  sweep_stale_git_locks "$git_dir"
+  # Fail LOUD, don't march into the doomed write: if the sweep reports a lock it
+  # could not remove (non-regular or rm-failed), the `git config` writes below
+  # WOULD fail EEXIST — so short-circuit here. The `if !` disarms set -e; the loud
+  # SOLEUR_GIT_LOCK_UNREMOVABLE sentinel already printed on stdout from the sweep.
+  if ! sweep_stale_git_locks "$git_dir"; then
+    headless_or_stderr error "worktree wedge: an unremovable git config lock remains in $git_dir (see SOLEUR_GIT_LOCK_UNREMOVABLE on stdout above). Refusing the shared-config write — it would fail EEXIST. A targeted fix is required."
+    return 1
+  fi
 
   local shared_config="$git_dir/config"
   local wt_config="$git_dir/config.worktree"
@@ -503,7 +599,10 @@ install_deps() {
 
 # Create a new worktree
 create_worktree() {
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Cannot create worktree — wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
   local branch_name="$1"
   local from_branch="${2:-main}"
 
@@ -564,7 +663,10 @@ create_worktree() {
   verify_worktree_created "$worktree_path" "$branch_name" "$BASE_REF"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Worktree created but shared-config repair is wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
 
   # Force the worktree to use the operator's global git identity (not a CI-bot
   # identity that may be set at the bare repo level).
@@ -586,7 +688,10 @@ create_worktree() {
 # Create a worktree for a feature with spec directory
 # Simplified version: no prompts, just creates everything
 create_for_feature() {
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Cannot create worktree — wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
   local name="$1"
   local from_branch="${2:-main}"
 
@@ -640,7 +745,10 @@ create_for_feature() {
   verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Worktree created but shared-config repair is wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
 
   # Force the worktree to use the operator's global git identity (not a CI-bot
   # identity that may be set at the bare repo level).
@@ -938,8 +1046,13 @@ cleanup_merged_worktrees() {
   # RETURN trap fires on any function-level return without clobbering EXIT.
   trap 'release_lock cleanup-merged' RETURN
 
-  # Fix bare repo config if broken (defense-in-depth on every session start)
-  ensure_bare_config
+  # Fix bare repo config if broken (defense-in-depth on every session start).
+  # Guard the non-zero return so a wedged config lock does NOT abort the unrelated
+  # session-start maintenance below (orphan-dir cleanup, tmp reclamation, runaway-
+  # process kill). The loud SOLEUR_GIT_LOCK_UNREMOVABLE sentinel already printed.
+  if ! ensure_bare_config; then
+    headless_or_stderr warn "cleanup-merged: ensure_bare_config wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above); continuing with remaining maintenance."
+  fi
 
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
