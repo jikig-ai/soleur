@@ -139,6 +139,28 @@ describe("reportSilentFallback — userIdHash pseudonymization", () => {
     expect(ctx).not.toHaveProperty("userId");
   });
 
+  it("promotes userIdHash to event user.id so affected-users alerts can count tenants (#5875)", () => {
+    // The sandbox-startup alert uses event_unique_user_frequency, which counts
+    // distinct Sentry USERS — not extra keys. Without user.id the ≥K-tenants
+    // threshold is unreachable. user.id = the HASH (Recital-26 preserved).
+    const err = new Error("bwrap: Operation not permitted");
+    reportSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "sdk-startup",
+      extra: { userId: "u1", conversationId: "c1" },
+    });
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.user).toEqual({ id: expectedHashFor("u1") });
+    // The hash is what Sentry counts — never the raw id.
+    expect(payload.user.id).not.toBe("u1");
+  });
+
+  it("omits event.user when the emit carries no userId (no tenant attribution)", () => {
+    reportSilentFallback(new Error("boot probe"), { feature: "startup" });
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.user).toBeUndefined();
+  });
+
   it("hashes userId on the non-Error → captureMessage path", () => {
     const pgError = { message: "duplicate key", code: "23505" };
     reportSilentFallback(pgError, {

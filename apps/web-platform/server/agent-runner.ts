@@ -205,6 +205,7 @@ import {
   forEachSessionForConversation,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
@@ -2640,18 +2641,49 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       }
       throw err;
     } else {
-      // Sandbox-required-but-unavailable surfaces as a SDK subprocess
-      // process.exit(1) after writing this substring to stderr (see
-      // `Options.sandbox.failIfUnavailable` in @anthropic-ai/claude-agent-sdk
-      // and #2634). The bare captureException below would land an untagged
-      // generic "command failed" event in Sentry — useless for triage. Tag
-      // it so on-call can filter by `feature: "agent-sandbox"`.
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes("sandbox required but unavailable")) {
+      // Sandbox-STARTUP failures surface as an SDK subprocess process.exit(1)
+      // with the failure text merged into `err.message` (Phase-0 spike, #5875 /
+      // ADR-079): the SDK's missing-binary preflight
+      // ("sandbox required but unavailable", #2634) AND the #5873 seccomp/userns
+      // EPERM on the split unshare() (`bwrap: … Operation not permitted`). The
+      // bare captureException below would land an untagged generic
+      // "command failed" event — useless for triage; the seccomp EPERM went
+      // WHOLLY unsignalled during #5873. Classify + tag so on-call can filter
+      // by `feature:"agent-sandbox"` and by `sandboxKind`.
+      //
+      // Tag on the error SIGNATURE alone (`sandboxKind !== "other"`) — NOT on a
+      // stream-phase gate (CTO ruling, ADR-079). `streamStartSent` is set
+      // unconditionally at L2111 BEFORE the iterator loop, so it is always true
+      // here; and the #5873 seccomp denial surfaces AFTER stream_start (the
+      // sandbox wraps the model-driven Bash tool, Phase-0 §0.2) — a
+      // `!streamStartSent` gate produced a silent no-op on the exact incident
+      // shape. The classifier's namespace/preflight-token requirement is what
+      // excludes a mid-conversation model/API error (no such token → "other").
+      // Emit is per-user (`reportSilentFallback` is undebounced; cc-dispatcher.ts
+      // uses a per-user debounce) so Sentry's native affected-users threshold can
+      // tell a one-tenant blip from a fleet outage — no global-key debounce.
+      const sandboxClass = classifySandboxStartupError(err);
+      if (sandboxClass.sandboxKind !== "other") {
         reportSilentFallback(err, {
           feature: "agent-sandbox",
           op: "sdk-startup",
-          extra: { userId, conversationId, leaderId },
+          // Low-cardinality searchable dimensions (never PII — raw ids stay in
+          // `extra`, auto-hashed at the emit boundary).
+          // Searchable dimensions only: `sandboxKind` (triage axis) + the SDK
+          // version (the bump that broke the sandbox is the root-cause signal).
+          // `sandboxErrorCode` is a refinement of `sandboxKind` recoverable from
+          // stderr — kept in `extra` rather than a redundant second tag.
+          tags: {
+            sandboxKind: sandboxClass.sandboxKind,
+            sdkVersion: sandboxClass.sdkVersion ?? "unknown",
+          },
+          extra: {
+            userId,
+            conversationId,
+            leaderId,
+            sandboxErrorCode: sandboxClass.errorCode,
+            sandboxStderr: sandboxClass.stderr,
+          },
         });
       } else if (err instanceof MissingByokKeyError) {
         // Phase 3.2 AC-D (Kieran N4): info-level breadcrumb with the

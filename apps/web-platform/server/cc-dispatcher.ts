@@ -84,6 +84,7 @@ import {
   hashUserId,
   __resetMirrorDebounceForTests,
 } from "./observability";
+import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { formatAssistantText } from "@/lib/format-assistant-text";
@@ -2714,22 +2715,36 @@ export const realSdkQueryFactory: QueryFactory = async (
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
-    // Mirror the "sandbox required but unavailable" branch in
-    // agent-runner.ts startAgentSession's catch (feature:
-    // "agent-sandbox", op: "sdk-startup"). Other inner throws bubble up
-    // to the runner's own queryFactory catch (which mirrors under
-    // `feature: "soleur-go-runner"`).
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (errMsg.includes("sandbox required but unavailable")) {
+    // Mirror the sandbox-startup branch in agent-runner.ts startAgentSession's
+    // catch (feature:"agent-sandbox", op:"sdk-startup"). #5875 / ADR-079
+    // broadens this beyond the SDK's missing-binary preflight substring to the
+    // #5873 seccomp/userns EPERM shape too (`bwrap: … Operation not permitted`),
+    // via the shared classifier. THIS catch is factory-scoped — it fires on an
+    // `sdkQuery` factory throw BEFORE the `Query` enters `activeQueries`, i.e.
+    // inherently in the startup phase — so no `streamStartSent` guard is needed
+    // here (mid-stream throws bubble to the runner's own queryFactory catch,
+    // `feature:"soleur-go-runner"`, which owns the streaming-phase path). The
+    // per-(userId, class) debounce keeps this per-USER (not a global-key
+    // collapse) so a fleet outage still crosses Sentry's affected-users alert.
+    const sandboxClass = classifySandboxStartupError(err);
+    if (sandboxClass.sandboxKind !== "other") {
       mirrorWithDebounce(
         err,
         {
           feature: "agent-sandbox",
           op: "sdk-startup",
+          // Searchable dimensions only (see agent-runner.ts): `sandboxKind` +
+          // `sdkVersion`. `sandboxErrorCode` rides in `extra`, not a second tag.
+          tags: {
+            sandboxKind: sandboxClass.sandboxKind,
+            sdkVersion: sandboxClass.sdkVersion ?? "unknown",
+          },
           extra: {
             userId: args.userId,
             conversationId: args.conversationId,
             leaderId: CC_ROUTER_LEADER_ID,
+            sandboxErrorCode: sandboxClass.errorCode,
+            sandboxStderr: sandboxClass.stderr,
           },
         },
         args.userId,

@@ -85,6 +85,30 @@ function hashExtraUserId(
 }
 
 /**
+ * Promote the pseudonymized `userIdHash` (already hashed by `hashExtraUserId`)
+ * to the Sentry event's User interface so affected-users alert conditions
+ * (`event_unique_user_frequency`) can count DISTINCT tenants. Sentry counts
+ * distinct users from `event.user`, NOT from `extra` — so an emit that carries
+ * the tenant only in `extra.userIdHash` is invisible to a "≥K users in T"
+ * threshold (the count stays 0). Using the HASH as `user.id` keeps Recital-26
+ * pseudonymization intact — no raw id reaches Sentry. Returns `undefined` when
+ * no hash is present so events without tenant attribution are unaffected.
+ *
+ * In prod each tenant gets a distinct HMAC (`SENTRY_USERID_PEPPER` is set), so
+ * the count is per-tenant; when the pepper is unset (dev/CI) every user collapses
+ * to the `"pepper_unset"` sentinel — harmless, as the affected-users alert only
+ * runs against prod. #5875 / ADR-079: the `sandbox_startup_failure` alert is the
+ * first user-count alert in `issue-alerts.tf`; before this, tenant identity lived
+ * only in `extra` and the threshold was unreachable.
+ */
+function userScopeFromExtra(
+  transformedExtra: Record<string, unknown> | undefined,
+): { id: string } | undefined {
+  const h = transformedExtra?.userIdHash;
+  return typeof h === "string" && h.length > 0 ? { id: h } : undefined;
+}
+
+/**
  * Strip line terminators from a human-readable log message so a CR/LF (or
  * unicode line/paragraph separator) cannot forge a fake log line in a
  * downstream plaintext view (js/log-injection). pino JSON-escapes values, but
@@ -227,16 +251,21 @@ export function reportSilentFallback(
   // Guard so an uninitialized Sentry never throws a TypeError into a caller
   // that fires on server boot (see #3045 plugin-mount-check) — the pino mirror
   // above is the durable signal regardless.
+  // Give the event a per-tenant user identity (the hash) so affected-users
+  // alert conditions can count distinct tenants — see userScopeFromExtra.
+  const user = userScopeFromExtra(transformedExtra);
+
   try {
     if (err instanceof Error) {
       if (typeof Sentry.captureException === "function") {
-        Sentry.captureException(err, { tags, extra: transformedExtra });
+        Sentry.captureException(err, { tags, extra: transformedExtra, user });
       }
     } else if (typeof Sentry.captureMessage === "function") {
       Sentry.captureMessage(safeMessage, {
         level: "error",
         tags,
         extra: { err, ...transformedExtra },
+        user,
       });
     }
   } catch {
