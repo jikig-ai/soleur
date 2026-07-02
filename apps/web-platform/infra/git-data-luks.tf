@@ -33,12 +33,40 @@ resource "random_password" "git_data_luks" {
   special = false
 }
 
+# GIT_DATA_LUKS_KEY lands in a DEDICATED `prd_git_data` config (NOT the shared `prd`),
+# so the read-only service token handed to the git-data host (below) can read this ONE
+# secret and nothing else. Least-privilege (3.D security review MEDIUM / CTO ruling):
+# the git-data host runs the client-facing git-shell transport and is a distinct attack
+# surface, so it must NOT carry the full-prd token (which would expose
+# SUPABASE_SERVICE_ROLE, GIT_REMOVE_SSH_PRIVATE_KEY, and PROXY_TLS_KEY/CERT). Doppler
+# tokens are config-scoped, so isolation requires a separate config.
+#
+# OPERATOR NOTE (mirrors kb-drift.tf `prd_kb_drift_walker`): the `prd_git_data` config
+# must exist in the `prd` environment BEFORE `terraform apply`. The Doppler provider
+# manages environments-and-their-configs as a unit and the operator's existing
+# environment+configs are not under TF management, so create it once via the dashboard
+# (Project → soleur → New config under `prd`, name = "prd_git_data"); this is a
+# documented cutover precondition (runbook §Preconditions). Rotate the boot key via
+# `terraform apply -replace=random_password.git_data_luks`.
 resource "doppler_secret" "git_data_luks_key" {
   project    = "soleur"
-  config     = "prd"
+  config     = "prd_git_data"
   name       = "GIT_DATA_LUKS_KEY"
   value      = random_password.git_data_luks.result
   visibility = "masked"
+}
+
+# Read-only service token scoped to `prd_git_data` (only GIT_DATA_LUKS_KEY). Handed to
+# the git-data host in place of the full-prd `var.doppler_token` so a git-data-host
+# compromise reads exactly one secret — restoring the "separate blast radii" property
+# git-data.tf already advertises. `.key` is Computed/write-once (same handling as
+# doppler_service_token.write / .kb_drift); rotate via
+# `terraform apply -replace=doppler_service_token.git_data`.
+resource "doppler_service_token" "git_data" {
+  project = "soleur"
+  config  = "prd_git_data"
+  name    = "git-data-luks-boot"
+  access  = "read"
 }
 
 # --- The fresh (LUKS-target) block volume -----------------------------------

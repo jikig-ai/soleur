@@ -19,6 +19,18 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
   (unset / not `"true"`) in Doppler `prd`.
 - `SENTRY_AUTH_TOKEN` and the git-data cutover secrets (`DOPPLER_TOKEN`,
   `DOPPLER_TOKEN_WRITE`) are configured as GitHub secrets.
+- **Doppler `prd_git_data` config exists** (Project → soleur → New config under `prd`,
+  name = `prd_git_data`) — the LUKS boot key + its read-only service token live there
+  so the git-data host carries a one-secret token, not the full-prd token (security
+  MEDIUM / CTO ruling). `terraform apply` writes `GIT_DATA_LUKS_KEY` + mints the token
+  into it; the empty config must be created once via the dashboard first (the Doppler
+  provider does not create configs — same constraint as `prd_kb_drift_walker`).
+- **Proxy activation (when the owner relay goes live):** whenever `SOLEUR_PROXY_BIND`
+  is set on a host (the private-net proxy listener), `SOLEUR_PROXY_PEER_ALLOWLIST` MUST
+  also be set to the comma-separated **web-host** private IPs (e.g. `10.0.1.10,10.0.1.11`
+  — EXCLUDING the git-data host `10.0.1.20`). The listener is **fail-closed**: with
+  `SOLEUR_PROXY_BIND` set but no allowlist it refuses to start (a token-less session
+  port must never accept from a non-peer private-net host — security HIGH / CTO ruling).
 
 ## Sequence
 

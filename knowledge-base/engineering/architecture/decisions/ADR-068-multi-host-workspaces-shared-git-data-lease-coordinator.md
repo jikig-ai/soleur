@@ -441,6 +441,35 @@ fixes for every per-step plan:
 > verified in prod (NFR-026/027). It does NOT flip at 3.D merge (the flag ships OFF; the
 > cutover is post-merge).
 
+> **Amendment (CTO ruling, 2026-07-02, Phase 3 GA — proxy-listener origin control + token
+> scope, Sub-PR 3.D security review).** Activating the owner proxy listener (3.D) surfaced
+> that one-way TLS + a token-less `proxy_hello` handshake makes network reachability the
+> only control — and Hetzner **cloud firewalls do NOT filter the private net** (intra-`
+> hcloud_network` traffic is open by network membership; git-data.tf:182-186). So ANY
+> `10.0.1.0/24` host — including the deliberately-lesser-privileged **git-data host** —
+> could open port 8443 and `attachProxiedSession` grants it a full act-as-user session:
+> account **takeover**, strictly ⊃ the §D2 "cross-tenant WRITE" residual, and reachable
+> from a NON-web host, defeating §6's separation-of-authority. This **exceeds** the
+> accepted residual and is CLOSED, not documented-away. **(a) Guest-side peer-origin
+> allowlist (load-bearing).** `createProxyServer` rejects any connection whose private-net
+> source is not in `SOLEUR_PROXY_PEER_ALLOWLIST` (the web-host private IPs, excluding
+> git-data) BEFORE the handshake, and is **fail-closed** (TLS material present but no
+> allowlist ⇒ the listener refuses to start). Enforced on the guest (the infra firewall
+> cannot see the private net), unit-testable, no PKI. **(b) git-data Doppler token scoped**
+> to a dedicated read-only `prd_git_data` config holding only `GIT_DATA_LUKS_KEY` — the
+> git-data host no longer carries the full-prd token (which exposed `SUPABASE_SERVICE_ROLE`,
+> `GIT_REMOVE_SSH_PRIVATE_KEY`, `PROXY_TLS_KEY/CERT`), restoring the "separate blast radii"
+> property. **Rejected:** an `hcloud_firewall` rule scoping 8443 — NON-FUNCTIONAL on Hetzner
+> (cloud firewall filters only the public interface; the attack traverses the private net).
+> **Rejected:** mutual TLS (`requestCert:true`) — reverses the §6 mTLS-drop, adds CA/rotation,
+> and is dominated (a git-data compromise holding `PROXY_TLS_KEY` mints a valid client cert
+> unless the token is scoped first, after which (a) already suffices). **Residual (now
+> narrower):** a *root*-compromised git-data host could IP-spoof a web-host private IP to
+> bypass (a); Hetzner's `hcloud_network` enforces source-IP at the vSwitch, so this is
+> materially harder and the same host-compromise class already accepted — per-workspace
+> keys remain the post-GA closer. Optional follow-up (non-blocking): a host-level nft DROP
+> on 8443 for non-web sources (belt-and-suspenders).
+
 7. **Self-host the session-Redis on EU Hetzner; secrets via `random_password`.**
    Hetzner has no managed Redis. A self-hosted dedicated EU Redis adds **no new
    sub-processor / DPA** (the deciding GDPR reason over Upstash/Aiven). It is a
