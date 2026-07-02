@@ -12,7 +12,7 @@ on:
         type: string
         required: true
       path_filter:
-        description: "Path prefix to detect changes (e.g., apps/web-platform/)"
+        description: "Space-separated list of git pathspecs to detect changes (e.g., 'apps/web-platform/' or 'apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/'). No embedded spaces within a token; filesystem globbing is disabled in check_changed, so use git directory-prefix + :(exclude) magic, NOT ** globs."
         type: string
         required: true
       tag_prefix:
@@ -85,13 +85,26 @@ jobs:
       - name: Check if component files changed
         id: check_changed
         run: |
+          set -euo pipefail
           if [ "$FORCE_RUN" = "true" ]; then
             printf 'changed=%s\n' "true" >> "$GITHUB_OUTPUT"
             echo "Release forced (workflow_dispatch or force_run)"
             exit 0
           fi
 
-          CHANGED=$(git diff --name-only HEAD~1 -- "$PATH_FILTER" | head -1)
+          # PATH_FILTER is a SPACE-SEPARATED list of git pathspecs (may include
+          # :(exclude) magic). Disable filesystem globbing so the tokens reach git
+          # verbatim (an unquoted `**` would be shell-expanded and silently miss
+          # newly-added files — the incident's failure mode), then intentionally
+          # word-split PATH_FILTER into multiple pathspec args.
+          set -f
+          # shellcheck disable=SC2086  # deliberate word-split into git pathspecs
+          if ! CHANGED=$(git diff --name-only HEAD~1 -- $PATH_FILTER); then
+            echo "::error::check_changed: git diff failed for PATH_FILTER='$PATH_FILTER'"
+            exit 1
+          fi
+          set +f
+
           if [ -z "$CHANGED" ]; then
             printf 'changed=%s\n' "false" >> "$GITHUB_OUTPUT"
             echo "No $COMPONENT files changed, skipping"

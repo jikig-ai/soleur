@@ -1,0 +1,179 @@
+# ADR-080: Runtime-plugin changes deploy via image rebuild, not host-direct re-seed
+
+- **Status:** Adopting
+- **Date:** 2026-07-02
+- **Deciders:** Jean (operator), CPO sign-off (single-user-incident threshold), CTO agent (binding Option A vs B ruling), deepen-plan review (spec-flow-analyzer, architecture-strategist, code-simplicity-reviewer)
+- **Relates to:** production-incident remediation (`worktree-manager.sh` stale-git-lock self-heal merged 2026-07-01 but the Concierge host mount kept running the pre-fix script until a coincidental `apps/web-platform/**` deploy the next morning); #3045 (`Dockerfile` plugin vendor+bake — the image-baked seed model, previously undocumented); `ADR-030-multi-tenant-deploy-substrate.md` (tenant credential aggregation — a distinct concern); `ADR-064-live-production-verification-harness.md` (the live-verify gate that correctly SKIPs on plugin-only merges); `ADR-078-graceful-cron-drain-before-container-swap.md` (the deploy path a runtime-plugin merge now traverses)
+
+## Context
+
+The Concierge agent runs plugin components (skills, hooks, agents, scripts,
+commands, and the `AGENTS.md`/`CLAUDE.md` instruction files it reads) from
+`/mnt/data/plugins/soleur`, a read-only bind-mount. That mount is **seeded from
+the web-platform image's baked plugin tree**:
+
+- `reusable-release.yml` "Vendor plugin into build context" copies `plugins/soleur`
+  → `apps/web-platform/_plugin-vendored`; `apps/web-platform/Dockerfile`
+  `COPY _plugin-vendored /opt/soleur/plugin` bakes the WHOLE tree.
+- `apps/web-platform/infra/ci-deploy.sh` re-seeds the mount on **every** deploy:
+  `docker create` → `find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete` → `docker cp
+  <ephemeral>:/opt/soleur/plugin/. "$PLUGIN_MOUNT_DIR/"` → `.seed-complete`.
+
+The **only** workflow that rebuilds the image and deploys is
+`web-platform-release.yml`, historically triggered on `push` to `main` with
+`paths: ['apps/web-platform/**']`. A plugins-only merge rebuilt no image, ran no
+deploy, and never re-seeded — so a runtime-affecting plugin change reached prod
+only by coincidence when an unrelated `apps/web-platform/**` change happened to
+deploy. `version-bump-and-release.yml` (on `plugins/soleur/**`) only cuts a plugin
+tag + GitHub Release; `deploy-docs.yml` only publishes GitHub Pages. Neither
+touches the Concierge host mount. This is the 2026-07-01 incident: a merged fix
+that silently never runs on the host.
+
+A second, hidden gate compounds it. `reusable-release.yml`'s `check_changed` step
+re-gates every build/deploy step on `git diff --name-only HEAD~1 -- "$PATH_FILTER"`
+(historically `apps/web-platform/`). Widening only the outer `on.push.paths`
+without widening this inner gate produces a green **no-op** — the workflow fires,
+the inner gate returns `changed=false`, and the incident reproduces.
+
+## Decision
+
+**Option A — a runtime-plugin merge rebuilds and deploys the web-platform image;
+the mount re-seeds from that fresh image, so image and host mount stay consistent
+by construction.** The runtime-plugin surface is treated as part of the
+web-platform deployable. No new host-write infrastructure, no new seed logic — a
+widening of the pipeline's **two** change-detection gates, in two deliberately
+different dialects:
+
+1. **Outer gate** — `web-platform-release.yml` `on.push.paths`, GitHub-Actions
+   glob dialect (supports `**` and `!`):
+   ```yaml
+   paths:
+     - 'apps/web-platform/**'
+     - 'plugins/soleur/**'
+     - '!plugins/soleur/docs/**'
+     - '!plugins/soleur/test/**'
+   ```
+2. **Inner gate** — `reusable-release.yml` `check_changed`, git-pathspec dialect
+   (`:(exclude)` magic, NO `**`), run under `set -euo pipefail` + `set -f` +
+   an explicit git rc check, with the widened `path_filter`:
+   ```
+   "apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/ :(exclude)plugins/soleur/test/"
+   ```
+
+**DENYLIST, not allowlist:** everything under `plugins/soleur/` deploys EXCEPT
+`docs/` (deploys via `deploy-docs.yml`) and `test/` (does not affect the deployed
+runtime). The incident IS "a runtime file class silently never deploys"; an
+allowlist fails in exactly that direction for future runtime surfaces and already
+has a concrete hole (`plugins/soleur/CLAUDE.md` → `@AGENTS.md` and `AGENTS.md`
+are runtime instruction files an allowlist excludes). A denylist is
+failure-mode-complete: new runtime dirs deploy by default.
+
+**Invariant (guard the one latent hole):** the two excluded dirs are anchored at
+top-level `plugins/soleur/{docs,test}/` only. This is safe today (verified:
+`docs/` is Eleventy docs-site source, `test/` is `.test.ts`/`.test.sh` only, and
+no runtime hook/skill/script sources anything from either). It stays safe ONLY as
+long as those two top-level dirs remain **runtime-free** — a runtime helper ever
+placed under top-level `docs/` or `test/` would silently NOT trigger a redeploy
+(the incident class, re-opened). Keep runtime code out of them; put test-only
+helpers under `plugins/soleur/skills/*/test/` (nested — not excluded, deploys by
+default, harmless) rather than top-level `test/`.
+
+## Why Option B (host-direct re-seed) is disqualified
+
+Option B — a dedicated workflow that pushes the plugin tree straight to the host
+mount without rebuilding the image — is not merely costlier, it is **worse than
+the status quo**. The plugin tree is baked into the image (`Dockerfile`) and every
+deploy re-seeds via `find -delete` + `docker cp` from that image. Under B, a
+host-direct re-seed pushes plugin vN to the mount, then the next unrelated
+`apps/web-platform` deploy re-seeds from an image that still bakes v(N-1) →
+**wipes vN, silently restores the stale tree** — reproducing the incident
+signature after the fix appeared to work. Any B mitigation ("also rebuild the
+image") collapses B back into A. The `apply-deploy-pipeline-fix.yml` precedent
+does NOT license B: it pushes host-resident files **not baked into any image**, so
+it has no image-vs-host drift surface — the exact property B lacks.
+
+## Fail-loud inner gate (load-bearing)
+
+The pre-fix `CHANGED=$(git diff … | head -1)` swallowed every git error into
+`changed=false` — a green no-op that reproduces the incident. The fix:
+
+- `set -euo pipefail` + an explicit `if ! CHANGED=$(git diff …); then
+  echo "::error::…"; exit 1; fi` — a git failure or bad pathspec now fails LOUD,
+  never defaults to skip.
+- `set -f` around the diff disables filesystem globbing so the space-separated
+  pathspec tokens (incl. `:(exclude)` magic) reach git verbatim. An unquoted
+  `**` token would be bash-glob-expanded before git sees it and silently miss
+  newly-added files — so the inner dialect uses directory-prefix pathspecs with
+  NO `**`. `$PATH_FILTER` is intentionally unquoted to word-split into multiple
+  git pathspecs.
+- The `force_run` short-circuit (for `workflow_dispatch`) is preserved.
+
+The shared plugin caller (`version-bump-and-release.yml`) passes a single-token
+`path_filter: "plugins/soleur/"` that word-splits to itself byte-unchanged, so it
+is unaffected.
+
+## Alternatives Considered
+
+| Option | Verdict | Why |
+|---|---|---|
+| **A: image rebuild + gated deploy re-seeds the mount (this ADR)** | **Chosen** | Image and host mount consistent by construction; reuses the existing seed path with zero new infra; consistency is total; costs one gated image build + prod cutover per runtime-plugin PR |
+| **B: host-direct re-seed (no image rebuild)** | **Rejected** | The next unrelated `apps/web-platform` deploy re-seeds from an image baking the stale tree → silently wipes the fix. Worse than status quo (fix appears to work, then reverts); adds a host-write ops surface. Any "also rebuild" mitigation is just A |
+| **Allowlist filter** (glob specific runtime dirs) | **Rejected** | Fails in the incident's own direction (silent under-deploy) for future runtime surfaces; concrete hole for runtime `CLAUDE.md`/`AGENTS.md`. Denylist is fail-safe |
+| **Widen only the outer `on.push.paths`** | **Rejected** | The inner `check_changed` gate re-keys on `path_filter`; leaving it narrow yields a green no-op that reproduces the incident. BOTH gates must widen |
+| **New `extra_path_filter` input** (vs reusing `path_filter`) | **Rejected** | A nullable extra input risks an empty-quoted-pathspec match-all hazard; reusing the always-non-empty `path_filter` (dropping the quotes) is simpler and safe |
+| **`**` globs in the inner git pathspec** | **Rejected** | Under `set -f`-off, bash filesystem-expands them and silently misses new files; the two gate dialects are deliberately different (Actions-glob outer, git-pathspec inner) |
+
+## Trade-offs named
+
+- **Dual-release co-fire.** A runtime-plugin merge now fires three workflows:
+  `web-platform-release` (`web-v*` tag + deploy), `version-bump-and-release`
+  (`v*` plugin tag + Release + Slack), and `deploy-docs` (GH Pages). Separate
+  concurrency groups (`release-web-platform` vs `release-plugin`) and regex-isolated
+  tag prefixes (`v` / `web-v`, #4082) → no collision or double-deploy, but TWO
+  Releases + TWO Slack/email notifications per PR. Accepted for correctness;
+  suppressing the plugin announcement for runtime merges is a follow-up.
+- **Prod pipeline on plugin-only merges.** `migrate` + `verify-doppler-secrets`
+  (under `DOPPLER_TOKEN_PRD`) now run on runtime-plugin merges — idempotent (no
+  new migrations → no-op), but a runtime fix's delivery can now be
+  fail-closed-blocked by unrelated prod drift. Correct trade-off (the image
+  genuinely changed → a full deploy is right).
+- **Denylist over-deploys on rare root-file edits** (`README.md`, `LICENSE`,
+  `NOTICE`) → a harmless over-build. The incident class (silent under-deploy) is
+  what we refuse to reintroduce.
+- **`HEAD~1` squash-merge assumption.** The inner diff basis assumes squash-merge;
+  a non-squash/multi-commit push could diff the wrong range. Residual risk called
+  out; the push-range compare `${{ github.event.before }}...${{ github.sha }}` is
+  the hardening path (do not alter the shared plugin caller's basis without
+  re-verifying it).
+
+## Observability (no-SSH)
+
+The inner gate fails loud (`::error::` + non-zero exit) on any git error — a red
+CI job pre-merge instead of a silent skip. Post-merge liveness: the
+`web-platform-release` deploy job succeeds, `/hooks/deploy-status` reports
+`exit_code=0` for the new tag, and `app.soleur.ai/health` `build_sha` equals the
+merge SHA. A behavioral drift-guard
+(`plugins/soleur/test/web-platform-runtime-plugin-trigger.test.ts`) runs the
+byte-identical `check_changed` bash against synthesized diffs so a regression to
+the swallow-into-`changed=false` form, a `**` token in the inner pathspec, or a
+docs/test-only over-trigger fails the suite pre-merge.
+
+## C4 impact
+
+**None** — enumeration cited. The change is a CI trigger *condition* on the
+already-modeled CI → image → host-deploy path (plugin system, skill loader,
+`claude -> skillloader "Loads plugin"`, deploy infra, GitHub CI/CD in `model.c4`).
+No new external actor, system, container, data store, or access relationship; C4
+does not model workflow path-filters. This ADR is the canonical record for the
+image-baked-plugin seed model (originated in #3045).
+
+## Consequences
+
+- A runtime-plugin merge to `main` now deterministically rebuilds and deploys the
+  web-platform image, re-seeding the Concierge host mount — image and mount are
+  consistent by construction.
+- `docs/`-only and `test/`-only plugin merges do NOT rebuild the image (docs still
+  publish via `deploy-docs.yml`).
+- The inner change-detection gate can no longer silently default to skip on error.
+- The `path_filter` reusable-workflow input is now a space-separated git-pathspec
+  list (documented in its `description:`), consumed under `set -f`.
