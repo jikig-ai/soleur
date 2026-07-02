@@ -16,7 +16,7 @@
 #
 # Exit semantics (per scripts/sweep-followthroughs.sh contract):
 #   0 = PASS       (≥5 consecutive green verdicts over ≥3 days — canary ready to
-#                   promote to blocking in PR3; sweeper closes #5875's soak)
+#                   promote to blocking in PR3; sweeper closes the soak issue #5889)
 #   1 = FAIL       (the faithful canary returned `sandbox_broken` — it disagreed
 #                   with the legacy PASS gate; investigate before promoting)
 #   * = TRANSIENT  (endpoint unreachable / non-JSON / soak not yet complete; retry)
