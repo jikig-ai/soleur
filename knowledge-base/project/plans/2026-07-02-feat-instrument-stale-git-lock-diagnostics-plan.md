@@ -180,16 +180,16 @@ None. (`gh issue list --label code-review --state open` — no open scope-out re
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — A **present, regular, stale** `config.lock` prints one `SOLEUR_GIT_LOCK_DIAG … type=regular …` line on **stdout**, is removed, prints `Swept 1`, and the sweep returns 0. (new `.test.sh`)
-- [ ] AC2 — A **directory** `config.lock` prints `SOLEUR_GIT_LOCK_DIAG … type=dir …` and `SOLEUR_GIT_LOCK_UNREMOVABLE … reason=non-regular-lock`, is **NOT removed** (test asserts the dir still exists), and the sweep returns non-zero.
-- [ ] AC3 — A **symlink** `config.lock` prints `type=symlink` + `SOLEUR_GIT_LOCK_UNREMOVABLE reason=non-regular-lock`, is **NOT removed** (link and its target both still exist), sweep returns non-zero.
-- [ ] AC4 — A **regular stale lock whose `rm` fails** (read-only parent → EPERM) prints `SOLEUR_GIT_LOCK_UNREMOVABLE … errno=EPERM` and the sweep returns non-zero — and the loud line IS printed (no `set -e` abort before it).
-- [ ] AC5 — `ensure_bare_config()` on an unremovable config-write lock emits the fail-loud line and **does not execute** the `git config --file "$shared_config"` writes (test asserts no shared-config mutation / no `EEXIST`), returning non-zero.
-- [ ] AC6 — `cleanup_merged_worktrees` with an unremovable lock **continues** past `ensure_bare_config` (test asserts a later cleanup step still runs / the function does not exit non-zero from the guarded call).
-- [ ] AC7 — A **present-but-fresh** lock (age < threshold) emits a `SOLEUR_GIT_LOCK_DIAG` line (present), is untouched, and the sweep returns 0.
-- [ ] AC8 — A **future-dated** lock (mtime = now+3600) is preserved (clock-skew guard), sweep returns 0.
-- [ ] AC9 — Every sentinel token appears on **stdout** with **no ANSI color codes** wrapping it — `grep -F 'SOLEUR_GIT_LOCK_'` on captured **stdout** (not stderr) matches.
-- [ ] AC10 — `bash -n plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` passes; `shellcheck` reports no new errors; full `scripts/test-all.sh` bash-shard green (incl. the two pre-existing `worktree-manager-*.test.sh` — no regression).
+- [x] AC1 — A **present, regular, stale** `config.lock` prints one `SOLEUR_GIT_LOCK_DIAG … type=regular …` line on **stdout**, is removed, prints `Swept 1`, and the sweep returns 0. (new `.test.sh`)
+- [x] AC2 — A **directory** `config.lock` prints `SOLEUR_GIT_LOCK_DIAG … type=dir …` and `SOLEUR_GIT_LOCK_UNREMOVABLE … reason=non-regular-lock`, is **NOT removed** (test asserts the dir still exists), and the sweep returns non-zero.
+- [x] AC3 — A **symlink** `config.lock` prints `type=symlink` + `SOLEUR_GIT_LOCK_UNREMOVABLE reason=non-regular-lock`, is **NOT removed** (link and its target both still exist), sweep returns non-zero.
+- [x] AC4 — A **regular stale lock whose `rm` fails** (read-only parent → EPERM) prints `SOLEUR_GIT_LOCK_UNREMOVABLE … errno=EPERM` and the sweep returns non-zero — and the loud line IS printed (no `set -e` abort before it).
+- [x] AC5 — `ensure_bare_config()` on an unremovable config-write lock emits the fail-loud line and **does not execute** the `git config --file "$shared_config"` writes (test asserts no shared-config mutation / no `EEXIST`), returning non-zero.
+- [x] AC6 — `cleanup_merged_worktrees` with an unremovable lock **continues** past `ensure_bare_config` (test asserts a later cleanup step still runs / the function does not exit non-zero from the guarded call).
+- [x] AC7 — A **present-but-fresh** lock (age < threshold) emits a `SOLEUR_GIT_LOCK_DIAG` line (present), is untouched, and the sweep returns 0.
+- [x] AC8 — A **future-dated** lock (mtime = now+3600) is preserved (clock-skew guard), sweep returns 0.
+- [x] AC9 — Every sentinel token appears on **stdout** with **no ANSI color codes** wrapping it — `grep -F 'SOLEUR_GIT_LOCK_'` on captured **stdout** (not stderr) matches.
+- [x] AC10 — `bash -n plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` passes; `shellcheck` reports no new errors; full `scripts/test-all.sh` bash-shard green (incl. the two pre-existing `worktree-manager-*.test.sh` — no regression).
 - [ ] AC11 — PR body uses `Ref` (not `Closes`) for any issue link, flags that cited issue #4826 does not match this wedge, and flags the deliberate divergence from the literal "rm -rf/unlink non-regular" instruction (detect+report+fail-loud instead) for operator sign-off. `## Changelog` section present; `semver:patch`.
 
 ### Post-merge (operator/automated)
