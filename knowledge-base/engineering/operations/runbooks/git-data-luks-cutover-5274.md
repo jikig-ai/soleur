@@ -56,13 +56,16 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
 
 Read the verdict from:
 
-- **Sentry** (feature tags `control_plane_route`, `worktree_lease`, `git-data`):
-  - `op:control_plane_route` failures — expect **0** after the flip. Zero events
-    on a changed routing path can ALSO mean the wrong layer shipped
-    (learning 2026-06-30) — confirm you see healthy `control_plane_route`
-    placement events, then zero *failures*.
-  - `op:worktree_lease` reject events — expect **0** (no fence false-rejects).
-  - `op:git-data member:false` — expect **0** (no cross-tenant denials).
+- **Sentry** (these classes are the `feature` tag — NOT `op`, which is the sub-op):
+  - `feature:control_plane_route level:error` failures — expect **0** after the flip.
+    Zero events on a changed routing path can ALSO mean the wrong layer shipped
+    (learning 2026-06-30) — confirm you see healthy `feature:control_plane_route`
+    placement events first, then zero *failures*.
+  - `feature:worktree_lease level:error` reject events — expect **0** (no fence
+    false-rejects).
+  - `feature:git-data-authz cross_tenant:true` — expect **0** (no cross-tenant
+    denials). NB: this is emitted at `level:warning` (not error) and `member:false`
+    lives in non-searchable `extra` — query the `cross_tenant:true` tag, not `member`.
 - **Better Stack**: the `soleur-git-data-prd` heartbeat (GIT_DATA_HEARTBEAT_URL)
   is GREEN — the git-data host is reachable over the private net post-cutover.
 

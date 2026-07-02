@@ -42,7 +42,13 @@ API="https://sentry.io/api/0"
 # worktree_lease, git-data per plan §Observability). worktree_lease events are
 # scoped to reject-outcomes; git-data events to member:false denials. level:error
 # excludes info-level breadcrumbs.
-QUERY='level:error (op:worktree_lease OR op:control_plane_route OR (op:git-data member:false))'
+# The three GA-gating classes are emitted as the `feature` tag (op is a sub-op),
+# so key on `feature:`, NOT `op:` (reportSilentFallback maps feature->tag feature,
+# op->tag op; observability.ts). The cross-tenant denial is warnSilentFallback
+# (level:warning, not error) and carries `cross_tenant:true` as a searchable tag
+# (`member:false` lives in non-searchable `extra`). Mis-keying any of these makes
+# the gate blind → always-PASS → false ADR-068 accept (#5274 review, detector-mismatch).
+QUERY='(level:error OR level:warning) (feature:worktree_lease OR feature:control_plane_route OR (feature:git-data-authz cross_tenant:true))'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 
 # Absolute window start — PIN THIS just after the cutover flip (the same UTC the
