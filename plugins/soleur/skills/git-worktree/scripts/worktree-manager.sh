@@ -215,27 +215,35 @@ sweep_stale_git_locks() {
     # Plain, color-free, STDOUT — color would break the agent's grep.
     echo "SOLEUR_GIT_LOCK_DIAG file=$lock type=$ftype owner=$owner perms=$perms mtime=$mtime age=$age mount=$mount"
 
-    # Act only on a lock that is present AND stale (age >= threshold). Fresh AND
-    # future-dated (clock skew) are left untouched — the DIAG line above already
-    # made them visible. Arithmetic nested in `if` so a false `(( ))` never trips
-    # set -e (mirrors cleanup_merged_worktrees).
-    if [[ "$age" =~ ^[0-9]+$ ]] && (( age >= threshold )); then
-      if [[ "$ftype" == "regular" ]]; then
+    if [[ "$ftype" == "regular" ]]; then
+      # In-flight-writer safety applies ONLY to a regular lock (a real git writer
+      # holds a regular config.lock for single-digit ms): remove it only once stale
+      # (age >= threshold); fresh AND future-dated (clock skew) are left untouched —
+      # the DIAG line above already surfaced them. Arithmetic nested in `if` so a
+      # false `(( ))` never trips set -e (mirrors cleanup_merged_worktrees).
+      if [[ "$age" =~ ^[0-9]+$ ]] && (( age >= threshold )); then
         rm_err=""; rm_rc=0
         # 2>&1 >/dev/null order is load-bearing: capture stderr, discard stdout.
-        rm_err=$(rm -f -- "$path" 2>&1 >/dev/null) || rm_rc=$?
+        # LC_ALL=C pins strerror to English so _rm_errno maps the label reliably
+        # under a non-C operator/CI locale (else every failure degrades to OTHER).
+        rm_err=$(LC_ALL=C rm -f -- "$path" 2>&1 >/dev/null) || rm_rc=$?
         if (( rm_rc == 0 )); then
           swept=$(( swept + 1 ))   # assignment form, NOT (( swept++ )) — old value 0 -> rc 1 -> set -e abort
         else
           unremovable=1
           echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=regular errno=$(_rm_errno "$rm_err") reason=rm-failed hint=\"git config write will fail EEXIST — targeted fix needed\""
         fi
-      else
-        # dir / symlink / mount / other: never auto-removed on a blind surface.
-        # The DIAG line above carries the forensic detail to design the real fix.
-        unremovable=1
-        echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=$ftype errno=none reason=non-regular-lock hint=\"observed non-regular config lock — targeted fix required; not auto-removed\""
       fi
+    else
+      # dir / symlink / mount / other: a config.lock is created by git via
+      # open(O_CREAT|O_EXCL) — ALWAYS a regular file. A non-regular lock is NEVER a
+      # legitimate in-flight writer and ALWAYS blocks the git config write (EEXIST)
+      # regardless of age, so flag it unremovable UNCONDITIONALLY (no staleness gate
+      # — that gate exists only for the regular in-flight-writer case above). Never
+      # auto-removed on a blind surface; the DIAG line above carries the forensic
+      # detail to design the targeted fix.
+      unremovable=1
+      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=$ftype errno=none reason=non-regular-lock hint=\"observed non-regular config lock — targeted fix required; not auto-removed\""
     fi
   done
   # Report progress BEFORE the return so a partial sweep (one lock removed, the

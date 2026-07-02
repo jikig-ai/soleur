@@ -110,6 +110,25 @@ if (( SW_RC != 0 )); then echo "  PASS: sweep returns non-zero on dir lock"; PAS
 else echo "  FAIL: sweep must return non-zero on dir lock"; FAIL=$((FAIL + 1)); fi
 
 # ---------------------------------------------------------------------------
+echo "Test 4b: FRESH directory lock -> UNREMOVABLE regardless of age, rc!=0 (never march into doomed write)"
+# A config.lock is created by git via open(O_CREAT|O_EXCL) — always regular. A
+# non-regular lock is never a legit in-flight writer and always blocks the git
+# config write (EEXIST), so the staleness gate must NOT gate the non-regular case.
+D=$(new_lockdir)
+mkdir "$D/config.lock"   # mtime = now (fresh, age < threshold)
+run_sweep "$D" 60
+assert_contains "$SW_OUT" "type=dir" "fresh dir lock typed dir"
+assert_contains "$SW_OUT" "reason=non-regular-lock" "fresh dir lock flagged non-regular-lock (age-independent)"
+if (( SW_RC != 0 )); then echo "  PASS: sweep returns non-zero on fresh dir lock"; PASS=$((PASS + 1));
+else echo "  FAIL: fresh non-regular lock must still be flagged unremovable"; FAIL=$((FAIL + 1)); fi
+
+# NOTE: the type=mount branch (stat -c%m == realpath + findmnt SOURCE) is NOT
+# unit-tested — synthesizing a real mountpoint named config.lock needs the mount
+# syscall (root + a loopback/bind source), which is not cleanly reproducible in a
+# unit test. The mount branch is covered by code inspection only; the highest-value
+# real-world scenario (the mounted /workspaces volume) is asserted structurally.
+
+# ---------------------------------------------------------------------------
 echo "Test 5: symlink lock -> type=symlink, UNREMOVABLE, link+target preserved, rc!=0"
 D=$(new_lockdir)
 printf 'target\n' > "$D/target"
