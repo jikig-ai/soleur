@@ -26,8 +26,8 @@ lane: cross-domain
 - [x] 2.2 Write CONCISE learning under `knowledge-base/project/learnings/` (date picked at write-time) as a **pointer to the ADR amendment**, not a restatement.
 
 ## Phase 3 — Full suite + PR
-- [ ] 3.1 `bun test plugins/soleur/test/` green (no sibling suite regresses).
-- [ ] 3.2 Confirm `git diff .github/workflows/apply-web-platform-infra.yml` is EMPTY (no `-target` change).
+- [x] 3.1 `bun test plugins/soleur/test/` green (no sibling suite regresses).
+- [x] 3.2 Confirm `git diff .github/workflows/apply-web-platform-infra.yml` is EMPTY (no `-target` change).
 - [ ] 3.3 Open PR with `Ref #5887` (NOT `Closes`); labels `domain/engineering`, `priority/p1-high`; `semver:patch`; `## Changelog` section.
 - [ ] 3.4 Enroll `follow-through` tracker + `scripts/followthroughs/<name>-5887.sh` (both workflows green post-cutover).
 - [ ] 3.5 File deferred follow-up issue (`domain/engineering`, `priority/p2-medium`): reboot-aware destroy-guard for in-place `update` on `hcloud_server.*` reboot-forcing attrs (architecture review P2).
