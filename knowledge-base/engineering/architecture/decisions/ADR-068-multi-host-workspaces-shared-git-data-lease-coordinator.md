@@ -414,7 +414,7 @@ fixes for every per-step plan:
 coordinator routing — GA)** → Phase 4a (Nomad + reclaim cron + Redis buffer) →
 Phase 4b (continuous checkpoint).
 
-> **Amendment (2026-07-02, #5877/#5887 — moved-block migration sequencing).** A
+> **Amendment (CTO ruling, 2026-07-02, #5877/#5887 — moved-block migration sequencing).** A
 > `moved {}` block that re-addresses a resource in `OPERATOR_APPLIED_EXCLUSIONS`
 > **wedges every target-scoped CI apply** (`apply-web-platform-infra.yml`,
 > `apply-deploy-pipeline-fix.yml`) until an operator full apply consumes the pending
@@ -437,7 +437,8 @@ Phase 4b (continuous checkpoint).
 > re-addresses an operator-excluded resource fails at plan-review time instead of
 > silently wedging CI. (Residual, deferred to a follow-up: the destroy-guard remains
 > blind to reboot-forcing in-place `update` on `hcloud_server.*` — a reboot-aware
-> apply guard is the interim gap the parity accounting-check does not mechanically close.)
+> apply guard is the interim gap the parity accounting-check does not mechanically
+> close; tracked in #5911.)
 
 ## Consequences
 

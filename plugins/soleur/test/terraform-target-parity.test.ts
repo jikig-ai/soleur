@@ -616,7 +616,11 @@ describe("terraform `moved`/-target parity — pending moves are accounted for (
   });
 
   test("every `moved` endpoint base is `-target=`ed OR documented operator-consumed", () => {
-    expect(movedBases.length).toBeGreaterThan(0); // non-vacuity: the 4 #5877 bases
+    // non-vacuity: the 4 #5877 bases. NOTE: once the operator ADR-068 Phase-3
+    // cutover completes and the `moved {}` blocks are cleaned out of
+    // placement-group.tf, this assertion red-lines BY DESIGN — drop it (and
+    // MOVED_OPERATOR_CONSUMED) in that cleanup PR.
+    expect(movedBases.length).toBeGreaterThan(0);
     const uncovered = movedBases.filter(
       (a) => !allTargets.has(a) && !MOVED_OPERATOR_CONSUMED.has(a),
     );

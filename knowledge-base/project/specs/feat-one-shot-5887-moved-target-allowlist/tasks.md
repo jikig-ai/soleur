@@ -30,7 +30,7 @@ lane: cross-domain
 - [x] 3.2 Confirm `git diff .github/workflows/apply-web-platform-infra.yml` is EMPTY (no `-target` change).
 - [ ] 3.3 Open PR with `Ref #5887` (NOT `Closes`); labels `domain/engineering`, `priority/p1-high`; `semver:patch`; `## Changelog` section.
 - [ ] 3.4 Enroll `follow-through` tracker + `scripts/followthroughs/<name>-5887.sh` (both workflows green post-cutover).
-- [ ] 3.5 File deferred follow-up issue (`domain/engineering`, `priority/p2-medium`): reboot-aware destroy-guard for in-place `update` on `hcloud_server.*` reboot-forcing attrs (architecture review P2).
+- [x] 3.5 File deferred follow-up issue (`domain/engineering`, `priority/p2-medium`): reboot-aware destroy-guard for in-place `update` on `hcloud_server.*` reboot-forcing attrs (architecture review P2).
 
 ## Post-merge (operator — maintenance window; NOT agent-executed)
 - [ ] O.1 Dry-run `terraform plan` via canonical Doppler tf-var invocation; confirm `0 to destroy` + expected cutover scope.
