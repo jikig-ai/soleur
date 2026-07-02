@@ -39,6 +39,11 @@ let actionSendsSelectResult: { data: unknown; error: unknown } = {
   data: { cancellation_requested_at: null },
   error: null,
 };
+// feat-l5-runaway-guard: spawn-entry pause gate reads users.runtime_paused_at.
+let usersSelectResult: { data: unknown; error: unknown } = {
+  data: { runtime_paused_at: null, runtime_cost_cap_cents: 2000 },
+  error: null,
+};
 let cumulativeCostCents = 0;
 let auditSelectError: unknown = null;
 
@@ -80,6 +85,9 @@ function buildSupabaseClient() {
       }
       if (currentTable === "action_sends") {
         return Promise.resolve(actionSendsSelectResult);
+      }
+      if (currentTable === "users") {
+        return Promise.resolve(usersSelectResult);
       }
       return Promise.resolve({ data: null, error: null });
     },
@@ -134,6 +142,28 @@ vi.mock("@/server/github/app-client", () => ({
 const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
+}));
+
+// Offline notification dispatch (feat-l5-runaway-guard). Records the payload
+// AND the number of action_sends failure_reason UPDATEs already applied at
+// call time — used to prove notify fires BEFORE the terminal UPDATE (AC3).
+interface NotifyCall {
+  userId: string;
+  payload: Record<string, unknown>;
+  actionSendsUpdatesBefore: number;
+}
+const notifyCalls: NotifyCall[] = [];
+const notifyOfflineUserSpy = vi.fn(async (userId: string, payload: unknown) => {
+  notifyCalls.push({
+    userId,
+    payload: payload as Record<string, unknown>,
+    actionSendsUpdatesBefore: updateCalls.filter(
+      (u) => (u.patch as Record<string, unknown>).failure_reason !== undefined,
+    ).length,
+  });
+});
+vi.mock("@/server/notifications", () => ({
+  notifyOfflineUser: notifyOfflineUserSpy,
 }));
 
 // Inngest stub.
@@ -299,6 +329,11 @@ beforeEach(() => {
     data: { cancellation_requested_at: null },
     error: null,
   };
+  usersSelectResult = {
+    data: { runtime_paused_at: null, runtime_cost_cap_cents: 2000 },
+    error: null,
+  };
+  notifyCalls.length = 0;
   cumulativeCostCents = 0;
   auditSelectError = null;
   octokitResponses = {
@@ -494,6 +529,111 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
       failureReason: "cancelled_by_operator",
     });
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
+  // --- feat-l5-runaway-guard PR-A --------------------------------------------
+
+  it("AC1 run_paused: paused founder halts at the entry gate before any cap-check or Anthropic call", async () => {
+    usersSelectResult = {
+      data: {
+        runtime_paused_at: "2026-07-01T09:00:00Z",
+        runtime_cost_cap_cents: 2000,
+      },
+      error: null,
+    };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "run_paused",
+    });
+    // Never entered the turn loop: no cap-check RPC (⇒ zero new
+    // audit_byok_use rows) and no Anthropic spend.
+    expect(recordByokUseAndCheckCapSpy).not.toHaveBeenCalled();
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
+  it("cap_check_unavailable: a transient cap-check RPC error is NOT reported as byok_cap_exceeded", async () => {
+    capRpcThrows = new Error("connection reset by peer");
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "cap_check_unavailable",
+    });
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC3 notify: byok_cap_exceeded fires cost_breaker_tripped BEFORE the action_sends UPDATE", async () => {
+    capRpcResult = { cumulativeCents: 9999, killTripped: true };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0].userId).toBe("founder-123");
+    expect(notifyCalls[0].payload.type).toBe("cost_breaker_tripped");
+    expect(notifyCalls[0].payload.reason).toBe("byok_cap_exceeded");
+    expect(notifyCalls[0].payload.which_window).toBe("cap-1h");
+    // Ordering (AC3): notify fires before the terminal failure_reason UPDATE.
+    expect(notifyCalls[0].actionSendsUpdatesBefore).toBe(0);
+  });
+
+  it("AC3 notify: run_paused notifies with which_window=spawn and no fabricated cents", async () => {
+    usersSelectResult = {
+      data: {
+        runtime_paused_at: "2026-07-01T09:00:00Z",
+        runtime_cost_cap_cents: 2000,
+      },
+      error: null,
+    };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0].payload.reason).toBe("run_paused");
+    expect(notifyCalls[0].payload.which_window).toBe("spawn");
+    const ctx = notifyCalls[0].payload.context as {
+      cumulativeCents: number | null;
+    };
+    expect(ctx.cumulativeCents).toBeNull();
+  });
+
+  it("AC3 notify: cancelled_by_operator NEVER notifies (operator-initiated stops are not surprises)", async () => {
+    actionSendsSelectResult = {
+      data: { cancellation_requested_at: "2026-05-25T12:00:00Z" },
+      error: null,
+    };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(notifyOfflineUserSpy).not.toHaveBeenCalled();
   });
 
   it("AC10 leader_response_truncated: stop_reason=max_tokens → persist failure", async () => {

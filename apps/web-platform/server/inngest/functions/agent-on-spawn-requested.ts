@@ -43,6 +43,7 @@ import { reportSilentFallback } from "@/server/observability";
 import { runWithByokLease } from "@/server/byok-lease";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
+import { notifyOfflineUser } from "@/server/notifications";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import {
   LEADER_MAX_TURNS,
@@ -156,7 +157,11 @@ type FailureReason =
   | "leader_max_turns_exceeded"
   | "leader_response_truncated"
   | "leader_tool_invalid"
-  | "leader_class_disabled";
+  | "leader_class_disabled"
+  // feat-l5-runaway-guard PR-A: spawn-entry pause gate + distinct
+  // transient-cap-check reason (P2-H — a DB error is not a budget breach).
+  | "run_paused"
+  | "cap_check_unavailable";
 
 interface ReversalHandle {
   kind:
@@ -316,6 +321,57 @@ export async function agentOnSpawnRequestedHandler({
   // Per-spawn reversal handles ledger (AC9 — multi-artifact array).
   const reversalHandles: ReversalHandle[] = [];
 
+  // Spawn-entry pause gate (feat-l5-runaway-guard PR-A, P0-A). Before the
+  // turn loop — and therefore before ANY Anthropic call or audit_byok_use
+  // row — refuse to run for a founder whose account is paused. This is the
+  // primary of the two defense-in-depth blocks; the cap RPC returning
+  // kill_tripped while paused (migration 121) is the backstop if this gate
+  // is ever bypassed. Fail-OPEN on a read error: we don't halt every spawn
+  // on a transient users-read blip, because the very next step (turn-1
+  // cap-check) row-locks users and re-reads runtime_paused_at, so a paused
+  // founder is still refused before any spend.
+  const pauseState = await step.run("check-runtime-pause", async () => {
+    const sb = getServiceClient();
+    const { data, error } = await sb
+      .from("users")
+      .select("runtime_paused_at, runtime_cost_cap_cents")
+      .eq("id", founderId)
+      .maybeSingle();
+    if (error) {
+      reportSilentFallback(new Error(error.message), {
+        feature: "spawn-agent",
+        op: "check-runtime-pause",
+        message: "runtime-pause read failed; failing open (cap-check backstops)",
+        extra: { founderId, actionSendId },
+      });
+      return { pausedAt: null as string | null, capCents: null as number | null };
+    }
+    const row = data as
+      | { runtime_paused_at: string | null; runtime_cost_cap_cents: number | null }
+      | null;
+    return {
+      pausedAt: row?.runtime_paused_at ?? null,
+      capCents: row?.runtime_cost_cap_cents ?? null,
+    };
+  });
+  if (pauseState.pausedAt) {
+    return persistFailure(step, {
+      actionSendId,
+      reason: "run_paused",
+      err: new Error("spawn refused: founder account is paused"),
+      founderId,
+      messageId,
+      actionClass,
+      sourceRef,
+      logger,
+      notify: {
+        whichWindow: "spawn",
+        cumulativeCents: null,
+        ceilingCents: pauseState.capCents,
+      },
+    });
+  }
+
   // The leader prompt loop. Layer-3 backstop (LEADER_MAX_TURNS = 8 turns,
   // per ADR-041); the primary gates are the Layer-1 cap-check + Layer-2
   // cost ceiling.
@@ -334,15 +390,24 @@ export async function agentOnSpawnRequestedHandler({
         });
       });
     } catch (err) {
+      // P2-H: a transient cap-check DB error is NOT a budget breach. Use a
+      // distinct reason so the operator alert reads "we couldn't verify your
+      // budget", not a false "you exceeded your cap". Fail-closed (no
+      // Anthropic call) is preserved — only the reason/copy differs.
       return persistFailure(step, {
         actionSendId,
-        reason: "byok_cap_exceeded",
+        reason: "cap_check_unavailable",
         err,
         founderId,
         messageId,
         actionClass,
         sourceRef,
         logger,
+        notify: {
+          whichWindow: "cap-1h",
+          cumulativeCents: null,
+          ceilingCents: pauseState.capCents,
+        },
       });
     }
     if (capResult.killTripped) {
@@ -355,6 +420,11 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
+        notify: {
+          whichWindow: "cap-1h",
+          cumulativeCents: capResult.cumulativeCents,
+          ceilingCents: pauseState.capCents,
+        },
       });
     }
 
@@ -395,6 +465,11 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
+        notify: {
+          whichWindow: "spawn",
+          cumulativeCents,
+          ceilingCents: PER_SPAWN_COST_CEILING_CENTS,
+        },
       });
     }
 
@@ -645,6 +720,12 @@ export async function agentOnSpawnRequestedHandler({
     actionClass,
     sourceRef,
     logger,
+    notify: {
+      // A turn-count halt carries no trustworthy dollar figure.
+      whichWindow: "spawn",
+      cumulativeCents: null,
+      ceilingCents: null,
+    },
   });
 }
 
@@ -910,6 +991,18 @@ function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
   return "anthropic_timeout";
 }
 
+// The failure reasons that warrant an operator cost-breaker notification.
+// A curated subset of FailureReason — cost/turn-cap/pause halts the founder
+// needs to know about. NEVER cancelled_by_operator (operator-initiated) and
+// never the infra/GitHub reasons (surfaced on the Today card, not paged).
+const COST_BREAKER_NOTIFY_REASONS: ReadonlySet<FailureReason> = new Set([
+  "cost_ceiling_exceeded",
+  "byok_cap_exceeded",
+  "leader_max_turns_exceeded",
+  "cap_check_unavailable",
+  "run_paused",
+] as const);
+
 async function persistFailure(
   step: HandlerArgs["step"],
   args: {
@@ -921,6 +1014,16 @@ async function persistFailure(
     actionClass: ActionClass;
     sourceRef: string;
     logger: HandlerArgs["logger"];
+    /**
+     * Cost-breaker notification context (feat-l5-runaway-guard PR-A). Present
+     * only at the cost/turn-cap/pause call sites; its presence + a reason in
+     * COST_BREAKER_NOTIFY_REASONS is what triggers the single notify call.
+     */
+    notify?: {
+      whichWindow: "spawn" | "cap-1h";
+      cumulativeCents: number | null;
+      ceilingCents: number | null;
+    };
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
@@ -936,6 +1039,30 @@ async function persistFailure(
       actionSendId,
     },
   });
+
+  // Single notification site (AC3). Fire-and-forget, BEFORE the action_sends
+  // UPDATE — mirroring the Sentry-mirror-first ordering above. A send failure
+  // is swallowed by notifyOfflineUser (which mirrors its own failures to
+  // Sentry), so it can never mask the terminal state write. The `reason IN
+  // subset` guard means cancelled_by_operator and the infra reasons never
+  // page the founder even if a caller passes a `notify` context by mistake.
+  if (args.notify && COST_BREAKER_NOTIFY_REASONS.has(reason)) {
+    void notifyOfflineUser(args.founderId, {
+      type: "cost_breaker_tripped",
+      reason: reason as
+        | "cost_ceiling_exceeded"
+        | "byok_cap_exceeded"
+        | "leader_max_turns_exceeded"
+        | "cap_check_unavailable"
+        | "run_paused",
+      which_window: args.notify.whichWindow,
+      context: {
+        cumulativeCents: args.notify.cumulativeCents,
+        ceilingCents: args.notify.ceilingCents,
+      },
+    });
+  }
+
   try {
     await step.run("persist-failure", async () => {
       const sb = getServiceClient();
