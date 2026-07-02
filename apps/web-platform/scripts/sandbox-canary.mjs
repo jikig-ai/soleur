@@ -127,12 +127,30 @@ export function validateFixture(obj) {
  * in bwrap SETUP before it execs the command, so `true` exercises the profile
  * identically to the SDK's real command — same discipline as the legacy probe.
  * We store/replay SETUP argv only and NEVER a captured command token.
+ *
+ * SECURITY BOUNDARY: the integrity of `bwrapSetupArgv` is enforced by the fixture
+ * TRUST PATH — it is committed to the repo, baked into the image at build time
+ * (Dockerfile COPY), and re-captured + byte-diffed (`--verify`) on every SDK/config
+ * change; it is only ever populated by `--capture` driving the real SDK (which
+ * emits `-`-prefixed setup options). The two checks below are cheap SANITY FILTERS,
+ * NOT the security boundary: bwrap treats the first non-option token as the start of
+ * the COMMAND (no `--` needed), so a hostile fixture could inject a command that
+ * these structural checks cannot fully exclude (a `--bind SRC DEST` legitimately
+ * carries non-dash value tokens). Do not lean on them as an authorization boundary.
  */
 export function buildBwrapInvocation(fixture) {
   const argv = fixture.bwrapSetupArgv;
   if (argv.includes("--")) {
     throw new Error(
       "sandbox-canary: setup argv must not contain a '--' separator; replay appends its own no-op command",
+    );
+  }
+  // A real bwrap SETUP argv always begins with an option (`--new-session`,
+  // `--unshare-*`, …), never a bare command — cheapest filter for the obvious
+  // "command in argv[0]" injection shape.
+  if (!argv[0].startsWith("-")) {
+    throw new Error(
+      `sandbox-canary: setup argv must begin with a bwrap option, got '${argv[0]}'`,
     );
   }
   return { cmd: "bwrap", args: [...argv, "--", "true"] };

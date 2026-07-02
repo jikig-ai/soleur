@@ -424,23 +424,30 @@ sandbox_canary_sentry_event() {
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
 run_faithful_sandbox_canary() {
-  local verdict reason sdk_version exec_rc out
+  local verdict reason sdk_version exec_rc out err_file docker_err
+  # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
+  # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
+  # the numeric rc alone would otherwise be the only signal (obs review P2).
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
   # set +o pipefail so the classification below reads docker exec's own rc, not
   # a downstream pipe member's (load-bearing under set -euo — mirrors the
   # canary_layer3 logger block).
   set +o pipefail
-  out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>/dev/null)"
+  out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"
   exec_rc=$?
   set -o pipefail
   if [[ "$exec_rc" -ne 0 ]]; then
     # docker/exec/node failure (125 daemon, 126/127 not-exec/not-found) — infra,
-    # never a sandbox verdict.
-    verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}"; sdk_version=""
+    # never a sandbox verdict. Fold docker's first stderr line (print-safe,
+    # length-capped) into the reason so the cause rides deploy-state + the log.
+    docker_err="$(head -1 "$err_file" 2>/dev/null | tr -dc '[:print:]' | cut -c1-120)"
+    verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
   else
     verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
     reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
     sdk_version="$(printf '%s' "$out" | jq -r '.sdk_version // ""' 2>/dev/null || echo '')"
   fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
   write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"
   echo "Faithful sandbox canary (non-blocking): verdict=$verdict reason=$reason"
   # Page only on a faithful FAIL (sandbox_broken) — the disagreement signal.
