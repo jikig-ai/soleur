@@ -67,13 +67,11 @@ CPO sign-off carried forward (`USER_BRAND_CRITICAL=true`); `user-impact-reviewer
 
 ## Non-Goals (all filed as tracked follow-up issues)
 
-- **Cron cost-enforcement** (Kieran P0-1) — make crons write `audit_byok_use` / share the cap RPC so a
-  dollar ceiling covers them. **Top-priority follow-up** — the real threat surface.
-- **Rolling-24h founder budget** — product/tunability increment (operator chose it 2026-07-02, but it is
-  not the safety floor and can't see crons). Follow-up.
-- **Per-run cost ceiling** (CFO, default $20) — follow-up.
-- **Pre-run cost estimate** (avg, not p95; no HITL modal) — follow-up.
-- **Doom-loop detector** — web-only, own ADR, behind telemetry proving the cap misses real loops. Follow-up.
+- **Cron cost-enforcement** (Kieran P0-1) — **[#5902](https://github.com/jikig-ai/soleur/issues/5902), p1, top-priority** — the real threat surface.
+- **Rolling-24h founder budget** — **[#5903](https://github.com/jikig-ai/soleur/issues/5903)** — product increment, not the safety floor, can't see crons.
+- **Per-run cost ceiling** (CFO, default $20) — **[#5904](https://github.com/jikig-ai/soleur/issues/5904)**.
+- **Pre-run cost estimate** (avg, not p95; no HITL modal) — **[#5905](https://github.com/jikig-ai/soleur/issues/5905)**.
+- **Doom-loop detector** — web-only, own ADR, behind telemetry — **[#5906](https://github.com/jikig-ai/soleur/issues/5906)**.
 - **Resume-from-checkpoint apparatus** — v2 uses **terminal-halt**: operator resumes by clearing the pause
   and starting a fresh run. No checkpoint/re-bill/cycle-cap machinery.
 
