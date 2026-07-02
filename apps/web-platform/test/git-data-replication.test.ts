@@ -38,6 +38,7 @@ vi.mock("child_process", async (importOriginal) => ({
 
 import {
   replicateToGitData,
+  removeGitDataRepo,
   assertSafeWorkspaceId,
   gitDataRemoteUrl,
 } from "../server/git-data-replication";
@@ -142,5 +143,42 @@ describe("replicateToGitData — gated on", () => {
     ).rejects.toThrow();
     expect(sshProvision).not.toHaveBeenCalled();
     expect(gitPush).not.toHaveBeenCalled();
+  });
+});
+
+// Art. 17 app-side erasure (Sub-PR 3.D, CLO DL-1 / Kieran P0-1 / AC9). The 3.A
+// cloud-init `git-data-remove.sh` forced command tears down the per-workspace bare
+// repo; the app must call it over the private net with the dedicated REMOVE key —
+// distinct authority from provision/transport. Mirrors provisionGitDataRepo shape.
+describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)", () => {
+  beforeEach(() => vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "remove-key"));
+
+  it("gated OFF: issues NO ssh to the git-data host", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "");
+    await removeGitDataRepo(WS);
+    expect(sshProvision).not.toHaveBeenCalled();
+  });
+
+  it("gated ON: dials the git-data host with the REMOVE key (not provision/transport) + the workspaceId as SSH_ORIGINAL_COMMAND", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    await removeGitDataRepo(WS);
+    expect(sshProvision).toHaveBeenCalledTimes(1);
+    const [host, remoteCmd, key] = sshProvision.mock.calls[0] as [string, string, string, unknown];
+    expect(host).toBe("10.0.1.20");
+    expect(remoteCmd).toBe(WS); // opaque workspace_id, not a shell string (CWE-22 host-side)
+    expect(key).toBe("remove-key"); // the dedicated GIT_REMOVE_SSH_PRIVATE_KEY authority
+  });
+
+  it("gated ON but REMOVE key unset: FAILS LOUD (refuses to guess)", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "");
+    await expect(removeGitDataRepo(WS)).rejects.toThrow(/GIT_REMOVE_SSH_PRIVATE_KEY/);
+    expect(sshProvision).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsafe workspace_id BEFORE any ssh (CWE-22)", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    await expect(removeGitDataRepo("../evil")).rejects.toThrow();
+    expect(sshProvision).not.toHaveBeenCalled();
   });
 });

@@ -38,6 +38,14 @@ vi.mock("@/server/workspace", () => ({
   deleteWorkspace: (...args: unknown[]) => mockDeleteWorkspace(...args),
 }));
 
+// Art. 17 erasure of the shared git-data bare repo (#5274 Sub-PR 3.D, DL-1/AC9).
+// account-delete imports ONLY removeGitDataRepo from this module, so a wholesale
+// factory is safe (nothing else in the SUT graph reads its other exports).
+const mockRemoveGitDataRepo = vi.fn();
+vi.mock("@/server/git-data-replication", () => ({
+  removeGitDataRepo: (...args: unknown[]) => mockRemoveGitDataRepo(...args),
+}));
+
 // ---------------------------------------------------------------------------
 // Import the module under test
 // ---------------------------------------------------------------------------
@@ -67,6 +75,7 @@ function setupSupabaseMocks(overrides: {
   });
 
   mockDeleteWorkspace.mockResolvedValue(undefined);
+  mockRemoveGitDataRepo.mockResolvedValue(undefined);
   mockAbortAllUserSessions.mockReturnValue(undefined);
 
   mockStorageFrom.mockReturnValue({
@@ -244,6 +253,19 @@ describe("deleteAccount", () => {
     await deleteAccount("user-123", "test@example.com");
 
     expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
+  });
+
+  test("erases the shared git-data bare repo for the deleted user (Art. 17 / AC9)", async () => {
+    setupSupabaseMocks();
+
+    await deleteAccount("user-123", "test@example.com");
+
+    // userId === workspaces.id (mig 053 N2 invariant) → the sole-owned workspace's
+    // git-data repo is keyed on userId, mirroring deleteWorkspace(userId). Best-effort
+    // (removeGitDataRepo is a no-op at flag-off), so the reach — not the transport — is
+    // what this asserts; the flag gate + key authority are covered in
+    // git-data-replication.test.ts.
+    expect(mockRemoveGitDataRepo).toHaveBeenCalledWith("user-123");
   });
 
   test("when auth deletion fails, public.users data remains intact (no partial deletion)", async () => {
