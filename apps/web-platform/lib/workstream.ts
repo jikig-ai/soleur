@@ -11,14 +11,17 @@
 //   4. "Live" marker = green dot + green text, no fill (rendered in issue-card)
 //   5. `user` field — a PERSON distinct from the role assignee
 
+// Column vocabulary mirrors the canonical GitHub Project v2 board "Soleur Kanban"
+// (ADR-075): Backlog, Ready, In progress, In review, Blocked, Pending, Done.
+// The board has no Cancelled column, so closed issues fold to `done`.
 export type WorkstreamStatus =
   | "backlog"
-  | "todo"
+  | "ready"
   | "in_progress"
   | "in_review"
   | "blocked"
-  | "done"
-  | "cancelled";
+  | "pending"
+  | "done";
 
 export type WorkstreamPriority = "urgent" | "high" | "medium" | "low" | "none";
 
@@ -78,12 +81,12 @@ export interface ColumnConfig {
 
 export const COLUMNS: readonly ColumnConfig[] = [
   { status: "backlog", label: "Backlog", accent: "#9AA3B2" },
-  { status: "todo", label: "Todo", accent: "#5E84C4" },
+  { status: "ready", label: "Ready", accent: "#5E84C4" },
   { status: "in_progress", label: "In Progress", accent: "#E0A93B" },
   { status: "in_review", label: "In Review", accent: "#A87BE0" },
   { status: "blocked", label: "Blocked", accent: "#E5534B" },
+  { status: "pending", label: "Pending", accent: "#3FA6B0" },
   { status: "done", label: "Done", accent: "#3FB950" },
-  { status: "cancelled", label: "Cancelled", accent: "#595959" },
 ] as const;
 
 /** Ordered list of statuses (column order). */
@@ -105,7 +108,7 @@ export function statusPillClass(status: WorkstreamStatus): string {
   switch (status) {
     case "backlog":
       return "text-slate-300";
-    case "todo":
+    case "ready":
       return "text-blue-300";
     case "in_progress":
       return "text-amber-300";
@@ -113,10 +116,10 @@ export function statusPillClass(status: WorkstreamStatus): string {
       return "text-violet-300";
     case "blocked":
       return "text-red-300";
+    case "pending":
+      return "text-teal-300";
     case "done":
       return "text-green-300";
-    case "cancelled":
-      return "text-neutral-400";
   }
 }
 
@@ -269,28 +272,30 @@ export const PRIORITY_LABEL_TO_PRIORITY: Record<string, WorkstreamPriority> = {
 };
 
 /**
- * Derive the kanban column from state + state_reason + labels.
- * Precedence (per plan):
- *   - closed → state_reason ∈ {not_planned, duplicate} OR has `duplicate` label → cancelled; else done.
- *   - open  → `blocked` → blocked; else `in-progress` → in_progress;
- *             else `review`/`needs-review` → in_review; else `todo`/`ready` → todo; else backlog.
+ * Derive the kanban column from state + labels. FALLBACK ONLY — when the GitHub
+ * Project v2 board Status is present it is preferred over this (ADR-075; see
+ * boardStatusToWorkstreamStatus + get-workstream-issues, Phase 2). The board has
+ * no Cancelled column, so every closed issue folds to `done` (not_planned /
+ * duplicate closed issues render under Done).
+ * Precedence (open):
+ *   `blocked` → blocked; else `pending` → pending; else `in-progress` →
+ *   in_progress; else `review`/`needs-review` → in_review; else `ready`/`todo`
+ *   → ready; else backlog.
  */
 export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
   const labels = input.labels;
   if (input.state === "closed") {
-    const cancelledReason =
-      input.state_reason === "not_planned" ||
-      input.state_reason === "duplicate";
-    if (cancelledReason || labels.includes("duplicate")) return "cancelled";
+    // Board has no Cancelled column — all closed issues fold to done.
     return "done";
   }
   // open
   if (labels.includes("blocked")) return "blocked";
+  if (labels.includes("pending")) return "pending";
   if (labels.includes("in-progress")) return "in_progress";
   if (labels.includes("review") || labels.includes("needs-review")) {
     return "in_review";
   }
-  if (labels.includes("todo") || labels.includes("ready")) return "todo";
+  if (labels.includes("ready") || labels.includes("todo")) return "ready";
   return "backlog";
 }
 
@@ -360,16 +365,16 @@ export function githubIssueToWorkstreamIssue(
 
 /** Statuses that read as "closed" — the single source of truth shared by
  *  `isClosed` and the Status filter (arch review D4; mirrors `deriveColumn`'s
- *  closed branch which maps closed GitHub issues to `done`/`cancelled`). */
+ *  closed branch, which now maps every closed GitHub issue to `done` since the
+ *  board has no Cancelled column, ADR-075). */
 export const CLOSED_STATUSES: ReadonlySet<WorkstreamStatus> = new Set([
   "done",
-  "cancelled",
 ]);
 
-/** An issue reads as closed iff its column is `done` or `cancelled`. Sound +
- *  complete for GitHub-sourced issues (`deriveColumn` only sends closed issues
- *  to those two columns); an optimistic local move to done/cancelled also reads
- *  closed, which is semantically correct. */
+/** An issue reads as closed iff its column is `done`. Sound + complete for
+ *  GitHub-sourced issues (`deriveColumn` sends every closed issue to `done`); an
+ *  optimistic local move to done also reads closed, which is semantically
+ *  correct. */
 export function isClosed(i: WorkstreamIssue): boolean {
   return CLOSED_STATUSES.has(i.status);
 }
