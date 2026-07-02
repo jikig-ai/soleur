@@ -211,6 +211,18 @@ jobs:
             exit 1
           fi
 
+      # #5875 item 3 / ADR-079 — SDK-bump sandbox gate (BLOCKING). Asserts
+      # bun.lock↔package-lock parity for both @anthropic-ai SDK packages AND, on a
+      # resolved-version bump vs the base branch, requires an `sdk-bump-verified:`
+      # ack (a maintainer attests the committed seccomp profile was validated against
+      # the new SDK). Closes the #5849 "a routine SDK bump shipped green because
+      # nothing forced a look" class deterministically (no model turn / creds). The
+      # base comparison needs origin/main; the default checkout is depth-1, so fetch it.
+      - name: SDK-bump sandbox gate (lockfile parity + bump ack)
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
+
   # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
   # of inside the post-merge Docker build (#2347/#2401 outage).
