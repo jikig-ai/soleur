@@ -3,6 +3,7 @@ import {
   COLUMNS,
   STATUS_ORDER,
   assigneeInitials,
+  boardStatusToWorkstreamStatus,
   columnAccent,
   deriveColumn,
   deriveLive,
@@ -41,12 +42,12 @@ function input(over: Partial<BoardIssueInput> = {}): BoardIssueInput {
 
 const ALL_STATUSES: WorkstreamStatus[] = [
   "backlog",
-  "todo",
+  "ready",
   "in_progress",
   "in_review",
   "blocked",
+  "pending",
   "done",
-  "cancelled",
 ];
 const ALL_PRIORITIES: WorkstreamPriority[] = [
   "urgent",
@@ -64,12 +65,12 @@ describe("COLUMNS config", () => {
 
   it("carries the binding per-column accent hexes (Addendum item 1)", () => {
     expect(columnAccent("backlog")).toBe("#9AA3B2");
-    expect(columnAccent("todo")).toBe("#5E84C4");
+    expect(columnAccent("ready")).toBe("#5E84C4");
     expect(columnAccent("in_progress")).toBe("#E0A93B");
     expect(columnAccent("in_review")).toBe("#A87BE0");
     expect(columnAccent("blocked")).toBe("#E5534B");
+    expect(columnAccent("pending")).toBe("#3FA6B0");
     expect(columnAccent("done")).toBe("#3FB950");
-    expect(columnAccent("cancelled")).toBe("#595959");
   });
 
   it("labels In Progress and exposes an amber status pill (matches the tint)", () => {
@@ -136,19 +137,19 @@ describe("deriveColumn (state + state_reason + labels)", () => {
     );
   });
 
-  it("closed + not_planned → cancelled", () => {
+  it("closed + not_planned → done (board has no Cancelled column)", () => {
     expect(
       deriveColumn(input({ state: "closed", state_reason: "not_planned" })),
-    ).toBe("cancelled");
+    ).toBe("done");
   });
 
-  it("closed + duplicate state_reason → cancelled", () => {
+  it("closed + duplicate state_reason → done", () => {
     expect(
       deriveColumn(input({ state: "closed", state_reason: "duplicate" })),
-    ).toBe("cancelled");
+    ).toBe("done");
   });
 
-  it("closed + duplicate LABEL → cancelled (even when state_reason is completed)", () => {
+  it("closed + duplicate LABEL → done (every closed issue folds to done)", () => {
     expect(
       deriveColumn(
         input({
@@ -157,7 +158,7 @@ describe("deriveColumn (state + state_reason + labels)", () => {
           labels: ["duplicate"],
         }),
       ),
-    ).toBe("cancelled");
+    ).toBe("done");
   });
 
   it("open + blocked label → blocked", () => {
@@ -175,9 +176,19 @@ describe("deriveColumn (state + state_reason + labels)", () => {
     expect(deriveColumn(input({ labels: ["needs-review"] }))).toBe("in_review");
   });
 
-  it("open + todo / ready label → todo", () => {
-    expect(deriveColumn(input({ labels: ["todo"] }))).toBe("todo");
-    expect(deriveColumn(input({ labels: ["ready"] }))).toBe("todo");
+  it("open + ready / todo label → ready", () => {
+    expect(deriveColumn(input({ labels: ["ready"] }))).toBe("ready");
+    expect(deriveColumn(input({ labels: ["todo"] }))).toBe("ready");
+  });
+
+  it("open + pending label → pending", () => {
+    expect(deriveColumn(input({ labels: ["pending"] }))).toBe("pending");
+  });
+
+  it("pending takes precedence over in-progress", () => {
+    expect(deriveColumn(input({ labels: ["in-progress", "pending"] }))).toBe(
+      "pending",
+    );
   });
 
   it("open + no recognized label → backlog", () => {
@@ -190,6 +201,40 @@ describe("deriveColumn (state + state_reason + labels)", () => {
     expect(
       deriveColumn(input({ labels: ["in-progress", "blocked"] })),
     ).toBe("blocked");
+  });
+});
+
+describe("board Status preference (Phase 2, ADR-080)", () => {
+  it("maps board Status names to app columns (case-insensitive)", () => {
+    expect(boardStatusToWorkstreamStatus("Backlog")).toBe("backlog");
+    expect(boardStatusToWorkstreamStatus("Ready")).toBe("ready");
+    expect(boardStatusToWorkstreamStatus("In progress")).toBe("in_progress");
+    expect(boardStatusToWorkstreamStatus("in review")).toBe("in_review");
+    expect(boardStatusToWorkstreamStatus("Blocked")).toBe("blocked");
+    expect(boardStatusToWorkstreamStatus("Pending")).toBe("pending");
+    expect(boardStatusToWorkstreamStatus("Done")).toBe("done");
+  });
+
+  it("returns null for an unknown board Status name", () => {
+    expect(boardStatusToWorkstreamStatus("Icebox")).toBeNull();
+  });
+
+  it("board Status overrides label/state derivation when present + mappable", () => {
+    // labels would derive blocked; board says Pending -> Pending wins.
+    expect(
+      deriveColumn(input({ labels: ["blocked"], boardStatus: "Pending" })),
+    ).toBe("pending");
+    // board Status wins even over a closed issue's Done fold.
+    expect(
+      deriveColumn(input({ state: "closed", boardStatus: "In progress" })),
+    ).toBe("in_progress");
+  });
+
+  it("falls back to label derivation for an unknown/absent board Status", () => {
+    expect(
+      deriveColumn(input({ labels: ["blocked"], boardStatus: "Nonsense" })),
+    ).toBe("blocked");
+    expect(deriveColumn(input({ labels: ["blocked"] }))).toBe("blocked");
   });
 });
 
@@ -317,11 +362,11 @@ describe("githubIssueToWorkstreamIssue (full mapper)", () => {
     expect(out.live).toBeUndefined();
   });
 
-  it("closed + not_planned → cancelled column", () => {
+  it("closed + not_planned → done column", () => {
     expect(
       githubIssueToWorkstreamIssue(
         input({ state: "closed", state_reason: "not_planned" }),
       ).status,
-    ).toBe("cancelled");
+    ).toBe("done");
   });
 });

@@ -72,12 +72,12 @@ describe("WorkstreamBoard", () => {
     await waitFor(() => expect(screen.getByText("Card one")).toBeTruthy());
     for (const label of [
       "Backlog",
-      "Todo",
+      "Ready",
       "In Progress",
       "In Review",
       "Blocked",
+      "Pending",
       "Done",
-      "Cancelled",
     ]) {
       expect(screen.getByRole("heading", { name: label })).toBeTruthy();
     }
@@ -370,14 +370,14 @@ describe("WorkstreamBoard", () => {
     // Backlog (content) is expanded by default with a working Collapse toggle.
     expect(screen.getByRole("button", { name: "Collapse Backlog" })).toBeTruthy();
 
-    // Todo (empty) renders as a w-10 collapsed strip and has no toggle.
-    const todo = container.querySelector('section[aria-label="Todo"]');
-    expect(todo).toBeTruthy();
-    const cls = todo?.getAttribute("class") ?? "";
+    // Ready (empty) renders as a w-10 collapsed strip and has no toggle.
+    const ready = container.querySelector('section[aria-label="Ready"]');
+    expect(ready).toBeTruthy();
+    const cls = ready?.getAttribute("class") ?? "";
     expect(cls).toContain("w-10");
     expect(cls).not.toContain("w-72");
-    expect(screen.queryByRole("button", { name: "Collapse Todo" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand Todo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collapse Ready" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Ready" })).toBeNull();
   });
 
   it("an unknown ?issue= renders the Issue-not-found Sheet state", async () => {

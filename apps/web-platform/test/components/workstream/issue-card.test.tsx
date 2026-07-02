@@ -51,7 +51,7 @@ describe("IssueCard", () => {
 
     rerender(
       <IssueCard
-        issue={issue({ status: "todo", live: true })}
+        issue={issue({ status: "ready", live: true })}
         onOpen={() => {}}
       />,
     );
