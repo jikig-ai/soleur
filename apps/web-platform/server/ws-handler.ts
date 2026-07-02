@@ -3098,7 +3098,10 @@ function teardownAuthedSessionOnClose(userId: string, ws: WebSocket): void {
       pendingDisconnects.set(`${uid}:${convId}`, timer);
     }
   }
-  log.info({ userId, gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
+  // No raw `userId` on this direct-logger breadcrumb — the userid-bypass-lint guard
+  // (#3698) scans NEW source for `log.*({ userId })`; runtime is already safe (pino
+  // formatters.log hashes top-level userId). Same posture as ensure-workspace-repo.ts.
+  log.info({ gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
 }
 
 /**
@@ -3218,7 +3221,7 @@ export async function attachProxiedSession(
     }
   }
 
-  log.info({ userId, workspaceId }, "Proxied session attached (owner-side)");
+  log.info({ workspaceId }, "Proxied session attached (owner-side)"); // no raw user id (#3698 lint; pino hashes at runtime)
 
   resetIdleTimer(userId, session);
 
@@ -3240,8 +3243,8 @@ export async function attachProxiedSession(
   // socket arrived pre-authed).
   ws.on("message", (data: unknown) => {
     handleMessage(userId, String(data)).catch((err) => {
-      Sentry.captureException(err);
-      log.error({ userId, err }, "Unhandled message error");
+      Sentry.captureException(err); // Sentry carries the error; local breadcrumb omits raw userId (#3698)
+      log.error({ err }, "Unhandled message error (proxied)");
       sendToClient(userId, { type: "error", message: "Internal server error" });
     });
   });
@@ -3252,8 +3255,8 @@ export async function attachProxiedSession(
   });
 
   ws.on("error", (err) => {
-    Sentry.captureException(err);
-    log.error({ userId, err }, "Proxied socket error");
+    Sentry.captureException(err); // Sentry carries the error; local breadcrumb omits raw userId (#3698)
+    log.error({ err }, "Proxied socket error");
   });
 
   // Resume signal — NOT a fresh greeting (AC8).
