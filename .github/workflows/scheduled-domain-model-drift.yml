@@ -1,0 +1,215 @@
+# Domain-model register drift detection (executor).
+#
+# Trigger: this workflow has NO GitHub Actions `schedule:` key. The weekly
+# cadence (Mon 08:00 UTC) is Inngest-dispatched via
+# apps/web-platform/server/inngest/functions/cron-domain-model-drift.ts
+# (workflow_dispatch). Inngest is the single scheduling substrate (ADR-033);
+# a raw `schedule:` YAML write is blocked by the new-scheduled-cron-prefer-inngest
+# PreToolUse hook. The deterministic analyzer runs HERE in the ephemeral runner
+# (the Inngest fn only dispatches).
+#
+# What it does: runs `scripts/domain-model-drift.sh drift` (100% deterministic
+# bash — the LLM is NEVER in the drift-detection path, ADR-076 §1), parses the
+# STALE-CITATION sub-count using the preflight Check 11 parser verbatim, and —
+# only when the register cites a source that no longer resolves (stale > 0) —
+# files/updates a single idempotent GitHub issue. Undocumented facts / blind
+# spots are advisory-only (nonzero by design, ADR-076 enforcement §1) and NEVER
+# trigger an issue.
+#
+# To test manually: gh workflow run scheduled-domain-model-drift.yml --ref main
+name: Domain-Model Drift Detection
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-domain-model-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+
+      - name: Run drift analyzer
+        id: drift
+        run: |
+          set +e
+          bash scripts/domain-model-drift.sh drift --repo . \
+            --register knowledge-base/engineering/architecture/domain-model.md \
+            > "$RUNNER_TEMP/dm-drift.txt" 2>&1
+          rc=$?
+          set -e
+
+          # Parse the stale-citation sub-count — preflight Check 11 Step 11.2
+          # parser VERBATIM. The `^`-anchor + `head -1` is load-bearing: an
+          # unanchored grep can match a verbatim-SQL predicate line echoing the
+          # substring, breaking the numeric read (ADR-076 / Check 11 note).
+          stale_line=$(grep -oE '^## Stale register citations \([0-9]+\)' "$RUNNER_TEMP/dm-drift.txt" | head -1)
+          stale=$(printf '%s' "$stale_line" | grep -oE '[0-9]+' | head -1)
+          undoc=$(grep -oE '^## Undocumented source facts \([0-9]+' "$RUNNER_TEMP/dm-drift.txt" | head -1 | grep -oE '[0-9]+' | head -1)
+          undoc=${undoc:-0}
+
+          # rc 2 (analyzer error) / rc 3 (secret-refuse): fail loud, file NO
+          # drift issue. Heartbeat status=error.
+          if [[ "$rc" == "2" || "$rc" == "3" ]]; then
+            {
+              echo "rc=$rc"
+              echo "stale="
+              echo "undoc=$undoc"
+              echo "status=error"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "### domain-model drift"
+              echo "rc=$rc stale=n/a undoc=$undoc — analyzer error/secret-refuse; NO issue filed"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::domain-model-drift analyzer returned rc=$rc (2=error, 3=secret-refuse) — failing loudly, no drift issue"
+            exit 1
+          fi
+
+          # Empty-stale anomaly guard (unattended path). Under rc in {0,1} the
+          # '## Stale register citations (N)' heading MUST be present. An empty
+          # match means a truncated report / format drift — do NOT coerce
+          # empty→0 (that would silently suppress a real drift issue). Treat as
+          # an anomaly: error heartbeat, file nothing, fail loud.
+          if [[ -z "$stale_line" ]]; then
+            {
+              echo "rc=$rc"
+              echo "stale="
+              echo "undoc=$undoc"
+              echo "status=error"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "### domain-model drift"
+              echo "rc=$rc stale=<missing-heading> undoc=$undoc — ANOMALY (report missing the stale-citations heading); NO issue filed"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::domain-model-drift report missing the '## Stale register citations (N)' heading (rc=$rc) — treating as anomaly; no issue filed"
+            exit 1
+          fi
+
+          # Normal path: stale is a valid integer. Heartbeat status=ok whether
+          # or not a drift issue is filed (issue-filing is orthogonal to
+          # scheduler/executor liveness).
+          stale=${stale:-0}
+          {
+            echo "rc=$rc"
+            echo "stale=$stale"
+            echo "undoc=$undoc"
+            echo "status=ok"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### domain-model drift"
+            echo "rc=$rc stale=$stale undoc=$undoc"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure domain-model-drift label exists
+        if: steps.drift.outputs.stale > 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create "domain-model-drift" --description "domain-model register cites an unresolvable source (stale citation)" --color "FBCA04" 2>/dev/null || true
+
+      - name: Create or update drift issue
+        if: steps.drift.outputs.stale > 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STALE: ${{ steps.drift.outputs.stale }}
+          UNDOC: ${{ steps.drift.outputs.undoc }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Constant idempotency title (keys the exact-title match). Timestamp,
+          # stale count and advisory context live in the body/comment ONLY.
+          TITLE="domain-model: register drift detected"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+          # The stale section verbatim from the analyzer report (from the
+          # '## Stale register citations' heading up to the next '## ' heading).
+          awk '/^## Stale register citations/{f=1} f&&/^## /&&!/^## Stale register citations/{exit} f' \
+            "$RUNNER_TEMP/dm-drift.txt" > /tmp/stale-section.md || true
+
+          EXISTING=$(gh issue list --label "domain-model-drift" --state open \
+            --limit 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" \
+            | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            {
+              echo "Stale register citation(s) still present as of ${TIMESTAMP} — **${STALE}** stale."
+              echo ""
+              echo "<details><summary>Stale register citations</summary>"
+              echo ""
+              echo '```'
+              cat /tmp/stale-section.md
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "[Run #${RUN_NUMBER}](${RUN_URL})"
+            } > /tmp/issue-body.md
+            gh issue comment "$EXISTING" --body-file /tmp/issue-body.md
+            echo "Updated existing drift issue #$EXISTING"
+          else
+            {
+              echo "## Domain-model register drift detected"
+              echo ""
+              echo "**Stale register citations:** ${STALE}"
+              echo "**Detected:** ${TIMESTAMP}"
+              echo "**Workflow:** [Run #${RUN_NUMBER}](${RUN_URL})"
+              echo ""
+              echo "The domain-model register (\`knowledge-base/engineering/architecture/domain-model.md\`) cites a migration or symbol that no longer resolves in the source tree."
+              echo ""
+              echo "<details><summary>Stale register citations</summary>"
+              echo ""
+              echo '```'
+              cat /tmp/stale-section.md
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "## Next Steps"
+              echo ""
+              echo "1. Run \`/soleur:sync domain-model\` to re-reconcile the register against source."
+              echo "2. If a stale citation backticks a *filename* (citation-parser false positive), unbacktick it so the parser stops treating it as a symbol."
+              echo "3. Close this issue once \`stale = 0\` again."
+              echo ""
+              echo "> _Advisory:_ the analyzer's \"undocumented source facts\" count (currently ${UNDOC}) is expected-nonzero by design (the register is a curated subset — ADR-076 enforcement §1) and is **never** the trigger for this issue. Only stale citations are actionable here."
+              echo ""
+              echo "_Auto-created by the [domain-model-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-domain-model-drift.yml)._"
+            } > /tmp/issue-body.md
+            gh issue create \
+              --title "$TITLE" \
+              --label "domain-model-drift" \
+              --milestone "Post-MVP / Later" \
+              --body-file /tmp/issue-body.md
+            echo "Created new domain-model drift issue"
+          fi
+
+      # Single end-of-job heartbeat. Status is computed in the drift step:
+      #   ok   = analyzer succeeded (rc 0/1), whether or not a drift issue was
+      #          filed (issue-filing is orthogonal to liveness).
+      #   error = rc 2/3 (analyzer error / secret-refuse) OR empty-stale anomaly.
+      # A missing status output (step crashed before writing it, e.g. checkout
+      # failed) defaults to error.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-domain-model-drift
+          status: ${{ steps.drift.outputs.status || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
