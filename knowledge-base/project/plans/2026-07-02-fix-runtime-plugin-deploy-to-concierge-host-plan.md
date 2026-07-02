@@ -92,7 +92,7 @@ skills/hooks/instructions after a fix merges — the 2026-07-01 incident recurs 
 **If this leaks, the user's workflow is exposed via:** no data-leak surface. Risk is
 *availability/correctness* (a runtime fix silently not deploying), not confidentiality.
 
-**Brand-survival threshold:** single-user incident. `requires_cpo_signoff: true` — CPO sign-off required
+- **Brand-survival threshold:** single-user incident. `requires_cpo_signoff: true` — CPO sign-off required
 at plan time before `/work`; technical approach ruled by the CTO agent (Option A). `user-impact-reviewer`
 runs at review time.
 
@@ -312,8 +312,12 @@ logs:
   where: "GitHub Actions run logs; host /hooks/deploy-status JSON; app.soleur.ai/health"
   retention: "GitHub Actions default; deploy-status ephemeral host state file"
 discoverability_test:
-  command: "gh run list --workflow=web-platform-release.yml --branch main --limit 3 --json conclusion,headSha AND curl -s https://app.soleur.ai/health | jq .build_sha"
-  expected_output: "latest run conclusion=success; health build_sha == the runtime-plugin merge SHA"
+  command: curl -sf -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/health
+  expected_output: "200"
+  # Single token-safe probe (Check 10 rejects pipes/AND). Full deploy-path proof —
+  # `gh run list --workflow=web-platform-release.yml` succeeded on the runtime-plugin
+  # merge AND app.soleur.ai/health .build_sha == that merge SHA — is verified at
+  # /soleur:postmerge, not here; this probe confirms the health surface is reachable.
 ```
 
 ### Soak follow-through enrollment
