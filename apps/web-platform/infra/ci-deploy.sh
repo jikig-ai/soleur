@@ -185,6 +185,15 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/var/run/ci-deploy-sandbox-canary.json}"
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# Loaded seccomp profile hash (#5875 item 4 / ADR-079). The host seccomp profile
+# is delivered by terraform_data.docker_seccomp_config; the RUNNING container only
+# loads it at `docker run` (--security-opt seccomp=…). To let apply-deploy-pipeline-fix.yml
+# assert loaded==committed with NO SSH, ci-deploy.sh records the sha256 of the
+# profile file the prod container was JUST started with, surfaced on
+# /hooks/deploy-status by cat-deploy-state.sh (seccomp_profile_sha256). Separate
+# small state file — same pattern as SANDBOX_CANARY_STATE_FILE.
+SECCOMP_PROFILE_HOST_PATH="${SECCOMP_PROFILE_HOST_PATH:-/etc/docker/seccomp-profiles/soleur-bwrap.json}"
+SECCOMP_PROFILE_STATE_FILE="${SECCOMP_PROFILE_STATE_FILE:-/var/run/ci-deploy-seccomp-profile.json}"
 
 # -----------------------------------------------------------------------------
 # Deploy state observability (#2185)
@@ -456,6 +465,34 @@ run_faithful_sandbox_canary() {
   if [[ "$verdict" == "sandbox_broken" ]]; then
     sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" || true
   fi
+  return 0
+}
+
+# write_seccomp_profile_hash: record the sha256 of the seccomp profile the prod
+# container was JUST started with (#5875 item 4 / ADR-079). The container loads
+# the profile at `docker run --security-opt seccomp=<host file>`, so the sha256 of
+# that host file at container-start time IS the "loaded" profile hash. Surfaced on
+# /hooks/deploy-status by cat-deploy-state.sh (seccomp_profile_sha256), it lets
+# apply-deploy-pipeline-fix.yml assert loaded==committed with NO SSH — the
+# "applied ≠ loaded" gap that let a #5874-style recovery fix "apply" without ever
+# loading. Always returns 0: recording the hash must never abort a succeeded deploy.
+write_seccomp_profile_hash() {
+  local host_path="${1:-$SECCOMP_PROFILE_HOST_PATH}" sha="" tmp now
+  now="$(date +%s)"
+  # cut the leading 64-hex field from `sha256sum`; empty (→ JSON "") if the
+  # profile file is absent (e.g. a host predating docker_seccomp_config, or the
+  # test harness). The existence guard + `|| true` keep a missing file from
+  # tripping `set -euo pipefail` and aborting a SUCCEEDED deploy — this is a
+  # best-effort observability write, never a gate (mirrors write_sandbox_canary_state).
+  if [[ -f "$host_path" ]]; then
+    sha="$(sha256sum "$host_path" 2>/dev/null | cut -d' ' -f1 || true)"
+  fi
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || sha=""
+  tmp="$(mktemp "${SECCOMP_PROFILE_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  jq -nc --arg sha "$sha" --argjson ts "$now" \
+    '{seccomp_profile_sha256:$sha, loaded_at:$ts}' \
+    > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$SECCOMP_PROFILE_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
 }
 
@@ -1099,6 +1136,13 @@ case "$COMPONENT" in
         "$IMAGE:$TAG"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.
+
+        # Record the LOADED seccomp profile hash (#5875 item 4 / ADR-079). The
+        # prod container was just started with --security-opt seccomp=<host file>,
+        # so the sha256 of that file NOW is exactly what this container loaded.
+        # apply-deploy-pipeline-fix.yml asserts this == sha256(committed) with no
+        # SSH — the "applied ≠ loaded" gap closer. Best-effort; never gates.
+        write_seccomp_profile_hash
 
         # Clear the deploy lease so the new container's crons resume immediately
         # (#5669 / ADR-078). Best-effort: the substrate's TTL fail-open is the

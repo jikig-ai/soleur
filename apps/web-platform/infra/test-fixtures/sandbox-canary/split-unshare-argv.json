@@ -1,0 +1,15 @@
+{
+  "_comment": "SYNTHESIZED split-unshare bwrap SETUP argv (cq-test-fixtures-synthesized-only). This is NOT the production replay fixture — that is apps/web-platform/infra/sandbox-canary-argv.json, which stays status:uncaptured until the deferred creds-gated real capture lands (see the #5875 follow-up issue). Per ADR-079 CTO guardrail 1, the regression fixture MUST be physically distinct from the prod fixture and MUST NOT feed any deploy-time rollback decision. It mirrors the claude-agent-sdk 0.3.x split that caused #5849: bwrap --unshare-user does unshare(CLONE_NEWUSER), then a SECOND unshare(CLONE_NEWNS|CLONE_NEWPID) that lacks CLONE_NEWUSER. The committed profile (post-#5874) allows that second call; the synthesized pre-5874 profile does not (default ERRNO → EPERM). Consumed ONLY by apps/web-platform/scripts/sandbox-canary-regression.test.sh to prove would-have-caught.",
+  "status": "captured",
+  "sdkVersion": "synthesized-pre-5874-regression",
+  "bwrapSetupArgv": [
+    "--unshare-user",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--new-session",
+    "--die-with-parent",
+    "--bind", "/", "/"
+  ],
+  "prepDirs": []
+}
