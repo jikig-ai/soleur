@@ -23,6 +23,7 @@
 
 import { WebSocket, WebSocketServer } from "ws";
 import { createServer, type Server as HttpsServer } from "node:https";
+import type { IncomingMessage } from "node:http";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "./logger";
@@ -151,6 +152,26 @@ export async function proxyClientToOwner(params: {
  * native session). Never re-authenticates a token — the proxying host already did,
  * and AP-2 re-verifies the membership boundary.
  */
+/**
+ * Strip an IPv4-mapped IPv6 prefix (`::ffff:10.0.1.20` → `10.0.1.20`) so a socket
+ * peer address compares equal to the plain IPv4 the allowlist carries. Node reports
+ * `remoteAddress` in v4-mapped form on dual-stack listeners.
+ */
+export function normalizeProxyPeerAddress(addr: string | undefined | null): string {
+  if (!addr) return "";
+  return addr.startsWith("::ffff:") ? addr.slice("::ffff:".length) : addr;
+}
+
+/** Parse the comma-separated peer allowlist env into a Set of trimmed, non-empty IPs. */
+export function parseProxyPeerAllowlist(csv: string | undefined | null): Set<string> {
+  return new Set(
+    (csv ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+}
+
 export function createProxyServer(params: {
   onProxiedSession: (ws: WebSocket, ctx: ProxiedSessionContext) => void;
   port?: number;
@@ -181,11 +202,43 @@ export function createProxyServer(params: {
     );
     return null;
   }
+  // Peer-origin allowlist (3.D, CTO ruling). One-way TLS + a token-less handshake
+  // means network reachability is the only control, and Hetzner cloud firewalls do
+  // NOT filter the private net (git-data.tf:182-186) — so any 10.0.1.0/24 host,
+  // INCLUDING the deliberately-lesser-privileged git-data host, could open this port
+  // and take over any account (attachProxiedSession registers a full act-as-user
+  // session). The infra firewall cannot scope 8443; this guest-side allowlist is the
+  // load-bearing control. Fail-closed like the bind guard: TLS material present but
+  // no allowlist ⇒ refuse to start (never serve an unrestricted takeover port).
+  const peerAllowlist = parseProxyPeerAllowlist(process.env.SOLEUR_PROXY_PEER_ALLOWLIST);
+  if (peerAllowlist.size === 0) {
+    reportSilentFallback(
+      new Error(
+        "SOLEUR_PROXY_PEER_ALLOWLIST unset/empty — refusing to start the owner proxy " +
+          "listener: a token-less pre-authed session port must restrict its private-net " +
+          "source to known web-host peers (any other private-net host could take over accounts)",
+      ),
+      { feature: "control_plane_route", op: "createProxyServer.no-peer-allowlist" },
+    );
+    return null;
+  }
+
   const port = params.port ?? PROXY_LISTEN_PORT;
   const httpsServer = createServer({ key: tls.key, cert: tls.cert });
   const wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy" });
 
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    // Reject any connection whose private-net source is not a known web-host peer
+    // BEFORE the handshake — closes the git-data-host / non-web-host takeover vector.
+    const peer = normalizeProxyPeerAddress(req.socket.remoteAddress);
+    if (!peerAllowlist.has(peer)) {
+      reportSilentFallback(
+        new Error("proxy connection from a non-peer private IP — rejected before handshake"),
+        { feature: "control_plane_route", op: "createProxyServer.peer-deny", extra: { peer } },
+      );
+      safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "not a routing peer");
+      return;
+    }
     // First frame MUST be proxy_hello; anything else → reject.
     ws.once("message", async (data: unknown) => {
       let hello: ProxyHello | null = null;
