@@ -424,17 +424,31 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
-  // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key
-  // ride the operator's MAINTENANCE-WINDOW cutover apply (the volume attaches to the
-  // RUNNING git-data host; guest-side cryptsetup unlocks it at boot), NOT the #5566
-  // per-PR-CI class. Same class as hcloud_volume.git_data + the git-data doppler_secrets
-  // above. (`doppler_service_token.git_data` is the CI-published token type the test
-  // forces to be targeted — it gets a `-target` line in apply-web-platform-infra.yml,
-  // NOT this exclusion set.)
+  // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key +
+  // its scoped read-only token ALL ride the operator's MAINTENANCE-WINDOW cutover apply
+  // (the volume attaches to the RUNNING git-data host; guest-side cryptsetup unlocks it
+  // at boot), NOT the #5566 per-PR-CI class. Same class as hcloud_volume.git_data + the
+  // git-data doppler_secrets above.
+  //   `doppler_service_token.git_data` is an OPERATOR-APPLIED token exception (see
+  //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below): unlike doppler_service_token.write /
+  //   .kb_drift (whose `.key` is published into a paired github_actions_secret consumed
+  //   by CI, so #5566 forces them to be CI-targeted), this token is minted into an
+  //   operator-created `prd_git_data` Doppler config and consumed by cloud-init on the
+  //   git-data HOST. CI cannot apply it — the config does not exist until the operator
+  //   creates it (runbook precondition), and CI cannot provision the host that reads it.
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
+  "doppler_service_token.git_data",
+]);
+// Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
+// assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
+// config for host consumption (NOT published into a CI-consumed github_actions_secret),
+// so CI genuinely cannot and must not apply it. Do NOT grow this for a token that feeds
+// a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
+const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
+  "doppler_service_token.git_data",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
@@ -486,15 +500,25 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     );
   });
 
-  test("every github_actions_secret + doppler_service_token is targeted (CI-publish types, no operator-apply ambiguity)", () => {
+  test("every github_actions_secret + doppler_service_token is targeted (CI-publish types), except operator-applied host tokens", () => {
     const ciPublish = allResources.filter(
       (a) =>
         a.startsWith("github_actions_secret.") ||
         a.startsWith("doppler_service_token."),
     );
     expect(ciPublish.length).toBeGreaterThan(0); // non-vacuity
-    const uncovered = ciPublish.filter((a) => !allTargets.has(a));
+    // Operator-applied host tokens (minted into an operator-created config, consumed by
+    // cloud-init — NOT published to a CI github_actions_secret) are exempt: CI cannot
+    // apply them. Every OTHER token MUST be CI-targeted (the #5566 silent-un-applied class).
+    const uncovered = ciPublish.filter(
+      (a) => !allTargets.has(a) && !OPERATOR_APPLIED_TOKEN_EXCLUSIONS.has(a),
+    );
     expect(uncovered).toEqual([]);
+    // Non-vacuity for the carve-out: every excluded token must actually exist as a
+    // managed resource (a stale exclusion would silently permit a real miss).
+    for (const t of OPERATOR_APPLIED_TOKEN_EXCLUSIONS) {
+      expect(allResources).toContain(t);
+    }
   });
 
   test("guard FAILS on a synthetic new un-targeted resource (non-vacuity)", () => {
