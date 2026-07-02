@@ -11,6 +11,12 @@ infra/
 # FS read. Excluding the JSON file shrinks the build context by 28 lines —
 # leaving it in is harmless to the runtime image.
 !infra/github-app-manifest.json
+# Re-include the faithful sandbox canary argv fixture (#5875 / ADR-079). The
+# Dockerfile runner stage bakes it in (`COPY --from=builder
+# /app/infra/sandbox-canary-argv.json`) so ci-deploy.sh's in-container replay
+# can read it with no network; without this re-include the builder-stage
+# `COPY . .` drops it and the runner COPY fails the image build.
+!infra/sandbox-canary-argv.json
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`
@@ -19,6 +25,12 @@ scripts/
 # found), failing the prd image build. The runner stage is a separate
 # `FROM` so this re-include does NOT bloat the runtime image.
 !scripts/assert-dev-signin-eliminated.sh
+# Re-include the faithful sandbox canary payload (#5875 / ADR-079). The
+# Dockerfile runner stage bakes it in (`COPY --from=builder
+# /app/scripts/sandbox-canary.mjs`) so ci-deploy.sh can `docker exec` it inside
+# the canary container; without this re-include the builder-stage `COPY . .`
+# drops it and the runner COPY fails the image build (the #5890 release break).
+!scripts/sandbox-canary.mjs
 
 .git
 .gitignore
