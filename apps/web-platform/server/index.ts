@@ -7,7 +7,9 @@ import { createServer } from "http";
 import next from "next";
 import { parse } from "url";
 import { WebSocket } from "ws";
-import { setupWebSocket } from "./ws-handler";
+import { setupWebSocket, attachProxiedSession } from "./ws-handler";
+import { createProxyServer } from "./session-proxy";
+import { logProxyCertExpiryAtStartup } from "./proxy-tls";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -114,6 +116,26 @@ app.prepare().then(() => {
   });
 
   const wss = setupWebSocket(server);
+
+  // #5274 Phase 3 Sub-PR 3.D (ADR-068 b2) — the OWNER host's private-net TLS
+  // proxy listener. A session that lands on a non-owning web host is relayed
+  // here (session-proxy.ts) and attached as a PRE-AUTHENTICATED native session
+  // via `attachProxiedSession`. `createProxyServer` returns null in dev/
+  // single-host (no PROXY_TLS material, or SOLEUR_PROXY_BIND unset) — entirely
+  // inert, no throw. Log the long-lived cert's expiry once at startup (the only
+  // expiry signal besides the Better Stack monitor).
+  logProxyCertExpiryAtStartup();
+  const proxyServer = createProxyServer({
+    onProxiedSession: (proxiedWs, ctx) => {
+      attachProxiedSession(proxiedWs, ctx).catch((err) => {
+        reportSilentFallback(err, {
+          feature: "control_plane_route",
+          op: "proxied-attach",
+          extra: { userId: ctx.userId, workspaceId: ctx.workspaceId },
+        });
+      });
+    },
+  });
 
   // Clean up conversations left in active/waiting_for_user from before restart
   cleanupOrphanedConversations().catch((err) => {
@@ -280,6 +302,11 @@ app.prepare().then(() => {
 
     server.close();
     server.closeIdleConnections();
+
+    // #5274 3.D — stop accepting new proxied sessions from peer hosts. Inert
+    // (null) in dev/single-host. In-flight proxied sessions drain via the wss
+    // client-close loop below, same as native ones.
+    if (proxyServer) proxyServer.close();
 
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {

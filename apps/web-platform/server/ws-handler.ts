@@ -2846,13 +2846,7 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         // If user already has an open socket, close the old one
-        const existing = sessions.get(userId);
-        if (existing && existing.ws.readyState === WebSocket.OPEN) {
-          if (existing.subscriptionRefreshTimer) {
-            clearInterval(existing.subscriptionRefreshTimer);
-          }
-          existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
-        }
+        supersedeExistingUserSocket(userId);
 
         // Register session — cancel any pending disconnect grace period
         const userRowTyped = userRow as {
@@ -3041,31 +3035,7 @@ export function setupWebSocket(server: HTTPServer) {
         pendingConnections.remove(clientIp);
       }
       if (userId) {
-        const current = sessions.get(userId);
-        if (current?.ws === ws) {
-          if (current.idleTimer) clearTimeout(current.idleTimer);
-          if (current.subscriptionRefreshTimer) {
-            clearInterval(current.subscriptionRefreshTimer);
-          }
-          sessions.delete(userId);
-          // Phase 5.5: drop the workspace binding so a future reconnect
-          // re-resolves from user_session_state (handles the org-switch +
-          // reconnect sequence cleanly — see AC-FLOW3 multi-tab race coverage).
-          clearUserWorkspace(userId);
-          // Grace period: defer abort to allow reconnection
-          if (current.conversationId) {
-            const convId = current.conversationId;
-            const uid = userId;
-            const timer = setTimeout(
-              () => runDisconnectGraceAbort(uid, convId),
-              DISCONNECT_GRACE_MS,
-            );
-            timer.unref();
-            // Store timer so reconnecting user can cancel it
-            pendingDisconnects.set(`${uid}:${convId}`, timer);
-          }
-        }
-        log.info({ userId, gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
+        teardownAuthedSessionOnClose(userId, ws);
       }
     });
 
@@ -3076,4 +3046,150 @@ export function setupWebSocket(server: HTTPServer) {
   });
 
   return wss;
+}
+
+/**
+ * Close a user's existing OPEN socket before a new one supersedes it (one live
+ * socket per user). Factored out of the native connection path so the proxied
+ * attach (#5274 3.D) supersedes identically — a stale native socket and a fresh
+ * proxied attach for the same user must not both stay registered.
+ */
+function supersedeExistingUserSocket(userId: string): void {
+  const existing = sessions.get(userId);
+  if (existing && existing.ws.readyState === WebSocket.OPEN) {
+    if (existing.subscriptionRefreshTimer) {
+      clearInterval(existing.subscriptionRefreshTimer);
+    }
+    existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
+  }
+}
+
+/**
+ * Teardown for an AUTHENTICATED session whose socket closed — clears the idle +
+ * subscription timers, drops the session + workspace binding, and arms the
+ * disconnect grace-abort. Factored out of the native `ws.on("close")` so the
+ * proxied attach (#5274 3.D) tears down through the SAME path: the grace-abort is
+ * host-locality-correctness-critical (#2191 / #5240) and must never drift between
+ * the native and proxied lifecycles. Guards on `current.ws === ws` so a socket
+ * that was already superseded does not delete its successor's registration.
+ */
+function teardownAuthedSessionOnClose(userId: string, ws: WebSocket): void {
+  const current = sessions.get(userId);
+  if (current?.ws === ws) {
+    if (current.idleTimer) clearTimeout(current.idleTimer);
+    if (current.subscriptionRefreshTimer) {
+      clearInterval(current.subscriptionRefreshTimer);
+    }
+    sessions.delete(userId);
+    // Phase 5.5: drop the workspace binding so a future reconnect re-resolves
+    // from user_session_state (handles the org-switch + reconnect sequence
+    // cleanly — see AC-FLOW3 multi-tab race coverage).
+    clearUserWorkspace(userId);
+    // Grace period: defer abort to allow reconnection
+    if (current.conversationId) {
+      const convId = current.conversationId;
+      const uid = userId;
+      const timer = setTimeout(
+        () => runDisconnectGraceAbort(uid, convId),
+        DISCONNECT_GRACE_MS,
+      );
+      timer.unref();
+      // Store timer so reconnecting user can cancel it
+      pendingDisconnects.set(`${uid}:${convId}`, timer);
+    }
+  }
+  log.info({ userId, gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
+}
+
+/**
+ * Attach a PRE-AUTHENTICATED proxied session on the OWNER host (epic #5274 Phase
+ * 3 Sub-PR 3.D, ADR-068 b2). A session that lands on a non-owning web host is
+ * relayed here over one-way TLS (session-proxy.ts): the proxying host already
+ * authenticated the client and the owner's proxy listener re-verified AP-2
+ * membership before invoking this. So there is NO token re-auth, NO T&C gate, and
+ * NO placement/routing (the session is already on its owner). This mirrors the
+ * register → bind → idle → heartbeat → `auth_ok` TAIL of the native connection
+ * path for a socket that arrives already-authed, then wires message→handleMessage
+ * and close→teardown (through the SAME shared helpers as the native path).
+ *
+ * It sends only `auth_ok` — NOT a fresh-session greeting (AC8: a drain/deploy-
+ * migrated session RESUMES; it must not be greeted as a new one). Never throws to
+ * the caller in a way that escapes; the caller (server/index.ts) mirrors any
+ * rejection to Sentry.
+ */
+export async function attachProxiedSession(
+  ws: WebSocket,
+  ctx: { userId: string; workspaceId: string },
+): Promise<void> {
+  const { userId, workspaceId } = ctx;
+
+  // Supersede any existing socket for this user (mirrors the native path).
+  supersedeExistingUserSocket(userId);
+
+  // A proxied attach carries no token, so the plan/subscription caches are not
+  // read inline here — `startSubscriptionRefresh` hydrates them from the DB on
+  // its first tick. Default to the conservative free-tier cap until then so a
+  // pre-refresh `start_session` can never over-grant concurrency.
+  const session: ClientSession = {
+    ws,
+    lastActivity: Date.now(),
+    planTier: "free",
+  };
+  sessions.set(userId, session);
+  startSubscriptionRefresh(userId, session);
+
+  // Phase 5.5: bind userId → workspaceId (the owner already holds this user's
+  // worktree lease) so workspace-membership revocation SIGTERMs precisely.
+  setUserWorkspace(userId, workspaceId);
+
+  // This attach IS the reconnect — cancel any armed disconnect grace-abort so a
+  // migrated in-flight turn is not aborted out from under the resumed session.
+  for (const [key, timer] of pendingDisconnects) {
+    if (key.startsWith(`${userId}:`)) {
+      clearTimeout(timer);
+      pendingDisconnects.delete(key);
+      log.info({ key }, "Cancelled pending disconnect (proxied session attached)");
+    }
+  }
+
+  log.info({ userId, workspaceId }, "Proxied session attached (owner-side)");
+
+  resetIdleTimer(userId, session);
+
+  // Heartbeat (mirrors the native path): WS ping + touch the concurrency slot so
+  // the pg_cron sweep does not reclaim a still-live proxied session. Cleared on
+  // close. `.unref()` so it never keeps the process alive on its own.
+  const pingInterval = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.ping();
+    const current = sessions.get(userId);
+    const convId = current?.conversationId ?? current?.pending?.id;
+    if (current && convId) {
+      void touchSlot(userId, convId);
+    }
+  }, 30_000);
+  pingInterval.unref?.();
+
+  // Authenticated frames route straight to handleMessage — no auth branch (the
+  // socket arrived pre-authed).
+  ws.on("message", (data: unknown) => {
+    handleMessage(userId, String(data)).catch((err) => {
+      Sentry.captureException(err);
+      log.error({ userId, err }, "Unhandled message error");
+      sendToClient(userId, { type: "error", message: "Internal server error" });
+    });
+  });
+
+  ws.on("close", () => {
+    clearInterval(pingInterval);
+    teardownAuthedSessionOnClose(userId, ws);
+  });
+
+  ws.on("error", (err) => {
+    Sentry.captureException(err);
+    log.error({ userId, err }, "Proxied socket error");
+  });
+
+  // Resume signal — NOT a fresh greeting (AC8).
+  ws.send(JSON.stringify({ type: "auth_ok" }));
 }
