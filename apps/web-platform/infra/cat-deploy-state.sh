@@ -205,6 +205,23 @@ sandbox_canary_json() {
   fi
 }
 
+# Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for
+# the "applied ≠ loaded" gap: the sha256 of the seccomp profile the RUNNING prod
+# container actually started with (--security-opt seccomp=<file>), recorded by
+# ci-deploy.sh write_seccomp_profile_hash at container start. apply-deploy-pipeline-fix.yml
+# asserts this == sha256(committed apps/web-platform/infra/seccomp-bwrap.json)
+# after its sequenced post-apply redeploy. Emits "" when the file is absent (a
+# host predating this field, or no deploy yet). Best-effort + read-only.
+seccomp_profile_sha256_value() {
+  local f="${SECCOMP_PROFILE_STATE_FILE:-/var/run/ci-deploy-seccomp-profile.json}"
+  local sha=""
+  if [[ -f "$f" ]]; then
+    sha="$(jq -r '.seccomp_profile_sha256 // ""' "$f" 2>/dev/null || echo "")"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || sha=""
+  fi
+  printf '%s' "$sha"
+}
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
 # inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
@@ -226,6 +243,7 @@ JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
+SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -251,7 +269,8 @@ jq -nc \
   --argjson cr "$CONTAINER_RESTART" \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
-  '$base + $cr + $cd + {sandbox_canary: $sc, journald_storage: $js, services: (($base.services // {}) + {
+  --arg sps "$SECCOMP_PROFILE_SHA256" \
+  '$base + $cr + $cd + {sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
