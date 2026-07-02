@@ -47,6 +47,19 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
    does that idempotent unlock+mount at `/mnt/git-data-luks` (key fetched host-side
    via `doppler run`, piped on stdin — never argv). Do **not** expect
    `/mnt/git-data-luks` to exist before the cutover runs.
+   This maintenance-window apply is a **FULL operator apply** (not the per-PR CI
+   `-target` path), so it ALSO lands the resources the dark-launch merge-apply
+   deliberately excludes because they depend on prerequisites CI cannot create:
+   - **`doppler_service_token.git_data`** — the scoped read-only token minted into the
+     `prd_git_data` config (created as a Precondition above). It is in
+     `OPERATOR_APPLIED_TOKEN_EXCLUSIONS` (terraform-target-parity.test.ts), NOT the CI
+     `-target` set — CI cannot mint it (the config does not exist until you create it).
+   - **Multi-host DNS rewire** — to serve both hosts, convert `cloudflare_record.app`
+     (dns.tf) to `for_each = var.web_hosts` (one proxied A record per host → CF
+     round-robin) in this same apply, once `web-2` exists. It is NOT in dns.tf on
+     `main` (a per-PR `for_each` conversion is a destroy+recreate of the LIVE app
+     record with no `moved` path, and references a not-yet-existing `web-2`). Apply the
+     `for_each` edit here so the record transition and `web-2`'s creation land together.
 4. **Dry-run the cutover** — dispatch `git-data-cutover.yml` with
    `confirm=CUTOVER-GIT-DATA`, `dry_run=true`. This runs `prepare_luks_target` +
    preconditions + pass-1 rsync + the **set-identity verify** with NO freeze, NO
