@@ -63,6 +63,22 @@ reject() {
 # the namespace loop is a no-op.
 ref_lines="$(cat 2>/dev/null || true)"
 
+# --- Cutover write-freeze gate (epic #5274 Sub-PR 3.D, git-data-cutover.sh) ------
+# While the LUKS cutover holds its write-freeze, git-data-cutover.sh:acquire_freeze
+# places a sentinel at $GIT_DATA_ROOT/.cutover-freeze. Every receive-pack is DENIED
+# fail-closed while it exists, so a straggler push (an in-flight turn finishing
+# during the host drain-settle window) is rejected LOUD and retried after release —
+# NOT silently landed on the soon-to-be-stale source volume and lost at the flip.
+# This is the belt-and-suspenders half of the freeze; the authoritative half is the
+# both-hosts drain + post-drain delta-rsync/verify the cutover performs. Origin is
+# only a SUBSET of git-data, so a lost git-data-only ref is unrecoverable — hence
+# fail-closed here. Checked BEFORE any push-option parse or sidecar mutation.
+GIT_DATA_ROOT="${GIT_DATA_ROOT:-/mnt/git-data}"
+cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${GIT_DATA_ROOT}/.cutover-freeze}"
+if [ -e "$cutover_freeze" ]; then
+  reject "cutover write-freeze active ($cutover_freeze) — receive-pack denied; retry after the git-data LUKS cutover completes"
+fi
+
 # --- Parse push-options (git sets GIT_PUSH_OPTION_COUNT + GIT_PUSH_OPTION_<i>) ---
 count="${GIT_PUSH_OPTION_COUNT:-0}"
 case "$count" in (*[!0-9]*|"") count=0 ;; esac

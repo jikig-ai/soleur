@@ -25,14 +25,18 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT="${DIR}/cloud-init-git-data.yml"
 LUKS_TF="${DIR}/git-data-luks.tf"
+CUTOVER="${DIR}/git-data-cutover.sh"
+PRERECEIVE="${DIR}/git-data-pre-receive.sh"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-[ -f "$CLOUD_INIT" ] || { echo "FAIL: cloud-init-git-data.yml not found at $CLOUD_INIT" >&2; exit 1; }
-[ -f "$LUKS_TF" ]    || { echo "FAIL: git-data-luks.tf not found at $LUKS_TF" >&2; exit 1; }
+[ -f "$CLOUD_INIT" ]   || { echo "FAIL: cloud-init-git-data.yml not found at $CLOUD_INIT" >&2; exit 1; }
+[ -f "$LUKS_TF" ]      || { echo "FAIL: git-data-luks.tf not found at $LUKS_TF" >&2; exit 1; }
+[ -f "$CUTOVER" ]      || { echo "FAIL: git-data-cutover.sh not found at $CUTOVER" >&2; exit 1; }
+[ -f "$PRERECEIVE" ]   || { echo "FAIL: git-data-pre-receive.sh not found at $PRERECEIVE" >&2; exit 1; }
 
 # --- Predicates (each takes a file, echoes "1" if the property holds, else "0") ---
 
@@ -89,6 +93,63 @@ p_tf_random() {
     && grep -Eq 'name[[:space:]]*=[[:space:]]*"GIT_DATA_LUKS_KEY"' "$1"; then echo 1; else echo 0; fi
 }
 
+# --- Cutover-script predicates (GAP-1/2/3 + DI-HIGH review) -----------------
+
+# GAP-1: repoint_luks_mount exists AND re-points the mapper to the hardcoded path
+# (/dev/mapper/git-data mounted at /mnt/git-data) AND rewrites /etc/fstab.
+p_repoint() {
+  if grep -Eq '^repoint_luks_mount\(\)' "$1" \
+    && grep -Eq 'mount "\$LUKS_MAPPER" "\$OLD_ROOT"' "$1" \
+    && grep -Eq '/etc/fstab' "$1"; then echo 1; else echo 0; fi
+}
+
+# GAP-1: a canary asserts /mnt/git-data's source device is the LUKS mapper, AND the
+# DL-2 wipe is gated on it (CANARY_OK).
+p_canary_gate() {
+  if grep -Eq '^canary_luks_device\(\)' "$1" \
+    && grep -Eq 'findmnt -no SOURCE "\$OLD_ROOT"' "$1" \
+    && grep -Eq 'CANARY_OK' "$1" \
+    && grep -Eq '\[ "\$CANARY_OK" != "1" \]' "$1"; then echo 1; else echo 0; fi
+}
+
+# GAP-2: prepare_luks_target idempotently luksOpens+mounts, key via stdin --key-file -
+# (never argv), fail-loud on empty key.
+p_prepare_luks() {
+  local f="$1"
+  if grep -Eq '^prepare_luks_target\(\)' "$f" \
+    && grep -Eq 'cryptsetup luksOpen --key-file - "\$luks_dev"' "$f" \
+    && grep -Eq 'GIT_DATA_LUKS_KEY.*empty' "$f" \
+    && ! grep -Eq 'cryptsetup luks(Open|Format)[^|]*\$GIT_DATA_LUKS_KEY' "$f"; then echo 1; else echo 0; fi
+}
+
+# GAP-3: an EXIT trap auto-recovers (rollback on flip + release freeze), and a
+# ROLLBACK-only mode exists.
+p_trap_rollback() {
+  if grep -Eq 'trap cleanup EXIT' "$1" \
+    && grep -Eq 'FLIP_DONE" = "1" \].*rollback' "$1" \
+    && grep -Eq '\[ "\$ROLLBACK" = "1" \]' "$1"; then echo 1; else echo 0; fi
+}
+
+# DI-HIGH: the delta-rsync + set-identity verify that gate the flip run AFTER the
+# drain (acquire_freeze before delta_rsync before verify before flip in main()).
+# Matches the indented call-sites (which carry trailing comments), not the col-0
+# function definitions (`name() {`).
+p_postdrain_gate() {
+  local f="$1" a d v ff
+  a="$(grep -nE '^[[:space:]]+acquire_freeze([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
+  d="$(grep -nE '^[[:space:]]+delta_rsync([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
+  v="$(grep -nE '^[[:space:]]+verify_set_identity([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
+  ff="$(grep -nE '^[[:space:]]+flip_flag_and_reload([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
+  if [ -n "$a" ] && [ -n "$d" ] && [ -n "$v" ] && [ -n "$ff" ] \
+    && [ "$a" -lt "$d" ] && [ "$d" -lt "$v" ] && [ "$v" -lt "$ff" ]; then echo 1; else echo 0; fi
+}
+
+# DI-HIGH: the pre-receive hook honours the cutover freeze sentinel (fail-closed).
+p_prereceive_freeze() {
+  if grep -Eq 'cutover_freeze=' "$1" \
+    && grep -Eq 'if \[ -e "\$cutover_freeze" \]; then' "$1"; then echo 1; else echo 0; fi
+}
+
 # --- Assertion + mutation harness ---
 # assert_holds <name> <predicate-fn> <file>            -> predicate MUST be 1
 # assert_mutation <name> <predicate-fn> <file> <sed>   -> after the sed mutation the
@@ -137,10 +198,38 @@ assert_mutation "A6 doppler-run" p_doppler_run "$CLOUD_INIT" 's/doppler run/dopp
 assert_holds   "A7 tf-random-secret" p_tf_random "$LUKS_TF"
 assert_mutation "A7 tf-random-secret" p_tf_random "$LUKS_TF" 's/random_password/static_password/g'
 
+# A8 (GAP-1): repoint_luks_mount re-points the mapper to the hardcoded path.
+assert_holds    "A8 repoint-mount" p_repoint "$CUTOVER"
+assert_mutation "A8 repoint-mount" p_repoint "$CUTOVER" 's#mount "\$LUKS_MAPPER" "\$OLD_ROOT"#mount "\$LUKS_MAPPER" "\$FRESH_ROOT"#'
+
+# A9 (GAP-1): canary asserts the LUKS device AND gates the wipe on CANARY_OK.
+assert_holds    "A9 canary-gate" p_canary_gate "$CUTOVER"
+assert_mutation "A9 canary-gate" p_canary_gate "$CUTOVER" 's/CANARY_OK/CANARY_NOPE/g'
+
+# A10 (GAP-2): prepare_luks_target unlocks via stdin --key-file -, key never argv.
+assert_holds    "A10 prepare-luks" p_prepare_luks "$CUTOVER"
+assert_mutation "A10 prepare-luks" p_prepare_luks "$CUTOVER" \
+  's#cryptsetup luksOpen --key-file - "\$luks_dev" git-data#cryptsetup luksOpen "\$GIT_DATA_LUKS_KEY" "\$luks_dev" git-data#'
+
+# A11 (GAP-3): EXIT-trap auto-rollback + ROLLBACK-only mode.
+assert_holds    "A11 trap-rollback" p_trap_rollback "$CUTOVER"
+assert_mutation "A11 trap-rollback" p_trap_rollback "$CUTOVER" 's/trap cleanup EXIT/trap - EXIT/'
+
+# A12 (DI-HIGH): the flip-gating rsync+verify run AFTER the drain (main() order).
+assert_holds    "A12 postdrain-gate" p_postdrain_gate "$CUTOVER"
+# Mutation: neutralize the drain call-site so the ordered gate can no longer be
+# proven (models the pre-fix "verify races live writers" arrangement) → flips to 0.
+assert_mutation "A12 postdrain-gate" p_postdrain_gate "$CUTOVER" \
+  's/^([[:space:]]+)acquire_freeze([[:space:]])/\1XdrainX\2/'
+
+# A13 (DI-HIGH): the pre-receive hook denies receive-pack while the freeze sentinel exists.
+assert_holds    "A13 prereceive-freeze" p_prereceive_freeze "$PRERECEIVE"
+assert_mutation "A13 prereceive-freeze" p_prereceive_freeze "$PRERECEIVE" 's/cutover_freeze=/cutover_nofreeze=/g'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 14 ]; then
-  echo "FAIL: ran only ${total} assertions (<14) — suite did not execute fully" >&2
+if [ "$total" -lt 26 ]; then
+  echo "FAIL: ran only ${total} assertions (<26) — suite did not execute fully" >&2
   exit 1
 fi
 

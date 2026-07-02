@@ -44,7 +44,12 @@ on:
         type: boolean
         default: true
       confirm_wipe:
-        description: "If true AND flip healthy: secure-wipe the old plaintext volume (DL-2). Leave false until post-soak."
+        description: "If true AND canary-confirmed: decommission the old plaintext volume (DL-2). Leave false until post-soak."
+        required: false
+        type: boolean
+        default: false
+      rollback:
+        description: "Recovery: flip the flag OFF + reload both hosts + release any freeze. Use if a cutover left prod unhealthy."
         required: false
         type: boolean
         default: false
@@ -103,7 +108,8 @@ jobs:
       # exports the ssh invocation into the environment; the cutover script reads
       # it via GIT_DATA_SSH / WEB_HOST_SSH and holds no key material itself.
       - name: CF Tunnel SSH bridge
-        if: ${{ !inputs.dry_run }}
+        # Needed for any host-touching run: a real cutover OR a rollback recovery.
+        if: ${{ !inputs.dry_run || inputs.rollback }}
         uses: ./.github/actions/cf-tunnel-ssh-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}
@@ -120,6 +126,7 @@ jobs:
           DOPPLER_TOKEN_WRITE: ${{ secrets.DOPPLER_TOKEN_WRITE }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           CONFIRM_WIPE: ${{ inputs.confirm_wipe && '1' || '0' }}
+          ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
         # The read path (preconditions) uses DOPPLER_TOKEN; the flip uses
         # DOPPLER_TOKEN_WRITE. The script's set_flag/read_flag call `doppler` with
         # an explicit -p/-c; we bind the write token for the process so the flip

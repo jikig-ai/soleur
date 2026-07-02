@@ -26,31 +26,51 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
 2. **CI deploys** the container to BOTH hosts (AC5) — verify the deploy workflow
    run is green.
 3. **Maintenance-window `terraform apply`** (`apply-web-platform-infra.yml`):
-   provisions the fresh **LUKS** git-data volume, `luksOpen`s + mounts it at its
-   target, and re-points the git-data mount. The `placement_group` attach on the
-   running host forces a power-off → **this reboots `web-1`**, hence the
-   maintenance window. Confirm `0 to destroy` on the plan.
+   provisions + **attaches** the fresh **LUKS** git-data block volume. The
+   `placement_group` attach on the running host forces a power-off → **this reboots
+   `web-1`**, hence the maintenance window. Confirm `0 to destroy` on the plan.
+   NOTE: terraform only *attaches* the volume — cloud-init runs **only on first
+   boot**, so on the already-running git-data host it does **not** `luksFormat`/
+   `luksOpen`/mount the new volume. The cutover script's `prepare_luks_target` step
+   does that idempotent unlock+mount at `/mnt/git-data-luks` (key fetched host-side
+   via `doppler run`, piped on stdin — never argv). Do **not** expect
+   `/mnt/git-data-luks` to exist before the cutover runs.
 4. **Dry-run the cutover** — dispatch `git-data-cutover.yml` with
-   `confirm=CUTOVER-GIT-DATA`, `dry_run=true`. This runs preconditions + both
-   rsync passes' shape + the **set-identity verify** with NO freeze, NO flip, NO
-   wipe. Confirm the set-identity verify reports `OK` for every repo.
+   `confirm=CUTOVER-GIT-DATA`, `dry_run=true`. This runs `prepare_luks_target` +
+   preconditions + pass-1 rsync + the **set-identity verify** with NO freeze, NO
+   flip, NO re-point, NO wipe. Confirm the set-identity verify reports `OK` for
+   every repo.
 5. **Real cutover** — dispatch `git-data-cutover.yml` with
    `confirm=CUTOVER-GIT-DATA`, `dry_run=false`, `confirm_wipe=false`. The script:
-   - pass-1 bulk rsync (writers live) → pass-2 delta rsync under a **write-freeze**
-     (freeze sentinel the pre-receive fence honours; receive-pack fail-closed-rejects
-     while held);
-   - **set-identity verify** (`git for-each-ref` diff empty **AND**
-     `git rev-list --all | sort | sha256sum` equal on old and fresh, per repo) —
-     aborts with the freeze left releasable on any mismatch;
-   - **coordinated cross-host flip**: drain both hosts together → write
-     `GIT_DATA_STORE_ENABLED=true` once → reload both containers → un-drain (no
-     turn straddles the non-atomic Doppler propagation);
-   - release the freeze.
+   - `prepare_luks_target`: idempotent `luksOpen` + mount at `/mnt/git-data-luks`;
+   - pass-1 bulk rsync (writers live);
+   - **write-freeze**: drain **both** web hosts (the authoritative freeze — the
+     writers are the web hosts' per-turn `replicateToGitData`) + drop the freeze
+     sentinel (`git-data-pre-receive.sh` now denies receive-pack while it exists,
+     so a straggler push is rejected loud, not lost);
+   - pass-2 **delta rsync under the drain** (a genuinely quiesced source) →
+     **set-identity verify** (`git for-each-ref` diff empty **AND** `git rev-list
+     --all | sort | sha256sum` equal, per repo) — the ONLY verify that gates the
+     flip, and it runs post-drain so it never races a live writer;
+   - **`repoint_luks_mount`**: umount the LUKS staging + old plaintext mounts, mount
+     `/dev/mapper/git-data` **at `/mnt/git-data`** and rewrite `/etc/fstab`, so every
+     hardcoded wrapper/symlink/`hooksPath` becomes LUKS-backed with zero path
+     changes (the GA flag alone does NOT change host mount topology);
+   - **coordinated flip**: write `GIT_DATA_STORE_ENABLED=true` once → reload both
+     (drained) containers → release the freeze / un-drain;
+   - **canary**: assert a fresh write under `/mnt/git-data` is backed by
+     `/dev/mapper/git-data` — this gates the DL-2 wipe.
+   On any mid-flip failure the script auto-rolls-back (flag off) and always releases
+   the freeze (un-drains). A stale-mount abort leaves the wipe gated.
 6. **Verify set-identity + health from observability** (below).
 7. **Enroll the soak follow-through** (below) — this gates GA close.
-8. **Old-volume wipe (DL-2)** — only AFTER the soak confirms health, re-dispatch
-   with `confirm_wipe=true` (or run the wipe step), then detach/destroy the old
+8. **Old-volume decommission (DL-2)** — only AFTER the soak confirms health AND the
+   canary passed, re-dispatch with `confirm_wipe=true`. The old plaintext volume is
+   already unmounted by the re-point; secure-wipe + detach/destroy the old
    `hcloud_volume` via terraform so the decommissioned disk carries no plaintext.
+   Do **not** wipe the **FRESH** volume — it is now live. After a *rollback*, do not
+   wipe **either** volume until git-data-only post-flip writes are reconciled (see
+   Rollback).
 
 ## Verification (observability layer — NO SSH)
 
@@ -73,15 +93,23 @@ If any is unhealthy, run **Rollback**.
 
 ## Rollback
 
-Flag off + re-drain (the cutover script's rollback path, or dispatch a flag-off):
-set `GIT_DATA_STORE_ENABLED=false` in Doppler `prd` and reload both containers.
+Dispatch `git-data-cutover.yml` with `confirm=CUTOVER-GIT-DATA`, `rollback=true`
+(or, if the run is still in progress, the script's EXIT trap auto-rolls-back a
+mid-flip failure). Rollback sets `GIT_DATA_STORE_ENABLED=false` in Doppler `prd`,
+reloads both containers, and releases any held freeze (un-drains both hosts).
 
-**GitHub-rehydration dependency (state explicitly):** post-flip git-data writes
-made *after* the flip are LOST by rollback. This is acceptable ONLY because every
-ref the app pushes to git-data is ALSO pushed to GitHub `origin`
-(`ensure-workspace-repo.ts` retains `origin`→GitHub, ADR-068 §1). On rollback the
-next turn re-clones/re-pushes from origin, so no user work is permanently lost. If
-origin retention were ever removed, this rollback would become lossy.
+**Backstop — do NOT assume GitHub `origin` holds everything (it does not).**
+`replicateToGitData` force-pushes **all** refs to git-data, whereas the app's
+`syncPush` only auto-commits `knowledge-base/**` and reroutes protected pushes to a
+PR branch — so **`origin` is a strict SUBSET of git-data**. On rollback the flag is
+OFF, so `replicateToGitData` no-ops and the app reverts to its local-clone +
+origin baseline. The real backstops for any **git-data-only** post-flip writes are
+(a) each web host's **local worktree clone** and (b) the **FRESH LUKS volume**,
+which physically retains every post-flip write.
+
+**WARNING:** after a rollback, do **not** run the DL-2 wipe of the FRESH LUKS
+volume until those git-data-only post-flip writes are reconciled — `origin` does
+not hold them, so wiping FRESH would permanently lose them.
 
 ## Soak follow-through (gates GA close)
 
