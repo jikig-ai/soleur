@@ -137,10 +137,20 @@ export async function provisionGitDataRepo(workspaceId: string): Promise<void> {
  * host-local working tree — closing the DL-1 bare-repo erasure gap.
  */
 export async function removeGitDataRepo(workspaceId: string): Promise<void> {
-  if (!isGitDataStoreEnabled()) return;
   assertSafeWorkspaceId(workspaceId);
+  // NOT gated on isGitDataStoreEnabled() (data-integrity review LOW): a bare repo
+  // provisioned during a flag-ON window PERSISTS on the git-data host after a
+  // rollback flips the flag OFF (dual-existence). Gating erasure on the LIVE flag
+  // would silently strand that user's PII — an Art. 17 gap in exactly the
+  // rollback/cutover window this epic introduces. Gate instead on whether the
+  // REMOVE key is configured: absent ⇒ this env never had git-data (nothing to
+  // erase, skip silently — no Sentry noise on every delete in a non-git-data env);
+  // present ⇒ the store is (or was) in play, so attempt the erase regardless of the
+  // flag. The host-side wrapper is idempotent — a remove of a non-existent repo is
+  // a no-op — so an over-eager call is harmless.
+  const removeKey = process.env.GIT_REMOVE_SSH_PRIVATE_KEY?.trim();
+  if (!removeKey) return;
   const host = resolveGitDataSshHost();
-  const removeKey = requireEnvKey("GIT_REMOVE_SSH_PRIVATE_KEY");
   await sshWithPrivateKeyAuth(host, workspaceId, removeKey, { timeout: 30_000 });
 }
 

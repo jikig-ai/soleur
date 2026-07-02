@@ -153,13 +153,19 @@ describe("replicateToGitData — gated on", () => {
 describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)", () => {
   beforeEach(() => vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "remove-key"));
 
-  it("gated OFF: issues NO ssh to the git-data host", async () => {
-    vi.stubEnv("GIT_DATA_STORE_ENABLED", "");
+  it("flag OFF but REMOVE key present (rollback/dual-existence window): STILL erases (Art. 17, not gated on the live flag)", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", ""); // flag off (post-rollback)
     await removeGitDataRepo(WS);
-    expect(sshProvision).not.toHaveBeenCalled();
+    // A repo provisioned during a flag-on window must still be erasable after a
+    // rollback flips the flag off — erasure keys on the REMOVE key, not the flag.
+    expect(sshProvision).toHaveBeenCalledTimes(1);
+    const [host, remoteCmd, key] = sshProvision.mock.calls[0] as [string, string, string, unknown];
+    expect(host).toBe("10.0.1.20");
+    expect(remoteCmd).toBe(WS);
+    expect(key).toBe("remove-key");
   });
 
-  it("gated ON: dials the git-data host with the REMOVE key (not provision/transport) + the workspaceId as SSH_ORIGINAL_COMMAND", async () => {
+  it("flag ON: dials the git-data host with the REMOVE key (not provision/transport) + the workspaceId as SSH_ORIGINAL_COMMAND", async () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     await removeGitDataRepo(WS);
     expect(sshProvision).toHaveBeenCalledTimes(1);
@@ -169,10 +175,10 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
     expect(key).toBe("remove-key"); // the dedicated GIT_REMOVE_SSH_PRIVATE_KEY authority
   });
 
-  it("gated ON but REMOVE key unset: FAILS LOUD (refuses to guess)", async () => {
+  it("no REMOVE key configured (env never had git-data): skips silently — no ssh, no throw (avoids Sentry noise)", async () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "");
-    await expect(removeGitDataRepo(WS)).rejects.toThrow(/GIT_REMOVE_SSH_PRIVATE_KEY/);
+    await expect(removeGitDataRepo(WS)).resolves.toBeUndefined();
     expect(sshProvision).not.toHaveBeenCalled();
   });
 
