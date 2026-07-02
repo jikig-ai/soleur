@@ -21,7 +21,7 @@ import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
 import { reportSilentFallback } from "./observability";
-import { WORKTREE_ID_PRIMARY } from "./worktree-write-lease";
+import { assertSafeWorktreeId } from "./worktree-write-lease";
 
 const log = createChildLogger("git-data-replication");
 
@@ -172,40 +172,62 @@ export function ensureGitDataRemote(
 export async function replicateToGitData(params: {
   workspacePath: string;
   workspaceId: string;
+  /**
+   * The PER-USER worktree id (ADR-068 D0 amendment) that owns this push's ref
+   * namespace + fence generation stream. Each user pushes ONLY to
+   * `refs/soleur/worktrees/<worktreeId>/…`, so `--force` never clobbers a peer
+   * user's commits under a 2nd writer. Required — a missing/hardcoded worktree
+   * id would re-pin the workspace to one fence stream (Sharp Edge).
+   */
+  worktreeId: string;
   leaseGeneration: number;
   userId?: string;
 }): Promise<void> {
   if (!isGitDataStoreEnabled()) return;
-  const { workspacePath, workspaceId, leaseGeneration, userId } = params;
+  const { workspacePath, workspaceId, worktreeId, leaseGeneration, userId } = params;
   assertSafeWorkspaceId(workspaceId);
+  assertSafeWorktreeId(worktreeId);
 
   try {
     await provisionGitDataRepo(workspaceId);
     ensureGitDataRemote(workspacePath, workspaceId);
 
     const transportKey = requireEnvKey("GIT_TRANSPORT_SSH_PRIVATE_KEY");
-    // The git-data store is a REPLICA of the workspace's branch + tag refs — force
-    // so a non-fast-forward on the shared store never blocks replication; the
-    // fence's monotonic gen (NOT ref ancestry) is the ordering authority.
-    // BOTH refspecs are carried so a local-only tag (never pushed to GitHub origin,
-    // so uncovered by GitHub rehydration) still reaches the durable replica — the
-    // ref-completeness the cutover's ref-set-equality check depends on (#5817 review
-    // F1). NOT `--mirror`: deletes/prune are PR C cutover scope, not the transport's.
-    // Push-options ride THIS push only, never origin/syncPush.
+    // PER-USER NAMESPACED REFSPEC (ADR-068 D0-ref, epic #5274 Phase 3). Heads +
+    // tags land under `refs/soleur/worktrees/<worktreeId>/` — this worktree is the
+    // SOLE writer of its namespace, so `--force` never clobbers a PEER user's
+    // commits under a 2nd writer (the pre-#3.B `refs/heads/*:refs/heads/*` --force
+    // was safe only at replicas=1; under a 2nd writer it silently overwrote one
+    // user's commits — the per-worktree fence guards monotonicity WITHIN a gen
+    // stream, not last-writer-wins ACROSS streams). Cross-user visibility is
+    // `git fetch <peer namespace>`; GitHub `origin/main` stays canonical
+    // (rehydration intact). The git-data host's pre-receive enforces that
+    // worktree-id=W may only write `refs/soleur/worktrees/W/` (namespace ownership).
+    //
+    // --force so a non-fast-forward WITHIN the user's own namespace never blocks
+    // replication; the fence's monotonic gen (NOT ref ancestry) is the ordering
+    // authority. Both heads + tags are carried so a local-only tag (never pushed
+    // to GitHub origin, so uncovered by GitHub rehydration) still reaches the
+    // durable replica — the ref-completeness the cutover's ref-set-equality check
+    // depends on (#5817 review F1). NOT `--mirror`. Push-options ride THIS push
+    // only, never origin/syncPush.
     await gitWithPrivateKeyAuth(
       [
         "push",
         "--force",
         "git-data",
-        "refs/heads/*:refs/heads/*",
-        "refs/tags/*:refs/tags/*",
+        `refs/heads/*:refs/soleur/worktrees/${worktreeId}/heads/*`,
+        `refs/tags/*:refs/soleur/worktrees/${worktreeId}/tags/*`,
         `--push-option=lease-gen=${leaseGeneration}`,
-        `--push-option=worktree-id=${WORKTREE_ID_PRIMARY}`,
+        `--push-option=worktree-id=${worktreeId}`,
       ],
       transportKey,
       { cwd: workspacePath, timeout: 60_000 },
     );
-    log.info({ workspaceId, leaseGeneration }, "git-data replication push complete");
+    log.info(
+      { workspaceId, worktreeId, leaseGeneration },
+      "git-data replication push complete",
+    );
   } catch (err) {
     reportSilentFallback(err, {
       feature: "worktree_lease",

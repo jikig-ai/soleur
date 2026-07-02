@@ -40,6 +40,25 @@ run_hook() {
   echo $?
 }
 
+# Like run_hook, but pipes newline-separated `<old> <new> <ref>` lines on stdin
+# (the D0-ref namespace-ownership check reads them). Fourth arg is the ref block.
+run_hook_refs() {
+  local git_dir="$1" lease_gen="$2" worktree_id="$3" refs="$4"
+  local -a env_args=()
+  local count=0
+  if [ "$lease_gen" != "__OMIT__" ]; then
+    env_args+=("GIT_PUSH_OPTION_${count}=lease-gen=${lease_gen}")
+    count=$((count + 1))
+  fi
+  if [ "$worktree_id" != "__OMIT__" ]; then
+    env_args+=("GIT_PUSH_OPTION_${count}=worktree-id=${worktree_id}")
+    count=$((count + 1))
+  fi
+  printf '%s\n' "$refs" | env -i PATH="$PATH" GIT_DIR="$git_dir" \
+    GIT_PUSH_OPTION_COUNT="$count" "${env_args[@]}" bash "$HOOK" >/dev/null 2>&1
+  echo $?
+}
+
 # Read the sidecar gen for a worktree id (echoes "" if absent).
 sidecar_gen() {
   local git_dir="$1" wt="$2"
@@ -127,6 +146,36 @@ if [ "$rc" = "0" ]; then pass; else fail "T10 per-worktree isolation: wt-a gen=4
 if [ "$(sidecar_gen "$g" wt-a)" = "4" ] && [ "$(sidecar_gen "$g" wt-b)" = "9" ]; then pass; else fail "T10 sidecars: wt-a='$(sidecar_gen "$g" wt-a)' wt-b='$(sidecar_gen "$g" wt-b)' (expected 4 / 9)"; fi
 rm -rf "$g"
 
+# --- T11 (D0 namespace-ownership): worktree W writing ITS OWN namespace -> accept ---
+g=$(fresh_gitdir)
+rc=$(run_hook_refs "$g" 1 wt-a $'0000 1111 refs/soleur/worktrees/wt-a/heads/main\n0000 2222 refs/soleur/worktrees/wt-a/tags/v1')
+if [ "$rc" = "0" ]; then pass; else fail "T11 in-namespace push (wt-a → refs/soleur/worktrees/wt-a/*): expected accept (0), got $rc"; fi
+rm -rf "$g"
+
+# --- T12 (D0 namespace-ownership): worktree W writing the CANONICAL refs/heads/* -> REJECTED ---
+g=$(fresh_gitdir)
+rc=$(run_hook_refs "$g" 1 wt-a $'0000 1111 refs/heads/main')
+if [ "$rc" = "1" ]; then pass; else fail "T12 out-of-namespace push (wt-a → refs/heads/main, the pre-3.B clobbering refspec): expected reject (1), got $rc"; fi
+# The rejected push must not have advanced wt-a's sidecar.
+if [ "$(sidecar_gen "$g" wt-a)" = "" ]; then pass; else fail "T12 sidecar must be unwritten after namespace reject, got '$(sidecar_gen "$g" wt-a)'"; fi
+rm -rf "$g"
+
+# --- T13 (D0 namespace-ownership, the cross-tenant-write boundary): worktree W
+#     writing a PEER worktree's namespace -> REJECTED (a compromised/buggy writer
+#     cannot clobber another user even sharing the cluster-wide transport key). ---
+g=$(fresh_gitdir)
+rc=$(run_hook_refs "$g" 1 wt-a $'0000 1111 refs/soleur/worktrees/wt-b/heads/main')
+if [ "$rc" = "1" ]; then pass; else fail "T13 peer-namespace push (wt-a → refs/soleur/worktrees/wt-b/*): expected reject (1), got $rc"; fi
+rm -rf "$g"
+
+# --- T14 (non-vacuity for the namespace check): a MIXED push (one in-namespace ref
+#     + one peer-namespace ref) is rejected WHOLE — proves the loop inspects every
+#     ref, not just the first. ---
+g=$(fresh_gitdir)
+rc=$(run_hook_refs "$g" 1 wt-a $'0000 1111 refs/soleur/worktrees/wt-a/heads/main\n0000 2222 refs/soleur/worktrees/wt-b/heads/main')
+if [ "$rc" = "1" ]; then pass; else fail "T14 mixed in+peer namespace push: expected reject (1), got $rc"; fi
+rm -rf "$g"
+
 # --- Verify-the-verifier (non-vacuity guard): a hook that ALWAYS exits 0 must fail
 #     the stale-reject assertion T3 — proves the suite distinguishes fence-present
 #     from fence-absent, not just that the real hook happens to pass. ---
@@ -142,8 +191,8 @@ rm -rf "$g" "$stub"
 # --- Minimum-cardinality guard: if zero assertions ran, the suite is malformed
 #     (a silent set-e abort / empty loop would otherwise exit 0 with no coverage). ---
 total=$((passes + fails))
-if [ "$total" -lt 17 ]; then
-  echo "FAIL: ran only ${total} assertions (<17) — suite did not execute fully" >&2
+if [ "$total" -lt 22 ]; then
+  echo "FAIL: ran only ${total} assertions (<22) — suite did not execute fully" >&2
   exit 1
 fi
 
