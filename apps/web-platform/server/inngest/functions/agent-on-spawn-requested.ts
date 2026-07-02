@@ -43,7 +43,7 @@ import { reportSilentFallback } from "@/server/observability";
 import { runWithByokLease } from "@/server/byok-lease";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
-import { notifyOfflineUser } from "@/server/notifications";
+import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import {
   LEADER_MAX_TURNS,
@@ -355,6 +355,10 @@ export async function agentOnSpawnRequestedHandler({
     };
   });
   if (pauseState.pausedAt) {
+    // No cost-breaker notification here (F3): the founder was already paged by
+    // the byok_cap_exceeded breach that SET the pause; the Today card renders
+    // this run_paused halt + a Resume button, so re-paging every subsequent
+    // blocked spawn would be a notification storm from the guard itself.
     return persistFailure(step, {
       actionSendId,
       reason: "run_paused",
@@ -364,11 +368,6 @@ export async function agentOnSpawnRequestedHandler({
       actionClass,
       sourceRef,
       logger,
-      notify: {
-        whichWindow: "spawn",
-        cumulativeCents: null,
-        ceilingCents: pauseState.capCents,
-      },
     });
   }
 
@@ -991,18 +990,6 @@ function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
   return "anthropic_timeout";
 }
 
-// The failure reasons that warrant an operator cost-breaker notification.
-// A curated subset of FailureReason — cost/turn-cap/pause halts the founder
-// needs to know about. NEVER cancelled_by_operator (operator-initiated) and
-// never the infra/GitHub reasons (surfaced on the Today card, not paged).
-const COST_BREAKER_NOTIFY_REASONS: ReadonlySet<FailureReason> = new Set([
-  "cost_ceiling_exceeded",
-  "byok_cap_exceeded",
-  "leader_max_turns_exceeded",
-  "cap_check_unavailable",
-  "run_paused",
-] as const);
-
 async function persistFailure(
   step: HandlerArgs["step"],
   args: {
@@ -1040,27 +1027,28 @@ async function persistFailure(
     },
   });
 
-  // Single notification site (AC3). Fire-and-forget, BEFORE the action_sends
-  // UPDATE — mirroring the Sentry-mirror-first ordering above. A send failure
-  // is swallowed by notifyOfflineUser (which mirrors its own failures to
-  // Sentry), so it can never mask the terminal state write. The `reason IN
-  // subset` guard means cancelled_by_operator and the infra reasons never
-  // page the founder even if a caller passes a `notify` context by mistake.
-  if (args.notify && COST_BREAKER_NOTIFY_REASONS.has(reason)) {
-    void notifyOfflineUser(args.founderId, {
-      type: "cost_breaker_tripped",
-      reason: reason as
-        | "cost_ceiling_exceeded"
-        | "byok_cap_exceeded"
-        | "leader_max_turns_exceeded"
-        | "cap_check_unavailable"
-        | "run_paused",
-      which_window: args.notify.whichWindow,
-      context: {
-        cumulativeCents: args.notify.cumulativeCents,
-        ceilingCents: args.notify.ceilingCents,
-      },
-    });
+  // Single notification site (AC3), BEFORE the action_sends UPDATE — mirroring
+  // the Sentry-mirror-first ordering above. Wrapped in its OWN memoized
+  // step.run so Inngest fires it EXACTLY ONCE across function replays/retries
+  // (a raw side-effect here re-executes on every replay → duplicate founder
+  // pages) AND awaits completion so the push/email isn't torn down at a later
+  // step boundary. `notifyOfflineUser` never throws (it mirrors its own send
+  // failures to Sentry via op=notify-cost-breaker), so the step always
+  // succeeds and can never mask the terminal state write. `isCostBreakerReason`
+  // means cancelled_by_operator / run_paused / infra reasons never page.
+  const notify = args.notify;
+  if (notify && isCostBreakerReason(reason)) {
+    await step.run("notify-cost-breaker", () =>
+      notifyOfflineUser(args.founderId, {
+        type: "cost_breaker_tripped",
+        reason,
+        which_window: notify.whichWindow,
+        context: {
+          cumulativeCents: notify.cumulativeCents,
+          ceilingCents: notify.ceilingCents,
+        },
+      }),
+    );
   }
 
   try {

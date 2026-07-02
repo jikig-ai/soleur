@@ -483,7 +483,7 @@ describe("notifications", () => {
       expect(call.subject).toMatch(/spending cap|stopped/i);
     });
 
-    test("run_paused carries no false dollar figure and says nothing ran", async () => {
+    test("leader_max_turns_exceeded carries no fabricated dollar figure", async () => {
       mockSendNotification.mockResolvedValue({});
       mockFrom.mockReturnValue({ update: () => ({ in: () => ({ error: null }) }) });
       const subscriptions = [
@@ -492,18 +492,18 @@ describe("notifications", () => {
 
       await sendPushNotifications(subscriptions, {
         type: "cost_breaker_tripped",
-        reason: "run_paused",
+        reason: "leader_max_turns_exceeded",
         which_window: "spawn",
         context: { cumulativeCents: null, ceilingCents: null },
       });
 
       const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
-      // No fabricated dollar amount when we have no figure.
+      // No fabricated dollar amount when we have no figure (turn-count halt).
       expect(body.body).not.toMatch(/\$\d/);
-      expect(body.body).toMatch(/paused/i);
+      expect(body.body).not.toMatch(/completed|finished successfully/i);
     });
 
-    test("cap_check_unavailable does not claim the budget was exceeded", async () => {
+    test("cap_check_unavailable does not claim the budget was exceeded or paused", async () => {
       mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
 
       await sendEmailNotification("founder@example.com", {
@@ -516,6 +516,9 @@ describe("notifications", () => {
       const call = mockResendSend.mock.calls[0][0];
       // A transient DB error must NOT read as "you overspent".
       expect(call.html).not.toMatch(/exceeded your|over your (limit|cap|budget)/i);
+      // Nor as "paused" — cap_check_unavailable sets no runtime_paused_at and
+      // renders no Resume affordance (F6: don't send the founder hunting).
+      expect(call.html).not.toMatch(/paused/i);
       // Apostrophes are HTML-entity-escaped at the sink (couldn&#39;t).
       expect(call.html).toMatch(/couldn(&#39;|')t (verify|check)/i);
     });

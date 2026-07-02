@@ -162,8 +162,18 @@ const notifyOfflineUserSpy = vi.fn(async (userId: string, payload: unknown) => {
     ).length,
   });
 });
+// Include isCostBreakerReason — the handler now imports it for the fire-guard.
+// A wholesale factory that omitted it would make the guard call `undefined()`.
+const COST_BREAKER_NOTIFY_REASONS_FIXTURE = [
+  "cost_ceiling_exceeded",
+  "byok_cap_exceeded",
+  "leader_max_turns_exceeded",
+  "cap_check_unavailable",
+];
 vi.mock("@/server/notifications", () => ({
   notifyOfflineUser: notifyOfflineUserSpy,
+  isCostBreakerReason: (r: string) =>
+    COST_BREAKER_NOTIFY_REASONS_FIXTURE.includes(r),
 }));
 
 // Inngest stub.
@@ -509,6 +519,10 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
       failureReason: "cost_ceiling_exceeded",
     });
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
+    // Notifies against the per-spawn window with honest amount-vs-ceiling.
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0].payload.reason).toBe("cost_ceiling_exceeded");
+    expect(notifyCalls[0].payload.which_window).toBe("spawn");
   });
 
   it("AC10 cancelled_by_operator: cancellation_requested_at NOT NULL → short-circuit", async () => {
@@ -574,6 +588,10 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
       failureReason: "cap_check_unavailable",
     });
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
+    // Still notifies (honest "couldn't verify" copy), tagged to the 1h window.
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0].payload.reason).toBe("cap_check_unavailable");
+    expect(notifyCalls[0].payload.which_window).toBe("cap-1h");
   });
 
   it("AC3 notify: byok_cap_exceeded fires cost_breaker_tripped BEFORE the action_sends UPDATE", async () => {
@@ -595,7 +613,10 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(notifyCalls[0].actionSendsUpdatesBefore).toBe(0);
   });
 
-  it("AC3 notify: run_paused notifies with which_window=spawn and no fabricated cents", async () => {
+  it("AC3 notify: run_paused does NOT notify (avoids a paged-every-blocked-spawn storm)", async () => {
+    // The founder was already paged by the byok_cap_exceeded breach that set
+    // the pause; the Today card surfaces this blocked spawn + Resume. Re-paging
+    // every subsequent paused spawn would be a storm from the guard itself.
     usersSelectResult = {
       data: {
         runtime_paused_at: "2026-07-01T09:00:00Z",
@@ -606,18 +627,13 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     const { agentOnSpawnRequestedHandler } = await import(
       "@/server/inngest/functions/agent-on-spawn-requested"
     );
-    await agentOnSpawnRequestedHandler({
+    const result = await agentOnSpawnRequestedHandler({
       event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
       step: makeStep(),
       logger,
     });
-    expect(notifyCalls).toHaveLength(1);
-    expect(notifyCalls[0].payload.reason).toBe("run_paused");
-    expect(notifyCalls[0].payload.which_window).toBe("spawn");
-    const ctx = notifyCalls[0].payload.context as {
-      cumulativeCents: number | null;
-    };
-    expect(ctx.cumulativeCents).toBeNull();
+    expect(result).toEqual({ acknowledged: false, failureReason: "run_paused" });
+    expect(notifyOfflineUserSpy).not.toHaveBeenCalled();
   });
 
   it("AC3 notify: cancelled_by_operator NEVER notifies (operator-initiated stops are not surprises)", async () => {

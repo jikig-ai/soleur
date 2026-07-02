@@ -87,27 +87,42 @@ export interface EmailTriageNotificationPayload {
 }
 
 /**
- * Cost-breaker halt notification (feat-l5-runaway-guard PR-A). Sent when a
- * run is stopped by a spending/turn guard OR blocked because the founder's
- * account is paused. TR5: payload is minimized to cost aggregates + the
- * terminal reason — no prompt/response content, no PII beyond the founder's
- * own account id (the recipient). All fields are server-generated (enum +
- * numbers), so nothing here is attacker-controlled.
+ * The failure reasons that warrant an operator cost-breaker notification —
+ * the SINGLE SOURCE OF TRUTH the handler's fire-guard, the payload union, and
+ * the copy switch all derive from (no forced `as` cast, no triplicated list).
+ *
+ * `run_paused` is deliberately EXCLUDED: the cap-breach `byok_cap_exceeded`
+ * notification already tells the founder they entered pause, and the Today
+ * card renders the paused halt + Resume on every subsequent blocked spawn —
+ * re-paging each blocked spawn would be a notification storm from the guard
+ * itself (feat-l5-runaway-guard #5767 set-only-flag learning). NEVER
+ * cancelled_by_operator (operator-initiated stops are not surprises).
+ */
+export const COST_BREAKER_NOTIFY_REASONS = [
+  "cost_ceiling_exceeded",
+  "byok_cap_exceeded",
+  "leader_max_turns_exceeded",
+  "cap_check_unavailable",
+] as const;
+
+export type CostBreakerReason = (typeof COST_BREAKER_NOTIFY_REASONS)[number];
+
+/** Runtime narrowing from the broad FailureReason string to the notify subset. */
+export function isCostBreakerReason(reason: string): reason is CostBreakerReason {
+  return (COST_BREAKER_NOTIFY_REASONS as readonly string[]).includes(reason);
+}
+
+/**
+ * Cost-breaker halt notification (feat-l5-runaway-guard PR-A). Sent when a run
+ * is stopped by a spending/turn guard. TR5: payload is minimized to cost
+ * aggregates + the terminal reason — no prompt/response content, no PII beyond
+ * the founder's own account id (the recipient). All fields are server-generated
+ * (enum + numbers), so nothing here is attacker-controlled.
  */
 export interface CostBreakerNotificationPayload {
   type: "cost_breaker_tripped";
-  /**
-   * The terminal failure reason that tripped the halt. A curated subset of
-   * the leader-loop FailureReason union — only the cost / turn-cap / pause
-   * reasons that warrant an operator alert. NEVER cancelled_by_operator
-   * (operator-initiated stops are not surprises).
-   */
-  reason:
-    | "cost_ceiling_exceeded"
-    | "byok_cap_exceeded"
-    | "leader_max_turns_exceeded"
-    | "cap_check_unavailable"
-    | "run_paused";
+  /** The terminal failure reason that tripped the halt (notify subset). */
+  reason: CostBreakerReason;
   /**
    * Which enforcement window tripped (P2-G): the per-spawn cost ceiling /
    * turn cap ("spawn") or the rolling 1-hour BYOK cap ("cap-1h"). Drives
@@ -132,22 +147,29 @@ export type NotificationPayload =
   | CostBreakerNotificationPayload;
 
 /**
- * Statutory email-triage pings must not fail silently: the catches in
- * notifyOfflineUser log without capturing (Layer 2's pino hook only
- * captures Error-instance `err` fields), so a missed statutory ping would
- * reach no one while an Art. 12 clock runs. Explicit mirror — necessary,
- * not redundant (cq-silent-fallback-must-mirror-to-sentry). No-op for
- * review_gate and non-statutory payloads (existing behavior preserved).
+ * Notifications that must not fail silently: the catches in notifyOfflineUser
+ * log without capturing (Layer 2's pino hook only captures Error-instance
+ * `err` fields), so a missed send would reach no one. Explicit Sentry mirror —
+ * necessary, not redundant (cq-silent-fallback-must-mirror-to-sentry):
+ *   - statutory email-triage: a missed ping runs an Art. 12 clock unattended.
+ *   - cost_breaker_tripped: a missed halt notification IS the exact "a halt
+ *     with no notice" failure this feature exists to prevent (#5767); the plan
+ *     Observability block pages on `op=notify-cost-breaker`.
+ * No-op for review_gate and non-statutory email_triage (existing behavior).
  */
-function mirrorStatutoryNotifyFailure(
-  payload: NotificationPayload,
-  err: unknown,
-): void {
-  if (payload.type !== "email_triage" || !payload.isStatutory) return;
+function mirrorNotifyFailure(payload: NotificationPayload, err: unknown): void {
+  const isCostBreaker = payload.type === "cost_breaker_tripped";
+  const isStatutoryTriage =
+    payload.type === "email_triage" && payload.isStatutory;
+  if (!isCostBreaker && !isStatutoryTriage) return;
   try {
     Sentry.captureException(
       err instanceof Error ? err : new Error(String(err)),
-      { tags: { feature: "email-triage", op: "statutory-notify-failed" } },
+      {
+        tags: isCostBreaker
+          ? { feature: "cost-breaker", op: "notify-cost-breaker" }
+          : { feature: "email-triage", op: "statutory-notify-failed" },
+      },
     );
   } catch {
     // Observability must never become a second failure.
@@ -230,7 +252,7 @@ export async function notifyOfflineUser(
 
     if (error) {
       log.error({ userId, err: error.message }, "Failed to query push subscriptions");
-      mirrorStatutoryNotifyFailure(payload, error.message);
+      mirrorNotifyFailure(payload, error.message);
       return;
     }
 
@@ -241,14 +263,14 @@ export async function notifyOfflineUser(
       const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
       if (userError || !userData?.user?.email) {
         log.error({ userId, err: userError?.message }, "Failed to look up user email for notification");
-        mirrorStatutoryNotifyFailure(payload, userError?.message ?? "user email missing");
+        mirrorNotifyFailure(payload, userError?.message ?? "user email missing");
         return;
       }
       await sendEmailNotification(userData.user.email, payload);
     }
   } catch (err) {
     log.error({ userId, err }, "notifyOfflineUser failed");
-    mirrorStatutoryNotifyFailure(payload, err);
+    mirrorNotifyFailure(payload, err);
   }
 }
 
@@ -294,18 +316,13 @@ function costBreakerCopy(payload: CostBreakerNotificationPayload): CostBreakerCo
         : "";
 
   switch (payload.reason) {
-    case "run_paused":
-      return {
-        heading: "Run blocked — your account is paused",
-        body:
-          "Your account is paused because a spending cap was reached earlier. " +
-          "Nothing ran and no credits were spent on this attempt. Clear the " +
-          "pause to start a fresh run.",
-        subject: "Your Soleur run was blocked — account paused",
-      };
     case "cap_check_unavailable":
       return {
-        heading: "Run paused — we couldn't verify your budget",
+        // NOT "paused" — cap_check_unavailable writes no runtime_paused_at and
+        // renders no Resume affordance; "stopped" matches the sibling
+        // failure-reason-copy + Today-card surfaces (avoids sending the
+        // founder hunting for a Resume button that isn't there).
+        heading: "Run stopped — we couldn't verify your budget",
         body:
           "We couldn't check your spending against your cap because of a " +
           "temporary system issue, so the run was stopped as a precaution. " +
@@ -522,7 +539,7 @@ async function sendEmailTriageEmailNotification(
 
   if (error) {
     log.error({ email, emailId: payload.emailId, err: error }, "Failed to send triage email notification");
-    mirrorStatutoryNotifyFailure(payload, error);
+    mirrorNotifyFailure(payload, error);
   } else {
     log.info({ email, emailId: payload.emailId }, "Triage email notification sent");
   }
@@ -549,8 +566,15 @@ async function sendCostBreakerEmailNotification(
     html: renderBrandedNotificationEmail({
       heading: escapeHtml(copy.heading),
       bodyHtml: escapeHtml(copy.body),
+      // CTA reflects the actual recovery path: only byok_cap_exceeded leaves
+      // the account paused (Resume renders); a failed cap-check is transient
+      // (try again); the per-spawn/turn-cap halts just land on the dashboard.
       ctaLabel:
-        payload.reason === "run_paused" ? "Clear pause & resume" : "Review & resume",
+        payload.reason === "byok_cap_exceeded"
+          ? "Clear pause & resume"
+          : payload.reason === "cap_check_unavailable"
+            ? "Try again"
+            : "Review run",
       deepLink,
       footnoteHtml:
         "You received this because a spending safeguard stopped one of your Soleur runs.",
@@ -559,6 +583,9 @@ async function sendCostBreakerEmailNotification(
 
   if (error) {
     log.error({ email, reason: payload.reason, err: error }, "Failed to send cost-breaker email notification");
+    // A missed halt notification is the exact failure this feature prevents —
+    // mirror to Sentry (op=notify-cost-breaker) so it never fails silently.
+    mirrorNotifyFailure(payload, error);
   } else {
     log.info({ email, reason: payload.reason }, "Cost-breaker email notification sent");
   }
