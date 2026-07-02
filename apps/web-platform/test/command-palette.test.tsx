@@ -453,8 +453,10 @@ describe("CommandPalette — Super/Meta accelerators (⌘D/⌘I/⌘R/⌘A/⌘C)"
   it("is inert when focus is in an editable element (native ⌘D preserved)", () => {
     renderPalette();
     const input = screen.getByTestId("outside-input");
-    pressKeyEvent("d", { meta: true, target: input });
+    const ev = pressKeyEvent("d", { meta: true, target: input });
     expect(routerPush).not.toHaveBeenCalled();
+    // Native action (browser bookmark) survives in an input — we did not preventDefault.
+    expect(ev.defaultPrevented).toBe(false);
   });
 
   it("is inert while an app modal (role=dialog aria-modal) is open", () => {
