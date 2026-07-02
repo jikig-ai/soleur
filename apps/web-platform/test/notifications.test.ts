@@ -437,4 +437,87 @@ describe("notifications", () => {
       expect(mockCaptureException).not.toHaveBeenCalled();
     });
   });
+
+  // cost_breaker_tripped variant (feat-l5-runaway-guard PR-A). Honest,
+  // dollar-denominated halt notification. AC4: dollars (not tokens),
+  // amount-vs-ceiling, which_window, never implies the run completed.
+  describe("cost_breaker_tripped variant", () => {
+    const costPayload = {
+      type: "cost_breaker_tripped" as const,
+      reason: "byok_cap_exceeded" as const,
+      which_window: "cap-1h" as const,
+      context: { cumulativeCents: 2014, ceilingCents: 2000 },
+    };
+
+    test("push body carries dollars, window, and never implies completion", async () => {
+      mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({ update: () => ({ in: () => ({ error: null }) }) });
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "k", auth: "a" },
+      ];
+
+      await sendPushNotifications(subscriptions, costPayload);
+
+      const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
+      // Dollars, not tokens.
+      expect(body.body).toContain("$20.14");
+      expect(body.body).toContain("$20.00");
+      expect(body.body).not.toMatch(/token/i);
+      // Never implies the run finished.
+      expect(body.body).not.toMatch(/completed|finished successfully|shipped/i);
+      expect(body.body).toContain("no pull request");
+      // Deep link routes to the halt banner surface.
+      expect(body.data.url).toContain("/dashboard");
+    });
+
+    test("email carries amount-vs-ceiling and an honest subject", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("founder@example.com", costPayload);
+
+      const call = mockResendSend.mock.calls[0][0];
+      expect(call.to).toContain("founder@example.com");
+      expect(call.html).toContain("$20.14");
+      expect(call.html).toContain("$20.00");
+      expect(call.html).not.toMatch(/completed|finished successfully/i);
+      expect(call.subject).toMatch(/spending cap|stopped/i);
+    });
+
+    test("run_paused carries no false dollar figure and says nothing ran", async () => {
+      mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({ update: () => ({ in: () => ({ error: null }) }) });
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "k", auth: "a" },
+      ];
+
+      await sendPushNotifications(subscriptions, {
+        type: "cost_breaker_tripped",
+        reason: "run_paused",
+        which_window: "spawn",
+        context: { cumulativeCents: null, ceilingCents: null },
+      });
+
+      const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
+      // No fabricated dollar amount when we have no figure.
+      expect(body.body).not.toMatch(/\$\d/);
+      expect(body.body).toMatch(/paused/i);
+    });
+
+    test("cap_check_unavailable does not claim the budget was exceeded", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("founder@example.com", {
+        type: "cost_breaker_tripped",
+        reason: "cap_check_unavailable",
+        which_window: "cap-1h",
+        context: { cumulativeCents: null, ceilingCents: null },
+      });
+
+      const call = mockResendSend.mock.calls[0][0];
+      // A transient DB error must NOT read as "you overspent".
+      expect(call.html).not.toMatch(/exceeded your|over your (limit|cap|budget)/i);
+      // Apostrophes are HTML-entity-escaped at the sink (couldn&#39;t).
+      expect(call.html).toMatch(/couldn(&#39;|')t (verify|check)/i);
+    });
+  });
 });
