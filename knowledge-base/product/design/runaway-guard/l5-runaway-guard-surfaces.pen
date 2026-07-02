@@ -1,0 +1,1899 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "efDHt",
+      "x": 0,
+      "y": 0,
+      "name": "01 Pre-Run Cost Estimate",
+      "width": 900,
+      "fill": "$--bg",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "u0rzt",
+          "name": "cap",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "text",
+              "id": "QsAJi",
+              "fill": "$--gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "PRE-RUN COST ESTIMATE",
+              "fontFamily": "$--mono",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "sVFeZ",
+              "fill": "$--text-2",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Informational panel shown at every autonomous run kickoff. Not a blocking gate — estimate only, dollars not tokens.",
+              "lineHeight": 1.5,
+              "fontFamily": "$--font",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "X8OWO",
+          "name": "Run kickoff panel",
+          "width": "fill_container",
+          "fill": "$--surface",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "KHz2V",
+              "name": "hdr",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "wsrop",
+                  "name": "htxt",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Nd4KK",
+                      "fill": "$--text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Fix signup validation bug",
+                      "fontFamily": "$--font",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "I28nH",
+                      "fill": "$--text-3",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Autonomous run · about 20–30 steps",
+                      "fontFamily": "$--font",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "q54NR",
+                  "name": "chip",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-strong"
+                  },
+                  "padding": [
+                    5,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "REiAz",
+                      "fill": "$--gold",
+                      "content": "Engineering",
+                      "fontFamily": "$--mono",
+                      "fontSize": 11,
+                      "fontWeight": "600",
+                      "letterSpacing": 1
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "7skc3",
+              "name": "well",
+              "width": "fill_container",
+              "fill": "$--surface-2",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--border"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "T68UP",
+                  "fill": "$--text-2",
+                  "content": "ESTIMATED COST",
+                  "fontFamily": "$--mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "text",
+                  "id": "Wk8eT",
+                  "fill": "$--text",
+                  "content": "~$0.60 – $1.10",
+                  "fontFamily": "$--font",
+                  "fontSize": 34,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "cuKfW",
+                  "fill": "$--text-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Runs on your Anthropic credits (BYOK). This is an estimate, not a limit — your run won't be blocked.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$--font",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "Alyea",
+                  "name": "aff",
+                  "gap": 6,
+                  "padding": [
+                    6,
+                    0,
+                    0,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "tg1yK",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "chevron-down",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--gold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "kclT4",
+                      "fill": "$--gold",
+                      "content": "What affects this?",
+                      "fontFamily": "$--font",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WTnr3",
+              "name": "what-affects expanded",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                4,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Yn2P7",
+                  "fill": "$--text-3",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Estimates are based on the task's size and how many files it touches, how many steps the run plans, and current Claude API prices. You'll see the actual cost climb live while the run works.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$--font",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "4Pstg",
+              "name": "div",
+              "width": "fill_container",
+              "height": 1,
+              "fill": "$--border"
+            },
+            {
+              "type": "frame",
+              "id": "GzR4J",
+              "name": "act",
+              "width": "fill_container",
+              "gap": 12,
+              "justifyContent": "end",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "0X4a5",
+                  "name": "cancel",
+                  "padding": [
+                    10,
+                    18
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "a5od9",
+                      "fill": "$--text-2",
+                      "content": "Cancel",
+                      "fontFamily": "$--font",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "34PrT",
+                  "name": "start",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 135,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "$--gold-start",
+                        "position": 0
+                      },
+                      {
+                        "color": "$--gold-end",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    10,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NHZ5p",
+                      "fill": "$--ink",
+                      "content": "Start run",
+                      "fontFamily": "$--font",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "xfjGQ",
+      "x": 1020,
+      "y": 0,
+      "name": "02 HITL Spend-Approval Modal",
+      "width": 900,
+      "fill": "$--bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "m6LAn",
+          "name": "cap2",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            40,
+            40,
+            0,
+            40
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "dbI5Y",
+              "fill": "$--gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "HITL SPEND-APPROVAL MODAL",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "xG8hr",
+              "fill": "$--text-2",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "OFF by default. Appears only for routines the founder explicitly arms as high-cost. Blocks the run until Approve or Cancel.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "4sSTk",
+          "name": "Dimmed backdrop",
+          "width": "fill_container",
+          "height": 640,
+          "fill": "#050505",
+          "layout": "vertical",
+          "padding": 40,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "SQsOx",
+              "name": "Spend-approval modal",
+              "width": 480,
+              "fill": "$--surface",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--border"
+              },
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#000000B0",
+                "offset": {
+                  "x": 0,
+                  "y": 24
+                },
+                "blur": 60
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "auBqX",
+                  "name": "top",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Jaw55",
+                      "name": "badge",
+                      "fill": "#241E10",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#4A3D1C"
+                      },
+                      "gap": 6,
+                      "padding": [
+                        5,
+                        10
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "ERHDY",
+                          "width": 13,
+                          "height": 13,
+                          "iconFontName": "shield-alert",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--gold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "jSCjX",
+                          "fill": "$--gold",
+                          "content": "HIGH-COST ROUTINE",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "BCNvZ",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--text-3"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "frNlk",
+                  "fill": "$--text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Approve this run's spending?",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "ox7ZB",
+                  "fill": "$--text-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "You armed “Nightly Full-Site Refresh” as a high-cost routine, so Soleur checks with you before it starts.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "dA8ql",
+                  "name": "brk",
+                  "width": "fill_container",
+                  "fill": "$--surface-2",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "layout": "vertical",
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "N3SNZ",
+                      "name": "r1",
+                      "width": "fill_container",
+                      "padding": [
+                        10,
+                        0
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "VuIHf",
+                          "fill": "$--text-2",
+                          "content": "Estimated cost",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Bd6CX",
+                          "fill": "$--text",
+                          "content": "~$8 – $14",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "3b88p",
+                      "name": "rdiv",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$--border"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Rz8sz",
+                      "name": "r2",
+                      "width": "fill_container",
+                      "padding": [
+                        10,
+                        0
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "srOdY",
+                          "name": "r2l",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 2,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Zucvg",
+                              "fill": "$--text-2",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Spending ceiling",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "hGMOk",
+                              "fill": "$--text-3",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Soleur halts the run if it reaches this",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "1Wq0h",
+                          "fill": "$--gold",
+                          "content": "$25.00",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "oShvi",
+                  "fill": "$--text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "This run may spend up to $25.00 of your own Anthropic credits before the safety limit stops it.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "Vglf1",
+                  "name": "act2",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "padding": [
+                    4,
+                    0,
+                    0,
+                    0
+                  ],
+                  "justifyContent": "end",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "rxFcP",
+                      "name": "cancel2",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--border-strong"
+                      },
+                      "padding": [
+                        11,
+                        18
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "4ITof",
+                          "fill": "$--text",
+                          "content": "Cancel",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "0c2uM",
+                      "name": "appr",
+                      "fill": {
+                        "type": "gradient",
+                        "gradientType": "linear",
+                        "enabled": true,
+                        "rotation": 135,
+                        "size": {
+                          "height": 1
+                        },
+                        "colors": [
+                          {
+                            "color": "$--gold-start",
+                            "position": 0
+                          },
+                          {
+                            "color": "$--gold-end",
+                            "position": 1
+                          }
+                        ]
+                      },
+                      "gap": 8,
+                      "padding": [
+                        11,
+                        20
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "XB5dT",
+                          "fill": "$--ink",
+                          "content": "Approve & start",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Rtgs7",
+                  "name": "foot",
+                  "width": "fill_container",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "R0HgZ",
+                      "width": 12,
+                      "height": 12,
+                      "iconFontName": "settings",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--text-3"
+                    },
+                    {
+                      "type": "text",
+                      "id": "fFOHh",
+                      "fill": "$--text-3",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Turn off approval for this routine in Settings → Spending.",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "CZtFU",
+      "x": 2040,
+      "y": 0,
+      "name": "03a Halt Banner — Cost Ceiling",
+      "width": 1200,
+      "fill": "$--bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "6mUgM",
+          "name": "cap3",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            40,
+            40,
+            24,
+            40
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "8fuIG",
+              "fill": "$--gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "BREAKER-TRIPPED HALT — IN-PRODUCT BANNER (COST CEILING)",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "ymEVp",
+              "fill": "$--text-2",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Pushed over WebSocket when the founder is online. Same message as the email. Persistent — no dismiss; clears only on Resume or Abandon.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "N9wN3",
+          "name": "App context",
+          "width": "fill_container",
+          "height": 520,
+          "fill": "$--bg",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "6VrrQ",
+              "name": "bar",
+              "width": "fill_container",
+              "height": 52,
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border"
+              },
+              "padding": [
+                0,
+                20
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "g3dUm",
+                  "fill": "$--gold",
+                  "content": "S O L E U R",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500",
+                  "letterSpacing": 3
+                },
+                {
+                  "type": "text",
+                  "id": "0GwpW",
+                  "fill": "$--text-3",
+                  "content": "Engineering · run paused",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "1qk9L",
+              "name": "Halt banner",
+              "width": "fill_container",
+              "fill": "#1A1210",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1,
+                  "left": 3
+                },
+                "fill": "$--danger"
+              },
+              "gap": 16,
+              "padding": [
+                16,
+                20
+              ],
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Uhx7U",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "octagon-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "$--danger"
+                },
+                {
+                  "type": "frame",
+                  "id": "sk67h",
+                  "name": "mid",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "u3Uin",
+                      "fill": "$--text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Run stopped — you hit your cost ceiling",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Ckwdi",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Your Engineering run reached your $20.00 rolling 24-hour spending limit (it got to $20.14 of your own Anthropic credits). It stopped partway through: the signup form was updated, but tests never ran and nothing shipped — no pull request was opened.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "JC7MC",
+                      "name": "meta",
+                      "gap": 8,
+                      "padding": [
+                        2,
+                        0,
+                        0,
+                        0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "wJhYr",
+                          "fill": "$--danger",
+                          "content": "$20.14 spent",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "YRQo9",
+                          "fill": "$--text-3",
+                          "content": "of $20.00 · rolling 24h limit",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rF1Xj",
+                  "name": "acts",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "alignItems": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "4Lo3b",
+                      "name": "resume",
+                      "fill": {
+                        "type": "gradient",
+                        "gradientType": "linear",
+                        "enabled": true,
+                        "rotation": 135,
+                        "size": {
+                          "height": 1
+                        },
+                        "colors": [
+                          {
+                            "color": "$--gold-start",
+                            "position": 0
+                          },
+                          {
+                            "color": "$--gold-end",
+                            "position": 1
+                          }
+                        ]
+                      },
+                      "gap": 6,
+                      "padding": [
+                        10,
+                        18
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "dOLW4",
+                          "fill": "$--ink",
+                          "content": "Raise limit & resume",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "LzVD9",
+                      "name": "abandon",
+                      "padding": [
+                        6,
+                        4
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "TY7B0",
+                          "fill": "$--text-2",
+                          "content": "Leave it stopped",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TevNp",
+              "name": "paused transcript",
+              "opacity": 0.55,
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "eQH22",
+                  "name": "s1",
+                  "width": 640,
+                  "fill": "$--surface",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "42TDJ",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Step 41 · Editing signup-form.tsx",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ppJFZ",
+                      "fill": "$--text-3",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Added email-format validation to the signup form.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "TcoVm",
+                  "name": "s2",
+                  "width": 560,
+                  "fill": "$--surface",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "WVAkO",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Step 42 · Running test suite…",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "gbs7C",
+                      "fill": "$--text-3",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Interrupted — spending limit reached before tests finished.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XlIbS",
+                  "name": "pill",
+                  "fill": "$--surface-2",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-strong"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zwvjE",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "pause",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--text-2"
+                    },
+                    {
+                      "type": "text",
+                      "id": "R2oUD",
+                      "fill": "$--text-2",
+                      "content": "Run paused — waiting for you",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "r5zcJ",
+      "x": 3360,
+      "y": 0,
+      "name": "03b Halt Banner — Doom Loop",
+      "width": 1200,
+      "fill": "$--bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "x9dbw",
+          "name": "cap4",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            40,
+            40,
+            24,
+            40
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "8Bj1g",
+              "fill": "$--gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "BREAKER-TRIPPED HALT — IN-PRODUCT BANNER (DOOM LOOP)",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "XRR0V",
+              "fill": "$--text-2",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Same banner, second stop reason: the run kept repeating the same edit with no progress. Plain language — no “doom loop” jargon shown to the founder.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "kXCbb",
+          "name": "App context",
+          "width": "fill_container",
+          "height": 520,
+          "fill": "$--bg",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "0615s",
+              "name": "bar4",
+              "width": "fill_container",
+              "height": 52,
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border"
+              },
+              "padding": [
+                0,
+                20
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "inXt1",
+                  "fill": "$--gold",
+                  "content": "S O L E U R",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500",
+                  "letterSpacing": 3
+                },
+                {
+                  "type": "text",
+                  "id": "pwfwW",
+                  "fill": "$--text-3",
+                  "content": "Engineering · run paused",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "XAjWm",
+              "name": "Halt banner",
+              "width": "fill_container",
+              "fill": "#1A1210",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1,
+                  "left": 3
+                },
+                "fill": "$--danger"
+              },
+              "gap": 16,
+              "padding": [
+                16,
+                20
+              ],
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "fsHAI",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "repeat",
+                  "iconFontFamily": "lucide",
+                  "fill": "$--danger"
+                },
+                {
+                  "type": "frame",
+                  "id": "9ppUH",
+                  "name": "mid4",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "2u7QI",
+                      "fill": "$--text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Run stopped — it kept repeating itself with no progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "EnWHq",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Your Engineering run kept making the same change to checkout.ts over and over without moving forward. Soleur stopped it so it wouldn't keep spending on a run that was stuck. Nothing shipped — no pull request was opened.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "jkEsN",
+                      "name": "meta4",
+                      "gap": 8,
+                      "padding": [
+                        2,
+                        0,
+                        0,
+                        0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "K4LUy",
+                          "fill": "$--text-2",
+                          "content": "$6.30 spent",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "tQQHr",
+                          "fill": "$--text-3",
+                          "content": "of $20.00 · repeated the same edit 12×",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "BbZ5T",
+                  "name": "acts4",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "alignItems": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "91bKW",
+                      "name": "resume4",
+                      "fill": {
+                        "type": "gradient",
+                        "gradientType": "linear",
+                        "enabled": true,
+                        "rotation": 135,
+                        "size": {
+                          "height": 1
+                        },
+                        "colors": [
+                          {
+                            "color": "$--gold-start",
+                            "position": 0
+                          },
+                          {
+                            "color": "$--gold-end",
+                            "position": 1
+                          }
+                        ]
+                      },
+                      "gap": 6,
+                      "padding": [
+                        10,
+                        18
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Us0Ch",
+                          "fill": "$--ink",
+                          "content": "Resume with a fresh approach",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "7u5I1",
+                      "name": "abandon4",
+                      "padding": [
+                        6,
+                        4
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "O6w5Z",
+                          "fill": "$--text-2",
+                          "content": "Leave it stopped",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "H2yih",
+              "name": "looping transcript",
+              "opacity": 0.55,
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "35cef",
+                  "name": "l1",
+                  "width": 560,
+                  "fill": "$--surface",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "gap": 10,
+                  "padding": 14,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "QXQwZ",
+                      "fill": "$--text-3",
+                      "content": "Step 28",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "oXYT7",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Editing checkout.ts — same 6 lines",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "nO6FH",
+                  "name": "l2",
+                  "width": 560,
+                  "fill": "$--surface",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "gap": 10,
+                  "padding": 14,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Wjvva",
+                      "fill": "$--text-3",
+                      "content": "Step 29",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "O1yhO",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Editing checkout.ts — same 6 lines",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Wu2ml",
+                  "name": "l3",
+                  "width": 560,
+                  "fill": "$--surface",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "gap": 10,
+                  "padding": 14,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "c8bKB",
+                      "fill": "$--text-3",
+                      "content": "Step 30",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "7DOGu",
+                      "fill": "$--text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Editing checkout.ts — same 6 lines",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "s95N0",
+                  "fill": "$--text-3",
+                  "content": "⋮  no change in the file after each edit",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "7hR9r",
+                  "name": "pill4",
+                  "fill": "$--surface-2",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-strong"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "XKTVt",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "pause",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--text-2"
+                    },
+                    {
+                      "type": "text",
+                      "id": "FMHub",
+                      "fill": "$--text-2",
+                      "content": "Run paused — waiting for you",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "9FSMR",
+      "x": 4680,
+      "y": 0,
+      "name": "03c Halt Email — Transactional",
+      "width": 640,
+      "fill": "#F2F2F2",
+      "layout": "vertical",
+      "padding": 40,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "cbSoI",
+          "name": "cap5",
+          "width": 480,
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            0,
+            0,
+            20,
+            0
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "Qdh2k",
+              "fill": "#9C7A2E",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "BREAKER-TRIPPED HALT — TRANSACTIONAL EMAIL",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "RMOAB",
+              "fill": "#5C5043",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Sent when the founder is offline. Same message as the banner. Uses renderBrandedNotificationEmail() — 480px card, gold CTA, Forge ink.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "9rBnA",
+          "name": "email header",
+          "width": 480,
+          "fill": "#FFFFFF",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#E4E4E4"
+          },
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            14,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "fyGLH",
+              "name": "fr",
+              "width": "fill_container",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "uZAr4",
+                  "fill": "#9a9a9a",
+                  "content": "From",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "Ux5FG",
+                  "fill": "#4a4a4a",
+                  "content": "Soleur <notifications@soleur.ai>",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "dRnc9",
+              "fill": "#1a1a1a",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Subject: Your Engineering run stopped early",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Vq2K4",
+          "name": "branded email body",
+          "width": 480,
+          "fill": "#FFFFFF",
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "color": "#00000022",
+            "offset": {
+              "x": 0,
+              "y": 8
+            },
+            "blur": 24
+          },
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "PTMIO",
+              "fill": "#1a1a1a",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Your Engineering run stopped early",
+              "lineHeight": 1.3,
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "aTrJu",
+              "fill": "#4a4a4a",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Soleur stopped your Engineering run because it reached your spending limit. It used $20.14 of your $20.00 rolling 24-hour limit — these are your own Anthropic credits.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "50ZS2",
+              "fill": "#4a4a4a",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "The run did not finish. It updated your signup form, but it did not run the tests and did not ship anything — no pull request was opened.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "U9S8t",
+              "name": "ctaRow",
+              "width": "fill_container",
+              "padding": [
+                8,
+                0
+              ],
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ruzsF",
+                  "name": "cta",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 135,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    12,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "eVLQY",
+                      "fill": "#1A1612",
+                      "content": "Review & resume run",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "wSBiu",
+              "fill": "#9a9a9a",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "You can raise your limit and pick the run back up, or leave it stopped. You're receiving this because a spending guard tripped on your account. Manage your limits in Settings → Spending.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "--bg": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "--surface": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "--surface-2": {
+      "type": "color",
+      "value": "#1C1C1C"
+    },
+    "--border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "--border-strong": {
+      "type": "color",
+      "value": "#3A3A3A"
+    },
+    "--gold": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "--gold-start": {
+      "type": "color",
+      "value": "#D4B36A"
+    },
+    "--gold-end": {
+      "type": "color",
+      "value": "#B8923E"
+    },
+    "--ink": {
+      "type": "color",
+      "value": "#1A1612"
+    },
+    "--text": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "--text-2": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "--text-3": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "--danger": {
+      "type": "color",
+      "value": "#E5675C"
+    },
+    "--danger-dim": {
+      "type": "color",
+      "value": "#3A1E1C"
+    },
+    "--success": {
+      "type": "color",
+      "value": "#3FB950"
+    },
+    "--font": {
+      "type": "string",
+      "value": "Inter"
+    },
+    "--mono": {
+      "type": "string",
+      "value": "JetBrains Mono"
+    }
+  }
+}

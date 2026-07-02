@@ -107,7 +107,13 @@ describe("installation-id source-of-truth sentinel", () => {
     // the SERVER-DERIVED founderId — never a client-supplied id.
     expect(fnSrc).toMatch(/resolveInstallationIdForWorkspace\s*\(/);
     expect(fnSrc).toMatch(/resolveInstallationIdForWorkspace\s*\(\s*founderId\b/);
-    // And it no longer reads the install credential from the users table inline.
-    expect(fnSrc).not.toMatch(/from\(["']users["']\)/);
+    // And it no longer reads the install CREDENTIAL (github_installation_id)
+    // from the users table inline. Narrowed from a blanket `from("users")` ban
+    // to the credential-read pattern: feat-l5-runaway-guard's spawn-entry
+    // pause gate legitimately reads users.runtime_paused_at (keyed on the
+    // server-derived founderId), which is unrelated to install routing.
+    expect(fnSrc).not.toMatch(
+      /from\(["']users["']\)[\s\S]{0,160}github_installation_id/,
+    );
   });
 });

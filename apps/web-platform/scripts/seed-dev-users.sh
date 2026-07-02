@@ -91,7 +91,7 @@ header_json="Content-Type: application/json"
 # TC_VERSION must match `lib/legal/tc-version.ts`. If that file's literal
 # changes, bump this string too — middleware redirects to /accept-terms
 # when the user's tc_accepted_version doesn't match the literal.
-TC_VERSION="2.3.0"
+TC_VERSION="2.4.0"
 
 # Look up an existing user by email via the admin endpoint's per-email
 # filter (avoids the >100-users pagination bug in the previous shape that
