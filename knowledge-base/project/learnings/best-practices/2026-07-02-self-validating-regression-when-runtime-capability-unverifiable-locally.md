@@ -49,6 +49,16 @@ runtime** layer:
    analysis might be wrong on this runner" from a silent false-negative into an
    explicit skip-or-clear-fail.
 
+   **Two refinements the first CI run forced (session error #7):** (a) the runtime
+   probe must exercise ONLY the gated syscall — the seccomp `unshare()` gate fires from
+   `--unshare-user --unshare-pid` BEFORE any mount, so the synthesized argv must carry
+   NO `--proc`/`--dev` mounts (those EPERM for container-cap reasons unrelated to the
+   gate, and a naive classifier misreads that mount-EPERM as "the profile is broken").
+   (b) classify on the DIFFERENCE between the two profiles, not an absolute verdict: a
+   committed-baseline failure is ALWAYS an env limitation → SKIP; the only hard FAIL is
+   "no discrimination" (both profiles allow the gated syscall). An absolute "committed
+   EPERM ⇒ profile broken" rule conflates the env-setup failure with the gate signal.
+
 The deterministic layer + the lockfile-parity/bump-detection gate remain the blocking
 guards; the runtime layer is the higher-fidelity confirmation where the env supports it.
 
@@ -116,3 +126,17 @@ Cross-refs: `2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`;
 6. **Pre-existing/env failures (one-off, no action):** 2 `missing doppler CLI` ci-deploy
    test failures (present on pristine origin/main — doppler not mocked on my host) and
    non-deterministic cron-drain T-tests (timing-sensitive under host load).
+
+7. **The docker-bwrap regression false-FAILed on its FIRST real CI run** — the exact
+   env-fidelity risk this learning is about. Because I couldn't run bwrap userns
+   locally (sysctl=1), the runtime layer was unvalidated until CI. On the runner
+   (sysctl=0), the committed profile's `--proc /proc` MOUNT step EPERM'd (container
+   caps), and my absolute classifier read that as "committed profile broken" → FAIL.
+   The check was non-required (didn't block auto-merge), but shipping it red is wrong.
+   **Recovery:** dropped `--proc`/`--dev` from the synthesized argv (the unshare gate
+   fires before any mount) and switched to a differential classifier (committed failure
+   → SKIP; only "no discrimination" → FAIL). **Prevention:** a runtime probe for a
+   specific gated syscall must isolate THAT syscall from env-dependent setup steps, and
+   verdict on the profile DIFFERENCE, never an absolute per-profile pass/fail. Corollary:
+   an env-unverifiable runtime check belongs on a NON-required lane so its first-run
+   surprise cannot block merges — put the deterministic proof on the required lane.
