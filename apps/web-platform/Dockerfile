@@ -145,6 +145,15 @@ COPY --from=builder /app/.next ./.next
 # Compiled custom server
 COPY --from=builder /app/dist/server ./dist/server
 
+# Faithful sandbox canary payload + captured-argv fixture (#5875 / ADR-079).
+# Baked into the image so ci-deploy.sh can `docker exec <canary> node
+# /app/scripts/sandbox-canary.mjs --replay` against the LOADED profile — the
+# host has no node, and the replay path is pure JS (reads the fixture, spawns
+# bwrap) with no runtime TypeScript/SDK dependency. The fixture is version-
+# consistent with this image's SDK because both are baked at build time.
+COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
+COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
+
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 

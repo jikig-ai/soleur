@@ -203,6 +203,10 @@ jobs:
       - name: Run cat-deploy-state.sh tests
         run: bash apps/web-platform/infra/cat-deploy-state.test.sh
 
+      # Faithful sandbox canary soak accumulator (#5875 / ADR-079).
+      - name: Run sandbox-canary-soak.sh tests
+        run: bash apps/web-platform/infra/sandbox-canary-soak.test.sh
+
       # No-SSH inngest cutover orchestration (#5450).
       - name: Run inngest-enumerate-reminders.sh tests
         run: bash apps/web-platform/infra/inngest-enumerate-reminders.test.sh

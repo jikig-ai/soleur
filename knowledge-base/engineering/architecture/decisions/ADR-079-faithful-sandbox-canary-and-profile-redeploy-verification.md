@@ -2,7 +2,7 @@
 
 - **Status:** Adopting
 - **Date:** 2026-07-01
-- **Deciders:** Jean (operator), CTO agent (binding rulings: `aggregate pattern` threshold; PR1 phase-guard mechanism), Engineering domain review
+- **Deciders:** Jean (operator), CTO agent (binding rulings: `aggregate pattern` threshold; PR1 phase-guard mechanism; PR2 canary mechanism — hybrid capture-in-CI / replay-at-deploy), Engineering domain review
 - **Relates to:** #5875 (this hardening), #5873 / #5874 (the P0 + its fix), #5849 (the SDK bump 0.2.85→0.3.197 that split `unshare()`), #4932 / #4941 (the false-rollback lesson), ADR-031 (Sentry-as-IaC), ADR-068 (cron drain — since renumbered ADR-078), ADR-075 (agent-sandbox config the canary imports), ADR-072 (adaptive deploy gate), ADR-027 (single-replica swap invariant)
 
 > **Ordinal note.** This ADR was planned as ADR-077, but siblings #5766 (ADR-077 routine-run lifecycle) and #5669 (ADR-078 graceful cron drain) landed that window on `main` first. Renumbered to **ADR-079** at work-start per `scripts/check-adr-ordinals.sh`.
@@ -96,16 +96,52 @@ The alert is IaC (ADR-031): `apps/web-platform/infra/sentry/issue-alerts.tf`.
 
 ### 2. Faithful canary (PR2 — dark-launch, non-blocking)
 
-A payload (`apps/web-platform/scripts/sandbox-canary.mjs`, baked into the image)
-**imports `agent-runner-sandbox-config.ts`** and feeds that exact options object
-into the SDK, so its bwrap argv *is* the SDK's argv, version-locked to the tree.
-Hand-rolled argv is disqualified (it caused both #5849's false-green and #4932's
-false-rollback). Wired non-blocking alongside the legacy `ci-deploy.sh` probe,
-which stays the gate during dark-launch; a "faithful FAIL + legacy PASS"
-disagreement is the promote-readiness signal. Exit-code classification
-distinguishes `canary_infra_error` (125/126/127/ENOENT — do NOT roll back) from
-`sandbox_broken` (`bwrap … Operation not permitted`). Promotion to blocking is
-soak-gated (5 green verdicts over ≥3 days).
+**Mechanism (CTO-ruled at PR2 kickoff — the Phase-0 §0.2 fork): HYBRID —
+capture-in-CI, replay-at-deploy.** The two runtime contexts are not two competing
+mechanisms; they are the **capture** end and the **replay** end of one
+faithfulness pipeline. A single payload
+(`apps/web-platform/scripts/sandbox-canary.mjs`, baked into the image) has two
+modes:
+
+- **`--capture` / `--verify` (CI only, PR3, creds-gated).** Puts a
+  bwrap-intercepting shim on `PATH`, **imports the real
+  `buildAgentSandboxConfig` from `agent-runner-sandbox-config.ts`** (lazily — a
+  dynamic `import()` kept out of the replay graph), feeds that exact options
+  object into the SDK `query()`, runs one no-op Bash op so the SDK builds+spawns
+  its real split-unshare argv, and snapshots the bwrap **SETUP** argv to the
+  committed fixture `apps/web-platform/infra/sandbox-canary-argv.json`. `--verify`
+  re-captures and byte-diffs against the committed fixture, failing the PR on
+  drift. The argv is a pure function of `(SDK version, sandbox config)` — both
+  in-tree — so PR3's gate re-captures whenever **`package-lock.json` OR
+  `agent-runner-sandbox-config.ts` OR `sandbox-canary.mjs`** changes (a plan
+  correction: keying re-capture on `package-lock.json` alone would let a config
+  reshape stale the fixture silently). This decouples faithfulness from the
+  model turn and confines the paid/nondeterministic Anthropic call to CI.
+- **`--replay` (DEFAULT, deploy-time, PR2).** `ci-deploy.sh` runs
+  `docker exec <canary> node /app/scripts/sandbox-canary.mjs --replay` INSIDE the
+  running canary container, which reads the committed fixture and runs
+  `bwrap <captured-setup-argv> -- true` against the **loaded** `--security-opt`
+  profile. Creds-free, network-free, deterministic — it never reaches `query()`
+  (the host has no ANTHROPIC key and no node; the replay is pure JS). The
+  replayed argv *is* the SDK's captured argv, version- and config-locked.
+
+Wired non-blocking alongside the legacy `ci-deploy.sh` probe, which stays the
+gate during dark-launch; a "faithful FAIL + legacy PASS" disagreement is the
+promote-readiness signal (Sentry event on a faithful FAIL — never journald-only).
+Exit-code classification distinguishes `canary_infra_error` (125/126/127/ENOENT —
+do NOT roll back) from `sandbox_broken` (`bwrap … Operation not permitted`).
+**Dark-launch bootstrap:** the committed fixture ships as an `{"status":
+"uncaptured"}` sentinel (never a hand-authored argv — the #4932 trap); until
+PR3's CI capture lands the real SDK argv, the deploy-time replay records
+`canary_infra_error` / `fixture_uncaptured` (non-blocking; no green soak verdicts
+accrue). Promotion to blocking is soak-gated (5 green verdicts over ≥3 days).
+
+**Faithfulness guarantee.** It cannot repeat #5849's false-green because the
+replayed argv *is* the SDK's own captured argv — re-captured and byte-diffed on
+every SDK-or-config change — so a bump that breaks the profile makes the
+deploy-time `bwrap … -- true` EPERM red; and it cannot repeat #4932's
+false-rollback because the argv is never hand-guessed and non-EPERM failures
+classify as `canary_infra_error` (never `sandbox_broken`).
 
 ### 3. SDK-bump guard + profile→redeploy coupling (PR3)
 
@@ -148,6 +184,16 @@ Flip this ADR to `accepted` in PR3.
 
 - **Hand-rolled bwrap argv canary** — rejected: can't track the SDK; caused
   #5849 (false-green) and #4932 (false-rollback).
+- **Pure model-turn-driven canary at deploy-time** (PR2 mechanism option (a),
+  the alternative to the chosen hybrid) — rejected: it forces ANTHROPIC creds +
+  network egress + model non-determinism onto *every routine host deploy*, which
+  the Hetzner host cannot reliably satisfy (no node, no key) and which turns a
+  deterministic deploy gate into a flaky, paid, creds-dependent one (violates the
+  deterministic-LLM-SDK-invocation learning). The hybrid confines the one model
+  turn to CI (capture) and replays creds-free at deploy. A secondary rejection:
+  a **hand-authored** replay fixture — the fixture MUST be SDK-captured, never
+  written by hand (the #4932 trap), which is why the dark-launch bootstrap ships
+  an explicit `uncaptured` sentinel rather than a guessed argv.
 - **Item-4 self-healing verify loop** (poll→detect-drift→retrigger) — rejected
   as overbuilt vs. one graceful, idempotent, sequenced redeploy.
 - **Item-4 via shared GHA `concurrency:` group** — rejected: serializes but does
