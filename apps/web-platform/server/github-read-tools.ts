@@ -13,7 +13,7 @@
  */
 
 import type { BoardIssueInput } from "@/lib/workstream";
-import { githubApiGet } from "./github-api";
+import { githubApiGet, githubApiPost, GitHubApiError } from "./github-api";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -376,4 +376,100 @@ export async function listRepoIssues(
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Workstream board Status reader (Phase 2, ADR-080)
+//
+// The canonical "Soleur Kanban" Project v2 board is the source of truth for a
+// card's column. This reads each board item's Status single-select via GraphQL
+// so the Workstream tab can PREFER it over label derivation. A Project v2 board
+// can span multiple repos, so items are matched by `nameWithOwner` (not just
+// issue number, which collides across repos). Bounded page count keeps each
+// request small (500k-node GraphQL cost cap) — 512 board items ≈ 6 pages.
+// ---------------------------------------------------------------------------
+
+const MAX_BOARD_STATUS_PAGES = 10;
+
+interface BoardStatusProjectV2 {
+  items: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: Array<{
+      content:
+        | { number?: number; repository?: { nameWithOwner?: string } }
+        | null;
+      fieldValueByName: { name?: string } | null;
+    }>;
+  };
+}
+
+interface BoardStatusGqlResponse {
+  data?: {
+    organization?: { projectV2?: BoardStatusProjectV2 | null } | null;
+  };
+  errors?: Array<{ message: string }>;
+}
+
+const BOARD_STATUS_QUERY = `query($org:String!,$num:Int!,$field:String!,$cursor:String){
+  organization(login:$org){
+    projectV2(number:$num){
+      items(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{
+          content{ ... on Issue { number repository { nameWithOwner } } }
+          fieldValueByName(name:$field){ ... on ProjectV2ItemFieldSingleSelectValue { name } }
+        }
+      }
+    }
+  }
+}`;
+
+/**
+ * Fetch `issueNumber → board Status name` for the issues of `repoNwo`
+ * (e.g. "jikig-ai/soleur") that live on the org's Project v2 board
+ * `projectNumber` (Phase 2, ADR-080).
+ *
+ * Requires the App installation to have `organization_projects: read`. THROWS on
+ * any GitHub/GraphQL error (403 = App not granted) so the caller degrades to
+ * label derivation + mirrors to Sentry — a failed board read must NEVER
+ * masquerade as "every issue is Backlog".
+ */
+export async function fetchBoardStatusMap(
+  installationId: number,
+  org: string,
+  projectNumber: number,
+  repoNwo: string,
+): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  const wanted = repoNwo.toLowerCase();
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_BOARD_STATUS_PAGES; page++) {
+    const resp: BoardStatusGqlResponse | null =
+      await githubApiPost<BoardStatusGqlResponse>(installationId, "/graphql", {
+        query: BOARD_STATUS_QUERY,
+        variables: { org, num: projectNumber, field: "Status", cursor },
+      });
+    if (resp?.errors?.length) {
+      throw new GitHubApiError(
+        `board Status GraphQL errors: ${resp.errors
+          .map((e) => e.message)
+          .join("; ")}`,
+        502,
+      );
+    }
+    const proj: BoardStatusProjectV2 | null | undefined =
+      resp?.data?.organization?.projectV2;
+    if (!proj) break; // no project / no access → empty map, caller keeps fallback
+    for (const node of proj.items.nodes) {
+      const num = node.content?.number;
+      const name = node.fieldValueByName?.name;
+      const nwo = node.content?.repository?.nameWithOwner?.toLowerCase();
+      if (typeof num === "number" && name && nwo === wanted) {
+        map.set(num, name);
+      }
+    }
+    if (!proj.items.pageInfo.hasNextPage) break;
+    cursor = proj.items.pageInfo.endCursor;
+  }
+  return map;
 }

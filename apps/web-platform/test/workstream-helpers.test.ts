@@ -3,6 +3,7 @@ import {
   COLUMNS,
   STATUS_ORDER,
   assigneeInitials,
+  boardStatusToWorkstreamStatus,
   columnAccent,
   deriveColumn,
   deriveLive,
@@ -200,6 +201,40 @@ describe("deriveColumn (state + state_reason + labels)", () => {
     expect(
       deriveColumn(input({ labels: ["in-progress", "blocked"] })),
     ).toBe("blocked");
+  });
+});
+
+describe("board Status preference (Phase 2, ADR-080)", () => {
+  it("maps board Status names to app columns (case-insensitive)", () => {
+    expect(boardStatusToWorkstreamStatus("Backlog")).toBe("backlog");
+    expect(boardStatusToWorkstreamStatus("Ready")).toBe("ready");
+    expect(boardStatusToWorkstreamStatus("In progress")).toBe("in_progress");
+    expect(boardStatusToWorkstreamStatus("in review")).toBe("in_review");
+    expect(boardStatusToWorkstreamStatus("Blocked")).toBe("blocked");
+    expect(boardStatusToWorkstreamStatus("Pending")).toBe("pending");
+    expect(boardStatusToWorkstreamStatus("Done")).toBe("done");
+  });
+
+  it("returns null for an unknown board Status name", () => {
+    expect(boardStatusToWorkstreamStatus("Icebox")).toBeNull();
+  });
+
+  it("board Status overrides label/state derivation when present + mappable", () => {
+    // labels would derive blocked; board says Pending -> Pending wins.
+    expect(
+      deriveColumn(input({ labels: ["blocked"], boardStatus: "Pending" })),
+    ).toBe("pending");
+    // board Status wins even over a closed issue's Done fold.
+    expect(
+      deriveColumn(input({ state: "closed", boardStatus: "In progress" })),
+    ).toBe("in_progress");
+  });
+
+  it("falls back to label derivation for an unknown/absent board Status", () => {
+    expect(
+      deriveColumn(input({ labels: ["blocked"], boardStatus: "Nonsense" })),
+    ).toBe("blocked");
+    expect(deriveColumn(input({ labels: ["blocked"] }))).toBe("blocked");
   });
 });
 
