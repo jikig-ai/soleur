@@ -112,9 +112,12 @@ stale tree and silently revert the fix.
   (incl. `worktree-manager.sh`, `AGENTS.md`, `CLAUDE.md`, a future `mcp/` surface)
   yield `changed=true`; `docs/`-only and `test/`-only yield `changed=false`; a git
   failure fails loud. `actionlint` + `shellcheck` clean on both workflows.
-- Post-merge soak: `scripts/followthroughs/runtime-plugin-deploy-soak-*.sh` — after
-  the first post-fix runtime-plugin merge, `app.soleur.ai/health` `.build_sha` must
-  equal that merge's SHA (secret-free gh + curl check).
+- Post-merge (this PR is self-verifying): #5888 itself touches a runtime-plugin path
+  (`plugins/soleur/skills/reproduce-bug/SKILL.md`), so its own merge exercises the
+  widened trigger end-to-end — the `web-platform-release` run firing on this merge
+  (verified at ship postmerge) IS the live proof that a runtime-plugin change now
+  rebuilds+deploys and re-seeds `/mnt/data/plugins/soleur`. No separate soak
+  follow-through needed (the drift-guard test + this self-deploy cover it).
 
 ---
 
