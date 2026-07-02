@@ -20,25 +20,30 @@ status: BLOCKED — operator decision required (see plan Decision Matrix)
   - D (reframe to speed goal) → file a tracking issue, route to `/soleur:brainstorm`; stop.
   - B / C → proceed to Phases 1-3 with the guard rails.
 
-## Phase 1 — Safe wins (do regardless of A/B/C; the one unambiguous improvement)
+## Phase 1 — Shippable scope (Option A′; FR1/FR2 — the one unambiguous improvement)
 
 - [ ] 1.1 Create `apps/web-platform/components/command-palette/platform.ts` — pure,
-  SSR-safe `isApplePlatform()` (inject nav shape for testability). (FR1)
-- [ ] 1.2 Create `apps/web-platform/test/platform.test.ts` — true / false / no-navigator. (AC3)
-- [ ] 1.3 Platform-aware glyphs in `help-overlay.tsx` (`CHORDS`) + `command-palette.tsx`
-  hints + `use-shortcuts.tsx` `⌘B`/`⌘↵` literals → `⌘`/`Ctrl` per FR1. (FR2, AC2)
+  SSR-safe `isApplePlatform()` (inject nav shape; novel — no existing helper). (FR1)
+- [ ] 1.2 Fold `isApplePlatform()` unit tests (true/false/no-navigator) into
+  `test/shortcuts-registry.test.ts` — no separate `platform.test.ts`. (AC3)
+- [ ] 1.3 Platform-aware glyphs as a DISPLAY substitution (no `seq`/`formatSeqHint` change):
+  `help-overlay.tsx` `CHORDS` (`:31-35`) + `command-palette.tsx` hints + `use-shortcuts.tsx`
+  `⌘B` literal (`:249`) → `⌘`/`Ctrl`. Render off hydrated state via the provider's
+  init-default-then-`useEffect`-sync pattern (`:335-344`); SSR default = `Ctrl`. (FR2, AC2)
 - [ ] 1.4 Extend `test/help-overlay.test.tsx` to assert `Ctrl` on non-Apple nav shape. (AC2)
 
-## Phase 2 — Reserved-chord model + resolver (only if B/C signed off)
+## Phase 2 — APPENDIX: accelerator model + resolver (ONLY if operator picks B/C)
 
-- [ ] 2.1 `nav-items.ts`: add per-destination `metaKey?` + `reservedReason?` metadata,
-  preserving the `seq` single-source invariant. (FR3)
+- [ ] 2.1 `nav-items.ts`: add single `accel?` field (NOT `metaKey` — DOM-prop collision)
+  + advisory `reservedReason?`; binding-eligibility ⇔ presence of `accel`; keep `seq`.
 - [ ] 2.2 `help-overlay.tsx`: render reserved letters as struck/click-only caps + reason +
-  "Click to open" (match the `.pen` wireframe). (FR3, AC5)
-- [ ] 2.3 `use-shortcuts.tsx`: split `mod = metaKey || ctrlKey` into `metaOnly`; add the
-  macOS additive accelerator arm — gated on `isApplePlatform()`, suppressed in editables +
-  under `[role=dialog][aria-modal]`, NEVER binding reserved letters (⌘K/⌘W/⌘C). (FR4, AC5, AC6)
-- [ ] 2.4 Keep `resolveSequence` + arm/resolve state machine intact (dual-bind). (FR5, AC4)
+  "Click to open" (match the `.pen`). (AC5)
+- [ ] 2.3 `use-shortcuts.tsx`: add `resolveNavChord(e, ctx): CommandEffect | null` sibling of
+  `resolveSequence` (reads `e.metaKey` ONLY — do NOT touch the `:88` `mod` union); inject
+  `isApplePlatform` on `ShortcutContext`; listener precedence `resolveShortcut →
+  resolveNavChord → g-leader`; NEVER bind ⌘K/⌘W/⌘C/⌘R/⌘D/⌘A (safe subset ~empty). (AC5, AC6)
+- [ ] 2.4 If any accelerator is bound, assert `preventDefault` fires on non-editable focus. (AC6b)
+- [ ] 2.5 Keep `resolveSequence` + arm/resolve intact (dual-bind). (FR3, AC4)
 
 ## Phase 3 — Tests + verification
 

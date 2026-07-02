@@ -26,6 +26,24 @@ related:
 > is set. Per the memory guidance "just ship, no gate questions" — its explicit carve-out
 > is "risky/irreversible changes + design sign-off," which this is.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-02
+**Research agents used:** spec-flow-analyzer, cpo, clo, ux-design-lead (plan phase); code-simplicity-reviewer, architecture-strategist, user-impact-reviewer (deepen phase); precedent-diff + verify-the-negative greps.
+
+### Key improvements from the deepen pass
+
+1. **Scope split (simplicity).** The shippable, option-independent scope is now **decision + FR1/FR2 only** — the platform-aware glyph fix, a *real present bug* (glyphs are hardcoded `⌘` even on Windows/Linux; grep confirmed **zero** platform detection exists anywhere in `apps/web-platform`). The accelerator-binding work (former FR3/FR4 + Option-C spec) is demoted to a **gated appendix** that materializes only if the operator overrides the recommendation.
+2. **The "safe subset" is empty (user-impact + CPO).** ⌘K/⌘W are taken/impossible; ⌘C/⌘R/⌘A/⌘D all hijack copy/reload/select-all/bookmark and are moved into the **never-bind** set (⌘R reload-data-loss was an un-asserted gap — `preventDefault` on ⌘R is "soft-reload only"). Only ⌘I is marginal. So even Option B delivers ~nothing — reinforcing Option A′ (glyph fix) as the answer.
+3. **Architecture seam corrected.** The `metaKey`/`ctrlKey` split must be **local to a new `resolveNavChord(e, ctx): CommandEffect | null` arm only** — NEVER touch `resolveShortcut`'s `mod = metaKey || ctrlKey` union (`use-shortcuts.tsx:88`), or ⌘K/⌘B regress on non-mac. Platform is injected on `ShortcutContext` (never `navigator` inside a resolver). Handler precedence is explicit: `resolveShortcut` → `resolveNavChord` (on null) → g-leader arm/resolve. nav-items field renamed `metaKey`→`accel` (DOM-prop collision); "reserved" ⇔ "no `accel`".
+4. **Hydration.** FR2 glyph rendering MUST use the provider's existing init-default-then-`useEffect`-sync pattern (`use-shortcuts.tsx:335-344`) — a raw `isApplePlatform()` call in first render causes a hydration mismatch + glyph flash. Accept a mount-gated first paint.
+
+### New considerations discovered
+
+- No platform-detection helper exists in the repo (`platform.ts` is genuinely novel, no dup risk).
+- No hotkey/tinykeys dependency — the bespoke pure-resolver pattern is the canonical precedent to extend.
+- The non-mac **Ctrl-union hijack** (Ctrl+W/R/T on Windows/Linux via the `mod` union) is the *highest-risk* role and is now surfaced in User-Brand Impact.
+
 ## Overview
 
 The Soleur web-platform command palette (`apps/web-platform/components/command-palette/`)
@@ -140,81 +158,111 @@ concrete, guard-railed target — but this plan does not recommend it.
 Ships value without regressing anything, and is the honest synthesis of "honor the intent
 (a Super-key navigation *feel*) while not breaking reserved chords or dropping non-mac users":
 
-1. **Fix the pre-existing glyph bug (unambiguous win, do regardless of option).** The
-   overlay + palette hardcode `⌘` (`help-overlay.tsx:31-35`, `use-shortcuts.tsx:249`), so
-   Windows/Linux users are already shown a key they don't have. Add a tiny
-   `platform.ts` (`isApplePlatform()` via `navigator.platform`/`userAgentData`, SSR-safe
-   default) and render `⌘` on mac / `Ctrl` elsewhere.
-2. **macOS-only additive `⌘` accelerators for genuinely-safe letters only.** Keep the
-   `g`-leader as the canonical cross-platform binding. On macOS, ALSO accept `⌘`+letter for
-   letters that are (a) not OS/browser-reserved, (b) not already app-bound, (c) not a
-   native-copy/select/reload/bookmark hijack. Per the matrix, that set is **at most `{i}`**
-   among the current mnemonics — so in practice this delivers little unless letters are
-   remapped (which breaks the mnemonic). Document honestly; do not advertise chords the
-   browser overrides.
-3. **Overlay surfaces reserved chords honestly** (the wireframe design): reserved letters
-   render a muted/struck key cap + a one-line reason + a "Click to open" affordance (the
-   overlay rows are already clickable launchers). See the `.pen` in Domain Review.
-4. **Retain the WCAG turn-off toggle** (`soleur:shortcuts.enabled`) unchanged (CLO blocking
-   condition).
+1. **Fix the pre-existing glyph bug (unambiguous win, do regardless of option) — the entire
+   shippable scope.** The overlay + palette hardcode `⌘` (`help-overlay.tsx:31-35`,
+   `use-shortcuts.tsx:249`), so Windows/Linux users are already shown a key they don't have.
+   Add a tiny `platform.ts` (`isApplePlatform()`, SSR-safe) and render `⌘` on mac / `Ctrl`
+   elsewhere as a **display-time substitution** (no `seq`/`formatSeqHint` model change),
+   using the provider's init-default-then-`useEffect`-sync pattern to avoid a hydration
+   mismatch (FR2). This is FR1+FR2 — the whole PR under Option A′.
+2. **Keep the `g`-leader** as the canonical cross-platform binding (FR3). The macOS additive
+   `⌘` accelerators are NOT part of this scope — per the matrix + user-impact review the
+   bindable safe subset is effectively empty (⌘K/W/C/R/A/D all taken/hostile; only ⌘I
+   marginal), so they live in the gated Appendix and only materialize under Option B/C.
+3. **Retain the WCAG turn-off toggle** (`soleur:shortcuts.enabled`) unchanged (FR4, CLO
+   blocking condition).
 
-## Guarded implementation (only if Option C is chosen — NOT recommended)
+The wireframe (`.pen`, see Domain Review) additionally shows how reserved chords would be
+surfaced (muted/struck cap + reason + "Click to open") — that overlay treatment is part of
+the Appendix (Option B/C), not the Option A′ shippable scope.
 
-If the operator explicitly signs off on the literal rebind despite the verdict, `/work`
-MUST honor every CLO/spec-flow guard rail:
+## Appendix — Guarded accelerator spec (materializes ONLY if operator picks Option B/C)
 
-- **Scope to Apple platforms.** Split the listener's `mod`: introduce `metaOnly` /
-  `ctrlOnly` and bind nav to `metaKey` only (never the `ctrlKey` union) so Windows/Linux
-  never arm hostile Ctrl+letter chords. Non-mac keeps only the `g`-leader.
-- **Do NOT bind any reserved chord.** ⌘W (impossible), ⌘K (palette), ⌘C (copy) are
-  permanently click-only / `g`-leader-only. Workstream and Knowledge Base and Ask-an-agent
-  keep the `g`-leader; there is no ⌘ equivalent for them.
-- **For the preventable-but-hostile letters (⌘D/⌘R/⌘A/⌘I)**, `preventDefault` and accept
-  the browser-action override ONLY on non-editable focus — never inside inputs (so ⌘A/⌘C
-  keep native meaning). This is the editable-focus inversion; document it.
-- **Retain the `g`-leader as a live cross-platform alias** (dual-bind) — do not delete
-  `resolveSequence`. This hedges the macOS-only risk and preserves muscle memory.
-- **Platform-aware glyphs + reserved annotations** as in Option A′ (mandatory here too, or
-  the overlay lies about what works).
+Demoted from the FR list per code-simplicity review — this is contingency for an outcome the
+plan rates Weak/REJECT. If the operator explicitly overrides the recommendation, `/work` MUST
+honor every guard rail below (architecture-strategist + user-impact corrections applied):
+
+- **New pure resolver arm, not an extension of `resolveShortcut`.** Add
+  `resolveNavChord(e, ctx): CommandEffect | null` as a **sibling of `resolveSequence`** (nav
+  destinations are dynamic `href`s → `CommandEffect`, which `resolveShortcut`'s fixed
+  action-enum cannot express). Platform enters as an **injected field on `ShortcutContext`**
+  (`{ isAdmin }` → `{ isAdmin; isApplePlatform }`) — NEVER read `navigator` inside a resolver
+  (preserves the DOM-free/pure invariant).
+- **Split `metaKey`/`ctrlKey` LOCALLY, in the new arm only.** `resolveNavChord` reads
+  `e.metaKey` exclusively. **Do NOT touch `resolveShortcut`'s `mod = metaKey || ctrlKey` at
+  `use-shortcuts.tsx:88`** — ⌘K/⌘B/⌘/ must keep firing on both meta AND ctrl cross-platform;
+  a global split regresses them on Windows/Linux.
+- **Explicit handler precedence** in the listener: `resolveShortcut` first → fall through to
+  `resolveNavChord` only on `null` → then the g-leader arm/resolve (unchanged). This keeps
+  ⌘K=palette / ⌘B=sidebar authoritative (AC5).
+- **The bindable "safe subset" is effectively EMPTY.** Never-bind: ⌘W (closes tab —
+  impossible), ⌘K (palette), ⌘C (copy). **Also never-bind ⌘R / ⌘D / ⌘A** — user-impact
+  review showed ⌘R reload-data-loss is only "soft-reload" preventable (⌘⇧R still hard-reloads)
+  and ⌘D/⌘A hijack bookmark/select-all with no reliable win. Only ⌘I is marginal. So Option B
+  aliases at most `{i}` — i.e. delivers ~nothing. Document this honestly; do not advertise
+  chords the browser overrides.
+- **If any accelerator IS bound**, an AC/test MUST assert the handler calls `preventDefault`
+  for it on non-editable focus (the reload-data-loss guard) — binding without asserting
+  `preventDefault` is the FINDING-1 gap.
+- **`nav-items.ts` metadata:** add a single `accel?: string` field (NOT `metaKey` — collides
+  with the DOM `metaKey: boolean` on `ShortcutKeyEvent`). Binding-eligibility ⇔ presence of
+  `accel`; `reservedReason?: string` is advisory display text only (soft-drift is acceptable
+  for prose, but do not claim it is covered by the `seq` single-source guarantee).
+- **Reuse `isEditable`** (`use-shortcuts.tsx:87/191`) and the `[role=dialog][aria-modal]`
+  guard (`:494`) in the new arm — do not reinvent editable/modal suppression. Note that a
+  single ⌘-chord **lowers the accidental-navigation-away threshold** vs the 2-key leader
+  (FINDING-3); the inline-dirty-form case remains a pre-existing `g`-leader scope-out.
+- **Retain the `g`-leader as a live cross-platform alias** (dual-bind — the two grammars are
+  mutually exclusive by the modifier bit, so they cannot cross-fire; both converge on the
+  single `runEffect` interpreter).
+- **Option C only:** author a short ADR ("modifier-nav accepted on macOS despite
+  browser-collision trade-offs") in the same PR (not deferred), per `wg-architecture-decision-is-a-plan-deliverable`.
 
 Even fully guarded, Option C re-breaks copy/reload/select-all on macOS and delivers nothing
 on the majority platform. Recorded for completeness; the plan recommends against shipping it.
 
-## Functional Requirements
+## Functional Requirements (shippable scope — option-independent)
+
+These ship regardless of which option the operator picks (they fix a real present bug and
+change no keybinding behavior). Accelerator-binding requirements moved to the gated Appendix.
 
 FR1. **Platform detection helper** — `apps/web-platform/components/command-palette/platform.ts`
 exporting a pure, SSR-safe `isApplePlatform()` (unit-testable, DOM-free via injected nav
-shape). *(location: new file)*
+shape). Confirmed novel — grep found no existing platform helper anywhere in
+`apps/web-platform`. *(location: new file)*
 
-FR2. **Platform-aware glyph rendering** — the `CHORDS` list (`help-overlay.tsx:26-36`) and
-the palette/overlay key hints render `⌘`↔`Ctrl` per FR1. `formatSeqHint` / the `seq`
-single-source model extends to carry a modifier form without breaking the "documented key
-can never drift from the live binding" invariant (`nav-items.ts:12-19`).
-*(location: help-overlay.tsx, use-shortcuts.tsx, nav-items.ts)*
+FR2. **Platform-aware glyph rendering (render swap, NOT a data-model change)** — the `CHORDS`
+list (`help-overlay.tsx:31-35`) and the palette/overlay key hints (`command-palette.tsx`
+~284/292-307/344-348, `use-shortcuts.tsx:249`) render `⌘`↔`Ctrl` at display time. Do **not**
+alter `formatSeqHint` or the `seq` model — a render-time substitution keeps the single-source
+invariant (`nav-items.ts:12-19`) intact with zero model change. **Hydration:** the glyph MUST
+render off hydrated state using the provider's existing init-stable-default-then-`useEffect`-sync
+pattern (`use-shortcuts.tsx:335-344`), NOT a raw `isApplePlatform()` call in first render, or
+React warns + the glyph flashes. AC3 default: treat SSR as non-Apple (`Ctrl`) then sync; accept
+a one-frame mount-gated correction. *(location: help-overlay.tsx, command-palette.tsx, use-shortcuts.tsx)*
 
-FR3. **Reserved-chord annotation model** — `nav-items.ts` carries per-destination metadata
-(e.g. `metaKey?: string`, `reservedReason?: string`) so the overlay can render a muted
-struck cap + reason + "Click to open" for reserved letters, and the resolver never binds
-them. *(location: nav-items.ts, help-overlay.tsx)*
+FR3. **`g`-leader retained unchanged** — `resolveSequence` and the arm/resolve state machine
+stay as the cross-platform canonical path. No behavior change.
 
-FR4. **(Option A′/C) macOS additive `⌘` accelerator resolution** — a new pure resolver arm
-(or an extension of `resolveShortcut`) maps `metaKey`+safe-letter → the destination's
-`CommandEffect`, gated on `isApplePlatform()`, suppressed in editables and under
-`[role=dialog][aria-modal]` (reuse the existing guard, `use-shortcuts.tsx:494`), never for
-reserved letters. *(location: use-shortcuts.tsx)*
-
-FR5. **`g`-leader retained** — `resolveSequence` and the arm/resolve state machine stay as
-the cross-platform canonical path (dual-bind), unchanged in behavior.
-
-FR6. **WCAG turn-off retained** — `soleur:shortcuts.enabled` continues to gate the entire
+FR4. **WCAG turn-off retained** — `soleur:shortcuts.enabled` continues to gate the entire
 listener (CLO blocking condition). No change.
+
+> Former FR3 (reserved-chord metadata model) and FR4 (macOS `⌘` accelerator resolution) are
+> **demoted to the Appendix** — they only materialize if the operator overrides the
+> recommendation and picks Option B/C. Per code-simplicity review, speccing them as first-class
+> FRs is building infrastructure for a path the plan recommends against.
 
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a navigation keystroke that closes their
 browser tab (⌘W), reloads the page mid-workflow discarding unsaved input (⌘R), or silently
 does nothing (a reserved chord swallowed by the browser) — on a surface the solo-founder
-operator drives constantly.
+operator drives constantly. **Highest-risk role: Windows/Linux/ChromeOS users** — the shipped
+`mod = metaKey || ctrlKey` union (`use-shortcuts.tsx:88,193`) means a naive rebind arms
+**Ctrl+W (tab close) / Ctrl+R (reload) / Ctrl+T (new tab)** on the majority platform, where
+the failure is strictly worse than on mac. (Mitigated only by the Appendix's local-metaKey
+split + `isApplePlatform` gate — which is exactly why the rebind is not in the shippable
+scope.)
 
 **If this leaks, the user's workflow is exposed via:** N/A — no data surface. The exposure
 is *session/data loss* (tab close, reload) and *trust erosion* from a shortcut layer that
@@ -224,30 +272,36 @@ fights the OS/browser, not a data breach.
 brainstorm; a single user losing a session to a mis-bound nav key is a brand-eroding event
 for the keyboard-power-user beachhead). `requires_cpo_signoff: true`.
 
-## Files to Edit
+### Shippable scope (Option A′ — FR1/FR2)
 
-- `apps/web-platform/components/command-palette/use-shortcuts.tsx` — resolver arm(s),
-  glyph hint, retain `resolveSequence`, (C) split `metaKey`/`ctrlKey`.
-- `apps/web-platform/components/command-palette/nav-items.ts` — per-destination modifier +
-  reserved metadata; keep `seq`.
-- `apps/web-platform/components/command-palette/help-overlay.tsx` — platform-aware glyphs,
-  reserved annotations, click-to-open affordance.
+- `apps/web-platform/components/command-palette/use-shortcuts.tsx` — glyph hint render swap
+  (`:249`); provider hydration-sync of platform (mirror `:335-344`). Retain `resolveSequence`
+  untouched.
+- `apps/web-platform/components/command-palette/help-overlay.tsx` — platform-aware glyphs in
+  `CHORDS` (`:31-35`) via display substitution.
 - `apps/web-platform/components/command-palette/command-palette.tsx` — palette key hints
-  (lines ~284, ~292-293, ~303-307, ~344-348) render platform-aware glyphs.
-- `apps/web-platform/test/shortcuts-registry.test.ts` — unit assertions: arm-on-`g` (kept),
-  `formatSeqHint`, new platform-aware + resolver arms, reserved-letter non-binding.
-- `apps/web-platform/test/help-overlay.test.tsx` — testids `help-row-G D/G C/G A` and
-  "Go to X" rows; add platform-glyph + reserved-annotation assertions.
-- `apps/web-platform/test/command-palette.test.tsx` — hint rows (lines 193-206), go-to
-  sequence integration (225-272), modal-suppression (326), WCAG turn-off (595-603).
-- `apps/web-platform/app/globals.css` — `.cmdk-keys` (line 356) if the reserved/struck cap
-  needs a style hook.
+  (~284, ~292-293, ~303-307, ~344-348) render platform-aware glyphs.
+- `apps/web-platform/test/shortcuts-registry.test.ts` — fold in `isApplePlatform()` unit
+  tests (true/false/no-navigator); keep the `g`-leader cases green.
+- `apps/web-platform/test/help-overlay.test.tsx` — assert `Ctrl` on non-Apple nav shape;
+  existing `help-row-G D/G C/G A` + "Go to X" rows stay green.
+
+### Appendix scope (Option B/C only — do NOT touch unless operator overrides)
+
+- `apps/web-platform/components/command-palette/nav-items.ts` — add single `accel?` field
+  (+ advisory `reservedReason?`); keep `seq`. **`accel`, not `metaKey`** (DOM-prop collision).
+- `apps/web-platform/components/command-palette/use-shortcuts.tsx` — new
+  `resolveNavChord(e, ctx)` sibling arm; extend `ShortcutContext` with `isApplePlatform`;
+  listener precedence; **never** touch the `:88` `mod` union.
+- `apps/web-platform/test/command-palette.test.tsx` — go-to integration (225-272),
+  modal-suppression (326), WCAG turn-off (595-603), + `preventDefault`-on-bound-accelerator.
+- `apps/web-platform/app/globals.css` — `.cmdk-keys` (`:356`) reserved/struck cap style hook.
 
 ## Files to Create
 
-- `apps/web-platform/components/command-palette/platform.ts` — `isApplePlatform()` helper.
-- `apps/web-platform/test/platform.test.ts` — unit tests for the helper (or fold into
-  `shortcuts-registry.test.ts`).
+- `apps/web-platform/components/command-palette/platform.ts` — `isApplePlatform()` helper
+  (novel — no existing platform helper in the repo). Tests folded into
+  `shortcuts-registry.test.ts` (no separate `platform.test.ts` — one pure function).
 
 ## Open Code-Review Overlap
 
@@ -268,11 +322,16 @@ should re-run the overlap check per plan Phase 1.7.5 when online.)
   `navigator`) — asserted in unit tests.
 - AC4. The `g`-leader still works unchanged: `resolveSequence(true, key("d"))` →
   `{navigate,/dashboard}` etc. (existing `shortcuts-registry.test.ts` cases stay green).
-- AC5. **No reserved chord is bound.** A unit assertion proves `⌘K`→palette (not KB),
-  `⌘W`/`⌘C` never resolve to a nav effect, and reserved letters render the struck/click-only
-  cap in the overlay.
-- AC6. (If B/C) macOS additive accelerators resolve only under `isApplePlatform()`, only for
-  non-reserved letters, and are suppressed in editables + under `[role=dialog][aria-modal]`.
+- AC5. **No reserved chord is bound (precedence holds).** A unit assertion proves
+  `resolveShortcut` runs first so `⌘K`→palette (not KB) and `⌘B`→sidebar; `⌘W`/`⌘C`/`⌘R`/`⌘D`/`⌘A`
+  never resolve to a nav effect. The `:88` `mod = metaKey||ctrlKey` union is unchanged
+  (⌘K/⌘B still fire on Ctrl too).
+- AC6. (If B/C) `resolveNavChord` accelerators resolve only under `isApplePlatform()` (via
+  injected `ShortcutContext`, not `navigator`), only for non-reserved letters, suppressed in
+  editables + under `[role=dialog][aria-modal]`.
+- AC6b. (If B/C, and ANY accelerator is bound) a test asserts the keydown handler calls
+  `preventDefault` for every bound ⌘-accelerator on non-editable focus (reload-data-loss
+  guard — FINDING 1).
 - AC7. WCAG turn-off (`soleur:shortcuts.enabled=0`) disables the WHOLE listener incl. any new
   arms — existing `command-palette.test.tsx:603` extended.
 - AC8. Typecheck + tests green: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
