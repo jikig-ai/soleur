@@ -81,7 +81,12 @@ describe("SelectionToolbar", () => {
     render(<Harness onAddToChat={onAdd} />);
     const article = screen.getByTestId("article");
     act(() => { setSelection(article, "hello world"); });
-    expect(screen.getByRole("button", { name: /quote in chat/i })).toBeTruthy();
+    const pill = screen.getByRole("button", { name: /quote in chat/i });
+    expect(pill).toBeTruthy();
+    // FR2: the shortcut badge shows the platform key. happy-dom is non-Apple →
+    // `Ctrl+Shift+L` (the ⌘⇧L glyph renders only on Apple).
+    expect(pill).toHaveTextContent("Ctrl+Shift+L");
+    expect(pill).not.toHaveTextContent("⌘");
   });
 
   it("clicking the pill invokes onAddToChat with the selection text", async () => {

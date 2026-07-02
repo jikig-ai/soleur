@@ -16,6 +16,7 @@ import {
   type CommandEffect,
 } from "./use-shortcuts";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "./nav-items";
+import { modChord } from "./platform";
 import { useTour } from "@/components/tour/tour-provider";
 
 // Each chord row carries the action it performs, so selecting it (click or ↵)
@@ -23,17 +24,27 @@ import { useTour } from "@/components/tour/tour-provider";
 // doubles as a clickable launcher, not just a cheat-sheet.
 type HelpAction = "palette" | "help" | "sidebar" | "close";
 
-const CHORDS: ReadonlyArray<{
+type ChordRow = {
+  /** Stable, platform-independent test/render key (the `keys` glyph is not). */
+  id: string;
   keys: string;
   label: string;
   action: HelpAction;
-}> = [
-  { keys: "⌘K", label: "Open command palette", action: "palette" },
-  { keys: "⌘/", label: "Open keyboard shortcuts (this overlay)", action: "help" },
-  { keys: "?", label: "Open keyboard shortcuts", action: "help" },
-  { keys: "⌘B", label: "Toggle sidebar", action: "sidebar" },
-  { keys: "Esc", label: "Close palette / overlay / drawer", action: "close" },
-];
+};
+
+// The modifier-chord rows are built per-render from the hydrated platform so the
+// glyph reads `⌘K` on Apple and `Ctrl+K` elsewhere (FR2). `id` is the stable
+// row key/testid — it never changes with platform, so tests target the row by
+// intent while asserting the platform-specific glyph on the `<kbd>`.
+function buildChords(isApple: boolean): ReadonlyArray<ChordRow> {
+  return [
+    { id: "palette", keys: modChord("K", isApple), label: "Open command palette", action: "palette" },
+    { id: "help-chord", keys: modChord("/", isApple), label: "Open keyboard shortcuts (this overlay)", action: "help" },
+    { id: "help-key", keys: "?", label: "Open keyboard shortcuts", action: "help" },
+    { id: "sidebar", keys: modChord("B", isApple), label: "Toggle sidebar", action: "sidebar" },
+    { id: "close", keys: "Esc", label: "Close palette / overlay / drawer", action: "close" },
+  ];
+}
 
 // "Go to" sequence rows — derived from the single-source `seq` field. Each runs
 // its navigate effect. Admin rows render only when the operator is an admin.
@@ -62,9 +73,10 @@ const AGENT_ROW: SeqRow = {
 };
 
 export function HelpOverlay() {
-  const { enabled, helpOpen, closeHelp, openPalette, runEffect, isAdmin } =
+  const { enabled, helpOpen, closeHelp, openPalette, runEffect, isAdmin, isApplePlatform } =
     useShortcuts();
   const tour = useTour();
+  const chords = buildChords(isApplePlatform);
 
   function runChord(action: HelpAction) {
     switch (action) {
@@ -112,14 +124,14 @@ export function HelpOverlay() {
       <Command.List>
         <Command.Empty>No matching shortcuts.</Command.Empty>
         <Command.Group heading="Keyboard shortcuts">
-          {CHORDS.map((s) => (
+          {chords.map((s) => (
             <Command.Item
-              key={s.keys + s.label}
+              key={s.id}
               value={`${s.label} ${s.keys}`}
               // Selecting a row RUNS its shortcut (open palette / toggle sidebar
               // / close), not just dismiss the overlay.
               onSelect={() => runChord(s.action)}
-              data-testid={`help-row-${s.keys}`}
+              data-testid={`help-row-${s.id}`}
             >
               <span className="cmdk-help-label">{s.label}</span>
               <kbd className="cmdk-keys">{s.keys}</kbd>

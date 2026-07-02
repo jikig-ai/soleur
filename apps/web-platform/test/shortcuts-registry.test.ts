@@ -16,6 +16,11 @@ import {
   NAV_ITEMS,
   ADMIN_NAV_ITEMS,
 } from "@/components/command-palette/nav-items";
+import {
+  isApplePlatform,
+  modChord,
+  modShiftChord,
+} from "@/components/command-palette/platform";
 
 function byId(cmds: Command[], id: string): Command | undefined {
   return cmds.find((c) => c.id === id);
@@ -214,5 +219,61 @@ describe("shortcutsEnabled storage", () => {
     expect(readShortcutsEnabled()).toBe(false);
     writeShortcutsEnabled(true);
     expect(readShortcutsEnabled()).toBe(true);
+  });
+});
+
+// FR1/AC3 — platform detection is a pure, SSR-safe, DOM-free helper (inject the
+// navigator shape) used only to pick the display glyph (⌘ vs Ctrl). It never
+// touches the resolver path.
+describe("isApplePlatform", () => {
+  it("returns true for a macOS navigator shape", () => {
+    expect(isApplePlatform({ platform: "MacIntel", userAgent: "Mozilla/5.0 (Macintosh)" })).toBe(true);
+  });
+  it("returns true for iPhone/iPad user agents", () => {
+    expect(isApplePlatform({ platform: "iPhone", userAgent: "iPhone" })).toBe(true);
+    expect(isApplePlatform({ platform: "", userAgent: "Mozilla/5.0 (iPad; CPU OS 17_0)" })).toBe(true);
+  });
+  it("returns false for Windows / Linux / ChromeOS shapes", () => {
+    expect(isApplePlatform({ platform: "Win32", userAgent: "Windows NT 10.0" })).toBe(false);
+    expect(isApplePlatform({ platform: "Linux x86_64", userAgent: "X11; Linux" })).toBe(false);
+    expect(isApplePlatform({ platform: "Linux armv8l", userAgent: "CrOS" })).toBe(false);
+  });
+  it("returns false (stable SSR default) when navigator is null", () => {
+    // Passing `null` explicitly exercises the no-navigator branch (the
+    // `undefined` arm would instead fall through to the ambient navigator).
+    expect(isApplePlatform(null)).toBe(false);
+  });
+});
+
+describe("modChord", () => {
+  it("renders the ⌘ glyph (no separator) on Apple", () => {
+    expect(modChord("K", true)).toBe("⌘K");
+    expect(modChord("/", true)).toBe("⌘/");
+  });
+  it("renders Ctrl+ on non-Apple", () => {
+    expect(modChord("K", false)).toBe("Ctrl+K");
+    expect(modChord("B", false)).toBe("Ctrl+B");
+  });
+});
+
+describe("modShiftChord", () => {
+  it("renders ⌘⇧<letter> on Apple", () => {
+    expect(modShiftChord("L", true)).toBe("⌘⇧L");
+  });
+  it("renders Ctrl+Shift+<letter> on non-Apple", () => {
+    expect(modShiftChord("L", false)).toBe("Ctrl+Shift+L");
+  });
+});
+
+// FR2 — the ⌘B palette hint is a display substitution that follows the platform;
+// the default (SSR / non-Apple) is Ctrl+B, and the model (seq/formatSeqHint) is
+// untouched.
+describe("buildCommands — platform-aware modifier glyph", () => {
+  it("shows Ctrl+B for the sidebar toggle on a non-Apple platform (default)", () => {
+    expect(byId(buildCommands({ isAdmin: false }), "toggle-sidebar")?.keys).toBe("Ctrl+B");
+    expect(byId(buildCommands({ isAdmin: false }, { isApplePlatform: false }), "toggle-sidebar")?.keys).toBe("Ctrl+B");
+  });
+  it("shows ⌘B for the sidebar toggle on Apple", () => {
+    expect(byId(buildCommands({ isAdmin: false }, { isApplePlatform: true }), "toggle-sidebar")?.keys).toBe("⌘B");
   });
 });

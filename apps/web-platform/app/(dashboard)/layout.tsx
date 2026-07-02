@@ -21,6 +21,10 @@ import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
+import {
+  isApplePlatform as detectApplePlatform,
+  modChord,
+} from "@/components/command-palette/platform";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
 import { SupportLauncher } from "@/components/support/support-launcher";
@@ -139,6 +143,9 @@ export default function DashboardLayout({
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
+  // SSR-safe: init non-Apple (→ `Ctrl` glyph) then read the real platform on
+  // mount, so the ⌘B tooltip shows `Ctrl+B` on Windows/Linux (FR2).
+  const [isApplePlatform, setIsApplePlatform] = useState(false);
 
   // Check admin status on mount
   useEffect(() => {
@@ -146,6 +153,11 @@ export default function DashboardLayout({
       .then((res) => res.json())
       .then((data: { isAdmin: boolean }) => setIsAdmin(data.isAdmin))
       .catch(() => {});
+  }, []);
+
+  // Read the platform once post-hydration for the ⌘/Ctrl tooltip glyph.
+  useEffect(() => {
+    setIsApplePlatform(detectApplePlatform());
   }, []);
 
   useEffect(() => {
@@ -355,7 +367,11 @@ export default function DashboardLayout({
         <button
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+          title={
+            collapsed
+              ? `Expand sidebar (${modChord("B", isApplePlatform)})`
+              : `Collapse sidebar (${modChord("B", isApplePlatform)})`
+          }
           className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-3" : "right-3 top-10"} z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
         >
           <RailToggleIcon
