@@ -353,6 +353,37 @@ deliberately rejects floating tags and backs the wrong-image-tagged-with-right-v
 contract. **The deploy contract stays semver-only.** Single-file change:
 `.github/workflows/apply-deploy-pipeline-fix.yml`.
 
+### Amendment (#5960, 2026-07-03) — loaded proof read live from the running container; poll validates the swap terminal and treats lock_contention as non-terminal
+
+Once #5955 cleared the `tag_malformed` wedge, the item-4 assert failed on
+`LOADED != COMMITTED` with an **empty** loaded hash. Two latent defects: (a) the redeploy
+poll accepted any `exit_code>=0` frame with `start_ts>PRIOR_START` — no `component`/`tag`/
+`reason` guard — so it latched a foreign-component, stale, or **`lock_contention`** terminal
+(a flock loser stamps *our* `component`+`tag` with `exit_code=1`, since `START_TS` and
+`COMPONENT`/`TAG` are set pre-flock at `ci-deploy.sh:207`/`:674`, and that frame persists for
+the winner's whole multi-minute swap); (b) the assert read only the **ephemeral recorded**
+`.seccomp_profile_sha256` (tmpfs, reboot-cleared per #5877), which cannot discriminate
+not-delivered / host-stale / not-reloaded.
+
+**Decision (CTO + 5-agent panel, 2026-07-03).** The "loaded" proof is read **live** from the
+running container: `cat-deploy-state.sh` adds `seccomp_profile_loaded_matches_host` (docker
+inspect `HostConfig.SecurityOpt` inlined JSON `jq -cS`-equals the on-host file, computed with
+ONE host jq — reusing the `audit-bwrap-uid.sh:105-146` technique), plus
+`seccomp_profile_host_sha256` (raw `sha256sum`) and `seccomp_profile_host_present`. The
+assert becomes the STATE invariant "*the running container is enforcing the committed
+profile*" = `host_sha256==COMMITTED_SHA` (raw==raw, delivery leg) **AND**
+`loaded_matches_host` (host-jq, reload leg) — **no cross-jq comparison** on the load-bearing
+path. The poll accepts a terminal only when `component==web-platform && tag==TARGET_TAG &&
+start_ts>PRIOR_START`, keeps polling on `lock_contention`/`adr027_prod_already_running`/
+`running`, and on exhaustion does one STATE check (a concurrent release loading the *same*
+committed profile satisfies the invariant). Adds a marginal second `docker inspect` per
+`/hooks/deploy-status` GET (same pattern as `container_restart_json`). The recorded
+`seccomp_profile_sha256` field/writer stays as a permanent inert diagnostic (no gate).
+**Rejected:** a deploy nonce for redeploy provenance — the assert verifies host STATE, not
+"our POST caused it"; the timeout STATE check achieves correctness without threading a nonce.
+No new `TF_VAR_*`; `aggregate pattern` threshold unchanged. Files:
+`apps/web-platform/infra/cat-deploy-state.sh` + `.github/workflows/apply-deploy-pipeline-fix.yml`.
+
 ## Consequences
 
 - **Positive.** A future SDK bump that breaks the sandbox is caught pre-merge
