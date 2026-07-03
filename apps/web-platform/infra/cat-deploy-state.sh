@@ -186,7 +186,10 @@ cron_drain_json() {
 # the canary. Best-effort + read-only. The canary-promotion follow-through
 # (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
 sandbox_canary_json() {
-  local f="${SANDBOX_CANARY_STATE_FILE:-/var/run/ci-deploy-sandbox-canary.json}"
+  # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
+  # SANDBOX_CANARY_STATE_FILE. The soak accumulator must survive host reboots or
+  # it silently resets to zero (#5889); see the writer's rationale.
+  local f="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
   if [[ -f "$f" ]]; then
     local v r s c cp fp
     v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"

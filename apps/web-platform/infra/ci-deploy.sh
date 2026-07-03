@@ -180,9 +180,17 @@ CRON_DRAIN_PROBE_TIMEOUT="${CRON_DRAIN_PROBE_TIMEOUT:-10}"
 CRON_DEPLOY_LEASE_FILE="${CRON_DEPLOY_LEASE_FILE:-/mnt/data/workspaces/.deploy-lease}"
 CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.json}"
 # Faithful sandbox canary verdict (#5875 / ADR-079). Written per deploy, surfaced
-# on /hooks/deploy-status by cat-deploy-state.sh (sandbox_canary_json). Separate
-# small state file — same pattern as CRON_DRAIN_STATE_FILE.
-SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/var/run/ci-deploy-sandbox-canary.json}"
+# on /hooks/deploy-status by cat-deploy-state.sh (sandbox_canary_json).
+# DURABLE on purpose (NOT /var/run tmpfs like CRON_DRAIN/SECCOMP below): this file
+# alone carries the CROSS-DEPLOY soak accumulator (consecutive_pass + first_pass_at,
+# see write_sandbox_canary_state). tmpfs is wiped on every reboot, which would
+# silently reset the "≥5 greens over ≥3 days" soak (#5889) to zero and lose the
+# span clock — the soak could then never complete on a host that reboots inside
+# the window. /mnt/data is the durable Hetzner volume (deploy-owned, cloud-init
+# `chown -R deploy:deploy /mnt/data`, in webhook.service ReadWritePaths), same
+# durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
+# cat-deploy-state.sh sandbox_canary_json().
+SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The host seccomp profile
@@ -191,7 +199,9 @@ SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # assert loaded==committed with NO SSH, ci-deploy.sh records the sha256 of the
 # profile file the prod container was JUST started with, surfaced on
 # /hooks/deploy-status by cat-deploy-state.sh (seccomp_profile_sha256). Separate
-# small state file — same pattern as SANDBOX_CANARY_STATE_FILE.
+# small state file — /var/run tmpfs is fine here (unlike SANDBOX_CANARY_STATE_FILE):
+# this is a per-deploy snapshot with no cross-reboot accumulator, so a reboot
+# wiping it before the next deploy re-records it is harmless.
 SECCOMP_PROFILE_HOST_PATH="${SECCOMP_PROFILE_HOST_PATH:-/etc/docker/seccomp-profiles/soleur-bwrap.json}"
 SECCOMP_PROFILE_STATE_FILE="${SECCOMP_PROFILE_STATE_FILE:-/var/run/ci-deploy-seccomp-profile.json}"
 
