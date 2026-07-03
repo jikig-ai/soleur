@@ -14,8 +14,9 @@ name: canary-status
 on:
   workflow_dispatch: {}
 
-permissions:
-  contents: read
+# No repo checkout or contents access is needed — this job only makes one
+# outbound authenticated GET and writes a summary.
+permissions: {}
 
 jobs:
   read-canary-status:
@@ -40,7 +41,10 @@ jobs:
           if [[ "$CODE" != "200" ]]; then
             echo "::error::deploy-status returned HTTP $CODE"; exit 1
           fi
-          SC="$(printf '%s' "$BODY" | jq -c '.sandbox_canary // "MISSING"')"
+          # -e: a non-JSON 200 body (e.g. a CF Access interstitial) must fall into
+          # the MISSING branch, not silently through to "unknown" (parity with
+          # scripts/followthroughs/canary-promotion-5875.sh).
+          SC="$(printf '%s' "$BODY" | jq -ce '.sandbox_canary // "MISSING"' 2>/dev/null || echo '"MISSING"')"
           if [[ "$SC" == '"MISSING"' ]]; then
             echo "::warning::deploy-status has no .sandbox_canary field (old host / not yet written)"; echo "$BODY" | head -c 400; exit 0
           fi
@@ -53,6 +57,9 @@ jobs:
           {
             echo "## Faithful sandbox-canary soak state"
             echo ""
+            # NOTE: the \` escapes below are load-bearing — inside double quotes an
+            # UNescaped backtick is command substitution, so a compromised deploy
+            # host could inject via .verdict/.sdk_version. Keep them escaped.
             echo "| field | value |"
             echo "|---|---|"
             echo "| verdict | \`$VERDICT\` |"
