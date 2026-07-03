@@ -92,8 +92,13 @@ installer which writes the fail-closed `/run/soleur-hostscripts.ok` sentinel the
 
 `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` — 21 pass (web < 30,500 B
 strict + structural extraction contract + Dockerfile↔server.tf baked-set parity; also pins
-git-data host at a no-further-growth ceiling). Live fresh-host verification is gated behind
-operator cutover #5887 and tracked as a ⏳ test-plan item on PR #5922.
+git-data host at a no-further-growth ceiling). Live fresh-host verification **completed
+2026-07-03** (#5942, closed): fresh `soleur-web-2` provisioned through the bake-and-extract
+path (created 07:13:22Z, 61s after #5922 merged) and healthy ~9h later — confirmed via
+self-pulled signals (no SSH): (1) host `running` not powered off ⇒ fail-closed
+`/run/soleur-hostscripts.ok` sentinel written; (2) **zero** `stage=extract|verify|install`
+(+5 other stages) Sentry bootstrap-trap events in 24h. Dedicated per-host Better Stack
+uptime alarm for future boots deferred to #5933.
 
 ---
 
@@ -164,4 +169,6 @@ Every action item and follow-up so this incident cannot recur.
 | Issue | Action | Status |
 |---|---|---|
 | #5927 | git-data host cloud-init `user_data` is ALSO over cap (~41.7 KB, no-docker host so bake-and-extract N/A) — resolve before ADR-068 Phase 2; size guard pins it at a no-further-growth ceiling in the meantime. | open |
-| #5887 | `apply-web-platform-infra.yml` red since #5877 (moved resources excluded by `-target` allow-list) — this blocked infra-apply pipeline gates any fresh-host provision reaching prod, so it must go green before this fix is exercised live (the ⏳ recovery-verification item confirming extraction + sentinel end-to-end). | open |
+| #5887 | `apply-web-platform-infra.yml` red since #5877 (moved resources excluded by `-target` allow-list) — this blocked infra-apply pipeline gated any fresh-host provision reaching prod, so it had to go green before this fix was exercised live. | **closed 2026-07-03** (unblocked via #5950 deferring the web-1 placement reboot with `ignore_changes`; infra-apply green). |
+| #5942 | Live fresh-host recovery-verification (extraction + content-hash + sentinel end-to-end on a real host). | **closed 2026-07-03** — verified on fresh `soleur-web-2` (running + zero Sentry stage-trap events). |
+| #5933 | Dedicated per-host Better Stack "provision-armed uptime absence" monitor (ADR-082 Item 1) — the PRIMARY fresh-boot alarm; not yet wired, so #5942 relied on the fail-closed running-state proxy + Sentry absence instead. | open |
