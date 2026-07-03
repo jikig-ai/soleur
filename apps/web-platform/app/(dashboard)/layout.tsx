@@ -21,6 +21,8 @@ import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
 import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
+import { ConversationsNavBadge } from "@/components/dashboard/conversations-nav-badge";
+import { WorkstreamNavBadge } from "@/components/dashboard/workstream-nav-badge";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import {
   isApplePlatform as detectApplePlatform,
@@ -437,14 +439,21 @@ export default function DashboardLayout({
                     <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
                       {item.label}
                     </span>
-                    {/* feat-inbox-attention-badge: the Inbox item carries an
-                        active-count badge. Special-cased by href (matching the
-                        `/dashboard` active-check above) to keep nav-items.ts as
-                        pure route/label data (TR2). Mounted here — inside this
-                        layout's <SWRConfig> (ADR-067) — so its fetch dedups with
-                        the Inbox Active tab under the shared key (TR1/G3). */}
+                    {/* Nav attention-count badges, special-cased by href (matching
+                        the `/dashboard` active-check above) to keep nav-items.ts
+                        as pure route/label data. Mounted here — inside this
+                        layout's <SWRConfig> (ADR-067) — so each fetch dedups with
+                        its surface's list under the shared key. Inbox counts the
+                        active email feed; Dashboard counts conversations needing a
+                        decision; Workstream counts items needing attention. */}
                     {item.href === "/dashboard/inbox" && (
                       <InboxNavBadge collapsed={collapsed} />
+                    )}
+                    {item.href === "/dashboard" && (
+                      <ConversationsNavBadge collapsed={collapsed} />
+                    )}
+                    {item.href === "/dashboard/workstream" && (
+                      <WorkstreamNavBadge collapsed={collapsed} />
                     )}
                   </Link>
                 );
