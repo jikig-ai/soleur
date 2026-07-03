@@ -134,6 +134,7 @@ const gitDataTf = readFileSync(join(INFRA, "git-data.tf"), "utf8");
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
+const dockerignore = readFileSync(join(REPO_ROOT, "apps", "web-platform", ".dockerignore"), "utf8");
 
 describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
   test("web host user_data is under the sub-cap budget with headroom", () => {
@@ -294,5 +295,25 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
   });
   test("the baked set is exactly 22 scripts + hooks.json.tmpl + journald + bootstrap", () => {
     expect(serverTfBakedSet().length).toBe(25);
+  });
+
+  // #5922 release break: the Dockerfile bakes the host-scripts via
+  // `COPY --from=builder /app/infra/<file>`, but `.dockerignore` excludes the
+  // whole `infra/` dir from the builder-stage `COPY . .`. Every baked file must
+  // be re-included with `!infra/<file>` or the runner COPY fails
+  // ("/app/infra/<file>": not found) and the entire web-platform release build
+  // breaks. This asserts the third leg of parity the AC2 test above did not cover.
+  function dockerignoreInfraReincludes(): Set<string> {
+    const set = new Set<string>();
+    for (const raw of dockerignore.split("\n")) {
+      const m = /^!infra\/(\S+)\s*$/.exec(raw.trim());
+      if (m) set.add(m[1]);
+    }
+    return set;
+  }
+  test("every baked host-script is re-included in .dockerignore (survives COPY . .)", () => {
+    const reincludes = dockerignoreInfraReincludes();
+    const missing = dockerfileBakedSet().filter((f) => !reincludes.has(f));
+    expect(missing).toEqual([]);
   });
 });
