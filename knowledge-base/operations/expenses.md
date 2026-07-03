@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-02
+last_updated: 2026-07-03
 ---
 
 # Expenses
@@ -38,6 +38,7 @@ last_updated: 2026-07-02
 | Claude Code Max 20x (seat 1) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 1 of 2 |
 | Claude Code Max 20x (seat 2) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 2 of 2 |
 | Cloudflare R2 (cla-evidence) | Cloudflare | storage | 0.00 | active | - | Off-site CLA signature archive, Governance object-lock, 10yr retention, region weur. Pay-per-use: $0.015/GB-mo + $0.36/M writes. Sub-cent/mo at realistic scale. See apps/cla-evidence/infra/. |
+| Cloudflare Load Balancing | Cloudflare | hosting | 5.00 | approved-not-billing | - | Load Balancing add-on fronting `app.soleur.ai` for the multi-host GA blue-green ingress (ADR-068 §(b); runbook `cf-lb-a-record-gaplessness-verify.md`). ~$5/mo base tier (2 origins web-1+web-2 + 1 pool + 500k DNS queries/mo; +$5/additional origin, + DNS-query overage). **Operator pre-approved the recurring spend 2026-07-03** — NOT revenue-gated; goal is deploy-everything-then-flip-to-GA ASAP. Free-plan zone has no LB subscription until the LB is created; provisions via `apply-web-platform-infra.yml` as a count-gated `cloudflare_load_balancer` (`cf_load_balancing_enabled`). **Billing begins at provision** (status flips `approved-not-billing → active` in the GA infra-apply PR) — excluded from current burn until then. DPA: covered by existing Cloudflare relationship (same account, no new sub-processor). VERIFY exact base + query draw on the first Cloudflare invoice post-provision. See #5966, PR #5968 |
 
 ## One-Time
 
