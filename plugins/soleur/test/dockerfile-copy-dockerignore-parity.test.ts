@@ -51,7 +51,25 @@ interface SrcRef {
  * (excluded); tolerates optional `--chown=`/`--chmod=` flags between `COPY` and `--from=`.
  */
 export function parseBuilderCopySources(dockerfileText: string): SrcRef[] {
-  return []; // STUB — implemented in GREEN
+  const lines = dockerfileText.split("\n");
+  const out: SrcRef[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    // Only statements whose first keyword is COPY --from=<stage>. Join `\`-continuations.
+    if (!/^\s*COPY\s+(?:--\w+=\S+\s+)*--from=\S+/.test(lines[i])) continue;
+    const keywordLine = i + 1; // 1-indexed line of the COPY keyword
+    let stmt = lines[i];
+    while (/\\\s*$/.test(stmt) && i + 1 < lines.length) {
+      stmt = stmt.replace(/\\\s*$/, " ") + lines[++i];
+    }
+    // Strip the leading `COPY (--flag=… )* --from=<stage>` prefix, then tokenize the rest.
+    const rest = stmt.replace(/^\s*COPY\s+(?:--\w+=\S+\s+)*--from=\S+\s+/, "");
+    const tokens = rest.split(/\s+/).filter(Boolean);
+    tokens.pop(); // last token is the <dst>
+    for (const tok of tokens) {
+      if (tok.startsWith("/app/")) out.push({ src: tok.slice("/app/".length), line: keywordLine });
+    }
+  }
+  return out;
 }
 
 /**
@@ -60,7 +78,26 @@ export function parseBuilderCopySources(dockerfileText: string): SrcRef[] {
  * srcs the builder needs at build time (a `.dockerignore` strip → `exit 127`).
  */
 export function parseBuilderRunScriptSources(dockerfileText: string): SrcRef[] {
-  return []; // STUB — implemented in GREEN
+  const lines = dockerfileText.split("\n");
+  // Slice the builder stage: from `FROM … AS builder` to the next `FROM`.
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (start === -1) {
+      if (/^\s*FROM\s+.*\bAS\s+builder\b/i.test(lines[i])) start = i + 1;
+    } else if (/^\s*FROM\s+/i.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  if (start === -1) return [];
+  const out: SrcRef[] = [];
+  const runScript = /(?:\bbash|\bsh|\bsource|(?:^|\s)\.)\s+(\S+\.sh)\b/g;
+  for (let i = start; i < end; i++) {
+    if (!/^\s*RUN\b/.test(lines[i])) continue;
+    for (const m of lines[i].matchAll(runScript)) out.push({ src: m[1], line: i + 1 });
+  }
+  return out;
 }
 
 interface ExclusionModel {
@@ -70,7 +107,21 @@ interface ExclusionModel {
 
 /** Excluded-dir-prefix set + exact-`!`-reinclude set. Simplified evaluator — no glob engine. */
 export function dockerignoreExclusionModel(dockerignoreText: string): ExclusionModel {
-  return { excludedDirPrefixes: [], reincludes: new Set() }; // STUB — implemented in GREEN
+  const excludedDirPrefixes: string[] = [];
+  const reincludes = new Set<string>();
+  const hasGlob = (p: string) => /[*?[\]]/.test(p);
+  for (const raw of dockerignoreText.split("\n")) {
+    const pat = raw.trim();
+    if (!pat || pat.startsWith("#")) continue;
+    if (pat.startsWith("!")) {
+      const body = pat.slice(1);
+      if (!hasGlob(body)) reincludes.add(body.replace(/\/+$/, ""));
+      continue;
+    }
+    if (hasGlob(pat)) continue; // simplified evaluator: only literal prefixes (fail-loud on globs)
+    excludedDirPrefixes.push(pat.replace(/\/+$/, ""));
+  }
+  return { excludedDirPrefixes, reincludes };
 }
 
 interface GuardInput {
@@ -79,13 +130,43 @@ interface GuardInput {
   trackedContextPaths: Set<string>; // build-context-relative git-tracked file paths
 }
 
+interface Violation extends SrcRef {
+  reinclude: string; // the exact `!<path>` line to add to apps/web-platform/.dockerignore
+}
+
 /**
  * The composed guard over `parseBuilderCopySources ∪ parseBuilderRunScriptSources`: skip srcs that
  * are NOT context-sourced (not in, and not an ancestor-dir of any path in, `trackedContextPaths`);
  * flag a context-sourced src iff some excluded prefix is its ancestor AND it is not re-included.
  */
-export function findReincludeViolations(input: GuardInput): SrcRef[] {
-  return []; // STUB — implemented in GREEN
+export function findReincludeViolations(input: GuardInput): Violation[] {
+  const { dockerfileText, dockerignoreText, trackedContextPaths } = input;
+  const { excludedDirPrefixes, reincludes } = dockerignoreExclusionModel(dockerignoreText);
+  const refs = [
+    ...parseBuilderCopySources(dockerfileText),
+    ...parseBuilderRunScriptSources(dockerfileText),
+  ];
+
+  // context-sourced = the path itself is git-tracked, OR it is an ancestor dir of a tracked path
+  // (e.g. `public` → `public/index.html`). A src that is neither is build-generated → skip.
+  const isContextSourced = (src: string): boolean => {
+    if (trackedContextPaths.has(src)) return true;
+    const prefix = src + "/";
+    for (const p of trackedContextPaths) if (p.startsWith(prefix)) return true;
+    return false;
+  };
+  const isStripped = (src: string): boolean =>
+    excludedDirPrefixes.some((p) => src === p || src.startsWith(p + "/")) && !reincludes.has(src);
+
+  const seen = new Set<string>();
+  const violations: Violation[] = [];
+  for (const { src, line } of refs) {
+    if (seen.has(src)) continue;
+    seen.add(src);
+    if (!isContextSourced(src)) continue; // build-generated (e.g. .next, dist/server) — safe to skip
+    if (isStripped(src)) violations.push({ src, line, reinclude: `!${src}` });
+  }
+  return violations;
 }
 
 // ---------------------------------------------------------------------------
