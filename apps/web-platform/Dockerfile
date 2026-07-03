@@ -197,6 +197,7 @@ COPY --from=builder \
   /app/infra/cron-egress-resolve.timer \
   /app/infra/cron-egress-alarm@.service \
   /app/infra/cron-egress-postapply-assert.sh \
+  /app/infra/cron-egress-enforce-probe.sh \
   /app/infra/hooks.json.tmpl \
   /app/infra/journald-soleur.conf \
   /app/infra/soleur-host-bootstrap.sh \

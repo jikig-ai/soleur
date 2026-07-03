@@ -577,3 +577,10 @@ runcmd:
       -p 0.0.0.0:3000:3000 \
       ${image_name}
     rm -f "$TMPENV"
+    # Fresh-host post-container egress-enforcement probe (#5933; details in the script
+    # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open
+    # exfil path. The probe emits an SSH-free Sentry event before exiting non-zero.
+    if ! /usr/local/bin/cron-egress-enforce-probe.sh; then
+      echo "FATAL: container egress enforcement not proven — powering off (#5933)" >&2
+      poweroff -f
+    fi

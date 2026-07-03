@@ -351,8 +351,10 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 22 scripts + hooks.json.tmpl + journald + bootstrap", () => {
-    expect(serverTfBakedSet().length).toBe(25);
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap", () => {
+    // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
+    // enforcement probe, #5933 item 3).
+    expect(serverTfBakedSet().length).toBe(26);
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via

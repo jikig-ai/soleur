@@ -59,7 +59,7 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          disk-monitor.sh resource-monitor.sh container-restart-monitor.sh \
          infra-config-apply.sh cat-infra-config-state.sh \
          cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
-         cron-egress-postapply-assert.sh; do
+         cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
 # The pinned root-run escalation helper installs WITHOUT the .sh suffix (its sudoers grant +
@@ -114,7 +114,7 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          disk-monitor.sh resource-monitor.sh container-restart-monitor.sh \
          infra-config-apply.sh cat-infra-config-state.sh \
          cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
-         cron-egress-postapply-assert.sh; do
+         cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh; do
   FAILED_FILE="$f"; test -x "/usr/local/bin/$f"
 done
 FAILED_FILE=infra-config-install
