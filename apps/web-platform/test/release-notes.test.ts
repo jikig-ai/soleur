@@ -74,6 +74,37 @@ describe("sanitizeReleases", () => {
     ]);
     expect(s.title).toBe("Faster dashboard tab switching");
   });
+
+  it("flattens inline markdown in the derived title (no literal ** or backticks)", () => {
+    const [s] = sanitizeReleases([
+      rel({
+        tag_name: "web-v1.4.0",
+        name: "web-v1.4.0",
+        body: "- **ADR-068 amendments:** user-sticky routing via `worktree_id` and [a link](https://x.io)",
+      }),
+    ]);
+    expect(s.title).not.toContain("**");
+    expect(s.title).not.toContain("`");
+    expect(s.title).toContain("ADR-068 amendments: user-sticky routing via worktree_id");
+    expect(s.title).toContain("a link");
+    // Single underscores in identifiers survive.
+    expect(s.title).toContain("worktree_id");
+  });
+
+  it("truncates a long derived title on a word boundary with an ellipsis", () => {
+    const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+    const [s] = sanitizeReleases([
+      rel({ tag_name: "web-v1.5.0", name: "web-v1.5.0", body: `- ${long}` }),
+    ]);
+    expect(s.title.length).toBeLessThanOrEqual(151); // 150 + ellipsis
+    expect(s.title.endsWith("…")).toBe(true);
+    // The stem (title minus ellipsis) is a clean word-boundary prefix of the
+    // original: it is a prefix, and the original's next char is a space — i.e.
+    // no word was bisected.
+    const stem = s.title.slice(0, -1);
+    expect(long.startsWith(stem)).toBe(true);
+    expect(long[stem.length]).toBe(" ");
+  });
 });
 
 describe("fetchWebReleases", () => {
@@ -161,6 +192,19 @@ describe("fetchWebReleases", () => {
       expect.any(Error),
       expect.objectContaining({ op: "releases-page-undercount" }),
     );
+  });
+
+  it("labels each release's bump (major/minor/patch) vs the next-older release", async () => {
+    fetchMock.mockResolvedValueOnce(
+      page([
+        rel({ tag_name: "web-v2.0.0" }), // vs 1.3.1 → major
+        rel({ tag_name: "web-v1.3.1" }), // vs 1.3.0 → patch
+        rel({ tag_name: "web-v1.3.0" }), // vs 1.2.0 → minor
+        rel({ tag_name: "web-v1.2.0" }), // oldest in window → null
+      ]),
+    );
+    const cards = await fetchWebReleases();
+    expect(cards.map((c) => c.bump)).toEqual(["major", "patch", "minor", null]);
   });
 
   it("throws on a non-200 GitHub response", async () => {
