@@ -538,6 +538,42 @@ Phase 4b (continuous checkpoint).
 > caught by the pre-existing `resource_deletes` counter; the reboot clause deliberately
 > does not compare them (a REPLACE never matches `actions==["update"]`).)
 
+> **Amendment (2026-07-03, #5887 — blue-green ingress prerequisites & reboot deferral).**
+> Refines the moved-block amendment above: by 2026-07-03 the four `moved` blocks were
+> already consumed in state and web-2 existed (bare), so the CI red was NOT the moved
+> error but the `reboot_updates` guard halting on web-1's pending `placement_group_id`
+> attach. **(a) Reboot deferral (zero-downtime CI unwedge).** Adding `placement_group_id`
+> to `hcloud_server.web`'s `lifecycle.ignore_changes` (`server.tf`) removes web-1's
+> pending `0 → web_spread` attach from **every** plan (verified: a full plan drops from
+> `31 add, 2 change` to `31 add, 1 change, 0 destroy` — the only residual change is the
+> in-place `hcloud_firewall_attachment.web` server-id update). The `reboot_updates`
+> counter then reads 0, so both targeted apply pipelines self-heal green with **zero
+> reboot**, via a normal PR merge — no maintenance window. web-2 was born INTO the group
+> at create time, so this defers ONLY web-1. **GA-window removal trigger:** the GA
+> maintenance-window PR removes this `ignore_changes` entry as its FIRST diff and takes
+> the reboot on a **drained** host (blue-green), never on the sole live origin. A static
+> guard in `plugins/soleur/test/terraform-target-parity.test.ts` fails if the entry is
+> dropped silently. **(b) Deferred GA ingress design.** The multi-host ingress is a
+> **Cloudflare Load Balancer** (v4 provider syntax — the repo pins `cloudflare ~> 4.0`,
+> NOT v5; drain via origin `weight = 0`, not the v5-only `endpoint_drain_duration`),
+> health-checked. Its monitor MUST be **reachability-only** (`expected_codes = "2xx"`
+> against `/health`) and MUST NOT parse the `supabase` body field: `/health` always
+> returns 200 (`server/index.ts`) and both hosts share one Supabase, so a body-coupled
+> monitor would eject the sole live origin on a DB blip → full ingress outage. The A→LB
+> record migration is a live-record operation (no `moved` block / stable import id on
+> `cloudflare_record.app`) and its gaplessness is an **unverified** Cloudflare-behavior
+> claim — verify against CF docs + a staging convert before the GA window. The LB is a
+> paid add-on (~$5/mo) — record the recurring expense. web-2 sits in the pool at
+> **weight 0** (drained) until GA. **(c) Hard invariant.** NO live LB weight to web-2
+> before BOTH the owner-side relay is active (`SOLEUR_PROXY_BIND`/`PEER_ALLOWLIST`/
+> `HOST_ROSTER` set → `session-proxy.ts createProxyServer` binds) AND the git-data store
+> is cut over (`isGitDataStoreEnabled()` true, 3.C write-boundary sentinel merged, 3.D
+> LUKS cutover soak-verified). Rationale: with the router gated off (default) each host
+> serves purely locally on its own `/workspaces` volume, so any live request round-robined
+> to web-2 hits an empty workspace — a single-user (workspace-gone) incident. A truly
+> zero-downtime web-1 reboot therefore requires (b)+(c), i.e. it IS the GA line (§8), not
+> a prerequisite. Plan: `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills

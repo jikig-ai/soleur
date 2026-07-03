@@ -4,11 +4,11 @@ Plan: `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingres
 Lane: cross-domain · Threshold: single-user incident (CPO sign-off) · Refs #5887 #5877 #5274
 
 ## Phase 1 — Unwedge CI, zero reboot (normal PR)
-- [ ] 1.1 Edit `apps/web-platform/infra/server.tf`: `hcloud_server.web` `lifecycle.ignore_changes += placement_group_id` with a temporary-GA-deferral comment (names the GA removal trigger; notes web-2 already in the group).
-- [ ] 1.2 Add `terraform-target-parity.test.ts` assertion: plan with the ignore present → `reboot_updates = 0` on `hcloud_server.web` (guards future silent removal).
-- [ ] 1.3 Amend ADR-068 via `/soleur:architecture`: reboot-deferral + deferred GA ingress design + monitor-must-not-couple-to-supabase rule + no-live-weight-before-GA invariant.
+- [x] 1.1 Edit `apps/web-platform/infra/server.tf`: `hcloud_server.web` `lifecycle.ignore_changes += placement_group_id` with a temporary-GA-deferral comment (names the GA removal trigger; notes web-2 already in the group). — verified via `terraform validate` + live plan `31 add, 1 change, 0 destroy`.
+- [x] 1.2 Add `terraform-target-parity.test.ts` static guard: `hcloud_server.web` `ignore_changes` includes `placement_group_id` (guards future silent removal that would re-trip `reboot_updates`). — RED→GREEN, 1942 plugins tests pass.
+- [x] 1.3 Amend ADR-068: reboot-deferral + deferred GA ingress design (CF LB v4, monitor reachability-only) + no-live-weight-before-GA invariant.
 - [ ] 1.4 PR body: `Ref #5887` (NOT `Closes`); note the zero-reboot verification (`31 add, 1 change, 0 destroy`).
-- [ ] 1.5 Review gate: grep-verify no `cloudflare_load_balancer*` added; run user-impact-reviewer (single-user threshold).
+- [ ] 1.5 Review gate: grep-verify no `cloudflare_load_balancer*` added (done); run user-impact-reviewer (single-user threshold).
 
 ## Phase 1 — Post-merge (operator, automated)
 - [ ] 1.6 Confirm both apply pipelines green on `main` (`gh run list`, no dashboard).

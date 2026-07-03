@@ -138,8 +138,19 @@ resource "hcloud_server" "web" {
   # template interpolation differs from the original user_data, and
   # ssh_keys forces replacement. Both are safe to ignore (#967).
   # TODO: remove ignore_changes after clean reprovisioning (import artifact)
+  #
+  # placement_group_id — TEMPORARY GA-deferral (#5887, ADR-068 blue-green ingress
+  # prereqs). web-1 pre-dates the web_spread group; attaching it to the RUNNING host
+  # forces a Hetzner power-off reboot (see the placement_group_id comment above).
+  # Ignoring it keeps the pending 0 -> web_spread attach OUT of every plan so the
+  # destroy-guard `reboot_updates` counter (#5911) does not halt the targeted CI
+  # applies — unwedging #5887 with ZERO reboot. web-2 was born INTO the group at
+  # create time, so this defers ONLY web-1. REMOVE this entry in the GA maintenance-
+  # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
+  # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
+  # dropped silently.
   lifecycle {
-    ignore_changes = [user_data, ssh_keys, image]
+    ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }
 
   labels = {
