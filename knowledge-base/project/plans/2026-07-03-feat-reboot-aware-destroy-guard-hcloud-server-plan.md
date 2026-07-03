@@ -74,7 +74,7 @@ resource types (`nested_deletes`). It is **structurally blind to reboot-forcing
 in-place `update` actions on `hcloud_server.*`**: a change to
 `placement_group_id` or `server_type` powers-off / reboots the running prod
 host with **0 destroys** and **0 nested-block removals**, so `destroy_count`
-stays 0 and the unattended per-PR apply proceeds without an `[ack-destroy]`.
+remains at zero and the unattended per-PR apply proceeds without an `[ack-destroy]`.
 
 This plan adds a **third counter** — `reboot_updates` — to the same
 path-specific filter, wired into the same `[ack-destroy]` gate, so a planned
