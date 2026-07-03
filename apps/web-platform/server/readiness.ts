@@ -4,6 +4,7 @@ import { randomBytes } from "crypto";
 import type { IncomingMessage, ServerResponse } from "http";
 import { countWorkspaceDirsAt } from "./session-metrics";
 import { reportSilentFallback } from "./observability";
+import { isLoopbackHost, isLoopbackPeer } from "./loopback";
 
 // Deep-readiness (#5966, ADR-068 Sharp Edge C1). `/health` is liveness-only
 // (hardcoded status:"ok" + a SHARED-Supabase probe) — neither signal reflects
@@ -43,13 +44,17 @@ function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || "/workspaces";
 }
 
-// Write+unlink a dotfile probe. The probe is a dotfile AND a file (not a dir),
-// so it never inflates the populated count even in the window before unlink.
-// FAIL CLOSED on any error.
+// Write+unlink a probe. The probe is a regular file (not a dir), so
+// countWorkspaceDirsAt's isDirectory() filter excludes it from the populated
+// count even in the window before unlink (there is no dotfile-name filter — the
+// isDirectory() check is what saves it). Opened O_EXCL (`wx`) so it refuses to
+// follow a final symlink and fails EEXIST rather than truncating a target
+// (CWE-59/CWE-377 defense-in-depth); the 48-bit random name makes a collision
+// with a real file a non-event. FAIL CLOSED on any error.
 function isWorkspacesWritable(root: string): boolean {
   const probe = join(root, `.readyz-probe-${randomBytes(6).toString("hex")}`);
   try {
-    writeFileSync(probe, "");
+    writeFileSync(probe, "", { flag: "wx" });
     return true;
   } catch {
     return false;
@@ -84,54 +89,47 @@ export function buildReadinessResponse(): ReadinessResponse {
   }
 }
 
-function isLoopbackPeer(remoteAddress: string | undefined): boolean {
-  return (
-    remoteAddress === "127.0.0.1" ||
-    remoteAddress === "::1" ||
-    remoteAddress === "::ffff:127.0.0.1"
-  );
-}
-
-// Local mirror of index.ts's isLoopbackHost. Kept here (rather than imported
-// from index.ts, which imports THIS module → circular) so the readyz handler is
-// fully self-contained and unit-testable. Both are trivial pure "is this a
-// loopback Host header" checks; the port suffix is stripped so e2e tests that
-// hit a non-3000 port still match.
-function isLoopbackHostHeader(hostHeader: string | undefined): boolean {
-  if (!hostHeader) return false;
-  const host = hostHeader.split(":")[0];
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
-}
-
-// Handle GET /internal/readyz. Gated to the loopback TRANSPORT PEER
-// (socket.remoteAddress — unspoofable off-host) as the primary control, with
-// the Host header as a secondary clause; mount/topology state is attacker-
-// useful (DoS-tuning, cluster-shape scraping) and the Host header is client-
-// supplied. FAIL CLOSED: every path terminates in a JSON response, and the
-// try/catch converts any throw to a 503 — an unhandled rejection here would
-// reach installCrashHandlers() → process.exit(1), a *restart* of live web-1,
-// strictly worse than a 503. `build` is injectable purely for testing the
-// catch path; production callers use the default.
+// Handle GET /internal/readyz. Loopback-gated: mount/topology state is
+// attacker-useful (DoS-tuning, cluster-shape scraping). Behind the CF tunnel the
+// socket peer is loopback for ALL relayed traffic, so the Host-header clause
+// (isLoopbackHost) is the load-bearing boundary for tunnel traffic; the
+// transport-peer clause (isLoopbackPeer) additionally blocks direct off-host TCP
+// to the port (the firewall's job too). Both must hold — see ./loopback. On-host
+// consumers (drain/undrain tooling, GA pre-pool check) therefore MUST run on
+// loopback with a loopback Host header, not probe readyz as a direct off-host LB
+// healthcheck.
+//
+// FAIL CLOSED: the ENTIRE body (gate included) is wrapped so any throw becomes a
+// 503, never an escaped uncaught throw → installCrashHandlers() → process.exit(1),
+// which would *restart* live web-1 (strictly worse than a 503). `build` is
+// injectable purely for testing the catch path; production callers use the default.
 export function handleReadyzRequest(
   req: IncomingMessage,
   res: ServerResponse,
   build: () => ReadinessResponse = buildReadinessResponse,
 ): void {
-  const peerLoopback = isLoopbackPeer(req.socket.remoteAddress);
-  if (!peerLoopback || !isLoopbackHostHeader(req.headers.host)) {
-    res.writeHead(403, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "forbidden" }));
-    return;
-  }
   try {
+    const peerLoopback = isLoopbackPeer(req.socket?.remoteAddress);
+    if (!peerLoopback || !isLoopbackHost(req.headers.host)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "forbidden" }));
+      return;
+    }
     const readiness = build();
     res.writeHead(readiness.ready ? 200 : 503, {
       "Content-Type": "application/json",
     });
     res.end(JSON.stringify(readiness));
   } catch {
-    res.writeHead(503, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ready: false, checks: {} }));
+    if (!res.headersSent) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          ready: false,
+          checks: { workspaces_writable: false, workspaces_populated: false },
+        }),
+      );
+    }
   }
 }
 

@@ -47,6 +47,9 @@ export function countWorkspaceDirsAt(root: string): number {
     if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
       reportSilentFallback(err, {
         feature: "resource-monitoring",
+        // op string pinned for Sentry alert-grouping continuity — do NOT rename
+        // to match countWorkspaceDirsAt. `extra.workspacesRoot` disambiguates
+        // which caller (metrics vs readiness) triggered the error.
         op: "getActiveWorkspaceCount",
         extra: { workspacesRoot: root },
       });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, readdirSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { IncomingMessage, ServerResponse } from "http";
@@ -77,6 +77,22 @@ describe("buildReadinessResponse", () => {
     expect(r.checks.workspaces_writable).toBe(false);
   });
 
+  it("read-only mount (present dir, chmod 0555 → EACCES on write) → ready:false, workspaces_writable:false", async () => {
+    // The module's raison d'être: a PRESENT but non-writable mount (the
+    // silent-write-loss mode) — distinct from ENOENT (absent). root bypasses
+    // Unix perm bits, so skip under root (CI containers sometimes run as root).
+    if (process.getuid?.() === 0) return;
+    process.env.WORKSPACES_ROOT = tmpRoot;
+    populate(tmpRoot, 2); // populated, so ONLY the writable check can fail
+    chmodSync(tmpRoot, 0o555); // read+execute, no write → writeFileSync EACCES
+    const { buildReadinessResponse } = await import("../../server/readiness");
+    const r = buildReadinessResponse();
+    chmodSync(tmpRoot, 0o755); // restore so afterEach rmSync can clean up
+    expect(r.ready).toBe(false);
+    expect(r.checks.workspaces_writable).toBe(false);
+    expect(r.checks.workspaces_populated).toBe(true); // proves ONLY writable failed
+  });
+
   it("fail-closed: never throws even for a pathological root", async () => {
     process.env.WORKSPACES_ROOT = "\0invalid"; // NUL byte → fs throws internally
     const { buildReadinessResponse } = await import("../../server/readiness");
@@ -117,12 +133,28 @@ describe("handleReadyzRequest", () => {
     expect(end).toHaveBeenCalledWith(expect.stringContaining('"ready":true'));
   });
 
-  it("loopback peer + not-ready host (empty) → 503", async () => {
+  it("loopback peer + not-ready host (empty) → 503 with full checks body", async () => {
     process.env.WORKSPACES_ROOT = tmpRoot; // writable but empty
     const { handleReadyzRequest } = await import("../../server/readiness");
-    const { req, res, writeHead } = mockReqRes("::1", "localhost:3000");
+    const { req, res, writeHead, end } = mockReqRes("::1", "localhost:3000");
     handleReadyzRequest(req, res);
     expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    // parse the body (not substring) and pin the 503 contract symmetrically
+    const body = JSON.parse(end.mock.calls[0][0] as string);
+    expect(body.ready).toBe(false);
+    expect(body.checks.workspaces_populated).toBe(false);
+    expect(body.checks.workspaces_writable).toBe(true);
+  });
+
+  it("IPv4-mapped-IPv6 loopback peer (::ffff:127.0.0.1) + ready host → 200", async () => {
+    // exercises the isLoopbackPeer mapped-form branch; a regression removing it
+    // would 403 this same-host caller and ship green without this case.
+    process.env.WORKSPACES_ROOT = tmpRoot;
+    populate(tmpRoot, 2);
+    const { handleReadyzRequest } = await import("../../server/readiness");
+    const { req, res, writeHead } = mockReqRes("::ffff:127.0.0.1", "127.0.0.1:3000");
+    handleReadyzRequest(req, res);
+    expect(writeHead).toHaveBeenCalledWith(200, expect.any(Object));
   });
 
   it("non-loopback peer → 403, no readiness body", async () => {

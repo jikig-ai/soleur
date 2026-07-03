@@ -613,6 +613,12 @@ Phase 4b (continuous checkpoint).
 >   draining the sole live origin on one transient probe error. readyz is NOT the continuous LB
 >   liveness monitor (that stays reachability-only on `/health`); the GA LB config (b) inherits this
 >   N≥2-consecutive precondition as a stated invariant.
+> - **On-host consumer only.** readyz is gated to the loopback transport peer AND a loopback Host
+>   header, so it is NOT directly reachable by an off-host LB health probe (that gets 403). The GA
+>   pre-pool / drain consumer therefore MUST execute **on-host** (drain-undrain tooling, deploy
+>   sidecar) hitting `127.0.0.1:3000/internal/readyz` with a loopback Host, or via the private-net
+>   proxy — never as a direct off-host CF-LB monitor. The continuous LB monitor stays
+>   reachability-only on `/health` (b); readyz is the on-host pre-pool check, a distinct consumer.
 > - **Necessary-but-not-sufficient.** `/internal/readyz` is an ADDITIONAL pre-pool gate layered on
 >   top of the unchanged hard invariant (c) (relay active AND git-data cut over). Shipping it does
 >   NOT relax (c) or by itself unlock pooling. Plan:
