@@ -43,13 +43,25 @@ describe("InboxNavBadge", () => {
     expect(passedKey).toEqual(swrKeys.inboxEmails("active"));
   });
 
-  it("renders the active-item count as a neutral pill (FR2/FR5)", async () => {
+  it("renders the active-item count as a neutral pill with an honest accessible name (FR2/FR5)", async () => {
     useSWRMock.mockReturnValue({ data: makeItems(3), error: undefined });
     await renderBadge();
     const badge = screen.getByTestId("inbox-nav-badge");
     expect(badge).toHaveTextContent("3");
-    // Gold is reserved for the active-state (FR5) — the badge must NOT use it.
-    expect(badge.className).not.toMatch(/gold/);
+    // The accessible name is the load-bearing user/agent-facing contract.
+    expect(badge).toHaveAccessibleName("3 items needing attention");
+    // Positive assertion on the neutral token actually rendered — fails if the
+    // fill is swapped for gold (reserved for the active-state, FR5) or anything
+    // else. (A `not.toMatch(/gold/)` check is vacuous: "gold" never appears.)
+    expect(badge.className).toContain("bg-soleur-bg-badge");
+  });
+
+  it("uses the singular noun at count 1 (FR2)", async () => {
+    useSWRMock.mockReturnValue({ data: makeItems(1), error: undefined });
+    await renderBadge();
+    expect(screen.getByTestId("inbox-nav-badge")).toHaveAccessibleName(
+      "1 item needing attention",
+    );
   });
 
   it("omits the badge entirely at count 0 — never an empty pill (FR3)", async () => {
@@ -61,13 +73,20 @@ describe("InboxNavBadge", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("caps large counts at 99+ (FR5)", async () => {
-    useSWRMock.mockReturnValue({ data: makeItems(150), error: undefined });
+  it("shows the exact count at the cap boundary (99), caps only above it (FR5)", async () => {
+    useSWRMock.mockReturnValue({ data: makeItems(99), error: undefined });
+    const { unmount } = await renderBadge();
+    expect(screen.getByTestId("inbox-nav-badge")).toHaveTextContent("99");
+    unmount();
+
+    // 100 is the first capped value — guards the `count > 99` off-by-one.
+    useSWRMock.mockReturnValue({ data: makeItems(100), error: undefined });
     await renderBadge();
     expect(screen.getByTestId("inbox-nav-badge")).toHaveTextContent("99+");
   });
 
-  it("does NOT render a false 0 on fetch error — omits instead (FR6)", async () => {
+  it("does NOT render a false 0 on a COLD fetch error — omits instead (FR6)", async () => {
+    // First load errored: no cached data. Must omit, never claim "0".
     useSWRMock.mockReturnValue({
       data: undefined,
       error: new Error("inbox emails 500"),
@@ -75,6 +94,18 @@ describe("InboxNavBadge", () => {
     await renderBadge();
     expect(screen.queryByTestId("inbox-nav-badge")).not.toBeInTheDocument();
     expect(screen.queryByText("0")).not.toBeInTheDocument();
+  });
+
+  it("keeps showing the last-good count on a WARM revalidation error (FR6)", async () => {
+    // SWR retains stale `data` while a background refetch fails. Blanking the
+    // badge here would read as a false "0" — the exact thing FR6 forbids — so
+    // the known-good count must survive the transient error.
+    useSWRMock.mockReturnValue({
+      data: makeItems(6),
+      error: new Error("revalidation failed"),
+    });
+    await renderBadge();
+    expect(screen.getByTestId("inbox-nav-badge")).toHaveTextContent("6");
   });
 
   it("does NOT render while the count is still loading (data undefined)", async () => {
@@ -91,6 +122,10 @@ describe("InboxNavBadge", () => {
     // The 2px ring cuts the dot out of the icon — it must match the rail bg
     // (the soleur-bg-surface-1 token) so it stays theme-correct.
     expect(dot.className).toMatch(/ring-soleur-bg-surface-1/);
+    // aria-hidden: the collapsed rail hides the "Inbox" label, so a labelled
+    // dot would hijack the link's accessible name. The dot is a visual-only cue
+    // there; the link keeps its title-based "Inbox" name.
+    expect(dot).toHaveAttribute("aria-hidden", "true");
   });
 
   it("does NOT render the collapsed corner variant when expanded", async () => {

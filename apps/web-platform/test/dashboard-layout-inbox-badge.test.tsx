@@ -65,6 +65,7 @@ vi.mock("@/hooks/use-team-names", () => ({
 
 vi.mock("@/lib/client-observability", () => ({
   reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
 }));
 
 // The workspace context band (OrgSwitcher + LiveRepoBadge) runs its own async
@@ -134,6 +135,12 @@ describe("DashboardLayout — Inbox attention badge", () => {
     const inboxLink = screen.getByRole("link", { name: /inbox/i });
     const badge = await within(inboxLink).findByTestId("inbox-nav-badge");
     expect(badge).toHaveTextContent("4");
+    // The count fetch fires exactly once — the badge does not double-fetch
+    // /api/inbox/emails (it reuses the shared active-feed request; TR3).
+    const inboxFetches = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).startsWith("/api/inbox/emails"),
+    );
+    expect(inboxFetches).toHaveLength(1);
   });
 
   it("puts the badge on the Inbox item only — exactly one in the rail (NG2)", async () => {

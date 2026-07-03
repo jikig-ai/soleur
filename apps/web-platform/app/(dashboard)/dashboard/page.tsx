@@ -433,9 +433,13 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   // feat-inbox-attention-badge: this empty state no longer special-cases
-  // pending email-triage items. They are always surfaced by the Inbox nav
-  // count badge (visible in every dashboard state), so a statutory clock is no
-  // longer hidden by the conversation-less first-run screen.
+  // pending email-triage items. They are surfaced by the Inbox nav count badge —
+  // persistent in the desktop rail in every dashboard state. On mobile the badge
+  // rides the nav drawer, so with the drawer closed the count is one tap from
+  // the top-bar hamburger (an accepted degradation vs. the removed inline block;
+  // a mobile top-bar indicator is out of scope here — it needs its own
+  // wireframe). A statutory clock is thus no longer hidden by the
+  // conversation-less first-run screen on desktop, and is one tap away on mobile.
   if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
