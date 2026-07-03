@@ -1,13 +1,17 @@
 # Destroy-guard counter for apply-web-platform-infra.yml. Path-specific
 # per #4420; NO recursive walk(). Five resource types have array-of-blocks
 # or single-block surfaces in the current apply allow-list (verified
-# 2026-05-25 via apps/web-platform/infra/*.tf inspection — closes #4419):
+# 2026-05-25 via apps/web-platform/infra/*.tf inspection — closes #4419);
+# a sixth surface (#5911) counts reboot-forcing in-place updates on
+# hcloud_server.*:
 #
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
 #   3. cloudflare_zone_settings_override.*               .settings[0].security_header
 #   4. cloudflare_notification_policy.*                  .email_integration
 #   5. cloudflare_zero_trust_access_policy.*             .include
+#   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
+#                                                        server_type (#5911)
 #
 # The HIGHEST-impact case is (1) — removing the ACME carve-out
 # (cloudflare_ruleset.seo_page_redirects.rules[10] at seo-rulesets.tf)
@@ -46,7 +50,7 @@
 # `test-destroy-guard-counter-<workflow>.sh`, CODEOWNERS rows.
 #
 # Input: `terraform show -json <plan>` document.
-# Output: {resource_deletes: int, nested_deletes: int}.
+# Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int}.
 #
 # Each `_count($side)` helper uses `$side` value-binding (jq 1.7+; safe on
 # jq 1.8.x). NOT the call-by-name filter-arg shape that crashed v1 of
@@ -106,5 +110,34 @@ def cf_access_policy_include_count($side):
        | (cf_access_policy_include_count(.change.before) - cf_access_policy_include_count(.change.after))
        | select(. > 0))
     ] | add // 0
+  ),
+  # 6th surface (#5911): hcloud_server.* reboot-forcing IN-PLACE update.
+  # A placement_group_id / server_type change → power-off reboot of the
+  # RUNNING host with ZERO destroys → invisible to resource_deletes + the 5
+  # Cloudflare nested clauses above. TYPE-scoped select (not address)
+  # INTENTIONALLY covers BOTH hcloud_server.web AND hcloud_server.git_data
+  # (git-data.tf) — git_data is not target-reachable today but a git_data
+  # reboot (holds the LUKS git volume) is MORE disruptive, so
+  # defense-in-depth. `location`/`datacenter` force a full REPLACE (actions
+  # include "delete") → already caught by resource_deletes and NOT compared
+  # here (a REPLACE never matches actions==["update"], so comparing them
+  # would be dead code). Selecting ONLY actions==["update"] never
+  # double-counts a REPLACE, never false-fires on a CREATE (web-2 add), and
+  # never false-fires on a `moved` re-address (serializes as no-op). An
+  # `after` value UNKNOWN at plan time (placement_group_id is a resource
+  # reference → serialized into change.after_unknown, change.after.<attr>
+  # absent → jq yields null) still trips (before != null) — errs SAFE
+  # (availability friction, never a missed reboot). KNOWN-UNCOVERED: a future
+  # reboot/power-cycle attr (rescue, iso) or a provider upgrade flipping a
+  # ForceNew attr to in-place silently returns rupd=0; any new hcloud_server
+  # argument must be consciously classified reboot/non-reboot (CODEOWNERS
+  # coupling on server.tf + this filter).
+  reboot_updates: (
+    [ .resource_changes[]?
+      | select(.type == "hcloud_server")
+      | select(.change.actions == ["update"])
+      | select(.change.before.placement_group_id != .change.after.placement_group_id
+            or .change.before.server_type       != .change.after.server_type) ]
+    | length
   )
 }
