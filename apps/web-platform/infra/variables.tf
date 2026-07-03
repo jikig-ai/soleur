@@ -68,14 +68,22 @@ variable "cf_api_token" {
 # GDPR residency (CLO T-1, GA-blocking).
 variable "web_hosts" {
   description = "Web-host cluster (multi-host /workspaces, ADR-068 Phase 3). web-1 = pre-existing host; keys immutable post-migration; EU-location-pinned (CLO T-1)."
+  # `monitored` gates BOTH the per-host uptime monitor AND its CF-proxied probe
+  # record (dns.tf / uptime-alerts.tf, #5933 Item 1). It doubles as an EXISTENCE
+  # flag: web-2's backing hcloud_server.web["web-2"] is excluded from the auto-apply
+  # -target set (managed by the #5274 operator cutover), so a probe record/monitor
+  # for web-2 must NOT materialise until that cutover flips this to true — else the
+  # record's `content = hcloud_server.web["web-2"].ipv4_address` transitively drags
+  # the excluded server into a routine -target apply and provisions it out-of-window.
   type = map(object({
     location    = string
     private_ip  = string
     server_type = optional(string, "cx33")
+    monitored   = optional(bool, true)
   }))
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11" }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", monitored = false }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])

@@ -76,6 +76,39 @@ resource "betteruptime_monitor" "soleur_apex" {
   paused     = false
 }
 
+# Per-host origin absence detector (#5933 Item 1). Mirrors soleur_apex but targets
+# each host's CF-proxied probe hostname (web-<n>.app.soleur.ai/health, dns.tf) directly,
+# so a dead/never-booted host returns non-200 (CF 522) and pages — the apex/round-robin
+# monitors stay green because healthy hosts answer them, giving zero per-host attribution.
+#
+# for_each gates on `if v.monitored` (SAME filter as cloudflare_record.web_host): web-1 now;
+# web-2 activates when the #5274 cutover flips monitored=true (pointing a monitor at a
+# not-yet-created hostname would page immediately on 522/NXDOMAIN).
+resource "betteruptime_monitor" "web_host" {
+  for_each = { for k, v in var.web_hosts : k => v if v.monitored }
+
+  monitor_type       = "status"
+  url                = "https://${each.key}.app.soleur.ai/health"
+  pronounceable_name = "soleur uptime ${each.key}" # unique per host (hard provider constraint)
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 60
+  recovery_period     = 60
+  # No follow_redirects: /health serves 200 directly (no apex→www 301 to chase).
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
 # Conditional escalation policy — mirrors betteruptime_policy.inngest
 # (inngest.tf:140-156). count-gated on the same paid-tier flag so a free-tier
 # operator does not see an apply-time error attempting to create a paid feature.
