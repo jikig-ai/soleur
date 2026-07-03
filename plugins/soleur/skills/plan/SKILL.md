@@ -565,7 +565,7 @@ After planning the issue structure, run SpecFlow Analyzer to validate and refine
 
 Before finalizing the plan into issues, get one strong-model second opinion at the highest-leverage decision point — but pay only for a curated payload, not the whole session.
 
-Spawn a **Task** subagent with `model: fable` (the top advisor tier; fall back to `model: opus` if the org lacks Fable access) and a **curated** prompt — pass only the plan's `## Overview`, `## Implementation Phases`, and the phase you judge riskiest. Do NOT pass the conversation: a Task subagent receives prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`), so curation is the token lever that makes this far cheaper than Claude Code's built-in advisor (which re-sends the full transcript, uncached, every call). Prompt shape:
+Spawn a **Task** subagent with `model: fable` (the top advisor tier; if that spawn is rejected because the org lacks Fable access, retry once with `model: opus`) and a **curated** prompt — pass only the plan's `## Overview`, `## Implementation Phases`, and the phase you judge riskiest. Do NOT pass the conversation: a Task subagent receives prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`), so curation is the token lever that makes this far cheaper than Claude Code's built-in advisor (which re-sends the full transcript, uncached, every call). Prompt shape:
 
 > Review this implementation plan's approach and its riskiest phase. Name the one or two changes most likely to prevent rework or a wrong-architecture commit. Be concise — assume you see only what is quoted. PLAN:\n<overview + phases + riskiest phase>
 
