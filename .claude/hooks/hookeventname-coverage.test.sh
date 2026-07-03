@@ -33,6 +33,19 @@ for h in "$HOOK_DIR"/*.sh; do
   pd=$(grep -vE '^[[:space:]]*#' "$h" | grep -cE 'permissionDecision"?[[:space:]]*:' || true)
   hen=$(grep -vE '^[[:space:]]*#' "$h" | grep -c 'hookEventName' || true)
 
+  # Same contract on the OTHER side: a SessionStart/UserPromptSubmit hook that
+  # emits `additionalContext` inside hookSpecificOutput must pair it with
+  # hookEventName, or Claude Code rejects the output ("hookSpecificOutput is
+  # missing required field hookEventName") and the injected context is dropped.
+  # This is the SessionStart analogue of the permissionDecision bug above —
+  # regressed once in session-rules-loader.sh, hence this guard.
+  ac=$(grep -vE '^[[:space:]]*#' "$h" | grep -cE 'additionalContext"?[[:space:]]*:' || true)
+  if [[ "$ac" -gt 0 && "$hen" -lt "$ac" ]]; then
+    echo "FAIL: $base emits $ac additionalContext(s) but only $hen hookEventName(s)."
+    echo "      Every hookSpecificOutput with additionalContext must include hookEventName (e.g. \"SessionStart\")."
+    fail=1
+  fi
+
   # Per-file count check (count(hookEventName) >= count(permissionDecision)),
   # not per-emission pairing. This catches the realistic regression — a new
   # decision block added without hookEventName bumps `pd` without `hen` and
