@@ -43,6 +43,7 @@ import { reportSilentFallback } from "@/server/observability";
 import { runWithByokLease } from "@/server/byok-lease";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
+import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import {
   LEADER_MAX_TURNS,
@@ -156,7 +157,11 @@ type FailureReason =
   | "leader_max_turns_exceeded"
   | "leader_response_truncated"
   | "leader_tool_invalid"
-  | "leader_class_disabled";
+  | "leader_class_disabled"
+  // feat-l5-runaway-guard PR-A: spawn-entry pause gate + distinct
+  // transient-cap-check reason (P2-H — a DB error is not a budget breach).
+  | "run_paused"
+  | "cap_check_unavailable";
 
 interface ReversalHandle {
   kind:
@@ -316,6 +321,69 @@ export async function agentOnSpawnRequestedHandler({
   // Per-spawn reversal handles ledger (AC9 — multi-artifact array).
   const reversalHandles: ReversalHandle[] = [];
 
+  // Spawn-entry pause gate (feat-l5-runaway-guard PR-A, P0-A). Before the
+  // turn loop — and therefore before ANY Anthropic call or audit_byok_use
+  // row — refuse to run for a founder whose account is paused. This is the
+  // SOLE working-pause guard: the cap RPC does NOT backstop the paused case
+  // (#5919 made its kill_tripped exactly-once via `FOUND`, which correctly
+  // does not re-trip an already-paused caller). So this gate FAILS CLOSED on
+  // a users-read error (CTO ruling on the #5767-vs-#5919 fork) — matching the
+  // fail-closed posture of the two adjacent steps (turn-1 cap-check throws on
+  // RPC error; precheck-cost-ceiling fail-closes on cumulative-read error).
+  let pauseState: { pausedAt: string | null; capCents: number | null };
+  try {
+    pauseState = await step.run("check-runtime-pause", async () => {
+      const sb = getServiceClient();
+      const { data, error } = await sb
+        .from("users")
+        .select("runtime_paused_at, runtime_cost_cap_cents")
+        .eq("id", founderId)
+        .maybeSingle();
+      if (error) {
+        // Fail-closed: an unverifiable pause state must not admit a possibly-
+        // paused founder into the loop.
+        throw new Error(`check-runtime-pause read failed: ${error.message}`);
+      }
+      const row = data as
+        | { runtime_paused_at: string | null; runtime_cost_cap_cents: number | null }
+        | null;
+      return {
+        pausedAt: row?.runtime_paused_at ?? null,
+        capCents: row?.runtime_cost_cap_cents ?? null,
+      };
+    });
+  } catch (err) {
+    // Read error → halt (fail-closed). run_paused keeps the Resume-button UX;
+    // persistFailure's reportSilentFallback mirrors it to Sentry (observable
+    // without SSH, cq-silent-fallback-must-mirror-to-sentry).
+    return persistFailure(step, {
+      actionSendId,
+      reason: "run_paused",
+      err,
+      founderId,
+      messageId,
+      actionClass,
+      sourceRef,
+      logger,
+    });
+  }
+  if (pauseState.pausedAt) {
+    // No cost-breaker notification here (F3): the founder was already paged by
+    // the byok_cap_exceeded breach that SET the pause; the Today card renders
+    // this run_paused halt + a Resume button, so re-paging every subsequent
+    // blocked spawn would be a notification storm from the guard itself.
+    return persistFailure(step, {
+      actionSendId,
+      reason: "run_paused",
+      err: new Error("spawn refused: founder account is paused"),
+      founderId,
+      messageId,
+      actionClass,
+      sourceRef,
+      logger,
+    });
+  }
+
   // The leader prompt loop. Layer-3 backstop (LEADER_MAX_TURNS = 8 turns,
   // per ADR-041); the primary gates are the Layer-1 cap-check + Layer-2
   // cost ceiling.
@@ -334,15 +402,24 @@ export async function agentOnSpawnRequestedHandler({
         });
       });
     } catch (err) {
+      // P2-H: a transient cap-check DB error is NOT a budget breach. Use a
+      // distinct reason so the operator alert reads "we couldn't verify your
+      // budget", not a false "you exceeded your cap". Fail-closed (no
+      // Anthropic call) is preserved — only the reason/copy differs.
       return persistFailure(step, {
         actionSendId,
-        reason: "byok_cap_exceeded",
+        reason: "cap_check_unavailable",
         err,
         founderId,
         messageId,
         actionClass,
         sourceRef,
         logger,
+        notify: {
+          whichWindow: "cap-1h",
+          cumulativeCents: null,
+          ceilingCents: pauseState.capCents,
+        },
       });
     }
     if (capResult.killTripped) {
@@ -355,6 +432,11 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
+        notify: {
+          whichWindow: "cap-1h",
+          cumulativeCents: capResult.cumulativeCents,
+          ceilingCents: pauseState.capCents,
+        },
       });
     }
 
@@ -395,6 +477,11 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
+        notify: {
+          whichWindow: "spawn",
+          cumulativeCents,
+          ceilingCents: PER_SPAWN_COST_CEILING_CENTS,
+        },
       });
     }
 
@@ -645,6 +732,12 @@ export async function agentOnSpawnRequestedHandler({
     actionClass,
     sourceRef,
     logger,
+    notify: {
+      // A turn-count halt carries no trustworthy dollar figure.
+      whichWindow: "spawn",
+      cumulativeCents: null,
+      ceilingCents: null,
+    },
   });
 }
 
@@ -921,6 +1014,16 @@ async function persistFailure(
     actionClass: ActionClass;
     sourceRef: string;
     logger: HandlerArgs["logger"];
+    /**
+     * Cost-breaker notification context (feat-l5-runaway-guard PR-A). Present
+     * only at the cost/turn-cap/pause call sites; its presence + a reason in
+     * COST_BREAKER_NOTIFY_REASONS is what triggers the single notify call.
+     */
+    notify?: {
+      whichWindow: "spawn" | "cap-1h";
+      cumulativeCents: number | null;
+      ceilingCents: number | null;
+    };
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
@@ -936,6 +1039,31 @@ async function persistFailure(
       actionSendId,
     },
   });
+
+  // Single notification site (AC3), BEFORE the action_sends UPDATE — mirroring
+  // the Sentry-mirror-first ordering above. Wrapped in its OWN memoized
+  // step.run so Inngest fires it EXACTLY ONCE across function replays/retries
+  // (a raw side-effect here re-executes on every replay → duplicate founder
+  // pages) AND awaits completion so the push/email isn't torn down at a later
+  // step boundary. `notifyOfflineUser` never throws (it mirrors its own send
+  // failures to Sentry via op=notify-cost-breaker), so the step always
+  // succeeds and can never mask the terminal state write. `isCostBreakerReason`
+  // means cancelled_by_operator / run_paused / infra reasons never page.
+  const notify = args.notify;
+  if (notify && isCostBreakerReason(reason)) {
+    await step.run("notify-cost-breaker", () =>
+      notifyOfflineUser(args.founderId, {
+        type: "cost_breaker_tripped",
+        reason,
+        which_window: notify.whichWindow,
+        context: {
+          cumulativeCents: notify.cumulativeCents,
+          ceilingCents: notify.ceilingCents,
+        },
+      }),
+    );
+  }
+
   try {
     await step.run("persist-failure", async () => {
       const sb = getServiceClient();

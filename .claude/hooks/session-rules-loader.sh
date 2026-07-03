@@ -49,7 +49,7 @@ emit_core_only_fallback() {
   if [[ -r "$root/AGENTS.core.md" ]]; then
     fb="$(<"$root/AGENTS.core.md")"
   fi
-  printf '%s' "{\"hookSpecificOutput\":{\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): loaded AGENTS.core.md only"$'\n'"$fb")}}"
+  printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): loaded AGENTS.core.md only"$'\n'"$fb")}}"
 }
 
 INPUT=$(cat 2>/dev/null || true)
@@ -271,5 +271,5 @@ jq -nc \
 # operator-glanceable header (STAMP/HINT/manifest, lines 1-3, which Test 11
 # byte-budgets via `head -3`) and before the rule bodies.
 OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}"
-jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { additionalContext: $out } }'
+jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0

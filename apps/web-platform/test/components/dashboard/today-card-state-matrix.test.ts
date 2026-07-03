@@ -198,4 +198,29 @@ describe("deriveTodayCardState (AC11)", () => {
       expect(state.copy, `failure_reason=${reason}`).not.toContain(reason);
     }
   });
+
+  // feat-l5-runaway-guard PR-A: Resume affordance for the paused-state
+  // failure reasons — the only two that set users.runtime_paused_at.
+  it.each(["run_paused", "byok_cap_exceeded"])(
+    "shows Resume for paused-state reason %s (route reachable in-product)",
+    (reason) => {
+      const state = deriveTodayCardState(row({ failure_reason: reason }));
+      expect(state.showResume).toBe(true);
+    },
+  );
+
+  it.each([
+    "cost_ceiling_exceeded",
+    "cap_check_unavailable",
+    "cancelled_by_operator",
+    "anthropic_timeout",
+  ])("does NOT show Resume for non-pausing reason %s", (reason) => {
+    const state = deriveTodayCardState(row({ failure_reason: reason }));
+    expect(state.showResume).toBe(false);
+  });
+
+  it("non-failure states never show Resume", () => {
+    expect(deriveTodayCardState(row({ current_turn: 3 })).showResume).toBe(false);
+    expect(deriveTodayCardState(row({})).showResume).toBe(false);
+  });
 });

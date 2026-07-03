@@ -25,7 +25,7 @@ fi
 QA_EMAIL="qa-test@example.com"
 QA_PASSWORD="qa-test-local-2026"
 # TC_VERSION must match lib/legal/tc-version.ts
-TC_VERSION="2.3.0"
+TC_VERSION="2.4.0"
 # Must match the migration-053 backfill sentinel (also used by
 # server/agent-runner.ts and server/cc-dispatcher.ts message writes).
 TEMPLATE_ID="default_legacy"

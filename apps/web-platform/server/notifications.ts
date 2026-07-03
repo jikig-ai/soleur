@@ -86,27 +86,90 @@ export interface EmailTriageNotificationPayload {
   isStatutory: boolean;
 }
 
-export type NotificationPayload =
-  | ReviewGateNotificationPayload
-  | EmailTriageNotificationPayload;
+/**
+ * The failure reasons that warrant an operator cost-breaker notification —
+ * the SINGLE SOURCE OF TRUTH the handler's fire-guard, the payload union, and
+ * the copy switch all derive from (no forced `as` cast, no triplicated list).
+ *
+ * `run_paused` is deliberately EXCLUDED: the cap-breach `byok_cap_exceeded`
+ * notification already tells the founder they entered pause, and the Today
+ * card renders the paused halt + Resume on every subsequent blocked spawn —
+ * re-paging each blocked spawn would be a notification storm from the guard
+ * itself (feat-l5-runaway-guard #5767 set-only-flag learning). NEVER
+ * cancelled_by_operator (operator-initiated stops are not surprises).
+ */
+export const COST_BREAKER_NOTIFY_REASONS = [
+  "cost_ceiling_exceeded",
+  "byok_cap_exceeded",
+  "leader_max_turns_exceeded",
+  "cap_check_unavailable",
+] as const;
+
+export type CostBreakerReason = (typeof COST_BREAKER_NOTIFY_REASONS)[number];
+
+/** Runtime narrowing from the broad FailureReason string to the notify subset. */
+export function isCostBreakerReason(reason: string): reason is CostBreakerReason {
+  return (COST_BREAKER_NOTIFY_REASONS as readonly string[]).includes(reason);
+}
 
 /**
- * Statutory email-triage pings must not fail silently: the catches in
- * notifyOfflineUser log without capturing (Layer 2's pino hook only
- * captures Error-instance `err` fields), so a missed statutory ping would
- * reach no one while an Art. 12 clock runs. Explicit mirror — necessary,
- * not redundant (cq-silent-fallback-must-mirror-to-sentry). No-op for
- * review_gate and non-statutory payloads (existing behavior preserved).
+ * Cost-breaker halt notification (feat-l5-runaway-guard PR-A). Sent when a run
+ * is stopped by a spending/turn guard. TR5: payload is minimized to cost
+ * aggregates + the terminal reason — no prompt/response content, no PII beyond
+ * the founder's own account id (the recipient). All fields are server-generated
+ * (enum + numbers), so nothing here is attacker-controlled.
  */
-function mirrorStatutoryNotifyFailure(
-  payload: NotificationPayload,
-  err: unknown,
-): void {
-  if (payload.type !== "email_triage" || !payload.isStatutory) return;
+export interface CostBreakerNotificationPayload {
+  type: "cost_breaker_tripped";
+  /** The terminal failure reason that tripped the halt (notify subset). */
+  reason: CostBreakerReason;
+  /**
+   * Which enforcement window tripped (P2-G): the per-spawn cost ceiling /
+   * turn cap ("spawn") or the rolling 1-hour BYOK cap ("cap-1h"). Drives
+   * the window label in the copy.
+   */
+  which_window: "spawn" | "cap-1h";
+  /**
+   * Dollar context for honest amount-vs-ceiling copy. Both nullable — a
+   * turn-count halt, a pause re-block, or a failed cap-check carries no
+   * trustworthy dollar figure, and fabricating one would be dishonest
+   * (AC4).
+   */
+  context: {
+    cumulativeCents: number | null;
+    ceilingCents: number | null;
+  };
+}
+
+export type NotificationPayload =
+  | ReviewGateNotificationPayload
+  | EmailTriageNotificationPayload
+  | CostBreakerNotificationPayload;
+
+/**
+ * Notifications that must not fail silently: the catches in notifyOfflineUser
+ * log without capturing (Layer 2's pino hook only captures Error-instance
+ * `err` fields), so a missed send would reach no one. Explicit Sentry mirror —
+ * necessary, not redundant (cq-silent-fallback-must-mirror-to-sentry):
+ *   - statutory email-triage: a missed ping runs an Art. 12 clock unattended.
+ *   - cost_breaker_tripped: a missed halt notification IS the exact "a halt
+ *     with no notice" failure this feature exists to prevent (#5767); the plan
+ *     Observability block pages on `op=notify-cost-breaker`.
+ * No-op for review_gate and non-statutory email_triage (existing behavior).
+ */
+function mirrorNotifyFailure(payload: NotificationPayload, err: unknown): void {
+  const isCostBreaker = payload.type === "cost_breaker_tripped";
+  const isStatutoryTriage =
+    payload.type === "email_triage" && payload.isStatutory;
+  if (!isCostBreaker && !isStatutoryTriage) return;
   try {
     Sentry.captureException(
       err instanceof Error ? err : new Error(String(err)),
-      { tags: { feature: "email-triage", op: "statutory-notify-failed" } },
+      {
+        tags: isCostBreaker
+          ? { feature: "cost-breaker", op: "notify-cost-breaker" }
+          : { feature: "email-triage", op: "statutory-notify-failed" },
+      },
     );
   } catch {
     // Observability must never become a second failure.
@@ -189,7 +252,7 @@ export async function notifyOfflineUser(
 
     if (error) {
       log.error({ userId, err: error.message }, "Failed to query push subscriptions");
-      mirrorStatutoryNotifyFailure(payload, error.message);
+      mirrorNotifyFailure(payload, error.message);
       return;
     }
 
@@ -200,14 +263,91 @@ export async function notifyOfflineUser(
       const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
       if (userError || !userData?.user?.email) {
         log.error({ userId, err: userError?.message }, "Failed to look up user email for notification");
-        mirrorStatutoryNotifyFailure(payload, userError?.message ?? "user email missing");
+        mirrorNotifyFailure(payload, userError?.message ?? "user email missing");
         return;
       }
       await sendEmailNotification(userData.user.email, payload);
     }
   } catch (err) {
     log.error({ userId, err }, "notifyOfflineUser failed");
-    mirrorStatutoryNotifyFailure(payload, err);
+    mirrorNotifyFailure(payload, err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cost-breaker halt copy (feat-l5-runaway-guard PR-A)
+// ---------------------------------------------------------------------------
+
+/** Cents → "$X.XX", or null when there is no trustworthy figure. */
+function formatDollars(cents: number | null): string | null {
+  if (cents == null || !Number.isFinite(cents)) return null;
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+interface CostBreakerCopy {
+  heading: string;
+  /** Plain-text body (push) — also escaped into the email HTML sink. */
+  body: string;
+  subject: string;
+}
+
+/**
+ * Single source of truth for cost-breaker copy across push + email. Honest
+ * by construction (AC4): never implies the run completed, denominates in
+ * dollars (the founder's own Anthropic credits), and only quotes an amount
+ * when we actually have one. The `cap_check_unavailable` copy deliberately
+ * avoids any "you overspent" framing — a transient DB error is not a budget
+ * breach (P2-H).
+ */
+function costBreakerCopy(payload: CostBreakerNotificationPayload): CostBreakerCopy {
+  const spent = formatDollars(payload.context.cumulativeCents);
+  const ceiling = formatDollars(payload.context.ceilingCents);
+  const windowLabel =
+    payload.which_window === "cap-1h"
+      ? "rolling 1-hour spending limit"
+      : "per-run spending limit";
+  // Amount clause — only when we have a real figure. "your own Anthropic
+  // credits" is load-bearing: BYOK spend is the founder's money.
+  const amountClause =
+    spent && ceiling
+      ? ` You spent ${spent} of your ${ceiling} ${windowLabel} — your own Anthropic credits.`
+      : spent
+        ? ` You spent ${spent} of your own Anthropic credits.`
+        : "";
+
+  switch (payload.reason) {
+    case "cap_check_unavailable":
+      return {
+        // NOT "paused" — cap_check_unavailable writes no runtime_paused_at and
+        // renders no Resume affordance; "stopped" matches the sibling
+        // failure-reason-copy + Today-card surfaces (avoids sending the
+        // founder hunting for a Resume button that isn't there).
+        heading: "Run stopped — we couldn't verify your budget",
+        body:
+          "We couldn't check your spending against your cap because of a " +
+          "temporary system issue, so the run was stopped as a precaution. " +
+          "No pull request was opened. Try again shortly.",
+        subject: "Your Soleur run was paused — budget check unavailable",
+      };
+    case "leader_max_turns_exceeded":
+      return {
+        heading: "Run stopped — it hit the work limit",
+        body:
+          "The agent used up its allotted steps before finishing and was " +
+          `stopped. Whatever it managed is preserved, but no pull request ` +
+          `was opened.${amountClause}`,
+        subject: "Your Soleur run stopped — work limit reached",
+      };
+    case "cost_ceiling_exceeded":
+    case "byok_cap_exceeded":
+    default:
+      return {
+        heading: "Run stopped — you hit your spending cap",
+        body:
+          `Your run reached your ${windowLabel} and was stopped partway ` +
+          `through — no pull request was opened.${amountClause}`,
+        subject: "Your Soleur run stopped — spending cap reached",
+      };
   }
 }
 
@@ -234,6 +374,19 @@ export async function sendPushNotifications(
       data: {
         emailId: payload.emailId,
         url: `${appUrl()}/dashboard/inbox/email/${payload.emailId}`,
+      },
+      icon: "/icons/icon-192x192.png",
+    });
+  } else if (payload.type === "cost_breaker_tripped") {
+    // All fields server-generated (enum + numbers) — no sanitization
+    // needed. Deep link routes to the Today feed where the halt banner
+    // + Resume CTA live.
+    const copy = costBreakerCopy(payload);
+    body = JSON.stringify({
+      title: copy.heading,
+      body: copy.body,
+      data: {
+        url: `${appUrl()}/dashboard`,
       },
       icon: "/icons/icon-192x192.png",
     });
@@ -319,6 +472,10 @@ export async function sendEmailNotification(
     await sendEmailTriageEmailNotification(email, payload);
     return;
   }
+  if (payload.type === "cost_breaker_tripped") {
+    await sendCostBreakerEmailNotification(email, payload);
+    return;
+  }
   const resend = getResend();
   const deepLink = `${appUrl()}/dashboard/chat/${payload.conversationId}`;
 
@@ -382,9 +539,55 @@ async function sendEmailTriageEmailNotification(
 
   if (error) {
     log.error({ email, emailId: payload.emailId, err: error }, "Failed to send triage email notification");
-    mirrorStatutoryNotifyFailure(payload, error);
+    mirrorNotifyFailure(payload, error);
   } else {
     log.info({ email, emailId: payload.emailId }, "Triage email notification sent");
+  }
+}
+
+/**
+ * Email fallback for the cost_breaker_tripped variant (feat-l5-runaway-guard
+ * PR-A). Body is fully server-generated; escapeHtml is applied at the sink
+ * for defense-in-depth even though the copy carries no third-party content.
+ * The CTA lands on the Today feed where the halt banner + Resume live.
+ */
+async function sendCostBreakerEmailNotification(
+  email: string,
+  payload: CostBreakerNotificationPayload,
+): Promise<void> {
+  const resend = getResend();
+  const copy = costBreakerCopy(payload);
+  const deepLink = `${appUrl()}/dashboard`;
+
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [email],
+    subject: `${copy.subject} — Soleur`,
+    html: renderBrandedNotificationEmail({
+      heading: escapeHtml(copy.heading),
+      bodyHtml: escapeHtml(copy.body),
+      // CTA reflects the actual recovery path: only byok_cap_exceeded leaves
+      // the account paused (Resume renders); a failed cap-check is transient
+      // (try again); the per-spawn/turn-cap halts just land on the dashboard.
+      ctaLabel:
+        payload.reason === "byok_cap_exceeded"
+          ? "Clear pause & resume"
+          : payload.reason === "cap_check_unavailable"
+            ? "Try again"
+            : "Review run",
+      deepLink,
+      footnoteHtml:
+        "You received this because a spending safeguard stopped one of your Soleur runs.",
+    }),
+  });
+
+  if (error) {
+    log.error({ email, reason: payload.reason, err: error }, "Failed to send cost-breaker email notification");
+    // A missed halt notification is the exact failure this feature prevents —
+    // mirror to Sentry (op=notify-cost-breaker) so it never fails silently.
+    mirrorNotifyFailure(payload, error);
+  } else {
+    log.info({ email, reason: payload.reason }, "Cost-breaker email notification sent");
   }
 }
 

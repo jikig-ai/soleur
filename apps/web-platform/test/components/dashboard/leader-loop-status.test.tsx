@@ -215,6 +215,65 @@ describe("LeaderLoopStatus — state-matrix integration (AC11)", () => {
   });
 });
 
+describe("LeaderLoopStatus — Resume button (feat-l5-runaway-guard PR-A)", () => {
+  const pausedRow: FakeRow = {
+    failure_reason: "byok_cap_exceeded",
+    reversal_handles: null,
+    undone_at: null,
+    acknowledged_at: null,
+    artifact_url: null,
+    cancellation_requested_at: null,
+    current_turn: 1,
+  };
+
+  it("shows Resume on a paused-state failure and POSTs the resume route on click", async () => {
+    const channel = buildFakeChannel();
+    createClientMock.mockImplementation(() => buildSupabaseClient(pausedRow, channel));
+
+    const { LeaderLoopStatus } = await import(
+      "@/components/dashboard/leader-loop-status"
+    );
+    render(<LeaderLoopStatus messageId="msg-1" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("leader-loop-status").getAttribute("data-state-kind"),
+      ).toBe("failure_no_artifact");
+    });
+
+    const resumeBtn = screen.getByLabelText(/Resume run|Clear pause/i);
+    const user = userEvent.setup();
+    await user.click(resumeBtn);
+
+    await waitFor(() => {
+      const resumeCalls = fetchMock.mock.calls.filter((c) =>
+        String(c[0]).endsWith("/api/dashboard/runtime/resume"),
+      );
+      expect(resumeCalls).toHaveLength(1);
+      expect((resumeCalls[0][1] as RequestInit).method).toBe("POST");
+    });
+  });
+
+  it("does NOT show Resume for a non-pausing failure (cost_ceiling_exceeded)", async () => {
+    const channel = buildFakeChannel();
+    createClientMock.mockImplementation(() =>
+      buildSupabaseClient({ ...pausedRow, failure_reason: "cost_ceiling_exceeded" }, channel),
+    );
+
+    const { LeaderLoopStatus } = await import(
+      "@/components/dashboard/leader-loop-status"
+    );
+    render(<LeaderLoopStatus messageId="msg-1" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("leader-loop-status").getAttribute("data-state-kind"),
+      ).toBe("failure_no_artifact");
+    });
+    expect(screen.queryByLabelText(/Resume run|Clear pause/i)).toBeNull();
+  });
+});
+
 describe("LeaderLoopStatus — Stop button (AC13)", () => {
   it("posts /cancel and optimistically flips to 'stopping'", async () => {
     const row: FakeRow = {
