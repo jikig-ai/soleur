@@ -20,6 +20,7 @@ import { MembershipRevokedScreen } from "@/components/dashboard/membership-revok
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
+import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import {
   isApplePlatform as detectApplePlatform,
@@ -436,6 +437,15 @@ export default function DashboardLayout({
                     <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
                       {item.label}
                     </span>
+                    {/* feat-inbox-attention-badge: the Inbox item carries an
+                        active-count badge. Special-cased by href (matching the
+                        `/dashboard` active-check above) to keep nav-items.ts as
+                        pure route/label data (TR2). Mounted here — inside this
+                        layout's <SWRConfig> (ADR-067) — so its fetch dedups with
+                        the Inbox Active tab under the shared key (TR1/G3). */}
+                    {item.href === "/dashboard/inbox" && (
+                      <InboxNavBadge collapsed={collapsed} />
+                    )}
                   </Link>
                 );
               })}

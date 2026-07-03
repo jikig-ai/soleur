@@ -519,10 +519,24 @@ Phase 4b (continuous checkpoint).
 > A recurrence guard lives in `plugins/soleur/test/terraform-target-parity.test.ts`
 > (`moved`/`-target` parity block, `MOVED_OPERATOR_CONSUMED`): a future migration that
 > re-addresses an operator-excluded resource fails at plan-review time instead of
-> silently wedging CI. (Residual, deferred to a follow-up: the destroy-guard remains
-> blind to reboot-forcing in-place `update` on `hcloud_server.*` — a reboot-aware
-> apply guard is the interim gap the parity accounting-check does not mechanically
-> close; tracked in #5911.)
+> silently wedging CI. (Residual, **closed by #5911**: the destroy-guard is no longer
+> blind to reboot-forcing in-place `update` on `hcloud_server.*`. A third counter —
+> `reboot_updates` — was added to `tests/scripts/lib/destroy-guard-filter-web-platform.jq`
+> and the `apply-web-platform-infra.yml` destroy-guard step; it selects
+> `actions==["update"]` on `hcloud_server.*` whose `placement_group_id` or `server_type`
+> changed and folds into the same `destroy_count`/`[ack-destroy]` gate. Scope: the
+> **unattended per-PR apply path only** (`hcloud_server.web` is reachable there as a
+> dependency of the targeted `hcloud_firewall_attachment.web`); the operator's
+> human-attended maintenance-window full apply does not run this jq gate. **Resolution
+> boundary:** a `reboot_updates` trip is resolved by the **operator maintenance-window
+> apply** (which consumes the pending change), NOT by `[ack-destroy]` — because
+> `hcloud_server.web` is transitively in the saved plan, an ack-through would *execute*
+> the reboot on the unattended `terraform apply tfplan`, re-introducing the exact hazard
+> the guard prevents. `[ack-destroy]` still functions (per the issue's
+> "`[ack-destroy]`-style" requirement) but is an emergency override, not the normal
+> reboot resolution. `location`/`datacenter` changes force a full REPLACE and remain
+> caught by the pre-existing `resource_deletes` counter; the reboot clause deliberately
+> does not compare them (a REPLACE never matches `actions==["update"]`).)
 
 ## Consequences
 

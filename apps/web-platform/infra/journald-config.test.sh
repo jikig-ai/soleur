@@ -75,23 +75,35 @@ assert "SystemKeepFree=2G (load-bearing hard floor)" \
 assert "RuntimeMaxUse=200M" \
   "grep -qE '^RuntimeMaxUse=200M$' '$DROPIN'"
 
-# --- AC2: cloud-init write_files renders the drop-in (fresh-host parity) ---
+# --- AC2: fresh-host parity via the baked host-scripts set (#5921) ---
+# The journald drop-in used to be an inline cloud-init write_files: base64 blob, but that
+# was the biggest remaining user_data expansion (2.4 KB) and #5921 moved it into the baked
+# /opt/soleur/host-scripts/ set: server.tf.local.host_script_files bakes journald-soleur.conf,
+# the Dockerfile COPYs it, and soleur-host-bootstrap.sh installs + applies it at boot. Assert
+# that delivery path (the inline write_files entry MUST be gone — else user_data re-bloats).
 echo ""
-echo "--- AC2: cloud-init write_files entry for the drop-in ---"
-assert "write_files targets /etc/systemd/journald.conf.d/00-soleur.conf" \
-  "grep -qE '^[[:space:]]+- path: /etc/systemd/journald\.conf\.d/00-soleur\.conf' '$CLOUD_INIT'"
-# b64 templatefile var = byte-identical by construction (same file() the .tf
-# provisioner pushes raw). Asserting the var reference proves the parity wiring.
-assert "drop-in content sourced from \${journald_soleur_conf_b64} (byte-parity by construction)" \
-  "grep -qE 'content: \\\$\{journald_soleur_conf_b64\}' '$CLOUD_INIT'"
-assert "drop-in entry is b64-encoded" \
-  "awk '/path: \/etc\/systemd\/journald\.conf\.d\/00-soleur\.conf/{f=1} f&&/encoding: b64/{print; exit}' '$CLOUD_INIT' | grep -q 'encoding: b64'"
+echo "--- AC2: fresh-host delivery via baked host-scripts (#5921) ---"
+BOOTSTRAP="$SCRIPT_DIR/soleur-host-bootstrap.sh"
+assert "journald drop-in is NOT an inline cloud-init write_files entry anymore" \
+  "! grep -qE '^[[:space:]]+- path: /etc/systemd/journald\.conf\.d/00-soleur\.conf' '$CLOUD_INIT'"
+assert "journald_soleur_conf_b64 is NOT re-inlined in cloud-init" \
+  "! grep -qE 'content: \\\$\{journald_soleur_conf_b64\}' '$CLOUD_INIT'"
+assert "journald-soleur.conf is in server.tf host_script_files (baked set)" \
+  "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -qE '\"journald-soleur\.conf\"'"
+assert "Dockerfile bakes journald-soleur.conf into /opt/soleur/host-scripts/" \
+  "grep -qE '/app/infra/journald-soleur\.conf' '$SCRIPT_DIR/../Dockerfile'"
+assert "bootstrap installs the drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
+  "grep -qE 'install -D -m 0644 .* /etc/systemd/journald\.conf\.d/00-soleur\.conf' '$BOOTSTRAP'"
+assert "bootstrap applies journald persistence (restart + flush)" \
+  "grep -q 'systemctl restart systemd-journald' '$BOOTSTRAP' && grep -q 'journalctl --flush' '$BOOTSTRAP'"
 
-# --- AC3: server.tf wires base64encode(file(drop-in)) into the templatefile ---
+# --- AC3: server.tf wires the running-host SSH provisioner (unchanged by #5921) ---
 echo ""
-echo "--- AC3: server.tf templatefile + provisioner wiring ---"
-assert "templatefile passes journald_soleur_conf_b64 = base64encode(file(...))" \
-  "grep -qE 'journald_soleur_conf_b64[[:space:]]*=[[:space:]]*base64encode\(file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)\)' '$SERVER_TF'"
+echo "--- AC3: server.tf provisioner wiring (running-host path) ---"
+# #5921: journald_soleur_conf_b64 was REMOVED from the cloud-init templatefile map (baked
+# instead); the running-host delivery via terraform_data.journald_persistent is unchanged.
+assert "journald_soleur_conf_b64 is NOT passed to the cloud-init templatefile" \
+  "! awk '/user_data = templatefile\(\"\\\$\{path.module\}\/cloud-init.yml\"/,/^  \}\)/' '$SERVER_TF' | grep -qE 'journald_soleur_conf_b64'"
 assert "terraform_data.journald_persistent resource declared" \
   "grep -qE 'resource \"terraform_data\" \"journald_persistent\"' '$SERVER_TF'"
 
@@ -141,17 +153,19 @@ assert "remote-exec asserts persistent storage via journalctl --header" \
 
 # --- AC5: runcmd creates /var/log/journal BEFORE the container starts ---
 echo ""
-echo "--- AC5: runcmd journald-persistence step ordered before container start ---"
-JOURNALD_RUNCMD_LINE=$(grep -nE '^[[:space:]]+- (mkdir -p /var/log/journal|systemd-tmpfiles --create --prefix /var/log/journal)' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-# Match the runcmd container-start invocation (`--name soleur-web-platform`),
-# NOT the write_files webhook.service ExecStart references.
+echo "--- AC5: journald-persistence runs (in the bootstrap) before the container start ---"
+# #5921: journald persistence (mkdir /var/log/journal + tmpfiles + restart + flush) moved
+# from an inline cloud-init runcmd step into soleur-host-bootstrap.sh, which the extraction
+# launcher runs BEFORE the terminal --log-driver journald container. Assert the bootstrap
+# carries the persistence steps AND that the extraction launcher precedes the container start.
+assert "bootstrap sets up journald persistence (mkdir + tmpfiles + restart + flush)" \
+  "grep -q 'mkdir -p /var/log/journal' '$BOOTSTRAP' && grep -q 'systemd-tmpfiles --create --prefix /var/log/journal' '$BOOTSTRAP' && grep -q 'systemctl restart systemd-journald' '$BOOTSTRAP' && grep -q 'journalctl --flush' '$BOOTSTRAP'"
+EXTRACT_LINE=$(grep -nE 'BEGIN host-script extraction' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-assert "runcmd journald-persistence step found"     "[[ -n '$JOURNALD_RUNCMD_LINE' ]]"
-assert "soleur-web-platform container-start found"   "[[ -n '$WEBPLATFORM_LINE' ]]"
-assert "journald persistence is set up BEFORE the container starts" \
-  "(( JOURNALD_RUNCMD_LINE < WEBPLATFORM_LINE ))"
-assert "runcmd restarts systemd-journald" \
-  "grep -qE '^[[:space:]]+- systemctl restart systemd-journald' '$CLOUD_INIT'"
+assert "host-script extraction (runs the bootstrap) found" "[[ -n '$EXTRACT_LINE' ]]"
+assert "soleur-web-platform container-start found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
+assert "the bootstrap runs BEFORE the container starts" \
+  "(( EXTRACT_LINE < WEBPLATFORM_LINE ))"
 
 # --- AC6: cloud-init.yml still parses as valid YAML ---
 echo ""

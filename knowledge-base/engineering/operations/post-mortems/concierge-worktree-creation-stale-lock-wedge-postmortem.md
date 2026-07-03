@@ -10,6 +10,8 @@ art_34_notifiable: false
 art_34_rationale: "No high-risk to data subjects' rights/freedoms — no personal-data exposure. Art. 34 individual notification not triggered."
 originating_incident: knowledge-base/engineering/operations/post-mortems/2026-07-01-concierge-bwrap-seccomp-sdk-0-3-outage-postmortem.md
 remediation_pr: 5880
+followup_remediation_pr: 5932
+followup_tracker: 5912
 ---
 
 # PIR: Concierge worktree creation wedged by stale `.git/config.lock`
@@ -76,6 +78,45 @@ no operator SSH required.
   `stale-lock-sweep.test.sh` suite pins removal, preservation, clock-skew, scope
   (config-locks-only), and the black-box wiring through `ensure_bare_config`.
 
+## Update (2026-07-03): confirmed root cause + targeted fix (#5912, PR #5932)
+
+The #5880 sweep resolved the **stale-regular-lock** class above, but the Concierge
+workspace continued to wedge. #5907 instrumented the sweep to self-report the lock's
+true nature on a blind surface, and a real wedged `/soleur:go → /soleur:one-shot`
+session finally emitted the forensic (recorded on #5912):
+
+```
+SOLEUR_GIT_LOCK_UNREMOVABLE file=config.lock type=other errno=none reason=non-regular-lock
+```
+
+The wedged session's own `ls -la` resolved `type=other` to a **character device**.
+
+**Confirmed root cause (distinct from, and coexisting with, the stale-lock class):**
+`.git/config.lock` in the Concierge agent-sandbox is materialised as a **masked
+character-device node** by the sandbox filesystem/masking layer — it is NOT a stale
+git lock (git only ever creates `config.lock` as a regular file via
+`open(O_CREAT|O_EXCL)`). This **falsifies the seccomp-stale-lock hypothesis for this
+environment**: the node is not a leftover from a killed writer, it is a persistent
+mount/masking artifact. The #5880 sweep **correctly** refused to remove it
+(non-regular → `UNREMOVABLE`) and failed loud — but that left worktree creation wedged
+with no in-sandbox self-heal, because every `git config` write still hit `EEXIST`
+against the device node.
+
+**Targeted fix (PR #5932):** `ensure_bare_config()` now routes every config mutation
+through a new `atomic_git_config()` helper that, when `config.lock` is non-regular
+(wedged), writes **losslessly** — `cp -p config <same-dir temp>` → `git config --file
+<temp>` (git creates a *clean* `<temp>.lock`, a distinct path the mask does not cover)
+→ atomic `mv -f <temp> config`. Setting `extensions.worktreeConfig=true` this way
+steers the subsequent `git worktree add` onto per-worktree config, so it never needs
+the masked shared `config.lock` (empirically verified on git 2.53). The stale-lock
+sweep still runs for diagnostics + stale-regular removal. A new
+`SOLEUR_GIT_LOCK_TEMP_WEDGED` sentinel fires if even the clean temp lock cannot be
+written — the diagnostic signal that would confirm the sandbox masks `*.lock` as a
+**glob** (the fix's one remaining assumption; the durable platform fix is #5934).
+
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved by PR #5880's stale-lock sweep, which self-heals affected workspaces on next session with no operator action.
+| Issue | Item | Status |
+| --- | --- | --- |
+| #5934 | Durable platform fix: stop the Concierge sandbox mount/masking layer from materialising a character-device at `.git/config.lock` (removes the provenance; the repo-side lockless writer is the in-session mitigation). | open |
+| #5912 | Root-cause PIR + targeted fix (this update + PR #5932). | closing with PR #5932 |

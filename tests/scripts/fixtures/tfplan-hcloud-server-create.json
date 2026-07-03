@@ -1,0 +1,24 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "hcloud_server.web[\"web-2\"]",
+      "mode": "managed",
+      "type": "hcloud_server",
+      "name": "web",
+      "index": "web-2",
+      "provider_name": "registry.terraform.io/hetznercloud/hcloud",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "soleur-web-2",
+          "server_type": "cx33",
+          "location": "fsn1",
+          "placement_group_id": 987654
+        }
+      }
+    }
+  ]
+}
