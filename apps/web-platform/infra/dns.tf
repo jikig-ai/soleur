@@ -19,6 +19,27 @@ resource "cloudflare_record" "app" {
   ttl     = 1 # Auto when proxied
 }
 
+# Per-host CF-PROXIED probe hostname (web-<n>.app.soleur.ai → that host's origin IP),
+# the reach-target for the per-host uptime absence detector (betteruptime_monitor.web_host,
+# uptime-alerts.tf). #5933 Item 1. Proxied so the probe traverses CF edge → origin,
+# preserving the CF-IP-only origin firewall (firewall.tf:54-76) — a raw-origin-IP probe
+# would be firewall-dropped; an unproxied record would expose the origin.
+#
+# for_each gates on `if v.monitored` (NOT all of var.web_hosts): web-2's server is excluded
+# from the auto-apply -target set until the #5274 cutover, so an ungated for_each would drag
+# hcloud_server.web["web-2"] into a routine -target apply. web-2's record+monitor both land
+# when the cutover flips monitored=true. See variables.tf web_hosts comment.
+resource "cloudflare_record" "web_host" {
+  for_each = { for k, v in var.web_hosts : k => v if v.monitored }
+
+  zone_id = var.cf_zone_id
+  name    = "${each.key}.app"
+  content = hcloud_server.web[each.key].ipv4_address
+  type    = "A"
+  proxied = true
+  ttl     = 1 # Auto when proxied
+}
+
 # Deploy webhook endpoint routed through Cloudflare Tunnel (see #749).
 # Protected by CF Access service token + HMAC signature validation.
 resource "cloudflare_record" "deploy" {

@@ -329,6 +329,8 @@ jobs:
               -target=doppler_secret.deploy_ssh_private_key \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
+              -target=cloudflare_record.web_host \
+              -target=betteruptime_monitor.web_host \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \

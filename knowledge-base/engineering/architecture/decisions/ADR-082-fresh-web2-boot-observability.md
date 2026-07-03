@@ -3,7 +3,7 @@
 - **Status:** Adopting
 - **Date:** 2026-07-03
 - **Deciders:** one-shot pipeline (plan + work), CPO threshold carried from ADR-080 (single-user-incident substrate)
-- **Relates to:** #5933 (this contract); #5921 / ADR-080 (fresh-host bake-and-extract boot path — the surface these controls observe); #5887 (the operator web-2 cutover these are prerequisites of); #5046 (container egress firewall — the enforcement Item 3 proves); ADR-068 (multi-host web cluster)
+- **Relates to:** #5933 (this contract); #5921 / ADR-080 (fresh-host bake-and-extract boot path — the surface these controls observe); **#5274 Phase 3.D** (the operator web-2 provisioning cutover these are prerequisites of — `dns.tf:4`); #5887 (a `moved`-block CI fix that RED-blocked the auto-apply; **now CLOSED/merged** — Item 1's original deferral reason, see amendment below); #5046 (container egress firewall — the enforcement Item 3 proves); ADR-068 (multi-host web cluster)
 
 ## Context
 
@@ -53,20 +53,29 @@ enforcing.
 but only executes at boot; web-1 is not rebooting, and its egress enforcement is still proven
 by the existing SSH-provisioner path.
 
-### Item 1 — per-host absence detector (design; DEFERRED, blocked on #5887)
+### Item 1 — per-host absence detector (design; web-1 SHIPPED #5933, web-2 rides #5274)
 
-**Decision (to land with the cutover):** a per-host CF-**proxied** probe hostname
+**Decision:** a per-host CF-**proxied** probe hostname
 (`web-<n>.app.soleur.ai` → the specific origin IP, preserving the CF-only origin firewall in
 `firewall.tf`) + a `betteruptime_monitor` `for_each` over a `monitored`-gated subset of
-`var.web_hosts` (add `monitored = optional(bool, true)` to the object type;
-`web-2 = { … monitored = false }` until cutover). Rejected alternatives: raw-origin-IP probes
-(origin firewall gates 443 to CF IPs only), grey-cloud/unproxied per-host DNS (exposes
-origins; Sentry/BetterStack publish no stable probe-source ranges to allowlist).
+`var.web_hosts` (`monitored = optional(bool, true)` on the object type;
+`web-2 = { … monitored = false }` until cutover). **The `monitored` filter gates BOTH the
+monitor AND its probe `cloudflare_record` (`dns.tf`)** — an ungated `for_each = var.web_hosts`
+references `hcloud_server.web["web-2"]` (excluded from the auto-apply `-target` set), which
+`-target` would transitively drag into a routine apply and provision web-2 out-of-window.
+Rejected alternatives: raw-origin-IP probes (origin firewall gates 443 to CF IPs only),
+grey-cloud/unproxied per-host DNS (exposes origins; Sentry/BetterStack publish no stable
+probe-source ranges to allowlist).
 
-**Why deferred:** the probe hostname is a main-root `cloudflare_record`, and the main-root
-auto-apply (`apply-web-platform-infra.yml`) is currently RED (#5887 — `moved` resources
-excluded by the `-target` allow-list). A monitor pointed at a not-yet-created hostname pages
-immediately (522 / NXDOMAIN). Both ride the cutover apply, sequenced after #5887.
+**Amendment (2026-07-03, #5933): deferral trigger CLEARED — web-1 shipped now.** The original
+"blocked on #5887" reason was that the main-root auto-apply (`apply-web-platform-infra.yml`) was
+RED (`moved` resources excluded by the `-target` allow-list). **#5887 is now fixed & merged and
+the apply is green**, so the `monitored`-gated design ships web-1's probe record + monitor on the
+normal per-PR merge-apply (with the two resources added to the `-target` allow-list). web-2's
+record + monitor stay out of state (`monitored=false`) until the #5274 Phase 3.D cutover provisions
+web-2 and flips the flag — pointing a monitor at a not-yet-created hostname pages immediately
+(522 / NXDOMAIN). **Note:** when Item 2's CF Load Balancer origin health-checks land at #5274 they
+may duplicate this per-host monitor — retire one at that time.
 
 ### Item 2 — A-record drain (design; DEFERRED to the cutover DNS rewire)
 
