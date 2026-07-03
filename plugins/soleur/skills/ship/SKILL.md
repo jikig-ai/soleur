@@ -1062,6 +1062,29 @@ done
 
 **Why:** On 2026-06-29 two PRs shipped soak-gated closures in prose with no sweeper enrollment — PR #5675 (#5689 soak) and PR #5671 (#5673 AC8 `op:founder-ambiguous` soak, enrolled retroactively via PR #5724). Both declared the soak in prose, so Phase 7 Step 3.5's `⏳`-only scan never fired and the trackers were left to rot open on human memory. This gate moves soak-class follow-through enrollment from honor-system to a mechanical block-before-ready, reusing the existing follow-through substrate. See `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
 
+### ADR-Ordinal Collision Gate (mandatory)
+
+Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. This is the collision class that turns the (non-required) `adr-ordinals` CI check RED on `main` **post-squash**: the ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. Because `adr-ordinals` is not a required merge check, the queued auto-merge fires on the green required set and the collision surfaces only after merge, on `main`.
+
+**Detection.** Run the canonical sentinel from the branch root:
+
+```bash
+git fetch origin main -q
+bash scripts/check-adr-ordinals.sh
+```
+
+`check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it also trips on a NEW ADR missing the required `## Status`/`## Context`/`## Decision`/`## Consequences` headings). Exit 0 → pass silently.
+
+**If it exits 1 on an ADR THIS branch introduced:** renumber to the next free ordinal BEFORE merge — never merge a colliding ADR:
+
+1. Next free ordinal: `git ls-tree -r --name-only origin/main -- knowledge-base/engineering/architecture/decisions/ | grep -oE 'ADR-[0-9]+' | sort -t- -k2 -n | tail -1`.
+2. `git mv` the branch's ADR to `ADR-<next>-<slug>.md`, fix its `# ADR-NNN:` header, and sweep every reference in the SAME feature's artifacts (plan, `tasks.md`, `session-state.md`, learning, PR/issue bodies). Scope the sweep to YOUR ADR so the sibling that legitimately holds the ordinal is untouched: `grep -rln 'ADR-<old>' knowledge-base/ | xargs grep -l '<feature-slug>'`.
+3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push.
+
+**The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
+
+**Why:** PR #5945 (#5933) chose ADR-081 at plan time (080 was the highest then); sibling PR #5934's ADR-081 landed during the ~90-min pipeline and auto-synced into the branch during Phase 7. `adr-ordinals` is not required, so the auto-merge fired on the green required set and the collision surfaced only as RED CI on `main`, fixed by a follow-up renumber (#5952 → ADR-082). Making `adr-ordinals` a required check would let the Phase 7 poll loop's required-check-failure exit catch this automatically; this gate is the skill-level defense until/unless that lands.
+
 ## Phase 6.4: Unpushed-Commits Gate
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
@@ -1532,6 +1555,8 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+
+**ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` is not a required check, so the collision does NOT block the queued auto-merge — it surfaces only as RED CI on `main` post-squash (PR #5945 → hotfix #5952). Whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
 **Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's ~8-minute CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). At the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
 
