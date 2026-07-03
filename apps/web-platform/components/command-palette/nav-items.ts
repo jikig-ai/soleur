@@ -36,6 +36,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/dashboard/workstream", label: "Workstream", seq: "g w" }, // NO accel — ⌘W unbindable
   { href: "/dashboard/kb", label: "Knowledge Base", seq: "g k" }, // NO accel — ⌘K = palette
   { href: "/dashboard/routines", label: "Routines", seq: "g r", accel: "r" },
+  { href: "/dashboard/releases", label: "Releases", seq: "g l" }, // NO accel — ⌘L is browser-reserved (address bar)
 ] as const;
 
 export const ADMIN_NAV_ITEMS: readonly NavItem[] = [

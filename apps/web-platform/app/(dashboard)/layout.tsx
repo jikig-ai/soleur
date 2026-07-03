@@ -116,6 +116,7 @@ const NAV_ICONS: Record<string, (props: { className?: string }) => React.JSX.Ele
   "/dashboard/workstream": KanbanIcon,
   "/dashboard/kb": BookIcon,
   "/dashboard/routines": RepeatIcon,
+  "/dashboard/releases": RocketIcon,
   "/dashboard/admin/analytics": ChartIcon,
 };
 
@@ -825,6 +826,25 @@ function KanbanIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M3.75 5.25h4.5v13.5h-4.5V5.25Zm6 0h4.5v9h-4.5v-9Zm6 0h4.5v6h-4.5v-6Z"
+      />
+    </svg>
+  );
+}
+
+// Releases nav glyph (#5958): a rocket — "what we've shipped".
+function RocketIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.59 14.37a6 6 0 0 1-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.63 8.41m5.96 5.96a14.926 14.926 0 0 1-5.84 2.58m0 0a6.003 6.003 0 0 0-7.38-5.84 6 6 0 0 1 7.38 5.84Zm-2.58-5.96a3 3 0 1 0-4.24-4.24 3 3 0 0 0 4.24 4.24Z"
       />
     </svg>
   );

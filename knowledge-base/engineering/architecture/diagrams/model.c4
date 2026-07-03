@@ -244,12 +244,13 @@ model {
   // Relationships — preserved 1:1 from the three Mermaid sources.
   // ======================================================================
 
-  // ---- C4 L1 (System Context) — 17 relationships -------------------------
+  // ---- C4 L1 (System Context) — 18 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }
   webapp -> supabase "Auth and data" { technology "HTTPS" }
   webapp -> stripe "Checkout and billing" { technology "HTTPS" }
   webapp -> plausible "Page view events" { technology "JS snippet" }
+  webapp -> github "Reads release notes for the in-app Releases page" { technology "HTTPS (GitHub REST API)" }
   engine -> anthropic "LLM calls with BYOK keys" { technology "HTTPS" }
   engine -> github "Git operations and CI" { technology "HTTPS/SSH" }
   engine -> supabase "Sessions and encrypted keys" { technology "HTTPS" }
