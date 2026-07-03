@@ -616,6 +616,15 @@ const SHIM_SOURCE = `#!/usr/bin/env node
 // (no model-provided code runs in the creds-bearing job; security-sentinel P2).
 const fs = require("fs");
 const argv = process.argv.slice(2);
+// The SDK PROBES bwrap availability with \`bwrap --version\` (and refuses to
+// build the sandbox — failIfUnavailable — if the probe looks broken). Answer it
+// like the real binary so the probe passes and the SDK proceeds to the real
+// SETUP spawn we want to capture. (A version-only invocation carries no setup
+// argv, so nothing to record.)
+if (argv.length === 1 && argv[0] === "--version") {
+  process.stdout.write("bubblewrap 0.11.1\\n");
+  process.exit(0);
+}
 const rec = { argv };
 // bwrap may pass setup args via \`--args FD\` (NUL-separated on a pipe fd)
 // rather than argv; capture that stream too so the setup argv is never missed.
@@ -729,7 +738,13 @@ export async function doCapture() {
           options: {
             model: CAPTURE_MODEL,
             maxTurns: 2,
-            permissionMode: "bypassPermissions",
+            // NOT "bypassPermissions": that maps to --dangerously-skip-permissions,
+            // which claude.exe REFUSES under root ("cannot be used with root/sudo
+            // privileges") — and the capture runs as root in CI/in-image. The
+            // `canUseTool` force-allow below + `autoAllowBashIfSandboxed` in the
+            // sandbox config already auto-allow the one Bash op, so "default" is
+            // sufficient and root-compatible (#5913 in-image capture fix).
+            permissionMode: "default",
             cwd: resolvedOwn,
             allowedTools: ["Bash"],
             sandbox,

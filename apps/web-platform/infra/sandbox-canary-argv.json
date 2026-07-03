@@ -19,8 +19,6 @@
     "${CANARY_WS}",
     "--tmpfs",
     "/proc",
-    "--tmpfs",
-    "/etc/ssh/ssh_config.d",
     "--ro-bind",
     "${CANARY_EMPTY}",
     "${CANARY_WS}/.claude",
