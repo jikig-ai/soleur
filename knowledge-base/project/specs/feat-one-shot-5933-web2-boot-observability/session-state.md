@@ -17,3 +17,10 @@
 - soleur:plan (inline, parent context)
 - Direct research: read uptime-alerts.tf, dns.tf, variables.tf, server.tf, sentry/uptime-monitors.tf, cron-egress-postapply-assert.sh, web-hosts-fanout-parity.test.sh, soleur-host-bootstrap.sh, cloud-init.yml, apply-{sentry,web-platform}-infra.yml, ADR-080; gh issue/pr state for #5921/#5887/#5046.
 - deepen-plan folded inline (research reconciliation + observability/IaC/ADR/domain sections authored directly from file reads).
+
+## Work Phase
+- Status: complete (Item 3 shipped). Commits: probe+wiring+test, ADR-081, tasks/tracker.
+- Deferred Items 1/2/4 → consolidated tracker #5947. PR uses Ref #5933.
+- Verified GREEN: cron-egress-enforce-probe.test.sh 24/24; cron-egress-firewall.test.sh 195/195 (regression); cloud-init-user-data-size.test.ts (bun) 22/22 (count 25→26, .dockerignore re-include, user_data trimmed); server-tf-set-e 14/14; web-hosts-fanout-parity 1/1; cloud-init schema valid; terraform validate Success.
+- Open Code-Review Overlap: server.tf false-positive hits #3216/#2197 (unrelated concerns — acknowledged, remain open). No genuine overlap.
+- GDPR gate: skipped (no schema/auth/API/migration surface).
