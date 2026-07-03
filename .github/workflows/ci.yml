@@ -223,6 +223,55 @@ jobs:
           git fetch --no-tags --depth=1 origin main 2>/dev/null || true
           bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
 
+  # #5913 / ADR-079 deferral B — creds-gated canary CAPTURE gate. DARK-LAUNCH:
+  # NOT a required status check yet (do not add to branch protection until it has
+  # soaked — see ADR-079 amendment). It re-captures the SDK's real bwrap argv,
+  # canonically projects it, and byte-diffs the committed fixture (block on drift),
+  # ONLY on PRs that touch a capture input. Same-repo PRs only: fork PRs get no
+  # secrets → skipped (the capture check "passes"; section 2's bump-ack in
+  # lockfile-sync still applies to forks). Skips merge_group so it never stalls the
+  # queue. The --verify runs INSIDE the deploy base image (node:22-slim) via
+  # sandbox-canary-verify-in-image.sh — the capture-env==replay-env invariant
+  # (ADR-079 amendment): running the capture on the ubuntu-latest runner (which has
+  # /etc/ssh) would emit a host-conditional --tmpfs /etc/ssh token absent in the
+  # node:22-slim deploy image and byte-diff-fail the committed fixture. bwrap is
+  # REPLACED by an in-process PATH shim during capture (no real bubblewrap needed).
+  sandbox-canary-capture-gate:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect capture-input changes
+        id: trigger
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+            echo "hit=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=0" >> "$GITHUB_OUTPUT"
+            echo "sandbox-canary-capture-gate: no capture-input change — skipping (nothing to re-verify)."
+          fi
+
+      # No node/bun/npm-ci on the runner: the --verify runs inside a node:22-slim
+      # container (the deploy base image) via the helper below, which does its own
+      # npm ci. The runner needs only docker (preinstalled) + git.
+      - name: Canary capture gate (in-image --verify drift + ack-fallback)
+        if: steps.trigger.outputs.hit == '1'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SANDBOX_CANARY_GATE_ENABLED: "1"
+          # --verify runs inside node:22-slim (deploy base) — see helper header.
+          SDK_GATE_VERIFY_CMD: bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
+
   # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
   # of inside the post-merge Docker build (#2347/#2401 outage).

@@ -193,12 +193,15 @@ the incident **class** deterministically:
 Two load-bearing pieces remain **open**, so this ADR **stays `adopting`** (it is NOT
 flipped to `accepted` in PR3):
 
-- **Deferral B — creds-gated real `--capture` wiring** (drives the real SDK
-  `query()` + `buildAgentSandboxConfig()` to populate `sandbox-canary-argv.json`).
-  New follow-up issue. **Trigger:** confirm `ANTHROPIC_API_KEY` availability in CI +
-  design non-determinism bounding for the model turn. B is a **hard prerequisite of
-  A**: per #5889, the dark-launch soak counter holds at 0 (`fixture_uncaptured`)
-  until the real fixture lands, so no green soak verdict can accrue without B.
+- **Deferral B — creds-gated real `--capture` wiring** — **LANDED (#5913).** Drives
+  the real SDK `query()` + `buildAgentSandboxConfig()` via a bwrap-intercepting PATH
+  shim to populate `sandbox-canary-argv.json` with the SDK's real bwrap SETUP argv.
+  `ANTHROPIC_API_KEY` confirmed as a repo secret; the model-turn non-determinism is
+  bounded by retry-N + per-attempt wall-clock timeout + reserved exit `4`, keeping
+  the LLM out of the assertion path. B was a hard prerequisite of A: #5889's soak
+  held at `fixture_uncaptured` until this real fixture landed. **See the #5913
+  amendment below — the "verbatim snapshot, no normalization" mechanism this ADR
+  originally specified was empirically falsified and is superseded.**
 - **Deferral A — promote the `ci-deploy.sh` faithful canary to BLOCKING**
   (`sandbox_broken` → rollback). Owned by **#5889** (soak: 5 green verdicts / ≥3
   days). Its `earliest=2026-07-06` is necessary-but-not-sufficient — promotion also
@@ -208,8 +211,119 @@ flipped to `accepted` in PR3):
   a faithful `sandbox_broken` (or a loaded≠committed hash mismatch) — NOT on a
   literal "canary pass".
 
-**Flip to `accepted`** only when BOTH land: real-capture wired (B) AND the canary
-promoted-to-blocking after #5889's soak proves green (A), citing both tracking issues.
+**Flip to `accepted`** only when BOTH land: real-capture wired (B — **now landed,
+#5913**) AND the canary promoted-to-blocking after #5889's soak proves green (A),
+citing both tracking issues. **Still `adopting`** — A remains open.
+
+### Amendment (#5913, 2026-07-03) — canonical projection supersedes verbatim snapshot
+
+Wiring the real `--capture` empirically **falsified** deferral B's core premise that
+"the captured argv is a pure function of (SDK version, sandbox config), byte-repro-
+ducible by construction." The real `@anthropic-ai/claude-agent-sdk@0.3.197` bwrap
+SETUP argv (176 tokens) embeds three axes the ADR did not anticipate: (a) **per-run
+random paths** — a network-proxy socket `/tmp/claude-http-<hex>.sock` and ~12
+`/tmp/claude-empty-<rand>` bind sources (change every capture, same machine); (b)
+**host-specific binds** (`/home/<user>/.npm/_logs`, `/tmp/claude-<session>/…`, absent
+in the prod canary container → a verbatim replay `canary_infra_error`s every time);
+(c) **26 `--setenv NAME VALUE` env-forwarded vars**, some secret-shaped (e.g. an
+empty `CLOUDSDK_PROXY_PASSWORD`). So a verbatim fixture is neither byte-reproducible
+nor replayable off-host, and the `--verify` byte-diff + `normalizeCapturedArgv`-
+dropped design were unworkable.
+
+**Resolution (CTO ruling, binding — supersedes the "verbatim snapshot, no
+normalization" clause of deferral B):** commit a **canonical projection**
+(`normalizeCapturedArgv`, schema `canonical-bwrap-v1`). It KEEPS the seccomp-relevant
+structure (all `--unshare-*`, `--dev`, `--tmpfs`, deterministic-const binds `/` `/proc`
+`/dev/null`, ws-relative binds), NORMALIZES the hermetic ws root → `${CANARY_WS}` and
+the random empty-dir source → `${CANARY_EMPTY}` (substituted back at replay), and
+DROPS the non-deterministic/host/secret axes (all `--setenv`, random socket, host
+binds; counts recorded in a non-diffed `droppedForDeterminism` audit block). This is
+byte-reproducible (two independent captures produce identical canonical fields) AND
+replayable off-host. The projection is NOT the ADR's rejected "silent-strip normalizer":
+it is a structured projection with a **proof obligation** — the always-on exact
+`--unshare-*` multiset assertion — that fails CI if it ever over-drops or the SDK
+narrows the sandbox. Two-staged secret-scrub (raw literal-value + canonical
+names+value backstop) is retained; reject-never-strip.
+
+**§2d proof-obligation refinement (bwrap-version reality).** The ADR's replay end
+cannot reproduce the #5849 split-unshare EPERM via `bwrap <argv> -- true`: bwrap
+0.11.x **combines** all `--unshare-*` into one `unshare(…|NEWUSER)` which the #1557
+allow-rule permits under BOTH profiles (empirically, the real canonical argv passes
+the committed AND the pre-#5874 profile). The #5849 split is a property of the claude
+CLI's **nested-process structure**, not any bwrap-argv token, so no argv fidelity
+reproduces it. Therefore §2d splits into two argv-independent signals:
+1. **#5849 split-unshare discrimination** stays the already-shipped layer-B
+   nested-unshare probe (`sandbox-canary-regression.test.sh`; `unshare --user
+   --map-root-user unshare --mount --pid`) under both profiles. Unchanged; the only
+   thing that discriminates that class.
+2. **Real-argv replay** is a **bwrap-level profile-fidelity canary**: "does the SDK's
+   real bwrap setup survive the committed profile on the deploy-side bwrap/kernel?"
+   The **deploy-time prod-container replay is authoritative** (#5873-shape fleet-
+   outage detector); the CI capture-gate self-replay-green is only a capture-sanity
+   precheck (runner bwrap/kernel differ from prod, so CI-green ≠ prod-green).
+3. **Always-on deterministic guard on the committed fixture:** exact `--unshare-*`
+   multiset assertion (A5b) + `--verify` byte-diff drift.
+
+**Recorded residual (follow-up, NOT #5913).** The deploy-time real-argv replay
+CANNOT catch a prod-side kernel/bwrap-version regression that re-breaks *specifically*
+the nested split (the #5849/#5873 shape) — bwrap replay can't reproduce the nested
+unshare. In CI that class is covered at merge by layer-B against the committed profile
+file, but a kernel/bwrap regression on the prod host would pass the deploy-time canary
+(false-green for that one class). Closing it means running the argv-independent
+nested-unshare probe under the deployed profile **inside the prod canary container** at
+deploy time. That is a distinct capability, not "wire the real `--capture`" — tracked as
+**#5941**, out of #5913 scope.
+
+The CI capture gate is **dark-launch** (non-blocking / not a required status check)
+until it has soaked; only its `argv_drift` byte-diff is a candidate block signal (a
+captured `sandbox_broken` is unreachable via argv replay, per the refinement above).
+
+**Capture-env invariant (CTO ruling, binding — the stronger invariant behind the
+canonical projection).** The canonical projection closed *cross-run* non-determinism
+within one environment, but the real invariant is **capture-env == verify-env ==
+replay-env == the deploy runtime base image (`node:22-slim`)**. The SDK's bwrap setup
+is a pure function of (SDK version, sandbox config, **host filesystem**): host-
+conditional tokens like `--tmpfs /etc/ssh/ssh_config.d` are emitted only when the host
+has `/etc/ssh` (a *security hardening* mount that hides host SSH config from the
+sandbox), and other host-conditional tokens (CA bundles, `/etc/machine-id`, `/run`,
+locale files) are latent. Capturing on any other host (a dev laptop, or the
+`ubuntu-latest` runner — both have `/etc/ssh`) produces an argv that is a **superset**
+of what prod runs and that **infra-errors** the `node:22-slim` deploy replay
+(`bwrap: Can't mkdir parents for /etc/ssh/ssh_config.d: Read-only file system`) — so
+the #5889 soak would accrue `canary_infra_error`, never green. Therefore both
+`--capture` and `--verify` are pinned to run **inside the deploy base image**, never on
+`ubuntu-latest`. This was rejected-alternative **B** (a projection rule that drops
+"non-universal `/etc/…`" tokens): B requires enumerating an open-ended host-conditional
+set and its failure mode is exactly the over-drop the §2d guard exists to prevent —
+silently dropping a *load-bearing hardening mount* that IS present in prod. A (capture
+in-image) eliminates the entire host-conditional class by construction. Bonus: an
+in-image capture also erases the dev-host noise (`/home/<user>/.npm/_logs`, host
+`/etc/ssh`, `/tmp/claude-<session>`), so the committed fixture is *closer to verbatim*
+than an off-image capture — honoring the plan's original minimal-transform spirit as
+far as physics allows.
+
+**Producing the fixture without hand-authoring (guardrail 1 / #4932) — DONE.** The
+committed fixture is a real in-image capture, generated by the generated-artifact
+bootstrap (`docker run <node:22-slim + web-platform deps> …/sandbox-canary.mjs
+--capture` with `SANDBOX_CANARY_CAPTURE=1` + creds), verified byte-identical across
+two independent in-image captures (84 tokens, no `/etc/ssh`, full `--unshare-*`
+multiset, zero secrets/host data). Two headless-in-image fixes (the de-risk the
+ruling called for) were required and are the reason an off-image capture "worked"
+while the in-image one initially did not:
+1. **permissionMode `default`, not `bypassPermissions`.** `bypassPermissions` maps
+   to `--dangerously-skip-permissions`, which `claude.exe` **refuses under root**
+   ("cannot be used with root/sudo privileges") — and the in-image/CI capture runs
+   as root. The `canUseTool` force-allow + `autoAllowBashIfSandboxed` already
+   auto-allow the single Bash op, so `default` is sufficient and root-compatible.
+   (An off-image capture on a non-root dev user silently avoided this.)
+2. **The bwrap PATH shim answers `bwrap --version`** like the real binary, so the
+   SDK's availability probe (`failIfUnavailable`) passes and proceeds to the real
+   SETUP spawn instead of skipping the sandbox.
+CI auth uses `ANTHROPIC_API_KEY` (repo secret); the in-image `--verify` runs via
+`scripts/sandbox-canary-verify-in-image.sh` inside `node:22-slim`. **Fidelity note:**
+the helper uses `node:22-slim` + `npm ci` (the deploy `FROM` base), not the fully
+built web-platform image; they share the base OS filesystem so the host-conditional
+token set is identical — a follow-up could pin to the built image for exactness.
 
 ## Consequences
 
