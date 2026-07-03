@@ -26,8 +26,8 @@ Lane: cross-domain (no spec.md — TR2 fail-closed default)
 ## Phase 3 — Verify
 - [x] 3.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
 - [x] 3.2 Un-gated run reports suite `skipped` (no env).
-- [ ] 3.3 Live gated run (dev Doppler, `TENANT_INTEGRATION_TEST=1`) → A/B/C pass.
+- [x] 3.3 Live gated run (dev Doppler, `TENANT_INTEGRATION_TEST=1`) → A/B/C pass.
 - [ ] 3.4 (Optional) deliberate-drift ROLLBACK smoke confirms embedded body appears on failure.
 
 ## Acceptance
-- [ ] All Pre-merge ACs in the plan satisfied. No post-merge operator steps (tenant-integration.yml auto-runs the heavy suite on the PR).
+- [x] All Pre-merge ACs in the plan satisfied. No post-merge operator steps (tenant-integration.yml auto-runs the heavy suite on the PR).

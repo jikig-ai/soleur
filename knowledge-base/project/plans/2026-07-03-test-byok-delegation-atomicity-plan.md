@@ -202,7 +202,7 @@ client-side, serialization is DB-side via `FOR UPDATE` at 084:370):
 - [x] Gated skip path is green by default (no env):
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/byok-delegation.atomicity.tenant-isolation.test.ts --project unit`
       → suite reports `skipped` (describe.skipIf), does not error.
-- [ ] Live run (deepen-plan / QA phase, dev Doppler):
+- [x] Live run (deepen-plan / QA phase, dev Doppler):
       `cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 npm run test:ci -- test/server/byok-delegation.atomicity.tenant-isolation.test.ts --project unit`
       → Tests A/B/C pass.
 - [ ] Deliberate-drift self-diagnosis smoke (optional, dev-only, ROLLBACK): in a
@@ -212,23 +212,23 @@ client-side, serialization is DB-side via `FOR UPDATE` at 084:370):
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] New file `apps/web-platform/test/server/byok-delegation.atomicity.tenant-isolation.test.ts`
+- [x] New file `apps/web-platform/test/server/byok-delegation.atomicity.tenant-isolation.test.ts`
       exists with the `.tenant-isolation.test.ts` suffix.
-- [ ] Header references BOTH the cap-RPC precedent
+- [x] Header references BOTH the cap-RPC precedent
       (`byok-kill-switch.atomicity.tenant-isolation.test.ts`) AND the existing
       partial hourly test (`byok-delegations.tenant-isolation.test.ts:537`) so
       the scope split is discoverable.
-- [ ] Test A asserts the **`== cap` call passes** (strict-`>` proof) and call
+- [x] Test A asserts the **`== cap` call passes** (strict-`>` proof) and call
       K+1 errors with `byok_delegations:hourly_cap_exceeded`; audit count `== K`.
-- [ ] Test B trips `byok_delegations:daily_cap_exceeded` via aged-seed
+- [x] Test B trips `byok_delegations:daily_cap_exceeded` via aged-seed
       isolation, and asserts the hourly branch did NOT raise.
-- [ ] Test C: exactly `K` calls admitted, `N−K` raise the hourly marker, and
+- [x] Test C: exactly `K` calls admitted, `N−K` raise the hourly marker, and
       `audit_byok_use` count for the delegation `== K` (no double-spend).
-- [ ] All three tests embed the live `pg_get_functiondef` body in the failing
+- [x] All three tests embed the live `pg_get_functiondef` body in the failing
       `expect()` message via a guarded fetch that never throws and never runs on
       a green path.
-- [ ] `tsc --noEmit` clean; default (un-gated) run reports the suite `skipped`.
-- [ ] `CAP_CENTS % COST_CENTS === 0` asserted in `beforeAll`.
+- [x] `tsc --noEmit` clean; default (un-gated) run reports the suite `skipped`.
+- [x] `CAP_CENTS % COST_CENTS === 0` asserted in `beforeAll`.
 
 ### Post-merge (operator)
 - None. The heavy suite runs automatically on the PR via
