@@ -4,12 +4,15 @@
 # (allow-list, non-SSH resources only)" step). Closes #4419 (sibling of
 # #4420 — the github-infra widening).
 #
-# Five vulnerable resource types are covered:
+# Five nested-block Cloudflare surfaces plus one reboot-update surface are
+# covered:
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
 #   3. cloudflare_zone_settings_override.*               .settings[0].security_header
 #   4. cloudflare_notification_policy.*                  .email_integration
 #   5. cloudflare_zero_trust_access_policy.*             .include
+#   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
+#                                                        server_type (#5911)
 #
 # Deterministic; no network. Uses synthesized fixtures plus one captured
 # real `terraform show -json` baseline (redacted).
@@ -87,22 +90,23 @@ _report() {
 }
 
 # Mirror the workflow's bash pipeline exactly. Returns
-# "rdel:ndel:dcount:rc". Byte-identical to apply-web-platform-infra.yml's
+# "rdel:ndel:rupd:dcount:rc". Byte-identical to apply-web-platform-infra.yml's
 # regex.
 _run_gate() {
   local fixture="$1" head_msg="$2"
-  local counts rdel ndel dcount ack rc=0
+  local counts rdel ndel rupd dcount ack rc=0
   if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
-    echo "ERROR:ERROR:ERROR:99"
+    echo "ERROR:ERROR:ERROR:ERROR:99"
     return
   fi
   rdel=$(echo "$counts" | jq -r '.resource_deletes')
   ndel=$(echo "$counts" | jq -r '.nested_deletes')
-  if [[ ! "$rdel" =~ ^[0-9]+$ ]] || [[ ! "$ndel" =~ ^[0-9]+$ ]]; then
-    echo "PARSE:PARSE:PARSE:1"
+  rupd=$(echo "$counts" | jq -r '.reboot_updates')
+  if [[ ! "$rdel" =~ ^[0-9]+$ ]] || [[ ! "$ndel" =~ ^[0-9]+$ ]] || [[ ! "$rupd" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:PARSE:PARSE:PARSE:1"
     return
   fi
-  dcount=$((rdel + ndel))
+  dcount=$((rdel + ndel + rupd))
   ack=false
   if [[ "$head_msg" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
     ack=true
@@ -110,7 +114,7 @@ _run_gate() {
   if [[ "$dcount" -gt 0 ]] && [[ "$ack" != "true" ]]; then
     rc=1
   fi
-  echo "$rdel:$ndel:$dcount:$rc"
+  echo "$rdel:$ndel:$rupd:$dcount:$rc"
 }
 
 if [[ ! -f "$FILTER" ]]; then
@@ -122,10 +126,10 @@ fi
 # regression shape; rules 13 → 12).
 t_ruleset_rule_removal_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-ruleset-rule-removal.json" "feat: trim redirects")
-  if [[ "$out" == "0:1:1:1" ]]; then
-    _report "T1 cloudflare_ruleset.rules removal trips guard (rdel=0 ndel=1 dcount=1 rc=1)" ok
+  if [[ "$out" == "0:1:0:1:1" ]]; then
+    _report "T1 cloudflare_ruleset.rules removal trips guard (rdel=0 ndel=1 rupd=0 dcount=1 rc=1)" ok
   else
-    _report "T1 cloudflare_ruleset.rules removal trips guard" fail "got '$out' want '0:1:1:1'"
+    _report "T1 cloudflare_ruleset.rules removal trips guard" fail "got '$out' want '0:1:0:1:1'"
   fi
 }
 
@@ -133,10 +137,10 @@ t_ruleset_rule_removal_trips() {
 # (SSH ingress shape; would brick CI deploy pipeline).
 t_tunnel_ingress_removal_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-tunnel-ingress-removal.json" "feat: prune ssh ingress")
-  if [[ "$out" == "0:1:1:1" ]]; then
+  if [[ "$out" == "0:1:0:1:1" ]]; then
     _report "T2 cloudflare_zero_trust_tunnel ingress_rule removal trips guard" ok
   else
-    _report "T2 cloudflare_zero_trust_tunnel ingress_rule removal trips guard" fail "got '$out' want '0:1:1:1'"
+    _report "T2 cloudflare_zero_trust_tunnel ingress_rule removal trips guard" fail "got '$out' want '0:1:0:1:1'"
   fi
 }
 
@@ -144,40 +148,40 @@ t_tunnel_ingress_removal_trips() {
 # guard (HSTS off; single-block-shrinkage variant).
 t_zone_settings_header_removal_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-zone-settings-header-removal.json" "feat: drop HSTS")
-  if [[ "$out" == "0:1:1:1" ]]; then
+  if [[ "$out" == "0:1:0:1:1" ]]; then
     _report "T3 cloudflare_zone_settings_override security_header removal trips guard" ok
   else
-    _report "T3 cloudflare_zone_settings_override security_header removal trips guard" fail "got '$out' want '0:1:1:1'"
+    _report "T3 cloudflare_zone_settings_override security_header removal trips guard" fail "got '$out' want '0:1:0:1:1'"
   fi
 }
 
 # T4: cloudflare_notification_policy email_integration removal trips guard.
 t_notification_email_removal_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-notification-integration-removal.json" "feat: silence expiry alerts")
-  if [[ "$out" == "0:1:1:1" ]]; then
+  if [[ "$out" == "0:1:0:1:1" ]]; then
     _report "T4 cloudflare_notification_policy email_integration removal trips guard" ok
   else
-    _report "T4 cloudflare_notification_policy email_integration removal trips guard" fail "got '$out' want '0:1:1:1'"
+    _report "T4 cloudflare_notification_policy email_integration removal trips guard" fail "got '$out' want '0:1:0:1:1'"
   fi
 }
 
 # T5: cloudflare_zero_trust_access_policy include removal trips guard.
 t_access_policy_include_removal_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-access-policy-include-removal.json" "feat: empty access policy")
-  if [[ "$out" == "0:1:1:1" ]]; then
+  if [[ "$out" == "0:1:0:1:1" ]]; then
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" ok
   else
-    _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" fail "got '$out' want '0:1:1:1'"
+    _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" fail "got '$out' want '0:1:0:1:1'"
   fi
 }
 
 # T6: no-changes plan passes silently.
 t_no_changes_passes() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-web-platform-no-changes.json" "feat: docs only")
-  if [[ "$out" == "0:0:0:0" ]]; then
-    _report "T6 no-changes plan passes (rdel=0 ndel=0 dcount=0 rc=0)" ok
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T6 no-changes plan passes (rdel=0 ndel=0 rupd=0 dcount=0 rc=0)" ok
   else
-    _report "T6 no-changes plan passes" fail "got '$out' want '0:0:0:0'"
+    _report "T6 no-changes plan passes" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -185,10 +189,10 @@ t_no_changes_passes() {
 # nested clause (select(.. | not) guard). rdel=1, ndel=0.
 t_ruleset_resource_delete_no_double_count() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-ruleset-resource-delete.json" "feat: drop allowlist_ai_crawlers ruleset")
-  if [[ "$out" == "1:0:1:1" ]]; then
+  if [[ "$out" == "1:0:0:1:1" ]]; then
     _report "T7 cloudflare_ruleset resource-delete: no nested double-count" ok
   else
-    _report "T7 cloudflare_ruleset resource-delete: no nested double-count" fail "got '$out' want '1:0:1:1'"
+    _report "T7 cloudflare_ruleset resource-delete: no nested double-count" fail "got '$out' want '1:0:0:1:1'"
   fi
 }
 
@@ -196,10 +200,10 @@ t_ruleset_resource_delete_no_double_count() {
 # resources) — both counters increment, dcount=2.
 t_mixed_delete_and_nested() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-web-platform-mixed.json" "feat: drop www + trim cache rules")
-  if [[ "$out" == "1:1:2:1" ]]; then
+  if [[ "$out" == "1:1:0:2:1" ]]; then
     _report "T8 mixed resource-delete + nested removal sum to 2" ok
   else
-    _report "T8 mixed resource-delete + nested removal sum to 2" fail "got '$out' want '1:1:2:1'"
+    _report "T8 mixed resource-delete + nested removal sum to 2" fail "got '$out' want '1:1:0:2:1'"
   fi
 }
 
@@ -207,10 +211,10 @@ t_mixed_delete_and_nested() {
 # additions, dcount=0.
 t_ruleset_rule_addition_passes() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-ruleset-rule-addition.json" "feat: add /legal/dpa redirect")
-  if [[ "$out" == "0:0:0:0" ]]; then
+  if [[ "$out" == "0:0:0:0:0" ]]; then
     _report "T9 cloudflare_ruleset rule addition is ignored (rdel=0 ndel=0)" ok
   else
-    _report "T9 cloudflare_ruleset rule addition is ignored" fail "got '$out' want '0:0:0:0'"
+    _report "T9 cloudflare_ruleset rule addition is ignored" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -222,10 +226,10 @@ t_real_baseline_zero() {
     return
   fi
   local out; out=$(_run_gate "$FIXTURES/tfplan-web-platform-real-baseline.json" "")
-  if [[ "$out" == "0:0:0:0" ]]; then
+  if [[ "$out" == "0:0:0:0:0" ]]; then
     _report "T10 captured real baseline yields destroy_count=0 (regression anchor)" ok
   else
-    _report "T10 captured real baseline yields destroy_count=0 (regression anchor)" fail "got '$out' want '0:0:0:0'"
+    _report "T10 captured real baseline yields destroy_count=0 (regression anchor)" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -234,10 +238,10 @@ t_ack_destroy_allows_nested() {
   local msg
   msg=$'feat: prune redirects\n\n[ack-destroy]\n\nRefs #4419.'
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-ruleset-rule-removal.json" "$msg")
-  if [[ "$out" == "0:1:1:0" ]]; then
+  if [[ "$out" == "0:1:0:1:0" ]]; then
     _report "T11 [ack-destroy] line allows nested removal through (rc=0)" ok
   else
-    _report "T11 [ack-destroy] line allows nested removal through" fail "got '$out' want '0:1:1:0'"
+    _report "T11 [ack-destroy] line allows nested removal through" fail "got '$out' want '0:1:0:1:0'"
   fi
 }
 
@@ -246,10 +250,106 @@ t_ack_destroy_allows_nested() {
 t_ack_destroy_substring_rejected() {
   local msg="chore: discuss [ack-destroy] policy inline"
   local out; out=$(_run_gate "$FIXTURES/tfplan-cf-ruleset-rule-removal.json" "$msg")
-  if [[ "$out" == "0:1:1:1" ]]; then
+  if [[ "$out" == "0:1:0:1:1" ]]; then
     _report "T12 [ack-destroy] substring (not line-anchored) is rejected (rc=1)" ok
   else
-    _report "T12 [ack-destroy] substring (not line-anchored) is rejected" fail "got '$out' want '0:1:1:1'"
+    _report "T12 [ack-destroy] substring (not line-anchored) is rejected" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 6th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
+# `placement_group_id` / `server_type` change → power-off reboot of the
+# RUNNING host with ZERO destroys — invisible to resource_deletes + the 5
+# Cloudflare nested clauses. reboot_updates (rupd) counts these. Reuses the
+# same `[ack-destroy]` gate (no new token; regex-parity still 6 sites).
+# ---------------------------------------------------------------------------
+
+# T13: SINGLETON hcloud_server.web placement_group_id 0 → 987654 in-place
+# update trips the guard (rupd=1). Live pre-migration shape (placement-group
+# `moved` not yet operator-consumed).
+t_hcloud_placement_group_update_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-placement-group-update.json" "feat: pin web to placement group")
+  if [[ "$out" == "0:0:1:1:1" ]]; then
+    _report "T13 hcloud_server.web placement_group_id update trips guard (rdel=0 ndel=0 rupd=1 dcount=1 rc=1)" ok
+  else
+    _report "T13 hcloud_server.web placement_group_id update trips guard" fail "got '$out' want '0:0:1:1:1'"
+  fi
+}
+
+# T14: after-unknown placement_group_id (resource-reference resolved
+# same-plan: after.placement_group_id absent, value in after_unknown, before
+# = 0). `0 != null` still trips (errs SAFE — an unknown `after` never yields a
+# missed reboot). for_each ["web-1"] shape.
+t_hcloud_placement_group_after_unknown_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-placement-group-after-unknown.json" "feat: rewire placement group")
+  if [[ "$out" == "0:0:1:1:1" ]]; then
+    _report "T14 hcloud_server placement_group_id after-unknown still trips (0 != null)" ok
+  else
+    _report "T14 hcloud_server placement_group_id after-unknown still trips" fail "got '$out' want '0:0:1:1:1'"
+  fi
+}
+
+# T15: server_type cx33 → cx43 in-place update (multi-attr: labels also
+# change) trips the guard. Pins that detection keys off the reboot-attr diff
+# even when a non-reboot attr also changes.
+t_hcloud_server_type_update_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-type-update.json" "feat: resize web to cx43")
+  if [[ "$out" == "0:0:1:1:1" ]]; then
+    _report "T15 hcloud_server server_type update trips guard (multi-attr)" ok
+  else
+    _report "T15 hcloud_server server_type update trips guard" fail "got '$out' want '0:0:1:1:1'"
+  fi
+}
+
+# T16: location change forces a REPLACE (actions ["delete","create"]) —
+# counted by resource_deletes (rdel=1), NOT double-counted by the reboot
+# clause (rupd=0). The invariant-not-proxy anchor.
+t_hcloud_location_replace_no_double_count() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json" "feat: move web to fsn1")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T16 hcloud_server location REPLACE counted by resource_deletes, not reboot clause" ok
+  else
+    _report "T16 hcloud_server location REPLACE not double-counted" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
+# T17: in-place update changing a NON-reboot attr only (labels) — reboot
+# attrs unchanged. rupd=0 (proves the clause detects the reboot-forcing
+# ATTRIBUTE diff, not merely "hcloud_server has an update action").
+t_hcloud_noop_attr_update_passes() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-noop-attr-update.json" "feat: relabel web")
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T17 hcloud_server non-reboot attr update ignored (rupd=0)" ok
+  else
+    _report "T17 hcloud_server non-reboot attr update ignored" fail "got '$out' want '0:0:0:0:0'"
+  fi
+}
+
+# T18: CREATE of a 2nd host (hcloud_server.web["web-2"]) — a legit new host,
+# not a reboot. reboot clause selects only ["update"], so rupd=0.
+t_hcloud_create_passes() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-create.json" "feat: add web-2 host")
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T18 hcloud_server create (web-2 add) is not a reboot (rupd=0)" ok
+  else
+    _report "T18 hcloud_server create is not a reboot" fail "got '$out' want '0:0:0:0:0'"
+  fi
+}
+
+# T19: [ack-destroy] on its own line allows a reboot-forcing update through
+# (rc=0). Per the issue's "[ack-destroy]-style acknowledgement" requirement —
+# an emergency override, NOT the normal reboot resolution (see the filter
+# header + the workflow ::error:: steer to the operator maintenance-window
+# apply).
+t_hcloud_reboot_ack_allows() {
+  local msg
+  msg=$'feat: pin web to placement group\n\n[ack-destroy]\n\nRefs #5911.'
+  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-placement-group-update.json" "$msg")
+  if [[ "$out" == "0:0:1:1:0" ]]; then
+    _report "T19 [ack-destroy] allows reboot-forcing update through (rc=0)" ok
+  else
+    _report "T19 [ack-destroy] allows reboot-forcing update through" fail "got '$out' want '0:0:1:1:0'"
   fi
 }
 
@@ -265,6 +365,13 @@ t_ruleset_rule_addition_passes
 t_real_baseline_zero
 t_ack_destroy_allows_nested
 t_ack_destroy_substring_rejected
+t_hcloud_placement_group_update_trips
+t_hcloud_placement_group_after_unknown_trips
+t_hcloud_server_type_update_trips
+t_hcloud_location_replace_no_double_count
+t_hcloud_noop_attr_update_passes
+t_hcloud_create_passes
+t_hcloud_reboot_ack_allows
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
