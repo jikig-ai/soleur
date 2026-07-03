@@ -103,12 +103,33 @@ if [[ "$argv_status" == "captured" && "$argv_len" -gt 0 && "$has_userns" == "tru
 else
   fail "A5 argv fixture invalid (status=$argv_status len=$argv_len userns=$has_userns split=$has_split no--=$no_dashdash)"
 fi
-# A5b — the regression fixture is NOT the prod replay fixture, which must stay uncaptured.
-prod_status="$(jq -r '.status' "$INFRA_DIR/sandbox-canary-argv.json" 2>/dev/null || echo missing)"
-if [[ "$prod_status" == "uncaptured" ]]; then
-  pass "A5b prod replay fixture (sandbox-canary-argv.json) still status:uncaptured (real capture deferred)"
+# A5b — the prod replay fixture is now a REAL canonical capture (#5913 / ADR-079
+# deferral B). Always-on STRUCTURAL guard (ADR-079 §2d, argv-independent of any
+# bwrap version): assert the committed fixture retains the EXACT --unshare-*
+# multiset the SDK requested. Exact (not subset) is deliberate — a future SDK
+# that DROPS a namespace (e.g. --unshare-net) silently narrows the sandbox; a
+# subset check would not fire. `--verify` byte-diff also catches it, but this
+# assertion documents the security intent and fails legibly. Regenerate this
+# expected set (via --capture) if the SDK's real unshare set intentionally
+# changes — that is a reviewed sandbox-posture change, not an incidental edit.
+PROD_FIX="$INFRA_DIR/sandbox-canary-argv.json"
+prod_status="$(jq -r '.status' "$PROD_FIX" 2>/dev/null || echo missing)"
+prod_schema="$(jq -r '.schema // ""' "$PROD_FIX" 2>/dev/null)"
+prod_unshare="$(jq -c '[.bwrapSetupArgv[]? | select(type=="string" and startswith("--unshare-"))] | sort' "$PROD_FIX" 2>/dev/null)"
+EXPECTED_UNSHARE='["--unshare-net","--unshare-pid","--unshare-user"]'
+if [[ "$prod_status" == "captured" && "$prod_schema" == "canonical-bwrap-v1" && "$prod_unshare" == "$EXPECTED_UNSHARE" ]]; then
+  pass "A5b prod fixture captured (canonical-bwrap-v1) + EXACT --unshare-* multiset (net+pid+user) (#5913)"
 else
-  fail "A5b prod replay fixture status='$prod_status', expected 'uncaptured' (guardrail 1 — do not hand-author the prod fixture)"
+  fail "A5b prod fixture invalid (status=$prod_status schema=$prod_schema unshare=$prod_unshare), expected captured canonical-bwrap-v1 with unshare multiset $EXPECTED_UNSHARE"
+fi
+# A5c — the prod canonical fixture must stay DISTINCT from the synthesized
+# regression fixture (guardrail 1: the two argv sources never converge).
+prod_argv="$(jq -cS '.bwrapSetupArgv' "$PROD_FIX" 2>/dev/null)"
+regr_argv="$(jq -cS '.bwrapSetupArgv' "$ARGV_FIXTURE" 2>/dev/null)"
+if [[ -n "$prod_argv" && "$prod_argv" != "$regr_argv" ]]; then
+  pass "A5c prod fixture DISTINCT from split-unshare-argv.json (guardrail 1)"
+else
+  fail "A5c prod fixture argv equals the synthesized regression fixture (guardrail 1 violated)"
 fi
 
 # ---------------------------------------------------------------------------

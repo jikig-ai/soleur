@@ -40,11 +40,28 @@ inputs:
     description: 'Doppler config (must resolve to environment=dev).'
     required: false
     default: 'dev_scheduled'
+  sentry-dsn:
+    description: >-
+      NEXT_PUBLIC_SENTRY_DSN. Forwarded ONLY by the scheduled surface. When
+      empty (PR CI), no Sentry event is emitted — a pre-existing dev-infra
+      drift must not misattribute a Sentry event to an unrelated PR.
+    required: false
+    default: ''
+  fail-on-rpc-body-drift:
+    description: >-
+      '"true" makes byok RPC body-marker drift fail-loud (::error:: + Sentry +
+      exit 1); "false" (default, PR CI) surfaces ::warning:: only, no Sentry,
+      exit 0 — mirrors the ledger probe's visibility-in-PR convention.'
+    required: false
+    default: 'false'
 
 outputs:
   drift-detected:
-    description: '"true" if any drift was reported, "false" otherwise.'
+    description: '"true" if any ledger drift was reported, "false" otherwise.'
     value: ${{ steps.probe.outputs.drift-detected }}
+  rpc-body-drift-detected:
+    description: '"true" if any byok RPC live-body marker drift was reported, "false" otherwise.'
+    value: ${{ steps.rpc-body.outputs.rpc-body-drift-detected }}
 
 runs:
   using: composite
@@ -131,3 +148,155 @@ runs:
           echo "No dev-vs-main migration drift detected."
         fi
         echo "drift-detected=${drift_seen}" >> "$GITHUB_OUTPUT"
+
+    # byok RPC live-body marker probe (#5920). Complements the ledger probe
+    # above: that step catches _schema_migrations rows whose FILE drifts from
+    # origin/main; this step catches the #5917 signature — a live FUNCTION BODY
+    # that drifted from source via a direct psql/MCP `CREATE OR REPLACE` with no
+    # tracked ledger row (invisible to the ledger probe). For a small allowlist
+    # of security-critical byok RPCs it asserts the live `pg_get_functiondef`
+    # body still contains the load-bearing markers.
+    - id: rpc-body
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: ${{ inputs.doppler-project }}
+        DOPPLER_CONFIG: ${{ inputs.doppler-config }}
+        SENTRY_DSN: ${{ inputs.sentry-dsn }}
+        FAIL_ON_DRIFT: ${{ inputs.fail-on-rpc-body-drift }}
+      run: |
+        set -uo pipefail
+        # TRIPWIRE, NOT semantic proof: marker-presence catches the #5917 drift
+        # signature + accidental marker deletion. It does NOT prove exactly-one-
+        # trip semantics — that authority stays with Invariant C in
+        # apps/web-platform/test/server/byok-kill-switch.atomicity.tenant-isolation.test.ts
+        # (kept strict). Do NOT relax Invariant C on the belief this probe covers it.
+        #
+        # STATIC-ALLOWLIST INVARIANT (no-SQLi): the function names come ONLY from
+        # the committed byok-rpc-markers.json (keys) — never from a DB-derived
+        # value or `github.event.*`. Each name is additionally shape-validated
+        # (^[a-z_]+$) before it reaches SQL, mirroring the filename-shape
+        # whitelist in the ledger step above. The DB-derived function BODY is
+        # never echoed into a ::error::/::warning:: annotation or the Sentry
+        # payload (log-injection vector) — it flows only into `grep -qF` and,
+        # in the atomicity test, the vitest failure message. Marker values in
+        # annotations/Sentry come from the committed JSON, not the DB.
+        #
+        # Severity + Sentry track `fail-on-rpc-body-drift`:
+        #   true  (scheduled): ::error:: + Sentry event + exit 1
+        #   false (PR CI):     ::warning:: only, NO Sentry, exit 0
+        MARKER_JSON="apps/web-platform/test/supabase-migrations/byok-rpc-markers.json"
+        if [[ ! -f "$MARKER_JSON" ]]; then
+          echo "::warning::byok-rpc-markers.json not found ($MARKER_JSON); skipping RPC body-marker probe."
+          echo "rpc-body-drift-detected=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        emit_sentry() {
+          # $1=fn $2=missing_marker. message is a STATIC literal; the DB body is
+          # never placed on the Sentry surface (precedent: web-platform-release.yml).
+          local fn="$1" marker="$2"
+          local PUBLIC_KEY HOST PROJECT_ID STORE_URL PAYLOAD code ok attempt
+          PUBLIC_KEY=$(printf '%s' "$SENTRY_DSN" | sed -E 's#^https?://([^@:]+)(:[^@]*)?@.*#\1#')
+          HOST=$(printf '%s' "$SENTRY_DSN" | sed -E 's#^https?://[^@]+@([^/]+)/.*#\1#')
+          PROJECT_ID=$(printf '%s' "$SENTRY_DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
+          if [[ -z "$PUBLIC_KEY" || -z "$HOST" || -z "$PROJECT_ID" ]]; then
+            echo "::warning::byok RPC body drift: could not parse SENTRY_DSN — event NOT emitted for public.$fn (drift disposition unchanged)."
+            return 0
+          fi
+          STORE_URL="https://${HOST}/api/${PROJECT_ID}/store/"
+          PAYLOAD=$(jq -nc --arg fn "$fn" --arg marker "$marker" \
+            '{message:"byok RPC body-marker drift", level:"error", platform:"other",
+              tags:{feature:"dev-migration-drift", op:"rpc-body-marker-drift", fn:$fn},
+              extra:{missing_marker:$marker}}')
+          ok=0; code="000"
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST "$STORE_URL" \
+              -H "Content-Type: application/json" \
+              -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=byok-rpc-drift-gha/1.0, sentry_key=${PUBLIC_KEY}" \
+              --data "$PAYLOAD" 2>/dev/null || echo "000")
+            if [[ "$code" == "200" || "$code" == "202" ]]; then ok=1; break; fi
+            echo "byok RPC body drift: Sentry POST attempt ${attempt} → HTTP ${code}"
+            sleep 3
+          done
+          if [[ "$ok" != "1" ]]; then
+            echo "::warning::byok RPC body drift: Sentry event POST failed after 3 attempts (last HTTP ${code}) for public.$fn — observability degraded, drift disposition unchanged."
+          fi
+        }
+
+        drift="false"
+        misses=""
+        while IFS= read -r fn; do
+          [[ -z "$fn" ]] && continue
+          case "$fn" in
+            *[!a-z_]*)
+              echo "::warning::skipping suspicious byok RPC name from marker map: $fn"
+              continue ;;
+          esac
+          # Query the live body. SQL written to a temp file (no shell-quoting of
+          # SQL); fn is interpolated from the validated static allowlist only.
+          # `sh -c '...'` (single-quoted) so $DATABASE_URL_POOLER expands inside
+          # the doppler-injected child env, per the ledger step's precedent.
+          printf 'SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = %s AND p.proname = %s;\n' "'public'" "'$fn'" > /tmp/functiondef.sql
+          if ! body=$(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
+                sh -c 'psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -f /tmp/functiondef.sql'); then
+            echo "::warning::byok RPC body probe: psql query for public.$fn failed; skipping (visibility, not enforcement)."
+            continue
+          fi
+          if [[ -z "$body" ]]; then
+            # 0 rows: the allowlisted RPC is absent on dev — treat as drift.
+            drift="true"
+            misses+="$fn::__ABSENT__"$'\n'
+            continue
+          fi
+          # Comment-strip line comments before matching (markers are executable-
+          # only today; defense-in-depth per 2026-05-31 learning). >1 overload
+          # rows are concatenated; markers are asserted across all bodies.
+          stripped=$(printf '%s' "$body" | sed 's/--.*//')
+          while IFS= read -r marker; do
+            [[ -z "$marker" ]] && continue
+            if ! grep -qF -- "$marker" <<<"$stripped"; then
+              drift="true"
+              # Delimiter is '::' (double colon); fn names are ^[a-z_]+$ and no
+              # marker contains '::' (v_tripped := FOUND has ':=', not '::').
+              misses+="$fn::$marker"$'\n'
+            fi
+          done < <(jq -r --arg fn "$fn" '.[$fn][]' "$MARKER_JSON")
+        done < <(jq -r 'keys[]' "$MARKER_JSON")
+
+        echo "rpc-body-drift-detected=${drift}" >> "$GITHUB_OUTPUT"
+
+        if [[ "$drift" == "false" ]]; then
+          echo "No byok RPC body-marker drift detected."
+          exit 0
+        fi
+
+        sev="warning"
+        [[ "$FAIL_ON_DRIFT" == "true" ]] && sev="error"
+        while IFS= read -r entry; do
+          [[ -z "$entry" ]] && continue
+          fn="${entry%%::*}"
+          marker="${entry##*::}"
+          if [[ "$marker" == "__ABSENT__" ]]; then
+            echo "::${sev}::dev-migration-drift: byok RPC public.${fn} is MISSING ENTIRELY on dev — allowlisted function not found (#5920; see mig 121/084)."
+          else
+            echo "::${sev}::dev-migration-drift: byok RPC public.${fn} is MISSING load-bearing marker \"${marker}\" — live dev body drifted from source (#5920; see mig 121/084)."
+          fi
+        done <<<"$misses"
+
+        if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
+          if [[ -z "$SENTRY_DSN" ]]; then
+            echo "::warning::byok RPC body drift detected but SENTRY_DSN unset — Sentry event NOT emitted (drift disposition unchanged)."
+          else
+            while IFS= read -r entry; do
+              [[ -z "$entry" ]] && continue
+              fn="${entry%%::*}"
+              marker="${entry##*::}"
+              [[ "$marker" == "__ABSENT__" ]] && marker="function-absent"
+              emit_sentry "$fn" "$marker"
+            done <<<"$misses"
+          fi
+          exit 1
+        fi
+        exit 0
