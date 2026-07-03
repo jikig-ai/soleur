@@ -222,6 +222,69 @@ seccomp_profile_sha256_value() {
   printf '%s' "$sha"
 }
 
+# Live loaded-vs-committed seccomp discriminators (#5960 / ADR-079 item-4 amend).
+# The recorded seccomp_profile_sha256_value above reads ONLY the ephemeral tmpfs
+# state file (reboot-cleared per #5877) — an empty value cannot distinguish
+# not-delivered / host-stale / not-reloaded, and apply-deploy-pipeline-fix.yml's
+# redeploy assert has no way to prove the RUNNING container is enforcing the
+# committed profile. These three live, read-only fields close that gap in ONE
+# deploy-status read (no SSH):
+#   seccomp_profile_host_present         : the on-host profile file exists.
+#   seccomp_profile_host_sha256          : RAW sha256sum of the on-host file — the
+#     DELIVERY leg. Matches the workflow's raw COMMITTED_SHA (sha256sum of the
+#     committed seccomp-bwrap.json); sha256sum is jq-version-independent, so
+#     host==committed is skew-free.
+#   seccomp_profile_loaded_matches_host  : the RUNNING container's inlined seccomp
+#     (docker inspect HostConfig.SecurityOpt) canonical-equals the on-host file —
+#     the RELOAD leg, computed with ONE host jq on BOTH sides so it never crosses
+#     jq versions (skew-immune by construction). #5875 item-4's real contract,
+#     "the container is enforcing the committed profile", decomposes into
+#     (host==committed) AND (loaded==host); this field is the second conjunct.
+# Reuses the audit-bwrap-uid.sh:105-146 docker-inspect + jq -cS + EMPTY_HASH-guard
+# technique. Best-effort + read-only: every failure collapses to a safe sentinel
+# (present=false, host_sha256="", matches=false) so the webhook never errors on a
+# non-docker / minimal host, and a jq failure that hashes the empty stream to
+# sha256("") never yields a false loaded==host match.
+seccomp_live_json() {
+  local host_path="${SECCOMP_PROFILE_HOST_PATH:-/etc/docker/seccomp-profiles/soleur-bwrap.json}"
+  local present=false host_sha="" matches=false
+  if [[ -f "$host_path" ]]; then
+    present=true
+    host_sha="$(sha256sum "$host_path" 2>/dev/null | cut -d' ' -f1 || true)"
+    [[ "$host_sha" =~ ^[0-9a-f]{64}$ ]] || host_sha=""
+  fi
+  # Reload leg — only meaningful once the host file is present and readable.
+  if [[ "$present" == true && -n "$host_sha" ]] && command -v docker >/dev/null 2>&1; then
+    local name="${CONTAINER_NAME:-soleur-web-platform}"
+    local entries entry
+    entries="$(docker inspect "$name" \
+      --format '{{range .HostConfig.SecurityOpt}}{{println .}}{{end}}' 2>/dev/null || true)"
+    entry="$(printf '%s\n' "$entries" | sed -n 's/^seccomp=//p' | head -n1)"
+    # A literal /path means Docker did not resolve --security-opt seccomp=<file>
+    # into inlined JSON at container-create (audit-bwrap-uid.sh:123 drift) → false.
+    if [[ -n "$entry" && "$entry" != /* ]]; then
+      local empty_hash inlined_hash file_hash
+      empty_hash="$(printf '' | sha256sum | cut -d' ' -f1)"
+      # `|| true` on both: a jq parse failure under set -euo pipefail would abort
+      # the script before the guard; instead let it hash the empty stream and let
+      # the EMPTY_HASH guard reject the sha256("") == sha256("") false-match.
+      inlined_hash="$(printf '%s' "$entry" | jq -cS . 2>/dev/null | sha256sum | cut -d' ' -f1 || true)"
+      file_hash="$(jq -cS . "$host_path" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)"
+      if [[ -n "$inlined_hash" && "$inlined_hash" != "$empty_hash" \
+            && "$inlined_hash" == "$file_hash" ]]; then
+        matches=true
+      fi
+    fi
+  fi
+  jq -nc \
+    --argjson present "$present" \
+    --arg host_sha "$host_sha" \
+    --argjson matches "$matches" \
+    '{seccomp_profile_host_present: $present,
+      seccomp_profile_host_sha256: $host_sha,
+      seccomp_profile_loaded_matches_host: $matches}'
+}
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
 # inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
@@ -244,6 +307,7 @@ CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
 SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
+SECCOMP_LIVE="$(seccomp_live_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -270,7 +334,8 @@ jq -nc \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
-  '$base + $cr + $cd + {sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  --argjson sl "$SECCOMP_LIVE" \
+  '$base + $cr + $cd + $sl + {sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,

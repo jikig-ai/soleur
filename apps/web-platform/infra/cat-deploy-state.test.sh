@@ -25,6 +25,33 @@ assert() {
   fi
 }
 
+# --- docker mock factory (#5960) ---------------------------------------------
+# PORTED from audit-bwrap-uid.test.sh:26 (this suite mocked nothing before).
+# Returns DOCKER_INSPECT_FIXTURE contents verbatim for ANY `docker inspect`
+# call, so the seccomp_live_json discriminators (and container_restart_json,
+# which safe-sentinels on garbage) can be exercised without a real daemon.
+FIXTURE_DIR="$SCRIPT_DIR/test-fixtures/audit-bwrap"
+
+create_docker_mock() {
+  cat > "$1/docker" << 'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  inspect)
+    if [[ -n "${DOCKER_INSPECT_FIXTURE:-}" && -r "${DOCKER_INSPECT_FIXTURE}" ]]; then
+      cat "$DOCKER_INSPECT_FIXTURE"
+    else
+      exit 1
+    fi
+    ;;
+  *)
+    echo "unexpected docker arg: $*" >&2
+    exit 99
+    ;;
+esac
+MOCK
+  chmod +x "$1/docker"
+}
+
 echo "=== cat-deploy-state.sh tests ==="
 echo ""
 
@@ -161,6 +188,104 @@ echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-
 SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-canary.json" bash "$TARGET")
 assert "malformed sandbox_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$SC_BAD' | jq -r .sandbox_canary.checked_at) == '0' ]]"
+
+# --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
+# seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),
+# seccomp_profile_host_sha256 (raw sha256sum — delivery leg), and
+# seccomp_profile_host_present. Mock docker; env-override SECCOMP_PROFILE_HOST_PATH
+# to a fixture; run against ok.state so top-level exit_code stays 0.
+VALID_SECCOMP="$FIXTURE_DIR/valid-seccomp.json"
+HOST_RAW_SHA=$(sha256sum "$VALID_SECCOMP" | cut -d' ' -f1)
+
+# Case 1: loaded == host. Inlined seccomp (inspect-pass.txt, different key order)
+# canonical-equals the on-host file after jq -cS; host fields populated.
+MOCK1=$(mktemp -d)
+create_docker_mock "$MOCK1"
+SL1=$(PATH="$MOCK1:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
+  DOCKER_INSPECT_FIXTURE="$FIXTURE_DIR/inspect-pass.txt" \
+  SECCOMP_PROFILE_HOST_PATH="$VALID_SECCOMP" bash "$TARGET")
+rm -rf "$MOCK1"
+assert "case1 loaded==host → seccomp_profile_loaded_matches_host true" \
+  "[[ \$(printf '%s' '$SL1' | jq -r .seccomp_profile_loaded_matches_host) == 'true' ]]"
+assert "case1 seccomp_profile_host_present true" \
+  "[[ \$(printf '%s' '$SL1' | jq -r .seccomp_profile_host_present) == 'true' ]]"
+assert "case1 seccomp_profile_host_sha256 is the RAW sha256sum of the host file" \
+  "[[ \$(printf '%s' '$SL1' | jq -r .seccomp_profile_host_sha256) == '$HOST_RAW_SHA' ]]"
+
+# Case 2: loaded != host (drift fixture — defaultAction differs) → matches false.
+MOCK2=$(mktemp -d)
+create_docker_mock "$MOCK2"
+SL2=$(PATH="$MOCK2:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
+  DOCKER_INSPECT_FIXTURE="$FIXTURE_DIR/inspect-drift.txt" \
+  SECCOMP_PROFILE_HOST_PATH="$VALID_SECCOMP" bash "$TARGET")
+rm -rf "$MOCK2"
+assert "case2 drift → seccomp_profile_loaded_matches_host false" \
+  "[[ \$(printf '%s' '$SL2' | jq -r .seccomp_profile_loaded_matches_host) == 'false' ]]"
+assert "case2 host_present still true (host file exists; only reload leg drifted)" \
+  "[[ \$(printf '%s' '$SL2' | jq -r .seccomp_profile_host_present) == 'true' ]]"
+
+# Case 3: literal-path seccomp entry (Docker did not resolve the flag) → matches false.
+MOCK3=$(mktemp -d)
+create_docker_mock "$MOCK3"
+SL3=$(PATH="$MOCK3:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
+  DOCKER_INSPECT_FIXTURE="$FIXTURE_DIR/inspect-literal-path.txt" \
+  SECCOMP_PROFILE_HOST_PATH="$VALID_SECCOMP" bash "$TARGET")
+rm -rf "$MOCK3"
+assert "case3 literal-path entry → seccomp_profile_loaded_matches_host false" \
+  "[[ \$(printf '%s' '$SL3' | jq -r .seccomp_profile_loaded_matches_host) == 'false' ]]"
+
+# Case 4: container down / docker inspect fails (no fixture) → matches false, but
+# the host-file discriminators are still populated (delivery leg is docker-free).
+MOCK4=$(mktemp -d)
+create_docker_mock "$MOCK4"
+SL4=$(PATH="$MOCK4:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
+  SECCOMP_PROFILE_HOST_PATH="$VALID_SECCOMP" bash "$TARGET")
+rm -rf "$MOCK4"
+assert "case4 container-down → seccomp_profile_loaded_matches_host false" \
+  "[[ \$(printf '%s' '$SL4' | jq -r .seccomp_profile_loaded_matches_host) == 'false' ]]"
+assert "case4 host fields still populated (present true, raw sha set)" \
+  "[[ \$(printf '%s' '$SL4' | jq -r .seccomp_profile_host_present) == 'true' \
+    && \$(printf '%s' '$SL4' | jq -r .seccomp_profile_host_sha256) == '$HOST_RAW_SHA' ]]"
+
+# Case 5: host file absent → present false, host_sha256 "", matches false.
+MOCK5=$(mktemp -d)
+create_docker_mock "$MOCK5"
+SL5=$(PATH="$MOCK5:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
+  DOCKER_INSPECT_FIXTURE="$FIXTURE_DIR/inspect-pass.txt" \
+  SECCOMP_PROFILE_HOST_PATH="$TMP/no-such-seccomp.json" bash "$TARGET")
+rm -rf "$MOCK5"
+assert "case5 host-absent → seccomp_profile_host_present false" \
+  "[[ \$(printf '%s' '$SL5' | jq -r .seccomp_profile_host_present) == 'false' ]]"
+assert "case5 host-absent → seccomp_profile_host_sha256 empty string" \
+  "[[ \$(printf '%s' '$SL5' | jq -r .seccomp_profile_host_sha256) == '' ]]"
+assert "case5 host-absent → seccomp_profile_loaded_matches_host false" \
+  "[[ \$(printf '%s' '$SL5' | jq -r .seccomp_profile_loaded_matches_host) == 'false' ]]"
+
+# Case 6: merge integrity — new fields present AND top-level deploy exit_code (0)
+# NOT clobbered by any live-seccomp read.
+assert "case6 top-level deploy exit_code preserved (0) alongside seccomp fields" \
+  "[[ \$(printf '%s' '$SL1' | jq -r .exit_code) == '0' ]]"
+assert "case6 all three seccomp_profile_* live keys present" \
+  "printf '%s' '$SL1' | jq -e 'has(\"seccomp_profile_loaded_matches_host\") and has(\"seccomp_profile_host_sha256\") and has(\"seccomp_profile_host_present\")' >/dev/null"
+assert "case6 recorded seccomp_profile_sha256 diagnostic field still emitted" \
+  "printf '%s' '$SL1' | jq -e 'has(\"seccomp_profile_sha256\")' >/dev/null"
+
+# Case 7: empty-hash guard. Host file is NON-JSON (raw sha exists so the reload
+# leg runs) and the inlined entry is also non-JSON+non-path — BOTH jq -cS calls
+# fail and hash the empty stream to sha256(""). Without the `!= EMPTY_HASH` guard
+# that reads as loaded==host (empty==empty); the guard must force matches=false.
+NONJSON_HOST=$(mktemp --suffix=.json)
+printf 'not valid json at all\n' > "$NONJSON_HOST"
+NONJSON_INSPECT=$(mktemp)
+printf 'apparmor=soleur-bwrap\nseccomp=also-not-json\n' > "$NONJSON_INSPECT"
+MOCK7=$(mktemp -d)
+create_docker_mock "$MOCK7"
+SL7=$(PATH="$MOCK7:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
+  DOCKER_INSPECT_FIXTURE="$NONJSON_INSPECT" \
+  SECCOMP_PROFILE_HOST_PATH="$NONJSON_HOST" bash "$TARGET")
+rm -rf "$MOCK7"; rm -f "$NONJSON_HOST" "$NONJSON_INSPECT"
+assert "case7 empty-hash guard → matches false (not a sha256(\"\") true-match)" \
+  "[[ \$(printf '%s' '$SL7' | jq -r .seccomp_profile_loaded_matches_host) == 'false' ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
