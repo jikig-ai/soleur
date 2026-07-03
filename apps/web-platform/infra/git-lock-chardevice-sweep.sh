@@ -44,13 +44,17 @@
 set -euo pipefail
 
 readonly LOG_TAG="git-lock-chardevice-sweep"
-ROOT="${GIT_LOCK_SWEEP_ROOT:-/mnt/data/workspaces}"
-STATE_FILE="${GIT_LOCK_SWEEP_STATE:-/var/lock/git-lock-chardevice-sweep.state}"
+# Config is resolved at CALL time (inside the functions below), NOT frozen at
+# source time — so a test that sources this file can stub GIT_LOCK_SWEEP_* per
+# case (mirrors agent-runner-sandbox-config.ts's WORKSPACES_ROOT resolver). A
+# source-time freeze would make every per-case override a silent no-op and pass
+# tests vacuously against the default /mnt/data/workspaces.
+sweep_root()  { printf '%s' "${GIT_LOCK_SWEEP_ROOT:-/mnt/data/workspaces}"; }
+sweep_state() { printf '%s' "${GIT_LOCK_SWEEP_STATE:-/var/lock/git-lock-chardevice-sweep.state}"; }
 # Depth 3 covers a bare repo (`<workspace>/config.lock`) AND a working tree
 # (`<workspace>/.git/config.lock`); `-type c` makes the walk a cheap kernel stat
 # filter that yields only the (rare) device node. Bounded — NOT an unbounded find.
-MAXDEPTH="${GIT_LOCK_SWEEP_MAXDEPTH:-3}"
-START_TS=$(date +%s)
+sweep_maxdepth() { printf '%s' "${GIT_LOCK_SWEEP_MAXDEPTH:-3}"; }
 
 # Emit a structured, grep-able, no-SSH marker (STDOUT + host journal via logger).
 marker() {
@@ -59,20 +63,21 @@ marker() {
 }
 
 write_state() {
-  local exit_code="$1" removed="$2" failed="$3"
+  local exit_code="$1" removed="$2" failed="$3" start_ts="$4"
+  local state_file; state_file="$(sweep_state)"
   # jq when available (matches the inngest-wiped-volume-verify state shape); a
   # dependency-free fallback keeps the liveness marker present on a jq-less host.
   if command -v jq >/dev/null 2>&1; then
     jq -nc \
       --argjson ec "$exit_code" --argjson rm "$removed" --argjson fl "$failed" \
-      --argjson st "$START_TS" --argjson et "$(date +%s)" \
+      --argjson st "$start_ts" --argjson et "$(date +%s)" \
       --arg comp "$LOG_TAG" \
       '{exit_code:$ec, removed:$rm, failed:$fl, component:$comp, start_ts:$st, end_ts:$et}' \
-      > "$STATE_FILE" 2>/dev/null || true
+      > "$state_file" 2>/dev/null || true
   else
     printf '{"exit_code":%s,"removed":%s,"failed":%s,"component":"%s","start_ts":%s,"end_ts":%s}\n' \
-      "$exit_code" "$removed" "$failed" "$LOG_TAG" "$START_TS" "$(date +%s)" \
-      > "$STATE_FILE" 2>/dev/null || true
+      "$exit_code" "$removed" "$failed" "$LOG_TAG" "$start_ts" "$(date +%s)" \
+      > "$state_file" 2>/dev/null || true
   fi
 }
 
@@ -94,8 +99,9 @@ is_mountpoint() {
 # discover_targets — NUL-separated char-device config-write locks under ROOT,
 # depth-bounded. Returns nothing (rc 0) when ROOT is absent or clean.
 discover_targets() {
-  [[ -d "$ROOT" ]] || return 0
-  find "$ROOT" -mindepth 1 -maxdepth "$MAXDEPTH" -type c \
+  local root maxdepth; root="$(sweep_root)"; maxdepth="$(sweep_maxdepth)"
+  [[ -d "$root" ]] || return 0
+  find "$root" -mindepth 1 -maxdepth "$maxdepth" -type c \
     \( -name config.lock -o -name config.worktree.lock \) -print0 2>/dev/null || true
 }
 
@@ -115,7 +121,7 @@ remediate_node() {
       return 1
     fi
   else
-    branch=rm
+    branch="rm"
   fi
   if ! rm -f -- "$path" 2>/dev/null; then
     marker "SOLEUR_CHARDEV_SWEEP_FAILED path=$path rdev=$rdev branch=$branch reason=rm-failed"
@@ -126,12 +132,12 @@ remediate_node() {
 }
 
 main() {
-  local removed=0 failed=0 path
+  local removed=0 failed=0 path start_ts; start_ts="$(date +%s)"
   while IFS= read -r -d '' path; do
     if remediate_node "$path"; then removed=$(( removed + 1 )); else failed=$(( failed + 1 )); fi
   done < <(discover_targets)
-  write_state "$(( failed == 0 ? 0 : 1 ))" "$removed" "$failed"
-  marker "SOLEUR_CHARDEV_SWEEP_DONE root=$ROOT removed=$removed failed=$failed"
+  write_state "$(( failed == 0 ? 0 : 1 ))" "$removed" "$failed" "$start_ts"
+  marker "SOLEUR_CHARDEV_SWEEP_DONE root=$(sweep_root) removed=$removed failed=$failed"
   (( failed == 0 ))   # non-zero iff a detected node could not be cleared
 }
 
