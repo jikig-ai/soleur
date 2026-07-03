@@ -15,15 +15,20 @@
 // gross re-inlining regression class (a script/hooks/config blob re-entering user_data),
 // which is what balloons the size past the cap.
 //
-// git-data (AC7): the git-data host is a NO-DOCKER host, so #5921's bake-and-extract mechanism
-// does not apply. After #5918 (LUKS/transport/remove/provision) its user_data is ~41.7 KB —
-// OVER the Hetzner cap — a distinct-mechanism fix tracked in #5927 (hard blocker on ADR-068
-// Phase 2). Until then we pin it at a NO-FURTHER-GROWTH ceiling so CI stays green while still
-// catching NEW git-data growth.
+// git-data (#5927, resolved): the git-data host is a NO-DOCKER host, so #5921's bake-and-extract
+// mechanism does not apply. After #5918 (LUKS/transport/remove/provision) its RAW user_data is
+// ~41.7 KB — OVER the Hetzner cap. The fix wraps the whole render in Terraform's base64gzip()
+// (git-data.tf), which cloud-init auto-decompresses; the base64gzip OUTPUT (~21.9 KB) is what
+// Hetzner stores against the cap — UNDER it with ~10 KB headroom. This test now models that
+// base64gzip'd size and asserts it stays under a sub-cap budget. CRITICAL: the gzip model reads
+// the REAL script bytes for the 5 base64encode(file()) args — gzipping the "x".repeat(N)
+// placeholder render collapses ~1000:1 and would make the budget non-discriminating (a re-inlined
+// script would gzip to near-nothing and never trip it).
 
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const INFRA = join(REPO_ROOT, "apps", "web-platform", "infra");
@@ -34,8 +39,13 @@ const DOCKERFILE = join(REPO_ROOT, "apps", "web-platform", "Dockerfile");
 const HETZNER_CAP = 32_768;
 const WEB_BUDGET = 30_500;
 const WEB_FLOOR = 5_000; // non-vacuity
-// git-data known-over-cap ceiling (measured ~41,662 B) — see #5927.
-const GIT_DATA_CEILING = 42_000;
+// git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
+// budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
+// level differences + CI jitter, tight enough to catch a re-inlined script re-ballooning the raw
+// payload. The FLOOR (10,000 B) is non-vacuity: the modeled render must gzip to something real,
+// so a broken model that gzips near-nothing (e.g. accidentally x-run placeholders) fails loudly.
+const GIT_DATA_BUDGET = 28_000;
+const GIT_DATA_FLOOR = 10_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
 // Modeled byte lengths for render-time values that are NOT base64-of-a-file. base64-of-file
@@ -129,6 +139,47 @@ function varLengths(tfSrc: string, cloudInitFile: string): Record<string, number
   return out;
 }
 
+// The REAL string value terraform would substitute for a templatefile var — needed for the
+// gzip model (git-data / #5927). For base64encode(file()) args this is the ACTUAL base64 of the
+// script on disk (its byte content, NOT an "x".repeat placeholder — placeholders compress
+// ~1000:1 and would make the gzip budget non-discriminating). Small variable-length secrets/ids
+// stay as fixed-length placeholders: their exact bytes are near-incompressible noise either way
+// and don't move the budget.
+function modeledValue(name: string, expr: string): string {
+  const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
+  if (fileMatch) return readFileSync(join(INFRA, fileMatch[1])).toString("base64");
+  if (/base64encode\(file\(/.test(expr)) {
+    throw new Error(`unrecognized base64encode(file()) for ${name}: ${expr}`);
+  }
+  return "x".repeat(modeledLen(name, expr));
+}
+
+// Model the base64gzip() OUTPUT length — what Hetzner stores against the 32,768 cap for git-data
+// (#5927). Renders the cloud-init template with REAL script content, gzips at level 9 (matching
+// terraform's base64gzip), and base64-encodes. NOT byte-exact vs terraform's Go zlib (different
+// header/level), so callers assert a BUDGET, never equality (#5887's terraform plan is the
+// byte-exact truth). Optional `extraVars` injects a synthetic arg for the discrimination check.
+function renderedGzipB64Len(
+  cloudInitFile: string,
+  tfSrc: string,
+  extraTemplate = "",
+  extraVars: Record<string, string> = {},
+): number {
+  const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
+  const src = readFileSync(join(INFRA, cloudInitFile), "utf8") + extraTemplate;
+  const ESC = "__SOLEUR_ESC__";
+  let s = src.split("$${").join(ESC);
+  s = s.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_whole, name) => {
+    if (name in extraVars) return extraVars[name];
+    if (!(name in map)) {
+      throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
+    }
+    return modeledValue(name, map[name]);
+  });
+  s = s.split(ESC).join("${");
+  return gzipSync(Buffer.from(s, "utf8"), { level: 9 }).toString("base64").length;
+}
+
 const serverTf = readFileSync(join(INFRA, "server.tf"), "utf8");
 const gitDataTf = readFileSync(join(INFRA, "git-data.tf"), "utf8");
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
@@ -144,16 +195,32 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(size).toBeGreaterThan(WEB_FLOOR); // non-vacuity
   });
 
-  test("git-data host user_data stays at-or-below its known-over-cap ceiling (#5927)", () => {
-    // git-data is a no-docker host: #5921's bake-and-extract does not apply. It is OVER the
-    // Hetzner cap post-#5918; a distinct-mechanism fix is tracked in #5927. This ceiling keeps
-    // CI green while catching NEW growth — do NOT relax it to hide further regressions.
-    const size = renderedSize(
+  test("git-data host base64gzip'd user_data is under the sub-cap budget (#5927)", () => {
+    // git-data is a no-docker host: #5921's bake-and-extract does not apply. Post-#5918 its RAW
+    // render is ~41.7 KB (over cap), so git-data.tf wraps it in base64gzip(). We model the
+    // base64gzip OUTPUT (the string Hetzner stores against the cap) with REAL script content.
+    const size = renderedGzipB64Len("cloud-init-git-data.yml", gitDataTf);
+    expect(size).toBeLessThan(HETZNER_CAP);
+    expect(size).toBeLessThan(GIT_DATA_BUDGET);
+    expect(size).toBeGreaterThan(GIT_DATA_FLOOR); // non-vacuity: model must gzip real content
+  });
+
+  test("git-data gzip model is discriminating: a re-inlined script raises the modeled size", () => {
+    // Guards R2: prove the gzip model tracks REAL content, not "x".repeat(N) placeholders
+    // (which collapse ~1000:1). Inject a synthetic 6th base64encode(file()) arg's worth of real
+    // script bytes and confirm the base64gzip'd size rises materially — a placeholder-based model
+    // would gzip the injected content to near-nothing and this delta would be ~0.
+    const base = renderedGzipB64Len("cloud-init-git-data.yml", gitDataTf);
+    const realScriptB64 = readFileSync(
+      join(INFRA, "git-data-bootstrap.sh"),
+    ).toString("base64");
+    const withExtra = renderedGzipB64Len(
       "cloud-init-git-data.yml",
-      varLengths(gitDataTf, "cloud-init-git-data.yml"),
+      gitDataTf,
+      "\n${__soleur_discrim__}\n",
+      { __soleur_discrim__: realScriptB64 },
     );
-    expect(size).toBeLessThan(GIT_DATA_CEILING);
-    expect(size).toBeGreaterThan(0);
+    expect(withExtra - base).toBeGreaterThan(1_000);
   });
 });
 
