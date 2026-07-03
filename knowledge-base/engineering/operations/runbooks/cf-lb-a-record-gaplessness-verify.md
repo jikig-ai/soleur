@@ -71,7 +71,8 @@ LB.
 > 2. rewrite the stale `dns.tf` comment (which still describes the *older* `for_each`
 >    round-robin A-record design, itself superseded by the LB).
 >
-> **Operator/CTO decision:** adopt the overlay model and amend ADR-068 §(b) accordingly.
+> **Decided (2026-07-03, PR #5968):** the overlay model is adopted — ADR-068 §(b) amended
+> (correction b.1). The GA PR retains `cloudflare_record.app` and rewrites the `dns.tf` comment.
 
 ---
 
@@ -203,7 +204,8 @@ resource "cloudflare_load_balancer" "app" {
   and weight lives inside `random_steering`/`origin_steering` blocks a refactor can silently drop.
   Expressing the drain as pool-absent-from-`default_pools` makes the "no live weight to web-2"
   **hard invariant** a *schema fact*. Reserve `weight` for post-GA traffic-proportioning.
-  **Operator/CTO decision:** adopt and amend §(b), or keep `weight = 0` and accept the softness.
+  **Decided (2026-07-03, PR #5968):** structural drain adopted — ADR-068 §(b) amended
+  (correction b.3). The GA PR drains web-2 via pool-absent-from-`default_pools`, not `weight = 0`.
 
 - **B3 — The owner-side router relay (invariant item 3) is the correctness mechanism; LB
   session-affinity is ONLY defense-in-depth and must not be mistaken for cross-host safety.** CF

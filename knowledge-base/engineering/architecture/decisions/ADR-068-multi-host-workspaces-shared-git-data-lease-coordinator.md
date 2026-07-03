@@ -574,6 +574,41 @@ Phase 4b (continuous checkpoint).
 > zero-downtime web-1 reboot therefore requires (b)+(c), i.e. it IS the GA line (§8), not
 > a prerequisite. Plan: `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
 
+> **Correction to §(b) (2026-07-03, gaplessness verification — PR #5968).** The §(b) remedy
+> ("verify against CF docs + a staging convert before the GA window") was executed via a
+> verification runbook + two agent pressure-tests (infra-security against the live CF DNS/zone
+> API + docs; platform-strategist against the LB steering/monitor design). It **corrects three
+> claims above** — the corrected form governs the GA cutover PR:
+> **(b.1) Overlay-ADD, NOT destroy+recreate — the gapless mechanism.** §(b)'s "the A→LB record
+> migration is a live-record operation (no `moved` block / stable import id on
+> `cloudflare_record.app`)" describes the **gapped** path and is superseded. Verified (CF docs):
+> a Load Balancer and a proxied A record **can coexist on the same hostname** — the LB record
+> takes precedence while active, and the plain record is served when the LB is disabled. So the
+> GA PR **RETAINS `cloudflare_record.app`** and **adds** a `cloudflare_load_balancer` on
+> `app.soleur.ai` as an overlay; it MUST NOT model the two as a Terraform replace (a destroy of
+> the record first opens an authoritative-NXDOMAIN window). Because both are **proxied**, the
+> edge swap propagates in seconds with **no client-side DNS TTL wait**. Gaplessness verdict:
+> **GAPLESS-ONLY-IF** {LB subscription present (zone is Free plan — add-on, unverified);
+> overlay-not-replace; `fallback_pool = web-1`; Hetzner firewall allows CF prober ranges direct
+> to origin}. The retained A record also becomes the disabled-LB fallback — the instant-abort
+> lever. `dns.tf`'s stale `for_each` round-robin comment is rewritten in the same PR.
+> **(b.2) `fallback_pool = web-1` is a HARD requirement (new).** With one healthy origin and no
+> second pool, a transient probe miss on web-1 marks the sole pool down and — with no fallback —
+> returns **530/HTTP 1016 to every user** (a CF fallback pool's health is not evaluated, so it
+> keeps serving; it also covers the pre-first-probe cold-LB unknown-health window). Without it
+> the LB is a net **availability regression** vs. today's bare A record.
+> **(b.3) Drain web-2 STRUCTURALLY (`enabled = false` / omit from `default_pools`), not
+> `weight = 0`.** §(b)'s "`weight = 0` (drained)" is refined: `weight = 0` is a **soft** steering
+> signal — a session-affinity cookie overrides it, and it lives in `random_steering`/
+> `origin_steering` blocks a refactor can silently drop — so it is not a durable enforcement of
+> the §(c) hard invariant. Express the drain as pool-absent-from-`default_pools` (schema fact);
+> reserve `weight` for post-GA traffic-proportioning. (The v4-vs-v5 point stands: v4 has no
+> `endpoint_drain_duration`.) Also: LB affinity is defense-in-depth only — the §(c) owner-side
+> relay is the workspace-correctness mechanism; affinity failover to a bare host is actively
+> harmful. Deep-readiness (#5966) gates web-2 *into* the pool via drain/undrain tooling, not the
+> live monitor (which stays reachability-only on `/health` to avoid DB-coupling). Verification
+> runbook: `knowledge-base/engineering/operations/runbooks/cf-lb-a-record-gaplessness-verify.md`.
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills
