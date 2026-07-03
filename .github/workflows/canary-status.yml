@@ -1,0 +1,71 @@
+# On-demand read of the faithful sandbox-canary soak state (#5875 / #5889 / ADR-079).
+#
+# The deploy-time canary replays the SDK-captured bwrap argv inside the prod canary
+# container each deploy and records a verdict to the host deploy-state, surfaced —
+# no-SSH (hr-no-ssh-fallback-in-runbooks) — on /hooks/deploy-status.sandbox_canary.
+# The scheduled follow-through sweeper only reads this after #5889's `earliest`
+# window opens; this workflow_dispatch lets an operator read the CURRENT verdict +
+# soak counters at any time (e.g. to confirm the fixture replays `pass` after an
+# SDK bump or a fresh capture). Read-only: it prints verdict / consecutive_pass /
+# span — no secrets in the output. Same authenticated GET as
+# scripts/followthroughs/canary-promotion-5875.sh (HMAC over an empty body +
+# CF-Access service token).
+name: canary-status
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  read-canary-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read /hooks/deploy-status .sandbox_canary
+        env:
+          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -uo pipefail
+          : "${WEBHOOK_DEPLOY_SECRET:?}" "${CF_ACCESS_CLIENT_ID:?}" "${CF_ACCESS_CLIENT_SECRET:?}"
+          SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
+          RESP="$(curl -sS --max-time 20 -w '\nHTTP:%{http_code}' -X GET \
+            -H "X-Signature-256: sha256=$SIG" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            https://deploy.soleur.ai/hooks/deploy-status)"
+          CODE="$(printf '%s' "$RESP" | sed -n 's/^HTTP://p' | tr -d '[:space:]')"
+          BODY="$(printf '%s' "$RESP" | sed '$d')"
+          if [[ "$CODE" != "200" ]]; then
+            echo "::error::deploy-status returned HTTP $CODE"; exit 1
+          fi
+          SC="$(printf '%s' "$BODY" | jq -c '.sandbox_canary // "MISSING"')"
+          if [[ "$SC" == '"MISSING"' ]]; then
+            echo "::warning::deploy-status has no .sandbox_canary field (old host / not yet written)"; echo "$BODY" | head -c 400; exit 0
+          fi
+          VERDICT="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.verdict // "unknown"')"
+          CONSEC="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.consecutive_pass // 0')"
+          FIRST="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.first_pass_at // 0')"
+          CHECKED="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.checked_at // 0')"
+          SDK="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.sdk_version // ""')"
+          SPAN_D=0; [[ "$FIRST" =~ ^[0-9]+$ && "$CHECKED" =~ ^[0-9]+$ && "$FIRST" -gt 0 ]] && SPAN_D=$(( (CHECKED - FIRST) / 86400 ))
+          {
+            echo "## Faithful sandbox-canary soak state"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| verdict | \`$VERDICT\` |"
+            echo "| consecutive_pass | $CONSEC (promote needs ≥5) |"
+            echo "| span since first_pass | ${SPAN_D}d (promote needs ≥3d) |"
+            echo "| sdk_version | \`$SDK\` |"
+            echo ""
+            case "$VERDICT" in
+              pass) echo "✅ Green — the SDK's real argv replays cleanly under the committed profile in the prod canary container." ;;
+              sandbox_broken) echo "🚨 FAITHFUL FAIL — the canary disagreed with the legacy PASS gate; investigate the seccomp/apparmor profile before promoting." ;;
+              canary_infra_error) echo "⚠️ Infra-error (soak HOLDS, non-blocking) — e.g. fixture not yet baked, or a replay-env mismatch. Check the reason field." ;;
+              fixture_uncaptured) echo "⏳ Fixture not yet captured/baked — no real verdicts accruing yet." ;;
+              *) echo "Unknown verdict." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "sandbox_canary=$SC"
