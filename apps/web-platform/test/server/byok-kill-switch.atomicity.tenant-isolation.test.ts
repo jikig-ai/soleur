@@ -36,6 +36,7 @@ import {
   createClient,
   type SupabaseClient,
 } from "@supabase/supabase-js";
+import postgres from "postgres";
 import { randomBytes, randomUUID } from "node:crypto";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
@@ -79,7 +80,33 @@ describe.skipIf(!INTEGRATION_ENABLED)(
   "record_byok_use_and_check_cap atomicity (integration)",
   () => {
     let service: SupabaseClient;
+    // Direct pg connection (porsager) used ONLY to self-diagnose an
+    // Invariant-C failure by embedding the live pg_get_functiondef body in the
+    // failure message (#5920). Dev-only, same credential class as the
+    // service_role usage above (DATABASE_URL_POOLER, present in the dev doppler
+    // env this test runs under). Never touched on a green run.
+    let sql: ReturnType<typeof postgres> | null = null;
     const founder = { id: "", email: syntheticEmail() };
+
+    // Fetch the live cap-RPC body for the failure message. Guarded so a fetch
+    // error NEVER masks the real Invariant-C assertion (returns a fallback
+    // string, never throws). The regprocedure signature matches migration 121.
+    async function fetchLiveCapRpcBody(): Promise<string> {
+      if (!sql) {
+        return "(live body unavailable: DATABASE_URL_POOLER unset)";
+      }
+      try {
+        const rows = await sql<Array<{ def: string | null }>>`
+          SELECT pg_get_functiondef(
+            'public.record_byok_use_and_check_cap(uuid,uuid,uuid,text,int,int)'::regprocedure
+          ) AS def`;
+        return rows[0]?.def ?? "(live body unavailable: no rows)";
+      } catch (e) {
+        return `(live body fetch failed: ${
+          e instanceof Error ? e.message : String(e)
+        })`;
+      }
+    }
 
     beforeAll(async () => {
       // Constants integrity check — fails fast if a future tuner
@@ -98,6 +125,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       service = createClient(url, serviceRoleKey, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
+
+      // Open the diagnostic pg connection if the pooler URL is available.
+      // Optional: the failure-path fetch guards on `sql === null`, so an
+      // absent URL degrades to a fallback message rather than breaking the
+      // (strict) assertions. The Supabase pooler presents a self-signed CA
+      // chain, so `rejectUnauthorized: false` (dev-only, mirrors
+      // run-migrations.sh `sslmode=require`; no committed code disables TLS
+      // verify on a prod runtime surface).
+      const poolerUrl = process.env.DATABASE_URL_POOLER;
+      if (poolerUrl) {
+        sql = postgres(poolerUrl, {
+          max: 1,
+          idle_timeout: 5,
+          ssl: { rejectUnauthorized: false },
+        });
+      }
 
       assertSynthetic(founder.email);
       const { data, error } = await service.auth.admin.createUser({
@@ -136,6 +179,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       //
       // Per-run isolation is guaranteed by the per-run randomBytes-derived
       // email in beforeAll, not by row cleanup.
+      if (sql) await sql.end({ timeout: 5 });
     }, 30_000);
 
     test(
@@ -227,17 +271,37 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // RV rewrite that drops either clause surfaces with a specific
         // message ("at cumulative=N").
         const tripCumulative = CAP_CENTS + COST_CENTS;
+        const trippedCount = pairs.filter((p) => p.kill_tripped).length;
+
+        // Self-diagnosing failure (#5920): if Invariant C is about to fail
+        // (wrong trip count, or any per-pair mismatch), fetch the LIVE
+        // pg_get_functiondef body and embed it in the expect() MESSAGE so a
+        // drift-induced double-trip diagnoses itself in the CI log instead of
+        // requiring a manual pg_get_functiondef read (the #5917 remediation
+        // cost). Invariant C stays byte-for-byte strict — the body enriches
+        // ONLY the failure message; no `.toBe` target is relaxed. The fetch is
+        // guarded (fetchLiveCapRpcBody never throws), so it cannot mask the
+        // real assertion, and it runs ONLY on the doomed path (green runs
+        // never open the diagnostic query).
+        const willFail =
+          trippedCount !== 1 ||
+          pairs.some(
+            (p) => p.kill_tripped !== (p.cumulative_cents === tripCumulative),
+          );
+        const diag = willFail
+          ? `\n\n--- live pg_get_functiondef(public.record_byok_use_and_check_cap) — drift self-diagnosis (#5920) ---\n${await fetchLiveCapRpcBody()}`
+          : "";
+
         for (const pair of pairs) {
           const expectedTripped = pair.cumulative_cents === tripCumulative;
           expect(
             pair.kill_tripped,
-            `at cumulative=${pair.cumulative_cents}`,
+            `at cumulative=${pair.cumulative_cents}${diag}`,
           ).toBe(expectedTripped);
         }
-        const trippedCount = pairs.filter((p) => p.kill_tripped).length;
         expect(
           trippedCount,
-          "exactly one call wins the kill-switch flip",
+          `exactly one call wins the kill-switch flip${diag}`,
         ).toBe(1);
 
         // Invariant D — audit_byok_use row count for this founder equals

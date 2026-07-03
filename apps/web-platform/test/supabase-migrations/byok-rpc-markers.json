@@ -1,0 +1,4 @@
+{
+  "record_byok_use_and_check_cap": ["FOR UPDATE", "v_tripped := FOUND"],
+  "check_and_record_byok_delegation_use": ["FOR UPDATE", "hourly_cap_exceeded", "daily_cap_exceeded"]
+}
