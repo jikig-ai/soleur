@@ -978,9 +978,33 @@ run_deploy_doppler() {
     fi
     create_base_mocks "$MOCK_DIR"
 
+    # Effective tool PATH: mocks first, then standard system dirs.
+    local effective_path="$MOCK_DIR:$TEST_PATH_BASE"
+
     # Override: doppler mock with MOCK_DOPPLER_MISSING/MOCK_DOPPLER_FAIL support
     if [[ "${MOCK_DOPPLER_MISSING:-}" == "1" ]]; then
       rm -f "$MOCK_DIR/doppler"
+      # ci-deploy.sh gates on `command -v doppler`. Removing the MOCK_DIR mock is
+      # NOT enough on hosts that ALSO ship a system-wide doppler in a TEST_PATH_BASE
+      # dir (e.g. /usr/bin/doppler on many dev boxes — NOT the CI runner): it leaks
+      # past the removed mock, the real binary runs against the fake token, and the
+      # "not installed" branch is never exercised (false FAIL, local-only). When we
+      # detect such a leak, mirror the base dirs into a farm WITHOUT doppler so the
+      # negative path is reachable everywhere. No-op on CI (no system doppler).
+      if PATH="$TEST_PATH_BASE" command -v doppler >/dev/null 2>&1; then
+        local _farm="$MOCK_DIR/nodoppler-bin"; mkdir -p "$_farm"
+        local _d _f _b _oldifs="$IFS"; IFS=:
+        for _d in $TEST_PATH_BASE; do
+          [[ -d "$_d" ]] || continue
+          for _f in "$_d"/*; do
+            _b="${_f##*/}"
+            [[ "$_b" == doppler ]] && continue
+            [[ -e "$_farm/$_b" ]] || ln -s "$_f" "$_farm/$_b" 2>/dev/null || true
+          done
+        done
+        IFS="$_oldifs"
+        effective_path="$MOCK_DIR:$_farm"
+      fi
     elif [[ "${MOCK_DOPPLER_FAIL:-}" == "1" ]]; then
       cat > "$MOCK_DIR/doppler" << 'MOCK'
 #!/bin/bash
@@ -997,9 +1021,9 @@ MOCK
       unset DOPPLER_TOKEN
     fi
 
-    # Restrict PATH to mock dir + standard system dirs (excludes ~/.local/bin
-    # where real doppler lives, so MOCK_DOPPLER_MISSING=1 actually works)
-    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    # MOCK_DIR mocks win over system tools; for MOCK_DOPPLER_MISSING on a host with
+    # a system doppler, effective_path is a doppler-free farm (see above).
+    export PATH="$effective_path"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
 }
