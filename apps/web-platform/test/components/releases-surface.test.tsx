@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 // MarkdownRenderer is heavy (react-markdown + lazy c4 diagram); stub it to a
 // plain content passthrough so the surface test stays in jsdom.
@@ -19,6 +25,7 @@ function card(over: Partial<ReleaseCard> = {}): ReleaseCard {
     publishedAt: "2026-07-02T00:00:00Z",
     htmlUrl: "https://github.com/jikig-ai/soleur/releases/tag/web-v1.0.0",
     securitySensitive: false,
+    bump: "minor",
     ...over,
   };
 }
@@ -84,5 +91,62 @@ describe("ReleasesSurface", () => {
       expect(screen.getByText(/Couldn't load releases/i)).toBeTruthy(),
     );
     expect(screen.getByText("Try again")).toBeTruthy();
+  });
+
+  async function renderFeed(releases: ReleaseCard[]) {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ releases }) });
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText(releases[0].tag)).toBeTruthy());
+  }
+
+  it("filters cards by the search query (tag/title/body)", async () => {
+    await renderFeed([
+      card({ tag: "web-v2.0.0", title: "Alpha feature", bodyMarkdown: "x" }),
+      card({ tag: "web-v1.0.0", title: "Beta feature", bodyMarkdown: "y" }),
+    ]);
+    fireEvent.change(screen.getByLabelText("Search releases"), {
+      target: { value: "Alpha" },
+    });
+    expect(screen.getByText("web-v2.0.0")).toBeTruthy();
+    expect(screen.queryByText("web-v1.0.0")).toBeNull();
+    expect(screen.getByText("1 of 2 releases")).toBeTruthy();
+  });
+
+  it("filters by release type (major/minor/patch)", async () => {
+    await renderFeed([
+      card({ tag: "web-v2.0.0", bump: "major" }),
+      card({ tag: "web-v1.1.0", bump: "minor" }),
+      card({ tag: "web-v1.0.1", bump: "patch" }),
+    ]);
+    fireEvent.change(screen.getByLabelText("Filter by release type"), {
+      target: { value: "major" },
+    });
+    expect(screen.getByText("web-v2.0.0")).toBeTruthy();
+    expect(screen.queryByText("web-v1.1.0")).toBeNull();
+    expect(screen.queryByText("web-v1.0.1")).toBeNull();
+  });
+
+  it("sorts oldest-first when selected (Latest badge stays on the newest)", async () => {
+    await renderFeed([
+      card({ tag: "web-v2.0.0", publishedAt: "2026-07-02T00:00:00Z" }),
+      card({ tag: "web-v1.0.0", publishedAt: "2026-07-01T00:00:00Z" }),
+    ]);
+    fireEvent.change(screen.getByLabelText("Sort releases"), {
+      target: { value: "oldest" },
+    });
+    const tags = screen.getAllByText(/^web-v/).map((el) => el.textContent);
+    expect(tags).toEqual(["web-v1.0.0", "web-v2.0.0"]);
+    // "Latest" still pinned to the newest (web-v2.0.0), even at the bottom.
+    expect(screen.getAllByText("Latest")).toHaveLength(1);
+  });
+
+  it("shows a filtered-empty state with a Clear reset", async () => {
+    await renderFeed([card({ tag: "web-v2.0.0", title: "Alpha" })]);
+    fireEvent.change(screen.getByLabelText("Search releases"), {
+      target: { value: "zzz-no-match" },
+    });
+    expect(screen.getByText(/No releases match/i)).toBeTruthy();
+    fireEvent.click(screen.getByText("Clear"));
+    expect(screen.getByText("web-v2.0.0")).toBeTruthy();
   });
 });

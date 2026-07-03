@@ -59,15 +59,42 @@ function stripPii(s: string): string {
 // changelog line (the squashed PR title) is the real content.
 const VERSION_ONLY_TITLE_RE = /^[a-z-]*v?\d[\w.-]*$/i;
 
+// The card TITLE renders in a plain <h2>, NOT through the markdown renderer, so
+// any inline markdown in a derived title (a PR-title changelog line) would show
+// literal `**`/backticks (#5958 follow-up). Flatten it to readable plain text:
+// unwrap links, drop bold/italic/code/strikethrough markers, strip a leading
+// heading marker. Only `*`/`**`/double-`_` emphasis is touched — single `_` is
+// left intact so identifiers like `worktree_id` survive.
+function stripInlineMarkdown(s: string): string {
+  return s
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // images/links → their text
+    .replace(/`+/g, "") // inline code fences
+    .replace(/\*\*(.*?)\*\*/g, "$1") // bold **x**
+    .replace(/__(.*?)__/g, "$1") // bold __x__
+    .replace(/~~(.*?)~~/g, "$1") // strikethrough
+    .replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, "$1$2") // italic *x*
+    .replace(/^#{1,6}\s+/, "") // leading heading marker
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Truncate on a word boundary (never mid-word) with an ellipsis.
+function truncateAtWord(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
 function deriveTitle(base: string, body: string): string {
   if (!VERSION_ONLY_TITLE_RE.test(base)) return base;
   for (const raw of body.split("\n")) {
     const line = raw.trim().replace(/^[-*]\s+/, "");
     if (!line || line.startsWith("#")) continue;
-    // Strip BEFORE slicing — truncation could bisect an email and leave a
-    // local-part fragment the regexes no longer match (stripPii is idempotent).
-    const derived = stripPii(line).trim().slice(0, MAX_DERIVED_TITLE_CHARS);
-    return derived || base;
+    // Strip PII + inline markdown BEFORE truncating — truncation could bisect an
+    // email and leave a fragment the regexes no longer match (both are idempotent).
+    const derived = stripInlineMarkdown(stripPii(line)).trim();
+    return derived ? truncateAtWord(derived, MAX_DERIVED_TITLE_CHARS) : base;
   }
   return base;
 }
@@ -82,7 +109,11 @@ export function sanitizeReleases(releases: RawGithubRelease[]): SanitizedRelease
     const rawBody = (r.body ?? "").slice(0, MAX_RAW_BODY_CHARS);
     const securitySensitive = SECURITY_DOWN_DETAIL_RE.test(`${r.name ?? ""}\n${rawBody}`);
     const base = (r.name || r.tag_name).trim();
-    const title = stripPii(securitySensitive ? base : deriveTitle(base, rawBody)).trim();
+    // deriveTitle already flattens markdown; also flatten the security-case name
+    // (rendered title-only) so a name with markdown never shows literal markers.
+    const title = stripInlineMarkdown(
+      stripPii(securitySensitive ? base : deriveTitle(base, rawBody)),
+    ).trim();
     const body = securitySensitive
       ? ""
       : stripPii(rawBody).slice(0, MAX_RELEASE_BODY_CHARS);
@@ -97,6 +128,11 @@ const MAX_PAGES = 5;
 const DEFAULT_LIMIT = 50;
 const TOKEN_MIN_LIFETIME_MS = 60_000;
 
+/** Semver bump of a release relative to the previous one (`null` = the oldest
+ *  release in the fetched window, or a tag that doesn't parse). Powers the
+ *  release-type filter. */
+export type ReleaseBump = "major" | "minor" | "patch" | null;
+
 /** A single card in the in-app Releases feed. `bodyMarkdown` is ALWAYS non-empty
  *  (fallback applied) so a card never renders blank (spec-flow Gap 1+3). */
 export interface ReleaseCard {
@@ -106,6 +142,23 @@ export interface ReleaseCard {
   publishedAt: string;
   htmlUrl: string;
   securitySensitive: boolean;
+  bump: ReleaseBump;
+}
+
+function parseWebVersion(tag: string): [number, number, number] | null {
+  const m = /^web-v(\d+)\.(\d+)\.(\d+)/.exec(tag);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+// Bump of `tag` relative to the next-older release `prevTag`. Web versions
+// increase monotonically, so a differing segment marks the bump kind.
+function computeBump(tag: string, prevTag: string | undefined): ReleaseBump {
+  const cur = parseWebVersion(tag);
+  const prev = prevTag ? parseWebVersion(prevTag) : null;
+  if (!cur || !prev) return null;
+  if (cur[0] !== prev[0]) return "major";
+  if (cur[1] !== prev[1]) return "minor";
+  return "patch";
 }
 
 // Web-platform releases only: anchor on the digit so plugin `v3.x` (which
@@ -185,6 +238,8 @@ export async function fetchWebReleases(opts?: {
       publishedAt: r.published_at,
       htmlUrl: r.html_url ?? "",
       securitySensitive: s.securitySensitive,
+      // `slice` is newest-first, so the next-older release is at i+1.
+      bump: computeBump(r.tag_name, slice[i + 1]?.tag_name),
     };
   });
 }
