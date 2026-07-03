@@ -130,6 +130,7 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-rearm-reminders",
   "inngest-wiped-volume-verify",
   "inngest-inventory",
+  "git-lock-chardevice-sweep",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16

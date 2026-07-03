@@ -722,6 +722,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/inngest-wiped-volume-verify.sh"),
     file("${path.module}/cat-inngest-verify-state.sh"),
     file("${path.module}/inngest-inventory.sh"),
+    # #5934 — the privileged char-device config.lock substrate sweep is
+    # webhook-delivered (push-infra-config.sh payload + FILE_MAP + DEST_SPEC), so a
+    # body-only edit must re-fire deploy_pipeline_fix to reach /usr/local/bin (same
+    # #5492 rationale as the inngest scripts above). Keep in lockstep with the ship
+    # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
+    file("${path.module}/git-lock-chardevice-sweep.sh"),
     local.hooks_json,
   ]))
 

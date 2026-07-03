@@ -21,6 +21,7 @@ verification passes — no human revisit required.
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
+   - **Query a sink the signal is ACTUALLY written to, and fail-safe when the signal path is unproven.** A soak that greps a sink the target signal never reaches PASSes vacuously and auto-closes the tracker blind (#5934: queried Sentry for an in-sandbox line that this host's `vector.toml` never mirrors to Sentry — only Better Stack). Verify the emit→sink wiring before trusting a zero-count; require a positive liveness marker (proof the producer ran) before treating "zero bad events" as PASS, and exit **TRANSIENT** (not PASS) on any auth/query failure or missing-liveness — so the gate can never false-close.
 3. **Declare needed secrets** via the directive's `secrets=` clause. Only the named secrets get exported into the script's environment. Add the secret to `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block if it isn't already wired.
 4. **Add the directive** to the issue body:
 
