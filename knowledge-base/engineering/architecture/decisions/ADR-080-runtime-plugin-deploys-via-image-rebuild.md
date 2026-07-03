@@ -216,7 +216,7 @@ on-disk source files):**
    image-bake stale-image trap this ADR otherwise carries into a hard boot
    failure, not a silent old-script install.
 3. **32,768-byte budget enforced** by `plugins/soleur/test/cloud-init-user-data-size.test.ts`
-   (web sub-cap budget 30,500 B; measured ~29,290 B). AC11's live `terraform plan`
+   (web sub-cap budget 30,500 B; measured ~29,256 B). AC11's live `terraform plan`
    is the byte-exact source of truth.
 4. **GHCR is public / auth-free at boot** — no `docker login` in runcmd; the
    extraction pull is the first critical-path pull, hardened with a bounded

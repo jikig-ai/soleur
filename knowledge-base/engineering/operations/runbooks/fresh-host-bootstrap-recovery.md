@@ -11,17 +11,24 @@ can't reach the host — so detection and recovery are both SSH-free.
 
 ## Detect
 
-- **PRIMARY — Better Stack uptime absence (no host emission required).** The existing
-  web-app uptime monitor, provision-armed against the new host id at maintenance-window
-  apply, fires an incident if the host does not report healthy within the provision
-  window. Catches pre-trap aborts (docker/apt/network/cloud-init-parse failures) that
-  the on-host trap cannot signal. **A failed bootstrap = a host that never serves = a
-  Better Stack incident.** No dashboard-gazing (`hr-no-dashboard-eyeball-pull-data-yourself`).
-- **SECONDARY — Sentry discriminating event.** On extraction/hash/install failure the
-  bootstrap's `set -e` trap (and the launcher's pre-verify trap) POST a Sentry event
-  tagged `{ stage, failed_file, image_ref, host_id }` — `stage` ∈ pull/extract/verify/
-  install/hooks/assert. Use it to jump straight to root cause. Best-effort (DSN via the
-  on-host Doppler token); the PRIMARY absence check is authoritative.
+> ⚠️ **PRIMARY detector NOT YET IMPLEMENTED — tracked in #5933 (hard blocker on #5887 web-2
+> provisioning).** The design calls for a per-host uptime absence check, but there is currently
+> **no per-host web monitor** (the apex monitors cover the docs site; `app.soleur.ai` is a CF
+> round-robin with no origin health-check). Until #5933 lands, a *pre-token* boot failure
+> (before `/etc/default/webhook-deploy` exists — doppler-CLI install or the package audit) is
+> **not observable**, and a failed host's A-record persists in the `app.soleur.ai` rotation (CF
+> keeps sending it traffic). Do NOT provision web-2 until #5933 closes.
+
+- **SECONDARY — Sentry discriminating event (the signal that exists today).** On
+  extraction/hash/install failure **after** `/etc/default/webhook-deploy` is written, the
+  bootstrap's `emit_fail` trap (and the launcher's pre-verify `on_err` trap) POST a Sentry event
+  tagged `{ stage, failed_file, image_ref, host_id }` — `stage` in pull/extract/verify/install/
+  hooks/assert/reload/journald. Fast root-cause path for the classes it covers; does NOT cover
+  pre-token failures. Best-effort (DSN via the on-host Doppler token).
+- **PRIMARY (once #5933 lands) — per-host uptime absence.** A per-host monitor hitting each
+  host's origin directly, so the detector does not depend on the failing host emitting anything.
+  A failed bootstrap = a host that never serves = an absence incident. No dashboard-gazing
+  (`hr-no-dashboard-eyeball-pull-data-yourself`).
 
 ## Root-cause by `stage`
 
@@ -30,7 +37,9 @@ can't reach the host — so detection and recovery are both SSH-free.
 | `pull` | `docker pull ${image_name}` failed after 3 retries | GHCR/registry/network; image tag missing |
 | `extract` | `docker create` / `docker cp` failed | image lacks `/opt/soleur/host-scripts/` (build regression) |
 | `verify` | boot recompute ≠ `host_scripts_content_hash` | **stale / mis-built / tampered image** — the applied Terraform commit ≠ the image build commit (AC11), or a supply-chain issue |
+| `extract` | `docker create`/`docker cp` failed | image lacks `/opt/soleur/host-scripts/` (build regression) — note: a *missing/extra baked file* usually surfaces later at `verify` (hash) or `install`/`assert` (per-file), since `docker cp` of the whole dir succeeds |
 | `install`/`hooks`/`assert` | a file failed to install / hooks.json invalid / assertion failed | build baked a bad file; disk/permission issue |
+| `reload`/`journald` | `systemctl daemon-reload` / journald persistence apply failed | systemd/journald state issue (rare) |
 
 ## Recover (SSH-free — `hr-no-ssh-fallback-in-runbooks`)
 
@@ -43,8 +52,17 @@ There is **no SSH remediation**. The fresh-host path runs only cloud-init.
 3. **`terraform apply` to RECREATE the fresh host** (re-runs cloud-init from scratch).
    For a `verify` (hash-mismatch) failure specifically: ensure the applied Terraform
    commit == the image build commit, else the boot aborts again **by design**.
-4. Confirm recovery via the PRIMARY signal: the Better Stack uptime monitor clears and
-   `app.soleur.ai/health` reports the expected `build_sha`.
+4. Confirm recovery: `app.soleur.ai/health` reports the expected `build_sha` (and, once #5933
+   lands, the per-host uptime monitor clears).
+
+**Mutable-`:latest` race (fail-safe, but know it):** `host_scripts_content_hash` is computed at
+`terraform plan` from the source at commit X, but the host boots by pulling `…:latest`. If a new
+web-platform image is pushed to `:latest` **between** `terraform apply` and the fresh host's first
+boot, the boot hash (the new image's baked files) will not match the plan hash (commit X's
+source) → the host aborts at `stage=verify` **by design** (loud, never wrong-serves). Do NOT push
+a web-platform release during a fresh-host maintenance-window apply; if you must, re-apply so the
+plan hash tracks the new image. (Digest-pinning `var.image_name` closes this race — tracked in
+#5933.)
 
 ## Guardrails
 

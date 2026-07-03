@@ -48,11 +48,20 @@ locals {
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
   # (no separator), hashed again. Injected into user_data (~64 B) and re-verified at boot
-  # BEFORE install — a stale/mis-built/compromised image aborts the boot loudly instead of
-  # silently installing old scripts (turns the ADR-080 image-bake stale trap into a loud
-  # failure). The boot recompute is the shell equivalent in cloud-init.yml's extraction
-  # block: `find … -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' |
-  # sha256sum`.
+  # BEFORE install — a stale/mis-built image aborts the boot loudly instead of silently
+  # installing old scripts (turns the ADR-080 image-bake stale trap into a loud failure).
+  # The boot recompute is the shell equivalent in cloud-init.yml's extraction block:
+  # `find … -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' | sha256sum`.
+  #
+  # THREAT MODEL (scope of this control): this is a STALENESS / COHERENCE control (does the
+  # image's baked-file CONTENT match the applied Terraform commit?), NOT a supply-chain
+  # control. It hashes the multiset of file CONTENTS (not names), so an actor who can push
+  # to the public GHCR repo could in principle permute trusted contents across filenames and
+  # pass this check — but that same push access already yields RCE via the app container
+  # layers (`docker run … ${image_name}` runs the SAME unpinned image), so filename-binding
+  # here raises no real bar. The honest supply-chain defense is pinning `var.image_name` to
+  # an immutable digest + signature verification — tracked as a fresh-host provisioning
+  # hardening on the #5887 cutover, not this cap-fix PR.
   host_scripts_content_hash = sha256(join("", sort([
     for f in local.host_script_files : filesha256("${path.module}/${f}")
   ])))

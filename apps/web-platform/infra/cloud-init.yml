@@ -344,22 +344,25 @@ runcmd:
   # host_scripts_content_hash, and ONLY THEN runs the now-trusted soleur-host-bootstrap.sh
   # (which installs everything + writes the fail-closed /run/soleur-hostscripts.ok sentinel).
   # The heavy install/assert ceremony lives in the baked script so it costs zero user_data.
-  # runcmd is NOT under top-level `set -e`; the sentinel gate on the terminal `docker run` is
-  # the fail-closed mechanism. Pre-verify failures (pull/extract/hash mismatch) emit a
-  # discriminating Sentry event here; install-stage failures emit from the bootstrap.
+  # FAIL-CLOSED (two mechanisms): (1) cloud-init concatenates all runcmd into ONE /bin/sh, so
+  # this block's `set -e` + `exit 1` aborts the WHOLE runcmd — the app `docker run` never runs
+  # (primary); (2) the terminal run block also gates on /run/soleur-hostscripts.ok + poweroff on
+  # absence (backstop if cloud-init ever ran entries separately). Do NOT add a `set +e` that
+  # would let a later bare failure (e.g. firewall enable) fall through to the app start.
+  # Pre-verify failures emit a discriminating Sentry event here; install-stage from the bootstrap.
   - |
     set -e
     IMAGE_REF='${image_name}'
     HOST_SCRIPTS_HASH='${host_scripts_content_hash}'
     STAGE=pull
-    HOST_ID=$(cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname)
+    HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
     on_err() {
       trap - EXIT
       docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
       ( set +e
         . /etc/default/webhook-deploy 2>/dev/null || true
-        DSN=$(doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
-               || doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
+        DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+               || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
         if [ -n "$DSN" ]; then
           KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
           SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
@@ -386,10 +389,14 @@ runcmd:
     STAGE=verify
     GOT=$(cd "$SEED" && find . -type f -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' | sha256sum | awk '{print $1}')
     [ "$GOT" = "$HOST_SCRIPTS_HASH" ] || exit 1
-    # Verified — run the now-trusted baked installer (it writes /run/soleur-hostscripts.ok).
+    # Verified — hand off to the now-trusted baked installer (it owns its own emit_fail trap +
+    # writes /run/soleur-hostscripts.ok). Disarm THIS trap FIRST so a bootstrap-stage failure
+    # isn't ALSO re-emitted here mislabeled stage=verify; a bootstrap non-zero still aborts
+    # runcmd (set -e) before the app starts. Secret via single-quote interpolation, same as
+    # doppler_token below (trusted operator value, generated ASCII — no shell metachar).
+    trap - EXIT
     WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
     rm -rf "$SEED"
-    trap - EXIT
   # END host-script extraction (#5921)
 
   # Mount volume for workspaces (Hetzner pre-formats with ext4 via Terraform)

@@ -33,6 +33,34 @@ Closes #5921 (use `Ref #5921` in the PR body if the fresh-host provision is defe
 - The combined content-hash makes image↔config coherence a boot-time invariant (a stale/mis-built image fails the boot loudly instead of silently installing old scripts).
 - After externalization the extraction `docker pull` is the FIRST, critical-path pull (not a "cache-hit no-op") — hence the `--retry` + provision-armed absence detection.
 
+## Post-Implementation Corrections (as-built + multi-agent review)
+
+The plan text below is the design-time record. What actually shipped differs on four points
+(details in `specs/feat-one-shot-5921-hetzner-userdata-32kb/tasks.md` §AMENDMENTS):
+
+1. **Baking 22 scripts alone did NOT fit (CTO ruling).** The plan's ~29,631 B estimate omitted
+   the ~90-line inline extraction runcmd + comments (~36.5 KB actual after baking alone). The
+   install/verify/assert/hooks/sentinel ceremony was moved into a **baked
+   `soleur-host-bootstrap.sh`** (launcher only pulls/cp/hash-verifies then runs it), and the
+   inline **journald** drop-in (2.4 KB, biggest remaining expansion) was **also externalized**
+   into the baked set (deviation from AC3; safe — its consumer, the terminal `--log-driver
+   journald` container, starts last). **As-built measured web `user_data` ≈ 29,256 B.** Baked set
+   = **25** files (22 scripts + hooks.json.tmpl + journald-soleur.conf + soleur-host-bootstrap.sh).
+2. **The PRIMARY observability detector does NOT exist yet.** The "provision-armed Better Stack
+   absence check" referenced throughout `## Observability` is aspirational — there is no per-host
+   web monitor (apex monitors cover the docs site; `app.soleur.ai` is a CF round-robin with no
+   origin health-check). Only the **secondary** Sentry emit ships, and it covers **post-token**
+   failures only (pre-token failures are currently silent). Per-host monitor + A-record-drain +
+   fresh-host firewall-enforcement probe + image digest-pin are tracked in **#5933** (hard blocker
+   on #5887 web-2 provisioning). The plan's `failure_modes` egress entry overclaimed fail-closed:
+   the sentinel proves the firewall unit *installed*, not *enforcing*.
+3. **git-data is OVER cap post-#5918 (out of scope → #5927).** The plan's premise ("git-data ~28
+   KB, under cap") predates #5918; git-data now renders ~41.7 KB and needs a distinct (no-docker)
+   mechanism, tracked as a #5887 blocker. The size test pins it at a no-further-growth ceiling.
+4. **Fail-closed is two mechanisms, not one.** runcmd's concatenated `set -e` + `exit 1` aborts
+   before the app starts (primary); the terminal `docker run` sentinel gate is the cross-
+   execution-model backstop.
+
 ## Overview
 
 A fresh Hetzner web host (`hcloud_server.web["web-2"]`) cannot be provisioned:

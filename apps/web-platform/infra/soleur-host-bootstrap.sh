@@ -26,7 +26,7 @@ set -e
 SEED="$1"
 STAGE=install
 FAILED_FILE=""
-HOST_ID=$(cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname)
+HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
 
 # Best-effort SSH-free discriminating signal (SECONDARY; the PRIMARY detector is the
 # provision-armed Better Stack absence check). DSN via the on-host Doppler token written to
@@ -35,8 +35,8 @@ emit_fail() {
   trap - EXIT
   ( set +e
     . /etc/default/webhook-deploy 2>/dev/null || true
-    DSN=$(doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
-          || doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+    DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+          || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
           || true)
     if [ -n "$DSN" ]; then
       KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
@@ -89,6 +89,10 @@ install -D -m 0644 -o root -g root "$SEED/journald-soleur.conf" /etc/systemd/jou
 STAGE=hooks
 FAILED_FILE=hooks.json
 install -D -m 0640 -o root -g deploy /dev/null /etc/webhook/hooks.json
+# NOTE: json.dumps defaults to ensure_ascii=True (\uXXXX-escapes non-ASCII), whereas the
+# running-host SSH path renders hooks.json via Terraform jsonencode() (raw UTF-8). For the
+# generated ASCII webhook_deploy_secret these produce byte-identical output; a non-ASCII
+# secret would diverge cosmetically (HMAC is unaffected — only the decoded secret matters).
 python3 - "$SEED/hooks.json.tmpl" /etc/webhook/hooks.json <<'PYEOF'
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
