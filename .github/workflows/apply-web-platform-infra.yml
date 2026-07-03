@@ -395,7 +395,15 @@ jobs:
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
             echo "::error::terraform plan shows ${destroy_count} destructive change(s) on web-platform infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s) + ${reboot_updates} reboot-forcing in-place update(s) on hcloud_server.*)."
-            echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+            # Only surface the generic `[ack-destroy]` instruction when a
+            # delete/nested-removal component exists — ack is the correct
+            # resolution there. On a PURE reboot trip (reboot_updates > 0 with
+            # zero deletes) the generic line contradicts the reboot-specific
+            # steer below, so suppress it: ack-through would execute the
+            # transitively-included reboot on the unattended apply.
+            if [[ "$resource_deletes" -gt 0 || "$nested_deletes" -gt 0 ]]; then
+              echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+            fi
             if [[ "$reboot_updates" -gt 0 ]]; then
               echo "::error::A reboot-forcing hcloud_server.* update is planned. Resolve via the operator maintenance-window apply — do NOT add [ack-destroy] to unblock this unattended apply: the host update is transitively in the saved plan, so ack-through would REBOOT prod unattended."
             fi
