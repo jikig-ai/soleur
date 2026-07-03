@@ -131,10 +131,85 @@ if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
     echo "sdk-bump-gate: SDK bump acknowledged (\`${ACK_TOKEN}\` present) — a maintainer attests the committed seccomp profile was validated against the new SDK. Proceeding."
   else
     echo "::error::sdk-bump-gate: an SDK version bump was detected (${bumped_pkgs[*]}) but NO \`${ACK_TOKEN}:\` acknowledgement is present in the branch commit messages."
-    echo "::error::An SDK bump is exactly what caused the #5873 P0 (a split unshare() the seccomp profile did not allow). Until ${FOLLOWUP} lands, a human MUST validate the committed profile (apps/web-platform/infra/seccomp-bwrap.json) against the new SDK's real bwrap argv, then add a commit trailer line: 'sdk-bump-verified: <how it was validated>'."
+    echo "::error::An SDK bump is exactly what caused the #5873 P0 (a split unshare() the seccomp profile did not allow). The #5913 canary replays the SDK's REAL bwrap argv but CANNOT reproduce the #5849 split-unshare EPERM (bwrap 0.11.x combines namespaces — see sandbox-canary-regression.test.sh layer B), so a human MUST still validate the committed profile (apps/web-platform/infra/seccomp-bwrap.json) against the new SDK, then add a commit trailer line: 'sdk-bump-verified: <how it was validated>'."
     fail=1
   fi
 fi
+
+# --- 3. CAPTURE GATE (ADR-079 deferral B / #5913) --------------------------------
+# Only runs where explicitly enabled (SANDBOX_CANARY_GATE_ENABLED=1) — a dedicated
+# creds-bearing CI job (bun + npm ci + ANTHROPIC_API_KEY). The always-run
+# `lockfile-sync` gate leaves this OFF so sections 1+2 (parity + bump-ack) run on
+# every PR (incl. forks) WITHOUT the paid capture turn, and a routine edit to the
+# canary script never trips a false ack-fallback. Fork PRs get no secrets → the
+# capture job is skipped. TRUST-BOUNDARY NOTE (security review #5913 L1): a fork's
+# fixture-ONLY edit (no SDK bump) is therefore NOT covered by any automated
+# integrity check here — section 2's bump-ack fires only on a version bump. For
+# fork PRs, fixture-edit integrity rests on HUMAN MERGE REVIEW (the fixture only
+# executes post-merge, in bwrap, in the canary container). This is acceptable
+# while the capture gate is dark-launch; if it is promoted to a required check,
+# add a fork-safe fixture-integrity path (e.g. a maintainer re-verify on the base
+# ref). See ci.yml `sandbox-canary-capture-gate`.
+if [[ "${SANDBOX_CANARY_GATE_ENABLED:-0}" == "1" ]]; then
+# Re-capture + byte-diff the committed CANONICAL fixture when the diff touches a
+# capture input. Block ONLY on `argv_drift` (deterministic once captured). Every
+# other outcome — capture-mechanism failure, or absent creds on a fork PR — falls
+# back to the `sdk-bump-verified:` ack (never hard-block on a flaky/paid model
+# turn; never silent-green). The #5849 split-unshare discrimination is NOT here
+# (bwrap combines namespaces so argv replay can't reproduce it); this gate's
+# block signal is drift, and the deploy-time prod-container replay is the
+# authoritative #5873-shape fleet-outage detector. Independent of check 2's
+# bump-ack (a soft-degraded capture must never REMOVE the ack requirement).
+# No colon in the default: an explicitly-empty SDK_GATE_CHANGED_FILES means "no
+# relevant changes" (test injection); only an UNSET var falls back to the diff.
+CHANGED="${SDK_GATE_CHANGED_FILES-$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null || true)}"
+capture_trigger=0
+[[ "${#bumped_pkgs[@]}" -gt 0 ]] && capture_trigger=1
+# Fixture-only edits are IN the trigger set: a hand-edit to sandbox-canary-argv.json
+# is a command-injection sink into the prod canary container (ci-deploy.sh replay),
+# so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
+# ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
+# fixture-only edit reaches neither; see the trust-boundary note above.
+if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+  capture_trigger=1
+fi
+
+require_capture_ack=0
+if [[ "$capture_trigger" -eq 1 ]]; then
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    VERIFY_CMD="${SDK_GATE_VERIFY_CMD:-SANDBOX_CANARY_CAPTURE=1 bun apps/web-platform/scripts/sandbox-canary.mjs --verify apps/web-platform/infra/sandbox-canary-argv.json}"
+    verdict_json="$(bash -c "$VERIFY_CMD" 2>/dev/null | tail -1 || true)"
+    v_verdict="$(printf '%s' "$verdict_json" | jq -r '.verdict // ""' 2>/dev/null || echo "")"
+    v_reason="$(printf '%s' "$verdict_json" | jq -r '.reason // ""' 2>/dev/null || echo "")"
+    if [[ "$v_reason" == "argv_drift" ]]; then
+      echo "::error::sdk-bump-gate: sandbox-canary-argv.json is STALE vs a fresh SDK capture (argv_drift). Re-run --capture and commit the refreshed canonical argv."
+      fail=1
+    elif [[ "$v_verdict" == "verify_ok" ]]; then
+      echo "sdk-bump-gate: capture --verify OK — committed canonical fixture matches a fresh capture."
+    else
+      echo "::warning::sdk-bump-gate: canary --verify did not complete (verdict='${v_verdict}' reason='${v_reason}') — automated capture gave up; falling back to the \`${ACK_TOKEN}\` ack (now load-bearing for this change)."
+      require_capture_ack=1
+    fi
+  else
+    echo "::warning::sdk-bump-gate: ANTHROPIC_API_KEY absent (fork PR?) — cannot re-verify the canary fixture; falling back to the \`${ACK_TOKEN}\` ack."
+    require_capture_ack=1
+  fi
+fi
+
+if [[ "$require_capture_ack" -eq 1 ]]; then
+  if [[ -n "${SDK_GATE_ACK_TEXT+x}" ]]; then
+    ack_text="${SDK_GATE_ACK_TEXT}"
+  else
+    ack_text="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null || true)"
+  fi
+  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+    echo "sdk-bump-gate: capture-gate ack present (\`${ACK_TOKEN}\`) — proceeding on the maintainer attestation."
+  else
+    echo "::error::sdk-bump-gate: the canary capture could not be verified automatically (see warning above) AND no \`${ACK_TOKEN}:\` ack is present. A maintainer must validate the committed profile against the SDK's real argv and add the ack trailer."
+    fail=1
+  fi
+fi
+fi  # SANDBOX_CANARY_GATE_ENABLED
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1
