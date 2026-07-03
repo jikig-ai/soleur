@@ -241,11 +241,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         CAP_CENTS % COST_CENTS,
         "CAP_CENTS must be an exact multiple of COST_CENTS",
       ).toBe(0);
+      // N must exceed K, else Test C's `tripped === N - K` expects ≤0 trips and
+      // the concurrency test proves nothing (localized guard, like the multiple
+      // check above, so a future tuner fails fast rather than silently).
+      expect(N, "N must exceed K for Test C to exercise the cap boundary").toBeGreaterThan(K);
 
       const url = requireEnv("SUPABASE_URL");
-      requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
       const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-      requireEnv("SUPABASE_JWT_SECRET");
 
       service = createClient(url, serviceRoleKey, {
         auth: { persistSession: false, autoRefreshToken: false },
@@ -428,7 +430,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       async () => {
         // Hourly cap = CAP_CENTS; daily at the ceiling. Fan out N concurrent
         // uses (each a distinct invocation_id). Concurrency is client-side;
-        // serialization is DB-side via the row `FOR UPDATE` at 084:370.
+        // serialization is DB-side via the row `FOR UPDATE` at 084:370. The
+        // no-double-spend proof requires the N fetches to genuinely overlap in
+        // the DB — on a cold/contended pooler, transport-layer serialization
+        // could mask a dropped lock. This is an accepted limitation inherited
+        // from the b020ebecf precedent; the self-diagnosis banner surfaces any
+        // breach that does occur.
         const { delegationId, grantee } = await grantDelegation(
           CAP_CENTS,
           DAILY_CEILING,
@@ -460,7 +467,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // same pre-INSERT SUM snapshot would each pass the cap check and INSERT
         // → `> K` audit rows and spend `> cap` (double-spend). With FOR UPDATE
         // serializing the read+INSERT critical section, exactly K are admitted.
+        const allFulfilled = settled.every((r) => r.status === "fulfilled");
         const willFail =
+          !allFulfilled ||
           admitted !== K ||
           tripped !== N - K ||
           audit.length !== K ||
@@ -469,10 +478,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           ? diagBanner(await fetchLiveDelegationRpcBody())
           : "";
 
-        expect(
-          settled.every((r) => r.status === "fulfilled"),
-          `all ${N} calls settled fulfilled${diag}`,
-        ).toBe(true);
+        expect(allFulfilled, `all ${N} calls settled fulfilled${diag}`).toBe(true);
         expect(admitted, `exactly K=${K} calls admitted${diag}`).toBe(K);
         expect(tripped, `exactly N−K=${N - K} calls raise the hourly marker${diag}`).toBe(
           N - K,
