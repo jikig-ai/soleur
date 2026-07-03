@@ -259,7 +259,10 @@ seccomp_live_json() {
     local entries entry
     entries="$(docker inspect "$name" \
       --format '{{range .HostConfig.SecurityOpt}}{{println .}}{{end}}' 2>/dev/null || true)"
-    entry="$(printf '%s\n' "$entries" | sed -n 's/^seccomp=//p' | head -n1)"
+    # `|| true`: head closing the pipe early can SIGPIPE sed (141); under
+    # pipefail that would abort the whole webhook script at the SECCOMP_LIVE
+    # assignment. Uniform with every other pipe in this function.
+    entry="$(printf '%s\n' "$entries" | sed -n 's/^seccomp=//p' | head -n1 || true)"
     # A literal /path means Docker did not resolve --security-opt seccomp=<file>
     # into inlined JSON at container-create (audit-bwrap-uid.sh:123 drift) → false.
     if [[ -n "$entry" && "$entry" != /* ]]; then
