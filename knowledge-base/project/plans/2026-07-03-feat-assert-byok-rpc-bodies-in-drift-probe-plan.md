@@ -11,6 +11,23 @@ brand_survival_threshold: aggregate pattern
 
 > Spec lacks valid `lane:` (no `spec.md` for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-03
+**Research agents used:** learnings-researcher, security-sentinel, architecture-strategist (+ local repo research)
+
+### Key improvements from deepen-plan review
+1. **Option B (test-only porsager `postgres` connection) is now primary; Option A (prod introspection RPC) demoted to fallback** — both reviewers ruled a permanent prod `SECURITY DEFINER` function unjustified for a dev-only test diagnostic (least-privilege / blast-radius). Removes all prod DDL from the default path.
+2. **Severity + Sentry emission now track `fail-on-rpc-body-drift`** — scheduled surface is the sole `::error::` + Sentry + fail authority; PR CI stays `::warning::`-only with no Sentry (kills signal erosion, Sentry misattribution to unrelated PRs, and N-duplicate events). Restores the composite action's documented `::warning::`-for-visibility convention.
+3. **Marker map promoted to a shared `byok-rpc-markers.json`** read by both the bash probe (`jq`, already required) and the TS structural test — true single source of truth (a comment was ruled insufficient for a security guard).
+4. **Explicit tripwire framing** — the marker probe is necessary-not-sufficient (a rewrite can keep both markers and still double-trip); Invariant C stays the strict semantic authority. Flagged the delegation RPC's lack of a live semantic backstop as a follow-up.
+
+### New considerations discovered
+- Supabase default-privileges gotcha: Option-A `REVOKE` must name `PUBLIC, anon, authenticated` explicitly (learning `2026-05-06-...`).
+- Markers must live inside the `$$…$$` body (`pg_get_functiondef` omits `COMMENT ON`/`REVOKE`/`GRANT`); anchor the definer-finder to `CREATE OR REPLACE FUNCTION`; `grep -qF` is reformat-brittle.
+- Sentry `message` pinned to a static literal so the DB body never reaches the Sentry surface; a "fn allowlist is static" comment guards the no-SQLi assumption.
+- Security review: all three surfaces (introspection RPC, bash Sentry emit, psql query) are sound; no Critical/High/Medium.
+
 ## Overview
 
 Follow-up hardening split out of the #5917 byok cap-boundary double-trip hotfix
@@ -35,7 +52,17 @@ correctly deferred out of the #5917 P1 hotfix):
    a `::error::` annotation naming the function + missing marker, plus a
    Sentry event (field-equivalent to `reportSilentFallback`) from the
    ephemeral runner. Add a source-side structural test guarding both body
-   shapes.
+   shapes. **This probe is a drift *tripwire* (necessary, not sufficient):**
+   it catches the #5917 drift signature and any accidental marker deletion,
+   but marker-presence does not *prove* the exactly-one-trip semantics — a
+   rewrite could keep both markers and still double-trip. The semantic
+   authority remains Invariant C in the atomicity test (deliverable 2), which
+   stays strict. A future maintainer MUST NOT relax Invariant C on the belief
+   that the marker probe covers it. The delegation RPC has **no** companion
+   live atomicity test, so for it the marker probe is the only live guard (its
+   `hourly_cap_exceeded`/`daily_cap_exceeded` markers prove the RAISE strings
+   exist, not that the `>` comparison logic is intact) — a delegation-RPC
+   semantic test is filed as a follow-up.
 
 2. **Self-diagnosing atomicity failure.** In
    `byok-kill-switch.atomicity.tenant-isolation.test.ts`, on an
@@ -49,9 +76,9 @@ correctly deferred out of the #5917 P1 hotfix):
 | Issue claim | Codebase reality | Plan response |
 | --- | --- | --- |
 | "assert … the live body contains the load-bearing markers (`FOR UPDATE`, `v_tripped := FOUND`)" — reads as a **flat, shared** marker set for both RPCs | `v_tripped := FOUND` exists **only** in `record_byok_use_and_check_cap` (mig 121). The delegation RPC `check_and_record_byok_delegation_use` (current def = mig `084_byok_delegation_withdrawals.sql:344`) has **no** trip flag — it enforces caps via `RAISE EXCEPTION 'byok_delegations:hourly_cap_exceeded'` / `daily_cap_exceeded` and locks the delegation row with its own `FOR UPDATE` (084:27). | The allowlist is a **per-function marker map**, not a global set. `record_byok_use_and_check_cap` → `["FOR UPDATE", "v_tripped := FOUND"]`. `check_and_record_byok_delegation_use` → `["FOR UPDATE", "hourly_cap_exceeded", "daily_cap_exceeded"]`. This is the single most load-bearing correction in this plan. |
-| "fetch `pg_get_functiondef` via the service client" (deliverable 2) | supabase-js exposes **no** raw-SQL path over PostgREST; there is **no** `pg`/`postgres` npm dep in `apps/web-platform`; the one existing test that names `pg_get_functiondef` (`byok-delegations-worm-column-enum.test.ts`) only *mentions* it in a comment and actually reads the migration **source** file. | Deliverable 2 needs a client-reachable introspection path. **Recommended (Option A):** a minimal service-role-only `SECURITY DEFINER` RPC `public.pg_functiondef(regprocedure) RETURNS text` (new migration 122), called via `service.rpc(...)`. **Fallback (Option B):** add `postgres` (porsager, zero-dep) as a devDependency and connect with `DATABASE_URL_POOLER` (already in the dev doppler env). Recommend A (faithful to "via the service client", convention-aligned); deepen-plan security-sentinel + data-integrity-guardian must ratify the grant scope. |
-| "reportSilentFallback Sentry mirror" (deliverable 1) | `reportSilentFallback` is a **TypeScript server function** (`server/observability.ts:216`) needing the Sentry SDK + Next server context — it cannot run in the bash composite action. The credential must "stay in the ephemeral runner". | The mirror is a Sentry **event** emitted from bash via `curl` to the DSN's `store/` endpoint, carrying the same field vocabulary (`feature`/`op` as tags; `fn` + `missing_marker` in tags/extra). Canonical precedent: `web-platform-release.yml:893-933` (DSN parse → `/api/{project}/store/` → `X-Sentry-Auth` header → jq payload → 3-retry → warn-not-fail on Sentry outage). |
-| existing ledger probe fails-loud (enforcement) | The composite action is **visibility-only** (`::warning::`, never non-zero) and is invoked by **two** workflows: `scheduled-dev-migration-drift.yml` **and** `tenant-integration.yml` (PR CI). | Body-marker drift emits `::error::` + Sentry event in **both** contexts, but the action never exits non-zero on its own. A new `fail-on-rpc-body-drift` input (default `false`) lets the **scheduled** workflow fail-loud (`true`) without reddening unrelated PRs (`tenant-integration.yml` keeps `false`). |
+| "fetch `pg_get_functiondef` via the service client" (deliverable 2) | supabase-js exposes **no** raw-SQL path over PostgREST; there is **no** `pg`/`postgres` npm dep in `apps/web-platform`; the one existing test that names `pg_get_functiondef` (`byok-delegations-worm-column-enum.test.ts`) only *mentions* it in a comment and actually reads the migration **source** file. | Deliverable 2 needs a client-reachable introspection path. **Recommended (Option B, revised per deepen-plan security + architecture review):** add `postgres` (porsager, zero-dep) as a **devDependency** and connect with `DATABASE_URL_POOLER` (already in the dev doppler env; same credential class the test already uses under `TENANT_INTEGRATION_TEST=1`) — **no prod DDL**, blast radius confined to the test process. **Fallback (Option A):** a minimal service-role-only `SECURITY DEFINER` RPC `public.pg_functiondef(regprocedure) RETURNS text` (new migration 122), called via `service.rpc(...)`. Both reviewers recommend B over A on least-privilege grounds ("via the service client" is a mechanism suggestion, not a contract — it does not justify a permanent prod introspection function for a dev-only diagnostic). Obey `cq-before-pushing-package-json-changes` for the devDep. |
+| "reportSilentFallback Sentry mirror" (deliverable 1) | `reportSilentFallback` is a **TypeScript server function** (`server/observability.ts:216`) needing the Sentry SDK + Next server context — it cannot run in the bash composite action. The credential must "stay in the ephemeral runner". | The mirror is a Sentry **event** emitted from bash via `curl` to the DSN's `store/` endpoint, carrying the same field vocabulary (`feature`/`op` as tags; `fn` + `missing_marker` in tags/extra); `message` is a **static** string (never the DB body). Canonical precedent: `web-platform-release.yml:893-933` (DSN parse → `/api/{project}/store/` → `X-Sentry-Auth` header → jq payload → 3-retry → warn-not-fail on Sentry outage). The Sentry emit is gated to the **scheduled** surface only (see next row). |
+| existing ledger probe fails-loud (enforcement) | The composite action is **visibility-only** (`::warning::`, never non-zero) and is invoked by **two** workflows: `scheduled-dev-migration-drift.yml` **and** `tenant-integration.yml` (PR CI). Its own header (action.yml:11-15) documents `::warning::`-for-visibility as the design invariant. | **Severity + Sentry track the `fail-on-rpc-body-drift` input** (revised per architecture review Q1 — restores the action's documented visibility/enforcement split). Scheduled workflow (`fail-on-rpc-body-drift: 'true'`) → `::error::` + Sentry event + `exit 1`. PR CI (`tenant-integration.yml`, default `false`) → `::warning::` only, **no Sentry** (a pre-existing dev-infra drift must not red-annotate or misattribute a Sentry event to an unrelated PR, and must not emit N duplicate events across every migration-touching PR run). Only the scheduled surface forwards `sentry-dsn`. |
 
 ## User-Brand Impact
 
@@ -63,10 +90,13 @@ double-trip reddens the `tenant-integration-required` check (blocking every
 founder's merges, as in #5917) with no fast-path root-cause in the CI log.
 
 **If this leaks, the user's data is exposed via:** n/a for user data — the
-probe reads function **definitions** (DDL introspection), never user rows. The
-Option-A introspection RPC (`pg_functiondef`) returns function **source** to
-`service_role` only (already omnipotent); no PII / user data / new grant to
-`anon`/`authenticated`.
+probe reads function **definitions** (DDL introspection), never user rows.
+Under **Option B (primary)** the introspection path is entirely test-process /
+dev-only (porsager over `DATABASE_URL_POOLER`) — **no prod runtime surface**.
+Under the Option-A fallback, the `dev_functiondef` RPC returns function
+**source** to `service_role` only (already omnipotent); no PII / user data /
+new grant to `anon`/`authenticated` (the explicit three-name `REVOKE` is
+load-bearing — Supabase default-privileges gotcha).
 
 **Brand-survival threshold:** `aggregate pattern` — this change's own failure
 mode is a *compounding observability gap* (the drift class recurs and stays
@@ -123,61 +153,65 @@ existing observability probe; it does not adopt a rejected mechanism).
 - Confirm `pg_get_functiondef` returns a single overload for each proname on dev (via the probe query shape) — if >1, Phase 1 iterates all oids.
 
 ### Phase 1 — Probe extension (deliverable 1)
-1. `action.yml`: add inputs `sentry-dsn` (required: false, default `''`) and `fail-on-rpc-body-drift` (default `'false'`); add output `rpc-body-drift-detected`.
-2. New composite step `assert-byok-rpc-body-markers` (after the ledger probe). For each fn in the per-function marker map:
+1. `action.yml`: add inputs `sentry-dsn` (required: false, default `''`) and `fail-on-rpc-body-drift` (default `'false'`); add output `rpc-body-drift-detected`. Load the marker map by reading the shared `byok-rpc-markers.json` via `jq` (single source of truth — see Phase 2). Add a comment asserting the fn allowlist / marker map is compile-time static (no DB-derived / `github.event.*` interpolation into SQL) — mirrors the existing filename-shape-whitelist comment at `action.yml:79-82`.
+2. New composite step `assert-byok-rpc-body-markers` (after the ledger probe). For each fn in the map:
    - `body=$(doppler run … -- sh -c 'psql "$DATABASE_URL_POOLER" … -c "SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='"'"'public'"'"' AND p.proname='"'"'<fn>'"'"';"')` — reuse the existing `sh -c` env-expansion + psql-failure `::warning::`+`exit 0` pattern.
-   - 0 rows → `::error::` "<fn> not found on dev" + Sentry event; >1 rows → assert markers across all bodies.
-   - `stripped=$(printf '%s' "$body" | sed 's/--.*//')`; for each marker `grep -qF -- "$marker" <<<"$stripped"` else accumulate `<fn>::<marker>`.
-   - On any miss: `echo "::error::dev-migration-drift: RPC public.<fn> is MISSING load-bearing marker \"<marker>\" — live dev body drifted from source (#5920; see mig 121/084)"` (static literals only), emit Sentry event, set `rpc-body-drift-detected=true`.
-3. Sentry event helper (inline bash, per `web-platform-release.yml:893-933`): DSN-presence guard (`::warning::`+continue), parse `PUBLIC_KEY`/`HOST`/`PROJECT_ID`, `jq -nc` payload `{message, level:"error", platform:"other", tags:{feature:"dev-migration-drift", op:"rpc-body-marker-drift", fn:<fn>}, extra:{missing_marker:<marker>}}`, POST `store/` with `X-Sentry-Auth`, 3-retry, curl-fail → `::warning::` (observability degraded, does not change drift disposition).
+   - 0 rows → drift ("<fn> not found on dev"); >1 rows → assert markers across all bodies.
+   - `stripped=$(printf '%s' "$body" | sed 's/--.*//')`; for each marker `grep -qF -- "$marker" <<<"$stripped"` else accumulate `<fn>::<marker>`. (Markers are exact fixed-strings; a semantically-identical reformat, e.g. `:=` spacing, fails loud — see Sharp Edges.)
+   - On any miss: set `rpc-body-drift-detected=true`; **severity tracks `fail-on-rpc-body-drift`**: `true` → `::error::dev-migration-drift: RPC public.<fn> is MISSING load-bearing marker "<marker>" — live dev body drifted from source (#5920; see mig 121/084)` (static literals only) + Sentry event; `false` → `::warning::` (same text), **no Sentry**.
+3. Sentry event helper (inline bash, per `web-platform-release.yml:893-933`), invoked ONLY when `fail-on-rpc-body-drift == 'true'` AND `sentry-dsn` non-empty: DSN-presence guard (`::warning::`+continue), parse `PUBLIC_KEY`/`HOST`/`PROJECT_ID`, `jq -nc` payload `{message:"byok RPC body-marker drift", level:"error", platform:"other", tags:{feature:"dev-migration-drift", op:"rpc-body-marker-drift", fn:<fn>}, extra:{missing_marker:<marker>}}` (`message` is a **static** string — the DB body is never placed on the Sentry surface), POST `store/` with `X-Sentry-Auth`, 3-retry, curl-fail → `::warning::` (observability degraded, does not change drift disposition).
 4. If `fail-on-rpc-body-drift == 'true'` AND `rpc-body-drift-detected == 'true'` → `exit 1` (fail the step) at the end of the step.
-5. `scheduled-dev-migration-drift.yml`: forward `sentry-dsn: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}` and `fail-on-rpc-body-drift: 'true'`.
-6. `tenant-integration.yml`: forward `sentry-dsn: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}` (leave `fail-on-rpc-body-drift` default `false` — annotation + Sentry on PRs, non-blocking).
+5. `scheduled-dev-migration-drift.yml`: forward `sentry-dsn: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}` and `fail-on-rpc-body-drift: 'true'`. (Scheduled = sole Sentry emitter + sole fail authority.)
+6. `tenant-integration.yml`: leave `fail-on-rpc-body-drift` default `false` and do **not** forward `sentry-dsn` — PR CI shows a `::warning::` (visibility, consistent with the ledger probe's `::warning::`-in-PR convention at action.yml:11-15), never `::error::` / Sentry / a red check on pre-existing dev drift. Timing note: `tenant-integration.yml` runs the probe pre-apply (before the migration apply), so the live body is dev's pre-apply state; a PR that legitimately changes a marker is caught at PR time by the **structural test** (Phase 2), not the live probe.
 
-### Phase 2 — Structural source-side test (deliverable 1)
-1. New file `apps/web-platform/test/supabase-migrations/byok-rpc-body-markers.test.ts`.
-2. Define `RPC_BODY_MARKERS` (TS object) — the SAME map as the bash probe, with a cross-reference comment naming `action.yml` (single-source-of-truth Sharp Edge).
-3. For each fn: glob `supabase/migrations/*.sql` (exclude `*.down.sql`), pick the **highest-numbered** file matching `/CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.<fn>\b/`, `readFileSync`, comment-strip `/--[^\n]*/g`, assert each marker via `.toContain`. `throw` (fail loud) if no defining migration resolves.
-4. This guards that committed source never regresses the markers (keeps the live-probe allowlist honest) and self-updates as the RPC is redefined in later migrations.
+### Phase 2 — Marker map + structural source-side test (deliverable 1)
+1. New file `apps/web-platform/test/supabase-migrations/byok-rpc-markers.json` — the **single source of truth** for the per-function marker map, consumed by BOTH the bash probe (`jq`, Phase 1) and the TS structural test. `jq` is already required by the Sentry-emit path, so the shared-file marginal cost is ~zero (architecture review Q3: a comment is insufficient for a duplicated security guard). Shape: `{ "record_byok_use_and_check_cap": ["FOR UPDATE", "v_tripped := FOUND"], "check_and_record_byok_delegation_use": ["FOR UPDATE", "hourly_cap_exceeded", "daily_cap_exceeded"] }`.
+2. New file `apps/web-platform/test/supabase-migrations/byok-rpc-body-markers.test.ts` — `import` (or `JSON.parse(readFileSync)`) the shared JSON.
+3. For each fn: glob `supabase/migrations/*.sql` (exclude `*.down.sql`), pick the **highest-numbered** file matching `/CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.<fn>\b/` (anchored to `CREATE OR REPLACE FUNCTION`, per `2026-06-19` learning — bare `FUNCTION public.<fn>` matches REVOKE/GRANT/COMMENT), `readFileSync`, comment-strip `/--[^\n]*/g`, assert each marker via `.toContain`. `throw` (fail loud) if no defining migration resolves.
+4. Assert each marker lives inside the function **body** (all five are executable-only today; `pg_get_functiondef` emits only the `$$…$$` body — never `COMMENT ON`/`REVOKE`/`GRANT` — so a marker outside the body would be invisible to the live probe).
+5. This guards that committed source never regresses the markers (keeps the live-probe map honest) and self-updates as the RPC is redefined in later migrations.
 
-### Phase 3 — Introspection RPC (deliverable 2, Option A — recommended)
-1. New migration `apps/web-platform/supabase/migrations/122_dev_pg_functiondef_introspection.sql`: `CREATE OR REPLACE FUNCTION public.pg_functiondef(p_fn regprocedure) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT pg_get_functiondef(p_fn); $$;` + `REVOKE ALL … FROM PUBLIC, anon, authenticated;` + `GRANT EXECUTE … TO service_role;` + `COMMENT ON FUNCTION`. `.down.sql` drops it.
-2. Wrap in `BEGIN;/COMMIT;` (no `CREATE INDEX CONCURRENTLY` — Supabase transaction-wraps migrations).
-3. **deepen-plan gate:** security-sentinel + data-integrity-guardian must ratify the grant scope; if rejected, pivot to Option B (porsager `postgres` devDep + `DATABASE_URL_POOLER`, no prod DDL — obey `cq-before-pushing-package-json-changes`).
+### Phase 3 — Introspection mechanism (deliverable 2, Option B — recommended)
+**Option B (primary; test-only, no prod DDL):** add `postgres` (porsager, zero-dep) to `apps/web-platform/package.json` `devDependencies` (obey `cq-before-pushing-package-json-changes`: `bun install` + commit the lockfile). The atomicity test opens a direct connection with `process.env.DATABASE_URL_POOLER` (present in the dev doppler env the test already runs under) to `SELECT pg_get_functiondef(...)` on failure. Same credential class as the test's existing `service_role` usage — no escalation, no prod runtime surface.
+
+**Option A (fallback — only if the devDep is rejected):** new migration `apps/web-platform/supabase/migrations/122_dev_functiondef_introspection.sql` (do NOT name it `pg_functiondef` — the `pg_` prefix squats on Postgres's reserved catalog convention; use e.g. `dev_functiondef`): `CREATE OR REPLACE FUNCTION public.dev_functiondef(p_fn regprocedure) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT pg_get_functiondef(p_fn); $$;` + `REVOKE ALL … FROM PUBLIC, anon, authenticated;` (**all three names explicit** — Supabase `ALTER DEFAULT PRIVILEGES` auto-grants EXECUTE to `anon`/`authenticated`; `FROM PUBLIC` alone leaves those live — learning `2026-05-06-supabase-default-privileges-defeat-revoke-from-public`, precedent `084:39-46`) + `GRANT EXECUTE … TO service_role;` + `COMMENT ON FUNCTION`; `.down.sql` drops it; wrap `BEGIN;/COMMIT;`; no `CREATE INDEX CONCURRENTLY`. Called via `service.rpc("dev_functiondef", …)`.
 
 ### Phase 4 — Self-diagnosing atomicity failure (deliverable 2)
 1. In `byok-kill-switch.atomicity.tenant-isolation.test.ts`, before the strict Invariant-C assertions, compute `willFail = trippedCount !== 1 || pairs.some(p => p.kill_tripped !== (p.cumulative_cents === tripCumulative))`.
-2. If `willFail`, `liveBody = (await service.rpc("pg_functiondef", { p_fn: "public.record_byok_use_and_check_cap(uuid,uuid,uuid,text,int,int)" })).data ?? "<functiondef fetch failed>"`.
-3. Pass `liveBody` into the **message** argument of the existing strict `expect(...)` calls (per-pair loop message + `trippedCount` message). **No assertion is relaxed** — Invariant C still requires exactly-one-trip; the body only enriches the failure message.
-4. Guard the fetch so a `pg_functiondef` error never masks the real Invariant-C failure (fallback string, not a throw before the `expect`).
+2. If `willFail`, fetch the live body: Option B → `sql\`SELECT pg_get_functiondef('public.record_byok_use_and_check_cap(uuid,uuid,uuid,text,int,int)'::regprocedure)\`` via the porsager connection; Option A → `service.rpc("dev_functiondef", { p_fn: "public.record_byok_use_and_check_cap(uuid,uuid,uuid,text,int,int)" })`. Fallback string on error.
+3. Pass the live body into the **message** argument of the existing strict `expect(...)` calls (per-pair loop message + `trippedCount` message). **No assertion is relaxed** — Invariant C still requires exactly-one-trip; the body only enriches the failure message.
+4. Guard the fetch so a fetch error never masks the real Invariant-C failure (fallback string, not a throw before the `expect`).
 
 ## Files to Create
+- `apps/web-platform/test/supabase-migrations/byok-rpc-markers.json` — shared per-function marker map (single source of truth for bash probe + TS test).
 - `apps/web-platform/test/supabase-migrations/byok-rpc-body-markers.test.ts` — structural source-side marker guard.
-- `apps/web-platform/supabase/migrations/122_dev_pg_functiondef_introspection.sql` + `.down.sql` — Option-A introspection RPC (subject to Phase 3 security ratification).
+- (Option A fallback only) `apps/web-platform/supabase/migrations/122_dev_functiondef_introspection.sql` + `.down.sql`.
 
 ## Files to Edit
-- `.github/actions/dev-migration-drift-probe/action.yml` — body-marker probe step, `sentry-dsn`/`fail-on-rpc-body-drift` inputs, `rpc-body-drift-detected` output, bash Sentry emit.
-- `.github/workflows/scheduled-dev-migration-drift.yml` — forward `sentry-dsn` + `fail-on-rpc-body-drift: 'true'`.
-- `.github/workflows/tenant-integration.yml` — forward `sentry-dsn` (default fail flag).
+- `.github/actions/dev-migration-drift-probe/action.yml` — body-marker probe step (reads shared JSON via jq), `sentry-dsn`/`fail-on-rpc-body-drift` inputs, `rpc-body-drift-detected` output, gated bash Sentry emit, static-allowlist comment.
+- `.github/workflows/scheduled-dev-migration-drift.yml` — forward `sentry-dsn` + `fail-on-rpc-body-drift: 'true'` (sole Sentry + fail authority).
+- `.github/workflows/tenant-integration.yml` — no change to fail flag; do NOT forward `sentry-dsn` (PR CI stays `::warning::`-only). *(If the composite action's default input handling already yields the warning-only path with no forwarding, this file may need no edit — verify at /work.)*
 - `apps/web-platform/test/server/byok-kill-switch.atomicity.tenant-isolation.test.ts` — self-diagnosing Invariant-C failure message.
+- (Option B primary) `apps/web-platform/package.json` + lockfile — add `postgres` devDependency.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-1. `RPC_BODY_MARKERS` in `byok-rpc-body-markers.test.ts` maps `record_byok_use_and_check_cap → ["FOR UPDATE","v_tripped := FOUND"]` and `check_and_record_byok_delegation_use → ["FOR UPDATE","hourly_cap_exceeded","daily_cap_exceeded"]`; the structural test passes green against current sources (mig 121, 084).
+1. The shared `byok-rpc-markers.json` maps `record_byok_use_and_check_cap → ["FOR UPDATE","v_tripped := FOUND"]` and `check_and_record_byok_delegation_use → ["FOR UPDATE","hourly_cap_exceeded","daily_cap_exceeded"]`; the structural test (reading that JSON) passes green against current sources (mig 121, 084).
 2. The structural test picks the **highest-numbered** `CREATE OR REPLACE FUNCTION public.<fn>` migration (anchored regex) and comment-strips before asserting; it `throw`s if no definer resolves (verified by a negative fixture).
-3. `action.yml` `assert-byok-rpc-body-markers` step, exercised via `bash -c` on an extracted snippet against (a) a fixture body containing all markers → no `::error::`, `rpc-body-drift-detected=false`; (b) a fixture body missing `v_tripped := FOUND` → `::error::` naming fn+marker, `rpc-body-drift-detected=true`.
-4. DSN-unset path emits `::warning::` and continues (no `::error::`-swallowing; no non-zero exit from a Sentry outage).
-5. `fail-on-rpc-body-drift='true'` + drift → step exits non-zero; default (`false`) → step exits 0 with the `::error::` annotation present.
-6. Both caller workflows forward `sentry-dsn`; only `scheduled-dev-migration-drift.yml` sets `fail-on-rpc-body-drift: 'true'` (verified by `grep`).
+3. `action.yml` `assert-byok-rpc-body-markers` step, exercised via `bash -c` on an extracted snippet against (a) all-markers fixture body → no drift, `rpc-body-drift-detected=false`; (b) body missing `v_tripped := FOUND` with `fail-on-rpc-body-drift=false` → `::warning::` naming fn+marker, no Sentry, exit 0; (c) same drift with `fail-on-rpc-body-drift=true` → `::error::` + Sentry payload + exit 1.
+4. DSN-unset path (with `fail-on-rpc-body-drift=true`) emits `::warning::` and continues (Sentry outage never flips the drift disposition / never swallows the `::error::`).
+5. Only `scheduled-dev-migration-drift.yml` sets `fail-on-rpc-body-drift: 'true'` and forwards `sentry-dsn` (verified by `grep`); `tenant-integration.yml` forwards neither.
+6. The Sentry `message` is a fixed literal string; the DB-derived body never appears in any `::error::`/`::warning::` annotation or Sentry payload (grep the diff — the body flows only into `grep -qF` and the vitest failure message).
 7. `byok-kill-switch.atomicity.tenant-isolation.test.ts`: Invariant C assertions are byte-for-byte as strict (exactly-one-trip; per-pair; `trippedCount === 1`); only the `expect` **message** args gain the conditional live-body embed. (Diff shows no change to any `.toBe`/`.toEqual` target.)
 8. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `./node_modules/.bin/vitest run test/supabase-migrations/byok-rpc-body-markers.test.ts` green.
-9. `actionlint` on the two edited workflows; extracted `run:` snippets pass `bash -c` syntax check (composite `action.yml` is NOT linted with `actionlint` — it emits spurious schema errors; use `bash -c` for its embedded shell).
+9. `actionlint` on the edited workflow(s); extracted `run:` snippets pass `bash -c` syntax check (composite `action.yml` is NOT linted with `actionlint` — it emits spurious schema errors; use `bash -c` for its embedded shell).
+10. (Option B) `postgres` added to `devDependencies` with the lockfile committed (`cq-before-pushing-package-json-changes`); the atomicity test's failure-path fetch is dev-only (`DATABASE_URL_POOLER`, gated by `TENANT_INTEGRATION_TEST=1`).
 
 ### Post-merge (operator/automated)
-10. Migration 122 (Option A) applied to dev **and** prd via the existing `web-platform-release.yml#migrate` path (NOT operator SSH) — verified via `mcp__plugin_supabase_supabase__list_migrations` (dev + prd both show `122`).
-11. Trigger the scheduled probe once (`gh workflow run scheduled-dev-migration-drift.yml`) and confirm a green run with "No … drift detected" (no false-positive body-marker `::error::`).
-12. Live-DB self-diagnosis smoke: run the atomicity test against dev with `TENANT_INTEGRATION_TEST=1` — green (Invariant C passes on the correct mig-121 body; self-diagnosis path is dormant on green).
+11. (Option A fallback only) Migration 122 applied to dev **and** prd via the existing `web-platform-release.yml#migrate` path (NOT operator SSH) — verified via `mcp__plugin_supabase_supabase__list_migrations`. **Under Option B (primary) there is no migration to apply.**
+12. Trigger the scheduled probe once (`gh workflow run scheduled-dev-migration-drift.yml`) and confirm a green run with "No … drift detected" (no false-positive body-marker `::error::`).
+13. Live-DB self-diagnosis smoke: run the atomicity test against dev with `TENANT_INTEGRATION_TEST=1` — green (Invariant C passes on the correct mig-121 body; self-diagnosis path is dormant on green).
 
 ## Observability
 
@@ -213,8 +247,15 @@ discoverability_test:
 
 **Blind-surface note (Phase 2.9.2):** the GHA runner is an ephemeral, operator-blind
 execution surface. The in-surface probe emits the Sentry event **from the runner
-itself**, with `fn` + `missing_marker` as discriminating structured fields that
-identify the exact function and marker in one event — not a host-side-only signal.
+itself** (scheduled surface only), with `fn` + `missing_marker` as discriminating
+structured fields that identify the exact function and marker in one event — not a
+host-side-only signal.
+
+**Tripwire, not semantic proof:** the marker probe is a *necessary-not-sufficient*
+drift tripwire (catches the #5917 signature + accidental marker deletion). It does
+NOT prove exactly-one-trip semantics — that authority stays with Invariant C in the
+atomicity test (kept strict). The delegation RPC has no live semantic backstop
+(follow-up filed).
 
 ## Architecture Decision (ADR/C4)
 
@@ -283,25 +324,75 @@ None. Queried 61 open `code-review` issues against all six planned file paths
 - **Per-function marker map, not a flat set** (Research Reconciliation row 1) —
   `v_tripped := FOUND` belongs only to the cap RPC. Encoding a shared set would
   false-`::error::` on the delegation RPC forever.
-- **Marker map duplicated in bash (`action.yml`) and TS (structural test).** Drift
-  between the two silently weakens the guard. Cross-reference comment in both;
-  deepen-plan may hoist to a shared JSON read by both — evaluate cost vs. benefit.
+- **Marker probe is necessary-not-sufficient** (architecture review Q4). A rewrite
+  can keep `FOR UPDATE` + `v_tripped := FOUND` and still double-trip; the probe
+  catches the #5917 signature + accidental marker deletion, not the full semantic.
+  Invariant C (atomicity test) is the semantic authority and stays strict.
+- **Delegation RPC has no live semantic backstop.** Its markers prove the RAISE
+  strings exist, not that the `> v_row.<cap>_cap_cents` comparison is intact — and
+  it has no companion atomicity test. Follow-up: a delegation-RPC semantic/atomicity
+  test (file a tracking issue at /work with label `observability`).
+- **Marker map is a shared JSON** (`byok-rpc-markers.json`), read by both bash (`jq`)
+  and TS — single source of truth, resolves the bash/TS duplication-drift edge
+  (architecture review Q3; `jq` is already required by the Sentry path).
+- **`grep -qF` exact-string brittleness:** a semantically-identical reformat (e.g.
+  `v_tripped:=FOUND` spacing) fails the fixed-string match. The structural test
+  asserts the same literal against source, so a reformat fails loud at PR time
+  (acceptable); the shared JSON then needs a manual marker bump.
 - **Comment-strip does not remove SQL string literals** (`2026-05-31` learning).
   Markers are verified executable-only today; still comment-strip before match, and
   never pick a marker that also appears in a `COMMENT ON` literal.
+- **Markers must live inside the `$$…$$` body** — `pg_get_functiondef` emits only the
+  body, never `COMMENT ON`/`REVOKE`/`GRANT`; a marker outside the body is invisible
+  to the live probe (all five are body-resident today).
 - **Anchor the structural test's definer-finder to `CREATE OR REPLACE FUNCTION`**
   (`2026-06-19` learning), not bare `FUNCTION public.<fn>` (matches REVOKE/GRANT/COMMENT).
 - **`pg_get_functiondef` overloads:** if a proname ever gains a second overload,
   the probe must iterate all oids (Phase 0 confirms single-overload today).
-- **Do NOT echo the DB-derived body into a `::error::` annotation** (log-injection
-  vector). Only static allowlist literals go into annotations; the body goes only
-  into the vitest failure message (deliverable 2).
-- **Sentry outage must never flip the drift disposition** — DSN-unset / curl-fail is
-  `::warning::` only.
-- **Option A adds prod DDL** for a test-only diagnostic; if security-sentinel rejects
-  the introspection RPC, pivot to Option B (test-only pg connection).
+- **Do NOT echo the DB-derived body into any annotation or Sentry payload**
+  (log-injection vector; Sentry `message` is a static literal). Only static allowlist
+  literals go into annotations; the body goes only into the vitest failure message.
+- **Severity + Sentry track `fail-on-rpc-body-drift`** — PR CI stays `::warning::`-only,
+  no Sentry (avoids signal erosion + misattribution + N-duplicate events); scheduled is
+  the sole `::error::`+Sentry+fail authority (architecture review Q1).
+- **Option B (primary) keeps introspection out of prod;** Option A fallback (if the
+  devDep is rejected) must name `REVOKE … FROM PUBLIC, anon, authenticated` (Supabase
+  default-privileges gotcha) and avoid the reserved `pg_` name prefix.
 - **A plan whose `## User-Brand Impact` section is empty, TBD, or omits the threshold
   will fail deepen-plan Phase 4.6.** This section is filled.
+
+## Precedent Diff (deepen-plan Phase 4.4)
+
+Pattern-bound behaviors and their in-repo precedents:
+
+- **SECURITY DEFINER RPC + search_path pin + REVOKE/GRANT** (Option-A migration 122):
+  precedent = `121_byok_cap_trip_from_found.sql:54-56,121-124` (`LANGUAGE plpgsql
+  SECURITY DEFINER SET search_path = public, pg_temp`; `REVOKE ALL … FROM PUBLIC,
+  anon, authenticated; GRANT EXECUTE … TO service_role`). Migration 122 follows
+  this shape verbatim, differing only in `LANGUAGE sql STABLE` (a one-line wrapper
+  around `pg_get_functiondef`) — a `regprocedure`-arg introspection helper also has
+  precedent in `048_precheck_jwt_mint_sqlstate.sql`. `cq-pg-security-definer-search-path-pin-pg-temp`
+  satisfied.
+- **Bash Sentry event emit from a CI runner:** precedent = `web-platform-release.yml:893-933`
+  (DSN parse → `store/` POST → `X-Sentry-Auth` → 3-retry → warn-not-fail). Adopted
+  verbatim in shape; only the tags/extra vocabulary differs.
+- **Composite-action psql with `sh -c` env expansion + filename-shape whitelist:**
+  precedent = the existing `dev-migration-drift-probe/action.yml:69-91`. The new
+  body-marker step reuses both patterns; fn names are a static allowlist (no
+  DB-derived interpolation into SQL).
+- **Structural migration-shape test:** precedent = `046-runtime-cost-state.test.ts`
+  (`readFileSync` + `/--[^\n]*/g` comment-strip + `.toMatch`). No novel pattern.
+
+No novel pattern is introduced; every shape has an established sibling.
+
+## Deepen-Plan Gate Status
+
+- **4.6 User-Brand Impact:** PASS (threshold `aggregate pattern`, concrete artifact + vector).
+- **4.7 Observability:** PASS (5 fields present, no placeholders, `discoverability_test.command` is ssh-free).
+- **4.8 PAT-shaped variable:** PASS (no PAT-shaped var/env/literal).
+- **4.9 UI-wireframe:** N/A (no UI-surface file in Files-to-Edit/Create).
+- **4.55 Downtime & Cutover:** N/A (migration 122 is a new `CREATE FUNCTION`, no hot-table rewrite/reboot/router change).
+- **4.5 Network-outage:** N/A (no SSH/network-connectivity symptom).
 
 ## Alternative Approaches Considered
 
@@ -309,5 +400,7 @@ None. Queried 61 open `code-review` issues against all six planned file paths
 | --- | --- |
 | Flat shared marker set for both RPCs | Rejected — `v_tripped := FOUND` is cap-RPC-only; would false-fire on the delegation RPC. |
 | Embed migration **source** in the atomicity failure (not live body) | Rejected — #5917 was a live-vs-source drift; source is clean, so source embedding defeats the diagnostic. |
-| Option B (porsager `postgres` devDep) as primary | Fallback only — "via the service client" favors an `.rpc()` path; keep B if security rejects the introspection RPC. |
+| Option A (prod `SECURITY DEFINER` introspection RPC) as primary | Demoted to fallback (security + architecture review) — permanent prod DDL + widened PostgREST surface for a dev-only test diagnostic; "via the service client" is a mechanism suggestion, not a contract. Option B (test-only pg connection) is primary. |
 | Fail the composite action non-zero in all contexts | Rejected — would red unrelated PRs on pre-existing dev drift; gated behind `fail-on-rpc-body-drift` (scheduled only). |
+| `::error::` + Sentry in both callers | Rejected (architecture review Q1) — severity/Sentry now track `fail-on-rpc-body-drift`; PR CI is `::warning::`-only to avoid signal erosion + Sentry misattribution + duplicate events. |
+| Cross-reference comment for the duplicated marker map | Rejected (architecture review Q3) — comments rot on a security-relevant guard; promoted to a shared `byok-rpc-markers.json` (jq already required). |
