@@ -29,6 +29,29 @@ not create-path correctness. Tests: `worktree-manager-atomic-config.test.sh` (ne
 dir+symlink+char-device fixtures) and the updated Test 8 in
 `worktree-manager-stale-lock-diag.test.sh` (behavior inverted: self-heal, not refuse).
 
+### User-Brand Impact of the change itself (post-review, 2026-07-03)
+
+Multi-agent review (security / architecture / code-quality / user-impact) confirmed
+NO P1/P2 and validated every failure mode of the fix degrades safely:
+
+- **Glob masking (assumption false):** if the sandbox masks `*.lock` (not just
+  `config.lock`), the temp's own clean lock is also masked → `git config --file <temp>`
+  fails. The writer fails **CLOSED** (temp discarded, real config byte-identical,
+  `ensure_bare_config` returns non-zero, session aborts loudly and is recoverable next
+  session — never silent, never corrupting). It now emits a **distinct**
+  `SOLEUR_GIT_LOCK_TEMP_WEDGED` stdout sentinel so the next blind-surface session can
+  tell glob-masking apart from the single-path wedge (empirically resolves the BLOCKING
+  ASSUMPTION and feeds #5934). Covered by atomic-config Test 10.
+- **Healthy sessions never regress:** the lockless path fires only when `config.lock`
+  is non-regular; an absent lock always takes the unchanged native writer.
+- **Partial write fault (cp/git-config/mv fails):** every arm rm's the temp and returns
+  non-zero with the real config untouched → next session's read-first re-applies cleanly.
+  Covered by atomic-config Test 11 (cp arm) + the temp-write arm in Test 10.
+- **Stuck REGULAR lock (real in-flight writer / 2026-07-01 class):** still fails loud
+  (native EEXIST surfaces) — Test 8b regression guard.
+- **Multi-valued `--unset`:** read-first skips ONLY on a truly-absent key (rc 1), not on
+  a multi-valued key (rc 2) — the one fail-open two agents flagged, now fixed.
+
 # Spec: config.lock worktree-creation wedge — targeted fix
 
 ## Problem Statement

@@ -294,19 +294,30 @@ _config_lock_wedged() {
 #     rename preserves the indirection instead of clobbering the link with a regular
 #     file.
 #
-# Parallel-session safety: last-rename-wins can drop a concurrent edit, but every
-# writer converges to the same idempotent target state, so a lost update is redundant
-# (not corrupting) — acceptable under this script's existing age-guard-not-flock
-# posture (see sweep_stale_git_locks). GNU-only tooling (stat/cp -p), consistent with
-# the sweep. Returns non-zero (with a loud headless_or_stderr line) on any write
-# failure so ensure_bare_config can fail loud instead of proceeding half-applied.
+# Parallel-session safety: last-rename-wins can drop a concurrent edit. For SAME-key
+# writes every writer converges to the same idempotent value (a lost update is
+# redundant, not corrupting). For DISTINCT-key writes by two concurrent lockless
+# sessions the result is only EVENTUALLY consistent — an interleave can momentarily
+# drop one key, self-healed on the next ensure_bare_config run. Native writers cannot
+# race here: under a wedge they EEXIST on the masked lock, so only Soleur's own
+# lockless sessions contend. Acceptable under this script's existing age-guard-not-flock
+# posture (see sweep_stale_git_locks). GNU-only tooling (cp -p / realpath / mv),
+# consistent with the sweep. Returns non-zero (with a loud headless_or_stderr line) on
+# any write failure so ensure_bare_config can fail loud instead of proceeding
+# half-applied. Self-contained return status (never relies on the caller's `if !`
+# context to disarm set -e), so a future bare call site stays safe.
 atomic_git_config() {
   local file="$1"; shift
 
   # --- FR2: read-first idempotence (reads never acquire "<file>.lock") ---
   if [[ "${1:-}" == "--unset" ]]; then
-    # Already absent -> nothing to unset.
-    git config --file "$file" --get "${2:-}" >/dev/null 2>&1 || return 0
+    # Skip ONLY when the key is truly ABSENT (git config --get rc 1). A multi-valued
+    # key exits rc 2 ("multiple values") — do NOT swallow that as "absent" or the
+    # unset silently no-ops (fail-open); fall through so the writer surfaces git's
+    # loud --unset-all-required error. Reads never take the lock.
+    local _grc=0
+    git config --file "$file" --get "${2:-}" >/dev/null 2>&1 || _grc=$?
+    (( _grc == 1 )) && return 0
   elif [[ "$#" -eq 2 && "$1" != --* ]]; then
     local _cur
     _cur=$(git config --file "$file" --get "$1" 2>/dev/null || true)
@@ -314,9 +325,12 @@ atomic_git_config() {
   fi
 
   # --- FR3: clean/absent lock -> native writer (keeps flock serialization) ---
+  # Capture rc explicitly so the function is correct regardless of call context
+  # (a bare `atomic_git_config …` call site must not abort at the git line under set -e).
   if ! _config_lock_wedged "$file"; then
-    git config --file "$file" "$@"
-    return
+    local _nrc=0
+    git config --file "$file" "$@" || _nrc=$?
+    return "$_nrc"
   fi
 
   # --- FR3 wedged + TR1/TR2/TR3: lockless temp-copy + same-dir atomic rename ---
@@ -336,6 +350,7 @@ atomic_git_config() {
   # preserving mode/owner via cp -p (TR2).
   if [[ -f "$target" ]]; then
     if ! cp -p -- "$target" "$tmp"; then
+      rm -f -- "$tmp" 2>/dev/null || true   # cp can fail mid-copy leaving a partial temp
       headless_or_stderr error "atomic_git_config: cp -p failed for $target."
       return 1
     fi
@@ -346,7 +361,13 @@ atomic_git_config() {
   # Edit the temp copy with git's own INI writer (creates a clean "$tmp.lock").
   if ! git config --file "$tmp" "$@"; then
     rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
-    headless_or_stderr error "atomic_git_config: git config write to temp failed for $target."
+    # Failing to write even the temp copy means git could not create the temp's OWN
+    # clean lock ("$tmp.lock") — the strongest in-surface signal that the sandbox
+    # masks *.lock as a GLOB, not just literal config.lock (the spec's BLOCKING
+    # ASSUMPTION). Emit a DISTINCT stdout sentinel so the next blind-surface session
+    # can tell glob-masking apart from the now-fixed single-path wedge (feeds #5934).
+    echo "SOLEUR_GIT_LOCK_TEMP_WEDGED file=$base.soleur-tmp type=temp-write-failed reason=lockless-temp-unwritable hint=\"clean temp lock could not be created — sandbox may mask *.lock as a glob; see #5934\""
+    headless_or_stderr error "atomic_git_config: git config write to temp failed for $target (temp lock unwritable — possible glob masking)."
     return 1
   fi
   # Atomic same-dir rename over the target; never touches the masked "<file>.lock".

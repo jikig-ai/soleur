@@ -218,6 +218,26 @@ fi
 assert_contains "$EBC_OUT" "SOLEUR_GIT_LOCK_UNREMOVABLE" "sweep UNREMOVABLE forensic still surfaced via ensure_bare_config stdout"
 
 # ---------------------------------------------------------------------------
+echo "Test 8b: a stale REGULAR lock that survives the sweep still FAILS LOUD (2026-07-01 class)"
+# The config-lock-wedge-fix changed the sweep call to `|| true`, so this regression
+# guard replaces the direct fail-loud assertion Test 8 lost to the self-heal inversion.
+# A REGULAR config.lock is NOT the char-device wedge: _config_lock_wedged returns
+# not-wedged for it, so atomic_git_config takes the NATIVE git-config branch, which
+# EEXISTs against the held regular lock and must make ensure_bare_config return non-zero
+# (a genuine in-flight writer / stuck lock must never be routed around).
+BARE2=$(new_lockdir)
+printf '[core]\n\tsentinel = untouched\n' > "$BARE2/config"
+printf 'held-by-a-real-writer\n' > "$BARE2/config.lock"   # REGULAR + fresh -> sweep leaves it
+GIT_ROOT="$BARE2"
+set +e
+EBC2_OUT="$(ensure_bare_config 2>"$TMP/ebc2.err")"
+EBC2_RC=$?
+set -e
+if (( EBC2_RC != 0 )); then echo "  PASS: ensure_bare_config fails loud on a surviving regular lock"; PASS=$((PASS + 1));
+else echo "  FAIL: ensure_bare_config must fail (rc!=0) on a surviving regular lock"; FAIL=$((FAIL + 1)); fi
+assert_eq "__MISS__" "$(git config --file "$BARE2/config" --get core.repositoryformatversion 2>/dev/null || echo __MISS__)" "shared config NOT mutated (native write correctly blocked by the held lock)"
+
+# ---------------------------------------------------------------------------
 echo "Test 9: cleanup_merged_worktrees-style caller CONTINUES past a wedged ensure_bare_config"
 # Drive the real dispatch: a wedged local repo (no remote -> fetch fails gracefully).
 # With the guard, ensure_bare_config's non-zero return is caught and the run

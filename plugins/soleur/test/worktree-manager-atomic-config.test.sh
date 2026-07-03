@@ -124,7 +124,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "Test 4: FR3/TR4 gated LOCKLESS on a wedged DIRECTORY lock -> value written, rc 0"
+echo "Test 4: FR3 gated LOCKLESS on a wedged DIRECTORY lock -> value written, rc 0"
 # Fixture non-vacuity: prove a NATIVE git config write genuinely fails here first.
 D=$(new_gitdir); seed_config "$D"
 git config --file "$D/config" section.gamma old
@@ -195,6 +195,54 @@ if mknod "$D/config.lock" c 1 3 2>/dev/null; then      # /dev/null-class char de
 else
   echo "  SKIP: mknod not permitted (needs root/CAP_MKNOD) — dir+symlink fixtures cover the branch"
   SKIPPED=$((SKIPPED + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo "Test 10: GLOB masking (temp's OWN lock also masked) -> FAIL-CLOSED + distinct sentinel"
+# Simulates the spec's BLOCKING ASSUMPTION being FALSE: the sandbox masks *.lock as a
+# glob, so config.soleur-tmp.$$.lock is ALSO an unwritable non-regular path. The
+# lockless writer must fail-closed (config untouched, rc!=0) and emit the distinct
+# SOLEUR_GIT_LOCK_TEMP_WEDGED sentinel so a blind-surface session can tell glob-masking
+# apart from the now-fixed single-path wedge. $$ here == atomic_git_config's $$ (a
+# redirection is not a subshell), so the temp lock path is predictable.
+D=$(new_gitdir); seed_config "$D"
+ORIG_GLOB="$(cat "$D/config")"
+mkdir "$D/config.lock"                                  # primary wedge -> routes lockless
+mkdir "$D/config.soleur-tmp.$$.lock"                    # glob: temp's clean lock ALSO masked
+run_agc "$D/config" section.glob v10
+if (( AGC_RC != 0 )); then echo "  PASS: glob case fails CLOSED (rc!=0), not silently"; PASS=$((PASS + 1));
+else echo "  FAIL: glob case must fail closed"; FAIL=$((FAIL + 1)); fi
+assert_eq "$ORIG_GLOB" "$(cat "$D/config")" "shared config byte-identical (no partial mutation under glob)"
+if grep -qF 'SOLEUR_GIT_LOCK_TEMP_WEDGED' "$TMP/agc.out"; then
+  echo "  PASS: distinct SOLEUR_GIT_LOCK_TEMP_WEDGED sentinel emitted for glob diagnosis"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected SOLEUR_GIT_LOCK_TEMP_WEDGED sentinel on the temp-write-failure branch"; FAIL=$((FAIL + 1))
+fi
+if compgen -G "$D/config.soleur-tmp.*" >/dev/null 2>&1 && [[ -f "$D/config.soleur-tmp.$$" ]]; then
+  echo "  FAIL: regular temp file orphaned after glob failure"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no regular temp file orphaned (only the pre-planted .lock dir remains)"; PASS=$((PASS + 1))
+fi
+rm -rf "$D/config.soleur-tmp.$$.lock"
+
+# ---------------------------------------------------------------------------
+echo "Test 11: lockless cp -p failure (unreadable target) -> rc!=0, temp cleaned up"
+# Exercises the cp-failure error arm and its cleanup (regression guard: the branch must
+# rm the partial temp before returning, matching every sibling error path).
+if [[ "$(id -u)" == "0" ]]; then
+  echo "  SKIP: running as root — DAC bypass means an unreadable target cannot force cp failure"
+  SKIPPED=$((SKIPPED + 1))
+else
+  D=$(new_gitdir); seed_config "$D"
+  git config --file "$D/config" section.keep v11         # give it content
+  mkdir "$D/config.lock"                                 # wedged -> lockless
+  chmod 000 "$D/config"                                  # cp -p read fails (EACCES)
+  run_agc "$D/config" section.new nope
+  chmod 0644 "$D/config"                                 # restore for asserts/cleanup
+  if (( AGC_RC != 0 )); then echo "  PASS: cp-failure returns non-zero"; PASS=$((PASS + 1));
+  else echo "  FAIL: cp-failure must return non-zero"; FAIL=$((FAIL + 1)); fi
+  no_temp_leftovers "$D" "cp-failure cleanup"
+  assert_eq "v11" "$(get_val "$D" section.keep)" "original config content intact after cp failure"
 fi
 
 echo ""
