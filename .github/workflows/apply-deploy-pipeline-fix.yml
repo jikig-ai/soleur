@@ -499,26 +499,81 @@ jobs:
               "$STATUS_URL" 2>/dev/null || echo "000"
           }
 
-          # --- Read current loaded profile + running tag + baseline start_ts ---
+          # Read the seccomp state-invariant fields from a status JSON file into
+          # globals. #5960: the load-bearing proof is now the LIVE host+container
+          # discriminators (cat-deploy-state.sh seccomp_live_json), NOT the ephemeral
+          # recorded .seccomp_profile_sha256 (reboot-cleared, latch-blind).
+          read_frame() {
+            local f="$1"
+            HOST_PRESENT=$(jq -r '.seccomp_profile_host_present // false' "$f" 2>/dev/null || echo false)
+            HOST_SHA=$(jq -r '.seccomp_profile_host_sha256 // ""' "$f" 2>/dev/null || echo "")
+            LOADED_MATCHES=$(jq -r '.seccomp_profile_loaded_matches_host // false' "$f" 2>/dev/null || echo false)
+          }
+
+          # STATE invariant: the running container is enforcing the committed
+          # profile. Delivery leg host==committed is raw sha256sum on BOTH sides
+          # (version-independent); reload leg loaded==host is precomputed host-side
+          # (skew-immune). No cross-jq comparison anywhere on this path.
+          invariant_holds() {
+            [[ "$HOST_PRESENT" == "true" && -n "$HOST_SHA" \
+               && "$HOST_SHA" == "$COMMITTED_SHA" && "$LOADED_MATCHES" == "true" ]]
+          }
+
+          # Self-diagnosing failure: name the discriminator class (not-delivered /
+          # host-stale / not-reloaded) from the frozen frame, then fail loud.
+          diagnose_and_fail() {
+            if [[ "$HOST_PRESENT" != "true" ]]; then
+              echo "::error::seccomp profile NOT DELIVERED to the host at /etc/docker/seccomp-profiles/soleur-bwrap.json (seccomp_profile_host_present=false). The terraform apply did not place the file."
+            elif [[ "$HOST_SHA" != "$COMMITTED_SHA" ]]; then
+              echo "::error::Host has a STALE/WRONG seccomp profile: host sha256='${HOST_SHA:-<none>}' != committed '${COMMITTED_SHA}' — delivery/path drift."
+            elif [[ "$LOADED_MATCHES" != "true" ]]; then
+              echo "::error::Seccomp profile is on the host and matches committed, but the RUNNING container did NOT reload it (seccomp_profile_loaded_matches_host=false) — the redeploy did not swap the container onto the committed profile."
+            else
+              echo "::error::Seccomp loaded-profile invariant failed, unclassified (host_present=${HOST_PRESENT}, host_sha='${HOST_SHA:-<none>}', loaded_matches=${LOADED_MATCHES})."
+            fi
+            cat /tmp/redeploy-terminal.json >&2 2>/dev/null || true
+            exit 1
+          }
+
+          # --- Baseline: read live discriminators + running tag + prior start_ts ---
           HTTP=$(get_status)
           if [[ "$HTTP" != "200" ]]; then
             echo "::error::Cannot read /hooks/deploy-status (HTTP $HTTP) — refusing to assert loaded profile blind."
             cat /tmp/redeploy-status.json >&2 2>/dev/null || true
             exit 1
           fi
-          LOADED_SHA=$(jq -r '.seccomp_profile_sha256 // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
-          CURRENT_TAG=$(jq -r '.tag // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
-          PRIOR_START=$(jq -r '.start_ts // 0' /tmp/redeploy-status.json 2>/dev/null || echo 0)
+          cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+          read_frame /tmp/redeploy-terminal.json
+          CURRENT_TAG=$(jq -r '.tag // ""' /tmp/redeploy-terminal.json 2>/dev/null || echo "")
+          PRIOR_START=$(jq -r '.start_ts // 0' /tmp/redeploy-terminal.json 2>/dev/null || echo 0)
           [[ "$PRIOR_START" =~ ^[0-9]+$ ]] || PRIOR_START=0
-          echo "Running container loaded seccomp sha256: '${LOADED_SHA:-<none>}' (tag='${CURRENT_TAG}')"
+          echo "Baseline: host_present=${HOST_PRESENT} host_sha256='${HOST_SHA:-<none>}' loaded_matches_host=${LOADED_MATCHES} (committed='${COMMITTED_SHA}', tag='${CURRENT_TAG}')."
 
-          # --- Fast path: already loaded → no swap needed ---
-          if [[ "$LOADED_SHA" == "$COMMITTED_SHA" ]]; then
-            echo "Loaded profile already equals committed — no profile change to load; skipping redeploy."
+          # --- Fast path: STATE invariant already holds → no swap needed ---
+          if invariant_holds; then
+            echo "Running container is already enforcing the committed profile (host==committed AND loaded==host) — no redeploy needed."
             exit 0
           fi
 
-          echo "Loaded ('${LOADED_SHA:-<none>}') != committed ('${COMMITTED_SHA}') — a seccomp change is applied but not loaded. Redeploying to load it."
+          # Settle-once guard: if the ONLY unmet condition is the reload leg (host
+          # already has the committed profile but the container reload is
+          # unconfirmed — e.g. an in-flight swap mid-window), settle 30s and re-read
+          # before triggering a ~70-min redeploy on a transient false-negative.
+          if [[ "$HOST_PRESENT" == "true" && "$HOST_SHA" == "$COMMITTED_SHA" && "$LOADED_MATCHES" != "true" ]]; then
+            echo "Host has the committed profile but the container reload is unconfirmed — settling 30s and re-reading before deciding to redeploy."
+            sleep 30
+            HTTP=$(get_status)
+            if [[ "$HTTP" == "200" ]]; then
+              cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+              read_frame /tmp/redeploy-terminal.json
+              if invariant_holds; then
+                echo "Re-read confirms the container is now enforcing the committed profile — no redeploy needed."
+                exit 0
+              fi
+            fi
+          fi
+
+          echo "STATE invariant not satisfied — a seccomp change is applied but the running container is not enforcing it. Redeploying to load it."
 
           # Resolve the redeploy tag from the RUNNING container's real version, NOT from
           # /hooks/deploy-status .tag. That .tag is the ci-deploy STATE FILE's last-ATTEMPT
@@ -565,42 +620,92 @@ jobs:
           fi
           echo "Redeploy initiated (HTTP 202). Polling for completion (bounded by the ADR-078 cron drain)..."
 
-          # Poll until a deploy that STARTED after our trigger reaches a terminal
-          # exit_code (>=0). 160 × 30s = 4800s, inside the 90-min job ceiling and
-          # ≥ CRON_DRAIN_TIMEOUT (4200s). exit_code -1 == running (ci-deploy #2205).
-          FINAL_EXIT=""
-          FINAL_LOADED=""
-          FINAL_VERDICT=""
+          # Poll for a GENUINE web-platform swap terminal of OUR target tag that
+          # started after our trigger. lock_contention / adr027_prod_already_running
+          # / running(exit -1) are NON-TERMINAL: a flock loser stamps OUR
+          # component+tag with exit_code=1 (START_TS + COMPONENT/TAG are set
+          # pre-flock, ci-deploy.sh:207/:674) and that frame persists for the
+          # winner's whole multi-minute swap — failing on it would false-red under
+          # any concurrent web-platform deploy. The winner's ok/ok_peer_fanout_
+          # degraded terminal is authoritative (it loads the same committed profile);
+          # on poll exhaustion the STATE check below adjudicates. 160 × 30s = 4800s ≥
+          # CRON_DRAIN_TIMEOUT (4200s), inside the 90-min job ceiling.
+          ACCEPTED=""
           for attempt in $(seq 1 160); do
             sleep 30
             HTTP=$(get_status)
             [[ "$HTTP" == "200" ]] || { echo "Attempt $attempt: status HTTP $HTTP"; continue; }
+            COMPONENT=$(jq -r '.component // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+            FRAME_TAG=$(jq -r '.tag // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+            REASON=$(jq -r '.reason // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
             EXIT=$(jq -r '.exit_code // -99' /tmp/redeploy-status.json 2>/dev/null || echo -99)
             START=$(jq -r '.start_ts // 0' /tmp/redeploy-status.json 2>/dev/null || echo 0)
             [[ "$START" =~ ^[0-9]+$ ]] || START=0
-            if [[ "$EXIT" =~ ^-?[0-9]+$ ]] && [[ "$EXIT" -ge 0 ]] && [[ "$START" -gt "$PRIOR_START" ]]; then
-              FINAL_EXIT="$EXIT"
-              FINAL_LOADED=$(jq -r '.seccomp_profile_sha256 // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
-              FINAL_VERDICT=$(jq -r '.sandbox_canary.verdict // "unknown"' /tmp/redeploy-status.json 2>/dev/null || echo unknown)
-              echo "Redeploy terminal after ${attempt} poll(s): exit_code=${FINAL_EXIT} loaded=${FINAL_LOADED} canary=${FINAL_VERDICT}"
-              break
+
+            # Terminal acceptance gate: only OUR web-platform swap of the target
+            # tag, started after our POST. Foreign component / mismatched tag /
+            # stale start_ts → ignore and keep polling.
+            if [[ "$COMPONENT" != "web-platform" ]] || [[ "$FRAME_TAG" != "$TARGET_TAG" ]] || ! [[ "$START" -gt "$PRIOR_START" ]]; then
+              echo "Attempt $attempt/160: ignoring frame (component='${COMPONENT}' tag='${FRAME_TAG}' start_ts=${START}); waiting for our web-platform ${TARGET_TAG} swap (prior_start=${PRIOR_START})..."
+              continue
             fi
-            echo "Attempt $attempt/160: exit_code=${EXIT} start_ts=${START} (waiting for a post-trigger terminal state)..."
+
+            # Our frame — adjudicate on reason/exit_code (BLOCKING #5960 fix).
+            case "$REASON" in
+              lock_contention|adr027_prod_already_running)
+                echo "Attempt $attempt/160: reason=${REASON} (a concurrent deploy holds the lock) — NON-TERMINAL, keep polling for the winner's terminal..."
+                continue
+                ;;
+            esac
+            if [[ "$EXIT" =~ ^-?[0-9]+$ ]] && [[ "$EXIT" -lt 0 ]]; then
+              echo "Attempt $attempt/160: exit_code=${EXIT} reason=${REASON} (running) — keep polling..."
+              continue
+            fi
+            case "$REASON" in
+              ok|ok_peer_fanout_degraded)
+                cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+                ACCEPTED="$REASON"
+                echo "Redeploy terminal after ${attempt} poll(s): reason=${REASON} exit_code=${EXIT}."
+                break
+                ;;
+              *)
+                cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+                echo "::error::Redeploy FAILED: web-platform ${TARGET_TAG} terminal reason='${REASON}' exit_code=${EXIT}. The applied seccomp profile was NOT loaded."
+                cat /tmp/redeploy-terminal.json >&2 2>/dev/null || true
+                exit 1
+                ;;
+            esac
           done
 
-          # --- Fail-loud adjudication ---
-          if [[ -z "$FINAL_EXIT" ]]; then
-            echo "::error::Redeploy did not reach a terminal state within the poll window — profile load UNVERIFIED. Check /hooks/deploy-status + the ci-deploy.sh journald log."
-            exit 1
+          # --- Adjudicate from the FROZEN terminal frame ---
+          if [[ -z "$ACCEPTED" ]]; then
+            # Poll window exhausted with no accepted swap terminal (e.g. a concurrent
+            # release starved our tag via lock_contention for the whole window). Do
+            # ONE final STATE check: the invariant is about host state NOW, not which
+            # deploy caused it. If a concurrent deploy loaded the SAME committed
+            # profile, the invariant holds and we PASS; else fail loud UNVERIFIED.
+            echo "Poll window exhausted without an accepted web-platform ${TARGET_TAG} terminal — final STATE check (the committed profile may already be loaded by a concurrent deploy)."
+            HTTP=$(get_status)
+            if [[ "$HTTP" != "200" ]]; then
+              echo "::error::Poll exhausted AND final /hooks/deploy-status read failed (HTTP $HTTP) — profile load UNVERIFIED."
+              exit 1
+            fi
+            cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+            read_frame /tmp/redeploy-terminal.json
+            if invariant_holds; then
+              echo "Final STATE check PASSES: host_present=true, host_sha256==committed, loaded_matches_host=true — the committed profile is loaded (a concurrent deploy satisfied the invariant). Profile is live."
+              exit 0
+            fi
+            echo "::error::Redeploy did not reach a terminal within the poll window AND the committed profile is NOT loaded now — profile load UNVERIFIED."
+            diagnose_and_fail
           fi
-          if [[ "$FINAL_EXIT" != "0" ]]; then
-            echo "::error::Redeploy failed (exit_code=${FINAL_EXIT}). The applied seccomp profile was NOT loaded. See /hooks/deploy-status .reason."
-            cat /tmp/redeploy-status.json >&2 2>/dev/null || true
-            exit 1
-          fi
-          if [[ "$FINAL_LOADED" != "$COMMITTED_SHA" ]]; then
-            echo "::error::LOADED != COMMITTED after redeploy: loaded='${FINAL_LOADED}' committed='${COMMITTED_SHA}'. The running container is NOT enforcing the committed seccomp profile (the exact 'applied ≠ loaded' failure #5875 item 4 exists to catch)."
-            exit 1
+
+          # Accepted an ok/ok_peer_fanout_degraded terminal — assert the STATE
+          # invariant from the FROZEN frame (get_status overwrites redeploy-status.json).
+          read_frame /tmp/redeploy-terminal.json
+          FINAL_VERDICT=$(jq -r '.sandbox_canary.verdict // "unknown"' /tmp/redeploy-terminal.json 2>/dev/null || echo unknown)
+          if ! invariant_holds; then
+            diagnose_and_fail
           fi
           # Per ADR-079 the faithful canary is still NON-BLOCKING dark-launch: pass /
           # canary_infra_error / fixture_uncaptured are all acceptable here; only a
@@ -610,7 +715,7 @@ jobs:
             echo "::error::Faithful sandbox canary verdict=sandbox_broken after redeploy — the committed seccomp profile EPERMs the real SDK bwrap argv. Do NOT leave this profile live."
             exit 1
           fi
-          echo "Loaded == committed (${COMMITTED_SHA}); canary verdict=${FINAL_VERDICT} (not sandbox_broken). Profile is live."
+          echo "STATE invariant holds: host_sha256==committed (${COMMITTED_SHA}) AND loaded_matches_host=true; canary verdict=${FINAL_VERDICT} (not sandbox_broken). Profile is live."
 
       - name: Check whether #4804 is still open (scopes the one-time self-heal verification)
         id: check_4804
