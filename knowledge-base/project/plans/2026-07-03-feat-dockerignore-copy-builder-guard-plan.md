@@ -8,6 +8,45 @@ brand_survival_threshold: none
 
 # Generic pre-merge guard: `COPY --from=builder` of a `.dockerignore`-stripped context path
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-03
+**Agents:** code-simplicity-reviewer, architecture-strategist (2 targeted; full 40-agent fan-out
+skipped per budget discipline for a test-only change).
+
+### Key improvements from the deepen pass
+
+1. **Simpler evaluator (simplicity review).** Dropped the general `*`/`**`/last-match-wins glob
+   engine. All in-scope `.dockerignore` excludes are literal directory prefixes (`infra/`,
+   `scripts/`) and all re-includes are exact `!<path>` — so the guard reuses the existing
+   `dockerignoreInfraReincludes()` Set pattern (test lines 306-317), generalized beyond `infra/`:
+   *excluded-dir-prefix set + exact-`!`-reinclude set + ancestor-prefix check*. Fail-loud-safe: a
+   future glob re-include (`!infra/*.json`) would produce a **loud spurious violation on the
+   clean-repo test**, prompting the author to extend — never a silent miss.
+2. **Inline, no helper module (simplicity review).** The only non-trivial pure logic left is the
+   multi-line `COPY` parser; `cloud-init-user-data-size.test.ts` already keeps such logic inline.
+   Dropped the `plugins/soleur/test/lib/dockerfile-copy-parity.ts` module — functions live at the
+   top of the new test file. Files-to-Create shrinks to one.
+3. **Trimmed tests (simplicity review).** Cut the tautological "old host-scripts regex misses a
+   single-line COPY" assertion (it tests another file's deliberate limitation). Trimmed the
+   per-src classification block to non-vacuity + the single genuine false-positive case: `.next`
+   (the only build-generated src that actually falls under an exclusion, `.next/`).
+4. **Wholesale close — builder `RUN` scripts too (architecture review).** The same release-break
+   class fires when a builder-stage `RUN bash scripts/<x>.sh` consumes a `.dockerignore`-stripped
+   context script (historical: `RUN bash scripts/assert-dev-signin-eliminated.sh` at Dockerfile:36,
+   re-included at `.dockerignore:55-61` — the comment there records the `exit 127` break). The guard
+   is extended to also scan builder-stage `RUN` shell-script invocations and apply the identical
+   check, so it closes the COPY-bake **and** the RUN-consume subsets, not just COPY.
+
+### New considerations discovered
+
+- Of the three build-generated srcs, only `.next` matches any `.dockerignore` exclusion; `dist/server`
+  and `next.config.mjs` match no pattern at all, so they cannot be flagged in either design — the
+  git-tracked discriminator's live false-positive surface today is a single path (`.next`). Keep the
+  discriminator (principled, one bounded `git ls-files` call) but do not over-frame its necessity.
+- The `next.config.mjs` trap is handled correctly: the guard resolves the literal COPY src token
+  (`next.config.mjs`, untracked → skip), never the sibling `next.config.ts` (tracked).
+
 ## Overview
 
 `apps/web-platform/Dockerfile` is a 3-stage build. The `builder` stage runs `COPY . .` (line 10),
@@ -33,12 +72,19 @@ asserts re-inclusion — but only for the **multi-line** host-scripts `COPY` blo
 sandbox-canary `COPY` (line 155), nor any future baked path under a different excluded dir.
 
 **Deliverable:** a generalized, self-maintaining guard that parses **every**
-`COPY --from=<stage> <src...> <dst>` in the Dockerfile, resolves each `<src>` to its build-context
+`COPY --from=<stage> <src...> <dst>` in the Dockerfile **plus every builder-stage `RUN` shell-script
+invocation** (e.g. `RUN bash scripts/<x>.sh`), resolves each referenced `<src>` to its build-context
 path, and — for any `<src>` that is context-sourced (git-tracked) **and** stripped by a
-`.dockerignore` exclusion with no `!`-re-include — fails `bun test`. Scope is test-only plus a small
-helper module; no Dockerfile/.dockerignore behavior change is required (the current repo is already
-clean — sandbox-canary and host-scripts are all re-included), unless the generalized guard surfaces a
-real currently-uncovered gap.
+`.dockerignore` exclusion with no `!`-re-include — fails `bun test`. Scope is test-only (one new test
+file, functions inline); no Dockerfile/.dockerignore behavior change is required (the current repo is
+already clean — sandbox-canary, host-scripts, and `assert-dev-signin-eliminated.sh` are all
+re-included), unless the generalized guard surfaces a real currently-uncovered gap.
+
+The `RUN`-script leg was added at deepen-plan time (architecture review): a builder `RUN bash
+scripts/<x>.sh` that `.dockerignore` strips fails with `exit 127` at build — the **same** red-`main`
++ frozen-prod release-break signature as the runner `COPY` case. `apps/web-platform/.dockerignore`
+lines 55-61 record exactly this history for `scripts/assert-dev-signin-eliminated.sh`. Covering both
+legs is what makes the guard close the class *wholesale* rather than the COPY subset only.
 
 ## Problem Statement / Motivation
 
@@ -54,29 +100,44 @@ multi-line COPY). Generalizing it converts a whack-a-mole into a closed class.
 
 ## Proposed Solution
 
-Add a **pure helper module** + a **dedicated bun test** that together model the release-build
+Add a **dedicated bun test** (pure functions inline, no separate module) that models the release-build
 invariant at source level:
 
 1. **Parse** all `COPY --from=<stage> <src...> <dst>` statements (single-line and `\`-continued
-   multi-line) from `apps/web-platform/Dockerfile`.
-2. For each statement, take the **last token as `<dst>`** and every preceding `/app/`-prefixed token
-   as a `<src>`; strip the `/app/` prefix to get a build-context-relative path.
-3. **Classify** each `<src>` via the build context's git-tracked set:
+   multi-line) from `apps/web-platform/Dockerfile`; last token = `<dst>`, every preceding
+   `/app/`-prefixed token = a `<src>` (stripped of `/app/`).
+2. **Also parse builder-stage `RUN` shell-script invocations** — for `RUN` lines between
+   `FROM … AS builder` and the next `FROM`, extract shell-script path args matching
+   `(?:bash|sh|source|\.)\s+(\S+\.sh)\b` with a relative path. These are context srcs the builder
+   needs at build time (strip → `exit 127`).
+3. **Classify** each referenced `<src>` via the build context's git-tracked set:
    - **context-sourced** (git-tracks the path, or any file under it) → it entered the builder via
      `COPY . .` and therefore **must survive `.dockerignore`**.
    - **build-generated** (not git-tracked — e.g. `.next`, `dist/server`, `next.config.mjs`) → it is
      produced by a `RUN` step inside the builder, independent of `.dockerignore` → **skip** (this is
      the false-positive guard that makes the check safe).
-4. For each context-sourced `<src>`, **evaluate `.dockerignore`** (order-sensitive, negation-aware,
-   last-match-wins) to decide whether the builder's `COPY . .` kept it. If it evaluates to
-   **excluded**, emit a violation naming the `<src>`, the Dockerfile line, and the missing
-   `!`-re-include the author must add.
-5. Assert the real repo produces **zero violations**; assert a **synthetic fixture** with an
-   infra-baked COPY lacking a re-include produces a violation (proves the guard bites).
+4. For each context-sourced `<src>`, decide whether `.dockerignore` strips it via the **simplified
+   evaluator** (deepen-plan simplicity review): an *excluded-dir-prefix set* (non-`!`, non-`#`,
+   non-glob patterns, trailing `/` stripped) + an *exact-`!`-reinclude set* (`!<path>` lines, no
+   globs). A `<src>` is **stripped** iff some excluded prefix is an ancestor
+   (`src === pref || src.startsWith(pref + "/")`) **and** `<src>` is not in the reinclude set. On a
+   stripped src, emit a violation naming the `<src>`, its Dockerfile line, and the exact `!<path>`
+   re-include to add.
+5. Assert the real repo produces **zero violations**; assert **synthetic fixtures** (one COPY form,
+   one `RUN`-script form) with no re-include each produce a violation (proves the guard bites).
 
-The git-tracked discriminator (step 3) is the key design choice: it is **self-maintaining** (no
-hardcoded allow-list of build outputs to drift) and **non-flaky** (unlike on-disk existence, which a
-stray local `npm run build` would corrupt by materializing `.next`/`dist`).
+Two design choices are load-bearing:
+
+- **Git-tracked discriminator (step 3):** self-maintaining (no hardcoded build-output allow-list to
+  drift) and non-flaky (unlike on-disk existence, which a stray local `npm run build` corrupts by
+  materializing `.next`/`dist`/`next.config.mjs`). *Today its only live false-positive surface is
+  `.next`* — `dist/server` and `next.config.mjs` match no `.dockerignore` pattern — but it remains the
+  correct general classifier.
+- **Simplified evaluator (step 4), not a glob engine:** every real in-scope exclude is a literal dir
+  prefix and every real re-include is an exact `!<path>`, so a `*`/`**`/last-match-wins engine is
+  unexercised generality (YAGNI). The Set+prefix form is **fail-loud-safe**: a future glob re-include
+  it cannot model surfaces as a *spurious violation on the clean-repo test* (safe direction), which
+  the author fixes by extending — it never silently passes a real strip.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -90,26 +151,29 @@ Verified against `origin`-worktree `HEAD` at plan time:
 | `.next`, `dist/server`, `next.config.mjs` are build-generated | `git ls-files` returns **nothing** for each (only `next.config.ts` tracked) | Classified build-generated → skipped → no false positive. |
 | Existing guard covers only host-scripts multi-line COPY | `dockerfileBakedSet()` regex anchored to `/opt/soleur/host-scripts/` (test lines 277-318) | Generalized guard subsumes it; keep old test as-is (parity trio). |
 | Repo is currently clean (no uncovered gap) | sandbox-canary re-included at `.dockerignore:19`,`:67`; host-scripts `:29-53` | No Dockerfile/.dockerignore change needed; guard ships green. |
+| Builder `RUN` also consumes a context script | `Dockerfile:36` `RUN bash scripts/assert-dev-signin-eliminated.sh`, re-included `.dockerignore:55-61` (comment records the `exit 127` break) | Same release-break class → guard covers builder `RUN .sh` args; currently clean. |
 
 ## Technical Considerations
 
 ### Files to Create
 
-- **`plugins/soleur/test/lib/dockerfile-copy-parity.ts`** — pure helper module (sibling to the
-  existing `plugins/soleur/test/lib/discoverability-test-parser.ts`). Exports:
-  - `parseBuilderCopySources(dockerfileText: string): { src: string; line: number }[]`
-    — returns every `/app/`-prefixed `<src>` (context-relative, `/app/` stripped) from all
-    `COPY --from=<stage> …` statements, single-line and multi-line; tolerates optional
-    `--chown=`/`--chmod=` flags; last token per statement is treated as `<dst>` and excluded.
-  - `isIgnoredByDockerignore(contextPath: string, dockerignoreText: string): boolean`
-    — replays `.dockerignore` patterns in file order (skip blanks/`#`), negation-aware (`!` prefix),
-    trailing-slash-normalized, dir-prefix + `*`/`**` glob matching, **last-match-wins**; returns
-    `true` iff `contextPath` is net-excluded from the build context.
-  - `findBuilderCopyReincludeViolations(args: { dockerfileText; dockerignoreText; trackedContextPaths: Set<string> }): { src: string; line: number }[]`
-    — the composed guard: for each parsed `<src>`, skip if not context-sourced (not in / not a prefix
-    of `trackedContextPaths`), else include if `isIgnoredByDockerignore` returns `true`.
-- **`plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts`** — the `bun:test` suite
-  (fixture RED tests + real-repo zero-violation assertion + classification assertions).
+- **`plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts`** — the `bun:test` suite with
+  the pure functions **inline at the top of the file** (the convention `cloud-init-user-data-size.test.ts`
+  already uses; no separate `lib/` module — deepen-plan simplicity review). Functions:
+  - `parseBuilderCopySources(dockerfileText): { src: string; line: number }[]`
+    — every `/app/`-prefixed `<src>` (context-relative, `/app/` stripped) from all
+    `COPY --from=<stage> …` statements, single-line and `\`-continued multi-line; last token per
+    statement = `<dst>` (excluded); tolerates optional `--chown=`/`--chmod=` flags.
+  - `parseBuilderRunScriptSources(dockerfileText): { src: string; line: number }[]`
+    — for `RUN` lines inside the `builder` stage (between `FROM … AS builder` and the next `FROM`),
+    the relative `.sh` path args matching `(?:bash|sh|source|\.)\s+(\S+\.sh)\b`.
+  - `dockerignoreExclusionModel(dockerignoreText): { excludedDirPrefixes: string[]; reincludes: Set<string> }`
+    — excluded-dir-prefix set (non-`!`/non-`#`/non-glob patterns, trailing `/` stripped) + exact
+    `!<path>` reinclude set. (Simplified evaluator — no glob engine.)
+  - `findReincludeViolations({ dockerfileText, dockerignoreText, trackedContextPaths }): { src; line }[]`
+    — the composed guard over `parseBuilderCopySources ∪ parseBuilderRunScriptSources`: skip srcs not
+    context-sourced (not in, and not an ancestor of any path in, `trackedContextPaths`); flag a
+    context-sourced src iff an excluded prefix is its ancestor **and** it is not in `reincludes`.
 
 ### Files to Edit
 
@@ -121,25 +185,30 @@ Verified against `origin`-worktree `HEAD` at plan time:
     that its host-scripts re-include test is now **subsumed** by the generalized guard and retained
     for the AC2 parity trio. Not load-bearing; skip if it risks the existing suite.
 
-### `.dockerignore` evaluator fidelity (scope boundary)
+### Evaluator: simplified Set+prefix form, not a glob engine (scope boundary)
 
-Full Docker `patternmatcher` glob fidelity (`filepath.Match` non-`/`-crossing `*`, ancestor-dir
-matching for every pattern) is **out of scope**. The evaluator targets the pattern **classes actually
-present** in `apps/web-platform/.dockerignore`: literal directory prefixes (`infra/`, `scripts/`,
-`supabase/`), exact-path negations (`!infra/<file>`), and `*`/`**` globs (`*.md`,
-`_plugin-vendored/**`). It is validated by a fixture suite covering each class. Because every real
-`COPY --from=builder` `<src>` is either an exact file under `infra/`/`scripts/` or a top-level dir
-(`public`), evaluator correctness on exotic patterns (`*.md` cross-directory semantics) is **not
-load-bearing** for the real assertions — only for defense. This is stated explicitly so a future
-editor does not mistake the evaluator for a general Docker-ignore engine.
+Every in-scope `.dockerignore` exclude that a real baked/consumed `<src>` hits is a **literal
+directory prefix** (`infra/`, `scripts/`) and every re-include is an **exact** `!<path>` — verified
+against all 7 COPY srcs + the one builder `RUN` script (deepen-plan architecture review). A full
+Docker `patternmatcher` port (`*`/`**`/last-match-wins/ancestor globbing) is therefore unexercised
+generality and is **out of scope** (YAGNI). The Set+prefix model is **fail-loud-safe**: if a future
+`.dockerignore` adds a glob re-include the simple model cannot represent (e.g. `!infra/*.json`), the
+clean-repo zero-violation test flags a *spurious* violation (safe direction) — the author then
+extends the model. It never silently passes a real strip. Do **not** mistake this for a general
+Docker-ignore engine.
 
-### Scope: `--from=<stage>` only
+### Scope: builder-stage `COPY --from=<stage>` and `RUN` shell-scripts
 
-The guard processes only `COPY --from=<stage>` statements (the two-stage bake-then-extract class).
-Direct context `COPY <src> <dst>` (e.g. `COPY _plugin-vendored /opt/soleur/plugin` at Dockerfile:165)
-is **out of scope**: a direct-context COPY that `.dockerignore` fully strips fails immediately and
-visibly at the same build step, and `_plugin-vendored` is CI-vendored (not git-tracked) with its own
-allow-list. The named problem class is specifically the builder-staged pattern.
+In scope: (a) `COPY --from=<stage>` statements (the bake-then-extract class), and (b) builder-stage
+`RUN` shell-script invocations (`bash|sh|source|.` + a `.sh` path). Both fail the release with the
+same signature when `.dockerignore` strips a needed context file.
+
+Out of scope: direct context `COPY <src> <dst>` (e.g. `COPY _plugin-vendored /opt/soleur/plugin` at
+Dockerfile:165) — a direct-context COPY fully stripped fails immediately/visibly at the same step, and
+`_plugin-vendored` is CI-vendored (not git-tracked) with its own allow-list. Also out of scope:
+builder `RUN` steps that consume non-`.sh` context files (`RUN node scripts/foo.mjs`) — none exist
+today; the `.sh` regex is intentionally narrow to avoid false-matching `RUN npm run build` /
+`RUN ./node_modules/.bin/esbuild next.config.ts`. Widen the regex if such a `RUN` is later added.
 
 ## User-Brand Impact
 
@@ -148,7 +217,7 @@ allow-list. The named problem class is specifically the builder-staged pattern.
   web-platform release and a frozen prod image until hotfixed. A *false positive* (guard flags a
   build-generated path) would red a PR's CI spuriously and block unrelated merges.
 - **If this leaks, the user's data/workflow/money is exposed via:** N/A — the change touches only
-  test code and a test-helper module; no runtime surface, no data path, no secret.
+  test code (one new bun test file); no runtime surface, no data path, no secret.
 - **Brand-survival threshold:** `none` — test-only tooling change; touches no sensitive path
   (per preflight Check 6 sensitive-path regex: schemas, migrations, auth, API routes, infra `.tf`).
 
@@ -187,61 +256,60 @@ discoverability_test:
 ### Phase 0 — Preconditions (verify, no code)
 
 - [ ] Confirm build context root is `apps/web-platform` (`web-platform-release.yml:50`).
-- [ ] Re-confirm the git-tracked classification for the 7 `<src>` (all verified at plan time):
-      context-sourced = `public`, `scripts/sandbox-canary.mjs`, `infra/sandbox-canary-argv.json`,
-      25 host-scripts; build-generated = `.next`, `dist/server`, `next.config.mjs`.
+- [ ] Re-confirm the git-tracked classification (all verified at plan time): context-sourced =
+      `public`, `scripts/sandbox-canary.mjs`, `infra/sandbox-canary-argv.json`, 25 host-scripts,
+      `scripts/assert-dev-signin-eliminated.sh` (builder `RUN` arg); build-generated = `.next`,
+      `dist/server`, `next.config.mjs`.
 - [ ] Confirm the suite is discovered by `bun test plugins/soleur/` (default `*.test.ts` glob; root
       `bunfig.toml` `pathIgnorePatterns` excludes only `.worktrees/**` and `apps/web-platform/**`,
       not `plugins/**`).
 
 ### Phase 1 — RED (failing test first, per `cq-write-failing-tests-before`)
 
-- [ ] Create `plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` importing the
-      (not-yet-implemented) helper API from `./lib/dockerfile-copy-parity`.
-- [ ] **Gap-demonstration fixture test** (synthesized inline strings, `cq-test-fixtures-synthesized-only`):
-      a synthetic Dockerfile containing `COPY --from=builder /app/infra/new-baked.sh ./infra/new-baked.sh`
-      + a synthetic `.dockerignore` containing `infra/` but **no** `!infra/new-baked.sh`
-      + a `trackedContextPaths` set containing `infra/new-baked.sh`. Assert
-      `findBuilderCopyReincludeViolations(...)` returns a violation for `infra/new-baked.sh`.
-- [ ] **Old-regex-misses-it assertion** (documents why generalization is needed): assert that the
-      existing host-scripts-scoped regex form (`/COPY --from=builder\s*\\\n[\s\S]*?\/opt\/soleur\/host-scripts\//`)
-      does **not** match the synthetic single-line infra COPY — i.e. the partial guard would let it through.
-- [ ] Run `bun test plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` → **fails**
-      (helper unimplemented). Commit RED.
+- [ ] Create `plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` with the four functions
+      **inline** at the top, each a **stub** (e.g. `findReincludeViolations` returns `[]`).
+- [ ] **Gap-demonstration fixture tests** (synthesized inline strings, `cq-test-fixtures-synthesized-only`):
+      (a) COPY form — a synthetic Dockerfile with `COPY --from=builder /app/infra/new-baked.sh ./…`
+      + `.dockerignore` with `infra/` but **no** `!infra/new-baked.sh` + `trackedContextPaths` ⊇
+      `{infra/new-baked.sh}` → assert `findReincludeViolations(...)` is non-empty;
+      (b) RUN form — a synthetic builder stage with `RUN bash scripts/new-run.sh` + `.dockerignore`
+      with `scripts/` and no re-include + tracked `scripts/new-run.sh` → assert a violation.
+- [ ] Run the suite → the two fixture tests **fail** (stub returns `[]`). Commit RED.
 
-### Phase 2 — GREEN (implement the helper)
+### Phase 2 — GREEN (implement the functions inline)
 
-- [ ] Create `plugins/soleur/test/lib/dockerfile-copy-parity.ts` with the three pure exports above.
-      - Parser: join `\`-continuation lines into one logical statement; regex-locate
-        `COPY\s+(?:--\w+=\S+\s+)*--from=\S+`; tokenize the remainder; last token = `<dst>`; keep
-        `/app/`-prefixed preceding tokens as srcs; record the source line number of the `COPY` keyword.
-      - Evaluator: iterate patterns; track `ignored` (default `false`); for each non-blank/non-`#`
-        pattern, compute negation + strip leading `!` + strip trailing `/`; translate to a full-match
-        regex (`**`→`.*`, `*`→`[^/]*`, `?`→`[^/]`, escape metachars); a pattern **matches** `path` if
-        the regex matches `path` OR matches any ancestor prefix of `path` (dir-prefix semantics);
-        on match set `ignored = !negated`; return final `ignored`.
-      - Composed guard: skip srcs not in the tracked set (membership = exact match OR any tracked path
-        `startsWith(src + "/")`); for the rest, flag when `isIgnoredByDockerignore` is `true`.
-- [ ] Build the real `trackedContextPaths` in the test via
+- [ ] `parseBuilderCopySources`: join `\`-continuation lines into one logical statement; regex-locate
+      `COPY\s+(?:--\w+=\S+\s+)*--from=\S+`; tokenize the remainder; last token = `<dst>`; keep
+      `/app/`-prefixed preceding tokens as srcs (strip `/app/`); record the `COPY` keyword's line.
+- [ ] `parseBuilderRunScriptSources`: slice the Dockerfile between `FROM … AS builder` and the next
+      `FROM`; for each `RUN` line, extract `(?:bash|sh|source|\.)\s+(\S+\.sh)\b` matches as srcs.
+- [ ] `dockerignoreExclusionModel`: iterate lines (skip blank/`#`); a non-`!` pattern with no glob
+      metachar (`*?[`) and (trailing `/` **or** bare path) → `excludedDirPrefixes` (trailing `/`
+      stripped); a `!<path>` with no glob → `reincludes` Set.
+- [ ] `findReincludeViolations`: union the two parsers; skip srcs not context-sourced (not in, and no
+      tracked path `startsWith(src + "/")` — handles dir srcs like `public`); flag a context-sourced
+      src iff some `excludedDirPrefixes` entry `p` satisfies `src === p || src.startsWith(p + "/")`
+      **and** `src ∉ reincludes`.
+- [ ] Build the real `trackedContextPaths` via
       `execSync("git ls-files apps/web-platform", { cwd: REPO_ROOT })` (bounded output;
-      `hr-never-run-commands-with-unbounded-output` satisfied) → split lines → strip the
-      `apps/web-platform/` prefix → `Set`.
+      `hr-never-run-commands-with-unbounded-output` satisfied) → split → strip `apps/web-platform/`
+      prefix → `Set`.
 - [ ] **Real-repo zero-violation test:** read the real Dockerfile + `.dockerignore`, run the guard,
       assert `violations` is `[]`.
-- [ ] **Classification tests:** assert `.next`, `dist/server`, `next.config.mjs` are skipped
-      (build-generated) and `public`, `scripts/sandbox-canary.mjs`, `infra/sandbox-canary-argv.json`,
-      a sampled host-script are treated as context-sourced-and-satisfied. Assert the parser finds
-      all 7 `COPY --from=builder` statements (non-vacuity: `parseBuilderCopySources(...).length > 0`
-      and includes at least one `/app/infra/…` and one `/app/public`).
-- [ ] **Evaluator unit tests:** dir-prefix exclusion (`infra/foo` under `infra/` → ignored), exact
-      negation re-include (`!infra/foo` → not ignored), later-negation-wins ordering, un-excluded
-      top-level path (`public` → not ignored).
+- [ ] **Non-vacuity + false-positive tests (trimmed per simplicity review):**
+      (a) `parseBuilderCopySources(real)` returns ≥1 `/app/infra/…` and ≥1 `/app/public` (guards a
+      vacuous green); `parseBuilderRunScriptSources(real)` returns `scripts/assert-dev-signin-eliminated.sh`;
+      (b) the one genuine false-positive case — `.next` (git-untracked, under the `.next/` exclusion)
+      is **skipped** and never flagged.
+- [ ] **Evaluator unit tests (minimal):** dir-prefix exclusion (`infra/foo` under `infra/` with no
+      re-include → violation), exact-negation re-include (`!infra/foo` → no violation), un-excluded
+      top-level (`public` → no violation).
 - [ ] Run the suite → **passes**. Commit GREEN.
 
 ### Phase 3 — Regression + docs
 
 - [ ] Run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` → still green (existing
-      host-scripts re-include assertion unchanged).
+      host-scripts re-include assertion unchanged; now subsumed by the generalized guard).
 - [ ] Optionally add the one-line "subsumed by generalized guard" comment in
       `cloud-init-user-data-size.test.ts` (skip if it risks the suite).
 - [ ] Run the full plugin bun shard: `bun test plugins/soleur/` → green.
@@ -255,17 +323,26 @@ discoverability_test:
 | On-disk existence to discriminate build-generated vs context-sourced | Flaky: a local `npm run build` materializes `.next`/`dist`/`next.config.mjs`, turning them into false positives. Git-tracked is deterministic. |
 | Hardcode a build-generated allow-list (`.next`, `dist`, `next.config.mjs`) | Drifts the moment a new build output is baked; the git-tracked check is self-maintaining. |
 | Run the actual `docker build` in CI to catch it directly | Prohibitively slow/heavy for a per-PR gate; the whole point is a cheap source-level assertion (`hr-observability-as-plan-quality-gate` — the pre-merge catch must not require the expensive real build). |
-| Full Docker `patternmatcher` port | Over-engineered for the pattern classes present; YAGNI. A focused evaluator + fixture suite covers the real srcs. |
+| Full Docker `patternmatcher` port (glob `*`/`**`, last-match-wins) | Over-engineered — every real in-scope exclude is a literal dir prefix and every re-include an exact `!<path>`. The Set+prefix model covers all real srcs and is fail-loud-safe. (deepen-plan simplicity review) |
+| Separate `lib/` helper module | Ceremony once the evaluator collapses to Set+prefix; the only non-trivial pure logic is the parser, which the sibling `cloud-init-user-data-size.test.ts` keeps inline. (deepen-plan simplicity review) |
+| Cover `COPY --from` only (not builder `RUN` scripts) | Leaves the same release-break class half-closed — a `RUN bash scripts/<x>.sh` strip is `exit 127` with the identical signature (`.dockerignore:55-61` history). Folded in. (deepen-plan architecture review) |
 
 ## Dependencies & Risks
 
-- **Risk: `.dockerignore` evaluator infidelity.** Mitigated by scoping to the pattern classes present
-  + a fixture suite per class + the real-repo zero-violation assertion (any evaluator bug that
-  mis-includes a real src surfaces as a spurious violation on the clean repo).
-- **Risk: parser misses a `--chown`/`--chmod` flag form.** None present today; parser tolerates
-  `--\w+=\S+` flags between `COPY` and `--from`. Covered by a fixture.
+- **Risk: simplified evaluator can't model a future glob re-include.** Fail-loud-safe by construction:
+  such a pattern surfaces as a *spurious* violation on the clean-repo zero-violation test (safe
+  direction), prompting the author to extend the model — never a silent miss. Mitigated further by
+  the minimal evaluator unit tests.
+- **Risk: parser misses a `--chown`/`--chmod` flag form or a `RUN`-script shape.** No flag forms
+  present today; parser tolerates `--\w+=\S+` flags between `COPY` and `--from`. The `RUN` regex is
+  intentionally narrow (`.sh` only) to avoid false-matching `RUN npm run build` /
+  `RUN ./node_modules/.bin/esbuild next.config.ts`; both shapes covered by fixtures.
 - **Risk: git unavailable in the test environment.** CI runs in a full `actions/checkout` git repo;
   `git ls-files` is standard and used by sibling tests. Bounded output.
+- **Precedent (deepen-plan Phase 4.4):** the existing `dockerignoreInfraReincludes()` +
+  `dockerfileBakedSet()` in `cloud-init-user-data-size.test.ts:277-318` is the direct precedent this
+  guard generalizes (`infra/`-only → any excluded dir; multi-line COPY → all COPY + builder RUN).
+  Not novel; the diff is a widened scope + the git-tracked discriminator.
 - **Dependency: none** — no new packages (`bun:test`, `node:fs`, `node:child_process`, `node:path`
   only). Satisfies the plugin "no new dependencies" norm.
 
@@ -273,7 +350,7 @@ discoverability_test:
 
 None. Queried `gh issue list --label code-review --state open` (61 open) and searched bodies for
 `cloud-init-user-data-size`, `dockerfile-copy`, `dockerignore`, `Dockerfile`, `.dockerignore`,
-`plugins/soleur/test/lib` — zero matches. The new test file + helper are greenfield.
+`plugins/soleur/test/lib` — zero matches. The new test file is greenfield.
 
 ## Domain Review
 
@@ -297,24 +374,19 @@ existing ADRs + C4 would not be misled by this change. Skip per Phase 2.10.
 ### Pre-merge (PR)
 
 - [ ] `bun test plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` exits 0.
-- [ ] The suite includes a test that runs `findBuilderCopyReincludeViolations` against a **synthetic**
-      Dockerfile+`.dockerignore` with an `infra/`-baked COPY lacking a re-include and asserts the
-      returned violation list is **non-empty** (guard bites).
-- [ ] The suite includes a test that runs the guard against the **real**
-      `apps/web-platform/Dockerfile` + `.dockerignore` + the live `git ls-files apps/web-platform`
-      tracked set and asserts **zero** violations.
-- [ ] `parseBuilderCopySources` against the real Dockerfile returns srcs for all 7
-      `COPY --from=builder` statements, including at least one `/app/infra/…` and one `/app/public`
-      (non-vacuity).
-- [ ] Classification is asserted: `.next`, `dist/server`, `next.config.mjs` are **skipped**
-      (build-generated / not git-tracked); `scripts/sandbox-canary.mjs` and
-      `infra/sandbox-canary-argv.json` are treated as **context-sourced-and-satisfied**.
-- [ ] The suite asserts the pre-existing host-scripts-scoped regex does **not** match a single-line
-      infra COPY (documents the closed gap).
+- [ ] The suite runs `findReincludeViolations` against **two synthetic fixtures** — (a) an `infra/`-baked
+      `COPY --from=builder` lacking a re-include, (b) a builder `RUN bash scripts/<x>.sh` lacking a
+      re-include — and asserts each returns a **non-empty** violation list (guard bites on both legs).
+- [ ] The suite runs the guard against the **real** `apps/web-platform/Dockerfile` + `.dockerignore` +
+      the live `git ls-files apps/web-platform` tracked set and asserts **zero** violations.
+- [ ] `parseBuilderCopySources(real)` returns ≥1 `/app/infra/…` and ≥1 `/app/public` src (non-vacuity);
+      `parseBuilderRunScriptSources(real)` returns `scripts/assert-dev-signin-eliminated.sh`.
+- [ ] The one genuine false-positive case is asserted: `.next` (git-untracked, under the `.next/`
+      exclusion) is **skipped** and never flagged.
 - [ ] `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` still exits 0 (existing
-      host-scripts re-include assertion unchanged).
+      host-scripts re-include assertion unchanged; now subsumed by the generalized guard).
 - [ ] `bun test plugins/soleur/` (full plugin shard) is green.
-- [ ] The RED fixture-test commit precedes the GREEN helper commit in the branch history
+- [ ] The RED fixture-test commit precedes the GREEN implementation commit in branch history
       (`cq-write-failing-tests-before`).
 
 ### Post-merge (operator)
@@ -325,25 +397,31 @@ existing ADRs + C4 would not be misled by this change. Skip per Phase 2.10.
 
 ### RED-phase targets
 
-- Given a Dockerfile baking `/app/infra/new-baked.sh` and a `.dockerignore` with `infra/` but no
-  `!infra/new-baked.sh` (and `infra/new-baked.sh` in the tracked set), when the guard runs, then it
-  reports a violation naming `infra/new-baked.sh`. *(Fails before the helper exists.)*
+- Given a Dockerfile baking `/app/infra/new-baked.sh` via `COPY --from=builder` and a `.dockerignore`
+  with `infra/` but no `!infra/new-baked.sh` (and `infra/new-baked.sh` tracked), when the guard runs,
+  then it reports a violation naming `infra/new-baked.sh`. *(Fails against the stub.)*
+- Given a builder stage with `RUN bash scripts/new-run.sh`, `scripts/` excluded with no re-include,
+  and `scripts/new-run.sh` tracked, when the guard runs, then it reports a violation. *(Fails against
+  the stub.)*
 
 ### Regression / real-repo
 
 - Given the real `apps/web-platform/Dockerfile` + `.dockerignore` + live tracked set, when the guard
-  runs, then it returns zero violations (sandbox-canary + host-scripts + `public` all satisfied).
-- Given `.next` / `dist/server` / `next.config.mjs` srcs (not git-tracked), when the guard runs, then
-  they are skipped and never flagged (no false positive).
+  runs, then it returns zero violations (sandbox-canary + host-scripts + `public` +
+  `assert-dev-signin-eliminated.sh` all satisfied).
+- Given `.next` (not git-tracked, under `.next/`), when the guard runs, then it is skipped and never
+  flagged (no false positive).
 
-### Evaluator edge cases
+### Parser / evaluator edge cases
 
-- Given `.dockerignore` = `["infra/", "!infra/keep.txt"]`, when evaluating `infra/keep.txt`, then
-  not-ignored; when evaluating `infra/drop.txt`, then ignored.
+- Given `.dockerignore` model `{ excludedDirPrefixes: ["infra"], reincludes: {"infra/keep.txt"} }`,
+  when checking `infra/keep.txt` → no violation; `infra/drop.txt` → violation.
 - Given a `\`-continued multi-line `COPY --from=builder`, when parsed, then every `/app/…` src is
   returned and the trailing `/opt/…/` dest is excluded.
 - Given a `COPY --from=builder --chown=1001:1001 /app/foo ./foo`, when parsed, then `foo` is returned
   (flag tolerated) and `./foo` (dest) is excluded.
+- Given `RUN npm run build` and `RUN ./node_modules/.bin/esbuild next.config.ts` in the builder stage,
+  when `parseBuilderRunScriptSources` runs, then neither is extracted (no `.sh` arg) — no false match.
 
 ## References & Research
 
@@ -353,8 +431,10 @@ existing ADRs + C4 would not be misled by this change. Skip per Phase 2.10.
 - `apps/web-platform/.dockerignore:4-67` — `infra/`/`scripts/` exclusions + sandbox-canary +
   host-scripts re-includes.
 - `plugins/soleur/test/cloud-init-user-data-size.test.ts:271-319` — existing partial guard
-  (`dockerfileBakedSet()` + host-scripts re-include test) that this subsumes.
-- `plugins/soleur/test/lib/discoverability-test-parser.ts` — sibling pure-helper convention.
+  (`dockerfileBakedSet()` + `dockerignoreInfraReincludes()` + host-scripts re-include test) that this
+  generalizes and subsumes; also the convention for inline pure functions in a bun test.
+- `apps/web-platform/Dockerfile:36` + `.dockerignore:55-61` — the builder `RUN`-script leg
+  (`assert-dev-signin-eliminated.sh`) and its historical `exit 127` release-break note.
 - `scripts/test-all.sh:180` — `run_suite "plugins/soleur" bun test plugins/soleur/` (CI discovery).
 - `.github/workflows/web-platform-release.yml:50` — `docker_context: "apps/web-platform"`.
 - `knowledge-base/project/learnings/2026-03-20-dockerignore-nextjs-vs-bun-patterns.md` — prior
@@ -374,8 +454,13 @@ existing ADRs + C4 would not be misled by this change. Skip per Phase 2.10.
 - The git-tracked discriminator is load-bearing: **do not** switch it to on-disk `existsSync` — a
   local `npm run build` materializes `.next`/`dist`/`next.config.mjs` and would flip them to false
   positives.
-- The evaluator is **not** a full Docker patternmatcher (see "evaluator fidelity" above). If a future
-  `.dockerignore` adds a pattern class the evaluator doesn't model (e.g. `[abc]` character classes),
-  add a fixture and extend the translator rather than assuming coverage.
-- Keep the guard scoped to `COPY --from=<stage>`; direct-context `COPY` (e.g. `_plugin-vendored`) is a
-  different, immediately-visible failure class and is intentionally excluded.
+- The evaluator is a deliberate **Set+prefix simplification**, not a full Docker patternmatcher (see
+  "Evaluator" section). Its safety rests on fail-loud: a future glob re-include it cannot model shows
+  up as a *spurious* violation on the clean-repo test (safe direction) — extend the model then. Do not
+  "fix" that by widening the discriminator to silence it.
+- Keep the guard scoped to builder-stage `COPY --from=<stage>` + `RUN .sh`; direct-context `COPY`
+  (e.g. `_plugin-vendored`) and `RUN` steps consuming non-`.sh` files are intentionally excluded
+  (immediately-visible / non-existent today). Widen the `RUN` regex only if a `RUN node scripts/*.mjs`
+  form is later added.
+- The `RUN`-script regex is intentionally narrow (`.sh` via `bash|sh|source|.`). Broadening it risks
+  false-matching `RUN npm run build` and flag-args; add a targeted fixture before widening.
