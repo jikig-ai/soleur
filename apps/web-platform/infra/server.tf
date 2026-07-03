@@ -36,6 +36,12 @@ locals {
     "cron-egress-resolve.timer",
     "cron-egress-alarm@.service",
     "cron-egress-postapply-assert.sh",
+    # Fresh-host POST-CONTAINER egress-enforcement probe (#5933 item 3). The SSH
+    # provisioner's cron-egress-postapply-assert.sh SKIPS the container probes on a
+    # fresh host (no container yet); this baked script runs them at boot AFTER the app
+    # container starts (cloud-init.yml terminal block) and fail-closed poweroffs a host
+    # whose container egress is not provably enforcing.
+    "cron-egress-enforce-probe.sh",
     "hooks.json.tmpl",
     # journald drop-in — moved out of inline write_files: (its 2.4 KB base64 blob was the
     # biggest remaining user_data expansion). Still delivered to the running host byte-for-byte

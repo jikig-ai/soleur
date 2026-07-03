@@ -183,6 +183,9 @@ jobs:
       - name: Run cron-egress firewall drift-guard
         run: bash apps/web-platform/infra/cron-egress-firewall.test.sh
 
+      - name: Run fresh-host egress-enforcement probe drift-guard
+        run: bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh
+
       - name: Run GitHub /meta CIDR generator tests
         run: bash apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh
 
