@@ -666,11 +666,16 @@ describe("profile→redeploy loaded-verification guard (#5875 item 4)", () => {
     const nextStep = rest.indexOf("\n      - name:");
     const stepBlock =
       nextStep >= 0 ? yml.slice(redeployStepIdx, redeployStepIdx + 1 + nextStep) : yml.slice(redeployStepIdx);
-    // Committed hash: sha256 of the in-repo profile; loaded hash: the
-    // seccomp_profile_sha256 field surfaced on /hooks/deploy-status by
-    // cat-deploy-state.sh (recorded by ci-deploy.sh at container start).
+    // Committed hash: raw sha256 of the in-repo profile. #5960 reads the LOADED
+    // profile live from the running container via cat-deploy-state.sh's
+    // seccomp_profile_loaded_matches_host (reload leg) + seccomp_profile_host_sha256
+    // (raw delivery leg) — NOT the ephemeral recorded seccomp_profile_sha256, which
+    // is now an inert diagnostic (reboot-cleared, latch-blind). Assert the two
+    // load-bearing discriminators so this gate tracks the real contract, not a
+    // coincidental comment match.
     expect(stepBlock).toMatch(/sha256sum\s+.*seccomp-bwrap\.json/);
-    expect(stepBlock).toContain("seccomp_profile_sha256");
+    expect(stepBlock).toContain("seccomp_profile_loaded_matches_host");
+    expect(stepBlock).toContain("seccomp_profile_host_sha256");
     // Fail-loud on a loaded≠committed mismatch (the whole point of item 4).
     expect(stepBlock).toContain("::error::");
     expect(stepBlock).toMatch(/\bexit 1\b/);
