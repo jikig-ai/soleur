@@ -192,6 +192,14 @@ export function sortDenyPaths(paths) {
 // GH-hosted ubuntu-latest runner `/tmp` is a real directory (not a symlink like
 // macOS `/private/var` or `$RUNNER_TEMP`), so a fixed `/tmp`-rooted path is
 // realpath-stable and the captured argv is byte-reproducible for `--verify`.
+// SECURITY (review #5913 L2): unlike the shim dir (`mkdtemp`, unpredictable),
+// this root is GUESSABLE, and cleanup `rmSync`s it recursively. That is safe
+// ONLY on a single-tenant, ephemeral runner (no second local user to pre-seed a
+// `/tmp/soleur-sandbox-canary` symlink). If `--capture`/`--verify` ever runs on a
+// shared or self-hosted runner, switch this to a per-run `mkdtemp` base and
+// accept that the ws path is then normalized to `${CANARY_WS}` in the projection
+// anyway (so byte-reproducibility survives — the fixed path is a determinism
+// convenience, not a requirement of the canonical projection).
 const CANARY_ROOT_BASE = "/tmp";
 // A constant UUID for the own workspace so the captured argv never embeds a
 // mktemp-random token (the byte-reproducibility crux). Valid v4 shape so it
@@ -971,8 +979,18 @@ if (invokedPath === import.meta.url) {
   main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((err) => {
+      // Process-level backstop: emit a structured verdict so NO exit-with-no-
+      // verdict path escapes the blind capture surface (e.g. an EACCES/ENOSPC on
+      // the atomic fixture write, which throws AFTER runCapture's last
+      // emitVerdict). The CI gate reads the verdict reason; a verdict-less exit
+      // would degrade to an ack-fallback with an empty (undiscriminating)
+      // reason. Observability review #5913 P2.
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: `capture_error:uncaught_${err?.name ?? "unknown"}`,
+      });
       process.stderr.write(`sandbox-canary: ${err?.message ?? err}\n`);
-      process.exit(2);
+      process.exit(EXIT_CAPTURE_MECH_FAIL);
     });
 }
 

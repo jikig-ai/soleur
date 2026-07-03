@@ -142,8 +142,14 @@ fi
 # `lockfile-sync` gate leaves this OFF so sections 1+2 (parity + bump-ack) run on
 # every PR (incl. forks) WITHOUT the paid capture turn, and a routine edit to the
 # canary script never trips a false ack-fallback. Fork PRs get no secrets → the
-# capture job is skipped → the capture check "passes" (section 2's bump-ack still
-# applies to them). See ci.yml `sandbox-canary-capture-gate`.
+# capture job is skipped. TRUST-BOUNDARY NOTE (security review #5913 L1): a fork's
+# fixture-ONLY edit (no SDK bump) is therefore NOT covered by any automated
+# integrity check here — section 2's bump-ack fires only on a version bump. For
+# fork PRs, fixture-edit integrity rests on HUMAN MERGE REVIEW (the fixture only
+# executes post-merge, in bwrap, in the canary container). This is acceptable
+# while the capture gate is dark-launch; if it is promoted to a required check,
+# add a fork-safe fixture-integrity path (e.g. a maintainer re-verify on the base
+# ref). See ci.yml `sandbox-canary-capture-gate`.
 if [[ "${SANDBOX_CANARY_GATE_ENABLED:-0}" == "1" ]]; then
 # Re-capture + byte-diff the committed CANONICAL fixture when the diff touches a
 # capture input. Block ONLY on `argv_drift` (deterministic once captured). Every
@@ -161,8 +167,9 @@ capture_trigger=0
 [[ "${#bumped_pkgs[@]}" -gt 0 ]] && capture_trigger=1
 # Fixture-only edits are IN the trigger set: a hand-edit to sandbox-canary-argv.json
 # is a command-injection sink into the prod canary container (ci-deploy.sh replay),
-# so force a re-verify (creds) or fail closed to the ack (no creds) — never wave
-# through on reviewer eyeball alone.
+# so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
+# ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
+# fixture-only edit reaches neither; see the trust-boundary note above.
 if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
   capture_trigger=1
 fi
