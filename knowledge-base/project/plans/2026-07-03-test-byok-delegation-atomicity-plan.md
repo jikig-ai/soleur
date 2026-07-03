@@ -104,13 +104,13 @@ user data and has no runtime surface — its worst failure is a missed drift
 
 ### Phase 0 — Preconditions (verify before writing)
 
-- [ ] Confirm the RPC regprocedure resolves live:
+- [x] Confirm the RPC regprocedure resolves live:
       `pg_get_functiondef('public.check_and_record_byok_delegation_use(uuid,uuid,int,int,uuid,text)'::regprocedure)`
       returns a body (dev, via `DATABASE_URL_POOLER`). Fixed at `<date>` in
       the deepen-plan research phase.
-- [ ] Confirm `audit_byok_use` accepts a service-role INSERT with an explicit
+- [x] Confirm `audit_byok_use` accepts a service-role INSERT with an explicit
       backdated `ts` + `delegation_id` (needed for the daily-isolation seed).
-- [ ] Confirm the `unit` vitest project glob `test/**/*.test.ts`
+- [x] Confirm the `unit` vitest project glob `test/**/*.test.ts`
       (`vitest.config.ts:44`) matches the new path.
 
 ### Phase 1 — New test file
@@ -197,9 +197,9 @@ client-side, serialization is DB-side via `FOR UPDATE` at 084:370):
 
 ### Phase 3 — Verify
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (typecheck;
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (typecheck;
       NOT `npm run -w` — repo root declares no `workspaces`).
-- [ ] Gated skip path is green by default (no env):
+- [x] Gated skip path is green by default (no env):
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/byok-delegation.atomicity.tenant-isolation.test.ts --project unit`
       → suite reports `skipped` (describe.skipIf), does not error.
 - [ ] Live run (deepen-plan / QA phase, dev Doppler):
