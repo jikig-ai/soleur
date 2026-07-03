@@ -59,6 +59,7 @@ export_valid_env_vars() {
   export INNGEST_WIPED_VOLUME_VERIFY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export CAT_INNGEST_VERIFY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export INNGEST_INVENTORY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
 }
 
 assert_eq() {
@@ -127,8 +128,10 @@ test_happy_path() {
     PASS=$((PASS + 1))
   fi
   assert_file_exists "cat-infra-config-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh"
+  assert_file_exists "git-lock-chardevice-sweep.sh written (#5934)" "$TEST_DESTDIR/usr/local/bin/git-lock-chardevice-sweep.sh"
 
   assert_file_mode "ci-deploy.sh is executable" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh" "755"
+  assert_file_mode "git-lock-chardevice-sweep.sh is executable (#5934)" "$TEST_DESTDIR/usr/local/bin/git-lock-chardevice-sweep.sh" "755"
   assert_file_mode "hooks.json is 640" "$TEST_DESTDIR/etc/webhook/hooks.json" "640"
 
   teardown
@@ -222,9 +225,9 @@ test_state_file_happy_path() {
   local files_total
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
-  assert_eq "files_written is 12" "12" "$files_written"
+  assert_eq "files_written is 13" "13" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
-  assert_eq "files_total is 12" "12" "$files_total"
+  assert_eq "files_total is 13" "13" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -420,14 +423,14 @@ test_missing_env_partial_write() {
     PASS=$((PASS + 1))
   fi
 
-  # State JSON counts: 10 written, 1 failed, 11 total
+  # State JSON counts: 12 written, 1 failed, 13 total (one env var deliberately missing)
   local files_written files_failed files_total
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "files_written is 11" "11" "$files_written"
+  assert_eq "files_written is 12" "12" "$files_written"
   assert_eq "files_failed is 1" "1" "$files_failed"
-  assert_eq "files_total is 12" "12" "$files_total"
+  assert_eq "files_total is 13" "13" "$files_total"
 
   # The missing file's entry records status:failed, reason:missing_env
   local mstatus mreason
@@ -493,7 +496,7 @@ test_prod_mode_escalated_move() {
   # root-managed and not in FILE_MAP, #4827 security review).
   local calls
   calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
-  assert_eq "escalation helper invoked once per file (12)" "12" "$calls"
+  assert_eq "escalation helper invoked once per file (13)" "13" "$calls"
 
   # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
   # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
@@ -516,7 +519,7 @@ test_prod_mode_escalated_move() {
   local files_written exit_code
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "prod-mode files_written is 12" "12" "$files_written"
+  assert_eq "prod-mode files_written is 13" "13" "$files_written"
   assert_eq "prod-mode exit_code is 0" "0" "$exit_code"
 
   teardown
