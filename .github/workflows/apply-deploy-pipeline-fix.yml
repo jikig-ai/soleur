@@ -520,18 +520,36 @@ jobs:
 
           echo "Loaded ('${LOADED_SHA:-<none>}') != committed ('${COMMITTED_SHA}') — a seccomp change is applied but not loaded. Redeploying to load it."
 
-          # Validate the tag we will redeploy (server-supplied state, but pinned to a
-          # safe charset before it reaches the payload — no shell/JSON injection).
-          if [[ -z "$CURRENT_TAG" || "$CURRENT_TAG" == "?" || ! "$CURRENT_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::Cannot determine a valid current image tag from /hooks/deploy-status (.tag='${CURRENT_TAG}'). Trigger a normal web-platform deploy, then re-run this apply."
+          # Resolve the redeploy tag from the RUNNING container's real version, NOT from
+          # /hooks/deploy-status .tag. That .tag is the ci-deploy STATE FILE's last-ATTEMPT
+          # tag (cat-deploy-state.sh reads /var/lock/ci-deploy.state) — which the Terraform
+          # bootstrap default image (variables.tf `...:latest`) and any REJECTED attempt
+          # leave as a non-semver value. ci-deploy.sh:713 requires ^v[0-9]+\.[0-9]+\.[0-9]+$,
+          # so re-sending `latest` is rejected (reason=tag_malformed) AND re-stamps
+          # .tag=latest — a self-perpetuating wedge (#5955, ADR-079 amendment). /health
+          # returns the baked BUILD_VERSION (bare semver); the release pipeline pushes
+          # :v<version> and :latest to the SAME digest (reusable-release.yml), so v<version>
+          # is a true same-image reload that ci-deploy.sh accepts. Public endpoint, no
+          # CF-Access (same one web-platform-release.yml curls for its health gate).
+          HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+          RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+          TARGET_TAG="v${RUNNING_VERSION}"
+
+          # Fail fast with the SAME semver shape ci-deploy.sh:713 enforces — never POST a
+          # doomed non-semver tag (which ci-deploy.sh would reject AND re-stamp as .tag,
+          # perpetuating the wedge). A non-released image (BUILD_VERSION unset → "dev" →
+          # "vdev") is caught here with a clear remediation instead of a tag_malformed loop.
+          if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RUNNING_VERSION}', state-file .tag='${CURRENT_TAG}'). The container is not reporting a released BUILD_VERSION. Trigger a normal web-platform release, then re-run this apply."
             exit 1
           fi
+          echo "Redeploying running version as ${TARGET_TAG} (state-file .tag was '${CURRENT_TAG}')."
 
-          # POST /hooks/deploy — redeploy the SAME image so the container restarts and
-          # loads the applied profile. No `peers` (single-host reload; fan-out is a
-          # dormant no-op at single-host, ADR-068). ci-deploy.sh's flock dedupes any
-          # concurrent web-platform-release deploy.
-          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s"}' "$CURRENT_TAG")
+          # POST /hooks/deploy — redeploy the SAME image (same digest as the running
+          # :latest) so the container restarts and loads the applied profile. No `peers`
+          # (single-host reload; fan-out is a dormant no-op at single-host, ADR-068).
+          # ci-deploy.sh's flock dedupes any concurrent web-platform-release deploy.
+          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s"}' "$TARGET_TAG")
           POST_SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
             -X POST \

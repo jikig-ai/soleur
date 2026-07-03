@@ -325,6 +325,34 @@ the helper uses `node:22-slim` + `npm ci` (the deploy `FROM` base), not the full
 built web-platform image; they share the base OS filesystem so the host-conditional
 token set is identical — a follow-up could pin to the built image for exactness.
 
+### Amendment (#5955, 2026-07-03) — the seccomp reload resolves the running semver from `/health`; the deploy contract stays semver-only
+
+The "item 4" redeploy step (`apply-deploy-pipeline-fix.yml`) originally read the tag to
+redeploy from `/hooks/deploy-status` `.tag`. That field is the ci-deploy **state file**'s
+last-ATTEMPT tag (`cat-deploy-state.sh` reads `/var/lock/ci-deploy.state`), not the running
+container's real image. The Terraform bootstrap default runs `...:latest` (`variables.tf`),
+and `ci-deploy.sh:713` requires `^v[0-9]+\.[0-9]+\.[0-9]+$` — so the redeploy re-sent
+`latest`, was rejected with `reason=tag_malformed`, and the rejection **re-stamped**
+`.tag=latest`, a self-perpetuating wedge that reddened the pipeline (surfaced once PR #5950
+cleared the #5877 reboot wedge that had masked it; #5955).
+
+**Decision (CTO ruling 2026-07-03).** The redeploy resolves the running container's version
+from the **public `/health` endpoint** (`.version` = the baked `BUILD_VERSION`, a bare
+semver) and redeploys `v<version>`. The release pipeline pushes `:v<version>` and `:latest`
+to the **same digest** (`reusable-release.yml`), so `v<version>` is a true same-image reload
+that `ci-deploy.sh` accepts — no version change, no risk beyond the already-intended graceful
+seccomp reload. The step's tag validation is **tightened to the exact `^v[0-9]+\.[0-9]+\.[0-9]+$`
+shape** so a non-released image (`BUILD_VERSION` unset → `"dev"` → `"vdev"`) fails loud with a
+remediation instead of perpetuating the loop.
+
+**Rejected:** (a) `docker inspect .Config.Image` — returns `:latest` for the bootstrap
+container, same unhelpful answer, and a digest-redeploy would force a `ci-deploy.sh` guard
+change; (b) relaxing `ci-deploy.sh`'s semver guard to accept `latest`/digest — the guard
+deliberately rejects floating tags and backs the wrong-image-tagged-with-right-version check
+(`web-platform-release.yml:683`); a resolution bug in one caller must not widen the deploy
+contract. **The deploy contract stays semver-only.** Single-file change:
+`.github/workflows/apply-deploy-pipeline-fix.yml`.
+
 ## Consequences
 
 - **Positive.** A future SDK bump that breaks the sandbox is caught pre-merge
