@@ -14,17 +14,17 @@ Lane: cross-domain · Threshold: single-user incident
 - [x] 1.7 Write `cron-egress-enforce-probe.test.sh` (static asserts + awk ordering + envelope parity + lockstep grep); register in `.github/workflows/infra-validation.yml`.
 - [x] 1.8 Run: `sh -n cron-egress-enforce-probe.sh`; the new `.test.sh`; `cloud-init-user-data-size.test.ts`; `web-hosts-fanout-parity.test.sh`; #5921 bootstrap tests.
 
-## Phase 2 — ADR-081 + C4
+## Phase 2 — ADR-082 + C4
 
-- [x] 2.1 Create `ADR-081-fresh-web2-boot-observability.md` (`status: adopting`) recording all 4 items (3 shipped; 1/2/4 designed).
+- [x] 2.1 Create `ADR-082-fresh-web2-boot-observability.md` (`status: adopting`) recording all 4 items (3 shipped; 1/2/4 designed).
 - [x] 2.2 Read all three `.c4` files; add external uptime-monitor actor / egress-enforcement edge if absent (+ `view include`), run `c4-code-syntax.test.ts` + `c4-render.test.ts`; else cite "no impact" with the actors/systems checked.
 
 ## Phase 3 — Follow-up tracking + ship prep
 
-- [x] 3.1 `gh label list` verify → create 3 issues (Items 1, 2, 4), each blocked-on/re-eval-criteria, link ADR-081, milestone from roadmap.
+- [x] 3.1 `gh label list` verify → create 3 issues (Items 1, 2, 4), each blocked-on/re-eval-criteria, link ADR-082, milestone from roadmap.
 - [x] 3.2 Open Code-Review Overlap check on final Files-to-Edit list.
 - [x] 3.3 PR body: `Ref #5933` (NOT `Closes`); summarize scope + deferrals.
 
 
 ## Deferred (tracked in #5947)
-- Items 1, 2, 4 → consolidated tracker #5947 (blocked on #5887 / cutover DNS rewire / own supply-chain PR); designs in ADR-081.
+- Items 1, 2, 4 → consolidated tracker #5947 (blocked on #5887 / cutover DNS rewire / own supply-chain PR); designs in ADR-082.

@@ -1,4 +1,4 @@
-# ADR-081: Fresh web-2 boot observability + supply-chain hardening contract
+# ADR-082: Fresh web-2 boot observability + supply-chain hardening contract
 
 - **Status:** Adopting
 - **Date:** 2026-07-03
