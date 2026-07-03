@@ -14,6 +14,34 @@ lineage: "companion tracker #5912; repo-side PR #5932 (WIP); instrument PR #5907
 
 # 🔧 Durable root-cause fix: stop the Concierge sandbox substrate from materializing `.git/config.lock` as a character device
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-03
+**Agents used:** OverlayFS/whiteout kernel research (Explore), verify-the-negative sweep (general-purpose), architecture-strategist review.
+
+### Key improvements
+1. **Corrected the leading mechanism + Phase 2 layer.** Confirmed topology (`ci-deploy.sh:899`,
+   `-v /mnt/data/workspaces:/workspaces`) shows bare repos on a **persistent bind-mount, not
+   container overlay2** — so the node is a **real char-special inode (rdev non-zero) on the
+   persistent volume**, not a container-overlay whiteout (which would be hidden/ENOENT and
+   would NOT cause EEXIST). Phase 2 is scoped to `/mnt/data/workspaces`, host-side.
+2. **Added `umount`-before-`rm` handling** for a bind-mounted device node (`rm -f` alone →
+   `EBUSY`; silent non-remediation) — the plan's own sub-hypothesis needed it.
+3. **Constrained the sweep to a quiescent window** (first-boot/entrypoint) and named the
+   shared-git-data (ADR-068) concurrency hazard a periodic sweep would hit.
+4. **Renumbered ADR-080 → ADR-081** (080 is taken) and made #5932-first ordering mandatory.
+5. **Kernel-grounded the discriminators:** whiteout = char dev `0:0` (and hidden in merged
+   view); `/dev/null` = `1:3`; `O_CREAT|O_EXCL` fails EEXIST on ANY inode type. Phase 1 now
+   records `rdev` + merged-view visibility (the pair, not `rdev` alone, pins the layer).
+
+### New considerations discovered
+- **overlayfs hides merged-view whiteouts** → a *visible* char device is itself evidence
+  against a plain container-overlay whiteout. This is the single most important finding.
+- **"#5912 becomes dead-code insurance" is conditional** on the node being a one-time
+  persistent-volume artifact; AC10's soak is its empirical test.
+- **SDK-pin dependence:** installed SDK is v0.3.197 (module comment stale at v0.2.85); the
+  (a)/(b) ruling is grounded in dir-only path passing (verified) + documented SDK behavior.
+
 ## Overview
 
 The confirmed root cause of the worktree-creation wedge (companion tracker #5912) is
@@ -54,8 +82,14 @@ IaC, the durable fix is **repo-expressible** — not a pure upstream ask.
    There is nothing to allow-list — the wedge is not a deliberate mask; it is a
    **residual device node** (whiteout / leftover bind) at one specific historical path.
    The durable fix is therefore not "narrow the mask" but "**clear/prevent the residual
-   node at a privileged layer**." When that fix lands, #5912's fallback branch becomes
-   dead-code insurance rather than a load-bearing path — exactly as #5934 predicted.
+   node at a privileged layer**." **The "#5912 becomes dead-code insurance" claim holds
+   ONLY under the assumption that the node is a one-time persistent-volume artifact**
+   (created once, cleared at the next quiescent boot/entrypoint, never re-appearing
+   mid-container-lifetime). This assumption is plausible — a char-device `config.lock` is
+   NOT what a git-killed-mid-write leaves (that is a *regular* stale lock the in-sandbox
+   age-guard already handles), so the char-device trigger is genuinely rare/substrate — but
+   it is an assumption, and AC10's 7-day soak is its empirical test. If the node can appear
+   mid-lifetime, entrypoint/boot granularity cannot preempt it and #5912 stays load-bearing.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -64,7 +98,7 @@ IaC, the durable fix is **repo-expressible** — not a pure upstream ask.
 | R1 | "Determine whether the masking is single-path or glob (`*.lock`)." | `apps/web-platform/server/agent-runner-sandbox-config.ts:213-221`: `filesystem.allowWrite = [workspacePath]`; `filesystem.denyRead = enumerateSiblingDenyPaths()` = sibling workspace dirs + `/proc` **only**. No `.lock`, no glob, no `/dev/null`/file-level mask anywhere in the repo sandbox config. | The config expresses **no `.lock` mask**. Origin (a) ruled out. The wedge is a per-path substrate artifact → **single-path**, de-risking #5912. |
 | R2 | Sibling brainstorm: platform fix (3) "lives in Concierge sandbox infra (**not this repo**) … Filed as an upstream companion ask." | The sandbox filesystem substrate IS this repo's IaC: `apps/web-platform/Dockerfile`, `apps/web-platform/infra/cloud-init.yml`, `hcloud_volume.workspaces` (`placement-group.tf:29`), `git-data-bootstrap.sh` (`/mnt/git-data/repositories` bare repos, ADR-068), `apparmor-soleur-bwrap.profile`. The Concierge runs on **web-platform Hetzner hosts** whose image + volumes + bwrap policy are all repo-defined. | The durable fix is **repo-expressible IaC**, not a pure upstream ask. The plan lands an in-repo substrate remediation, not a no-op PR. |
 | R3 | Sibling brainstorm Open Q1: "confirm single-path vs glob against the next fuller forensic **or by probing the sandbox mount config**." | The mount config was probed directly (R1) → answered. But the exact **substrate mechanism** (OverlayFS whiteout `rdev 0:0` vs. leftover bind vs. tmpfs device node) and **which volume/layer** holds the node are **not yet pinned** — the current sweep classifies a char device as `type=other`, discarding the decisive signal (`sweep_stale_git_locks`, `worktree-manager.sh:194-196` — no `-c` branch; `rdev` never emitted). | Phase 1 **sharpens the forensic** (`-c` detection + `rdev` major:minor) to pin the exact mechanism/layer on the next wedge **before** committing a substrate remediation to a specific layer (per Sharp Edge: "establish WHICH path executes before prescribing the fix layer"). |
-| R4 | #5934: "the SDK translates denyRead into `--tmpfs` obscuring + `--ro-bind` re-binds, and file-level masking is done by bind-mounting `/dev/null`." | Confirmed via SDK types (`@anthropic-ai/claude-agent-sdk` v0.2.85: `denyRead`/`allowRead`/`allowWrite` are **path arrays**; module header `agent-runner-sandbox-config.ts:33-50` documents dir-level `denyRead → --tmpfs`, `allowRead → --ro-bind`). File-level `/dev/null` masking only fires for a **file path passed to `denyRead`** — the repo passes **only directory paths**. | Origin (b) ruled out **as the cause**: the SDK never receives `.git/config.lock` (or any `*.lock`) to mask. The `/dev/null`-bind mechanism is real but **unreachable from our config**. |
+| R4 | #5934: "the SDK translates denyRead into `--tmpfs` obscuring + `--ro-bind` re-binds, and file-level masking is done by bind-mounting `/dev/null`." | Confirmed via SDK types (`@anthropic-ai/claude-agent-sdk` v0.2.85: `denyRead`/`allowRead`/`allowWrite` are **path arrays**; module header `agent-runner-sandbox-config.ts:33-50` documents dir-level `denyRead → --tmpfs`, `allowRead → --ro-bind`). File-level `/dev/null` masking only fires for a **file path passed to `denyRead`** — the repo passes **only directory paths**. | Origin (b) ruled out **as the cause**: the SDK never receives `.git/config.lock` (or any `*.lock`) to mask. The `/dev/null`-bind mechanism is real but **our config never exercises it** (no file path ever enters `denyRead`). |
 
 ## Hypotheses — origin of the character device (the decisive gate)
 
@@ -79,16 +113,58 @@ Per the KEY PLANNING CONSTRAINT, the origin is pinned **before** designing the f
   `denyRead`; the repo passes only directory paths, so the SDK cannot emit a node at
   `.git/config.lock`. (The mechanism exists in the SDK; our config never triggers it.)
 - **(c) Container filesystem / mount substrate** — **THE ORIGIN.** The device node is a
-  **residual** artifact of the container/volume substrate at one historical path.
-  Leading concrete mechanism: an **OverlayFS / Docker-overlay2 whiteout**, which the
-  kernel represents as a **character device with `rdev 0:0`** — created when a prior
-  process (e.g. git killed under the 2026-07-01 seccomp/`unshare` EPERM outage, or an
-  image/layer that deleted the path) removed `config.lock` across an overlay boundary,
-  leaving a persistent whiteout the blind in-sandbox agent cannot `rm`. Alternatives to
-  discriminate in Phase 1: a leftover `--bind` of a device node, or a tmpfs device node.
+  **residual** artifact at one historical path on the **persistent host block volume**
+  that holds the bare repos. Confirmed topology (`apps/web-platform/infra/ci-deploy.sh:899`):
+  the Concierge container runs `-v /mnt/data/workspaces:/workspaces` — the bare repos live
+  on a **bind-mounted persistent volume**, NOT the container overlay2 upper layer. The
+  agent sees the residual node because the SDK/bwrap base `--ro-bind / /` faithfully
+  re-exposes any pre-existing char-special inode at the bare-repo path (read-only) into the
+  sandbox. **Leading concrete mechanism (revised at deepen-plan — see Research Insights):**
+  a **real char-special inode (rdev NON-zero)** on `/mnt/data/workspaces` — a persistent
+  node that survives container recreation and deploys, matching the "wedged forever /
+  across sessions" symptom. A container-overlay-layer whiteout is **discriminated AGAINST**:
+  overlay2 does not overlay the bind mount, and a merged-view whiteout renders as ENOENT
+  (hidden) so git's `O_CREAT|O_EXCL` would SUCCEED — the opposite of the observed EEXIST on
+  a VISIBLE node. Sub-hypotheses to separate in Phase 1: a `/dev/null`-style device bind
+  (`rdev 1:3`) vs. a real `mknod` node (other non-zero rdev) vs. an anomalous visible `0:0`.
 
-**Phase 1 discriminates these with `rdev`:** `0:0` ⇒ overlay whiteout; non-zero ⇒
-real/leftover device bind. The remediation LAYER (Phase 2) is chosen from that evidence.
+**Phase 1 discriminates these with `rdev` + merged-view visibility:** the node is already
+KNOWN to be visible in the sandbox (that is the symptom), so `rdev` is the discriminator —
+`1:3` ⇒ a bound `/dev/null` (needs `umount` before `rm`); other non-zero ⇒ a real device
+node (`rm` clears it); a *visible* `0:0` ⇒ anomalous (a merged-view whiteout would be
+hidden) and must be explained before acting. The remediation LAYER (Phase 2) is scoped to
+the persistent volume `/mnt/data/workspaces` (ADR-068's `/mnt/git-data` is the not-yet-GA
+multi-host future, `replicas=1` still in force — not the active wedge surface).
+
+### Research Insights — kernel-grounded discriminators (deepen-plan)
+
+**Revised conclusion (deepen-plan):** given the confirmed bind-mount topology
+(`ci-deploy.sh:899`, bare repos on persistent `/mnt/data/workspaces`) AND the symptom of a
+**visible** char device causing EEXIST, the leading mechanism is a **real char-special
+inode (rdev non-zero) on the persistent volume** — a container-overlay whiteout is ruled
+out (overlay2 doesn't overlay the bind mount; a merged-view whiteout is hidden/ENOENT). The
+`0:0`-whiteout hypothesis survives only as an anomaly to explain, not the prior.
+
+Authoritative grounding for the mechanism claims (fold into ADR-081):
+
+- **Ruling-out (a)/(b) confirmed by a verify-the-negative sweep.** `agent-runner-sandbox-config.ts`
+  `denyRead` = sibling dirs + `/proc`, `allowWrite = [workspacePath]` (all directory paths;
+  no `.lock`/glob/`/dev/null`); no other sandbox file (`sandbox.ts`, `bash-sandbox.ts`,
+  `sandbox-hook.ts`, `sandbox-startup-classifier.ts`, `plugin-mount-check.ts`) binds
+  `/dev/null` or `mknod`s a node. **Caveat:** the SDK's actual bwrap-arg construction lives
+  in a compiled CLI binary (not source-verifiable), and the INSTALLED SDK is **v0.3.197**
+  (the module-header comment saying "v0.2.85" is stale) — so the "dir→`--tmpfs`,
+  file→`/dev/null`" behavior is grounded in the module-header documentation, not re-derived
+  from vendored source. The ruling-out is therefore **SDK-pin-dependent**; a future SDK bump
+  could change the guarantee. This does not weaken the conclusion (the repo demonstrably
+  passes only directory paths, so the file-mask path is never reached regardless), but
+  ADR-081 should state the pin-dependence as a one-line caveat + a drift-guard idea.
+
+- **Overlay whiteout = char device `rdev 0:0`.** Kernel doc (Documentation/filesystems/overlayfs.rst, "Whiteouts and opaque directories"): *"A whiteout is created as a character device with 0/0 device number or as a zero-size regular file with the xattr `trusted.overlay.whiteout`."* So `test -c` is true and GNU `stat -c '%t:%T'` returns `0:0`. (Ref: docs.kernel.org/filesystems/overlayfs.html.)
+- **`/dev/null` = char device `rdev 1:3` — a clean discriminator.** A bwrap `--dev-bind /dev/null <path>` (or any `/dev/null` bind) makes the path a char device with `rdev 1:3`, NOT `0:0`. `--tmpfs` alone creates no device nodes. So the Phase-1 `rdev` field cleanly separates: **`0:0` ⇒ overlay whiteout**; **`1:3` ⇒ a bound `/dev/null`** (some mount/plumbing layer binds it — never our repo config, R1/R4); **other non-zero ⇒ a real `mknod` device**. (Ref: bwrap.1; local `stat` verification.)
+- **LOAD-BEARING CAVEAT — overlayfs HIDES merged-view whiteouts.** The kernel conceals a whiteout from the merged/mounted view: through the overlay mount the path reads as **ENOENT (absent)**, and a whiteout is only visible as a char device when reading the **raw upper/`diff` dir directly**. Consequence for diagnosis: the wedge forensic reportedly **observed a visible non-regular node** (`type=other`, `stat` succeeded) AND git failed `EEXIST` — a *merged-view* container-overlay whiteout would instead present as ENOENT and git's `O_CREAT|O_EXCL` would **succeed**. So a *visible* char device at `.git/config.lock` points AWAY from a plain merged-view container-overlay whiteout and TOWARD either (i) a `/dev/null`-style bind (`rdev 1:3`) at some mount layer, (ii) a persistent-volume/raw-diff exposure where the whiteout IS visible, or (iii) a real device node. **Phase 1 must therefore record BOTH the `rdev` AND whether the node is visible in the agent's merged view** — that pair, not `rdev` alone, pins the layer. This materially tightens Phase 2 layer selection and is the single most important deepen-plan finding.
+- **`O_CREAT|O_EXCL` fails `EEXIST` on ANY pre-existing inode type** (POSIX/open(2): "fail if the file exists" — not "if a regular file exists"). A leftover char-device at `.git/config.lock` therefore blocks git's lock creation before any device semantics apply — confirming the wedge mechanism. (Ref: man7.org/linux/man-pages/man2/open.2.html.)
+- **Alternate whiteout form to rule out:** a zero-size **regular** file bearing the `trusted.overlay.whiteout` xattr. This presents as `type=regular` (the existing age-guarded removal path would touch it) but is semantically a whiteout — Phase 1 should additionally `getfattr -n trusted.overlay.whiteout` (or `lsattr`/`stat`) a *regular* `config.lock` before treating it as an ordinary stale lock.
 
 ## User-Brand Impact
 
@@ -116,18 +192,24 @@ The current sweep loses the decisive signal: a character device falls through
 captured. Sharpen it so the **next** wedge — or a deliberately-forced fixture — proves
 the exact mechanism.
 
-- **Coordinate with PR #5932** (WIP, same file + same `sweep_stale_git_locks` function).
-  This plan's Phase 1 edits are **additive** (a new `-c` branch + one extra field on the
-  existing `SOLEUR_GIT_LOCK_DIAG` line). Sequencing: if #5932 merges first, rebase onto
-  it; if this merges first, #5932 rebases. Do NOT duplicate #5932's `atomic_git_config`
-  work here — Phase 1 only extends the **diagnostic**.
+- **#5932-FIRST ordering is MANDATORY, not optional (P1 — arch review).** PR #5932 is
+  +160/−19 on `worktree-manager.sh` and +45/−10 on the diag test — the exact two files
+  Phase 1 edits — and its `atomic_git_config` refactor touches the SAME
+  `sweep_stale_git_locks` type-precedence ladder (`:181-196`), the SAME
+  `SOLEUR_GIT_LOCK_DIAG` echo, and the SAME diag test. #5932 is the more urgent PRIMARY
+  in-session fix. **Merge #5932 first, then rebase Phase 1's additive `-c`/`rdev`/visibility
+  additions onto the merged sweep.** Do NOT duplicate #5932's `atomic_git_config` work.
 - Add an explicit char-device branch in the type-precedence ladder
   (`worktree-manager.sh` `sweep_stale_git_locks`), **before** the `-d`/`-f`/`other`
   fallthrough: `elif [[ -c "$path" ]]; then ftype=chardevice`.
-- Capture and emit `rdev` on the DIAG line for the char-device case:
-  `rdev=$(stat -c '%t:%T' -- "$path" 2>/dev/null)` (GNU `stat`; hex major:minor —
-  `0:0` ⇒ overlay whiteout). Extend `SOLEUR_GIT_LOCK_DIAG` to
-  `… type=chardevice … rdev=$rdev`.
+- Capture and emit `rdev` AND merged-view visibility on the DIAG line for the char-device
+  case: `rdev=$(stat -c '%t:%T' -- "$path" 2>/dev/null)` (GNU `stat`; hex major:minor —
+  `1:3` ⇒ bound `/dev/null`, other non-zero ⇒ real device, `0:0` ⇒ anomalous whiteout).
+  Also record whether the node is a mountpoint (`stat -c%m` == its realpath) — a bind vs a
+  plain inode determines whether Phase 2 needs `umount`. Extend `SOLEUR_GIT_LOCK_DIAG` to
+  `… type=chardevice … rdev=$rdev mount=<none|mountpoint>`. For a REGULAR `config.lock`,
+  additionally probe `getfattr -n trusted.overlay.whiteout` (the zero-size-regular-file
+  whiteout form) before treating it as an ordinary stale lock.
 - Keep the **existing** UNREMOVABLE behavior for `chardevice` (non-regular → flag
   unremovable, never auto-`rm` on the blind surface — `:237-247`). The DIAG `rdev` is
   the new forensic; removal stays the privileged Phase-2 job.
@@ -148,25 +230,36 @@ uses the repo. Mirror the existing opt-in volume-maintenance precedent
 `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (base64-staged via
 `infra-config-apply.sh`, run from cloud-init/bootstrap).
 
-- **Layer selection is decided by Phase 1's `rdev` evidence** (do not pre-commit):
-  - If the node is an **overlay whiteout on the container layer** (`rdev 0:0`, path under
-    the container FS): the sweep runs at **container entrypoint** (before the agent
-    runtime starts) — a new idempotent step in the image/entrypoint path
-    (`apps/web-platform/Dockerfile` / entrypoint), removing char-device locks under
-    known bare-repo roots.
-  - If the node is on a **persistent block volume** (`/workspaces` or
-    `/mnt/git-data/repositories`, ADR-068): the sweep runs in the volume bootstrap
-    (`git-data-bootstrap.sh` and/or a new sibling staged like
-    `inngest-wiped-volume-verify.sh`), invoked from `cloud-init.yml` `runcmd` on first
-    boot **and** re-run on existing hosts via the idempotent bootstrap path.
-- **Sweep semantics (root, non-blind):** find `config.lock` / `config.worktree.lock`
-  under bare git dirs that are **character devices** (`test -c`); `rm -f` each (root can,
-  unlike the sandboxed agent); emit one structured, no-SSH-readable marker per removal
-  (Sentry/Better Stack + a state file readable by the `cat-*-state.sh` pattern). Regular
-  in-flight locks are **never** touched (that stays the age-guarded in-sandbox job).
-- **Idempotent + safe:** no-op when no char-device lock exists; scoped strictly to the
-  two config-write lock filenames on bare git dirs (never `index.lock`/`HEAD.lock`/
-  per-worktree locks — same scoping rationale as `sweep_stale_git_locks:169-176`).
+- **Layer: the persistent volume `/mnt/data/workspaces` on the host (arch-review P1).**
+  Confirmed topology (`ci-deploy.sh:899`): bare repos live on the host bind-mount
+  `/mnt/data/workspaces`, so the durable sweep runs **host-side** at a **quiescent window**
+  — the volume bootstrap / a new sibling staged like `inngest-wiped-volume-verify.sh`,
+  invoked from `cloud-init.yml` `runcmd` on first boot AND re-run idempotently on existing
+  hosts. (A container-entrypoint step also runs before the agent starts and is an
+  acceptable secondary placement; the `Dockerfile` overlay layer is NOT the target — it
+  does not overlay the bind mount.) Do NOT scope to ADR-068 `/mnt/git-data` (not-yet-GA).
+- **Sweep semantics (root, non-blind), rdev-aware removal:** find `config.lock` /
+  `config.worktree.lock` under bare git dirs that are **character devices** (`test -c`),
+  bounded to KNOWN bare-repo roots (not an unbounded `find` across all tenant workspaces —
+  arch-review P2 scaling). For each:
+  - **plain char-special inode** (not a mountpoint): `rm -f` (root can, unlike the
+    sandboxed agent).
+  - **bind-mounted device node** (`stat -c%m` == realpath ⇒ mountpoint; e.g. a bound
+    `/dev/null`, `rdev 1:3`): `unlink` returns `EBUSY` — the sweep MUST `umount` the path
+    FIRST, then `rm -f`; otherwise it silently "succeeds" while the wedge persists
+    (arch-review P1). Emit a distinct marker for the umount branch.
+  - emit one structured, no-SSH-readable marker per removal (Sentry/Better Stack + a state
+    file readable by the `cat-*-state.sh` pattern), naming the path + rdev + branch taken.
+  Regular in-flight locks are **never** touched (that stays the age-guarded in-sandbox job).
+- **Quiescence is the concurrency-safety mechanism (arch-review P1).** The sweep runs ONLY
+  in a quiescent window (first-boot / container-entrypoint, before the agent runtime
+  starts) — NOT as a periodic job against live git-data. Under a future ADR-068 shared
+  git-data topology the volume is NOT quiescent (concurrent cross-host writers), so a
+  periodic sweep there would race a live writer; the entrypoint/first-boot ordering closes
+  the TOCTOU by construction. State this explicitly; do not add a periodic timer.
+- **Idempotent + safe:** no-op when no char-device lock exists; scoped strictly to the two
+  config-write lock filenames on bare git dirs (never `index.lock`/`HEAD.lock`/per-worktree
+  locks — same scoping rationale as `sweep_stale_git_locks:169-176`).
 - **Apply path:** cloud-init + idempotent bootstrap script (extends already-provisioned
   hosts without re-provisioning). Applied via the auto-applied `apps/web-platform/infra/`
   root (`terraform apply`) and/or the deploy pipeline — applied through the pipeline, not
@@ -206,11 +299,12 @@ expressible in this repo's IaC (e.g. a host-runtime storage-driver default outsi
 - [ ] **AC5 (char-device stays unremovable in-sandbox):** the sweep still emits
   `SOLEUR_GIT_LOCK_UNREMOVABLE … type=chardevice reason=non-regular-lock` and never
   auto-`rm`s on the blind surface (regression guard on `:245-246`).
-- [ ] **AC6 (Phase 2 sweep is char-device-scoped + idempotent):** the privileged sweep
-  script removes **only** `config.lock`/`config.worktree.lock` that are `test -c` true
-  under bare git dirs, is a no-op otherwise, and has a shell test asserting: (i) removes a
-  forced char-device lock, (ii) leaves a regular lock untouched, (iii) leaves
-  `index.lock` untouched.
+- [ ] **AC6 (Phase 2 sweep is char-device-scoped, rdev-aware + idempotent):** the
+  privileged sweep script removes **only** `config.lock`/`config.worktree.lock` that are
+  `test -c` true under KNOWN bare-repo roots, is a no-op otherwise, and has a shell test
+  asserting: (i) removes a plain forced char-device lock, (ii) `umount`s-then-`rm`s a
+  bind-mounted device node (mountpoint case) rather than failing `EBUSY`, (iii) leaves a
+  regular lock untouched, (iv) leaves `index.lock` untouched.
 - [ ] **AC7 (fully pipeline-applied):** every infra change applies through
   cloud-init/bootstrap + `terraform apply` / the deploy pipeline; no phase applies a
   change by hand on a host.
@@ -306,7 +400,7 @@ This plan records a substrate-root-cause decision that a future engineer would b
 surprised to find undocumented → an ADR is a **deliverable of this PR**, not a follow-up.
 
 ### ADR
-- **Create ADR-080 — "Char-device residual at `.git/config.lock`: substrate root cause
+- **Create ADR-081 — "Char-device residual at `.git/config.lock`: substrate root cause
   and privileged non-blind sweep remediation"** (or amend ADR-075 if the reviewer
   prefers extending the tenant-isolation record). Decision: the sandbox filesystem
   substrate can leave a character-device residual (overlay whiteout `rdev 0:0`) at a
@@ -375,7 +469,7 @@ file set — `worktree-manager.sh`, `apps/web-platform/infra/*`, `apps/web-platf
 
 - `apps/web-platform/infra/git-lock-chardevice-sweep.sh` — privileged, idempotent,
   char-device-scoped lock sweep (+ `.test.sh` sibling).
-- `knowledge-base/engineering/architecture/decisions/ADR-080-*.md` — the substrate
+- `knowledge-base/engineering/architecture/decisions/ADR-081-*.md` — the substrate
   root-cause + remediation decision.
 - `scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh` — soak probe.
 
@@ -394,11 +488,19 @@ milestone, per the deferral-tracking gate. No other deferrals.
 
 ## Sharp Edges
 
-- **Do not pre-commit the Phase 2 remediation layer.** Choose container-entrypoint vs.
-  volume-bootstrap from Phase 1's `rdev`/mount evidence — a substrate fix at the wrong
-  layer is the recurring "fixed a code path the surface never executes" failure class.
-- **Coordinate the `worktree-manager.sh` edit with WIP PR #5932** (same file, same
-  function) — additive only; rebase whichever merges second.
+- **The sweep target is the persistent volume `/mnt/data/workspaces`, not the container
+  overlay.** overlay2 does not overlay the bind mount; a `Dockerfile`-layer sweep would
+  never see the node. Confirm the bare-repo root path against `ci-deploy.sh:899` at /work.
+- **`rm -f` alone cannot clear a bind-mounted device node** (`unlink` → `EBUSY`). If Phase
+  1 `rdev`/mount evidence shows a mountpoint (e.g. bound `/dev/null` `rdev 1:3`), the sweep
+  MUST `umount` before `rm`, else it "succeeds" while the wedge persists.
+- **Run the sweep ONLY in a quiescent window** (first-boot / container-entrypoint) — never
+  a periodic timer against live (future shared-git-data) volume, which would race a
+  concurrent writer. Ordering is the TOCTOU-safety mechanism.
+- **#5932 MUST merge first.** It is +160/−19 on the same `worktree-manager.sh` sweep
+  function; treat Phase 1 as an additive rebase ON TOP of merged #5932, not a parallel edit.
+- **ADR number: 081, not 080** — `ADR-080-runtime-plugin-deploys-via-image-rebuild.md`
+  already exists. Verify the next free number at /work before creating the file.
 - **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/placeholder
   text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This section is
   filled with a concrete artifact, vector, and `single-user incident` threshold.
