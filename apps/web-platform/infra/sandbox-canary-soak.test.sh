@@ -64,6 +64,20 @@ write_sandbox_canary_state "pass" "ok" "0.3.198"
 assert "pass after reset ⇒ consecutive_pass=1" "[[ \$(field consecutive_pass) == 1 ]]"
 assert "pass after reset ⇒ first_pass_at re-pinned (>0)" "[[ \$(field first_pass_at) -gt 0 ]]"
 
+# 6. DURABILITY (#5889 regression guard): the soak accumulator survives reboots
+# ONLY if its DEFAULT path is on durable storage, not /var/run tmpfs (wiped every
+# reboot → consecutive_pass + first_pass_at silently reset → soak can never reach
+# "≥5 greens over ≥3 days"). Assert the writer (ci-deploy.sh) and the reader
+# (cat-deploy-state.sh) BOTH default to /mnt/data and NEITHER defaults to /var/run.
+CAT_TARGET="$SCRIPT_DIR/cat-deploy-state.sh"
+WRITER_DEFAULT="$(grep -oE 'SANDBOX_CANARY_STATE_FILE:-[^}]+' "$TARGET" | head -1 | sed 's/.*:-//')"
+READER_DEFAULT="$(grep -oE 'SANDBOX_CANARY_STATE_FILE:-[^}]+' "$CAT_TARGET" | head -1 | sed 's/.*:-//')"
+assert "writer default is durable (/mnt/data), not tmpfs" "[[ \"$WRITER_DEFAULT\" == /mnt/data/* ]]"
+assert "reader default is durable (/mnt/data), not tmpfs" "[[ \"$READER_DEFAULT\" == /mnt/data/* ]]"
+assert "writer default is NOT /var/run tmpfs" "[[ \"$WRITER_DEFAULT\" != /var/run/* ]]"
+assert "reader default is NOT /var/run tmpfs" "[[ \"$READER_DEFAULT\" != /var/run/* ]]"
+assert "writer + reader defaults MATCH" "[[ \"$WRITER_DEFAULT\" == \"$READER_DEFAULT\" ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
