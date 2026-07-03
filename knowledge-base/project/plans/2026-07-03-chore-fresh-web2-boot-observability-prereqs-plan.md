@@ -224,8 +224,11 @@ logs:
   where: "journald (persistent, terminal container uses --log-driver journald); probe ASSERT-FAILED sentinels in cloud-output.log"
   retention: "journald bounded per journald-soleur.conf"
 discoverability_test:
-  command: "sentry issue search project:web-platform 'stage:egress-enforce' (NO ssh); + gh workflow view infra-validation for the .test.sh"
-  expected_output: "green .test.sh in CI; zero egress-enforce fatal events on a healthy fresh boot"
+  command: "bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh"
+  expected_output: "0 failed"
+  # Runnable, SSH-free, local. Proves the probe + its boot-wiring are correctly assembled
+  # BEFORE any host exists. Once web-2 boots, the runtime signal is a Sentry search for
+  # tag stage:egress-enforce (zero fatal events on a healthy boot) — the boot probe emits it.
 ```
 
 **2.9.2 blind-surface (fresh-host boot = uninspectable):** the probe runs INSIDE the boot
