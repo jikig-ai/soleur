@@ -464,7 +464,12 @@ run_faithful_sandbox_canary() {
   else
     verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
     reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
-    sdk_version="$(printf '%s' "$out" | jq -r '.sdk_version // ""' 2>/dev/null || echo '')"
+    # sandbox-canary.mjs emits the SDK version as the camelCase key `sdkVersion`
+    # (JS-idiomatic); this deploy-state chain is snake_case, so translate at the
+    # boundary here. Accept snake_case too so a future mjs rename can't silently
+    # re-blank it. Missing key ⇒ "" (the soak surface's sdk_version was empty
+    # before this — the key never matched).
+    sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
   write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"

@@ -198,6 +198,49 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# C. CROSS-FILE CONTRACT — the mjs `--replay` stdout ⇄ ci-deploy.sh reader.
+# Deterministic, always runs. Guards the JS/shell key-name seam that silently
+# blanked the soak's sdk_version: sandbox-canary.mjs emits camelCase `sdkVersion`,
+# but ci-deploy.sh read snake_case `.sdk_version`, so the value never propagated
+# to /hooks/deploy-status (#5889). A rename on either side re-breaks it.
+# ---------------------------------------------------------------------------
+echo "C: mjs↔ci-deploy sdk_version key contract"
+MJS="$SCRIPT_DIR/sandbox-canary.mjs"
+CI_DEPLOY="$INFRA_DIR/ci-deploy.sh"
+REPLAY_FIXTURE="$INFRA_DIR/sandbox-canary-argv.json"
+for f in "$MJS" "$CI_DEPLOY" "$REPLAY_FIXTURE"; do
+  [[ -f "$f" ]] || { echo "ERROR: missing $f" >&2; exit 1; }
+done
+
+# C1 — the replay path emits the version under the camelCase key `sdkVersion`.
+if grep -qE 'emitVerdict\(\{ \.\.\.verdict, sdkVersion:' "$MJS"; then
+  pass "C1 mjs runReplay emits key sdkVersion"
+else
+  fail "C1 mjs runReplay no longer emits 'sdkVersion' in its verdict — update the ci-deploy.sh reader key in lockstep"
+fi
+
+# C2 — ci-deploy.sh's sdk_version read accepts exactly that emitted key.
+if grep -qE "jq -r '\.sdkVersion // \.sdk_version" "$CI_DEPLOY"; then
+  pass "C2 ci-deploy.sh reads .sdkVersion (matches the mjs key)"
+else
+  fail "C2 ci-deploy.sh sdk_version read does not accept the mjs 'sdkVersion' key — the soak surface will blank sdk_version"
+fi
+
+# C3 — the committed captured fixture carries a non-empty sdkVersion, so a real
+# pass actually populates the field (an empty fixture version = silent blank).
+FIX_VER="$(jq -r '.sdkVersion // ""' "$REPLAY_FIXTURE" 2>/dev/null || echo '')"
+if [[ -n "$FIX_VER" && "$FIX_VER" != "null" ]]; then
+  pass "C3 committed fixture carries sdkVersion ($FIX_VER)"
+else
+  # Only required once the fixture is captured; an uncaptured sentinel is exempt.
+  if [[ "$(jq -r '.status // ""' "$REPLAY_FIXTURE" 2>/dev/null)" == "captured" ]]; then
+    fail "C3 captured fixture has empty sdkVersion — a real pass would report an empty version"
+  else
+    skip "C3 fixture is uncaptured — sdkVersion not required yet"
+  fi
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
