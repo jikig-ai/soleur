@@ -30,7 +30,7 @@ and the fail-closed `/run/soleur-hostscripts.ok` sentinel. The four remaining ga
 
 This PR ships the **one item that is fully unblocked, inert on running web-1, and closes the
 highest-severity gap** — **Item 3 (fresh-host post-container egress-enforcement probe)** —
-plus a new **ADR-081** recording the complete four-part design, plus **tracked follow-ups**
+plus a new **ADR-082** recording the complete four-part design, plus **tracked follow-ups**
 for Items 1, 2, 4. The PR body uses **`Ref #5933`** (NOT `Closes`) — the issue stays open
 until all four land, sequenced against #5887.
 
@@ -39,8 +39,8 @@ until all four land, sequenced against #5887.
 | Item | Blocker verified in-repo | Sequenced behind |
 |------|--------------------------|------------------|
 | 1 — per-host absence detector | The only firewall-preserving probe path is a **new CF-proxied per-host hostname** (`web-<n>.app.soleur.ai` → specific origin). That record lives in the **main root**, whose auto-apply is **RED (#5887 — `moved` resources excluded by `-target` allow-list)**. A monitor pointed at a not-yet-created hostname pages immediately (522/NXDOMAIN). The origin firewall gates 443 to CF IPs only (`firewall.tf`), so a raw-origin-IP probe is rejected and opening the firewall to Sentry/BetterStack probe ranges is rejected (exposes origins). | #5887 fix, then rides the cutover apply. |
-| 2 — A-record drain | `cloudflare_record.app` is a **singleton (web-1 only)**; the `for_each`-over-`var.web_hosts` round-robin **does not exist yet** — it is a destroy+recreate of the LIVE app record explicitly **deferred to the operator cutover** (`dns.tf:4-12`, `git-data-luks-cutover-5274.md`). There is nothing to drain until the round-robin exists. | The cutover DNS rewire (CF Load-Balancer origin health-check is the recommended drain — see ADR-081). |
-| 4 — image digest pin + signature | Cross-cutting supply-chain change spanning `web-platform-release.yml` (emit + thread the pushed digest), `variables.tf`, `cloud-init.yml` (`docker pull` + a cosign verify step), and cosign key/OIDC-keyless provisioning. Deserves a focused, security-reviewed PR — folding it into the egress-probe PR would blur two review surfaces. | Own PR (ADR-081 records the design). |
+| 2 — A-record drain | `cloudflare_record.app` is a **singleton (web-1 only)**; the `for_each`-over-`var.web_hosts` round-robin **does not exist yet** — it is a destroy+recreate of the LIVE app record explicitly **deferred to the operator cutover** (`dns.tf:4-12`, `git-data-luks-cutover-5274.md`). There is nothing to drain until the round-robin exists. | The cutover DNS rewire (CF Load-Balancer origin health-check is the recommended drain — see ADR-082). |
+| 4 — image digest pin + signature | Cross-cutting supply-chain change spanning `web-platform-release.yml` (emit + thread the pushed digest), `variables.tf`, `cloud-init.yml` (`docker pull` + a cosign verify step), and cosign key/OIDC-keyless provisioning. Deserves a focused, security-reviewed PR — folding it into the egress-probe PR would blur two review surfaces. | Own PR (ADR-082 records the design). |
 
 Item 3 has **no** dependency on #5887, `var.web_hosts`, cross-root variables, or web-2
 existing. It is a new baked host-script + a cloud-init wiring edit + a `.test.sh`, mirroring
@@ -51,9 +51,9 @@ the existing `cron-egress-postapply-assert.sh` pattern.
 | Issue claim | Codebase reality (verified) | Plan response |
 |-------------|-----------------------------|---------------|
 | "the live positive+negative container-egress probe (`cron-egress-postapply-assert.sh`) is web-1-SSH-only and cannot run at bootstrap time on a fresh host (no container yet)" | Confirmed. `cron-egress-postapply-assert.sh:85` runs the container probe only `if docker ps … grep -qx soleur-web-platform`, else prints `WARNING: … SKIPPED (fresh-host bootstrap)`. It is invoked by the `terraform_data.cron_egress_firewall` `remote-exec` (SSH, web-1-scoped). | Item 3 adds a **post-container** probe on the cloud-init path, run AFTER the app container starts, reusing the SAME positive+negative curl-probe logic (lines 77-89) but NOT skippable (the container IS up at that point). |
-| "no per-host web monitor anywhere in the root (`uptime-alerts.tf`)" | Confirmed. `uptime-alerts.tf` has only `betteruptime_monitor.soleur_apex` (apex URL). `sentry/uptime-monitors.tf` has 4 URL-scoped monitors (apex/www/changelog/acme). None is `for_each = var.web_hosts`. | Item 1 (deferred) designs the per-host monitor in ADR-081. |
-| "`app.soleur.ai` … proxied A-records with no CF Load-Balancer origin health-check (`dns.tf`)" | Partially stale: `cloudflare_record.app` is currently a **singleton** (`content = hcloud_server.web["web-1"].ipv4_address`), NOT yet a `for_each` round-robin. The round-robin is deferred (`dns.tf:4-12`). | Item 2 (deferred) — the drain is designed INTO the cutover DNS rewire in ADR-081. |
-| "`var.image_name` … public `:latest` GHCR image" | Confirmed. `variables.tf:44-48` default `ghcr.io/jikig-ai/soleur-web-platform:latest`; `cloud-init.yml:355,381,466,578` `docker pull ${image_name}` with no digest/signature check. | Item 4 (deferred) — ADR-081 records the digest-pin + cosign design. |
+| "no per-host web monitor anywhere in the root (`uptime-alerts.tf`)" | Confirmed. `uptime-alerts.tf` has only `betteruptime_monitor.soleur_apex` (apex URL). `sentry/uptime-monitors.tf` has 4 URL-scoped monitors (apex/www/changelog/acme). None is `for_each = var.web_hosts`. | Item 1 (deferred) designs the per-host monitor in ADR-082. |
+| "`app.soleur.ai` … proxied A-records with no CF Load-Balancer origin health-check (`dns.tf`)" | Partially stale: `cloudflare_record.app` is currently a **singleton** (`content = hcloud_server.web["web-1"].ipv4_address`), NOT yet a `for_each` round-robin. The round-robin is deferred (`dns.tf:4-12`). | Item 2 (deferred) — the drain is designed INTO the cutover DNS rewire in ADR-082. |
+| "`var.image_name` … public `:latest` GHCR image" | Confirmed. `variables.tf:44-48` default `ghcr.io/jikig-ai/soleur-web-platform:latest`; `cloud-init.yml:355,381,466,578` `docker pull ${image_name}` with no digest/signature check. | Item 4 (deferred) — ADR-082 records the digest-pin + cosign design. |
 | "#5921 ships the SSH-free error-path signals … fail-closed guarantee" | Confirmed. `soleur-host-bootstrap.sh` `emit_fail()` posts `{stage, image_ref, host_id}` to Sentry; sentinel `/run/soleur-hostscripts.ok` written LAST; cloud-init terminal `docker run` block gates on it. | Item 3 reuses this exact machinery (same Sentry envelope, same fail-closed model) for the post-container probe. |
 
 Premise validation: #5921 = CLOSED (predecessor, expected). #5887 = OPEN (this issue is a
@@ -141,9 +141,9 @@ Register in `.github/workflows/infra-validation.yml`. Assert (static, no live ho
 - cloud-init.yml invokes the probe AFTER the `docker run … ${image_name}` line (awk
   line-ordering assertion: probe-invocation line number > container-start line number).
 
-### Phase 2 — ADR-081 (records the full four-part design)
+### Phase 2 — ADR-082 (records the full four-part design)
 
-Create `knowledge-base/engineering/architecture/decisions/ADR-081-fresh-web2-boot-observability.md`
+Create `knowledge-base/engineering/architecture/decisions/ADR-082-fresh-web2-boot-observability.md`
 via `/soleur:architecture` (or direct Edit). Status: `adopting`. Record:
 - **Decision:** the four-control fresh-host observability contract (per-host absence detector,
   A-record drain, post-container egress-enforcement probe, image digest-pin + signature).
@@ -175,7 +175,7 @@ via `/soleur:architecture` (or direct Edit). Status: `adopting`. Record:
 
 Create one GitHub issue per deferred item (label `chore` + `domain/engineering`; verify labels
 via `gh label list` first), each: what/why-deferred/re-eval-criteria, blocked-on #5887 (Items
-1, 2) resp. own-PR (Item 4), linking ADR-081. Milestone from `knowledge-base/product/roadmap.md`
+1, 2) resp. own-PR (Item 4), linking ADR-082. Milestone from `knowledge-base/product/roadmap.md`
 matching the ADR-068 Phase 2 line.
 
 ## Acceptance Criteria
@@ -190,7 +190,7 @@ matching the ADR-068 Phase 2 line.
 - [ ] The probe's Sentry envelope tag set equals `soleur-host-bootstrap.sh` `emit_fail`'s (`stage`, `image_ref`, `host_id`) plus `probe_result`; asserted by source-grep in the `.test.sh`.
 - [ ] `apps/web-platform/infra/cron-egress-enforce-probe.test.sh` registered in `.github/workflows/infra-validation.yml` and green.
 - [ ] `web-hosts-fanout-parity.test.sh` still green (Item 3 does NOT touch `var.web_hosts`; confirm no regression).
-- [ ] ADR-081 created (`status: adopting`), C4 three-file review cited (edit or justified "no impact").
+- [ ] ADR-082 created (`status: adopting`), C4 three-file review cited (edit or justified "no impact").
 - [ ] Three follow-up issues created for Items 1, 2, 4; PR body uses `Ref #5933` (NOT `Closes`).
 
 ### Post-merge (operator / cutover) — NOT this PR
@@ -259,12 +259,12 @@ cause is decided the moment the event lands, not after N blind fixes.
 
 ### Vendor-tier reality check
 - N/A for Item 3 (no new vendor resource). Item 1's BetterStack per-host monitors (deferred)
-  must respect the free-tier 10-monitor cap — noted in ADR-081.
+  must respect the free-tier 10-monitor cap — noted in ADR-082.
 
 ## Architecture Decision (ADR/C4)
 
 An architectural decision IS made (a new fresh-host observability contract + the substrate
-security-probe boundary) → **ADR-081** is a deliverable of Phase 2 (not a deferred issue), per
+security-probe boundary) → **ADR-082** is a deliverable of Phase 2 (not a deferred issue), per
 `wg-architecture-decision-is-a-plan-deliverable`. C4: three-file review in Phase 2; external
 uptime-monitor actors + the container-egress-enforcement relationship are the candidate
 elements to confirm/add.

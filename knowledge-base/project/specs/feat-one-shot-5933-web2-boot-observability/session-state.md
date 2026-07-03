@@ -8,7 +8,7 @@
 - Planning subagent (general-purpose) stalled: spawned a nested repo-research agent and stopped waiting on it without emitting the Session Summary. No plan/spec artifacts were written by it. Recovered by running plan inline with direct file research (no nested agents, to avoid re-triggering the stall).
 
 ### Decisions
-- Scoped THIS PR to Item 3 (fresh-host post-container egress-enforcement probe) — the only fully-unblocked, inert-on-web-1, highest-severity deliverable. Items 1/2/4 deferred with tracking + ADR-081, after inline triage established their blockers.
+- Scoped THIS PR to Item 3 (fresh-host post-container egress-enforcement probe) — the only fully-unblocked, inert-on-web-1, highest-severity deliverable. Items 1/2/4 deferred with tracking + ADR-082, after inline triage established their blockers.
 - Item 1 blocked: only firewall-preserving probe path needs a new main-root CF hostname; main-root auto-apply is RED (#5887). Item 2 blocked: the for_each round-robin doesn't exist yet (deferred to operator cutover per dns.tf). Item 4 deferred: cross-cutting supply-chain change (release pipeline + cosign) deserves its own PR.
 - Egress probe wires into cloud-init.yml AFTER `docker run` (container up), reusing #5921's emit_fail Sentry envelope + fail-closed poweroff model. Reason: app container starts after soleur-host-bootstrap.sh, so the probe cannot live in the bootstrap script.
 - Threshold single-user incident (open container-egress = exfil path); CPO sign-off carried by ADR-080 precedent for this substrate.
@@ -19,7 +19,7 @@
 - deepen-plan folded inline (research reconciliation + observability/IaC/ADR/domain sections authored directly from file reads).
 
 ## Work Phase
-- Status: complete (Item 3 shipped). Commits: probe+wiring+test, ADR-081, tasks/tracker.
+- Status: complete (Item 3 shipped). Commits: probe+wiring+test, ADR-082, tasks/tracker.
 - Deferred Items 1/2/4 → consolidated tracker #5947. PR uses Ref #5933.
 - Verified GREEN: cron-egress-enforce-probe.test.sh 24/24; cron-egress-firewall.test.sh 195/195 (regression); cloud-init-user-data-size.test.ts (bun) 22/22 (count 25→26, .dockerignore re-include, user_data trimmed); server-tf-set-e 14/14; web-hosts-fanout-parity 1/1; cloud-init schema valid; terraform validate Success.
 - Open Code-Review Overlap: server.tf false-positive hits #3216/#2197 (unrelated concerns — acknowledged, remain open). No genuine overlap.
