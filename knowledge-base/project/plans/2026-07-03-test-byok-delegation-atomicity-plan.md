@@ -11,6 +11,40 @@ created: 2026-07-03
 
 # 🧪 test(observability): live semantic/atomicity test for `check_and_record_byok_delegation_use` (Ref #5920)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-03
+
+**Halt gates (all pass):** 4.6 User-Brand Impact present (threshold `none` +
+inline reason; the single test-file path `apps/web-platform/test/server/…` does
+NOT match the sensitive-path regex, so no scope-out bullet is even required).
+4.7 Observability present (no runtime surface → 5-field schema N/A, documented).
+4.8 no PAT-shaped variable. 4.9 no UI surface → skip.
+
+**Precedent-diff (Phase 4.4):** the test mirrors the merged cap-RPC precedent
+`byok-kill-switch.atomicity.tenant-isolation.test.ts` (#5920 / `b020ebecf`);
+the load-bearing *difference* between the two RPCs is documented in Sharp Edges
+(cap RPC returns a `kill_tripped` signal + always inserts → Invariant D expects
+`N` audit rows; delegation RPC **throws** on breach + inserts only on pass →
+invariant is `audit == K`). No novel pattern introduced.
+
+**Verified load-bearing claims (Phase 4.45 verify-the-negative):**
+1. Hourly/daily cap branches (084:449-454, 463-468) `RAISE` with **no** preceding
+   `INSERT` → the over-cap call persists nothing → `audit == K` (admitted calls
+   only). Confirmed against the RPC body.
+2. `check_and_record_byok_delegation_use` does **not** call the resolver; the
+   per-turn consent re-gate (084:404-425) fires **only if a withdrawal EXISTS**.
+   Zero withdrawals seeded ⇒ re-gate is a no-op. Confirmed.
+3. Cap predicate is single-clause strict `>` (`v_hourly_spent + v_this_cost >
+   v_row.hourly_usd_cap_cents`, 084:449) — the `== cap` call passes; a `>=`
+   regression makes it raise. This is the boundary the test pins.
+4. `audit_byok_use.workspace_id` is **NOT NULL** (mig 055/059) — the daily
+   isolation seed INSERT must carry the grantor's `workspace_id`. Seed columns:
+   `{invocation_id, founder_id (grantor), workspace_id (grantor workspace),
+   agent_role, token_count, unit_cost_cents, delegation_id, ts (now()−2h)}`;
+   `attribution_shift_reason` NULL. Only UPDATE/DELETE are WORM-blocked (037);
+   INSERT with explicit `ts` is allowed.
+
 ## Overview
 
 Add a **live-DB semantic/atomicity test** for the BYOK delegation cap RPC
@@ -131,9 +165,10 @@ one at a time, awaiting each:
 
 **Test B — daily strict-`>` boundary (sequential, aged-seed isolation).** Grant
 with `daily=CAP_CENTS`, `hourly=CAP_CENTS` (CHECK forces `hourly ≤ daily`).
-Pre-seed aged `audit_byok_use` rows (`ts = now() − 2h`, `delegation_id` set)
-summing to `CAP_CENTS − COST_CENTS = 400` — inside the 24h window, outside the
-1h window. Then:
+Pre-seed aged `audit_byok_use` rows (`ts = now() − 2h`, `delegation_id` set,
+`workspace_id` = grantor workspace — the column is NOT NULL per mig 055/059,
+`founder_id` = grantor) summing to `CAP_CENTS − COST_CENTS = 400` — inside the
+24h window, outside the 1h window. Then:
 - Live call 1: hourly-window spend `= 0 + 100 = 100 ≤ 500` (ok); daily-window
   spend `= 400 + 100 = 500 ≤ 500` (ok, `== cap` boundary) → passes.
 - Live call 2: hourly `= 100 + 100 = 200 ≤ 500` (does NOT trip); daily

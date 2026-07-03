@@ -20,7 +20,7 @@ Lane: cross-domain (no spec.md — TR2 fail-closed default)
 
 ## Phase 2 — Test cases
 - [ ] 2.1 Test A (hourly strict-`>` boundary, sequential): `== cap` call passes; K+1 raises `hourly_cap_exceeded`; audit count `== K`; self-diagnosis embed.
-- [ ] 2.2 Test B (daily strict-`>` boundary, aged-seed): pre-seed aged rows (`ts=now()−2h`) summing to `CAP_CENTS−COST_CENTS`; live call at `==cap` passes; next raises `daily_cap_exceeded`; assert hourly did NOT raise; self-diagnosis embed.
+- [ ] 2.2 Test B (daily strict-`>` boundary, aged-seed): pre-seed aged rows (`ts=now()−2h`; columns `{invocation_id, founder_id=grantor, workspace_id=grantor-ws (NOT NULL, mig 055/059), agent_role, token_count, unit_cost_cents, delegation_id}`) summing to `CAP_CENTS−COST_CENTS`; live call at `==cap` passes; next raises `daily_cap_exceeded`; assert hourly did NOT raise; self-diagnosis embed.
 - [ ] 2.3 Test C (concurrency/FOR UPDATE): `Promise.allSettled` N calls; exactly K admitted, N−K raise hourly marker; audit count `== K` and spend `== CAP_CENTS` (no double-spend); partition on `.error`; self-diagnosis embed.
 
 ## Phase 3 — Verify
