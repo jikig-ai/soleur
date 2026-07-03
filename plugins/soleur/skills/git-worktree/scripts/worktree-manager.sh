@@ -164,7 +164,7 @@ sweep_stale_git_locks() {
   local threshold="${2:-60}"   # seconds
   [[ -d "$git_dir" ]] || return 0
   local now lock path mtime age swept=0 unremovable=0
-  local ftype owner perms mount rp rm_err rm_rc
+  local ftype owner perms mount rp rm_err rm_rc rdev whiteout is_mp
   now=$(date +%s)
   # Scope: ONLY the config-write locks (`config.lock`, `config.worktree.lock`) —
   # the confirmed EEXIST wedge that blocks ensure_bare_config's writes below.
@@ -185,7 +185,20 @@ sweep_stale_git_locks() {
       # `stat -c%m` prints the file's mount root; == its own realpath iff the path
       # IS a mountpoint. (Do NOT use bare `findmnt -T`: it exits 0 + prints the
       # containing-fs SOURCE for every existing path and never yields "none".)
-      if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then
+      # Computed ONCE here and reused for both the `mount` classification and the
+      # char-device `mount=` attribute (a bound /dev/null is BOTH -c and a mountpoint).
+      is_mp=false
+      if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then is_mp=true; fi
+      # Character-device FIRST — the confirmed #5934 substrate wedge signature. A
+      # masked config.lock is a char-special inode: either a bound /dev/null (rdev
+      # 1:3, ALSO a mountpoint) or a real mknod/overlay-whiteout node (whiteout ⇒
+      # rdev 0:0). git's open(O_CREAT|O_EXCL) EEXISTs against ANY pre-existing inode.
+      # Typed `chardevice` (NOT `mount`) so the rdev discriminator stays on the DIAG
+      # line; is_mp is preserved in `mount=` so the privileged Phase-2 sweep knows
+      # whether it must umount before rm.
+      if [[ -c "$path" ]]; then
+        ftype=chardevice
+      elif [[ "$is_mp" == true ]]; then
         ftype=mount
       elif [[ -d "$path" ]]; then
         ftype=dir
@@ -204,6 +217,14 @@ sweep_stale_git_locks() {
     age=unknown
     # Numeric guard: a non-numeric mtime flowing into $(( )) aborts under set -e.
     if [[ "$mtime" =~ ^[0-9]+$ ]]; then age=$(( now - mtime )); fi
+    # rdev — GNU stat hex major:minor of a device node; the #5934 substrate
+    # discriminator (kernel-grounded, ADR-081): `1:3` ⇒ a bound /dev/null (Phase-2
+    # must umount before rm); `0:0` ⇒ an overlay whiteout; other non-zero ⇒ a real
+    # mknod device (`rm` clears it). `none` for every non-device type.
+    rdev=none
+    if [[ "$ftype" == "chardevice" ]]; then
+      rdev=$(stat -c '%t:%T' -- "$path" 2>/dev/null) || rdev=unknown
+    fi
     mount=none
     if [[ "$ftype" == "mount" ]]; then
       if command -v findmnt >/dev/null 2>&1; then
@@ -211,11 +232,25 @@ sweep_stale_git_locks() {
       else
         mount=findmnt-unavailable
       fi
+    elif [[ "$ftype" == "chardevice" && "$is_mp" == true ]]; then
+      mount=mountpoint   # bound device node → Phase-2 sweep umounts before rm
+    fi
+    # Overlay-whiteout alternate form: a ZERO-SIZE REGULAR file bearing the
+    # trusted.overlay.whiteout xattr is semantically a whiteout, not an ordinary
+    # stale lock — so it must NOT be auto-rm'd as one below. Probe with getfattr when
+    # available. NOTE: reading a `trusted.*` xattr needs CAP_SYS_ADMIN, so on the
+    # unprivileged blind sandbox this reliably reports `no` (unprobeable); the probe
+    # earns its keep under the privileged Phase-2 sweep and in root-run forensics.
+    whiteout=no
+    if [[ "$ftype" == "regular" ]] && command -v getfattr >/dev/null 2>&1; then
+      if getfattr -n trusted.overlay.whiteout --only-values -- "$path" >/dev/null 2>&1; then
+        whiteout=yes
+      fi
     fi
     # Plain, color-free, STDOUT — color would break the agent's grep.
-    echo "SOLEUR_GIT_LOCK_DIAG file=$lock type=$ftype owner=$owner perms=$perms mtime=$mtime age=$age mount=$mount"
+    echo "SOLEUR_GIT_LOCK_DIAG file=$lock type=$ftype owner=$owner perms=$perms mtime=$mtime age=$age mount=$mount rdev=$rdev whiteout=$whiteout"
 
-    if [[ "$ftype" == "regular" ]]; then
+    if [[ "$ftype" == "regular" && "$whiteout" != "yes" ]]; then
       # In-flight-writer safety applies ONLY to a regular lock (a real git writer
       # holds a regular config.lock for single-digit ms): remove it only once stale
       # (age >= threshold); fresh AND future-dated (clock skew) are left untouched —
@@ -234,16 +269,24 @@ sweep_stale_git_locks() {
           echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=regular errno=$(_rm_errno "$rm_err") reason=rm-failed hint=\"git config write will fail EEXIST — targeted fix needed\""
         fi
       fi
+    elif [[ "$whiteout" == "yes" ]]; then
+      # A zero-size REGULAR file carrying trusted.overlay.whiteout is a whiteout, not
+      # a real in-flight lock: never auto-rm it on the blind surface (its removal is
+      # the privileged Phase-2 sweep's job). Flagged unremovable so ensure_bare_config
+      # routes around it, exactly like a non-regular lock. (rdev is `none` for this
+      # regular-xattr whiteout form; the type stays `regular` for grep continuity.)
+      unremovable=1
+      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=regular rdev=$rdev whiteout=yes errno=none reason=overlay-whiteout-regular hint=\"regular-file overlay whiteout — targeted fix required; not auto-removed\""
     else
-      # dir / symlink / mount / other: a config.lock is created by git via
-      # open(O_CREAT|O_EXCL) — ALWAYS a regular file. A non-regular lock is NEVER a
-      # legitimate in-flight writer and ALWAYS blocks the git config write (EEXIST)
+      # chardevice / dir / symlink / mount / other: a config.lock is created by git
+      # via open(O_CREAT|O_EXCL) — ALWAYS a regular file. A non-regular lock is NEVER
+      # a legitimate in-flight writer and ALWAYS blocks the git config write (EEXIST)
       # regardless of age, so flag it unremovable UNCONDITIONALLY (no staleness gate
       # — that gate exists only for the regular in-flight-writer case above). Never
       # auto-removed on a blind surface; the DIAG line above carries the forensic
-      # detail to design the targeted fix.
+      # detail (type + rdev) to design/scope the privileged Phase-2 substrate fix.
       unremovable=1
-      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=$ftype errno=none reason=non-regular-lock hint=\"observed non-regular config lock — targeted fix required; not auto-removed\""
+      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=$ftype rdev=$rdev errno=none reason=non-regular-lock hint=\"observed non-regular config lock — targeted fix required; not auto-removed\""
     fi
   done
   # Report progress BEFORE the return so a partial sweep (one lock removed, the
