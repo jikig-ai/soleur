@@ -15,6 +15,15 @@
 // (repo_url + workspace_id + archived_at IS NULL) so the count matches what the
 // list shows. It reuses the cached active-repo fetch (swrKeys.workspaceActiveRepo)
 // so that request still dedups with the dashboard page.
+//
+// Liveness: because the count is a separate SWR key (not the realtime list's
+// channel), it refreshes on window-focus, not in real time — so it can lag the
+// list by one on the actively-viewed page until the next focus. This matches the
+// shipped Inbox badge's deferred-realtime posture (NG1); wiring realtime badge
+// refresh is a fast-follow for the whole badge pattern, not this PR.
+//
+// NOTE: the badge sits on the `/dashboard` nav item, so its testId + Sentry
+// `feature` tag are "dashboard-nav-badge" (not "conversations-*").
 
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
@@ -34,7 +43,10 @@ export async function fetchConversationAttentionCount([, repoUrl, workspaceId]: 
 ]): Promise<number> {
   const supabase = createClient();
   const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return 0;
+  // Throw (not `return 0`) on no-user so a transient auth blip routes to
+  // cold-omit / warm-last-good rather than blanking a warm badge to a false
+  // "0" — matches how the dashboard list treats no-user as a hard error.
+  if (!auth.user) throw new Error("conversation attention count: not authenticated");
   // Scope EXACTLY as the dashboard list (hooks/use-conversations.ts): active
   // repo + active workspace + not archived. RLS additionally scopes to the
   // owner, matching the list. `head: true` returns only the count.

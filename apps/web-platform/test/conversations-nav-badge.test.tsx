@@ -82,6 +82,20 @@ describe("fetchConversationAttentionCount", () => {
     ]);
   });
 
+  it("throws when unauthenticated so a warm badge never blanks to a false 0", async () => {
+    mockUser = null;
+    const { fetchConversationAttentionCount } = await import(
+      "@/components/dashboard/conversations-nav-badge"
+    );
+    await expect(
+      fetchConversationAttentionCount([
+        "dashboard:conversation-attention-count",
+        "r",
+        "w",
+      ]),
+    ).rejects.toThrow(/not authenticated/);
+  });
+
   it("throws on query error so the badge omits (never a false 0)", async () => {
     queryResult = { count: null, error: { message: "boom" } };
     const { fetchConversationAttentionCount } = await import(
