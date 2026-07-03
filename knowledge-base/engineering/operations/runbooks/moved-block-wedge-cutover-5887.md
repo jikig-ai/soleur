@@ -5,6 +5,37 @@
 > Downtime is acceptable only with explicit justification + a bounded window + operator
 > sign-off (learning `2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover`).
 
+## ✅ Resolved (2026-07-03) — how the CI wedge was actually cleared
+
+The CI wedge is **cleared**; both `apply-web-platform-infra.yml` and
+`apply-deploy-pipeline-fix.yml` are green on `main`. History, so a future reader
+does not re-run the wrong path:
+
+- By triage time the four `moved {}` blocks were **already consumed** in state (a
+  prior `terraform state mv` — Scope A below). The remaining red was **not** the
+  moved error but the `reboot_updates` destroy-guard (#5911) halting on web-1's
+  pending `placement_group_id` attach (the reboot).
+- It was cleared via a **third, even simpler zero-reboot path** (neither a state
+  mv nor the Scope-B cutover): `lifecycle { ignore_changes = [placement_group_id] }`
+  on `hcloud_server.web` (**PR #5950**). That drops web-1's pending placement change
+  out of **every** plan (verified live: `31 add, 2 change` → `31 add, 1 change,
+  0 destroy`), so the guard passes and **both** targeted CI applies self-heal green —
+  **zero reboot, normal PR merge, no maintenance window.** A static guard in
+  `plugins/soleur/test/terraform-target-parity.test.ts` fails if that entry is dropped.
+- Clearing the wedge then **exposed two latent deploy-fix defects** that had never
+  run green behind it (see learning `2026-07-03-chain-of-latent-defects-clearing-a-
+  wedge-exposes-a-cascade`): the seccomp redeploy sent `tag=latest` → `tag_malformed`
+  (fixed by **#5957**, `/health` semver resolution), then `loaded != committed`
+  (fixed by **#5963**, live-profile read). Both pipelines green on `b62526b80`.
+- **Design captured:** ADR-068 §Amendment (2026-07-03) + ADR-079 §Amendment.
+
+**Everything below is still the reference for the DEFERRED multi-host GA cutover**
+(Scope B) — which is what actually takes the web-1 reboot on a drained host and flips
+git-data. Its **first diff removes the `ignore_changes = [placement_group_id]` entry**
+so the placement reboot is taken deliberately, blue-green. The `terraform state mv`
+(Scope A) is retained as historical context; the moves are already consumed, so it is
+not re-run.
+
 ## When to run this
 
 `apply-web-platform-infra.yml` **and** `apply-deploy-pipeline-fix.yml` are red with:
@@ -32,9 +63,15 @@ nothing by themselves.** The reboot hazard is a *separate* pending change: web-1
 | **A** | Clear only the CI wedge (kill the plan-time error) | `terraform state mv` ×4 | **Zero** — no reboot, no new host, reversible |
 | **B** | Pipelines fully green / multi-host GA go-live | Blue-green cluster cutover | **Zero if blue-green**; brief outage if naive apply |
 
-Scope A alone does **not** turn the pipelines green (see Layer-2 note) — it's the
-availability-preserving way to do the wedge-clearing *half*, decoupled from the reboot.
-Closing #5887 (via the follow-through sweeper) needs Scope B's cluster changes to apply.
+> **Historical note (superseded by what shipped — see §Resolved above).** This table
+> predates the fix. In practice the wedge was cleared by a **third path**:
+> `ignore_changes = [placement_group_id]` on `hcloud_server.web` (#5950) — which turned
+> **both** pipelines green with zero reboot and **without** Scope B's cluster changes,
+> because the only remaining red-maker (once the moves were consumed) was the
+> `reboot_updates` guard, not an un-applied cluster. Scope A (`state mv`) alone would not
+> have cleared the reboot-guard red; the `ignore_changes` entry is what does. Scope B
+> below remains the DEFERRED GA go-live (it removes that `ignore_changes` entry as its
+> first diff and takes the reboot on a drained host).
 
 ## What NOT to do (forbidden / hazardous)
 
@@ -137,3 +174,7 @@ pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving
 - **#5911** — destroy-guard `reboot_updates` counter (reboot-forcing in-place
   `hcloud_server.*` update no longer blind on the unattended per-PR path).
 - **#5922** — web-2 `user_data` externalized under the 32 KB cap (unblocks blue-green).
+- **#5950** — `ignore_changes = [placement_group_id]` on `hcloud_server.web` (the actual
+  wedge-clear) + a `terraform-target-parity.test.ts` guard that fails if it is dropped.
+- **#5957 / #5963** — the two deploy-fix defects the unwedge exposed (seccomp redeploy
+  `tag_malformed`, then `loaded != committed`), now fixed; both pipelines green.
