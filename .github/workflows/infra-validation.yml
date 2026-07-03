@@ -240,6 +240,9 @@ jobs:
       - name: Run inngest-inventory.sh tests
         run: bash apps/web-platform/infra/inngest-inventory.test.sh
 
+      - name: Run git-lock-chardevice-sweep.sh tests
+        run: bash apps/web-platform/infra/git-lock-chardevice-sweep.test.sh
+
       - name: Run inngest.tf + bootstrap drift-guards
         run: bash apps/web-platform/infra/inngest.test.sh
 

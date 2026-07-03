@@ -849,6 +849,19 @@ case "$COMPONENT" in
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
+    # #5934 durable substrate remediation (ADR-081): clear any residual
+    # CHARACTER-DEVICE `.git/config.lock` the container filesystem substrate may
+    # have left on the persistent /mnt/data/workspaces volume, BEFORE the container
+    # (and the agents it runs) start. THIS is the quiescent, host-side, root window
+    # — the old container is stopped and the canary is not yet running — so the
+    # sweep never races a live git writer (ordering is the concurrency-safety
+    # mechanism; see ADR-081 / git-lock-chardevice-sweep.sh). The in-sandbox #5912
+    # `atomic_git_config` self-heal is the in-session stopgap; this removes the node
+    # at the substrate. Best-effort + `-x`-guarded: it never blocks a deploy and is
+    # inert until infra-config-apply has installed the sweep to /usr/local/bin.
+    if [[ -x /usr/local/bin/git-lock-chardevice-sweep.sh ]]; then
+      sudo /usr/local/bin/git-lock-chardevice-sweep.sh || true
+    fi
     # NOTE (#4886 follow-up): the `.cron` subdir isolation was reverted. A
     # `mkdir -p /mnt/data/workspaces/.cron` in the deploy critical path ENOSPC-
     # fails under `set -e` when the shared volume is already full (the exact
