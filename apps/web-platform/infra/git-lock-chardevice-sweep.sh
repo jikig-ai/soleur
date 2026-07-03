@@ -12,15 +12,24 @@
 # the privileged, NON-BLIND removal the wedge needs — it clears any char-device
 # config-write lock BEFORE an agent session uses the repo.
 #
-# WHY host-side + quiescent: the bare repos live on the host bind-mount
-# `/mnt/data/workspaces` (NOT the container overlay2 upper — overlay2 does not
-# overlay the bind mount, so a Dockerfile-layer sweep would never see the node).
-# It runs ONLY in a quiescent window (first-boot / container-entrypoint, before the
-# agent runtime starts) — NEVER a periodic timer against a live volume. Ordering
-# is the concurrency-safety mechanism: under a future ADR-068 shared-git-data
-# topology the volume is not quiescent, so a periodic sweep there would race a live
-# writer. Do NOT add a timer. (ADR-068 `/mnt/git-data` is the not-yet-GA multi-host
-# future — deliberately NOT swept here; `replicas=1` is still in force.)
+# WHY host-side: the bare repos live on the host bind-mount `/mnt/data/workspaces`
+# (NOT the container overlay2 upper — overlay2 does not overlay the bind mount, so a
+# Dockerfile-layer sweep would never see the node).
+#
+# CONCURRENCY SAFETY — the load-bearing invariant is the `-type c` FILTER, NOT a
+# quiescent volume (corrected after review). The sweep is invoked from ci-deploy.sh
+# BEFORE the canary `docker run`, but the OLD production container is still LIVE at
+# that point (it is not stopped until the blue-green cutover much later) — so its
+# uid-1001 agents are actively writing `.git/config.lock` on the shared volume. The
+# sweep is safe anyway because a live git writer's lock is ALWAYS a REGULAR file
+# (git creates it via open(O_CREAT|O_EXCL), held single-digit-ms) — never a
+# character device. `find -type c` therefore CANNOT match any in-flight legitimate
+# lock; the only things it matches are the wedge artifacts, whose removal is the
+# desired unwedge, not a race. Do NOT add a periodic timer regardless: under a
+# future ADR-068 shared-git-data topology the deploy-time invocation still holds
+# only because of the type filter, and a timer would add churn without new safety.
+# (ADR-068 `/mnt/git-data` is the not-yet-GA multi-host future — deliberately NOT
+# swept here; `replicas=1` is still in force.)
 #
 # SCOPE (idempotent, no-op when clean): ONLY `config.lock` / `config.worktree.lock`
 # that are CHARACTER DEVICES (`test -c`), depth-bounded under KNOWN workspace roots.
@@ -33,9 +42,14 @@
 # (e.g. a bound /dev/null, rdev 1:3) returns EBUSY on unlink — it MUST be `umount`ed
 # FIRST, else the sweep silently "succeeds" while the wedge persists.
 #
-# Observability (no-SSH): one structured SOLEUR_CHARDEV_SWEEP_* marker per node +
-# a JSON state file readable via the cat-*-state.sh pattern; a failure to remove a
-# detected node is LOUD, never silent (cq-silent-fallback-must-mirror-to-sentry).
+# Observability (no-SSH): each structured SOLEUR_CHARDEV_SWEEP_* marker is emitted
+# to stdout AND to the host journal via `logger -t git-lock-chardevice-sweep`, whose
+# SYSLOG_IDENTIFIER is routed by vector.toml's host_scripts_journald source →
+# Better Stack. THAT is the no-SSH observability layer (this host has no Sentry sink
+# — vector.toml ships to Better Stack only). A failure to remove a detected node is
+# LOUD (SOLEUR_CHARDEV_SWEEP_FAILED), never silent. The JSON state file at
+# /var/lock is host-local inspection only (no cat-*-state.sh reader is wired); the
+# Better Stack marker path is the authoritative no-SSH signal the AC10 soak greps.
 #
 # Test seams: GIT_LOCK_SWEEP_ROOT, GIT_LOCK_SWEEP_STATE, GIT_LOCK_SWEEP_MAXDEPTH,
 # GIT_LOCK_SWEEP_FORCE_MOUNTPOINTS (colon-list of paths to treat as mountpoints,
@@ -57,9 +71,17 @@ sweep_state() { printf '%s' "${GIT_LOCK_SWEEP_STATE:-/var/lock/git-lock-chardevi
 sweep_maxdepth() { printf '%s' "${GIT_LOCK_SWEEP_MAXDEPTH:-3}"; }
 
 # Emit a structured, grep-able, no-SSH marker (STDOUT + host journal via logger).
+# Sanitize control chars AND Unicode line separators (U+0085 NEL, U+2028, U+2029)
+# out of the interpolated workspace path so a hostile/anomalous dir name cannot
+# forge extra SOLEUR_CHARDEV_SWEEP_* lines in the Better Stack log viewer
+# (2026-04-17-log-injection-unicode-line-separators; workspace ids are normally
+# system-generated, but the sweep makes no such assumption).
 marker() {
-  echo "$1"
-  logger -t "$LOG_TAG" "$1" 2>/dev/null || true
+  local line="$1"
+  line="$(printf '%s' "$line" | LC_ALL=C tr -d '\000-\037\177')"   # C0 + DEL
+  line="${line//$''/}"; line="${line//$' '/}"; line="${line//$' '/}"
+  echo "$line"
+  logger -t "$LOG_TAG" "$line" 2>/dev/null || true
 }
 
 write_state() {
@@ -110,7 +132,30 @@ discover_targets() {
 # rc 1 (LOUD marker) on any failure. Assumes <path> is already a confirmed target
 # (discovery owns the -type c / name filter), so it is directly seam-testable.
 remediate_node() {
-  local path="$1" rdev branch
+  local path="$1" rdev branch root rp is_forced=0
+  # TOCTOU re-assert (defense-in-depth): the volume is LIVE at sweep time (see the
+  # CONCURRENCY SAFETY note in the header), so between discover_targets' find and
+  # here a concurrent uid-1001 writer could swap an ancestor component for a symlink
+  # to redirect the root rm/umount outside the workspace root. Re-verify the node is
+  # STILL a character device AND its resolved path is still under sweep_root before
+  # any destructive op; skip + LOUD marker otherwise (never rm/umount a moved target).
+  # The GIT_LOCK_SWEEP_FORCE_MOUNTPOINTS seam declares a stand-in target for the
+  # umount-branch test (no CAP_MKNOD in CI) and bypasses the re-check — it is NEVER
+  # set in production, so the guard is fully live on the real deploy path.
+  if [[ -n "${GIT_LOCK_SWEEP_FORCE_MOUNTPOINTS:-}" ]]; then
+    case ":${GIT_LOCK_SWEEP_FORCE_MOUNTPOINTS}:" in *":$path:"*) is_forced=1 ;; esac
+  fi
+  if (( ! is_forced )); then
+    root="$(sweep_root)"; rp="$(realpath -- "$path" 2>/dev/null || echo "")"
+    if [[ ! -c "$path" ]]; then
+      marker "SOLEUR_CHARDEV_SWEEP_SKIPPED path=$path reason=not-a-chardevice-at-remediation"
+      return 0
+    fi
+    if [[ -z "$rp" || ( "$rp" != "$root/"* && "$rp" != "$root" ) ]]; then
+      marker "SOLEUR_CHARDEV_SWEEP_SKIPPED path=$path reason=resolved-outside-root resolved=$rp"
+      return 0
+    fi
+  fi
   rdev=$(stat -c '%t:%T' -- "$path" 2>/dev/null || echo unknown)
   if is_mountpoint "$path"; then
     branch=umount-then-rm

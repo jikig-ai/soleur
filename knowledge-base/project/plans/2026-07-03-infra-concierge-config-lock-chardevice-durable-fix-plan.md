@@ -351,31 +351,39 @@ N/A — no vendor resource created (Hetzner host-local maintenance only).
 
 ## Observability
 
+**Corrected after review:** this host's `vector.toml` has **no Sentry sink** — all
+telemetry ships to **Better Stack** (journald → `host_scripts_journald` → HTTP sink).
+The earlier Sentry / `cat-*-state.sh` / heartbeat citations below were aspirational;
+the wired layer is the Better Stack `SOLEUR_CHARDEV_SWEEP_*` markers.
+
 ```yaml
 liveness_signal:
-  what: "privileged char-device lock sweep ran (per boot / bootstrap invocation)"
-  cadence: "on container start and/or volume bootstrap (idempotent re-run)"
-  alert_target: "Better Stack heartbeat OR deploy-state marker read via cat-*-state.sh"
-  configured_in: "apps/web-platform/infra/git-lock-chardevice-sweep.sh + infra-config-apply.sh"
+  what: "privileged char-device lock sweep ran (per deploy invocation)"
+  cadence: "per deploy (ci-deploy.sh pre-canary-docker-run); event-driven, NOT a fixed heartbeat cadence"
+  alert_target: "SOLEUR_CHARDEV_SWEEP_DONE marker in Better Stack (scripts/betterstack-query.sh --grep SOLEUR_CHARDEV_SWEEP_DONE)"
+  configured_in: "apps/web-platform/infra/git-lock-chardevice-sweep.sh + ci-deploy.sh + vector.toml"
 error_reporting:
-  destination: "Sentry (feature: agent-sandbox) + host journal + no-SSH state file"
-  fail_loud: "sweep failure to remove a detected char-device lock emits a loud structured marker; never silent"
+  destination: "Better Stack (journald host_scripts_journald → HTTP sink) + host journal; host-local /var/lock state file (NOT no-SSH readable — no cat-reader wired)"
+  fail_loud: "sweep failure to remove a detected char-device lock emits a loud SOLEUR_CHARDEV_SWEEP_FAILED marker → Better Stack; never silent"
 failure_modes:
-  - mode: "char-device config.lock persists after sweep (wrong layer / permission)"
-    detection: "in-sandbox SOLEUR_GIT_LOCK_UNREMOVABLE type=chardevice rdev=<maj:min> on the agent's captured stdout (the affected blind surface's own probe)"
-    alert_route: "grep-able orchestrator stdout + Sentry mirror; discriminates rdev 0:0 (whiteout) vs leftover-bind in one event"
+  - mode: "char-device config.lock detected but NOT cleared (umount/rm failed → wedge persists)"
+    detection: "SOLEUR_CHARDEV_SWEEP_FAILED marker (Better Stack), carrying path + rdev + branch + reason"
+    alert_route: "betterstack-query.sh --grep SOLEUR_CHARDEV_SWEEP_FAILED; this is the AC10 soak's regression signal"
+  - mode: "in-sandbox wedge reaches a live session despite the sweep"
+    detection: "in-sandbox SOLEUR_GIT_LOCK_UNREMOVABLE type=chardevice rdev=<maj:min> on the agent's captured stdout"
+    alert_route: "grep-able orchestrator stdout ONLY — NOT yet mirrored to a queryable sink (tracked as an observability follow-up); the host FAILED marker above is the wired proxy"
   - mode: "sweep removes a lock it should not (regular / index.lock)"
-    detection: "sweep test asserts scope; structured removal marker names the exact path+rdev removed"
-    alert_route: "Sentry event review; CI test gate"
+    detection: "sweep test asserts -type c scope + TOCTOU re-assert; structured removal marker names the exact path+rdev removed"
+    alert_route: "CI test gate (git-lock-chardevice-sweep.test.sh); Better Stack removal-marker review"
   - mode: "sweep never runs (staging/invocation drift)"
-    detection: "absence of liveness marker in state file / heartbeat"
-    alert_route: "Better Stack heartbeat miss"
+    detection: "absence of SOLEUR_CHARDEV_SWEEP_DONE marker in the deploy window (Better Stack)"
+    alert_route: "the AC10 soak treats zero-DONE as TRANSIENT (inconclusive, never a false PASS)"
 logs:
-  where: "Sentry (feature: agent-sandbox) + host journal + infra state file"
-  retention: "Sentry default; state file overwritten per run"
+  where: "Better Stack (host_scripts_journald) + host journal; host-local /var/lock state file"
+  retention: "Better Stack default; state file overwritten per run"
 discoverability_test:
-  command: "read the sweep state marker via apps/web-platform/infra/cat-*-state.sh (or query Sentry for type=chardevice events) — no remote shell"
-  expected_output: "last-run timestamp + count of char-device locks removed (0 when clean)"
+  command: "scripts/betterstack-query.sh --since 7d --grep SOLEUR_CHARDEV_SWEEP_DONE (needs BETTERSTACK_QUERY_* from Doppler prd_terraform) — no remote shell"
+  expected_output: "one JSONEachRow row per sweep run (DONE marker); zero SWEEP_FAILED rows when the fix holds"
 ```
 
 **Affected-surface (blind sandbox) note (Phase 2.9.2):** the failing surface is the
@@ -385,14 +393,19 @@ agent bwrap sandbox — a blind surface. The load-bearing probe is the **in-sand
 substrate hypotheses in one event** (`0:0` whiteout vs. non-zero leftover-bind vs.
 mount) — satisfying the structured-fields-discriminate-all-hypotheses requirement.
 
-### Soak follow-through enrollment
-- Script: `scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh` — exit 0 when,
-  for the soak window, zero `type=chardevice` UNREMOVABLE events occurred
-  (Sentry-rate soak; `start=` pinned strictly after deploy, mirroring
-  `reconcile-ff-only-sentry-4977.sh`).
-- Tracker directive on #5934: `<!-- soleur:followthrough script=scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh earliest=<deploy+7d> secrets=SENTRY_AUTH_TOKEN -->`
+### Soak follow-through enrollment (corrected after review)
+- Script: `scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh` — PASS (exit 0)
+  only when, for the soak window, the sweep ran ≥1× (a `SOLEUR_CHARDEV_SWEEP_DONE`
+  marker) AND zero `SOLEUR_CHARDEV_SWEEP_FAILED` markers occurred, queried via
+  **Better Stack** (`scripts/betterstack-query.sh`). Fail-safe TRANSIENT (never a false
+  PASS/close) on any query/auth failure OR when no DONE marker is observed yet.
+  (The original Sentry-query design was vacuous — the in-sandbox UNREMOVABLE line is not
+  mirrored to any queryable sink; see `## Observability`.)
+- Tracker directive on #5934: `<!-- soleur:followthrough script=scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh earliest=<deploy+7d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`
   + the `follow-through` label.
-- Wire any new `secrets=` into `.github/workflows/scheduled-followthrough-sweeper.yml`.
+- `BETTERSTACK_QUERY_*` wired into `.github/workflows/scheduled-followthrough-sweeper.yml`
+  (shared with #5110); until those GH secrets are provisioned the soak stays fail-safe
+  TRANSIENT (#5934 stays open, never false-closes).
 
 ## Architecture Decision (ADR/C4)
 

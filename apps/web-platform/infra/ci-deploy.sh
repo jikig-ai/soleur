@@ -851,16 +851,19 @@ case "$COMPONENT" in
     sudo chown 1001:1001 /mnt/data/workspaces
     # #5934 durable substrate remediation (ADR-081): clear any residual
     # CHARACTER-DEVICE `.git/config.lock` the container filesystem substrate may
-    # have left on the persistent /mnt/data/workspaces volume, BEFORE the container
-    # (and the agents it runs) start. THIS is the quiescent, host-side, root window
-    # — the old container is stopped and the canary is not yet running — so the
-    # sweep never races a live git writer (ordering is the concurrency-safety
-    # mechanism; see ADR-081 / git-lock-chardevice-sweep.sh). The in-sandbox #5912
-    # `atomic_git_config` self-heal is the in-session stopgap; this removes the node
-    # at the substrate. Best-effort + `-x`-guarded: it never blocks a deploy and is
-    # inert until infra-config-apply has installed the sweep to /usr/local/bin.
+    # have left on the persistent /mnt/data/workspaces volume, BEFORE the canary
+    # `docker run`. NOTE: the OLD production container is still LIVE here (it is not
+    # stopped until the blue-green cutover below), so the volume is NOT quiescent —
+    # safety comes from the sweep's `-type c` filter, since a live git writer's lock
+    # is always a REGULAR file, never a character device (see the CONCURRENCY SAFETY
+    # note in git-lock-chardevice-sweep.sh). The in-sandbox #5912 `atomic_git_config`
+    # self-heal is the in-session stopgap; this removes the node at the substrate.
+    # `-x`-guarded (inert until infra-config-apply delivers the sweep), `timeout`-
+    # bounded (a hang on a `find`/`umount` over the LIVE volume must never freeze the
+    # deploy for the whole fleet), and `|| true` (a non-zero exit never blocks a
+    # deploy — a failure already shipped a loud SOLEUR_CHARDEV_SWEEP_FAILED marker).
     if [[ -x /usr/local/bin/git-lock-chardevice-sweep.sh ]]; then
-      sudo /usr/local/bin/git-lock-chardevice-sweep.sh || true
+      sudo timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh || true
     fi
     # NOTE (#4886 follow-up): the `.cron` subdir isolation was reverted. A
     # `mkdir -p /mnt/data/workspaces/.cron` in the deploy critical path ENOSPC-

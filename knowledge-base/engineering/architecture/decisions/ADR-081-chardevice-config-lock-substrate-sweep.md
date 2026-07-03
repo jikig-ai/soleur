@@ -51,12 +51,20 @@ and NOT an unconditional in-sandbox `rm -rf` (blind surface + no privilege).
   not overlay the bind mount, so a `Dockerfile`-layer sweep would never see the node.
   ADR-068's `/mnt/git-data` (not-yet-GA multi-host, `replicas=1`) is deliberately **not**
   swept.
-- **Timing:** a **quiescent window** — `ci-deploy.sh`'s pre-`docker run` slot (old
-  container stopped, canary not yet running). **Ordering is the concurrency-safety
-  mechanism**: never a periodic timer against a live volume (under a future ADR-068
-  shared-git-data topology the volume is not quiescent and a periodic sweep would race a
-  live writer). Delivered via the webhook infra-config chain
-  (`git-lock-chardevice-sweep.sh`), so existing hosts get it on the next deploy.
+- **Timing + the real safety invariant (corrected after review):** the sweep runs at
+  `ci-deploy.sh`'s pre-canary-`docker run` slot, but the OLD production container is
+  **still live** there (it is not stopped until the blue-green cutover later), so the
+  volume is **NOT quiescent** — its uid-1001 agents are actively writing git config.
+  The load-bearing safety invariant is therefore the **`-type c` filter**, NOT ordering:
+  a live git writer's lock is ALWAYS a *regular* file (`open(O_CREAT|O_EXCL)`, held
+  single-digit-ms), never a character device, so `find -type c` can never match an
+  in-flight legitimate lock — it matches only the wedge artifact, whose removal is the
+  desired unwedge. `remediate_node` additionally re-asserts `-type c` + resolved-path-
+  under-root immediately before the destructive op (TOCTOU defense-in-depth on the live
+  volume). Keep it a deploy-time (not periodic-timer) invocation: under a future ADR-068
+  shared-git-data topology the same `-type c` invariant is what holds, and a timer adds
+  churn without new safety. Delivered via the webhook infra-config chain, so existing
+  hosts get it on the next deploy.
 - **rdev-aware removal (kernel-grounded discriminators):** a **plain** char-special
   inode is cleared with `rm -f`; a **bind-mounted** device node (e.g. a bound `/dev/null`,
   `rdev 1:3`) returns `EBUSY` on unlink and MUST be `umount`ed first, else the sweep
@@ -91,17 +99,26 @@ granularity cannot preempt it and #5912 stays load-bearing.
 
 ## Observability (no-SSH)
 
-- **Liveness:** `git-lock-chardevice-sweep.sh` writes a JSON state file
-  (`/var/lock/git-lock-chardevice-sweep.state`) and emits one `SOLEUR_CHARDEV_SWEEP_*`
-  marker per node to the host journal (routed by `vector.toml`); readable via the
-  `cat-*-state.sh` pattern.
-- **Fail-loud:** a failure to remove a detected node emits a loud
-  `SOLEUR_CHARDEV_SWEEP_FAILED` marker; never silent.
-- **Regression signal:** the in-sandbox `SOLEUR_GIT_LOCK_UNREMOVABLE … type=chardevice
-  rdev=…` line — a wedge that reached a live session despite the sweep. Its `rdev` field
-  discriminates all competing substrate hypotheses in ONE event.
-- **Soak (AC10):** `scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh` asserts
-  zero char-device UNREMOVABLE events for 7 days post-deploy; PASS closes #5934.
+Corrected after review — this host's `vector.toml` has **no Sentry sink**; all
+telemetry ships to **Better Stack** (journald → `host_scripts_journald` → HTTP sink).
+
+- **Liveness + fail-loud (the wired no-SSH layer):** each `SOLEUR_CHARDEV_SWEEP_*`
+  marker is emitted to stdout AND `logger -t git-lock-chardevice-sweep`, whose
+  SYSLOG_IDENTIFIER `vector.toml` routes to Better Stack. `SOLEUR_CHARDEV_SWEEP_DONE`
+  (one per run) is liveness; `SOLEUR_CHARDEV_SWEEP_FAILED` (a detected node it could
+  not clear) is the loud failure signal. The JSON state file at `/var/lock` is
+  host-local inspection only — **no `cat-*-state.sh` reader is wired** (unlike the
+  inngest precedent); the Better Stack marker path is the authoritative no-SSH signal.
+- **Regression signal (the AC10 soak):**
+  `scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh` queries Better Stack
+  (`scripts/betterstack-query.sh`) and PASSes only when the sweep ran ≥1× (a `DONE`
+  marker) AND zero `SOLEUR_CHARDEV_SWEEP_FAILED` in the window — fail-safe TRANSIENT
+  (never a false close) on any query/auth failure. The earlier draft queried Sentry for
+  the **in-sandbox** `SOLEUR_GIT_LOCK_UNREMOVABLE type=chardevice` line, but that line is
+  emitted only to blind agent-sandbox stdout and is **not mirrored to any queryable
+  sink**, so the query would PASS vacuously. Mirroring the in-sandbox line to a queryable
+  sink (a Concierge dispatch-path stdout→telemetry capture) is a separate observability
+  follow-up; until then the host `FAILED` marker is the sound, wired regression signal.
 
 ## C4 impact
 
@@ -118,5 +135,12 @@ no element, edge, or actor, so no `.c4` edit is in scope.
   repo-expressible IaC, not a pure upstream ask.
 - Negative / watch: the sweep runs per deploy (a fast no-op when clean); the
   "dead-code insurance" reclassification of #5912 is conditional on the AC10 soak; a
-  future ADR-068 shared-git-data topology would require re-validating the quiescence
-  assumption before any periodic variant.
+  future ADR-068 shared-git-data topology would require re-validating the `-type c`
+  safety invariant before any periodic variant.
+- **Coverage assumption (`GIT_LOCK_SWEEP_MAXDEPTH=3`):** the sweep is depth-bounded to
+  3, which covers the two observed wedge paths — a bare repo (`<workspace>/config.lock`,
+  depth 2) and a working tree (`<workspace>/.git/config.lock`, depth 3). A hypothetical
+  nested workspace layout one level deeper (`<workspace>/<repo>/.git/config.lock`) would
+  be silently missed (a no-op-that-looks-clean, `removed=0`). This is correct for
+  today's single-level workspace layout; a future nested-workspace change must revisit
+  `GIT_LOCK_SWEEP_MAXDEPTH`.

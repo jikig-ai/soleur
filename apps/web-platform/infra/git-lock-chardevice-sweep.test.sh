@@ -87,6 +87,7 @@ echo "Test (ii): bind-mounted node -> umount BEFORE rm (branch=umount-then-rm)"
 NODE="$TMP/bound-node.lock"
 printf 'stand-in\n' > "$NODE"
 : > "$MOCK_UMOUNT_LOG"
+# shellcheck disable=SC2034  # consumed by the sourced remediate_node/is_mountpoint (shellcheck cannot trace through `source`); the passing test proves the read
 GIT_LOCK_SWEEP_FORCE_MOUNTPOINTS="$NODE"
 set +e
 OUT="$(remediate_node "$NODE" 2>&1)"; RC=$?
@@ -109,6 +110,7 @@ EOF
 chmod +x "$MOCKBIN/umount"
 NODE2="$TMP/busy-node.lock"
 printf 'busy\n' > "$NODE2"
+# shellcheck disable=SC2034  # consumed by the sourced remediate_node (see above)
 GIT_LOCK_SWEEP_FORCE_MOUNTPOINTS="$NODE2"
 set +e
 OUT2="$(remediate_node "$NODE2" 2>&1)"; RC2=$?
@@ -166,6 +168,28 @@ set +e
 ( GIT_LOCK_SWEEP_STATE="$TMP/state-absent.json" main >/dev/null 2>&1 ); ABS_RC=$?
 set -e
 assert_eq "main tolerates an absent ROOT" "0" "$ABS_RC"
+
+# ---------------------------------------------------------------------------
+echo "Test (TOCTOU re-assert): a non-char-device / out-of-root target is SKIPPED, not rm'd"
+# remediate_node re-verifies the node is still a char device AND under sweep_root
+# before any destructive op (defense-in-depth against a live-volume ancestor swap).
+# A regular-file path that is NOT in FORCE_MOUNTPOINTS must be skipped loudly.
+GIT_LOCK_SWEEP_ROOT="$TMP/ws-root"; mkdir -p "$GIT_LOCK_SWEEP_ROOT"
+STRAY="$TMP/outside/config.lock"; mkdir -p "$(dirname "$STRAY")"; printf 'x\n' > "$STRAY"
+set +e
+TOCTOU_OUT="$(remediate_node "$STRAY" 2>&1)"; TOCTOU_RC=$?
+set -e
+assert_eq "remediate_node returns 0 (skip, not fail) on a non-target" "0" "$TOCTOU_RC"
+assert_contains "SKIPPED marker emitted for a non-char-device" "$TOCTOU_OUT" "SOLEUR_CHARDEV_SWEEP_SKIPPED"
+assert_eq "stray file NOT removed by the re-assert guard" "true" "$([[ -e "$STRAY" ]] && echo true || echo false)"
+
+# ---------------------------------------------------------------------------
+echo "Test (deploy wiring): ci-deploy.sh invokes the sweep, guarded + bounded + best-effort"
+CID="$SCRIPT_DIR/ci-deploy.sh"
+assert_contains "ci-deploy.sh invokes the installed sweep" "$(cat "$CID")" "/usr/local/bin/git-lock-chardevice-sweep.sh"
+assert_contains "invocation is -x guarded (inert until delivered)" "$(cat "$CID")" "[[ -x /usr/local/bin/git-lock-chardevice-sweep.sh ]]"
+assert_contains "invocation is wall-clock bounded (no fleet-wide deploy hang)" "$(cat "$CID")" "timeout"
+assert_contains "invocation is best-effort (never blocks a deploy)" "$(cat "$CID")" "git-lock-chardevice-sweep.sh || true"
 
 echo ""
 echo "=== Results ==="

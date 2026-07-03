@@ -64,6 +64,14 @@ jobs:
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          # #5934 chardevice-wedge-nonrecurrence-5934.sh (and #5110 betterstack-
+          # quota-verdict) — Better Stack Telemetry read creds for scripts/
+          # betterstack-query.sh (mirror Doppler soleur/prd_terraform). If these GH
+          # secrets are not yet provisioned they resolve to "", and the probes are
+          # fail-safe TRANSIENT (never a false PASS/close) until they are set.
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: |
           set -euo pipefail
           bash scripts/sweep-followthroughs.sh

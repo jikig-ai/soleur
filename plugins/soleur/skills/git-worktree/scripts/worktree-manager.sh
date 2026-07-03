@@ -176,6 +176,8 @@ sweep_stale_git_locks() {
   # different failure class (a wedged checkout/rebase) with a larger blast radius.
   for lock in config.lock config.worktree.lock; do
     path="$git_dir/$lock"
+    is_mp=false   # reset at loop scope beside rdev/mount/whiteout — never let a
+                  # prior iteration's mountpoint verdict leak into this one.
     # Type precedence is load-bearing: -L (symlink) FIRST because -e/-f/-d all
     # dereference symlinks; mountpoint BEFORE -d because a mountpoint is also a dir.
     if [[ -L "$path" ]]; then
@@ -185,9 +187,9 @@ sweep_stale_git_locks() {
       # `stat -c%m` prints the file's mount root; == its own realpath iff the path
       # IS a mountpoint. (Do NOT use bare `findmnt -T`: it exits 0 + prints the
       # containing-fs SOURCE for every existing path and never yields "none".)
-      # Computed ONCE here and reused for both the `mount` classification and the
-      # char-device `mount=` attribute (a bound /dev/null is BOTH -c and a mountpoint).
-      is_mp=false
+      # Computed ONCE here (is_mp was reset at loop scope above) and reused for both
+      # the `mount` classification and the char-device `mount=` attribute (a bound
+      # /dev/null is BOTH -c and a mountpoint).
       if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then is_mp=true; fi
       # Character-device FIRST — the confirmed #5934 substrate wedge signature. A
       # masked config.lock is a char-special inode: either a bound /dev/null (rdev
