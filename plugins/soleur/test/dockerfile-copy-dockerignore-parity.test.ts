@@ -16,15 +16,23 @@
 // the Docker build, so a source-level `bun test` assertion is the only pre-merge catch.
 //
 // The existing guard in cloud-init-user-data-size.test.ts is PARTIAL — it only asserts re-inclusion
-// for the multi-line host-scripts COPY block. This suite generalizes it to EVERY builder
-// `COPY --from=<stage>` src AND every builder-stage `RUN` shell-script arg, closing the class
-// wholesale. It ships green against the current repo (already clean).
+// for the multi-line host-scripts COPY block. This suite generalizes it to every builder
+// `COPY --from=<stage>` src AND every builder-stage `RUN` shell-script invocation
+// (`bash|sh|source|. <path>.sh` and direct-exec `./<path>.sh`, single-line and `\`-continued). It
+// ships green against the current repo (already clean).
 //
-// Evaluator scope: a deliberate Set+prefix simplification, NOT a full Docker patternmatcher. Every
-// in-scope `.dockerignore` exclude a real baked/consumed src hits is a literal directory prefix and
-// every re-include is an exact `!<path>`. The model is fail-loud-safe: a future glob re-include it
-// cannot represent surfaces as a SPURIOUS violation on the clean-repo test (safe direction) — extend
-// the model then; it never silently passes a real strip. See the feat plan for the full rationale.
+// Evaluator scope: a deliberate Set+prefix simplification, NOT a full Docker patternmatcher — but it
+// is designed to fail in the SAFE (loud) direction, never the silent one:
+//   - Literal directory-prefix EXCLUDES (`infra/`, `scripts/`) + exact `!<path>` RE-INCLUDES are
+//     modeled precisely (these cover every real baked/consumed src today).
+//   - GLOB EXCLUDES (`*.md`, `assets/*`, `_plugin-vendored/**`) are matched by an over-approximating
+//     translation (`**`→`.*`, `*`→`[^/]*`, `?`→`[^/]`): a baked src they shadow is FLAGGED (loud),
+//     never silently skipped — closing the fail-open a bare "skip all globs" would leave.
+//   - GLOB RE-INCLUDES the model cannot represent surface as a SPURIOUS violation on the clean-repo
+//     test (safe direction) — extend the model then.
+// The one residual model boundary is pattern ORDER (Docker is last-match-wins; this model is not):
+// a re-include placed BEFORE its dir exclude is treated as effective. No real `.dockerignore` authors
+// that order; documented as a known limit rather than modeled. See the feat plan for the rationale.
 
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -48,21 +56,26 @@ interface SrcRef {
 /**
  * Every `/app/`-prefixed `<src>` from all `COPY --from=<stage> <src...> <dst>` statements
  * (single-line and `\`-continued multi-line). The last token of a statement is the `<dst>`
- * (excluded); tolerates optional `--chown=`/`--chmod=` flags between `COPY` and `--from=`.
+ * (excluded); tolerates optional flags between `COPY` and `--from=`, both valued
+ * (`--chown=`/`--chmod=`) and valueless (`--link`/`--parents`).
  */
 export function parseBuilderCopySources(dockerfileText: string): SrcRef[] {
   const lines = dockerfileText.split("\n");
+  // `(?:--\w+(?:=\S+)?\s+)*` tolerates BOTH `--flag=value` and bare `--flag` (BuildKit `--link`).
+  const flags = "(?:--\\w+(?:=\\S+)?\\s+)*";
+  const copyHead = new RegExp(`^\\s*COPY\\s+${flags}--from=\\S+`);
+  const copyPrefix = new RegExp(`^\\s*COPY\\s+${flags}--from=\\S+\\s+`);
   const out: SrcRef[] = [];
   for (let i = 0; i < lines.length; i++) {
     // Only statements whose first keyword is COPY --from=<stage>. Join `\`-continuations.
-    if (!/^\s*COPY\s+(?:--\w+=\S+\s+)*--from=\S+/.test(lines[i])) continue;
+    if (!copyHead.test(lines[i])) continue;
     const keywordLine = i + 1; // 1-indexed line of the COPY keyword
     let stmt = lines[i];
     while (/\\\s*$/.test(stmt) && i + 1 < lines.length) {
       stmt = stmt.replace(/\\\s*$/, " ") + lines[++i];
     }
-    // Strip the leading `COPY (--flag=… )* --from=<stage>` prefix, then tokenize the rest.
-    const rest = stmt.replace(/^\s*COPY\s+(?:--\w+=\S+\s+)*--from=\S+\s+/, "");
+    // Strip the leading `COPY (--flag… )* --from=<stage>` prefix, then tokenize the rest.
+    const rest = stmt.replace(copyPrefix, "");
     const tokens = rest.split(/\s+/).filter(Boolean);
     tokens.pop(); // last token is the <dst>
     for (const tok of tokens) {
@@ -73,9 +86,16 @@ export function parseBuilderCopySources(dockerfileText: string): SrcRef[] {
 }
 
 /**
- * For `RUN` lines inside the `builder` stage (between `FROM … AS builder` and the next `FROM`),
- * the relative `.sh` path args matching `(?:bash|sh|source|\.)\s+(\S+\.sh)\b`. These are context
- * srcs the builder needs at build time (a `.dockerignore` strip → `exit 127`).
+ * For `RUN` statements inside the `builder` stage (between `FROM … AS builder` and the next `FROM`),
+ * the relative `.sh` script args the builder needs at build time (a `.dockerignore` strip → the RUN
+ * `exit 127`s). Covers both interpreter-prefixed (`bash|sh|source|. <path>.sh`) and direct-exec
+ * (`./<path>.sh`) invocations, single-line and `\`-continued multi-line, and normalizes a leading
+ * `./` so the src matches the git-tracked (unprefixed) form.
+ *
+ * Scope note: the RUN scan is builder-stage-only (the release-break class is a builder consuming a
+ * stripped context file). The COPY scan above is stage-agnostic (`--from=<stage>`) by design — a
+ * runner `COPY --from=X` can extract from any earlier stage. Renaming the `builder` stage would
+ * drop RUN coverage; keep the `AS builder` name or update this slice.
  */
 export function parseBuilderRunScriptSources(dockerfileText: string): SrcRef[] {
   const lines = dockerfileText.split("\n");
@@ -92,22 +112,56 @@ export function parseBuilderRunScriptSources(dockerfileText: string): SrcRef[] {
   }
   if (start === -1) return [];
   const out: SrcRef[] = [];
-  const runScript = /(?:\bbash|\bsh|\bsource|(?:^|\s)\.)\s+(\S+\.sh)\b/g;
+  // Two passes, both capturing the `.sh` path (group 1) WITHOUT any leading `./`:
+  //  (1) interpreter-prefixed: `bash|sh|source|.` + ` [./]<path>.sh`
+  //  (2) direct-exec: a `./<path>.sh` token at a command position (start / whitespace / `&&`)
+  // The `.sh` suffix keeps this narrow — `RUN npm run build`, `RUN ./node_modules/.bin/esbuild
+  // next.config.ts` (ends `.ts`/`.mjs`) do not match. Widen only with a fixture (see Sharp Edges).
+  const interpreterRun = /(?:\bbash|\bsh|\bsource|(?:^|\s)\.)\s+(?:\.\/)?(\S+\.sh)\b/g;
+  const directExecRun = /(?:^|\s|&&\s*)\.\/(\S+\.sh)\b/g;
   for (let i = start; i < end; i++) {
     if (!/^\s*RUN\b/.test(lines[i])) continue;
-    for (const m of lines[i].matchAll(runScript)) out.push({ src: m[1], line: i + 1 });
+    const keywordLine = i + 1;
+    // Join `\`-continuations into one logical statement (mirror the COPY parser).
+    let stmt = lines[i];
+    while (/\\\s*$/.test(stmt) && i + 1 < end) {
+      stmt = stmt.replace(/\\\s*$/, " ") + lines[++i];
+    }
+    // A `bash ./x.sh` token matches BOTH passes; dedup per statement so each src is reported once.
+    const stmtSrcs = new Set<string>();
+    for (const m of stmt.matchAll(interpreterRun)) stmtSrcs.add(m[1]);
+    for (const m of stmt.matchAll(directExecRun)) stmtSrcs.add(m[1]);
+    for (const src of stmtSrcs) out.push({ src, line: keywordLine });
   }
   return out;
 }
 
 interface ExclusionModel {
   excludedDirPrefixes: string[]; // literal (non-`!`/non-`#`/non-glob) patterns, trailing `/` stripped
+  globExcludeRes: RegExp[]; // over-approximating regexes for glob EXCLUDES (fail-loud, not skipped)
   reincludes: Set<string>; // exact `!<path>` lines (no globs)
 }
 
-/** Excluded-dir-prefix set + exact-`!`-reinclude set. Simplified evaluator — no glob engine. */
+/**
+ * Over-approximating glob→regex for EXCLUDE patterns. Deliberately errs toward matching MORE
+ * (the safe/loud direction: an over-match flags a src that then just needs a re-include; it never
+ * silently passes a real strip). `**`→`.*`, `*`→`[^/]*`, `?`→`[^/]`; anchored with a trailing
+ * `(?:/|$)` so a dir-glob also matches its children.
+ */
+function globExcludeToRegExp(pattern: string): RegExp {
+  const esc = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const body = esc
+    .replace(/\*\*/g, " ") // placeholder so the single-`*` pass doesn't clobber `**`
+    .replace(/\*/g, "[^/]*")
+    .replace(/ /g, ".*")
+    .replace(/\?/g, "[^/]");
+  return new RegExp(`^${body}(?:/|$)`);
+}
+
+/** Excluded-dir-prefix set + glob-exclude regexes + exact-`!`-reinclude set. */
 export function dockerignoreExclusionModel(dockerignoreText: string): ExclusionModel {
   const excludedDirPrefixes: string[] = [];
+  const globExcludeRes: RegExp[] = [];
   const reincludes = new Set<string>();
   const hasGlob = (p: string) => /[*?[\]]/.test(p);
   for (const raw of dockerignoreText.split("\n")) {
@@ -115,13 +169,18 @@ export function dockerignoreExclusionModel(dockerignoreText: string): ExclusionM
     if (!pat || pat.startsWith("#")) continue;
     if (pat.startsWith("!")) {
       const body = pat.slice(1);
+      // Glob re-includes are unmodeled: if one ever matters, a real strip surfaces as a SPURIOUS
+      // clean-repo violation (safe/loud) — extend then. See header.
       if (!hasGlob(body)) reincludes.add(body.replace(/\/+$/, ""));
       continue;
     }
-    if (hasGlob(pat)) continue; // simplified evaluator: only literal prefixes (fail-loud on globs)
+    if (hasGlob(pat)) {
+      globExcludeRes.push(globExcludeToRegExp(pat.replace(/\/+$/, "")));
+      continue;
+    }
     excludedDirPrefixes.push(pat.replace(/\/+$/, ""));
   }
-  return { excludedDirPrefixes, reincludes };
+  return { excludedDirPrefixes, globExcludeRes, reincludes };
 }
 
 interface GuardInput {
@@ -141,7 +200,8 @@ interface Violation extends SrcRef {
  */
 export function findReincludeViolations(input: GuardInput): Violation[] {
   const { dockerfileText, dockerignoreText, trackedContextPaths } = input;
-  const { excludedDirPrefixes, reincludes } = dockerignoreExclusionModel(dockerignoreText);
+  const { excludedDirPrefixes, globExcludeRes, reincludes } =
+    dockerignoreExclusionModel(dockerignoreText);
   const refs = [
     ...parseBuilderCopySources(dockerfileText),
     ...parseBuilderRunScriptSources(dockerfileText),
@@ -155,8 +215,15 @@ export function findReincludeViolations(input: GuardInput): Violation[] {
     for (const p of trackedContextPaths) if (p.startsWith(prefix)) return true;
     return false;
   };
-  const isStripped = (src: string): boolean =>
-    excludedDirPrefixes.some((p) => src === p || src.startsWith(p + "/")) && !reincludes.has(src);
+  // A src is stripped iff a literal dir-prefix OR an (over-approximating) glob exclude is its
+  // ancestor, AND it has no exact `!`-re-include. Glob excludes are matched — NOT skipped — so a
+  // baked path shadowed only by a glob (`*.md`, `assets/*`) fails LOUD, never silent.
+  const isStripped = (src: string): boolean => {
+    if (reincludes.has(src)) return false;
+    const litHit = excludedDirPrefixes.some((p) => src === p || src.startsWith(p + "/"));
+    const globHit = globExcludeRes.some((re) => re.test(src));
+    return litHit || globHit;
+  };
 
   const seen = new Set<string>();
   const violations: Violation[] = [];
@@ -213,11 +280,28 @@ describe("Dockerfile COPY --from=builder / RUN .sh <-> .dockerignore re-include 
   const realDockerfile = readFileSync(DOCKERFILE, "utf8");
   const realDockerignore = readFileSync(DOCKERIGNORE, "utf8");
   const realTracked = new Set(
-    execFileSync("git", ["ls-files", "apps/web-platform"], { cwd: REPO_ROOT, encoding: "utf8" })
+    // `-c core.quotePath=false` keeps non-ASCII paths literal (default octal-escapes + quotes them,
+    // which would mangle the `apps/web-platform/` strip → a baked ref would fail isContextSourced).
+    execFileSync("git", ["-c", "core.quotePath=false", "ls-files", "apps/web-platform"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    })
       .split("\n")
       .filter(Boolean)
       .map((p) => p.replace(/^apps\/web-platform\//, "")),
   );
+
+  // Render violations into an operator-actionable failure message (which file to edit + the exact
+  // `!`-line + the Dockerfile line) — a bare `toEqual([])` diff prints only the raw objects.
+  const explain = (vs: Violation[]): string =>
+    "\n" +
+    vs
+      .map(
+        (v) =>
+          `  Dockerfile:${v.line} bakes/consumes context path "${v.src}" but .dockerignore strips ` +
+          `it — add \`${v.reinclude}\` to apps/web-platform/.dockerignore (or the release build breaks).`,
+      )
+      .join("\n");
 
   test("real Dockerfile + .dockerignore + live tracked set → zero violations", () => {
     const violations = findReincludeViolations({
@@ -225,9 +309,26 @@ describe("Dockerfile COPY --from=builder / RUN .sh <-> .dockerignore re-include 
       dockerignoreText: realDockerignore,
       trackedContextPaths: realTracked,
     });
-    // A non-empty list here means a baked/consumed context path is missing its `!`-re-include —
-    // the release WILL break. The message names each src + the exact `!<path>` line to add.
-    expect(violations).toEqual([]);
+    // A non-empty list means a baked/consumed context path is missing its `!`-re-include — the
+    // release WILL break. `explain` names each src + the exact `!<path>` line + Dockerfile line.
+    expect(violations, violations.length ? explain(violations) : "clean").toEqual([]);
+  });
+
+  test("POSITIVE CONTROL: removing a real re-include from the model surfaces a violation", () => {
+    // Proves the zero-violation test above is NOT vacuous: strip one known `!`-re-include from the
+    // real .dockerignore and the guard must flag exactly that src. If a future refactor moved every
+    // baked src out of an excluded dir, THIS test goes red first (the src no longer needs a
+    // re-include), signalling that the clean-repo assertion has silently become vacuous.
+    const withoutOneReinclude = realDockerignore.replace(
+      /^!scripts\/assert-dev-signin-eliminated\.sh$/m,
+      "",
+    );
+    const violations = findReincludeViolations({
+      dockerfileText: realDockerfile,
+      dockerignoreText: withoutOneReinclude,
+      trackedContextPaths: realTracked,
+    });
+    expect(violations.map((v) => v.src)).toContain("scripts/assert-dev-signin-eliminated.sh");
   });
 
   // --- Non-vacuity: the parsers actually see the real srcs ---
@@ -319,5 +420,52 @@ describe("Dockerfile COPY --from=builder / RUN .sh <-> .dockerignore re-include 
       "RUN bash scripts/postrun.sh",
     ].join("\n");
     expect(parseBuilderRunScriptSources(df)).toEqual([]);
+  });
+
+  test("parseBuilderCopySources: bare valueless flag (--link) before --from is tolerated", () => {
+    const srcs = parseBuilderCopySources(
+      "FROM x AS runner\nCOPY --link --from=builder /app/infra/foo.sh ./infra/foo.sh",
+    ).map((s) => s.src);
+    expect(srcs).toEqual(["infra/foo.sh"]);
+  });
+
+  test("parseBuilderRunScriptSources: direct-exec RUN ./scripts/x.sh is captured (./ normalized)", () => {
+    const df = ["FROM x AS builder", "RUN ./scripts/gen.sh --flag", "FROM y AS runner"].join("\n");
+    expect(parseBuilderRunScriptSources(df).map((s) => s.src)).toEqual(["scripts/gen.sh"]);
+  });
+
+  test("parseBuilderRunScriptSources: bash ./scripts/x.sh normalizes the ./ prefix", () => {
+    const df = ["FROM x AS builder", "RUN bash ./scripts/gen.sh", "FROM y AS runner"].join("\n");
+    expect(parseBuilderRunScriptSources(df).map((s) => s.src)).toEqual(["scripts/gen.sh"]);
+  });
+
+  test("parseBuilderRunScriptSources: .sh on a \\-continuation line of a multi-line RUN is captured", () => {
+    const df = [
+      "FROM x AS builder",
+      "RUN set -e \\",
+      "  && bash scripts/gen.sh",
+      "FROM y AS runner",
+    ].join("\n");
+    expect(parseBuilderRunScriptSources(df).map((s) => s.src)).toEqual(["scripts/gen.sh"]);
+  });
+
+  test("glob EXCLUDE fail-LOUD: a baked src shadowed only by a glob exclude is flagged (not skipped)", () => {
+    // The earlier `if (hasGlob) continue` would have SILENTLY passed this — the fail-open the
+    // review caught. A glob exclude (`assets/*`) with no re-include must now surface a violation.
+    const violations = findReincludeViolations({
+      dockerfileText: "FROM x AS runner\nCOPY --from=builder /app/assets/logo.svg ./assets/logo.svg",
+      dockerignoreText: "assets/*",
+      trackedContextPaths: new Set(["assets/logo.svg"]),
+    });
+    expect(violations.map((v) => v.src)).toEqual(["assets/logo.svg"]);
+  });
+
+  test("glob EXCLUDE + exact re-include → no violation", () => {
+    const violations = findReincludeViolations({
+      dockerfileText: "FROM x AS runner\nCOPY --from=builder /app/assets/logo.svg ./assets/logo.svg",
+      dockerignoreText: "assets/*\n!assets/logo.svg",
+      trackedContextPaths: new Set(["assets/logo.svg"]),
+    });
+    expect(violations).toEqual([]);
   });
 });

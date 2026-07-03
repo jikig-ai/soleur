@@ -303,6 +303,11 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
   // be re-included with `!infra/<file>` or the runner COPY fails
   // ("/app/infra/<file>": not found) and the entire web-platform release build
   // breaks. This asserts the third leg of parity the AC2 test above did not cover.
+  //
+  // NOTE: this host-scripts-only re-include leg is now SUBSUMED by the generalized guard in
+  // plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts (which checks EVERY builder
+  // COPY --from / RUN .sh src against every .dockerignore exclusion, not just the infra/ host-scripts
+  // block). It is retained here as the AC2 parity trio. If you edit either parser, update both.
   function dockerignoreInfraReincludes(): Set<string> {
     const set = new Set<string>();
     for (const raw of dockerignore.split("\n")) {
