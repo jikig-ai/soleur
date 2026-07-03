@@ -110,6 +110,56 @@ loaded==host` holds now, **PASS** (the profile is loaded regardless of which dep
 loaded it); else fail-loud UNVERIFIED. This is strictly cheaper and more correct
 than threading a nonce through POST → `write_state` → deploy-status.
 
+## Deepen-Plan Enhancement Summary
+
+**Deepened on:** 2026-07-03. The plan had already passed a 5-agent review panel
+(DHH, Kieran, code-simplicity, architecture-strategist, spec-flow) whose material
+findings are folded in above, so the deepen pass focused on the mandatory halt
+gates and live-verification of every load-bearing claim rather than adding new
+scope.
+
+**Halt gates — all PASS:**
+- **4.6 User-Brand Impact:** section present, threshold `aggregate pattern` (valid
+  enum), concrete body. Touches sensitive paths (`.github/workflows/*deploy*.yml`,
+  `apps/*/infra/`) but threshold ≠ `none`, so no scope-out line required.
+- **4.7 Observability:** all 5 fields (`liveness_signal`, `error_reporting`,
+  `failure_modes`, `logs`, `discoverability_test`) present, non-placeholder;
+  `discoverability_test.command` is a `curl` (no `ssh`).
+- **4.8 PAT-shaped variable:** no `var.*_token`/`var.*_pat`/`TF_VAR_GH_*`/literal
+  `ghp_`/`github_pat_` — no match.
+- **4.9 UI-wireframe:** no UI-surface file in Files-to-Edit (`.yml`/`.sh`/`.md`) —
+  gate does not fire.
+- **4.5 Network-Outage — N/A:** "SSH" appears only in "no SSH needed" context. The
+  plan diagnoses a poll-latch + observability gap, NOT a connectivity symptom, and
+  proposes NO sshd/firewall fix; it does not alter the terraform SSH provisioners
+  (`docker_seccomp_config` etc.) — only the post-apply verify step. No L3→L7
+  checklist obligation (nothing to verify a firewall against).
+- **4.55 Downtime & Cutover — N/A:** the fix introduces no new downtime op. Phase 3
+  makes the poll correctly wait for the **pre-existing** graceful, canary-validated,
+  ADR-078-cron-drained **blue-green** redeploy in `ci-deploy.sh` (zero-downtime by
+  construction). No `hcloud_server` reboot/replace, no lock-taking DDL, no
+  drain-less container swap in Files-to-Edit.
+
+**Live-verified load-bearing claims (deepen pass):**
+- Committed hash is **raw** `sha256sum` (`apply-deploy-pipeline-fix.yml:487`) and
+  recorded write is **raw** (`ci-deploy.sh:488`) → the `loaded==host`(host-jq) +
+  `host==committed`(raw) decomposition is skew-free as designed.
+- `lock_contention` (`ci-deploy.sh:745`) writes with `COMPONENT`/`TAG` parsed
+  pre-flock (`:674`) and `START_TS` set pre-flock (`:207`) → the BLOCKING poll fix
+  (non-terminal handling) is confirmed necessary.
+- Five `final_write_state 0` sites; only `:1211/1213` are the web-platform arm →
+  the tightened poll cannot false-timeout a legitimate swap (AC4 confirmed).
+- `cat-deploy-state.test.sh` mocks nothing (0 hits) and `create_docker_mock` exists
+  at `audit-bwrap-uid.test.sh:26` with `inspect-literal-path.txt` present → "PORT
+  not reuse" (Phase 6) is correct.
+- ADR-079 already carries `### Amendment (#5913)` + `### Amendment (#5955)` →
+  the #5960 amendment is the fourth (no new ordinal). Cited issues #5913 (CLOSED),
+  #5877 (MERGED), #4116 (CLOSED) all resolve with matching semantics.
+
+**No new material findings** — the 5-agent panel already closed the correctness
+gaps (lock_contention, jq-skew, scope trims, frozen snapshot, STATE-invariant). The
+plan is implementation-ready.
+
 ## Premise Validation (Phase 0.6)
 
 - `#5955` **CLOSED**, `#5957` **MERGED** (tag resolution). `#5875` **CLOSED**,
