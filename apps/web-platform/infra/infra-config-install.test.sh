@@ -180,6 +180,7 @@ test_all_managed_dests_accepted() {
     "/usr/local/bin/inngest-wiped-volume-verify.sh|755|root:root"
     "/usr/local/bin/cat-inngest-verify-state.sh|755|root:root"
     "/usr/local/bin/inngest-inventory.sh|755|root:root"
+    "/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
   )
   local accepted=0 entry d mode owner rc
   for entry in "${specs[@]}"; do
@@ -188,7 +189,7 @@ test_all_managed_dests_accepted() {
     printf 'payload-%s' "$(basename "$d")" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
   done
-  assert_eq "all 12 managed dests accepted" "12" "$accepted"
+  assert_eq "all 13 managed dests accepted" "13" "$accepted"
   teardown
 }
 
@@ -251,8 +252,8 @@ test_dest_spec_filemap_lockstep() {
   filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
   # DEST_SPEC keys look like: ["/dest/path"]="mode owner"
   dest_spec_count=$(grep -cE '^\s*\["/' "$HELPER")
-  assert_eq "FILE_MAP has 12 managed dests" "12" "$filemap_count"
-  assert_eq "DEST_SPEC has 12 managed dests" "12" "$dest_spec_count"
+  assert_eq "FILE_MAP has 13 managed dests" "13" "$filemap_count"
+  assert_eq "DEST_SPEC has 13 managed dests" "13" "$dest_spec_count"
   assert_eq "DEST_SPEC and FILE_MAP cardinality match" "$filemap_count" "$dest_spec_count"
   # The sudoers dest must be in NEITHER (root-managed).
   if grep -q '/etc/sudoers.d/deploy-inngest-bootstrap' "$HELPER"; then

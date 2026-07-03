@@ -87,6 +87,7 @@ on:
       - "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
       - "apps/web-platform/infra/cat-inngest-verify-state.sh"
       - "apps/web-platform/infra/inngest-inventory.sh"
+      - "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
       # #5873 — the container seccomp profile is delivered by the
       # docker_seccomp_config SSH provisioner (server.tf), whose triggers_replace
       # hashes this file. A profile-only edit must fire this apply so the new

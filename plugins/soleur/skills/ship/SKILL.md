@@ -679,6 +679,7 @@ fi
 - `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
 - `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
 - `apps/web-platform/infra/inngest-inventory.sh` (#5509 — cutover full-state inventory op)
+- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934 — durable char-device config.lock substrate sweep)
 
 **Detection:**
 
@@ -702,8 +703,9 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/inngest-inventory.sh"
+  "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```

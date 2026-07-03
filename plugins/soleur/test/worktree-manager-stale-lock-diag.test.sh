@@ -125,6 +125,41 @@ assert_contains "$SW_OUT" "reason=non-regular-lock" "fresh dir lock flagged non-
 if (( SW_RC != 0 )); then echo "  PASS: sweep returns non-zero on fresh dir lock"; PASS=$((PASS + 1));
 else echo "  FAIL: fresh non-regular lock must still be flagged unremovable"; FAIL=$((FAIL + 1)); fi
 
+echo "Test 4c: CHARACTER-DEVICE lock (the #5934 substrate wedge) -> type=chardevice,"
+echo "         well-formed rdev, UNREMOVABLE non-regular, preserved, rc!=0"
+# The confirmed #5934 signature: a masked config.lock materialized as a char-special
+# inode. git's open(O_CREAT|O_EXCL) EEXISTs against it, permanently wedging worktree
+# creation. Forcing one needs CAP_MKNOD (root/privileged) — skip-guarded exactly like
+# Test 6's root gate, mirroring the suite's existing capability pattern. `c 1 3` is
+# /dev/null's major:minor, so a well-formed rdev is deterministically `1:3`.
+D=$(new_lockdir)
+if mknod "$D/config.lock" c 1 3 2>/dev/null; then
+  run_sweep "$D" 60
+  assert_contains "$SW_OUT" "type=chardevice" "char-device lock typed chardevice"
+  # rdev must be present and well-formed (hex major:minor); /dev/null ⇒ 1:3.
+  if printf '%s' "$SW_OUT" | grep -qE 'rdev=[0-9a-f]+:[0-9a-f]+'; then
+    echo "  PASS: well-formed rdev=<hex>:<hex> emitted on DIAG"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: DIAG missing well-formed rdev field"; echo "    got: $SW_OUT"; FAIL=$((FAIL + 1))
+  fi
+  assert_contains "$SW_OUT" "rdev=1:3" "rdev discriminates a /dev/null-major:minor node (1:3)"
+  assert_contains "$SW_OUT" "SOLEUR_GIT_LOCK_UNREMOVABLE" "UNREMOVABLE emitted for char-device lock"
+  assert_contains "$SW_OUT" "reason=non-regular-lock" "char-device lock reason=non-regular-lock"
+  assert_eq "true" "$([[ -c "$D/config.lock" ]] && echo true || echo false)" "char-device lock NOT removed on blind surface"
+  if (( SW_RC != 0 )); then echo "  PASS: sweep returns non-zero on char-device lock"; PASS=$((PASS + 1));
+  else echo "  FAIL: sweep must return non-zero on char-device lock"; FAIL=$((FAIL + 1)); fi
+  # Regression guard: removing the `-c` branch would type this `other`, not `chardevice`.
+  if printf '%s' "$SW_OUT" | grep -q 'type=other'; then
+    echo "  FAIL: char device fell through to type=other (the -c branch is missing)"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: char device did not fall through to type=other"; PASS=$((PASS + 1))
+  fi
+else
+  echo "  SKIP: mknod denied (no CAP_MKNOD) — char-device fixture needs a privileged runner"
+  SKIPPED=$((SKIPPED + 1))
+fi
+
+# ---------------------------------------------------------------------------
 # NOTE: the type=mount branch (stat -c%m == realpath + findmnt SOURCE) is NOT
 # unit-tested — synthesizing a real mountpoint named config.lock needs the mount
 # syscall (root + a loopback/bind source), which is not cleanly reproducible in a
