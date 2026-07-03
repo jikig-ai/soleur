@@ -356,33 +356,33 @@ sweep.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `bash tests/scripts/test-destroy-guard-counter-web-platform.sh` exits 0 with
+- [x] `bash tests/scripts/test-destroy-guard-counter-web-platform.sh` exits 0 with
       all T1-T20 passing; the placement-group + server-type fixtures return
       `rupd=1` and `rc=1` without ack.
-- [ ] The `after-unknown` placement-group fixture returns `rupd=1` (pins that a
+- [x] The `after-unknown` placement-group fixture returns `rupd=1` (pins that a
       resource-reference `placement_group_id` whose value is unknown at plan time
       — `after.placement_group_id` null, value in `after_unknown` — still trips;
       errs safe).
-- [ ] The location-REPLACE fixture returns `rdel=1 rupd=0` (no double-count) and
+- [x] The location-REPLACE fixture returns `rdel=1 rupd=0` (no double-count) and
       the no-op-attr + create fixtures return `rupd=0` (attribute-specific,
       lifecycle-aware — the invariant, not the "any hcloud_server change" proxy).
-- [ ] The placement-group fixture + a `[ack-destroy]`-on-own-line message returns
+- [x] The placement-group fixture + a `[ack-destroy]`-on-own-line message returns
       `rc=0` (ack allows the reboot through).
-- [ ] `jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq <
+- [x] `jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq <
       tests/scripts/fixtures/tfplan-web-platform-real-baseline.json` returns
       `reboot_updates: 0` (T10 baseline anchor stays green — the baseline's
       `hcloud_server.web` is `no-op`).
-- [ ] The workflow bash `destroy_count` sum includes `reboot_updates` and its
+- [x] The workflow bash `destroy_count` sum includes `reboot_updates` and its
       numeric-regex parse-guard covers the new counter (grep the step body).
-- [ ] `bash tests/scripts/test-destroy-guard-regex-parity.sh` exits 0 (still 6
+- [x] `bash tests/scripts/test-destroy-guard-regex-parity.sh` exits 0 (still 6
       sites; `[ack-destroy]` reused, not a new token).
-- [ ] `bun test plugins/soleur/test/terraform-target-parity.test.ts` exits 0
+- [x] `bun test plugins/soleur/test/terraform-target-parity.test.ts` exits 0
       (unchanged — no `-target=` allow-list edit).
-- [ ] ADR-068 §Amendment residual note flipped to closed; `### C4 views`
+- [x] ADR-068 §Amendment residual note flipped to closed; `### C4 views`
       concludes no-C4-impact with the external-actor/system enumeration cited.
 
 ### Post-merge (operator)
-- [ ] None. This is a CI-tooling change auto-verified by the test suite; the
+- [x] None. This is a CI-tooling change auto-verified by the test suite; the
       `apply-web-platform-infra.yml` workflow re-fires on the filter path
       (`on.push.paths` includes the `.jq`) against `main`'s captured baseline,
       which is `reboot_updates: 0` — no reboot, no ack needed.
