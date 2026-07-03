@@ -12,17 +12,29 @@ export function getActiveSessionCount(): number {
   return sessions.size;
 }
 
-export function getActiveWorkspaceCount(): number {
+// Count host-local workspace directories under an explicitly-passed root.
+// Root-parameterized so callers that resolve WORKSPACES_ROOT once (the
+// readiness probe, #5966) can prove both their signals read the SAME root —
+// getActiveWorkspaceCount below delegates here with the module-load const.
+export function countWorkspaceDirsAt(root: string): number {
   try {
-    return readdirSync(WORKSPACES_ROOT)
+    return readdirSync(root)
       .filter((name) => !name.startsWith(".orphaned-"))
       // `.cron` is the isolated ephemeral cron-clone subdir (#4882) — a sibling
       // of the UUID workspace dirs, not a user workspace. Exclude it so it never
       // inflates the active-workspace count by one.
       .filter((name) => name !== ".cron")
+      // `lost+found` is created by mkfs on a freshly-formatted ext4/xfs volume
+      // and is a directory — without this exclusion a truly-empty (bare) volume
+      // would false-report as populated when WORKSPACES_ROOT is the mount root
+      // directly (the readiness "populated" signal, #5966). Prod mounts
+      // /workspaces as a subdir of /mnt/data so lost+found is invisible there,
+      // but the generic default invites the direct-mount case — exclude it
+      // defensively.
+      .filter((name) => name !== "lost+found")
       .filter((name) => {
         try {
-          return statSync(join(WORKSPACES_ROOT, name)).isDirectory();
+          return statSync(join(root, name)).isDirectory();
         } catch {
           return false;
         }
@@ -35,10 +47,17 @@ export function getActiveWorkspaceCount(): number {
     if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
       reportSilentFallback(err, {
         feature: "resource-monitoring",
+        // op string pinned for Sentry alert-grouping continuity — do NOT rename
+        // to match countWorkspaceDirsAt. `extra.workspacesRoot` disambiguates
+        // which caller (metrics vs readiness) triggered the error.
         op: "getActiveWorkspaceCount",
-        extra: { workspacesRoot: WORKSPACES_ROOT },
+        extra: { workspacesRoot: root },
       });
     }
     return 0;
   }
+}
+
+export function getActiveWorkspaceCount(): number {
+  return countWorkspaceDirsAt(WORKSPACES_ROOT);
 }

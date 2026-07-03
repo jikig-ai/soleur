@@ -33,6 +33,11 @@ import {
   buildHealthResponse,
   buildInternalMetricsResponse,
 } from "./health";
+import {
+  handleReadyzRequest,
+  verifyWorkspacesMountOnce,
+} from "./readiness";
+import { isLoopbackHost } from "./loopback";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
 // the server at startup in environments without Inngest configured (e2e CI,
@@ -41,18 +46,9 @@ import {
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import { reportSilentFallback } from "@/server/observability";
 
-// Accept loopback hostnames only. resource-monitor.sh runs on the same host
-// and curls http://127.0.0.1:3000/internal/metrics; external callers (via CF
-// tunnel) arrive with the public Host header. This is defense-in-depth: a
-// sophisticated attacker could try to spoof the Host via the tunnel, but CF
-// normalizes Host for origin routing so a spoofed 127.0.0.1 header doesn't
-// reach here. Port suffix is optional so e2e tests that hit a non-3000 port
-// still match.
-function isLoopbackHost(hostHeader: string | undefined): boolean {
-  if (!hostHeader) return false;
-  const host = hostHeader.split(":")[0];
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
-}
+// isLoopbackHost (the /internal/metrics + /internal/readyz Host-header gate)
+// lives in ./loopback — a leaf module shared with readiness.ts so the loopback
+// logic has a single source of truth. See ./loopback for the CF-tunnel rationale.
 
 const log = createChildLogger("startup");
 
@@ -71,6 +67,11 @@ const handle = app.getRequestHandler();
 app.prepare().then(() => {
   assertSingleReplicaInvariant();
   verifyPluginMountOnce();
+  // #5966 — one-shot boot-time deep-readiness mirror. verifyPluginMountOnce
+  // above checks the PLUGIN mount, not /workspaces; this covers the host-local
+  // workspace volume so a mis-mounted/read-only web-1 surfaces a Sentry event
+  // at boot instead of only when a live request hits an empty /workspaces.
+  verifyWorkspacesMountOnce();
   emitTeamWorkspaceInviteBootBreadcrumb();
 
   const server = createServer(async (req, res) => {
@@ -100,6 +101,16 @@ app.prepare().then(() => {
       const metrics = await buildInternalMetricsResponse();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(metrics));
+      return;
+    }
+
+    // Deep-readiness (#5966, ADR-068 Sharp Edge C1). Unlike /health (liveness:
+    // status:"ok" + shared-Supabase probe), this answers "can THIS host serve?"
+    // — /workspaces writable + populated. Gated to the loopback transport peer
+    // and returns 503 when the host cannot serve locally. All gating + the
+    // fail-closed try/catch live in handleReadyzRequest (server/readiness.ts).
+    if (parsedUrl.pathname === "/internal/readyz") {
+      handleReadyzRequest(req, res);
       return;
     }
 
