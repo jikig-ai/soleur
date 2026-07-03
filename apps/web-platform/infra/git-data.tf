@@ -120,7 +120,23 @@ resource "hcloud_server" "git_data" {
     ipv6_enabled = true
   }
 
-  user_data = templatefile("${path.module}/cloud-init-git-data.yml", {
+  # gzip-first (#5927). Post-#5918 the rendered cloud-config is ~41.7 KB — OVER
+  # Hetzner's 32,768-byte user_data cap. git-data runs NO docker and pulls NO image,
+  # so #5921's web-host bake-and-extract mechanism (ADR-080) does NOT transfer here.
+  # Instead wrap the WHOLE render in base64gzip(): the highly-compressible shell
+  # payload gzips to ~16.4 KB, and the base64 of that (~21.9 KB) is what Hetzner
+  # stores against the cap — under it with ~10 KB headroom.
+  #
+  # Decode contract: Hetzner does NOT accept binary user-data, so it base64-decodes
+  # the stored string before cloud-init sees it (cloud-init's
+  # DataSourceHetzner.maybe_b64decode, added ≥20.3; Ubuntu 24.04 ships far newer) →
+  # raw gzip bytes (magic 1f 8b) → cloud-init auto-gunzips → byte-identical
+  # #cloud-config. base64 is therefore MANDATORY on Hetzner, which makes base64gzip()
+  # the intended path, not a datasource gamble. The template + all 5 injected scripts
+  # stay byte-identical; only this expression changed. Byte-exact size is confirmed at
+  # #5887's first `terraform plan`; fail-closed at first provisioning if decode fails
+  # (web-host readiness check finds no git/bare-repo, blocks cutover). See ADR-080.
+  user_data = base64gzip(templatefile("${path.module}/cloud-init-git-data.yml", {
     git_data_bootstrap_b64               = base64encode(file("${path.module}/git-data-bootstrap.sh"))
     git_data_pre_receive_placeholder_b64 = base64encode(file("${path.module}/git-data-pre-receive-placeholder.sh"))
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
@@ -148,7 +164,7 @@ resource "hcloud_server" "git_data" {
     # MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
     # GIT_REMOVE / PROXY_TLS material). The passphrase itself is NEVER in this user_data.
     doppler_token = doppler_service_token.git_data.key
-  })
+  }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. The web host carries it
   # only as an IMPORT ARTIFACT (server.tf:66-72); a FRESH host has no spurious

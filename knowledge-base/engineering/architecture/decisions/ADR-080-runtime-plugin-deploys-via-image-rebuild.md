@@ -226,12 +226,46 @@ on-disk source files):**
    real fail-closed mechanism; a failed extraction can never bring the app up with
    an unconfigured egress firewall (#5046).
 
-**Scope boundary — the git-data host is NOT covered.** git-data runs no docker and
-pulls no image, so this bake-and-extract mechanism does not apply. Post-#5918
-(LUKS/transport/remove/provision) its `user_data` is ~41.7 KB — OVER the same cap
-— a distinct-mechanism fix (gzip-first) tracked in **#5927**, a hard blocker on
-ADR-068 Phase 2 git-data provisioning. The size guard pins git-data at a
-no-further-growth ceiling until #5927 lands.
+**Scope boundary — the git-data host uses a DISTINCT mechanism (gzip-first).** git-data
+runs no docker and pulls no image, so this bake-and-extract mechanism does not apply.
+Cumulative script growth across #5865 (provision wrapper), #5877 (remove wrapper), and
+#5918 (transport-wrapper cutover) pushed its RAW `user_data` to ~41.7 KB — OVER the same
+cap, with the over-cap threshold crossed at #5918.
+
+**Resolved via `base64gzip()` (#5927, 2026-07-03).** The `user_data` expression in
+`git-data.tf` is wrapped in Terraform's core `base64gzip()` builtin, which gzips the whole
+rendered cloud-config and base64-encodes it. Measured: raw 41,662 B → `gzip -9` 16,447 B →
+`base64gzip()` output **21,932 B**, which is the string Hetzner stores against the cap —
+UNDER 32,768 with ~10.8 KB headroom. Zero content edits: the template and all 5 injected
+scripts stay byte-identical; only the one expression changed.
+
+- **Decode contract (source-confirmed, not a datasource gamble):** Hetzner does NOT accept
+  binary user-data, so it base64-decodes the stored string before cloud-init sees it —
+  cloud-init's `DataSourceHetzner.maybe_b64decode` (added ≥20.3, PR #448; Ubuntu 24.04 ships
+  far newer). Chain: stored base64gzip string → base64-decode → raw gzip bytes (magic `1f 8b`)
+  → cloud-init auto-gunzips → byte-identical `#cloud-config`. Because base64 is *mandatory* on
+  Hetzner, `base64gzip()` is the intended path, not one option among several. (The web-host
+  base64gzip figure in this ADR's history, 140,856 B, was a *size-rejection* measurement —
+  web's payload is 4.3× over even gzipped, which is why web uses bake-and-extract; git-data's
+  shell payload compresses far better.)
+- **Verification status:** the size-guard test (`plugins/soleur/test/cloud-init-user-data-size.test.ts`)
+  models the base64gzip'd size with REAL script content and asserts `< 32,768` (sub-cap budget
+  28,000 B) — the pre-merge byte estimate. `terraform console` cannot yield a concrete number
+  pre-provisioning (the map injects `hcloud_volume.git_data{,_luks}.id` + the Doppler service-
+  token key, all `known after apply`). Byte-exact truth is #5887's first `terraform plan`; the
+  empirical decode confirmation is #5887's first provisioning, where the web-host-driven
+  readiness check (`git-data.tf:9-14`) fails **fail-closed** if cloud-init did not decode/run.
+- **Security forward-note:** `base64gzip()` is a lossless *encoding*, NOT encryption. The scoped
+  `prd_git_data` Doppler token remains recoverable from `terraform.tfstate` and the Hetzner API
+  exactly as before — no new exposure vector. But any *future* control that scans tfstate or
+  `terraform plan` output for secret literals must `base64 -d | gunzip` first, or it will be
+  blind to the gzipped envelope. (No live regression: today's CI secret-scan is `gitleaks git`
+  over committed source, where the token is only a TF reference.)
+
+**Accretion advisory (non-blocking):** this is ADR-080's second stretch onto Hetzner 32 KB
+`user_data` cap handling (a no-docker concern unrelated to image rebuild). A future
+consolidation of "Hetzner user_data cap handling" into a small dedicated ADR that both the web
+and git-data hosts reference could reduce accretion. Out of scope here.
 
 ### C4 impact (this amendment)
 
