@@ -48,6 +48,7 @@ infra/
 !infra/cron-egress-resolve.timer
 !infra/cron-egress-alarm@.service
 !infra/cron-egress-postapply-assert.sh
+!infra/cron-egress-enforce-probe.sh
 !infra/hooks.json.tmpl
 !infra/journald-soleur.conf
 !infra/soleur-host-bootstrap.sh
