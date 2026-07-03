@@ -255,64 +255,64 @@ discoverability_test:
 
 ### Phase 0 — Preconditions (verify, no code)
 
-- [ ] Confirm build context root is `apps/web-platform` (`web-platform-release.yml:50`).
-- [ ] Re-confirm the git-tracked classification (all verified at plan time): context-sourced =
+- [x] Confirm build context root is `apps/web-platform` (`web-platform-release.yml:50`).
+- [x] Re-confirm the git-tracked classification (all verified at plan time): context-sourced =
       `public`, `scripts/sandbox-canary.mjs`, `infra/sandbox-canary-argv.json`, 25 host-scripts,
       `scripts/assert-dev-signin-eliminated.sh` (builder `RUN` arg); build-generated = `.next`,
       `dist/server`, `next.config.mjs`.
-- [ ] Confirm the suite is discovered by `bun test plugins/soleur/` (default `*.test.ts` glob; root
+- [x] Confirm the suite is discovered by `bun test plugins/soleur/` (default `*.test.ts` glob; root
       `bunfig.toml` `pathIgnorePatterns` excludes only `.worktrees/**` and `apps/web-platform/**`,
       not `plugins/**`).
 
 ### Phase 1 — RED (failing test first, per `cq-write-failing-tests-before`)
 
-- [ ] Create `plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` with the four functions
+- [x] Create `plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` with the four functions
       **inline** at the top, each a **stub** (e.g. `findReincludeViolations` returns `[]`).
-- [ ] **Gap-demonstration fixture tests** (synthesized inline strings, `cq-test-fixtures-synthesized-only`):
+- [x] **Gap-demonstration fixture tests** (synthesized inline strings, `cq-test-fixtures-synthesized-only`):
       (a) COPY form — a synthetic Dockerfile with `COPY --from=builder /app/infra/new-baked.sh ./…`
       + `.dockerignore` with `infra/` but **no** `!infra/new-baked.sh` + `trackedContextPaths` ⊇
       `{infra/new-baked.sh}` → assert `findReincludeViolations(...)` is non-empty;
       (b) RUN form — a synthetic builder stage with `RUN bash scripts/new-run.sh` + `.dockerignore`
       with `scripts/` and no re-include + tracked `scripts/new-run.sh` → assert a violation.
-- [ ] Run the suite → the two fixture tests **fail** (stub returns `[]`). Commit RED.
+- [x] Run the suite → the two fixture tests **fail** (stub returns `[]`). Commit RED.
 
 ### Phase 2 — GREEN (implement the functions inline)
 
-- [ ] `parseBuilderCopySources`: join `\`-continuation lines into one logical statement; regex-locate
+- [x] `parseBuilderCopySources`: join `\`-continuation lines into one logical statement; regex-locate
       `COPY\s+(?:--\w+=\S+\s+)*--from=\S+`; tokenize the remainder; last token = `<dst>`; keep
       `/app/`-prefixed preceding tokens as srcs (strip `/app/`); record the `COPY` keyword's line.
-- [ ] `parseBuilderRunScriptSources`: slice the Dockerfile between `FROM … AS builder` and the next
+- [x] `parseBuilderRunScriptSources`: slice the Dockerfile between `FROM … AS builder` and the next
       `FROM`; for each `RUN` line, extract `(?:bash|sh|source|\.)\s+(\S+\.sh)\b` matches as srcs.
-- [ ] `dockerignoreExclusionModel`: iterate lines (skip blank/`#`); a non-`!` pattern with no glob
+- [x] `dockerignoreExclusionModel`: iterate lines (skip blank/`#`); a non-`!` pattern with no glob
       metachar (`*?[`) and (trailing `/` **or** bare path) → `excludedDirPrefixes` (trailing `/`
       stripped); a `!<path>` with no glob → `reincludes` Set.
-- [ ] `findReincludeViolations`: union the two parsers; skip srcs not context-sourced (not in, and no
+- [x] `findReincludeViolations`: union the two parsers; skip srcs not context-sourced (not in, and no
       tracked path `startsWith(src + "/")` — handles dir srcs like `public`); flag a context-sourced
       src iff some `excludedDirPrefixes` entry `p` satisfies `src === p || src.startsWith(p + "/")`
       **and** `src ∉ reincludes`.
-- [ ] Build the real `trackedContextPaths` via
+- [x] Build the real `trackedContextPaths` via
       `execSync("git ls-files apps/web-platform", { cwd: REPO_ROOT })` (bounded output;
       `hr-never-run-commands-with-unbounded-output` satisfied) → split → strip `apps/web-platform/`
       prefix → `Set`.
-- [ ] **Real-repo zero-violation test:** read the real Dockerfile + `.dockerignore`, run the guard,
+- [x] **Real-repo zero-violation test:** read the real Dockerfile + `.dockerignore`, run the guard,
       assert `violations` is `[]`.
-- [ ] **Non-vacuity + false-positive tests (trimmed per simplicity review):**
+- [x] **Non-vacuity + false-positive tests (trimmed per simplicity review):**
       (a) `parseBuilderCopySources(real)` returns ≥1 `/app/infra/…` and ≥1 `/app/public` (guards a
       vacuous green); `parseBuilderRunScriptSources(real)` returns `scripts/assert-dev-signin-eliminated.sh`;
       (b) the one genuine false-positive case — `.next` (git-untracked, under the `.next/` exclusion)
       is **skipped** and never flagged.
-- [ ] **Evaluator unit tests (minimal):** dir-prefix exclusion (`infra/foo` under `infra/` with no
+- [x] **Evaluator unit tests (minimal):** dir-prefix exclusion (`infra/foo` under `infra/` with no
       re-include → violation), exact-negation re-include (`!infra/foo` → no violation), un-excluded
       top-level (`public` → no violation).
-- [ ] Run the suite → **passes**. Commit GREEN.
+- [x] Run the suite → **passes**. Commit GREEN.
 
 ### Phase 3 — Regression + docs
 
-- [ ] Run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` → still green (existing
+- [x] Run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` → still green (existing
       host-scripts re-include assertion unchanged; now subsumed by the generalized guard).
-- [ ] Optionally add the one-line "subsumed by generalized guard" comment in
+- [x] Optionally add the one-line "subsumed by generalized guard" comment in
       `cloud-init-user-data-size.test.ts` (skip if it risks the suite).
-- [ ] Run the full plugin bun shard: `bun test plugins/soleur/` → green.
+- [x] Run the full plugin bun shard: `bun test plugins/soleur/` → green.
 
 ## Alternative Approaches Considered
 
@@ -373,20 +373,20 @@ existing ADRs + C4 would not be misled by this change. Skip per Phase 2.10.
 
 ### Pre-merge (PR)
 
-- [ ] `bun test plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` exits 0.
-- [ ] The suite runs `findReincludeViolations` against **two synthetic fixtures** — (a) an `infra/`-baked
+- [x] `bun test plugins/soleur/test/dockerfile-copy-dockerignore-parity.test.ts` exits 0.
+- [x] The suite runs `findReincludeViolations` against **two synthetic fixtures** — (a) an `infra/`-baked
       `COPY --from=builder` lacking a re-include, (b) a builder `RUN bash scripts/<x>.sh` lacking a
       re-include — and asserts each returns a **non-empty** violation list (guard bites on both legs).
-- [ ] The suite runs the guard against the **real** `apps/web-platform/Dockerfile` + `.dockerignore` +
+- [x] The suite runs the guard against the **real** `apps/web-platform/Dockerfile` + `.dockerignore` +
       the live `git ls-files apps/web-platform` tracked set and asserts **zero** violations.
-- [ ] `parseBuilderCopySources(real)` returns ≥1 `/app/infra/…` and ≥1 `/app/public` src (non-vacuity);
+- [x] `parseBuilderCopySources(real)` returns ≥1 `/app/infra/…` and ≥1 `/app/public` src (non-vacuity);
       `parseBuilderRunScriptSources(real)` returns `scripts/assert-dev-signin-eliminated.sh`.
-- [ ] The one genuine false-positive case is asserted: `.next` (git-untracked, under the `.next/`
+- [x] The one genuine false-positive case is asserted: `.next` (git-untracked, under the `.next/`
       exclusion) is **skipped** and never flagged.
-- [ ] `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` still exits 0 (existing
+- [x] `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` still exits 0 (existing
       host-scripts re-include assertion unchanged; now subsumed by the generalized guard).
-- [ ] `bun test plugins/soleur/` (full plugin shard) is green.
-- [ ] The RED fixture-test commit precedes the GREEN implementation commit in branch history
+- [x] `bun test plugins/soleur/` (full plugin shard) is green.
+- [x] The RED fixture-test commit precedes the GREEN implementation commit in branch history
       (`cq-write-failing-tests-before`).
 
 ### Post-merge (operator)
