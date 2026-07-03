@@ -433,7 +433,7 @@ logs:
   retention: GitHub default (90 days)
 discoverability_test:
   command: bash tests/scripts/test-destroy-guard-counter-web-platform.sh
-  expected_output: "=== N passed, 0 failed ==="
+  expected_output: "0 failed"
 ```
 
 ## Domain Review
