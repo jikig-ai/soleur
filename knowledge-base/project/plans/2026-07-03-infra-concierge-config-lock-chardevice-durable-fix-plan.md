@@ -283,32 +283,32 @@ expressible in this repo's IaC (e.g. a host-runtime storage-driver default outsi
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (origin pinned):** the plan/PR body states origin = (c) substrate, with (a)
+- [x] **AC1 (origin pinned):** the plan/PR body states origin = (c) substrate, with (a)
   and (b) ruled out, each citing `agent-runner-sandbox-config.ts` line evidence.
-- [ ] **AC2 (forensic char-device branch):** `sweep_stale_git_locks` in
+- [x] **AC2 (forensic char-device branch):** `sweep_stale_git_locks` in
   `worktree-manager.sh` contains an `[[ -c "$path" ]] → ftype=chardevice` branch placed
   **before** the `-d`/`-f`/`other` fallthrough; `grep -n 'ftype=chardevice'
   plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` returns ≥1.
-- [ ] **AC3 (rdev emitted):** for a char-device lock the `SOLEUR_GIT_LOCK_DIAG` line
+- [x] **AC3 (rdev emitted):** for a char-device lock the `SOLEUR_GIT_LOCK_DIAG` line
   includes a `rdev=<hex>:<hex>` field; asserted by the diag test.
-- [ ] **AC4 (bit-rot fixture reaches the branch):** `worktree-manager-stale-lock-diag.test.sh`
+- [x] **AC4 (bit-rot fixture reaches the branch):** `worktree-manager-stale-lock-diag.test.sh`
   has a case that forces a char device at `config.lock` and asserts
   `type=chardevice` + well-formed `rdev`; the test **fails** if the `-c` branch is
   removed. Run via the repo's shell-test convention (`plugins/soleur/test/*.test.sh` —
   verify runner before prescribing; do NOT hardcode `bats`).
-- [ ] **AC5 (char-device stays unremovable in-sandbox):** the sweep still emits
+- [x] **AC5 (char-device stays unremovable in-sandbox):** the sweep still emits
   `SOLEUR_GIT_LOCK_UNREMOVABLE … type=chardevice reason=non-regular-lock` and never
   auto-`rm`s on the blind surface (regression guard on `:245-246`).
-- [ ] **AC6 (Phase 2 sweep is char-device-scoped, rdev-aware + idempotent):** the
+- [x] **AC6 (Phase 2 sweep is char-device-scoped, rdev-aware + idempotent):** the
   privileged sweep script removes **only** `config.lock`/`config.worktree.lock` that are
   `test -c` true under KNOWN bare-repo roots, is a no-op otherwise, and has a shell test
   asserting: (i) removes a plain forced char-device lock, (ii) `umount`s-then-`rm`s a
   bind-mounted device node (mountpoint case) rather than failing `EBUSY`, (iii) leaves a
   regular lock untouched, (iv) leaves `index.lock` untouched.
-- [ ] **AC7 (fully pipeline-applied):** every infra change applies through
+- [x] **AC7 (fully pipeline-applied):** every infra change applies through
   cloud-init/bootstrap + `terraform apply` / the deploy pipeline; no phase applies a
   change by hand on a host.
-- [ ] **AC8 (ADR shipped, not deferred):** the ADR named below exists on this branch
+- [x] **AC8 (ADR shipped, not deferred):** the ADR named below exists on this branch
   (create/amend in this PR), not a follow-up issue.
 
 ### Post-merge (pipeline — automated)

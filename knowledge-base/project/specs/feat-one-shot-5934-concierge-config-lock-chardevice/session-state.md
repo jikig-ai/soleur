@@ -32,3 +32,12 @@
   (4) continue one-shot Steps 4-8 (review incl. user-impact-reviewer per requires_cpo_signoff,
   resolve findings, QA, compound, ship).
 - Plan + deepened plan committed/pushed on this branch; WIP PR #5935 holds them.
+- RESUMED 2026-07-03: #5932 merged (6493c3c). Rebased onto merged main (clean). Implemented full plan:
+  - Phase 1: worktree-manager.sh sweep_stale_git_locks — chardevice branch + rdev + mount + whiteout probe; diag test char-device case (skip-guarded on CAP_MKNOD). Committed 15a7fd32f. (42 pass/1 skip)
+  - Phase 2: git-lock-chardevice-sweep.sh + test (14 pass/1 skip); full webhook delivery wiring (FILE_MAP, DEST_SPEC, push payload, hooks.json.tmpl, vector.toml, server.tf deploy_pipeline_fix trigger + ship DPF array/regex/bullet + gate test TRIGGER_FILES, apply-deploy-pipeline-fix.yml, infra-validation.yml); ci-deploy.sh pre-docker-run invocation. Committed 53b191d7d. (infra-config apply 59/0, install 29/0, DPF gate 89/0 bun, terraform validate OK)
+  - ADR-081 + soak follow-through (SENTRY_AUTH_TOKEN already wired). Committed 15b2d7565.
+  - Pre-merge AC1-AC8 checked; AC9/AC10 are post-merge soak (sweeper-gated).
+- CLOSE MODE: PR uses `Ref #5934` (NOT Closes) — #5934 stays OPEN through the 7-day AC10 soak;
+  the followthrough sweeper closes it on PASS. ADR status `adopting` until then.
+- Known: 2 ci-deploy.test.sh doppler-mock failures under investigation as pre-existing env flakes
+  (my ci-deploy.sh change is additive + inert; failures are "missing doppler CLI" env-mock class).
