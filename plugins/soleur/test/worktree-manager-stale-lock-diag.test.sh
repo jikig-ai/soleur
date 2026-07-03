@@ -11,9 +11,12 @@
 #   - non-regular locks (dir/symlink/mount) DETECTED + REPORTED loudly
 #     (SOLEUR_GIT_LOCK_UNREMOVABLE reason=non-regular-lock), never auto-removed;
 #   - the sweep returns non-zero iff a config-write lock remained unremovable;
-#   - ensure_bare_config() refuses the shared-config writes on an unremovable
-#     lock (no doomed EEXIST write) and its callers are set -e-safe (create paths
-#     exit clean; cleanup_merged_worktrees CONTINUES).
+#   - ensure_bare_config() SELF-HEALS past a non-regular (masked) lock via the
+#     atomic_git_config lockless writer (#5912) — the shared-config prerequisites
+#     are applied around the wedge, not refused — while its callers stay set -e-safe
+#     (create paths proceed; cleanup_merged_worktrees CONTINUES). The blind-surface
+#     SOLEUR_GIT_LOCK_DIAG / UNREMOVABLE forensic still emits. (The dedicated
+#     lockless-writer coverage lives in worktree-manager-atomic-config.test.sh.)
 #
 # Fixtures synthesized per cq-test-fixtures-synthesized-only.
 # Run: bash plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh
@@ -186,21 +189,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "Test 8: ensure_bare_config() on unremovable lock -> no config write, rc!=0"
+echo "Test 8: ensure_bare_config() SELF-HEALS past a non-regular lock via the lockless"
+echo "        writer (#5912) -> prerequisites written, rc 0, wedge untouched, forensic still emitted"
+# Behavior INVERTED by the config-lock-wedge-fix: a non-regular (masked) config.lock
+# no longer fails loud — atomic_git_config routes the shared-config writes around it
+# via a same-dir temp-copy+rename, so ensure_bare_config now SUCCEEDS and applies the
+# prerequisites that steer `git worktree add` off the wedged shared config.lock.
 BARE=$(new_lockdir)                    # acts as GIT_ROOT (no .git subdir -> git_dir=GIT_ROOT)
 printf '[core]\n\tsentinel = untouched\n' > "$BARE/config"
-CONFIG_BEFORE="$(cat "$BARE/config")"
-mkdir "$BARE/config.lock"              # non-regular -> unremovable
+mkdir "$BARE/config.lock"             # non-regular -> would EEXIST a native write
 touch -d "$OLD_MTIME" "$BARE/config.lock"
 GIT_ROOT="$BARE"
 set +e
 EBC_OUT="$(ensure_bare_config 2>"$TMP/ebc.err")"
 EBC_RC=$?
 set -e
-if (( EBC_RC != 0 )); then echo "  PASS: ensure_bare_config returns non-zero on wedge"; PASS=$((PASS + 1));
-else echo "  FAIL: ensure_bare_config must return non-zero on wedge"; FAIL=$((FAIL + 1)); fi
-assert_eq "$CONFIG_BEFORE" "$(cat "$BARE/config")" "shared config NOT mutated (no doomed write)"
-assert_contains "$EBC_OUT" "SOLEUR_GIT_LOCK_UNREMOVABLE" "sweep UNREMOVABLE surfaced via ensure_bare_config stdout"
+if (( EBC_RC == 0 )); then echo "  PASS: ensure_bare_config returns 0 (self-healed via lockless writer)"; PASS=$((PASS + 1));
+else echo "  FAIL: ensure_bare_config must self-heal (rc 0) on a non-regular lock"; sed 's/^/    /' "$TMP/ebc.err"; FAIL=$((FAIL + 1)); fi
+assert_eq "1" "$(git config --file "$BARE/config" --get core.repositoryformatversion 2>/dev/null || echo MISS)" "repositoryformatversion written via lockless path"
+assert_eq "true" "$(git config --file "$BARE/config" --get extensions.worktreeConfig 2>/dev/null || echo MISS)" "extensions.worktreeConfig written via lockless path"
+assert_eq "untouched" "$(git config --file "$BARE/config" --get core.sentinel 2>/dev/null || echo MISS)" "pre-existing config content preserved (cp -p seed)"
+assert_eq "true" "$([[ -d "$BARE/config.lock" ]] && echo true || echo false)" "non-regular lock left untouched (never auto-removed)"
+if compgen -G "$BARE/config*.soleur-tmp.*" >/dev/null 2>&1; then
+  echo "  FAIL: leftover soleur-tmp artifact after lockless write"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no soleur-tmp leftovers after lockless write"; PASS=$((PASS + 1))
+fi
+assert_contains "$EBC_OUT" "SOLEUR_GIT_LOCK_UNREMOVABLE" "sweep UNREMOVABLE forensic still surfaced via ensure_bare_config stdout"
 
 # ---------------------------------------------------------------------------
 echo "Test 9: cleanup_merged_worktrees-style caller CONTINUES past a wedged ensure_bare_config"

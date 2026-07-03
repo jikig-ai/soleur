@@ -6,8 +6,28 @@ tracking_issue: 5912
 branch: feat-config-lock-wedge-fix
 pr: 5932
 brainstorm: knowledge-base/project/brainstorms/2026-07-03-config-lock-wedge-fix-brainstorm.md
-status: draft
+status: implemented
 ---
+
+## Implementation note (2026-07-03)
+
+Landed in `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`:
+`_config_lock_wedged()` (per-file non-regular-lock gate) + `atomic_git_config()`
+(read-first + gated lockless temp-copy/atomic-rename), with all five
+`ensure_bare_config()` mutations routed through the helper and the old fail-loud
+short-circuit replaced by a route-around (the sweep still runs for diagnostics +
+stale-regular removal, `|| true`).
+
+**Empirically validated (BLOCKING ASSUMPTION resolved for the create path):** with a
+non-regular lock present at `.git/config.lock`, a native `git config` write fails
+EEXIST, but after `atomic_git_config` sets `extensions.worktreeConfig=true` via the
+lockless path, `git worktree add` (with a valid HEAD) succeeds and never touches the
+wedged shared `config.lock` — it writes per-worktree config instead. So the
+ensure_bare_config-scoped fix is sufficient to unwedge worktree creation; the
+single-path-masking assumption (candidate 3 / #5934) governs only defense-in-depth,
+not create-path correctness. Tests: `worktree-manager-atomic-config.test.sh` (new,
+dir+symlink+char-device fixtures) and the updated Test 8 in
+`worktree-manager-stale-lock-diag.test.sh` (behavior inverted: self-heal, not refuse).
 
 # Spec: config.lock worktree-creation wedge — targeted fix
 
