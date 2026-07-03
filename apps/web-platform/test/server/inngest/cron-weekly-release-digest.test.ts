@@ -62,10 +62,12 @@ import {
   escapeDiscordMarkup,
   isHighlightEligible,
   renderDigest,
-  sanitizeReleases,
   stripUrls,
   cronWeeklyReleaseDigestHandler,
 } from "@/server/inngest/functions/cron-weekly-release-digest";
+// sanitizeReleases moved to the shared release-notes module (#5958) — the cron
+// and the in-app Releases page share the exact same hygiene.
+import { sanitizeReleases } from "@/server/release-notes";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 

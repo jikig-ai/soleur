@@ -70,6 +70,7 @@ export const swrKeys = {
   dashboardConversationAttention: (repoUrl: string, workspaceId: string) =>
     ["dashboard:conversation-attention-count", repoUrl, workspaceId] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
+  releasesList: () => ["/api/dashboard/releases"] as const,
   workstreamIssues: () => ["/api/workstream/issues"] as const,
   conversations: (filters: {
     statusFilter?: string;
