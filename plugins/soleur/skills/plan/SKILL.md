@@ -561,6 +561,16 @@ After planning the issue structure, run SpecFlow Analyzer to validate and refine
 
 **Read `plugins/soleur/skills/plan/references/plan-issue-templates.md` now** to load the three issue templates (MINIMAL, MORE, A LOT). Select the appropriate detail level based on complexity -- simpler is mostly better. Use the template structure from the reference file for the chosen level.
 
+### 4.5. Scoped Advisor Consult (token-frugal)
+
+Before finalizing the plan into issues, get one strong-model second opinion at the highest-leverage decision point — but pay only for a curated payload, not the whole session.
+
+Spawn a **Task** subagent with `model: fable` (the top advisor tier; fall back to `model: opus` if the org lacks Fable access) and a **curated** prompt — pass only the plan's `## Overview`, `## Implementation Phases`, and the phase you judge riskiest. Do NOT pass the conversation: a Task subagent receives prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`), so curation is the token lever that makes this far cheaper than Claude Code's built-in advisor (which re-sends the full transcript, uncached, every call). Prompt shape:
+
+> Review this implementation plan's approach and its riskiest phase. Name the one or two changes most likely to prevent rework or a wrong-architecture commit. Be concise — assume you see only what is quoted. PLAN:\n<overview + phases + riskiest phase>
+
+Apply the returned guidance before Step 5. Advisory only — do not block, loop, or re-consult. Skip silently in a resource-constrained run only if the plan is trivially mechanical (single-file, no architecture choice). Rationale + the `model: fable` upgrade-pin justification: ADR-083 (`knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md`).
+
 ### 5. Issue Creation & Formatting
 
 <thinking>

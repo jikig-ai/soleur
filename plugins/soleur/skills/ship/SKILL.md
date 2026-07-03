@@ -295,6 +295,8 @@ Invoke the preflight skill via the **Skill tool**:
 
 ## Phase 5.5: Pre-Ship Review Gates
 
+**Scoped advisor consult (token-frugal).** Before declaring the feature shippable, get one strong-model completeness check — on a curated payload, not the transcript. Spawn a **Task** subagent with `model: fable` (fall back to `model: opus` if the org lacks Fable access) and pass only: the branch diff summary (`git diff --stat origin/main...HEAD` plus the substantive hunks), any still-unresolved review findings, and the acceptance criteria. Do NOT pass the conversation (Task subagents get prompt text only), which is what keeps this far cheaper than the built-in advisor's full-transcript-per-call. Ask: "Given only what is quoted, is this genuinely complete — any unresolved review finding, or an obvious failure mode left unhandled?" Apply the guidance; advisory only — do not block or loop. Rationale: ADR-083 (`knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md`).
+
 Emit rule-application telemetry (records that the conditional-domain-gates phase was entered — see AGENTS.md `hr-before-shipping-ship-phase-5-5-runs`):
 
 ```bash
