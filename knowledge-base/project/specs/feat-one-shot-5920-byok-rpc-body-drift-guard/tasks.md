@@ -11,40 +11,40 @@ Derived from the finalized plan. See the plan for rationale, Research
 Reconciliation (per-function marker map), and Sharp Edges.
 
 ## Phase 0 — Preconditions (verify, no code)
-- [ ] 0.1 Confirm mig `084_byok_delegation_withdrawals.sql` is the highest-numbered `CREATE OR REPLACE FUNCTION public.check_and_record_byok_delegation_use` (through 121).
-- [ ] 0.2 Confirm markers are executable-only (comment-strip then grep): `v_tripped := FOUND` + `FOR UPDATE` in mig 121; `FOR UPDATE` + `hourly_cap_exceeded` + `daily_cap_exceeded` in mig 084.
-- [ ] 0.3 Confirm `pg_get_functiondef` returns a single overload per proname on dev (else Phase 1 iterates all oids).
+- [x] 0.1 Confirmed mig `084_byok_delegation_withdrawals.sql` is the highest-numbered `CREATE OR REPLACE FUNCTION public.check_and_record_byok_delegation_use` (through 121). Cap RPC highest = 121.
+- [x] 0.2 Confirmed markers executable-only (comment-strip then grep, count==1 each): `v_tripped := FOUND` + `FOR UPDATE` in mig 121; `FOR UPDATE` + `hourly_cap_exceeded` + `daily_cap_exceeded` in mig 084.
+- [x] 0.3 `pg_get_functiondef` overload handling: probe concatenates all rows and asserts markers across all bodies (>1 overload safe); single-overload confirmed at live-probe run (Phase 6.2).
 
 ## Phase 1 — Probe extension (deliverable 1)
-- [ ] 1.1 `action.yml`: add inputs `sentry-dsn` (default `''`), `fail-on-rpc-body-drift` (default `'false'`); add output `rpc-body-drift-detected`. Read the marker map from shared `byok-rpc-markers.json` via `jq`; add a "fn allowlist / marker map is compile-time static" comment.
-- [ ] 1.2 New step `assert-byok-rpc-body-markers` after the ledger probe; psql `pg_get_functiondef` query reusing the `sh -c` DATABASE_URL_POOLER pattern; 0-rows / >1-overload handling.
-- [ ] 1.3 Comment-strip body (`sed 's/--.*//'`) before `grep -qF` marker match; accumulate misses; set `rpc-body-drift-detected=true`. **Severity tracks `fail-on-rpc-body-drift`:** true → `::error::` (static literals only) + Sentry; false → `::warning::`, no Sentry.
-- [ ] 1.4 Bash Sentry event emit per `web-platform-release.yml:893-933` (DSN parse, `store/` POST, tags `feature`/`op`/`fn`, extra `missing_marker`, **static** `message`, 3-retry, DSN-unset/curl-fail → `::warning::`) — invoked ONLY when `fail-on-rpc-body-drift=='true'`.
-- [ ] 1.5 `exit 1` when `fail-on-rpc-body-drift=='true'` AND `rpc-body-drift-detected=='true'`.
-- [ ] 1.6 `scheduled-dev-migration-drift.yml`: forward `sentry-dsn` + `fail-on-rpc-body-drift: 'true'` (sole Sentry + fail authority).
-- [ ] 1.7 `tenant-integration.yml`: do NOT forward `sentry-dsn`; leave fail flag default `false` (PR CI = `::warning::`-only). Verify whether any edit is needed at all.
+- [x] 1.1 `action.yml`: added inputs `sentry-dsn` (default `''`), `fail-on-rpc-body-drift` (default `'false'`); added output `rpc-body-drift-detected`. Marker map read from shared `byok-rpc-markers.json` via `jq`; static-allowlist / no-SQLi comment added.
+- [x] 1.2 New step `id: rpc-body` after the ledger probe; psql `pg_get_functiondef` query via SQL-to-tempfile + `sh -c` DATABASE_URL_POOLER pattern; 0-rows (`__ABSENT__`) / concatenated-overload handling.
+- [x] 1.3 Comment-strip body (`sed 's/--.*//'`) before `grep -qF` marker match; accumulate misses; set `rpc-body-drift-detected=true`. Severity tracks `fail-on-rpc-body-drift`.
+- [x] 1.4 Bash Sentry `emit_sentry()` per `web-platform-release.yml:893-933` (DSN parse, `store/` POST, tags `feature`/`op`/`fn`, extra `missing_marker`, static `message`, 3-retry, DSN-unset/curl-fail → `::warning::`) — invoked ONLY when `fail-on-rpc-body-drift=='true'` AND DSN set.
+- [x] 1.5 `exit 1` when `fail-on-rpc-body-drift=='true'` AND `drift=='true'`.
+- [x] 1.6 `scheduled-dev-migration-drift.yml`: forwards `sentry-dsn` + `fail-on-rpc-body-drift: 'true'`.
+- [x] 1.7 `tenant-integration.yml`: **no edit needed** — it forwards only `doppler-token`, so `sentry-dsn` defaults `''` + fail flag defaults `false` → `::warning::`-only, no Sentry (verified).
 
 ## Phase 2 — Shared marker map + structural source-side test (deliverable 1)
-- [ ] 2.1 Create `apps/web-platform/test/supabase-migrations/byok-rpc-markers.json` (single source of truth; shape per plan Phase 2).
-- [ ] 2.2 Create `byok-rpc-body-markers.test.ts` importing that JSON; glob migrations (exclude `.down.sql`), pick highest-numbered `CREATE OR REPLACE FUNCTION public.<fn>` (anchored regex), comment-strip, assert markers are body-resident; `throw` fail-loud if no definer resolves (negative fixture).
+- [x] 2.1 Created `apps/web-platform/test/supabase-migrations/byok-rpc-markers.json` (single source of truth).
+- [x] 2.2 Created `byok-rpc-body-markers.test.ts` reading that JSON; globs migrations (exclude `.down.sql`), picks highest-numbered `CREATE OR REPLACE FUNCTION public.<fn>` (anchored regex), extracts ONE function's def (dollar-quote isolation — sibling marker cannot leak), comment-strips, asserts markers; `throw` fail-loud + isolation negative fixtures. Green (10 tests), mutation-proven non-vacuous.
 
 ## Phase 3 — Introspection mechanism (deliverable 2, Option B primary)
-- [ ] 3.1 (Option B primary) Add `postgres` (porsager) to `apps/web-platform/package.json` devDependencies + commit lockfile (`cq-before-pushing-package-json-changes`).
-- [ ] 3.2 (Option A fallback only, if devDep rejected) Create `122_dev_functiondef_introspection.sql` (+ `.down.sql`): `SECURITY DEFINER` `dev_functiondef(regprocedure) RETURNS text` (NOT `pg_`-prefixed), search_path pinned, REVOKE from PUBLIC **+ anon + authenticated** explicitly, GRANT to service_role, `BEGIN;/COMMIT;`, no CONCURRENTLY.
+- [x] 3.1 Added `postgres@^3.4.9` (porsager, zero-dep) to `apps/web-platform` devDependencies; regenerated BOTH `bun.lock` (`bun add --dev`) and `package-lock.json` (npm@11 `--package-lock-only`); `bun install --frozen-lockfile` parity confirmed.
+- [~] 3.2 Option A fallback NOT used (Option B primary chosen — no migration).
 
 ## Phase 4 — Self-diagnosing atomicity failure (deliverable 2)
-- [ ] 4.1 In `byok-kill-switch.atomicity.tenant-isolation.test.ts` compute `willFail` (trippedCount !== 1 || any per-pair mismatch).
-- [ ] 4.2 On `willFail`, fetch live body — Option B: porsager `sql\`SELECT pg_get_functiondef('...'::regprocedure)\`` over `DATABASE_URL_POOLER`; Option A: `service.rpc("dev_functiondef", {...})`. Guarded fallback string on error.
-- [ ] 4.3 Embed live body in the `expect` **message** args only — no `.toBe`/`.toEqual` target changes (Invariant C stays strict).
-- [ ] 4.4 File a follow-up tracking issue (label `observability`) for a delegation-RPC semantic/atomicity test (no live semantic backstop today).
+- [x] 4.1 `byok-kill-switch.atomicity.tenant-isolation.test.ts` computes `willFail` (trippedCount !== 1 || any per-pair mismatch).
+- [x] 4.2 On `willFail`, fetches live body via porsager `sql\`SELECT pg_get_functiondef('...'::regprocedure)\`` over `DATABASE_URL_POOLER` (guarded `fetchLiveCapRpcBody`, never throws; fallback strings on unset/error).
+- [x] 4.3 Live body embedded in `expect` **message** args only — no `.toBe`/`.toEqual` target changes (verified by diff; Invariant C strict).
+- [x] 4.4 Filed follow-up #5938 (labels `observability`, `type/chore`) for a delegation-RPC semantic/atomicity test.
 
 ## Phase 5 — Verify
-- [ ] 5.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] 5.2 `./node_modules/.bin/vitest run test/supabase-migrations/byok-rpc-body-markers.test.ts` green.
-- [ ] 5.3 `actionlint` the two workflows; `bash -c` syntax-check extracted `run:` snippets (NOT actionlint on the composite action.yml).
-- [ ] 5.4 Probe snippet exercised via `bash -c` against all-markers + missing-marker fixtures.
+- [x] 5.1 `tsc --noEmit` clean.
+- [x] 5.2 Structural test green.
+- [x] 5.3 `actionlint` on `scheduled-dev-migration-drift.yml` OK; `bash -n` on extracted `action.yml` `run:` snippet clean (composite action.yml not actionlint'd).
+- [x] 5.4 Probe snippet exercised via `bash` harness against all-markers + missing-marker fixtures (warning/error/exit-1/DSN-unset all correct). Full webplat unit suite: 9936 passed, 0 failed.
 
 ## Phase 6 — Post-merge (automated)
-- [ ] 6.1 (Option A fallback only) Migration 122 applied to dev + prd via `web-platform-release.yml#migrate`; verify via `list_migrations`. **Under Option B (primary): no migration — skip.**
-- [ ] 6.2 `gh workflow run scheduled-dev-migration-drift.yml` → green, no false-positive body-marker `::error::`.
-- [ ] 6.3 Live atomicity smoke (`TENANT_INTEGRATION_TEST=1`, dev) → green.
+- [~] 6.1 Option A fallback only — skipped (Option B primary: no migration).
+- [ ] 6.2 `gh workflow run scheduled-dev-migration-drift.yml` → green, no false-positive body-marker `::error::` (post-merge; the workflow lives on main).
+- [ ] 6.3 Live atomicity smoke (`TENANT_INTEGRATION_TEST=1`, dev) → green (post-merge).
