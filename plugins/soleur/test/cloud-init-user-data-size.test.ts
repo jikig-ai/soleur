@@ -143,8 +143,8 @@ function varLengths(tfSrc: string, cloudInitFile: string): Record<string, number
 // gzip model (git-data / #5927). For base64encode(file()) args this is the ACTUAL base64 of the
 // script on disk (its byte content, NOT an "x".repeat placeholder — placeholders compress
 // ~1000:1 and would make the gzip budget non-discriminating). Small variable-length secrets/ids
-// stay as fixed-length placeholders: their exact bytes are near-incompressible noise either way
-// and don't move the budget.
+// stay as fixed-length "x".repeat placeholders: at ~600 B total they don't move the budget, and
+// their exact byte content is unknown at test time anyway.
 function modeledValue(name: string, expr: string): string {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return readFileSync(join(INFRA, fileMatch[1])).toString("base64");
@@ -155,22 +155,16 @@ function modeledValue(name: string, expr: string): string {
 }
 
 // Model the base64gzip() OUTPUT length — what Hetzner stores against the 32,768 cap for git-data
-// (#5927). Renders the cloud-init template with REAL script content, gzips at level 9 (matching
-// terraform's base64gzip), and base64-encodes. NOT byte-exact vs terraform's Go zlib (different
-// header/level), so callers assert a BUDGET, never equality (#5887's terraform plan is the
-// byte-exact truth). Optional `extraVars` injects a synthetic arg for the discrimination check.
-function renderedGzipB64Len(
-  cloudInitFile: string,
-  tfSrc: string,
-  extraTemplate = "",
-  extraVars: Record<string, string> = {},
-): number {
+// (#5927). Renders the cloud-init template with REAL script content (via modeledValue), gzips at
+// level 9 (matching terraform's base64gzip), and base64-encodes. NOT byte-exact vs terraform's Go
+// zlib (different header/level), so callers assert a BUDGET, never equality (#5887's terraform
+// plan is the byte-exact truth).
+function renderedGzipB64Len(cloudInitFile: string, tfSrc: string): number {
   const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
-  const src = readFileSync(join(INFRA, cloudInitFile), "utf8") + extraTemplate;
+  const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
   const ESC = "__SOLEUR_ESC__";
   let s = src.split("$${").join(ESC);
   s = s.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_whole, name) => {
-    if (name in extraVars) return extraVars[name];
     if (!(name in map)) {
       throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
     }
@@ -205,22 +199,19 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(size).toBeGreaterThan(GIT_DATA_FLOOR); // non-vacuity: model must gzip real content
   });
 
-  test("git-data gzip model is discriminating: a re-inlined script raises the modeled size", () => {
-    // Guards R2: prove the gzip model tracks REAL content, not "x".repeat(N) placeholders
-    // (which collapse ~1000:1). Inject a synthetic 6th base64encode(file()) arg's worth of real
-    // script bytes and confirm the base64gzip'd size rises materially — a placeholder-based model
-    // would gzip the injected content to near-nothing and this delta would be ~0.
-    const base = renderedGzipB64Len("cloud-init-git-data.yml", gitDataTf);
-    const realScriptB64 = readFileSync(
-      join(INFRA, "git-data-bootstrap.sh"),
-    ).toString("base64");
-    const withExtra = renderedGzipB64Len(
-      "cloud-init-git-data.yml",
-      gitDataTf,
-      "\n${__soleur_discrim__}\n",
-      { __soleur_discrim__: realScriptB64 },
-    );
-    expect(withExtra - base).toBeGreaterThan(1_000);
+  test("git-data gzip model reads REAL script content, not x-run placeholders (guards R2)", () => {
+    // R2: the base64gzip budget above only discriminates if modeledValue substitutes the ACTUAL
+    // base64 of each base64encode(file()) script. If modeledValue regressed to "x".repeat(N), the
+    // whole render would gzip ~4x smaller (real ~21.9 KB vs placeholder ~5.2 KB) and drop below
+    // GIT_DATA_FLOOR — so the budget test would fail loudly. Guard that property at the source by
+    // asserting modeledValue itself: a real file arg must yield the file's true base64, never an
+    // x-run stand-in. (Testing modeledValue directly avoids the trap where injecting content
+    // through a bypass path proves nothing about modeledValue.)
+    const fileArg = 'base64encode(file("${path.module}/git-data-bootstrap.sh"))';
+    const real = modeledValue("git_data_bootstrap_b64", fileArg);
+    expect(real).toBe(readFileSync(join(INFRA, "git-data-bootstrap.sh")).toString("base64"));
+    expect(real).not.toMatch(/^x+$/); // NOT the placeholder the non-file path would produce
+    expect(real.length).toBeGreaterThan(1_000); // a real script's base64 is substantial, not ~600 B of noise
   });
 });
 

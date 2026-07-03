@@ -228,8 +228,9 @@ on-disk source files):**
 
 **Scope boundary — the git-data host uses a DISTINCT mechanism (gzip-first).** git-data
 runs no docker and pulls no image, so this bake-and-extract mechanism does not apply.
-Post-#5918 (LUKS/transport/remove/provision) its RAW `user_data` is ~41.7 KB — OVER the
-same cap.
+Cumulative script growth across #5865 (provision wrapper), #5877 (remove wrapper), and
+#5918 (transport-wrapper cutover) pushed its RAW `user_data` to ~41.7 KB — OVER the same
+cap, with the over-cap threshold crossed at #5918.
 
 **Resolved via `base64gzip()` (#5927, 2026-07-03).** The `user_data` expression in
 `git-data.tf` is wrapped in Terraform's core `base64gzip()` builtin, which gzips the whole
