@@ -512,11 +512,26 @@ fi
 assert_not_grep "Better Stack is HOST egress (must not be in the container allowlist)" '^(logs\.)?(betterstack|betteruptime)' "$ALLOWLIST"
 assert_not_grep "GHCR is HOST egress (must not be in the container allowlist)" '^ghcr\.io$' "$ALLOWLIST"
 
-echo "-- cloud-init fresh-host mirror --"
-assert_grep "cloud-init writes the loader" '/usr/local/bin/cron-egress-nftables\.sh' "$CLOUD_INIT"
-assert_grep "cloud-init writes the resolver" '/usr/local/bin/cron-egress-resolve\.sh' "$CLOUD_INIT"
-assert_grep "cloud-init writes the post-apply assert script" '/usr/local/bin/cron-egress-postapply-assert\.sh' "$CLOUD_INIT"
-assert_grep "cloud-init writes the allowlist" '/etc/soleur/cron-egress-allowlist\.txt' "$CLOUD_INIT"
+echo "-- fresh-host mirror via the baked host-scripts set (#5921) --"
+# #5921: the cron-egress artifacts moved out of inline cloud-init write_files: (base64 blobs
+# that blew the 32,768-byte user_data cap) into the baked /opt/soleur/host-scripts/ set. They
+# are delivered on a fresh host by server.tf.local.host_script_files + the Dockerfile COPY +
+# soleur-host-bootstrap.sh's install loop. The systemctl enable + package steps stay inline.
+BOOTSTRAP="$SCRIPT_DIR/soleur-host-bootstrap.sh"
+DOCKERFILE="$SCRIPT_DIR/../Dockerfile"
+for f in cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
+  cron-egress-postapply-assert.sh cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt \
+  cron-egress-firewall.service cron-egress-resolve.service cron-egress-resolve.timer \
+  cron-egress-alarm@.service; do
+  # Scope the membership check to the host_script_files array (mirrors journald-config.test.sh)
+  # so a `"$f"` appearing only in an SSH-provisioner reference cannot satisfy it.
+  assert_cmd "baked set includes $f (host_script_files array)" \
+    bash -c "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -qF -- '\"$f\"'"
+  assert_grep "Dockerfile bakes $f" "/app/infra/$f" "$DOCKERFILE"
+done
+assert_grep "bootstrap installs cron-egress scripts (0755)" 'cron-egress-nftables\.sh cron-egress-resolve\.sh cron-egress-alarm\.sh' "$BOOTSTRAP"
+assert_grep "bootstrap installs cron-egress allowlists into /etc/soleur (0644)" 'install -D -m 0644 .* "/etc/soleur/\$f"' "$BOOTSTRAP"
+assert_not_grep "cron-egress loader is NOT re-inlined in cloud-init write_files" '- path: /usr/local/bin/cron-egress-nftables\.sh' "$CLOUD_INIT"
 assert_grep "cloud-init enables the firewall unit" 'systemctl enable --now cron-egress-firewall\.service' "$CLOUD_INIT"
 assert_grep "cloud-init enables the resolve timer" 'systemctl enable --now cron-egress-resolve\.timer' "$CLOUD_INIT"
 assert_grep "cloud-init installs nftables" '^ *- nftables$' "$CLOUD_INIT"
