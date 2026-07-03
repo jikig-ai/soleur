@@ -574,6 +574,50 @@ Phase 4b (continuous checkpoint).
 > zero-downtime web-1 reboot therefore requires (b)+(c), i.e. it IS the GA line (§8), not
 > a prerequisite. Plan: `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
 
+> **Amendment (2026-07-03, #5966 — deep-readiness endpoint / Sharp Edge C1).** The blue-green
+> amendment above (b) fixes the LB monitor as reachability-only on `/health` — correct, but it
+> means the monitor alone **cannot distinguish a ready host from a bare one**: `/health` is
+> liveness-only (`server/health.ts buildHealthResponse()` hardcodes `status:"ok"` and probes the
+> SHARED Supabase), so a bare web-2 (running, empty/unmounted `/workspaces`, not in rotation)
+> returns `200 / status:ok / supabase:connected` — a routing lie. **Decision:** deep-readiness
+> lives on a SEPARATE internal endpoint `GET /internal/readyz` (`server/readiness.ts`,
+> `handleReadyzRequest`), gated to the **loopback transport peer** (`req.socket.remoteAddress` —
+> unspoofable off-host; the Host header is client-supplied secondary), returning **non-2xx unless
+> the responding host can actually serve locally**: `/workspaces` is **writable** AND
+> **populated**. `/health` stays liveness-only — the physical endpoint split enforces the "no
+> mount coupling on `/health`" invariant (b) requires.
+>
+> - **Why writable, not a mountpoint check.** `buildReadinessResponse()` runs INSIDE the webapp
+>   container where `/workspaces` is a docker `-v /mnt/data/workspaces:/workspaces` bind mount over
+>   an overlay root, so the classic `st_dev(/workspaces) !== st_dev(/)` mountpoint check is **always
+>   true and inert** — it cannot detect a failed Hetzner volume attach (docker auto-creates the
+>   source dir on the host root fs). A **write+unlink dotfile probe** is the only signal that proves
+>   "this host can serve": it fails on absent (ENOENT), read-only (EROFS — the silent-write-loss
+>   mode), permission (EACCES), and I/O (EIO). `populated` = ≥1 host-local workspace dir
+>   (`.orphaned-`/`.cron`/`lost+found` excluded) — rejects a fresh/empty volume.
+> - **v1 identity = writable + populated; the Hetzner block-volume RWO single-attach guarantee is
+>   the identity backstop** (a host physically cannot mount another host's live volume, so
+>   "populated" is a sound proxy for "this host's own state"). The residual wrong-volume-attached
+>   gap is closed by the ADR-082 `host_id` sentinel as a fast-follow — not a v1 dependency.
+> - **Fail-closed is complete.** `buildReadinessResponse()` never throws (any internal error →
+>   `ready:false`) AND the route wraps it in try/catch → 503. An unguarded throw here would reach
+>   `installCrashHandlers()` → `process.exit(1)` = a *restart* of live web-1, strictly worse than a
+>   503.
+> - **Boot-time observability.** A latched `verifyWorkspacesMountOnce()` mirrors a not-ready boot to
+>   Sentry once via `reportSilentFallback` (`op=boot-readiness`). `verifyPluginMountOnce` checks the
+>   PLUGIN mount, NOT `/workspaces`, and passes on a bare volume — so `/workspaces` had no boot
+>   coverage before this. This is the async/push layer the pull-only readyz endpoint lacks.
+> - **Flap-safety (hard contract, not deferred to the GA PR).** Any consumer draining a **live**
+>   origin on a readyz not-ready read MUST require **N≥2 consecutive** not-ready reads — the
+>   fail-closed single-shot bias applies ONLY to the *candidate*/pre-pool decision, never to
+>   draining the sole live origin on one transient probe error. readyz is NOT the continuous LB
+>   liveness monitor (that stays reachability-only on `/health`); the GA LB config (b) inherits this
+>   N≥2-consecutive precondition as a stated invariant.
+> - **Necessary-but-not-sufficient.** `/internal/readyz` is an ADDITIONAL pre-pool gate layered on
+>   top of the unchanged hard invariant (c) (relay active AND git-data cut over). Shipping it does
+>   NOT relax (c) or by itself unlock pooling. Plan:
+>   `knowledge-base/project/plans/2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills

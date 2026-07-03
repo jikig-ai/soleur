@@ -33,6 +33,10 @@ import {
   buildHealthResponse,
   buildInternalMetricsResponse,
 } from "./health";
+import {
+  handleReadyzRequest,
+  verifyWorkspacesMountOnce,
+} from "./readiness";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
 // the server at startup in environments without Inngest configured (e2e CI,
@@ -71,6 +75,11 @@ const handle = app.getRequestHandler();
 app.prepare().then(() => {
   assertSingleReplicaInvariant();
   verifyPluginMountOnce();
+  // #5966 — one-shot boot-time deep-readiness mirror. verifyPluginMountOnce
+  // above checks the PLUGIN mount, not /workspaces; this covers the host-local
+  // workspace volume so a mis-mounted/read-only web-1 surfaces a Sentry event
+  // at boot instead of only when a live request hits an empty /workspaces.
+  verifyWorkspacesMountOnce();
   emitTeamWorkspaceInviteBootBreadcrumb();
 
   const server = createServer(async (req, res) => {
@@ -100,6 +109,16 @@ app.prepare().then(() => {
       const metrics = await buildInternalMetricsResponse();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(metrics));
+      return;
+    }
+
+    // Deep-readiness (#5966, ADR-068 Sharp Edge C1). Unlike /health (liveness:
+    // status:"ok" + shared-Supabase probe), this answers "can THIS host serve?"
+    // — /workspaces writable + populated. Gated to the loopback transport peer
+    // and returns 503 when the host cannot serve locally. All gating + the
+    // fail-closed try/catch live in handleReadyzRequest (server/readiness.ts).
+    if (parsedUrl.pathname === "/internal/readyz") {
+      handleReadyzRequest(req, res);
       return;
     }
 

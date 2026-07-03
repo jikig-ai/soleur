@@ -270,11 +270,17 @@ Flagged the `/health` monitor-coupling hazard (adopted into Sharp Edges + the AD
 
 ## Sharp Edges
 
-- **C1 — `/health` is a routing lie (follow-up issue required).** `server/health.ts`
-  hardcodes `status:"ok"` and only probes shared Supabase → returns 200 with an empty
-  `/workspaces`. web-2 must therefore NEVER be a monitored member of a public serving pool
-  until a **deep-readiness** endpoint exists (fails when the host cannot serve — pre-git-data-
-  GA that is *always* for web-2). File the deep-readiness endpoint as a GA-blocking follow-up.
+- **C1 — `/health` is a routing lie → deep-readiness endpoint DELIVERED (#5966).**
+  `server/health.ts` hardcodes `status:"ok"` and only probes shared Supabase → returns 200 with
+  an empty `/workspaces`, so web-2 must NEVER be a monitored member of a public serving pool on
+  `/health` alone. **Resolved:** `GET /internal/readyz` (`server/readiness.ts`, loopback-peer
+  gated) returns non-2xx unless the responding host's `/workspaces` is **writable AND populated**
+  — the pre-pool readiness gate for web-2. The GA LB pre-pool check / drain tooling MUST consult
+  it before granting live weight, and MUST require **N≥2 consecutive** not-ready reads before
+  draining a *live* origin (fail-closed single-shot bias applies only to the candidate/pre-pool
+  decision). Still necessary-but-not-sufficient: it does NOT relax the hard invariant (relay
+  active AND git-data cut over). See ADR-068 amendment (2026-07-03, #5966) and
+  `knowledge-base/project/plans/2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
 - **A→LB migration is a live-record operation (verify CF behavior before GA).** A CF hostname
   is either a proxied A record or an LB. best-practices research claims the LB takes DNS
   precedence gaplessly if both proxied; spec-flow warns of an NXDOMAIN/409 window. This is a
