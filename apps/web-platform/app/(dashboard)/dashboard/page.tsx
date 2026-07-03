@@ -1,18 +1,14 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { swrKeys, jsonFetcher } from "@/lib/swr-config";
-import { fetchInboxItems } from "@/components/inbox/inbox-surface";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ConversationRow } from "@/components/inbox/conversation-row";
-import { EmailTriageRow } from "@/components/inbox/email-triage-row";
-import type { EmailTriageItem } from "@/components/inbox/email-triage-row";
 import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
@@ -226,20 +222,10 @@ export default function DashboardPage() {
     },
   );
 
-  // feat-operator-inbox-delegation Phase 5b — email-triage inbox items.
-  // GET /api/inbox/emails already returns unacknowledged statutory rows
-  // pinned first (server-side ordering contract); render in given order.
-  // ADR-067: shares the SAME cache key as InboxSurface's Active view
-  // (swrKeys.inboxEmails("active")) + the same fetcher → free dedup and a
-  // consistent view across Dashboard ↔ Inbox. Errors stay silent here (the
-  // rest of the page renders); `emailItems` defaults to [] until resolved.
-  const { data: emailItems = [], mutate: mutateEmailItems } = useSWR(
-    swrKeys.inboxEmails("active"),
-    fetchInboxItems,
-  );
-  const fetchEmailItems = useCallback(() => {
-    void mutateEmailItems();
-  }, [mutateEmailItems]);
+  // feat-inbox-attention-badge: the email-triage "Needs attention" list was
+  // removed from the Dashboard — those items now live in the Inbox, surfaced as
+  // a count badge on the Inbox left-nav item (components/dashboard/
+  // inbox-nav-badge.tsx). The Dashboard no longer fetches /api/inbox/emails.
 
   // ADR-044 (#4543): the repo-disconnected hint reflects the ACTIVE workspace's
   // repo (never the caller's own users.repo_url), so an invited member viewing a
@@ -446,9 +432,11 @@ export default function DashboardPage() {
   // First-run state (no vision.md, no conversations)
   // ---------------------------------------------------------------------------
 
-  // emailItems gate: a pending email-triage item (esp. a statutory clock)
-  // must not be hidden behind the conversation-less empty states.
-  if (!kbError && !visionExists && conversations.length === 0 && emailItems.length === 0 && !hasActiveFilter) {
+  // feat-inbox-attention-badge: this empty state no longer special-cases
+  // pending email-triage items. They are always surfaced by the Inbox nav
+  // count badge (visible in every dashboard state), so a statutory clock is no
+  // longer hidden by the conversation-less first-run screen.
+  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
@@ -588,7 +576,7 @@ export default function DashboardPage() {
   // placeholder or suggested prompts depending on foundation status.
   // ---------------------------------------------------------------------------
 
-  if (conversations.length === 0 && emailItems.length === 0 && !hasActiveFilter) {
+  if (conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation + operational cards (hidden when all complete) */}
@@ -784,33 +772,6 @@ export default function DashboardPage() {
           >
             Clear filters
           </button>
-        </div>
-      )}
-
-      {/* Email-triage rows — siblings of conversation rows. Server returns
-          unacknowledged statutory pinned first; render in given order. The
-          "View all" link is the second entry point to /dashboard/inbox (the
-          top-level nav entry is the always-available path). */}
-      {emailItems.length > 0 && (
-        <div className="mb-2 space-y-2">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-soleur-text-muted">
-              Needs attention
-            </span>
-            <Link
-              href="/dashboard/inbox"
-              className="text-xs text-soleur-accent-gold-fg transition-colors hover:text-soleur-text-primary"
-            >
-              View all →
-            </Link>
-          </div>
-          {emailItems.map((item) => (
-            <EmailTriageRow
-              key={item.id}
-              item={item}
-              onChanged={fetchEmailItems}
-            />
-          ))}
         </div>
       )}
 
