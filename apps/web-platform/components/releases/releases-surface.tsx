@@ -85,11 +85,12 @@ export function ReleasesSurface() {
 
   return (
     <div>
-      {/* Ambient shimmer while revalidating a warm cache hit. */}
-      <RefreshShimmer active={isValidating && releases !== undefined} />
+      {/* Ambient shimmer while revalidating a warm cache hit (past the
+          `releases === undefined` skeleton return, so data is always defined). */}
+      <RefreshShimmer active={isValidating} />
       {/* Stale-failure affordance: a background refresh failed but we still have
           the last good feed — keep it, offer a retry (spec-flow Gap 2). */}
-      {error && releases !== undefined && <StaleRefreshBar onRetry={refetch} />}
+      {error && <StaleRefreshBar onRetry={refetch} />}
 
       <ul className="space-y-4">
         {releases.map((r, i) => (

@@ -164,7 +164,7 @@ export async function fetchWebReleases(opts?: {
     page += 1;
   }
 
-  if (hitCap && matched.length < limit) {
+  if (hitCap) {
     reportSilentFallback(new Error("release page cap reached before limit"), {
       feature: "releases-page",
       op: "releases-page-undercount",
