@@ -193,12 +193,15 @@ the incident **class** deterministically:
 Two load-bearing pieces remain **open**, so this ADR **stays `adopting`** (it is NOT
 flipped to `accepted` in PR3):
 
-- **Deferral B — creds-gated real `--capture` wiring** (drives the real SDK
-  `query()` + `buildAgentSandboxConfig()` to populate `sandbox-canary-argv.json`).
-  New follow-up issue. **Trigger:** confirm `ANTHROPIC_API_KEY` availability in CI +
-  design non-determinism bounding for the model turn. B is a **hard prerequisite of
-  A**: per #5889, the dark-launch soak counter holds at 0 (`fixture_uncaptured`)
-  until the real fixture lands, so no green soak verdict can accrue without B.
+- **Deferral B — creds-gated real `--capture` wiring** — **LANDED (#5913).** Drives
+  the real SDK `query()` + `buildAgentSandboxConfig()` via a bwrap-intercepting PATH
+  shim to populate `sandbox-canary-argv.json` with the SDK's real bwrap SETUP argv.
+  `ANTHROPIC_API_KEY` confirmed as a repo secret; the model-turn non-determinism is
+  bounded by retry-N + per-attempt wall-clock timeout + reserved exit `4`, keeping
+  the LLM out of the assertion path. B was a hard prerequisite of A: #5889's soak
+  held at `fixture_uncaptured` until this real fixture landed. **See the #5913
+  amendment below — the "verbatim snapshot, no normalization" mechanism this ADR
+  originally specified was empirically falsified and is superseded.**
 - **Deferral A — promote the `ci-deploy.sh` faithful canary to BLOCKING**
   (`sandbox_broken` → rollback). Owned by **#5889** (soak: 5 green verdicts / ≥3
   days). Its `earliest=2026-07-06` is necessary-but-not-sufficient — promotion also
@@ -208,8 +211,73 @@ flipped to `accepted` in PR3):
   a faithful `sandbox_broken` (or a loaded≠committed hash mismatch) — NOT on a
   literal "canary pass".
 
-**Flip to `accepted`** only when BOTH land: real-capture wired (B) AND the canary
-promoted-to-blocking after #5889's soak proves green (A), citing both tracking issues.
+**Flip to `accepted`** only when BOTH land: real-capture wired (B — **now landed,
+#5913**) AND the canary promoted-to-blocking after #5889's soak proves green (A),
+citing both tracking issues. **Still `adopting`** — A remains open.
+
+### Amendment (#5913, 2026-07-03) — canonical projection supersedes verbatim snapshot
+
+Wiring the real `--capture` empirically **falsified** deferral B's core premise that
+"the captured argv is a pure function of (SDK version, sandbox config), byte-repro-
+ducible by construction." The real `@anthropic-ai/claude-agent-sdk@0.3.197` bwrap
+SETUP argv (176 tokens) embeds three axes the ADR did not anticipate: (a) **per-run
+random paths** — a network-proxy socket `/tmp/claude-http-<hex>.sock` and ~12
+`/tmp/claude-empty-<rand>` bind sources (change every capture, same machine); (b)
+**host-specific binds** (`/home/<user>/.npm/_logs`, `/tmp/claude-<session>/…`, absent
+in the prod canary container → a verbatim replay `canary_infra_error`s every time);
+(c) **26 `--setenv NAME VALUE` env-forwarded vars**, some secret-shaped (e.g. an
+empty `CLOUDSDK_PROXY_PASSWORD`). So a verbatim fixture is neither byte-reproducible
+nor replayable off-host, and the `--verify` byte-diff + `normalizeCapturedArgv`-
+dropped design were unworkable.
+
+**Resolution (CTO ruling, binding — supersedes the "verbatim snapshot, no
+normalization" clause of deferral B):** commit a **canonical projection**
+(`normalizeCapturedArgv`, schema `canonical-bwrap-v1`). It KEEPS the seccomp-relevant
+structure (all `--unshare-*`, `--dev`, `--tmpfs`, deterministic-const binds `/` `/proc`
+`/dev/null`, ws-relative binds), NORMALIZES the hermetic ws root → `${CANARY_WS}` and
+the random empty-dir source → `${CANARY_EMPTY}` (substituted back at replay), and
+DROPS the non-deterministic/host/secret axes (all `--setenv`, random socket, host
+binds; counts recorded in a non-diffed `droppedForDeterminism` audit block). This is
+byte-reproducible (two independent captures produce identical canonical fields) AND
+replayable off-host. The projection is NOT the ADR's rejected "silent-strip normalizer":
+it is a structured projection with a **proof obligation** — the always-on exact
+`--unshare-*` multiset assertion — that fails CI if it ever over-drops or the SDK
+narrows the sandbox. Two-staged secret-scrub (raw literal-value + canonical
+names+value backstop) is retained; reject-never-strip.
+
+**§2d proof-obligation refinement (bwrap-version reality).** The ADR's replay end
+cannot reproduce the #5849 split-unshare EPERM via `bwrap <argv> -- true`: bwrap
+0.11.x **combines** all `--unshare-*` into one `unshare(…|NEWUSER)` which the #1557
+allow-rule permits under BOTH profiles (empirically, the real canonical argv passes
+the committed AND the pre-#5874 profile). The #5849 split is a property of the claude
+CLI's **nested-process structure**, not any bwrap-argv token, so no argv fidelity
+reproduces it. Therefore §2d splits into two argv-independent signals:
+1. **#5849 split-unshare discrimination** stays the already-shipped layer-B
+   nested-unshare probe (`sandbox-canary-regression.test.sh`; `unshare --user
+   --map-root-user unshare --mount --pid`) under both profiles. Unchanged; the only
+   thing that discriminates that class.
+2. **Real-argv replay** is a **bwrap-level profile-fidelity canary**: "does the SDK's
+   real bwrap setup survive the committed profile on the deploy-side bwrap/kernel?"
+   The **deploy-time prod-container replay is authoritative** (#5873-shape fleet-
+   outage detector); the CI capture-gate self-replay-green is only a capture-sanity
+   precheck (runner bwrap/kernel differ from prod, so CI-green ≠ prod-green).
+3. **Always-on deterministic guard on the committed fixture:** exact `--unshare-*`
+   multiset assertion (A5b) + `--verify` byte-diff drift.
+
+**Recorded residual (follow-up, NOT #5913).** The deploy-time real-argv replay
+CANNOT catch a prod-side kernel/bwrap-version regression that re-breaks *specifically*
+the nested split (the #5849/#5873 shape) — bwrap replay can't reproduce the nested
+unshare. In CI that class is covered at merge by layer-B against the committed profile
+file, but a kernel/bwrap regression on the prod host would pass the deploy-time canary
+(false-green for that one class). Closing it means running the argv-independent
+nested-unshare probe under the deployed profile **inside the prod canary container** at
+deploy time. That is a distinct capability, not "wire the real `--capture`" — tracked as
+**#5941**, out of #5913 scope.
+
+The CI capture gate is **dark-launch** (non-blocking / not a required status check)
+until a cross-environment-determinism soak proves a CI-runner capture reproduces the
+committed canonical argv; only its `argv_drift` byte-diff is a candidate block signal
+(a captured `sandbox_broken` is unreachable via argv replay, per the refinement above).
 
 ## Consequences
 
