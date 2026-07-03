@@ -54,6 +54,7 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh",
   "apps/web-platform/infra/cat-inngest-verify-state.sh",
   "apps/web-platform/infra/inngest-inventory.sh",
+  "apps/web-platform/infra/git-lock-chardevice-sweep.sh",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {
