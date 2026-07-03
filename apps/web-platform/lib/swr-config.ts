@@ -63,6 +63,12 @@ export const swrKeys = {
   // Not an HTTP endpoint — the fetcher runs a Supabase count query. Key is a
   // plain sentinel (no URL shape) so it can't be mistaken for a route.
   dashboardOrphanCount: () => ["dashboard:orphan-conversation-count"] as const,
+  // Nav-badge count of conversations needing founder attention/decision, scoped
+  // to the active workspace's repo (matches the dashboard list scope). Keyed on
+  // (repoUrl, workspaceId) so it re-counts on workspace switch and gates until
+  // the active repo resolves. Supabase count query — no URL shape.
+  dashboardConversationAttention: (repoUrl: string, workspaceId: string) =>
+    ["dashboard:conversation-attention-count", repoUrl, workspaceId] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
   workstreamIssues: () => ["/api/workstream/issues"] as const,
   conversations: (filters: {
