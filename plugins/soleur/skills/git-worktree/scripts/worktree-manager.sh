@@ -254,6 +254,132 @@ sweep_stale_git_locks() {
   (( unremovable == 0 ))   # non-zero iff a config-write lock remained unremovable
 }
 
+# _config_lock_wedged <file> — rc 0 (WEDGED) iff "<file>.lock" is PRESENT and
+# NON-REGULAR (symlink / dir / mountpoint / character-device / other). This is the
+# masked-lock signature the sweep flags reason=non-regular-lock: a genuine git config
+# lock is ALWAYS a regular file (git creates it via open(O_CREAT|O_EXCL)), so a
+# non-regular lock is never a legitimate in-flight writer and blocks every native
+# `git config` write with EEXIST. An ABSENT or REGULAR lock is NOT wedged (rc 1):
+# git's native writer either succeeds or legitimately blocks on a real concurrent
+# writer. Mirrors the type precedence in sweep_stale_git_locks (symlink first —
+# -e/-f dereference symlinks).
+_config_lock_wedged() {
+  local lock="$1.lock"
+  if [[ -L "$lock" ]]; then return 0; fi     # symlink -> non-regular -> wedged
+  if [[ ! -e "$lock" ]]; then return 1; fi   # absent -> not wedged
+  if [[ -f "$lock" ]]; then return 1; fi     # regular -> real/handled, not the wedge
+  return 0                                    # dir / mount / char-device / other -> wedged
+}
+
+# atomic_git_config <file> <git-config-args…> — apply a `git config --file <file>`
+# mutation without depending on <file>'s native "<file>.lock" when that lock is
+# wedged (the #5912 Concierge char-device). The targeted fix for the config.lock
+# worktree-creation wedge; composes read-first idempotence with a gated lockless
+# writer, and is the sole config-mutation entry point for ensure_bare_config below.
+#
+#   FR2 read-first — a `key value` set whose value already matches, or an `--unset`
+#     of an already-absent key, returns 0 with NO write. Reads never acquire
+#     "<file>.lock", so this fast path works even while the lock is wedged.
+#   FR3 gated writer — CLEAN/absent lock: native `git config` (preserves git's flock
+#     serialization for healthy concurrent writers; a real regular lock surfaces its
+#     own EEXIST here, the correct back-off). WEDGED (non-regular) lock: redirect
+#     git's own INI writer to a same-directory temp copy and atomic-rename over the
+#     target. git creates "<temp>.lock" — a clean path distinct from the masked
+#     "<file>.lock" — so the write never touches the wedge.
+#   TR1/TR2 — cp -p original -> same-dir temp (preserves mode/owner; plain cp
+#     perm-drifts), git edits the temp, `mv -f` atomically replaces the target
+#     (same-dir rename is atomic; a cross-fs /tmp temp would be a non-atomic
+#     copy+unlink).
+#   TR3 symlink guard — when <file> is itself a symlink, resolve to its target so the
+#     rename preserves the indirection instead of clobbering the link with a regular
+#     file.
+#
+# Parallel-session safety: last-rename-wins can drop a concurrent edit. For SAME-key
+# writes every writer converges to the same idempotent value (a lost update is
+# redundant, not corrupting). For DISTINCT-key writes by two concurrent lockless
+# sessions the result is only EVENTUALLY consistent — an interleave can momentarily
+# drop one key, self-healed on the next ensure_bare_config run. Native writers cannot
+# race here: under a wedge they EEXIST on the masked lock, so only Soleur's own
+# lockless sessions contend. Acceptable under this script's existing age-guard-not-flock
+# posture (see sweep_stale_git_locks). GNU-only tooling (cp -p / realpath / mv),
+# consistent with the sweep. Returns non-zero (with a loud headless_or_stderr line) on
+# any write failure so ensure_bare_config can fail loud instead of proceeding
+# half-applied. Self-contained return status (never relies on the caller's `if !`
+# context to disarm set -e), so a future bare call site stays safe.
+atomic_git_config() {
+  local file="$1"; shift
+
+  # --- FR2: read-first idempotence (reads never acquire "<file>.lock") ---
+  if [[ "${1:-}" == "--unset" ]]; then
+    # Skip ONLY when the key is truly ABSENT (git config --get rc 1). A multi-valued
+    # key exits rc 2 ("multiple values") — do NOT swallow that as "absent" or the
+    # unset silently no-ops (fail-open); fall through so the writer surfaces git's
+    # loud --unset-all-required error. Reads never take the lock.
+    local _grc=0
+    git config --file "$file" --get "${2:-}" >/dev/null 2>&1 || _grc=$?
+    (( _grc == 1 )) && return 0
+  elif [[ "$#" -eq 2 && "$1" != --* ]]; then
+    local _cur
+    _cur=$(git config --file "$file" --get "$1" 2>/dev/null || true)
+    [[ "$_cur" == "$2" ]] && return 0
+  fi
+
+  # --- FR3: clean/absent lock -> native writer (keeps flock serialization) ---
+  # Capture rc explicitly so the function is correct regardless of call context
+  # (a bare `atomic_git_config …` call site must not abort at the git line under set -e).
+  if ! _config_lock_wedged "$file"; then
+    local _nrc=0
+    git config --file "$file" "$@" || _nrc=$?
+    return "$_nrc"
+  fi
+
+  # --- FR3 wedged + TR1/TR2/TR3: lockless temp-copy + same-dir atomic rename ---
+  # TR3: resolve a symlinked config to its target so the rename preserves the link.
+  local target="$file"
+  if [[ -L "$file" ]]; then
+    if ! target=$(realpath -- "$file" 2>/dev/null) || [[ -z "$target" ]]; then
+      headless_or_stderr error "atomic_git_config: cannot resolve symlinked config $file; refusing lockless write."
+      return 1
+    fi
+  fi
+  local dir base tmp
+  dir=$(dirname -- "$target")
+  base=$(basename -- "$target")
+  tmp="$dir/$base.soleur-tmp.$$"   # same-dir temp -> atomic rename; distinct .lock path
+  # Seed the temp with current content (or empty when the target is absent),
+  # preserving mode/owner via cp -p (TR2).
+  if [[ -f "$target" ]]; then
+    if ! cp -p -- "$target" "$tmp"; then
+      rm -f -- "$tmp" 2>/dev/null || true   # cp can fail mid-copy leaving a partial temp
+      headless_or_stderr error "atomic_git_config: cp -p failed for $target."
+      return 1
+    fi
+  elif ! : > "$tmp" 2>/dev/null; then
+    headless_or_stderr error "atomic_git_config: cannot create temp $tmp."
+    return 1
+  fi
+  # Edit the temp copy with git's own INI writer (creates a clean "$tmp.lock").
+  if ! git config --file "$tmp" "$@"; then
+    rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    # Failing to write even the temp copy means git could not create the temp's OWN
+    # clean lock ("$tmp.lock") — the strongest in-surface signal that the sandbox
+    # masks *.lock as a GLOB, not just literal config.lock (the spec's BLOCKING
+    # ASSUMPTION). Emit a DISTINCT stdout sentinel so the next blind-surface session
+    # can tell glob-masking apart from the now-fixed single-path wedge (feeds #5934).
+    echo "SOLEUR_GIT_LOCK_TEMP_WEDGED file=$base.soleur-tmp type=temp-write-failed reason=lockless-temp-unwritable hint=\"clean temp lock could not be created — sandbox may mask *.lock as a glob; see #5934\""
+    headless_or_stderr error "atomic_git_config: git config write to temp failed for $target (temp lock unwritable — possible glob masking)."
+    return 1
+  fi
+  # Atomic same-dir rename over the target; never touches the masked "<file>.lock".
+  if ! mv -f -- "$tmp" "$target"; then
+    rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    headless_or_stderr error "atomic_git_config: atomic rename failed for $target."
+    return 1
+  fi
+  rm -f -- "$tmp.lock" 2>/dev/null || true   # defensive: git normally consumes it
+  return 0
+}
+
 # Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
 # Fixes TWO broken states that git worktree add creates on bare repos:
 #   1. core.bare=true in shared config — bleeds into worktrees, breaks git commit/push
@@ -269,46 +395,61 @@ ensure_bare_config() {
     git_dir="$GIT_ROOT"
   fi
 
-  # Self-heal: remove stale git locks BEFORE any config write below, or those
-  # writes fail EEXIST forever (2026-07-01 outage class). This chokepoint runs on
-  # every create path and on the session-start cleanup_merged_worktrees path, so
-  # an affected workspace self-heals on its next session — no operator SSH.
-  # Fail LOUD, don't march into the doomed write: if the sweep reports a lock it
-  # could not remove (non-regular or rm-failed), the `git config` writes below
-  # WOULD fail EEXIST — so short-circuit here. The `if !` disarms set -e; the loud
-  # SOLEUR_GIT_LOCK_UNREMOVABLE sentinel already printed on stdout from the sweep.
-  if ! sweep_stale_git_locks "$git_dir"; then
-    headless_or_stderr error "worktree wedge: an unremovable git config lock remains in $git_dir (see SOLEUR_GIT_LOCK_UNREMOVABLE on stdout above). Refusing the shared-config write — it would fail EEXIST. A targeted fix is required."
-    return 1
-  fi
+  # Self-heal: sweep BEFORE the config writes below for its diagnostics + stale
+  # REGULAR-lock removal (the 2026-07-01 outage class). A NON-REGULAR (masked) lock
+  # is NO LONGER fatal here — atomic_git_config routes every write below around it
+  # via a lockless temp-copy+rename (#5912). So we intentionally ignore the sweep's
+  # non-zero return: the per-write gate in atomic_git_config makes the correct
+  # native-vs-lockless choice, and a genuinely stuck REGULAR lock (a real in-flight
+  # writer) still surfaces as a native `git config` EEXIST failure from
+  # atomic_git_config's clean-lock branch. `|| true` disarms set -e; the sweep's
+  # SOLEUR_GIT_LOCK_DIAG / SOLEUR_GIT_LOCK_UNREMOVABLE sentinels still print for
+  # the blind-surface forensic.
+  sweep_stale_git_locks "$git_dir" || true
 
   local shared_config="$git_dir/config"
   local wt_config="$git_dir/config.worktree"
   local fixed=false
 
-  # Ensure prerequisites for per-worktree config
-  git config --file "$shared_config" core.repositoryformatversion 1
-  git config --file "$shared_config" extensions.worktreeConfig true
+  # Ensure prerequisites for per-worktree config. Routed through atomic_git_config so
+  # a wedged config.lock (the char-device wedge) does not block them — setting
+  # extensions.worktreeConfig here is what steers the subsequent `git worktree add`
+  # onto the per-worktree config instead of the wedged shared config.lock.
+  if ! atomic_git_config "$shared_config" core.repositoryformatversion 1 \
+     || ! atomic_git_config "$shared_config" extensions.worktreeConfig true; then
+    headless_or_stderr error "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)."
+    return 1
+  fi
 
   # Remove core.bare from shared config (any value — it belongs in per-worktree only)
   if git config --file "$shared_config" core.bare &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing core.bare from shared config...${NC}"
-    git config --file "$shared_config" --unset core.bare
+    if ! atomic_git_config "$shared_config" --unset core.bare; then
+      headless_or_stderr error "worktree wedge: could not unset core.bare in $shared_config (see errors above)."
+      return 1
+    fi
     fixed=true
   fi
 
   # Remove stale core.worktree from shared config (leftover from worktree operations)
   if git config --file "$shared_config" core.worktree &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing stale core.worktree from shared config...${NC}"
-    git config --file "$shared_config" --unset core.worktree
+    if ! atomic_git_config "$shared_config" --unset core.worktree; then
+      headless_or_stderr error "worktree wedge: could not unset core.worktree in $shared_config (see errors above)."
+      return 1
+    fi
     fixed=true
   fi
 
-  # Ensure per-worktree config has core.bare=true for the bare root
+  # Ensure per-worktree config has core.bare=true for the bare root (a SECOND wedge
+  # surface: config.worktree.lock — routed through the helper too).
   local current_bare
   current_bare=$(git config --file "$wt_config" core.bare 2>/dev/null || echo "")
   if [[ "$current_bare" != "true" ]]; then
-    git config --file "$wt_config" core.bare true
+    if ! atomic_git_config "$wt_config" core.bare true; then
+      headless_or_stderr error "worktree wedge: could not set core.bare in $wt_config (see errors above)."
+      return 1
+    fi
     fixed=true
   fi
 
