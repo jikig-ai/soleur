@@ -26,21 +26,45 @@ set -m
 
 readonly LOG_TAG="ci-deploy"
 
-# Image signature verification (#5933 Item 4, PR 2/2). The running host pulls the
-# app image by semver tag (ALLOWED_IMAGES); this cosign-verifies its signature and
-# runs the VERIFIED DIGEST (not the tag → closes the tag-repoint TOCTOU). WARN mode
-# (default) emits a discriminating Sentry event on any failure but NEVER blocks the
-# deploy; the WARN→ENFORCE flip is a soak-gated fast-follow after a signed release
-# is confirmed live. The verifier is a SHA-pinned cosign CONTAINER (no host install;
-# the host pulls it from a public registry). `--offline` uses the registry-attached
-# Rekor bundle so no live sigstore egress is needed (the container egress firewall
-# #5046 does not allowlist sigstore). Identity is pinned to the reusable release
-# workflow on main/release-tags ONLY — an intra-repo branch/tag signature must NOT
-# verify (a loose `refs/(heads|tags)/.+` would accept attacker-branch RCE).
+# Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
+# The running host pulls the app image by semver tag (ALLOWED_IMAGES); this
+# cosign-verifies its signature and runs the VERIFIED DIGEST (not the tag → closes
+# the tag-repoint TOCTOU). WARN mode (default) emits a discriminating Sentry event
+# on any failure but NEVER blocks the deploy; the WARN→ENFORCE flip is a soak-gated
+# fast-follow after a signed release is confirmed live.
+#
+# The app image is now a PRIVATE GHCR package (#6005), so the host authenticates via
+# a scoped `read:packages` credential (ghcr_prelude_and_login below) before pulling.
+# The verifier is a SHA-pinned distroless cosign CONTAINER (no host install). Per
+# ADR-085 (Design B′) it runs `--network host` so the OCI-attached signature fetch
+# rides the host's UNRESTRICTED egress — the #5046/ADR-052 container egress firewall
+# is `iifname docker0`-scoped and never sees host OUTPUT, so ghcr.io stays OUT of the
+# container allowlist. Trust is a LOCALLY-PINNED `trusted_root.json` mounted :ro
+# (cosign-trusted-root.json, delivered out-of-image via cloud-init — never baked;
+# the deploy image is the artifact under verification) with `--offline` so no live
+# Fulcio/Rekor/TUF egress is needed. (`--offline` is deprecated-but-frozen under the
+# pinned cosign SHA — SOLEUR-DEBT below ties migration to the next SHA bump.)
+# Identity is pinned to the reusable release workflow on main/release-tags ONLY — an
+# intra-repo branch/tag signature must NOT verify (a loose `refs/(heads|tags)/.+`
+# would accept attacker-branch RCE).
 readonly COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
 readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
+# SOLEUR-DEBT(#6005): cosign `--offline` is deprecated (removed in cosign v4). It is
+# inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
+# bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
+# it exists on the target version first; v3.1.1 `verify` has neither `--bundle` nor
+# `--new-bundle-format`). See ADR-085.
+# Host paths for the private-GHCR pull credential + the pinned offline trust root.
+# Overridable in tests; default to the real deploy-host layout. The docker config is
+# written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
+# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry,
+# NEVER a credStore/credHelpers indirection (the distroless cosign image has no
+# credential helper; an indirection silently UNAUTHORIZEs the .sig fetch — ADR-085).
+# The trusted root is delivered to the host out-of-image via cloud-init write_files.
+readonly GHCR_DOCKER_CONFIG="${GHCR_DOCKER_CONFIG:-/home/deploy/.docker/config.json}"
+readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/opt/soleur/cosign-trusted-root.json}"
 
 # Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
 # and the GitHub Actions "Verify deploy script completion" step. Keep in sync
@@ -475,6 +499,71 @@ cosign_verify_event() {
   fi
 }
 
+# pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
+# (#6005). Every deploy + fresh boot now hard-depends on a valid GHCR credential
+# (M2 SPOF), so a pull auth failure must be Sentry/Better-Stack-diagnosable, not
+# journald-only (hr-no-ssh-fallback-in-runbooks). The raw docker stderr is SCRUBBED
+# to a coarse classification BEFORE it enters the payload — a 401/403 daemon error
+# can echo the registry Authorization header (security-sentinel #7). Fail-open.
+pull_failure_event() {
+  local ref="$1" detail_raw="${2:-}" pull_result
+  if   printf '%s' "$detail_raw" | grep -qiE 'unauthorized|authentication required|denied|forbidden'; then pull_result="auth_denied"
+  elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
+  elif printf '%s' "$detail_raw" | grep -qiE 'timeout|timed out|temporary failure|no route|connection refused'; then pull_result="network"
+  else pull_result="pull_failed"
+  fi
+  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" \
+      '{message: ("image pull failed (" + $r + ") " + $ref),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r},
+        extra: {ref: $ref}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_PULL: Sentry POST failed"
+  fi
+}
+
+# ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
+# need INTO this script's OWN env, then authenticate the host docker daemon to the
+# now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
+# existing resolve_env_file download (~:1010) runs AFTER pull+verify and hands
+# secrets to the CONTAINER via --env-file, so those values are NEVER in this script's
+# env at pull/verify time. Without this: (a) the private pull fails-closed, and
+# (b) the WARN cosign telemetry is dark (SENTRY_* unset at verify time), blinding the
+# very soak gate the ENFORCE flip depends on. Best-effort + fail-open: a missing GHCR
+# credential does not abort here (the pull's own failure path + pull_failure_event
+# surface it loudly); missing SENTRY_* just means a dark event, exactly as today. The
+# token is captured into a var and piped via --password-stdin — NEVER argv/logs, and
+# unset immediately after login so it never reaches a child process env.
+ghcr_prelude_and_login() {
+  command -v doppler >/dev/null 2>&1 || { logger -t "$LOG_TAG" "PRELUDE: doppler unavailable — skipping GHCR login + SENTRY prefetch"; return 0; }
+  [[ -n "${DOPPLER_TOKEN:-}" ]] || { logger -t "$LOG_TAG" "PRELUDE: DOPPLER_TOKEN unset — skipping GHCR login + SENTRY prefetch"; return 0; }
+  local k
+  for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY GHCR_READ_USER GHCR_READ_TOKEN; do
+    # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
+    printf -v "$k" '%s' "$(doppler secrets get "$k" --plain --project soleur --config prd 2>/dev/null || true)"
+    export "$k"
+  done
+  if [[ -n "${GHCR_READ_USER:-}" && -n "${GHCR_READ_TOKEN:-}" ]]; then
+    if printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
+      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
+    else
+      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED — private pull may fail-closed"
+    fi
+  else
+    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present — skipping docker login (pre-provisioning?)"
+  fi
+  # The token must not linger in the env passed to child processes. The mounted
+  # $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier reuses.
+  unset GHCR_READ_TOKEN
+}
+
 # verify_image_signature <image:tag> — resolves the just-pulled image to its
 # immutable repo@sha256 digest and cosign-verifies the signature (offline,
 # identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
@@ -496,10 +585,19 @@ verify_image_signature() {
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
     return 0
   fi
-  # Verify via the pinned cosign container. --offline uses the registry-attached
-  # Rekor bundle (no live sigstore egress). The app image is public GHCR, so the
-  # cosign container needs no registry auth to fetch the signature.
-  if docker run --rm "$COSIGN_IMAGE" verify --offline \
+  # Verify via the pinned cosign container (ADR-085 Design B′). The app image is a
+  # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
+  # through the host's unrestricted egress (no ghcr.io in the container allowlist),
+  # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
+  # ghcr_prelude_and_login) is mounted :ro so cosign can authenticate that fetch.
+  # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
+  # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
+  # pull the .sig referrer, so the fetch (host egress) is still required.
+  if docker run --rm --network host \
+       -v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro" \
+       -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
+       "$COSIGN_IMAGE" verify --offline \
+       --trusted-root=/etc/cosign/trusted_root.json \
        --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
        --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
        "$repo_digest" >/dev/null 2>"$err"; then
@@ -889,6 +987,11 @@ if [[ "$AVAIL_KB" -lt "$MIN_DISK_KB" ]]; then
   exit 1
 fi
 
+# #6005: authenticate the host docker daemon to the now-PRIVATE GHCR packages and
+# prefetch SENTRY_* into this script's env BEFORE any pull/verify. Covers BOTH the
+# web-platform and inngest pull sites below. Fail-open (never aborts the deploy).
+ghcr_prelude_and_login
+
 # Component-specific deploy logic
 case "$COMPONENT" in
   web-platform)
@@ -906,7 +1009,17 @@ case "$COMPONENT" in
     # the next attempt). prune is included for the same reason — a slow prune on
     # a disk-full host is the same orphan class.
     docker image prune -af 200>&-
-    docker pull "$IMAGE:$TAG" 200>&-
+    # #6005: the pull is now against a PRIVATE package (M2 SPOF). Capture stderr and
+    # emit a loud, no-SSH pull-failure event (scrubbed) on denial before aborting —
+    # keeps the OLD container live (downtime-safe), same as any pre-swap failure.
+    _pull_err="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
+    if ! docker pull "$IMAGE:$TAG" 200>&- 2>"$_pull_err"; then
+      pull_failure_event "$IMAGE:$TAG" "$(tail -c 400 "$_pull_err" 2>/dev/null || true)"
+      rm -f "$_pull_err" 2>/dev/null || true
+      final_write_state 1 "image_pull_failed"
+      exit 1
+    fi
+    rm -f "$_pull_err" 2>/dev/null || true
 
     # #5933 Item 4: cosign-verify the pulled image's signature (WARN mode) and run
     # the VERIFIED DIGEST at every subsequent create/run below (plugin-seed, canary,
@@ -1363,7 +1476,17 @@ case "$COMPONENT" in
     # script inside it would fail at `systemctl daemon-reload`. The host has
     # systemd + the deploy user + the systemd unit paths the script writes.
     echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
-    docker pull "$IMAGE:$TAG"
+    # #6005: soleur-inngest-bootstrap is ALSO a PRIVATE package. ghcr_prelude_and_login
+    # (run before the case) already authenticated the host daemon; emit a loud, no-SSH
+    # pull-failure event (scrubbed) on denial before aborting.
+    _pull_err="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
+    if ! docker pull "$IMAGE:$TAG" 2>"$_pull_err"; then
+      pull_failure_event "$IMAGE:$TAG" "$(tail -c 400 "$_pull_err" 2>/dev/null || true)"
+      rm -f "$_pull_err" 2>/dev/null || true
+      final_write_state 1 "image_pull_failed"
+      exit 1
+    fi
+    rm -f "$_pull_err" 2>/dev/null || true
 
     # Extract the script + pinned ENV vars from the image.
     # Fixed path (not mktemp) so the sudoers entry in
