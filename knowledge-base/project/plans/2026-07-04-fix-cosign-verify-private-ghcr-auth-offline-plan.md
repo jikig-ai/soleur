@@ -14,6 +14,20 @@ branch: feat-one-shot-6005-cosign-verify-ghcr-auth-offline
 
 > Closes #6005 on merge. ENFORCE-prep only — the `IMAGE_VERIFY_MODE` default `warn`→`enforce` flip stays OUT OF SCOPE (gated on this landing + a clean WARN soak). Do NOT flip ENFORCE here.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-04. **Gates:** 4.6 User-Brand (PASS, `single-user incident`), 4.7 Observability (PASS), 4.8 PAT-shaped-var (PASS — naming avoids regex; the PAT is a deliberate, surfaced exception, see D1), 4.9 UI-wireframe (N/A — no UI surface). **Agents:** CTO (design), code-simplicity-reviewer, architecture-strategist, security-sentinel (pending). **External research:** cosign 3.x offline flag set (Sigstore docs, v3 blog, some-natalie air-gap guide, cosign #4550) — see Sources.
+
+**Key improvements over v1:**
+1. **Design coherence (code-simplicity P0):** v1 mixed `--network host` (which makes online verify work, since host egress is unrestricted — `cron-egress-nftables.sh:21`) with offline+trusted-root (redundant under `--network host`). Resolved to a single coherent **Design B** (sandboxed cosign container + narrow ghcr.io allowlist + offline verify), under which offline+trusted-root IS load-bearing. Design A recorded as the rejected alternative.
+2. **New D0 — keep-private vs. revert-to-public:** the entire credential subsystem exists only because the package flipped private; v1 never surfaced the decision. Added with evidence it's deliberate + an explicit operator/CPO sign-off requirement.
+3. **Circular-trust fix (architecture H1):** `trusted_root.json` is delivered via cloud-init `write_files`, NOT baked into the image-under-verification.
+4. **Mechanism pinned (architecture H2):** the login-before-pull AND SENTRY_*-before-verify both require ONE new early Doppler fetch (the existing download runs after verify) — v1 described the fixes without the mechanism.
+5. **Credential scope widened (architecture H4):** `soleur-inngest-bootstrap` is ALSO private → the credential must cover both packages or the fresh boot stays fail-closed at `cloud-init.yml:511`.
+6. **C4 correctness (architecture H3):** the `hetzner → sigstore` verify edge is FALSIFIED (no live sigstore call under offline+pinned-root) — a required correction, not optional.
+7. **Honest ADR rationale + discoverability (architecture M3):** PAT driver reframed to fresh-boot t=0 availability (+ counter-cost recorded); ADR owns pull+verify; `principles-register.md` AP-row pointer for the hr-github-app-auth-not-pat exception.
+8. **YAGNI cuts:** dropped the standalone refresh script (→ a comment) and the Dockerfile `COPY`.
+
 ## Overview
 
 The supply-chain image-signing + WARN-mode deploy-path verify shipped earlier (the "#5933 Item 4" work; running-host half in ci-deploy.sh, keyless signing in `reusable-release.yml`, dual-path amendment recorded in ADR-082). The WARN verify is safe (never blocks a deploy) but live validation on 2026-07-04 (dispatched release web-v0.188.1, run 28705048144, signing SUCCEEDED) found it will not actually PASS on the real host. This plan makes it PASSable — authenticated against the now-**private** GHCR package and verifying fully **offline** with the cosign 3.x non-deprecated flag set — while remaining in WARN.
@@ -51,10 +65,24 @@ The honest, minimal-coherent fix therefore provisions ONE GHCR read credential (
 
 ## Decisions (open items routed to deepen-plan / domain review)
 
-- **D1 — Credential type & ownership.** A single `read:packages` credential scoped to the one package. Options: (a) fine-grained PAT on a **machine/bot account** (simplest; static Doppler secret; no bash JWT mint) vs. (b) **GitHub App installation token** (aligns with `hr-github-app-auth-not-pat`; the App private key is *already* in Doppler `prd` via `github-app.tf`, but minting on the host needs RS256-JWT + token-exchange in bash, and the key is not in the ambient webhook env until after the Doppler download). **Recommendation:** scoped fine-grained PAT on a machine account, recorded in the ADR as a **deliberate, narrow exception** to `hr-github-app-auth-not-pat` (rationale: avoid a headless bash JWT-mint / minimize live credential surface; single-package read-only, revocable). Route to `security-sentinel` + `infra-security` for the final call. A user-account PAT (person-dependency) is the anti-pattern to avoid.
+- **D0 — Keep the package PRIVATE, or revert to PUBLIC? (decide FIRST — gates ~40-50% of this plan).** The entire credential subsystem (D1, D5, Phase 1, the Doppler secret, the host `docker login`, half of Phase 3) exists ONLY because the package flipped public→private. Reverting to public restores the prior known-good anonymous-pull path and deletes that whole subsystem for free. **Evidence that private is DELIBERATE (not incidental):** (a) issue #6005 itself asks to correct the C4 to say "private" and frames the whole task around private auth; (b) ADR-082's dual-path amendment assumes the private posture; (c) a private app image avoids exposing the built Next.js artifact + baked host-bootstrap scripts/hooks (`ADR-080`) publicly — a real supply-chain hardening. **Recommendation:** keep private (the security posture is intentional and the artifact should not be public), but this MUST be an explicit operator/CPO sign-off, not a silent assumption — if private was an accidental flip, go public and delete D1/D5/Phase 1 entirely. Surfaced per code-simplicity review (deepen-plan).
+- **D1 — Credential type & ownership.** A single `read:packages` credential scoped to the one package. **Verified cost table (deepen-plan):**
+
+  | | App installation token | fine-grained PAT (machine account) |
+  |---|---|---|
+  | Manifest change | **YES** — `github-app-manifest.json:18` `default_permissions` has NO `packages` key; adding `packages: read` triggers an installation **re-consent** (operator GitHub UI, #4173 three-plane-drift class) | none |
+  | Host-side mint | **NEW bash machinery** — `ci-deploy.sh` does NOT currently mint an App installation token (its `openssl` at `:152` is HMAC webhook-signing; the `jwt` refs at `:1102+` are the canary bundle-decode, not App JWT). Would need RS256 JWT + token-exchange in bash, pre-verify (App PEM is in Doppler `prd` via `github-app.tf` but not in the ambient webhook env until the `:992` download). | none — static Doppler secret used directly in `docker login --password-stdin` |
+  | `hr-github-app-auth-not-pat` | satisfies literally | **read-only GHCR pull, not a GitHub *write*** — the rule's scope (per deepen-plan Phase 4.8) is "infra-time GitHub **writes**"; a machine-account PAT mitigates the per-operator/handoff concern the rule targets |
+  | Expiry | none (App tokens auto-refresh) | fine-grained PAT max 1yr (or no-expiry with warning) → rotation follow-through needed |
+
+  **Scope (H4 — BOTH packages are private):** the credential must cover **both** `soleur-web-platform` AND `soleur-inngest-bootstrap` (`gh api` this session confirmed BOTH `visibility: private`). The fresh boot pulls web-platform at `cloud-init.yml:381`/`:466`/`:578` AND inngest-bootstrap at `:511` — a single-package credential leaves the fresh boot fail-closed at `:511`. Scope the fine-grained PAT to both packages (or org-level `read:packages` if the flip is org-wide). The cosign image (`ci-deploy.sh:40` `ghcr.io/sigstore/cosign`) is public — no concern.
+
+  **Recommendation:** scoped fine-grained PAT (`read:packages`, the two jikig-ai packages) on a **machine/bot account**, recorded in the ADR-082 amendment as a **deliberate, narrow, read-only exception** to `hr-github-app-auth-not-pat`. **Honest rationale (architecture-strategist M3c):** the strongest driver is **fresh-boot t=0 static-credential availability** — an App installation token needs an RS256 JWT + a token-exchange call to `api.github.com` BEFORE the very first pull, heavy and fragile at boot; a static PAT read from Doppler is available at t=0. Record the **counter-cost** too: a ≤1yr PAT is a *worse* secret-at-rest than a 1hr installation token → enroll a rotation follow-through (M2). Route to `security-sentinel` + `infra-security` for the final call. A user-account PAT (person-dependency) is the anti-pattern to avoid. Note: deepen-plan Phase 4.8 did NOT halt (the `GHCR_READ_TOKEN` / `TF_VAR_ghcr_read_token` naming avoids the PAT-shaped regex) — the exception is deliberate and surfaced here, not smuggled past the gate; it must ALSO be discoverable via a `principles-register.md` pointer (M3b).
 - **D2 — Scope: include the host pull fix.** CONFIRMED IN SCOPE. One `docker login ghcr.io` writing `/home/deploy/.docker/config.json` fixes both the host pull (`:909`, `:1366`, fresh-boot) and the cosign container (mount that config). Cosign-container-only would ship a still-broken fail-closed pull.
-- **D3 — Cosign container egress to ghcr.io.** Options: (a) add **only** `ghcr.io` to `cron-egress-allowlist.txt` (permanent, narrow, but widens the *app* container's steady-state egress surface too), or (b) run the cosign `docker run` with `--network host` (scoped to the verify invocation only; cosign uses host egress which already reaches GHCR; sigstore stays unreachable which is fine because the root is local). trusted-root being local means sigstore hosts are NEVER needed either way. **Lean:** `--network host` (surgical to the verify path, no steady-state app-egress change) — but confirm with `infra-security` that `--network host` on a SHA-pinned, single-purpose cosign container is acceptable vs. the allowlist widening. deepen-plan Phase 4.4 precedent-diff.
-- **D4 — trusted_root.json shipping.** CONFIRMED: **commit `trusted_root.json` to the repo** (reviewable/diffable) and **bake it into the deploy image** at build (`COPY`), mounted into the cosign container at `--trusted-root`. Do NOT `cosign initialize` at build (reaches TUF CDN → non-hermetic, defeats the offline posture). Rotation (~yearly, on sigstore root rotation) via a committed refresh script run deliberately in a PR. Provenance note + rotation cadence comment required.
+- **D3 — Egress + verify design: COHERENT choice (RESOLVED to Design B by deepen-plan review).** The plan v1 incoherently mixed two designs (code-simplicity-reviewer P0): it chose `--network host` (which, because **host egress is unrestricted** — the SOLEUR-EGRESS firewall is `iifname docker0`-scoped ONLY, `cron-egress-nftables.sh:21`) would let cosign reach sigstore and make plain **online** verify work, making the offline+trusted-root machinery redundant. The two coherent designs:
+  - **Design A (rejected): `--network host` + online verify.** Simplest for WARN-pass (drop `--offline`, no trusted-root). REJECTED because: (1) it reverses ADR-082's deliberate offline posture (which exists precisely because #5046 blocks sigstore from containers); (2) `--network host` exposes host-**loopback** services (inngest `:8288`/`:3000`, redis, the webhook) to the cosign container — the real cost is loopback exposure, not egress (architecture-strategist M1); (3) it couples deploy-time verify to sigstore CDN uptime — a CDN outage would fail-close every deploy once ENFORCE flips.
+  - **Design B (CHOSEN): sandboxed cosign container + narrow `ghcr.io` allowlist + offline verify.** Keep the cosign `docker run` on docker0 (sandboxed, no `--network host`); add **only** `ghcr.io` to `cron-egress-allowlist.txt` so the container can fetch the OCI-attached signature bundle; verify offline (`--offline=true --new-bundle-format=false --trusted-root=<local>`) so sigstore/TUF stay blocked. Under Design B the offline+trusted-root IS load-bearing (the sandboxed container genuinely cannot reach sigstore), resolving the v1 contradiction. Cost: the shared allowlist widens the *app* container's egress by one read-only registry host (low risk; the existing mechanism). Route the allowlist-widening vs. a cosign-scoped egress carve-out to `infra-security`.
+- **D4 — trusted_root.json provenance (RESOLVED: cloud-init `write_files`, NOT baked — circular-trust fix).** **Commit `trusted_root.json` to the repo** (reviewable/diffable) and deliver it to the host **via cloud-init `write_files` (a separate channel from the image under verification)**, rendered from the committed repo file. Do **NOT** `COPY` it into the deploy image (architecture-strategist H1): the deploy image is the artifact being verified — sourcing the trust anchor from the thing you're verifying is circular, and the fresh web-2 boot (#5274) has no previously-verified image to bake from, so it needs cloud-init regardless. Do NOT `cosign initialize` at build (reaches TUF CDN → non-hermetic). Rotation (~yearly) via a one-line comment in the committed JSON (`to rotate: cosign initialize; copy trusted_root.json`) — no standalone refresh script (YAGNI). ADR-082 must state the trust-root provenance is the committed repo via TF-rendered cloud-init, NEVER the image under verification.
 - **D5 — credential minting automation.** `automation-status: UNVERIFIED — /work MUST run a Playwright attempt before any operator handoff.` Fine-grained PAT / machine-account creation is a GitHub dashboard flow under an authenticated session — presumptively Playwright-automatable until a real attempt reaches a named human gate (password sudo-mode / 2FA). Per `hr-block-pr-ready-on-undeferred-operator-steps` + the never-defer-operator-actions memory, wire the value into Doppler via TF and confirm in-session; do not defer as a checklist bullet.
 
 ## Implementation Phases
@@ -64,24 +92,26 @@ The honest, minimal-coherent fix therefore provisions ONE GHCR read credential (
 - [ ] Generate `trusted_root.json` for the sigstore public-good instance on a connected machine (`cosign initialize`; grab `~/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json`) and confirm a local offline verify of the **already-signed** web-v0.188.1 digest succeeds with `--offline=true --new-bundle-format=false --trusted-root <file>` + the existing identity-regexp/OIDC-issuer + a valid GHCR credential. This is the load-bearing end-to-end probe — do it before writing the shell.
 - [ ] Confirm the signing identity regexp (`COSIGN_IDENTITY_REGEXP`, `ci-deploy.sh:41`) still matches the signature on the live digest (no drift since #5933).
 - [ ] Confirm `DOPPLER_TOKEN` is in the ambient env at verify time (it is — `cloud-init.yml:312` `/etc/default/webhook-deploy`) so a pre-verify `doppler secrets get` for the GHCR token + `SENTRY_*` is feasible.
+- [ ] **(H4) Enumerate EVERY `jikig-ai` GHCR package the fresh + running host pulls and confirm each visibility.** Confirmed this session: `soleur-web-platform` AND `soleur-inngest-bootstrap` are BOTH private (`cloud-init.yml` pulls at `:381`/`:466`/`:511`/`:578`; `ci-deploy.sh:909`/`:1366`). The credential must cover both; a single-package token leaves the fresh boot fail-closed at the inngest pull (`:511`).
 
 ### Phase 1 — Credential provisioning (IaC)
-- [ ] Mint the scoped `read:packages` credential (Decision D1) — `/work` attempts Playwright first (D5), else routes to the named human gate reached.
-- [ ] Add `doppler_secret` resource(s) for `GHCR_READ_TOKEN` (+ `GHCR_READ_USER` if PAT) to a new/extended `*.tf` under `apps/web-platform/infra/`, mirroring the `github-app.tf` `doppler_secret` precedent; provision to **both dev and prd** configs per the repo pattern. No default on the `TF_VAR_*` (`hr-tf-variable-no-operator-mint-default`); confirm the value is present in `prd_terraform` before the auto-applied infra root runs (sequencing per the operator-mint-vs-auto-applied-IaC Sharp Edge — a `*.tf` edit triggers `apply-web-platform-infra.yml`).
-- [ ] Add the host `docker login ghcr.io` to **cloud-init** (fresh-boot parity, `hr-fresh-host-provisioning-reachable-from-terraform-apply`) writing `/home/deploy/.docker/config.json` (owned `deploy:deploy`, `chmod 600`) from the Doppler-provided token, via `--password-stdin` (never argv). Ensure `runcmd` ordering places it before the first pull.
+- [ ] Mint the scoped `read:packages` credential (Decision D1, covering BOTH packages / org-level) — `/work` attempts Playwright first (D5), else routes to the named human gate reached.
+- [ ] **Ordered credential runbook (L1 — two distinct Doppler locations, do not conflate):** (1) mint → (2) write the value into Doppler `prd_terraform` (the TF runner's `TF_VAR` source) → (3) verify present → (4) merge the `*.tf` edit (which triggers `apply-web-platform-infra.yml`); the apply's `doppler_secret` resources then propagate it to Doppler `soleur/dev` + `soleur/prd` (where the host reads it). If step 2 is skipped, the auto-apply fails resolving all root vars before `-target` pruning. `TF_VAR_ghcr_read_token` has **no default** (`hr-tf-variable-no-operator-mint-default`). (L2: confirm a dev host actually pulls a private package before minting a second dev credential — `hr-dev-prd-distinct` doubles at-rest surface.)
+- [ ] Add `doppler_secret` resource(s) for `GHCR_READ_TOKEN` (+ `GHCR_READ_USER`) to a new/extended `*.tf` under `apps/web-platform/infra/`, mirroring the `github-app.tf` `doppler_secret` precedent; provision to dev + prd.
+- [ ] cloud-init `docker login ghcr.io` for **fresh-boot t=0** (`hr-fresh-host-provisioning-reachable-from-terraform-apply`) writing `/home/deploy/.docker/config.json` (`deploy:deploy`, `chmod 600`) via `--password-stdin` (never argv), before the first pull. The **running-host** login is the per-deploy one in ci-deploy.sh (Phase 3) — which also refreshes config.json on rotation (M2).
 
-### Phase 2 — trusted_root.json (repo + image build)
-- [ ] Commit `trusted_root.json` under `apps/web-platform/infra/` (e.g. `cosign-trusted-root.json`) with a header/NOTE documenting provenance (which TUF root, capture date) and the rotation cadence.
-- [ ] Bake it into the deploy image (`COPY` in the web-platform Dockerfile) at a stable path, OR (if simpler and firewall-safe) place it on the host via cloud-init `write_files`. Choose the path that keeps the cosign `--trusted-root` mount source stable across fresh + running hosts.
-- [ ] Add a committed refresh script + note (deliberate-PR rotation, not runtime fetch).
+### Phase 2 — trusted_root.json (repo + cloud-init, NOT baked)
+- [ ] Commit `trusted_root.json` under `apps/web-platform/infra/` (e.g. `cosign-trusted-root.json`) with a header/NOTE documenting provenance (which TUF root, capture date) AND a one-line rotation recipe comment (`to rotate: cosign initialize; copy trusted_root.json`) — no standalone refresh script (YAGNI, code-simplicity review).
+- [ ] Deliver it to the host via **cloud-init `write_files`** (rendered from the committed repo file) at a stable path (e.g. `/opt/soleur/cosign-trusted-root.json`, `deploy:deploy`, `0644`), so the cosign `--trusted-root` mount source is identical on fresh + running hosts. Do **NOT** `COPY` it into the deploy image — the deploy image is the artifact under verification (circular trust, architecture-strategist H1); cloud-init is the separate, out-of-image trust channel the fresh boot needs anyway.
 
-### Phase 3 — Rework the cosign verify invocation (ci-deploy.sh)
-- [ ] In `verify_image_signature` (`:487`): before the cosign `docker run`, ensure `/home/deploy/.docker/config.json` exists (host login from Phase 1) OR construct a scoped `DOCKER_CONFIG` dir from a pre-verify `doppler secrets get GHCR_READ_TOKEN`.
-- [ ] Replace `docker run --rm "$COSIGN_IMAGE" verify --offline …` with the 3.x offline set + auth + egress:
+### Phase 3 — Rework the cosign verify invocation (ci-deploy.sh) — PIN THE MECHANISM (H2)
+- [ ] **Add ONE early scoped Doppler fetch near the top of the deploy critical path (before the pull at `:909`)** that exports into ci-deploy.sh's OWN shell env: `GHCR_READ_TOKEN`, `GHCR_READ_USER`, and `SENTRY_INGEST_DOMAIN`/`SENTRY_PROJECT_ID`/`SENTRY_PUBLIC_KEY`. This is REQUIRED because the only existing Doppler download (`resolve_env_file`, `:626`) is called at `~:993` — AFTER the pull (`:909`) and verify (`:916`) — and passes secrets to the container via `--env-file`, so they are NEVER in the script's own env at pull/verify time. Without this fetch, neither the host login nor the WARN telemetry lands. Use a single `doppler secrets download`/`get` (DOPPLER_TOKEN is ambiently present, `cloud-init.yml:312`); keep the token OUT of argv/logs.
+- [ ] Host `docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin` using `$GHCR_READ_TOKEN`, **before** `docker pull` (`:909`, `:1366`) — makes the private pull succeed AND writes `/home/deploy/.docker/config.json`. Run the login **on every deploy** so a rotated/expired token propagates to a weeks-running host without a reboot (M2).
+- [ ] Replace `docker run --rm "$COSIGN_IMAGE" verify --offline …` with the **Design B** set (sandboxed, no `--network host`):
   ```sh
-  docker run --rm --network host \
+  docker run --rm \
     -v /home/deploy/.docker/config.json:/root/.docker/config.json:ro \
-    -v "$TRUSTED_ROOT_PATH":/trust/trusted_root.json:ro \
+    -v /opt/soleur/cosign-trusted-root.json:/trust/trusted_root.json:ro \
     "$COSIGN_IMAGE" verify \
     --offline=true --new-bundle-format=false \
     --trusted-root=/trust/trusted_root.json \
@@ -89,14 +119,14 @@ The honest, minimal-coherent fix therefore provisions ONE GHCR read credential (
     --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
     "$repo_digest"
   ```
-  (Exact `--network` vs allowlist per D3; exact flag set pinned by the Phase 0 probe.)
-- [ ] Fix the host pull auth: ensure `docker pull "$IMAGE:$TAG"` (`:909`, `:1366`) runs after the host `docker login` (Phase 1) — the login makes the private pull succeed.
+  Egress: add `ghcr.io` to `cron-egress-allowlist.txt` so the sandboxed container reaches GHCR (D3); exact flag set pinned by the Phase 0 probe.
 - [ ] Correct the stale code comment at `:499-501` ("The app image is public GHCR, so the cosign container needs no registry auth") and `:34-35` header.
 - [ ] Preserve the WARN/ENFORCE semantics exactly — telemetry fires identically, mode branch unchanged, ENFORCE default stays `warn`.
 
-### Phase 4 — Make WARN telemetry reach Sentry at verify time
-- [ ] Ensure `SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` / `SENTRY_PUBLIC_KEY` are set **before** `verify_image_signature` runs (options: a scoped pre-verify `doppler secrets get` of the three vars, or move the env-file resolution earlier). Without this the `verify_result` Sentry event never fires and the ENFORCE soak gate is blind.
-- [ ] Add a **loud, no-SSH** failure event for the host **pull** itself (currently an anonymous-pull-denied surfaces only in host docker logs) — an authenticated-pull failure on a private image must be Sentry/Better Stack diagnosable (`hr-no-ssh-fallback-in-runbooks`, observability-coverage-reviewer §4.6).
+### Phase 4 — Observability (telemetry-not-dark + credential SPOF)
+- [ ] The `SENTRY_*`-before-verify fix is delivered by the Phase 3 early Doppler fetch (they are exported into the script env before `verify_image_signature` runs) — the WARN `verify_result` event now reaches Sentry, which is what makes the ENFORCE-flip soak gate observable (the whole point of an "ENFORCE-prep" issue). Assert the ordering with a test.
+- [ ] Add a **loud, no-SSH** failure event for the host **pull** itself — an authenticated private-pull denial must be Sentry/Better Stack diagnosable, not journald-only (`hr-no-ssh-fallback-in-runbooks`, observability-coverage-reviewer §4.6). Because every deploy + fresh boot now hard-depends on a valid GHCR credential (M2 SPOF), this pull-failure event is load-bearing, not additive.
+- [ ] Add a **proactive credential-expiry** liveness signal (M2) — a fine-grained PAT with bounded expiry silently fail-closes the whole fleet's deploys AND fresh boots at expiry; a reactive pull-failure event fires too late. Alert before expiry (e.g. a scheduled check, or enroll the rotation follow-through per `wg-record-recurring-vendor-expense-before-ready`-style cadence).
 
 ### Phase 5 — C4 + ADR + tests
 - [ ] `model.c4:238-240`: change "Public GHCR registry" → private, note the host authenticates via `read:packages`. Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
@@ -105,24 +135,23 @@ The honest, minimal-coherent fix therefore provisions ONE GHCR read credential (
 - [ ] File the WARN→ENFORCE flip as a tracked follow-up issue (re-eval: verify observed PASSING with no `verify_result` failures over a soak) so WARN-forever is not the silent resting state.
 
 ## Files to Edit
-- `apps/web-platform/infra/ci-deploy.sh` — cosign invocation (`:487-524`), flag set, config/trusted-root mounts, `--network`, host-login ordering before pulls (`:909`, `:1366`), telemetry ordering (`:916` vs `:992`), stale comments (`:34-35`, `:499-501`).
-- `apps/web-platform/infra/cloud-init.yml` — host `docker login ghcr.io` writing `/home/deploy/.docker/config.json`; possibly `write_files` for trusted_root.json.
+- `apps/web-platform/infra/ci-deploy.sh` — early Doppler fetch (GHCR token + SENTRY_*, before `:909`), per-deploy `docker login`, cosign invocation (`:487-524`) flag set + config/trusted-root mounts (no `--network host`), host-login ordering before pulls (`:909`, `:1366`), stale comments (`:34-35`, `:499-501`).
+- `apps/web-platform/infra/cloud-init.yml` — `write_files` for `cosign-trusted-root.json` (D4, NOT baked). Fresh-boot `docker login ghcr.io` (if a boot-time login is used in addition to the per-deploy login) writing `/home/deploy/.docker/config.json`. Note: the per-deploy login lives in ci-deploy.sh (Phase 3), which covers the running host; cloud-init covers t=0 fresh boot before ci-deploy runs.
 - `apps/web-platform/infra/<new-or-existing>.tf` — `doppler_secret` for `GHCR_READ_TOKEN` (+ user), dev+prd; `variables.tf` for the `TF_VAR_*` (no default).
-- `apps/web-platform/infra/cron-egress-allowlist.txt` — only if D3 chooses the allowlist path (add `ghcr.io`).
-- `apps/web-platform/Dockerfile` (or infra) — `COPY` trusted_root.json into the deploy image (D4).
-- `apps/web-platform/infra/cosign-trusted-root.json` — NEW, committed pinned root + provenance/rotation note.
-- `apps/web-platform/infra/ci-deploy.test.sh` — mock-cosign flag-set + mount/egress trace assertions.
-- `knowledge-base/engineering/architecture/diagrams/model.c4` — `ghcr` element description (`:238-240`).
+- `apps/web-platform/infra/cron-egress-allowlist.txt` — add `ghcr.io` (Design B — sandboxed cosign container needs it to fetch the signature bundle).
+- `apps/web-platform/infra/cosign-trusted-root.json` — NEW, committed pinned root + provenance/rotation-recipe comment. (NO Dockerfile `COPY` — H1 circular-trust.)
+- `apps/web-platform/infra/ci-deploy.test.sh` — mock-cosign flag-set + mounted-config trace assertions; SENTRY_*-before-verify ordering assertion.
+- `knowledge-base/engineering/architecture/diagrams/model.c4` — `ghcr` element description (`:238-240`) AND the falsified `hetzner → sigstore` verify edge (`:312`, now no live sigstore call).
+- `knowledge-base/engineering/architecture/principles-register.md` — add a discoverability pointer (AP-row) for the `hr-github-app-auth-not-pat` read-only-GHCR-pull exception (M3b).
 - `knowledge-base/engineering/architecture/decisions/ADR-082-fresh-web2-boot-observability.md` — amendment.
 
 ## Files to Create
-- `apps/web-platform/infra/cosign-trusted-root.json` (committed pinned root).
-- (optional) `apps/web-platform/infra/refresh-cosign-trusted-root.sh` (deliberate-PR rotation helper).
+- `apps/web-platform/infra/cosign-trusted-root.json` (committed pinned root + provenance/rotation-recipe comment). No refresh script (YAGNI — the rotation recipe is a comment).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] The cosign `docker run` in `ci-deploy.sh` uses the **non-deprecated** 3.x offline flag set (`--offline=true --new-bundle-format=false --trusted-root=…`, exact set pinned by the Phase 0 `--help` probe) — no bare deprecated `--offline`; `git grep -n 'cosign' ci-deploy.sh` shows the mounted `-v …/config.json` and trusted-root, and the resolved egress path (`--network host` or allowlisted ghcr.io).
+- [ ] The cosign `docker run` in `ci-deploy.sh` uses the **non-deprecated** 3.x offline flag set (`--offline=true --new-bundle-format=false --trusted-root=…`, exact set pinned by the Phase 0 `--help` probe) — no bare deprecated `--offline`, no `--network host`; `git grep -n 'cosign' ci-deploy.sh` shows the mounted `-v …/config.json` and `-v …/trusted_root.json`; `ghcr.io` is present in `cron-egress-allowlist.txt` (Design B egress).
 - [ ] Phase 0 offline probe evidence (successful offline verify of the live signed web-v0.188.1 digest with a real GHCR credential + local trusted_root.json) pasted into the spec/PR body.
 - [ ] `IMAGE_VERIFY_MODE` default is still `warn` (`grep -n 'IMAGE_VERIFY_MODE:-warn' ci-deploy.sh` → 1 hit); no ENFORCE flip.
 - [ ] `ci-deploy.test.sh` green: existing WARN-never-blocks, ENFORCE-blocks (load-bearing), inspect-fallback tests unchanged + new flag/mount assertions.
@@ -188,6 +217,9 @@ failure_modes:
   - mode: "cosign container cannot reach ghcr.io (egress/trusted-root misconfig)"
     detection: "verify_result classification on connection/registry error; Phase 0 probe pre-empts"
     alert_route: "Sentry op=image-verify"
+  - mode: "GHCR credential expired/revoked → every deploy + fresh boot fail-closed (M2 SPOF)"
+    detection: "PROACTIVE credential-expiry check (before expiry), NOT just the reactive pull-failure event"
+    alert_route: "scheduled expiry alarm + rotation follow-through"
 logs:
   where: "journald (logger -t ci-deploy) + Sentry"
   retention: "journald host-local; Sentry per project retention"
@@ -199,18 +231,30 @@ discoverability_test:
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-Amend **ADR-082** (dual-path verify decision it already owns): add (a) the private-visibility GHCR credential model (`read:packages`, Doppler-threaded, host `docker login`), (b) the deliberate scoped exception to `hr-github-app-auth-not-pat` (rationale: no headless bash JWT-mint / minimize live credential surface; single-package read-only), (c) the committed+baked `trusted_root.json` offline-verify decision (vs `cosign initialize`-at-build, rejected as non-hermetic). New ADR NOT warranted — this is the same decision ADR-082 scopes. (ADR ordinal N/A — amendment, not a new record.)
+Amend **ADR-082** (dual-path verify decision it already owns; amend, not new — same decision, ordinal N/A). The amendment must:
+- Own **pull + verify** (M3a) — the credential now serves the private-image PULL, not just verify (broader than #5933 Item 4's "signing + verify"). Cross-reference **ADR-080** (image bakes host bootstrap) and **#5274** (fresh web-2 boot) — the fresh boot now cannot pull unauthenticated.
+- Record the **private-visibility GHCR credential model** (`read:packages` over BOTH `soleur-web-platform` + `soleur-inngest-bootstrap`, Doppler-threaded, host `docker login`).
+- Record the **`hr-github-app-auth-not-pat` exception** with the HONEST rationale (M3c): primary driver = **fresh-boot t=0 static-credential availability** (an App installation token needs a JWT + `api.github.com` exchange before the first pull); record the **counter-cost** (a ≤1yr PAT is a worse secret-at-rest than a 1hr installation token). Add a `principles-register.md` AP-row pointer so the exception is discoverable (M3b).
+- Record the **offline-verify decision**: pinned `trusted_root.json`, provenance = the committed repo via TF-rendered cloud-init `write_files`, **NEVER the image under verification** (H1); `cosign initialize`-at-build rejected as non-hermetic.
+- Record the **Design B egress decision** (sandboxed cosign container + narrow ghcr.io allowlist, NOT `--network host`) and why (loopback exposure + ADR-082-Item-3 container-egress invariant, M1).
 
 ### C4 views
-Checked all three `.c4` files. Relevant elements: `ghcr` system (`model.c4:238`, external), `sigstore` system (`:246`), `hetzner → ghcr` pull edge (`:309`), `hetzner → sigstore` verify edge (`:312`). Change: `ghcr` description "Public GHCR registry" → private + "host authenticates via read:packages". The `hetzner → ghcr` edge already exists (no new edge). The `hetzner → sigstore` verify edge remains accurate (offline, now via pinned trusted-root — description tweak optional). No new external actor/system/relationship is introduced (the credential is an attribute of the existing pull edge, not a new element). Run `c4-code-syntax.test.ts` + `c4-render.test.ts` after edit.
+Checked all three `.c4` files (`model.c4`, `views.c4`, `spec.c4`). Relevant elements: `ghcr` system (`model.c4:238`, external), `sigstore` system (`:246`), `hetzner → ghcr` pull edge (`:309`), `hetzner → sigstore` verify edge (`:312`), `github → sigstore` signing edge (`:311`). Corrections this change requires:
+- `ghcr` description (`:240`): "Public GHCR registry" → private; the fresh-host pull is now **authenticated** (`read:packages`).
+- **`hetzner → sigstore` verify edge (`:312`) is FALSIFIED and must be corrected/removed.** It reads `Verifies the image signature (cosign --offline, identity-pinned) … technology "HTTPS (cosign)"` — but with a pinned local `trusted_root.json` + true offline verify, the host makes **no live HTTPS call to sigstore** at verify time (it uses the local root + the GHCR-attached bundle fetched from `ghcr`). Re-describe as "verifies the signature fully offline against a pinned trusted-root + the GHCR-attached bundle (NO live sigstore call)" or drop the edge and fold the offline-verify note into the `hetzner → ghcr` edge. The `github → sigstore` signing edge (`:311`) STAYS accurate (CI dials Fulcio/Rekor at sign time).
+- `hetzner → ghcr` edge (`:309`): now carries the signature-bundle fetch too (authenticated) — description may note it.
+No new external actor/system/relationship is introduced (the credential is an attribute of the existing pull edge, not a new element). Run `c4-code-syntax.test.ts` + `c4-render.test.ts` after edit (a `view include` referencing an undefined element fails there, not at `tsc`).
 
 ### Sequencing
-The credential + login are true immediately on apply; trusted_root offline-verify is true once baked. No soak-gated ADR status change (WARN→ENFORCE is the separate follow-up, not this ADR amendment).
+The credential + login are true immediately on apply; trusted_root offline-verify is true once cloud-init writes the pinned root to the host. No soak-gated ADR status change (WARN→ENFORCE is the separate follow-up, not this ADR amendment).
 
 ## Risks & Sharp Edges
 - A plan whose `## User-Brand Impact` section is empty/placeholder fails deepen-plan Phase 4.6 — it is filled above.
 - **Fresh-host vs running-host validation:** the running host may have a cached image or a pre-applied `docker login` masking the break. Validate on a genuinely fresh/uncached host (or `docker logout` + prune first), not just the running host — otherwise the fail-closed pull looks fixed when it isn't.
-- **`--network host` on the cosign container** gives it full host egress for the verify window — confirm with infra-security it's acceptable vs. narrowly allowlisting `ghcr.io` (D3). Either way, do NOT add sigstore/rekor/fulcio/TUF hosts to any allowlist — the whole point of the pinned trusted-root is that they stay unreachable.
+- **`--network host` REJECTED (Design A) in favour of the sandboxed Design B** — its real cost is host-loopback exposure (inngest/redis/webhook), not egress (M1), and it reverses the ADR-082 container-egress invariant. Design B adds `ghcr.io` to the container allowlist instead. Do NOT add sigstore/rekor/fulcio/TUF to any allowlist — the pinned trusted-root exists precisely so they stay unreachable.
+- **Circular-trust (H1):** never `COPY` `trusted_root.json` into the deploy image — that image is the artifact under verification. Source it via cloud-init `write_files` from the committed repo file.
+- **Credential-expiry SPOF (M2):** once the host pull is authenticated, EVERY deploy + fresh boot hard-depends on a valid GHCR credential. A lapsed PAT fail-closes the whole fleet; a stale `config.json` on a weeks-running host is why the per-deploy login (Phase 3) must rewrite it each run, and why a PROACTIVE expiry alarm (not just reactive pull-failure) is required.
+- **Telemetry mechanism (H2):** the SENTRY_*-before-verify fix is NOT free — it requires a NEW early Doppler fetch (Phase 3) because the existing download runs after verify. Without it the fix is prose, not code.
 - **Deprecated-flag drift:** pin the exact 3.x flag set against the SHA-pinned cosign container via `--help` at Phase 0; do not trust docs alone (`--new-bundle-format` default and `--offline` deprecation semantics vary by minor version).
 - **Telemetry ordering is load-bearing for the ENFORCE gate:** if `SENTRY_*` remain unset at verify time, the soak that gates the flip observes nothing — a green-looking WARN with an invisible failure rate. Assert the ordering.
 - **Auto-apply sequencing:** the `GHCR_READ_TOKEN` `TF_VAR_*` (no default) must be in Doppler `prd_terraform` before the `*.tf` edit merges, or the auto-applied infra root fails the whole apply (resolves every root var before `-target` pruning).
