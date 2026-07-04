@@ -84,12 +84,9 @@ Directly reuses the ADR-066 / mig 111 precedent (the same compliance problem, al
 
 ### Phase 3 — Unified read path: `GET /api/inbox`
 - New route (or generalize `/api/inbox/emails` → keep back-compat) that returns a merged, severity-ordered list from **two sources**: `inbox_item` (native severity) + `email_triage_items`.
-- **Email severity map — clock-threshold based (operator decision 2026-07-04, reconciling wireframe + spec-flow P0-1):** statutory severity is governed by **time-to-deadline, not `status`**, with three hard safety invariants that preserve the P0-1 protection:
-  1. A non-archived statutory item is **never `info`, never capped-out-of-view, never swept** while unresolved — even when it sits in GOOD TO KNOW it renders (uncapped).
-  2. It **auto-escalates monotonically to `action_required` (NEEDS YOU, pinned)** once `hours_to_deadline ≤ STATUTORY_URGENT_MARGIN` — a conservative margin chosen so the founder always reaches NEEDS YOU with ample time to act. Above the margin it is `attention` (amber, GOOD TO KNOW).
-  3. `acknowledged` **never demotes** severity — only the clock does (acknowledgment is workflow state, not legal resolution). So an acknowledged statutory item inside the margin is still pinned.
-  - **Deadline derivation is a compliance rule (CLO + deepen-plan):** `email_triage_items` stores `statutory_class` + `received_at` but no explicit deadline. Deadline = `received_at + window(statutory_class)` (e.g. breach→GDPR Art. 33 72h; dsar→Art. 12 ~1 month; service-of-process/regulator per counsel). deepen-plan MUST have CLO fix the per-class window + the `STATUTORY_URGENT_MARGIN`; until then the safe fallback is "all non-archived statutory → `action_required`/pinned". Non-statutory email → `info`.
-- **Preserve the load-bearing invariant:** any statutory item currently at `action_required` pins first (uncapped), then severity rank, then `received_at DESC`. The clock-threshold rule only moves a statutory item *up* to the pin as its deadline nears — it can never let a near-deadline clock fall below the fold.
+- **Email severity map — "pin all, calm the visuals" (operator decision 2026-07-04, final):** **every non-archived statutory row → `action_required`, pinned + uncapped**, regardless of clock or `status` (acknowledgment is workflow state, not legal resolution — it never demotes). Non-statutory email → `info`. This is the strongest-safety, simplest rule: nothing statutory is ever demoted, so there is **no escalation mechanism to get wrong, no re-notify cron, and no per-class deadline model on the critical path** (the architecture "pull-only escalation" P1 dissolves — there is nothing to pull).
+- **Deadline is cosmetic-only.** The row shows a calm remaining-time **chip** (red when near-deadline, amber when far) so a far-off DSAR doesn't visually shout beside an 18h breach — but the chip governs **only the dot/chip color, never severity, grouping, or the pin**. The chip's `received_at + window(statutory_class)` estimate (breach≈72h, dsar≈1mo, …) is therefore **not safety-critical**: CLO can refine per-class windows anytime with zero risk. Fallback if a class window is unknown: show no chip (the item is still pinned).
+- **Load-bearing invariant (unchanged):** non-archived statutory pins first (uncapped), then severity rank, then `received_at DESC`. A statutory clock can never fall below the fold because a statutory item is never below the pin.
 - **`action_required` derivation rule is a reviewable spec artifact (CPO change):** the exact predicate per source (which statutory states, which inbox_item sources) lives in a named, tested `deriveSeverity()` helper + a table in this plan (see Appendix B) — not code-buried. This is the product's precision contract.
 - **Cap NEEDS YOU with explicit overflow (CPO change):** cap the visible NEEDS YOU count (e.g. 20) with a "+N more need you" overflow row — protect against banner-blindness — but the **statutory pin is never subject to the cap**.
 - Keep the existing `email_triage_list` agent-tool filter in lockstep (agent-native parity).
@@ -142,7 +139,7 @@ discoverability_test:
 - [ ] **RLS-leak negative test as a merge gate (CPO required change):** Owner A cannot read Owner B's items via `GET /api/inbox` (workspace isolation); a non-Owner gets 0 rows. Read route uses the user-context client (grep gate: **no `createServiceClient` under `app/api/inbox/**`**).
 - [ ] **Archive guard (spec-flow P0-2):** `set_inbox_item_state` rejects archiving an un-acted `action_required` item; retention sweep never deletes un-acted `action_required` (test both).
 - [ ] **Per-Owner state (spec-flow P0-3):** a broadcast row acked/archived by Owner A still shows to Owner B until B acts (per-recipient state test).
-- [ ] **Statutory clock-escalation (spec-flow P0-1 + operator clock-threshold decision):** a statutory item within `STATUTORY_URGENT_MARGIN` of its deadline is `action_required`/pinned (incl. when `acknowledged`); one with ample clock is `attention` but still rendered uncapped and never swept; escalation is monotonic as the deadline nears (tests at both sides of the margin + an acknowledged-near-deadline case).
+- [ ] **Statutory always pinned (spec-flow P0-1 + operator "pin all" decision):** every non-archived statutory item (incl. `acknowledged`, incl. far-from-deadline) is `action_required`/pinned/uncapped; the deadline chip color is cosmetic and never changes grouping/pin (tests: acknowledged statutory pinned; far-from-deadline statutory pinned; chip color != severity).
 - [ ] `email_triage_items` is **unmodified** (`git diff` shows zero changes to mig 102/111, no new trigger on it).
 - [ ] `GET /api/inbox` merges both sources via the tested `deriveSeverity()` helper; statutory pinned first + uncapped; NEEDS YOU capped with overflow (statutory exempt from the cap).
 - [ ] `notifyInboxItem` inserts once (idempotent on `dedup_key`) then dispatches; the `inbox_item` push variant has its own `sw.js` `tag`; a failed `action_required` dispatch mirrors to Sentry `op=notify-inbox-action-required`.
@@ -200,6 +197,32 @@ discoverability_test:
 - `inbox_item.title`/`deep_link` are server-generated — never persist agent output or email subject into a co-Owner-visible row.
 - Test runner is **vitest** (`./node_modules/.bin/vitest run`), not `bun test`/`npm -w`; test paths must match `vitest.config.ts` `include:` globs.
 
+## Plan-Review Revisions (3-reviewer pass: simplicity + architecture + data-integrity, 2026-07-04)
+
+These amend the phases above; folded before tasks.md.
+
+**Schema (Phase 1) — amended:**
+- **Defer the per-Owner join.** v1 stores `read_at` / `acted_at` / `archived_at` **inline on `inbox_item`** (single state). The per-Owner `inbox_item_recipient_state` join moves to **#4672** (broadcast `approval_required` is the first source that actually needs independent per-Owner state). This dissolves the data-integrity **P0** (dual `acted_at` source-of-truth): `acted_at` is the single **global** resolution signal (one approver resolves for the workspace), set-once, enforced in the RPC.
+- **Reuse the existing helper.** Use `public.is_workspace_owner(uuid,uuid)` (mig `098_workspace_logos.sql:67` — already `SECURITY DEFINER` / `plpgsql` / `search_path`-pinned / `role='owner'`). Do **not** mint a new helper and do **not** reuse the email-specific `is_email_triage_workspace_owner`.
+- **RLS SELECT predicate:** `(user_id = auth.uid()) OR (user_id IS NULL AND public.is_workspace_owner(workspace_id, auth.uid()))` — targeted rows are **private to their recipient** (fixes the co-Owner targeted-row leak), broadcasts visible to Owners. Keep it Owner-scoped, never `is_workspace_member` (ADR-066 warning).
+- **`REVOKE INSERT, UPDATE, DELETE FROM PUBLIC, anon, authenticated`** (not just INSERT); no authenticated write policy beside the RPC (2026-05-21 bypass-path learning).
+- **`source` CHECK = `('task_completed','system')`** only (the v1-emittable set). #4672 / #4674 each `ALTER … ADD` their enum value in the migration that ships their emitter. Delete the pre-#4672 non-navigating-`approval_required` handling from Phase 4; keep only the **generic** "build from `source_ref`, degrade if target missing/RLS-hidden" behavior. Document the full intended enum in ADR-075.
+- **FKs:** `user_id → users(id) ON DELETE CASCADE`; **`workspace_id → workspaces(id) ON DELETE CASCADE`** (operational data follows workspace lifecycle — RESTRICT was mig-111's *statutory-evidence* protection, inappropriate here). Add workspace-delete-cascade + user-delete-cascade tests.
+- **Dedup (ADR-035 pattern):** partial-unique index on the composite (`scope`/`source`/`source_ref`) `WHERE dedup_key IS NOT NULL`; `notifyInboxItem` uses **plain-insert + catch `23505`** (ADR-035: `ON CONFLICT DO NOTHING` is unreliable under supabase-js, returns `data:null`), and **dispatches push only when a row was actually inserted** (else an emit retry re-pushes).
+- **`.down.sql`:** `cron.unschedule` the retention job + drop RPC/helper-usage/table, guarded for pg_cron-absent CI (`WHEN undefined_table` warn, mig 102 shape).
+- **Retention (AP-009 note):** the 90d hard-DELETE of archived/`info` rows is **more aggressive than the email ledger's 365d** — justify in ADR-075 as content-minimized operational ephemera; the **never-delete-un-acted-`action_required`** carve-out is a hard invariant with a test on both sides.
+
+**Read path (Phase 3) — amended:**
+- **Single shared `lib/` module** = `deriveSeverity()` + the two-source merge, consumed by (a) `GET /api/inbox`, (b) the nav badge (the badge must run the *same* clock logic — a naive `status='new'` count drifts), and (c) a **new `inbox_list` agent tool** (agent-native parity AP-004 is a Hard Rule; email-only `email_triage_list` under-delivers it). This **collapses** the existing route↔`email-triage-tools.ts` "keep in lockstep" duplication rather than adding a third copy.
+- **Merge algorithm (explicit):** bounded fetch per source (uncapped non-archived statutory + capped `inbox_item`/email tails) → `deriveSeverity()` in app → stable severity-rank → concat; the NEEDS-YOU cap and statutory-pin-exemption operate **across both tables** in app memory (SQL can't sort on a wall-clock-derived severity). **Founder-scale, no cursor pagination** — state this as an explicit scale assumption in ADR-075 (the GOOD TO KNOW tail is what grows).
+- **`source_ref`** typed as a **discriminated union keyed by `source`** with one shared deep-link builder reused by the Phase-2 push link.
+
+**Substrate reconciliation (architecture P1):** `/api/dashboard/today` already ranks a multi-source feed over the `messages` table (ADR-035) with **stubbed** severity scoring. ADR-075 records **deliberate co-existence** for v1 (different substrate) with `deriveSeverity()` as the shared severity contract the Today feed can later adopt — not a silent second engine.
+
+**ADR/C4:** ordinal **ADR-075** (074 highest; provisional — re-verify at ship). ADR must record the non-obvious load-bearing decisions: severity is **computed at read, not stored**; the statutory-severity rule (per operator decision below); the **single shared severity module**; deep-link-at-render; the no-deep-pagination scale assumption; the AP-009 retention deviation. C4: add the **agent/MCP → Operational Inbox read edge** for `inbox_list`.
+
+**RESOLVED — statutory escalation (architecture P1):** operator chose **"pin all, calm the visuals"** — every non-archived statutory item is always pinned in NEEDS YOU; the deadline is a cosmetic chip only. This **eliminates** the pull-only-escalation risk (nothing to escalate), the re-notify cron, and the per-class-deadline compliance dependency on the critical path. Strongest safety, simplest code.
+
 ## Appendix A — Copy (copywriter, brand-guide-aligned)
 
 **Group headers** (existing ALL-CAPS gold kicker style): `NEEDS YOU` (helper: "A few things are waiting on your call.") · `GOOD TO KNOW` (helper: "Updates from your organization. Nothing to do here.").
@@ -218,8 +241,7 @@ discoverability_test:
 
 | Source | Severity → group | Deep-link target | Target exists? | Emit-gated by |
 |---|---|---|---|---|
-| email statutory, `hours_to_deadline ≤ margin` | `action_required` → NEEDS YOU (pinned, uncapped) | `/dashboard/inbox/email/{id}` | ✓ | shipped |
-| email statutory, ample clock (> margin) | `attention` → GOOD TO KNOW (amber; **never capped/swept**; auto-escalates as deadline nears) | `/dashboard/inbox/email/{id}` | ✓ | shipped |
+| email statutory (any non-archived) | `action_required` → NEEDS YOU (pinned, uncapped) — **always**; a cosmetic red/amber chip conveys near/far deadline without changing severity | `/dashboard/inbox/email/{id}` | ✓ | shipped |
 | email non-statutory | `info` → GOOD TO KNOW | `/dashboard/inbox/email/{id}` | ✓ | shipped |
 | `task_completed` | `info` → GOOD TO KNOW | `/dashboard/chat/{conversationId}` | ✓ | **this PR** |
 | `system` | `info` (→ `action_required` only if blocking, e.g. billing) | dashboard / contextual | ✓ | **this PR** |
