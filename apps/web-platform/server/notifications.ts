@@ -12,6 +12,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import type { InboxItemSeverity } from "@/lib/inbox-severity";
 
 const log = createChildLogger("notifications");
 
@@ -86,8 +87,7 @@ export interface EmailTriageNotificationPayload {
   isStatutory: boolean;
 }
 
-/** Native inbox_item severity (mig 122 CHECK). Aligned with lib/inbox-severity. */
-export type InboxItemSeverity = "action_required" | "attention" | "info";
+// InboxItemSeverity is imported at the top from lib/inbox-severity (canonical).
 
 /**
  * Operational-inbox notification (feat-severity-ranked-inbox #6007). Emitted by

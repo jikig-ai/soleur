@@ -24,10 +24,10 @@ Derived from the finalized plan (post 3-reviewer pass). All schema decisions ref
 - [x] 2.4 Wired the **`task_completed`** producer at the agent-run terminal success path (`agent-runner.ts`, after `assistantPersisted` + waiting_for_user). **No** `approval_required`/`autopilot_run` emit (deferred to #4672/#4674).
 
 ## Phase 3 — Unified read path + shared severity module
-- [ ] 3.1 `lib/inbox-severity.ts` (name TBD): `deriveSeverity()` (statutory→action_required; non-statutory email→info; task_completed→info; system→info|action_required-if-blocking — ~6 lines) + the two-source merge (bounded fetch per source → deriveSeverity → stable sort → concat; statutory uncapped-pinned exempt from the NEEDS YOU cap). Single source of truth.
-- [ ] 3.2 `GET /api/inbox`: user-context client (**no `createServiceClient`**), consumes 3.1, merges `inbox_item` + `email_triage_items`; deep links built from `source_ref` (discriminated-union builder) at render.
-- [ ] 3.3 New **`inbox_list` agent tool** (`server/*-tools.ts`) consuming the SAME 3.1 module (agent-native parity AP-004). Collapse the existing route↔`email-triage-tools.ts` duplication into 3.1.
-- [ ] 3.4 Deadline chip: cosmetic red/amber from `received_at + window(statutory_class)`; never affects severity/pin; no-chip fallback for unknown class.
+- [x] 3.1 `lib/inbox-severity.ts` (pure, client-safe): `deriveEmailSeverity()` (statutory→action_required, clock/status-independent; else info) + native severity + `mergeAndRank()` (statutory pinned first/uncapped → severity rank → recency) + `partitionForDisplay()` (NEEDS YOU cap, statutory-exempt) + `buildInboxDeepLink()` + `countOutstandingActionRequired()`. Single source of truth (shared server fetch in `server/inbox-sources.ts`).
+- [x] 3.2 `GET /api/inbox`: user-context client (**no `createServiceClient`** — source-grep gate test), consumes 3.1 via `fetchInboxSources`, merges `inbox_item` + `email_triage_items`; deep links built from `source_ref` at render.
+- [x] 3.3 New **`inbox_list` agent tool** (`server/inbox-tools.ts`, auto-approve tier) consuming the SAME 3.1 module + shared `fetchInboxSources` (agent-native parity AP-004); registered in agent-runner.
+- [x] 3.4 Deadline is cosmetic-only: `deriveEmailSeverity` IGNORES the clock (tested: acknowledged + far-from-deadline statutory both → action_required), so a chip can never move severity/pin. Email rows keep EmailTriageRow's existing due-date display; native rows have no statutory clock. No-chip fallback = no rule match.
 
 ## Phase 4 — Surface
 - [ ] 4.1 `InboxItemRow` component (new): severity dot + title + relative time + cosmetic deadline chip; builds link from `source_ref`; non-navigating when target missing/RLS-hidden.

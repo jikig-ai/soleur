@@ -62,6 +62,7 @@ import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildEmailTriageTools } from "./email-triage-tools";
+import { buildInboxTools } from "./inbox-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
@@ -1758,6 +1759,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       "mcp__soleur_platform__email_reply",
       "mcp__soleur_platform__email_suppress",
     );
+
+    // Unified attention-inbox read tool (feat-severity-ranked-inbox #6007):
+    // agent-user parity for the SAME severity-ranked feed the operator sees.
+    // Read-only (auto-approve); merges native inbox_item + email-triage via the
+    // shared fetchInboxSources + mergeAndRank modules.
+    const inboxTools = buildInboxTools({ userId });
+    platformTools.push(...inboxTools);
+    platformToolNames.push("mcp__soleur_platform__inbox_list");
 
     // Routines management tools (#5345): agent-user parity for the Routines
     // surface — registered unconditionally. routines_list / routine_runs_list
