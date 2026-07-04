@@ -352,6 +352,8 @@ jobs:
               -target=github_actions_secret.doppler_token_write \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \
+              -target=doppler_secret.ghcr_read_user \
+              -target=doppler_secret.ghcr_read_token \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
               -target=cloudflare_record.web_host \
@@ -574,6 +576,7 @@ jobs:
               -target=terraform_data.container_restart_monitor_install \
               -target=terraform_data.fail2ban_tuning \
               -target=terraform_data.journald_persistent \
+              -target=terraform_data.cosign_trusted_root \
               -target=terraform_data.docker_seccomp_config \
               -target=terraform_data.apparmor_bwrap_profile \
               -target=terraform_data.orphan_reaper_install \
