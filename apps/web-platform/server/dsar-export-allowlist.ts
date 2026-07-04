@@ -325,6 +325,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "(account-delete.ts), not Art. 15 export. The user-readable jobs " +
     "row in dsar_export_jobs already covers their own request history.",
 
+  // feat-severity-ranked-inbox (migration 122) — operational-inbox
+  // notifications. EXCLUDED as derivative content-minimized data: every row is
+  // a server-GENERATED notification pointer (title like "{Leader} finished" /
+  // "From Soleur: …" + a source_ref holding ONLY ids). It holds no
+  // user-provided content of its own — the referenced personal data is exported
+  // via its own allowlisted table (conversations/messages via source_ref
+  // conversationId; email items via email_triage_items). Targeted rows (user_id
+  // set) merely record "you were notified about already-exported item X";
+  // broadcast rows (user_id NULL) are workspace-level, not personal to a subject.
+  // 90d operational retention; Art. 17 erasure via user_id ON DELETE CASCADE.
+  inbox_item:
+    "Server-generated operational-notification pointers (title + source_ref " +
+    "ids only); no user-provided content. The referenced personal data is " +
+    "exported via its own allowlisted table (conversations/messages, " +
+    "email_triage_items). Content-minimized, 90d retention, CASCADE erasure.",
+
   // Operational state (no personal data).
   user_concurrency_slots:
     "Operational concurrency-slot bookkeeping. Transient runtime state, " +
