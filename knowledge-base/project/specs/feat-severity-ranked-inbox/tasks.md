@@ -9,13 +9,13 @@ plan: knowledge-base/project/plans/2026-07-04-feat-severity-ranked-inbox-plan.md
 Derived from the finalized plan (post 3-reviewer pass). All schema decisions reflect the review revisions: inline v1 state (no per-Owner join), reuse `is_workspace_owner` (mig 098:67), narrowed `source` CHECK, ADR-035 dedup, pin-all-statutory.
 
 ## Phase 1 — Data model (`inbox_item` migration)
-- [ ] 1.1 `ls apps/web-platform/supabase/migrations/` for next ordinal; read mig 111 (RLS/RPC pattern) + 098:67 (`is_workspace_owner`) + 094 (pg_cron retention) as templates.
-- [ ] 1.2 Write `<next>_inbox_item.sql`: table with `id, workspace_id NOT NULL → workspaces ON DELETE CASCADE, user_id NULL → users ON DELETE CASCADE, severity CHECK(action_required|attention|info), source CHECK('task_completed','system'), title NOT NULL, source_ref jsonb, dedup_key text, status DEFAULT 'unread' CHECK(unread|read|archived), created_at, read_at, acted_at, archived_at` (inline v1 state; **no** recipient-state join — deferred to #4672).
-- [ ] 1.3 RLS: `ENABLE ROW LEVEL SECURITY`; `REVOKE INSERT, UPDATE, DELETE FROM PUBLIC, anon, authenticated`; SELECT policy `USING ((user_id = auth.uid()) OR (user_id IS NULL AND public.is_workspace_owner(workspace_id, auth.uid())))`; no authenticated write policy.
-- [ ] 1.4 Dedup: partial-unique index on the composite `WHERE dedup_key IS NOT NULL` (ADR-035 shape).
-- [ ] 1.5 `set_inbox_item_state(p_id, p_action)` RPC: SECURITY DEFINER + `search_path=public,pg_temp`; `auth.uid()` pin; same error for missing+non-authorized row (no oracle); `FOR UPDATE`; **archive-guard** (reject archiving `action_required` when `acted_at IS NULL`); `acted_at` set-once; `acted` idempotent (already-acted → no-op, pre-wires the deferred "already resolved" banner). REVOKE from all, GRANT EXECUTE to authenticated.
-- [ ] 1.6 Retention: pg_cron sweep deleting archived/`info` > 90d **AND `NOT (severity='action_required' AND acted_at IS NULL)`** (defense-in-depth). Guard pg_cron-absent CI.
-- [ ] 1.7 `.down.sql`: `cron.unschedule` + drop RPC + table, `undefined_table` warn guard.
+- [x] 1.1 `ls apps/web-platform/supabase/migrations/` for next ordinal (→ 122); read mig 111 (RLS/RPC pattern) + 098:67 (`is_workspace_owner`) + 094 (pg_cron retention) as templates.
+- [x] 1.2 Write `122_inbox_item.sql`: table with `id, workspace_id NOT NULL → workspaces ON DELETE CASCADE, user_id NULL → users ON DELETE CASCADE, severity CHECK(action_required|attention|info), source CHECK('task_completed','system'), title NOT NULL, source_ref jsonb, dedup_key text, status DEFAULT 'unread' CHECK(unread|read|archived), created_at, read_at, acted_at, archived_at` (inline v1 state; **no** recipient-state join — deferred to #4672).
+- [x] 1.3 RLS: `ENABLE ROW LEVEL SECURITY`; `REVOKE INSERT, UPDATE, DELETE FROM PUBLIC, anon, authenticated`; SELECT policy `USING ((user_id = auth.uid()) OR (user_id IS NULL AND public.is_workspace_owner(workspace_id, auth.uid())))`; no authenticated write policy.
+- [x] 1.4 Dedup: partial-unique index `(workspace_id, dedup_key) WHERE dedup_key IS NOT NULL` (ADR-035 shape).
+- [x] 1.5 `set_inbox_item_state(p_id, p_action)` RPC: SECURITY DEFINER + `search_path=public,pg_temp`; `auth.uid()` pin; same error for missing+non-authorized row (no oracle); `FOR UPDATE`; **archive-guard** (reject archiving `action_required` when `acted_at IS NULL`); `acted_at` set-once; `acted` idempotent (already-acted → no-op, pre-wires the deferred "already resolved" banner). REVOKE from all incl. service_role, GRANT EXECUTE to authenticated.
+- [x] 1.6 Retention: pg_cron sweep deleting archived/`info` > 90d **AND `NOT (severity='action_required' AND acted_at IS NULL)`** (defense-in-depth). Guard pg_cron-absent CI.
+- [x] 1.7 `.down.sql`: `cron.unschedule` + drop RPC + table, `undefined_table` warn guard.
 
 ## Phase 2 — Emit + push (`notifyInboxItem`)
 - [ ] 2.1 Add `InboxItemNotificationPayload` (`type:'inbox_item'`) to `NotificationPayload` union in `server/notifications.ts`; sweep consumers (`cq-union-widening-grep-three-patterns`) + `tsc --noEmit`.
