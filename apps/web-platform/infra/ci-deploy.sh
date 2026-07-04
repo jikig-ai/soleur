@@ -40,8 +40,9 @@ readonly LOG_TAG="ci-deploy"
 # rides the host's UNRESTRICTED egress — the #5046/ADR-052 container egress firewall
 # is `iifname docker0`-scoped and never sees host OUTPUT, so ghcr.io stays OUT of the
 # container allowlist. Trust is a LOCALLY-PINNED `trusted_root.json` mounted :ro
-# (cosign-trusted-root.json, delivered out-of-image via cloud-init — never baked;
-# the deploy image is the artifact under verification) with `--offline` so no live
+# (cosign-trusted-root.json, delivered out-of-band via the baked HOST-image
+# host-scripts set + a running-host SSH provisioner — NEVER baked into the DEPLOY
+# image, which is the artifact under verification) with `--offline` so no live
 # Fulcio/Rekor/TUF egress is needed. (`--offline` is deprecated-but-frozen under the
 # pinned cosign SHA — SOLEUR-DEBT below ties migration to the next SHA bump.)
 # Identity is pinned to the reusable release workflow on main/release-tags ONLY — an
@@ -62,9 +63,11 @@ readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enfor
 # ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry,
 # NEVER a credStore/credHelpers indirection (the distroless cosign image has no
 # credential helper; an indirection silently UNAUTHORIZEs the .sig fetch — ADR-085).
-# The trusted root is delivered to the host out-of-image via cloud-init write_files.
+# The trusted root reaches the host via the baked HOST-image host-scripts set (fresh
+# hosts) + terraform_data.cosign_trusted_root SSH delivery (running host) — see
+# server.tf. It is NEVER baked into the DEPLOY image (circular trust).
 readonly GHCR_DOCKER_CONFIG="${GHCR_DOCKER_CONFIG:-/home/deploy/.docker/config.json}"
-readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/opt/soleur/cosign-trusted-root.json}"
+readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
 # Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
 # and the GitHub Actions "Verify deploy script completion" step. Keep in sync

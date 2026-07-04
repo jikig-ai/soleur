@@ -268,3 +268,20 @@ variable "github_app_private_key" {
   type        = string
   sensitive   = true
 }
+
+# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
+# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
+# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
+# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
+# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-085).
+variable "ghcr_read_user" {
+  description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
+  type        = string
+  sensitive   = true
+}
+
+variable "ghcr_read_token" {
+  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
+  type        = string
+  sensitive   = true
+}

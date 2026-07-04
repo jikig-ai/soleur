@@ -351,10 +351,13 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
-    expect(serverTfBakedSet().length).toBe(26);
+    // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
+    // HOST image (not the app image) + installed to /etc/soleur by the bootstrap (#6005,
+    // ADR-085). A data file, not a script.
+    expect(serverTfBakedSet().length).toBe(27);
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via
