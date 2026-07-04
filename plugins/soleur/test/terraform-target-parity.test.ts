@@ -359,12 +359,71 @@ function extractAllResources(stripped: string): string[] {
  *  Verified no-op against the current workflows (no live target sits in a comment). */
 function extractAllTargets(workflowText: string): Set<string> {
   const set = new Set<string>();
+  // `['"]?` tolerates a quoted `-target='addr["key"]'` (the shape the ADR-068
+  // warm-standby job uses for its for_each addresses) — the capture still stops at
+  // the word boundary before `[`, so a for_each target reduces to its BASE address
+  // exactly like an unquoted one. Optional, so every existing UNQUOTED `-target=`
+  // line captures identically (no change to prior results). Making quoted targets
+  // visible here is what makes the `stripJob` job-aware boundary below LOAD-BEARING
+  // rather than an accident of quoting.
   for (const m of stripComments(workflowText).matchAll(
-    /-target=([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
+    /-target=['"]?([a-z0-9_]+\.[A-Za-z0-9_]+)/g,
   )) {
     set.add(m[1]);
   }
   return set;
+}
+
+/**
+ * Return the workflow text with a named top-level job block removed. Top-level
+ * job keys are indented EXACTLY two spaces under `jobs:`; a job block runs from
+ * its `  <id>:` header to the next `  <id>:` header (or EOF). Keeps the #5566 /
+ * #5887 `-target` parity guards JOB-AWARE: the ADR-068 warm-standby DISPATCH job
+ * (`warm_standby`) `-target`s the 6 additive resources that are already
+ * OPERATOR_APPLIED_EXCLUSIONS, so folding its targets into `allTargets` would
+ * WEAKEN the moved-block regression anchor (dropping `hcloud_server_network.web`
+ * from MOVED_OPERATOR_CONSUMED must still turn the guard red). The auto-apply
+ * (per-PR push) + SSH-bridge apply paths those guards actually cover live in the
+ * `apply` job; the dispatch-only warm-standby path is a separate writer surface.
+ */
+function stripJob(workflowText: string, jobId: string): string {
+  const out: string[] = [];
+  let dropping = false;
+  for (const line of workflowText.split("\n")) {
+    if (/^ {2}[A-Za-z0-9_-]+:/.test(line)) {
+      dropping = new RegExp(`^ {2}${jobId}:`).test(line);
+    }
+    if (!dropping) out.push(line);
+  }
+  return out.join("\n");
+}
+
+/** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
+function extractJobBlock(workflowText: string, jobId: string): string {
+  const out: string[] = [];
+  let capturing = false;
+  for (const line of workflowText.split("\n")) {
+    if (/^ {2}[A-Za-z0-9_-]+:/.test(line)) {
+      capturing = new RegExp(`^ {2}${jobId}:`).test(line);
+    }
+    if (capturing) out.push(line);
+  }
+  return out.join("\n");
+}
+
+/**
+ * Full `-target=` values with the for_each `["key"]` PRESERVED (quoted or bare).
+ * Distinct from extractAllTargets, which reduces to base addresses for the
+ * coverage guards; the warm-standby guard needs the exact keyed addresses.
+ */
+function extractTargetsWithKeys(text: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(text).matchAll(
+    /-target=(?:'([^']+)'|"([^"]+)"|(\S+))/g,
+  )) {
+    out.push((m[1] ?? m[2] ?? m[3]).replace(/\\$/, ""));
+  }
+  return out;
 }
 
 // Resources intentionally NOT in the per-PR CI `-target=` allow-list.
@@ -474,7 +533,12 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
       extractAllResources(stripComments(readFileSync(f, "utf8"))),
     );
     allTargets = new Set<string>([
-      ...extractAllTargets(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
+      // JOB-AWARE: exclude the dispatch-only `warm_standby` job — its 6 additive
+      // for_each targets are OPERATOR_APPLIED_EXCLUSIONS and must not broaden this
+      // coverage set (see stripJob).
+      ...extractAllTargets(
+        stripJob(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "warm_standby"),
+      ),
       ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
     ]);
   });
@@ -765,7 +829,14 @@ describe("terraform `moved`/-target parity — pending moves are accounted for (
       extractMovedBases(stripComments(readFileSync(f, "utf8"))),
     );
     allTargets = new Set<string>([
-      ...extractAllTargets(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
+      // JOB-AWARE (P0.4): the warm_standby dispatch job `-target`s
+      // hcloud_server_network.web["web-1"/"web-2"] etc. Folding those into
+      // allTargets would let `hcloud_server_network.web` be dropped from
+      // MOVED_OPERATOR_CONSUMED without turning this guard red — weakening the
+      // #5877 regression anchor. Strip the job so the boundary holds.
+      ...extractAllTargets(
+        stripJob(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "warm_standby"),
+      ),
       ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
     ]);
   });
@@ -815,6 +886,78 @@ moved {
       (a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a),
     );
     expect(drifted).toEqual([]);
+  });
+});
+
+// ─── ADR-068 warm-standby dispatch -target guard (this PR) ───────────────────
+// The `apply_target=warm-standby` dispatch job (`warm_standby` in
+// apply-web-platform-infra.yml) runs an ADDITIVE 6-target plan+apply through the
+// shared R2 concurrency serializer, then triggers the host-side deploy fan-out to
+// web-2. This guard pins the target set to EXACTLY the 6 additive resources and
+// proves it can never carry web-1's placement-group reboot into the dispatch plan
+// (no hcloud_server.* target ⇒ the destroy-guard-filter-web-platform.jq
+// `reboot_updates` counter is 0 by construction). It also asserts the parity
+// guards above stay JOB-AWARE (the warm-standby targets are NOT folded into
+// `allTargets`), without weakening the moved-block boundary.
+const WARM_STANDBY_TARGETS = [
+  "hcloud_network.private",
+  "hcloud_network_subnet.private",
+  'hcloud_server_network.web["web-1"]',
+  'hcloud_server_network.web["web-2"]',
+  'hcloud_volume.workspaces["web-2"]',
+  'hcloud_volume_attachment.workspaces["web-2"]',
+];
+
+describe("ADR-068 warm-standby dispatch -target set (additive; reboot_updates=0)", () => {
+  let warmTargets: string[];
+  let fullBaseTargets: Set<string>;
+  let strippedBaseTargets: Set<string>;
+
+  beforeAll(() => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    warmTargets = extractTargetsWithKeys(extractJobBlock(wf, "warm_standby"));
+    fullBaseTargets = extractAllTargets(wf);
+    strippedBaseTargets = extractAllTargets(stripJob(wf, "warm_standby"));
+  });
+
+  test("the warm_standby job -targets EXACTLY the 6 additive resources", () => {
+    expect([...warmTargets].sort()).toEqual([...WARM_STANDBY_TARGETS].sort());
+  });
+
+  test("warm-standby targets NO hcloud_server.* — reboot_updates=0 by construction", () => {
+    // reboot_updates only counts placement_group_id/server_type in-place updates
+    // on hcloud_server.* (destroy-guard-filter-web-platform.jq:135). The warm-standby
+    // set attaches the private network (hcloud_server_network — a DIFFERENT type) +
+    // the web-2 volume; it never targets hcloud_server.web, so web-1's placement
+    // reboot cannot enter the dispatch plan and the plan-scoped guard's
+    // reboot_updates is 0. `\.` after hcloud_server is load-bearing: it must NOT
+    // match hcloud_server_network.
+    const serverTargets = warmTargets.filter((t) => /^hcloud_server\./.test(t));
+    expect(serverTargets).toEqual([]);
+    // non-vacuity: the network attach IS present (the filter above is not empty
+    // merely because the whole set is empty).
+    expect(
+      warmTargets.some((t) => t.startsWith("hcloud_server_network.web")),
+    ).toBe(true);
+  });
+
+  test("every warm-standby target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
+    // The 6 additive resources are excluded from BOTH auto-apply target sets
+    // (P0.4) — the dispatch is the ONLY path that applies them. If a future edit
+    // pointed the warm-standby job at a non-excluded resource this turns red.
+    for (const t of warmTargets) {
+      const base = t.replace(/\[.*$/, "");
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
+    }
+  });
+
+  test("the parity guards stay JOB-AWARE: warm-standby targets are NOT in the stripped allTargets", () => {
+    // Load-bearing boundary (P0.4): with extractAllTargets now quote-tolerant, a
+    // WHOLE-file scan DOES see the warm-standby base hcloud_server_network.web;
+    // once stripJob removes the dispatch job it is GONE. The #5566/#5887 guards use
+    // the stripped form, so the moved-block regression anchor keeps its teeth.
+    expect(fullBaseTargets.has("hcloud_server_network.web")).toBe(true);
+    expect(strippedBaseTargets.has("hcloud_server_network.web")).toBe(false);
   });
 });
 
