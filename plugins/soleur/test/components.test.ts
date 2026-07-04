@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   discoverAgents,
@@ -274,4 +274,51 @@ describe("Autonomous-loop API-budget disclosure", () => {
       ).toBe(true);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Decision-principles taxonomy drift guard (#5984 / ADR-084)
+// ---------------------------------------------------------------------------
+// Orphan guard: the reference doc must exist and every consumer must link it
+// (markdown-link form). Renaming/moving the doc without updating a consumer, or
+// dropping the ship render/action-required wiring, fails here. No content-presence
+// assertions — those pass by construction and false-fail on a good-faith reword.
+
+describe("Decision-principles taxonomy wiring", () => {
+  const DOC_REL = "skills/brainstorm-techniques/references/decision-principles.md";
+  // Every consumer must reference the doc; markdown-link form only (backtick refs
+  // are separately forbidden by "No backtick file references in skills").
+  const CONSUMERS = ["brainstorm-techniques", "plan", "work", "ship"];
+  const LINK_RE = /\]\([^)]*decision-principles\.md\)/;
+
+  test("decision-principles.md exists", () => {
+    expect(
+      existsSync(resolve(PLUGIN_ROOT, DOC_REL)),
+      `${DOC_REL} is missing — the ADR-084 taxonomy primitive.`,
+    ).toBe(true);
+  });
+
+  for (const skillName of CONSUMERS) {
+    test(`${skillName} links decision-principles.md`, () => {
+      const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"), "utf-8");
+      expect(
+        LINK_RE.test(raw),
+        `${skillName}/SKILL.md does not link decision-principles.md via a markdown link — ` +
+          `the taxonomy consumer wiring drifted.`,
+      ).toBe(true);
+    });
+  }
+
+  test("ship renders the challenge record + files the action-required issue", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    // The legible-surface wiring (ADR-084 §5): ship reads the artifact, renders it,
+    // and opens the action-required + decision-challenge issue operator-digest harvests.
+    for (const token of ["decision-challenges.md", "action-required", "decision-challenge"]) {
+      expect(
+        raw.includes(token),
+        `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
+          `no longer reach the operator (regresses ADR-084's legible surface).`,
+      ).toBe(true);
+    }
+  });
 });
