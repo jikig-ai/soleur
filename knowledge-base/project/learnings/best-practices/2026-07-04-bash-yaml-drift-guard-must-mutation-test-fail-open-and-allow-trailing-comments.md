@@ -102,3 +102,19 @@ extended to YAML-structural drift guards.
 4. **shellcheck SC2034** on a doc-only variable after inlining its regex.
    **Recovery:** removed the dead variable, kept the rationale as a comment.
    **Prevention:** one-off.
+5. **Green locally, RED in CI: an `awk` that prints an ENTIRE large job block
+   passed on the dev machine's mawk (1.3.4) but failed the premise check on
+   CI's older mawk** — `named_job_block` extracted `reusable-release.yml`'s
+   ~700-line `release` job (with a 418-char inline line at :406) and the older
+   mawk did not surface the early `id-token: write` line, so the premise
+   grep returned no match (3/4, premise FAIL). The two caller checks passed
+   because caller release jobs are small. **Recovery:** replaced the premise's
+   whole-block extraction with a `permissions:`-sub-block extractor that
+   early-`exit`s at the next 4-space key (reads ~7 lines, never touches the
+   700-line body); also swapped the GNU-only `\b` in the id-token grep for a
+   POSIX `([[:space:]]|$|#)` boundary class. **Prevention (recurring):** a bash
+   test that `awk`-extracts and prints a LARGE block is a CI-portability risk —
+   scope the extraction to the smallest sub-region that answers the question and
+   `exit` early; never rely on the dev machine's awk build matching CI's. The
+   `test-all.sh scripts` shard green locally is necessary but NOT sufficient for
+   an awk-heavy `.test.sh` — the authoritative gate is CI's `test-scripts` job.

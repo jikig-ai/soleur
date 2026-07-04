@@ -67,7 +67,10 @@ echo ""
 # remote (`owner/repo/…/reusable-release.yml@ref`). Anchored to `^<indent>uses:`
 # so a `# uses: …` comment line never matches.
 USES_GREP_ERE='^[[:space:]]+uses:[[:space:]]*[^[:space:]]*reusable-release\.yml'
-ID_TOKEN_ERE='^[[:space:]]+id-token:[[:space:]]*write\b'
+# `write` terminated by whitespace, end-of-line, or a trailing `#` comment.
+# POSIX class (NOT the GNU-only `\b`) so the guard is portable across grep
+# implementations (BusyBox / mawk-adjacent CI environments).
+ID_TOKEN_ERE='^[[:space:]]+id-token:[[:space:]]*write([[:space:]]|$|#)'
 
 # Print the block of a named job (header through the line before the next job
 # header), scoped to content after the top-level `jobs:` key so `on.push:` and
@@ -82,6 +85,27 @@ named_job_block() {
       inblock = (cur == job)
     }
     inblock { print }
+  ' "$file"
+}
+
+# Print ONLY the entries of a named job's job-level `permissions:` sub-block.
+# Scoped + early-exit (stops at the next 4-space job key) so it processes a
+# handful of early lines regardless of how large the job body is — the whole-job
+# `named_job_block` extraction chokes some `awk` builds on the 700-line reusable
+# `release` job (a 418-char inline line at :406); this reads only lines ~61-67.
+named_job_permissions_block() {
+  local file="$1" job="$2"
+  awk -v job="$job" '
+    /^jobs:[[:space:]]*$/ { injobs = 1; next }
+    !injobs { next }
+    /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+      cur = $0; sub(/^  /, "", cur); sub(/:.*/, "", cur)
+      inrel = (cur == job); next
+    }
+    inrel && /^  [A-Za-z0-9_-]+:/ { exit }
+    inrel && /^    permissions:[[:space:]]*(#.*)?$/ { inperm = 1; next }
+    inperm && /^    [A-Za-z0-9_-]+:/ { exit }
+    inperm { print }
   ' "$file"
 }
 
@@ -169,7 +193,7 @@ if [[ ! -f "$REUSABLE" ]]; then
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   exit 1
 fi
-if named_job_block "$REUSABLE" release | grep -qE "$ID_TOKEN_ERE"; then
+if named_job_permissions_block "$REUSABLE" release | grep -qE "$ID_TOKEN_ERE"; then
   pass "reusable release job requires id-token: write"
 else
   fail "reusable release job no longer declares id-token: write — revisit this guard's premise (cosign signing removed?)"
