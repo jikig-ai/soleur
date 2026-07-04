@@ -149,6 +149,15 @@ resource "hcloud_server" "web" {
   # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
+  #
+  # HARD GATE (ADR-068 §(c), the LB-weight gate) — do NOT remove this entry or shift
+  # web-2's Cloudflare LB weight above 0 until BOTH hold: (1) owner-side router relay
+  # ACTIVE (SOLEUR_PROXY_BIND / SOLEUR_PROXY_PEER_ALLOWLIST / HOST_ROSTER set), AND
+  # (2) git-data store CUT OVER (isGitDataStoreEnabled()==true + 3.D LUKS soak-verified).
+  # Pooling web-2 before both = a request lands on a host without that user's /workspaces
+  # → empty workspace → "workspace-gone" single-user incident. #5967 readyz + #5968 CF
+  # gaplessness are necessary but NOT sufficient. See the ADR §(c) amendment + runbook
+  # moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }
