@@ -177,20 +177,26 @@ fixes — this plan closes the caller it missed.
 
 ### Pre-merge (PR)
 
-- [ ] `.github/workflows/version-bump-and-release.yml`'s `release` job declares
+- [x] `.github/workflows/version-bump-and-release.yml`'s `release` job declares
       `id-token: write` (plus `contents: write`, `packages: write`).
-      Verify: `grep -A6 '^  release:' .github/workflows/version-bump-and-release.yml | grep -c 'id-token: write'` returns `1`.
-- [ ] `actionlint .github/workflows/version-bump-and-release.yml` exits 0 (YAML + job
+      Verify: `grep -A9 '^  release:' .github/workflows/version-bump-and-release.yml | grep -c 'id-token: write'` returns `1`.
+      (Note: the plan's original `-A6` window underestimated the 6-line rationale comment
+      that precedes the perms — the sibling #5981 block carries the same comment length;
+      `-A9` reaches it. The authoritative invariant is the drift-guard test below, not the
+      window size.)
+- [x] `actionlint .github/workflows/version-bump-and-release.yml` exits 0 (YAML + job
       shape valid). Note: actionlint does **not** validate the cross-workflow permission
       ceiling (a GitHub-runtime check) — the drift-guard test covers that invariant.
-- [ ] New drift-guard test exists and passes:
+- [x] New drift-guard test exists and passes:
       `bash plugins/soleur/test/reusable-release-caller-permissions.test.sh` exits 0.
-- [ ] Drift-guard proves it catches the bug: temporarily removing the `id-token: write`
+- [x] Drift-guard proves it catches the bug: temporarily removing the `id-token: write`
       line from the plugin caller makes the test FAIL naming `version-bump-and-release.yml`
-      (author-run sanity; revert before commit).
-- [ ] `bash scripts/test-all.sh scripts` (or the local shard runner) discovers and runs
-      the new test green.
-- [ ] PR body uses `Closes #6018`.
+      (author-run sanity; reverted before commit). Confirmed: the guard fails even with the
+      job-level `permissions:` block still present (precise REPLACE semantics), proving
+      non-vacuity.
+- [x] `bash scripts/test-all.sh scripts` discovers and runs the new test green
+      (138/138 suites passed; new test `[ok] ... (27ms)`).
+- [ ] PR body uses `Closes #6018`. (Set at ship.)
 
 ### Post-merge (verification — self-triggering)
 
