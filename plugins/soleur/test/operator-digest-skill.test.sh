@@ -14,6 +14,11 @@
 #   - each digest references the prior week's issue (in-band liveness loop).
 #
 # Exit codes: 0 = all contract assertions pass; 1 = a contract assertion failed; 2 = SKILL.md missing.
+#
+# Authoring note: assertions that match a multi-word ADJACENCY (`X.{0,N}Y`) match per
+# PHYSICAL line — grep never crosses a newline, but Markdown soft-wraps freely. Keep the
+# `X … Y` clause on ONE line in SKILL.md. A GREEN-fail on only the adjacency assertions is
+# a line-wrap signal (fix the prose wrap), not a missing-prose signal (do not widen `{0,N}`).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
