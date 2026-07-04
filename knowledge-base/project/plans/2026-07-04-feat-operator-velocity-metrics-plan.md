@@ -139,9 +139,11 @@ incident** — the exact false-read the digest exists to prevent.
 
 **If this leaks, the user's money/workflow is exposed via:** the metrics emit only
 **aggregate numbers** (a merge-count band, one rounded $ run-rate) — no per-row Notes,
-no PII, no new data class. The existing scrub gate (secrets + foreign-email abort)
-and §2's "amounts + vendor names only" rule already bound the leak surface; this
-feature adds no new egress.
+no PII, no new data class. The run-rate anchor's `Read` does widen the *in-context*
+read surface (the whole current ledger enters synthesis, vs. only window-changed rows
+before), but the **egress** is unchanged: the existing scrub gate (secrets + foreign-email
+abort) and §2's "amounts + vendor names only" / L2–L3 "never echo Notes, aggregate figure
+only" rules bound the output. This feature adds no new egress.
 
 **Brand-survival threshold:** single-user incident.
 

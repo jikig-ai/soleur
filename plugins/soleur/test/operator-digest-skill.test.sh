@@ -109,7 +109,9 @@ fi
 
 # Cadence: a qualitative shipping-cadence band folded into §1, compared to recent weeks,
 # defaulting to "about the same" on doubt. No exact multiplier/ratio (that would be false rigor).
-assert "cadence band present in §1"                          'cadence'
+# Anchor to the unique §1 lead ("Shipping cadence") — the bare word "cadence" also
+# matches the L3 guardrail and §2 "billing cadence", so it would not independently guard §1.
+assert "cadence band present in §1"                          'shipping cadence'
 assert "cadence compares to recent weeks / defaults typical" 'recent weeks|about the same|typical'
 
 # Cost trend: §2 emits a this-week direction line + a coarse run-rate anchor (suppressed on doubt).
@@ -139,8 +141,10 @@ fi
 assert "velocity metrics are company-aggregate only"         'company-aggregate|aggregate-only|aggregate only'
 
 # No vanity output: raw counts/percentages/arrows forbidden as the metric; consequence-framing required.
+# The consequence assertion anchors to the NEW L3 phrasing ("stated as a business consequence") — the
+# bare word "consequence" already lives in the pre-feature Register, so it would guard nothing new.
 assert "vanity guard: forbids raw counts / percentages / arrows" 'percentage|arrow|raw count'
-assert "vanity guard: mandates business-consequence framing"     'consequence'
+assert "vanity guard: mandates business-consequence framing"     'stated as a business consequence'
 
 echo "=== operator-digest-skill: ${pass} passed, ${fail} failed ===" >&2
 [[ "$fail" == 0 ]]

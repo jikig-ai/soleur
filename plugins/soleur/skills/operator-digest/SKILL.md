@@ -127,9 +127,10 @@ from $29 to ~$40/mo." "No new vendors this week." Never reproduce the Notes colu
 - **Coarse run-rate anchor (only when the ledger reads cleanly).** `Read` the current
   `knowledge-base/operations/expenses.md` and sum the **Recurring** table's Amount,
   counting **only** rows whose `status` is `active` (and `accruing` only when it carries a real
-  actual). This is a **fail-safe allowlist**: every other status — `deferred`, `test-mode`, `free-tier`,
-  `approved-not-billing`, one-time `credit`, and any future/unknown status — is invisible to the
-  run-rate; an unrecognized status is excluded, never summed. Normalize known non-monthly rows (a
+  actual). This is a **fail-safe allowlist, not a denylist** — the rule is the catch-all, not a list
+  to maintain: any status that is not `active`/`accruing`-with-actual (`deferred` and
+  `approved-not-billing` are the common ones, but a future/unknown status counts too) is invisible to
+  the run-rate; an unrecognized status is excluded, never summed. Normalize known non-monthly rows (a
   2-year `.ai` registration, annual-billed rows) to a monthly figure. **Suppress the anchor entirely**
   if any counted row's billing cadence is ambiguous — a mis-read annual row is a 12–24× error, the
   exact false alarm this digest exists to prevent. When clean, hard-round to one coarse aggregate
