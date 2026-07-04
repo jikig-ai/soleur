@@ -21,6 +21,36 @@ refs: [5887, 5877, 5274, 5966, 5967, 5968, 5933]
 
 # Autonomous multi-host GA warm-standby + programmatic §(c) gate
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-04. **Review panel:** CTO + spec-flow-analyzer + DHH + Kieran +
+code-simplicity (5 agents, all code-verified against `main`), fully incorporated before this pass.
+**Deepen gates:** 4.6 User-Brand (PASS), 4.7 Observability (PASS, no-SSH), 4.8 PAT-shaped (none),
+4.9 UI-wireframe (N/A), 4.55 Downtime & Cutover (section added). All cited rule IDs active, all
+cited learning paths + `[hook-enforced:]` tag format verified.
+
+### Key improvements folded from review
+1. **readyz reconciliation (P0):** dropped the off-host `readyz==200` / `workspaces_writable` design
+   — `workspaces_writable` passes on the host-root fallback dir so it does NOT prove the volume
+   attach. Attach proof = the terraform apply's own created-resources output; readyz serve-readiness
+   moved to the deferred orchestrator's on-host (docker-exec) gate.
+2. **topology (P0):** off-host `/hooks/deploy-status` reaches web-1 only (no peer aggregation) —
+   verify web-2 via web-1's deploy-status `reason` (`ok` vs `ok_peer_fanout_degraded`) + a pre-trigger
+   `:9000` probe; the dispatch fails on the degraded reason.
+3. **doc-lint (P0):** actor+imperative CO-OCCURRENCE model (not bare `terraform apply`/`reboot`) +
+   `<!-- lint-infra-ignore -->` regions + broadened scan dirs, so it doesn't red-line this plan or
+   the retained deferred-orchestrator prose; tag is `[hook-enforced:]` not `[skill-enforced:]`.
+4. **§(c) gate:** SHAPE-ONLY with a machine-readable `requires_runtime_bind_probe=true`; roster
+   parser-parity + web-2-in-roster + allowlist⊆roster; malformed/future/soak-floor timestamp cases;
+   dropped the tautological source-grep; two files (Doppler wrapper deferred to the orchestrator).
+5. **AGENTS:** strengthen one rule in place (24 B headroom); the lint is the enforcement teeth.
+
+### New considerations discovered
+- The deploy trigger **re-swaps the live origin (web-1)** — acknowledged as an existing
+  canary-gated zero-downtime path (SE-3), not a new downtime source (Downtime & Cutover §).
+- apply+deploy are **non-transactional** → an ingress-safe partial (attached-but-undeployed) is
+  possible; recovery = idempotent re-dispatch (Phase 2 recovery contract).
+
 ## Overview
 
 ADR-068's multi-host GA line was designed with **human-in-the-loop ops steps** — an operator
@@ -310,6 +340,30 @@ dispatched clean ≥1×; gate unit-green; `GIT_DATA_LUKS_CUTOVER_AT` written + s
   (`expenses.md:18`, active); CF Load Balancing ($5/mo) is `approved-not-billing` + GA-deferred. The
   dispatch's first run flips the volume to billing — already tracked. No
   `wg-record-recurring-vendor-expense-before-ready` action.
+
+## Downtime & Cutover
+
+Zero-downtime-first (deepen Phase 4.55; Soleur is a live single-operator surface — an outage is a
+`single-user incident`). Two operations in this arc *could* take the serving surface offline; both
+are handled zero-downtime and the one true offline op is **deferred**:
+
+- **Deferred placement-group reboot of web-1 (NOT this PR).** Attaching web-1 to `web_spread` is a
+  Hetzner power-off. This PR does NOT do it — `ignore_changes=[placement_group_id]` (#5950) keeps it
+  out of every plan; the deferred orchestrator (Phase 5) takes it **blue-green on a DRAINED host**
+  after web-2 is serving. The warm-standby apply asserts `reboot_updates=0` (P0.4) so it cannot
+  sneak into the dispatch path.
+- **Deploy-trigger re-swap of web-1 (this PR, zero-downtime).** The dispatch triggers a deploy so
+  the fan-out reaches web-2; `fan_out_to_peers` fires only after web-1's own swap, so web-1 is
+  re-deployed at the **current version** through the **existing canary-gated swap** (SE-3) — the
+  established zero-downtime deploy contract, not a naive drop-in. Ingress is unchanged (no LB, no
+  DNS, no weight).
+- **Warm-standby apply itself (this PR, zero-downtime).** The 6-target set is additive: the
+  `hcloud_server_network` attach is **online** (no reboot), the web-2 volume touches a
+  **non-serving** host, no reboot-bearing change is targeted (P0.1: `0 change / 0 destroy`).
+
+**Residual downtime accepted in THIS PR: none.** No bounded maintenance window is needed for the
+warm-standby; the maintenance window + operator sign-off belong ONLY to the deferred reboot
+orchestrator (which reboots a drained, non-serving host).
 
 ## Observability
 
