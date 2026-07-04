@@ -124,6 +124,25 @@ zero infra effect.
 `for_each` host is **born into the placement group at creation — no reboot**. Only the
 pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving** host.
 
+> ### 🚦 HARD GATE — ADR-068 §(c), the LB-weight gate (READ BEFORE STEP 6)
+> **web-2 receives ZERO live Cloudflare-LB weight** (absent from `default_pool_ids` /
+> `fallback_pool_id`, weight 0, **DRAINED**) **until BOTH conditions hold:**
+> 1. **Owner-side router relay ACTIVE** — `SOLEUR_PROXY_BIND` /
+>    `SOLEUR_PROXY_PEER_ALLOWLIST` / `HOST_ROSTER` set so `session-proxy.ts`
+>    `createProxyServer` binds and routes cross-host.
+> 2. **git-data store CUT OVER** — `isGitDataStoreEnabled()==true`, the 3.C write-boundary
+>    sentinel merged, and the 3.D LUKS cutover soak-verified.
+>
+> **Why:** each host serves its OWN `/workspaces` locally; with the router gated off
+> (default) hosts do not know each other's workspaces. A live request landing on web-2
+> before both conditions → **empty `/workspaces`** → "workspace-gone" **single-user
+> incident**. `/internal/readyz` (#5967) + the gapless A→LB migration (#5968) are
+> **necessary but NOT sufficient** — they do not authorize weighting web-2. The
+> zero-downtime web-1 reboot (steps 7–9) is only zero-downtime *because* web-2 is already
+> serving, so the gate is a prerequisite for the reboot too. **The LB monitor MUST be
+> reachability-only** (`expected_codes` 2xx on `/health`), **never** Supabase-body-coupled
+> — shared Supabase means a DB blip would eject the sole origin.
+
 ### Pre-flight
 1. Confirm a maintenance window is booked (safety margin, even for the zero-downtime path).
 2. Prerequisite bug is cleared: web-2 fresh-host `user_data` 32 KB cap (**#5921**) — fixed
@@ -139,18 +158,29 @@ pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving
 ### Blue-green sequence (reboot hits a non-serving host)
 5. **Provision web-2 in-group** — apply the create for `hcloud_server.web["web-2"]` +
    its volume/attachment/network. Born into `web_spread`, no reboot.
-6. **Bring web-2 into rotation** — deploy the app to web-2, health-check, add it to the
-   ingress (Cloudflare LB / proxied A records per `dns.tf` + `firewall.tf` D1 rewire).
-7. **Drain web-1** — drop its router/connector weight so it stops taking new traffic;
-   let in-flight requests finish.
-8. **Attach web-1 to the placement group *while drained*** — this is the power-off reboot,
-   now against a non-serving host. No user impact.
-9. **Restore web-1** to rotation once healthy.
-10. **(If flipping the git-data store too)** follow the hardened cutover — fresh LUKS
-    volume, write-freeze two-pass rsync, set-identity verify (`git for-each-ref` diff +
-    `git rev-list --all | sort | sha256sum`), coordinated flag flip — per plan §3.D +
-    `git-data-luks-cutover-5274.md`. Not strictly required to clear the wedge; ADR-068
-    sequences it with GA — decide before the window.
+6. **Deploy web-2 DRAINED (weight 0)** — deploy the app to web-2 and add it to the
+   Cloudflare LB pool but with **weight 0 / absent from `default_pool_ids` +
+   `fallback_pool_id`** (per `dns.tf` + `firewall.tf` D1 rewire). Verify deep-readiness
+   on the private IP: `/internal/readyz` on `10.0.1.11` (#5967) is 2xx (`/workspaces`
+   mounted + identity set). **Do NOT give web-2 any live weight here** — see the §(c)
+   HARD GATE box above.
+7. **§(c) GATE — satisfy BOTH conditions, then weight web-2 0→1.**
+   - **(1) Activate the owner-side router relay:** set `SOLEUR_PROXY_BIND` /
+     `SOLEUR_PROXY_PEER_ALLOWLIST` / `HOST_ROSTER` (Doppler `prd`, both hosts) and confirm
+     `session-proxy.ts` `createProxyServer` binds + routes cross-host.
+   - **(2) Cut over the git-data store:** hardened cutover — fresh LUKS volume,
+     write-freeze two-pass rsync, set-identity verify (`git for-each-ref` diff +
+     `git rev-list --all | sort | sha256sum`), coordinated `GIT_DATA_STORE_ENABLED=true`
+     flip (both hosts, drain+reload together) — per plan §3.D +
+     `git-data-luks-cutover-5274.md`; then soak-verify.
+   - **Only once both hold:** shift web-2's LB weight **0→1**. web-2 is now serving.
+8. **Drain web-1** — drop its LB weight to 0 so it stops taking new traffic; let in-flight
+   requests finish. (Zero-downtime *because* web-2 is now serving — this is why step 7 is
+   a prerequisite, not optional.)
+9. **Attach web-1 to the placement group *while drained*** — this is the power-off reboot,
+   now against a non-serving host. Its FIRST diff is removing `placement_group_id` from
+   `ignore_changes` in `server.tf`. No user impact.
+10. **Restore web-1** to rotation once healthy.
 
 ### Verify (pull data yourself — no dashboard eyeballing)
 11. Both pipelines' next `main` run must be **success**.

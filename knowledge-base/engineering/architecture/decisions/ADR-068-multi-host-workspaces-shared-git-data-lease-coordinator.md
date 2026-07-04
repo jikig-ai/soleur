@@ -492,6 +492,33 @@ fixes for every per-step plan:
    GA-blocking path. The residual shared-git-data-host SPOF at the Phase-3 GA line is
    accepted with honest reconnect; #5723 (Garage) closes it post-GA (OQ1).
 
+> **Amendment (2026-07-03, #5887 blue-green ingress — the LB-weight gate §(c), the LAST
+> gate before web-2 serves).** The Phase-3 GA ingress is a **Cloudflare Load Balancer**
+> (count-gated `var.cf_load_balancing_enabled`) replacing the single-origin A record; the
+> A-record→LB migration is gapless (verified #5968). The LB **monitor MUST be
+> reachability-only** (`expected_codes` 2xx on `/health`), **NOT** Supabase-body-coupled:
+> web-1 and web-2 share one Supabase, so a body-coupled health check would eject the *sole*
+> origin on a DB blip. **THE HARD INVARIANT — web-2 receives ZERO live LB weight** (absent
+> from `default_pool_ids`/`fallback_pool_id`, weight 0, **DRAINED**) **until BOTH hold:**
+> **(1) owner-side router relay ACTIVE** — `SOLEUR_PROXY_BIND` / `SOLEUR_PROXY_PEER_ALLOWLIST`
+> / `HOST_ROSTER` set so `session-proxy.ts` `createProxyServer` binds and routes cross-host
+> (§(c)/3.D condition 1); **AND (2) git-data store CUT OVER** — `isGitDataStoreEnabled()==true`,
+> the 3.C write-boundary sentinel merged, and the 3.D LUKS cutover (§(a)(b)) soak-verified
+> (condition 2). **Why:** each host serves its OWN `/workspaces` volume locally; with the
+> router gated off (today's default) hosts do not know each other's workspaces, so a live
+> request landing on web-2 before both conditions finds an **empty `/workspaces`** →
+> "workspace-gone" **single-user incident**. Condition 1 makes a mis-route *recoverable*
+> (the relay reaches the owning host); condition 2 *removes host-locality* (one shared,
+> coordinated store). **`/internal/readyz` (#5967) and the LB overlay + gapless A→LB
+> migration (#5968) are NECESSARY BUT NOT SUFFICIENT** — a fully-ready web-2 must still
+> clear this gate before it is pooled. **Sequencing (only after the gate holds):** shift
+> web-2 weight 0→1, *then* the GA reboot — the cutover PR's **FIRST diff removes
+> `placement_group_id` from `ignore_changes` in `server.tf`** (guarded there +
+> `terraform-target-parity.test.ts`) → drain web-1 → placement-attach reboot on the
+> **drained** host → restore. A truly zero-downtime web-1 reboot needs (b)+(c) *together*
+> — it IS the GA line (item 8), not an earlier prereq. Operationalized in
+> `operations/runbooks/moved-block-wedge-cutover-5887.md` §Scope B.
+
 **Staged delivery (each phase is its own `/soleur:plan` + spec + PR):** Phase 0
 (this ADR + C4) → Phase 1 (host-local correctness, no new infra, still `replicas=1`)
 → Phase 2 (split git-data/worktrees + lease + fencing) → **Phase 3 (2nd host +
