@@ -16,23 +16,23 @@ Closes #6005. ENFORCE flip OUT OF SCOPE.
 - [ ] 1.1 Mint scoped `read:packages` credential covering BOTH packages / org-level (Decision D1) — /work attempts Playwright first (D5); route to named human gate only if reached.
 - [ ] 1.2 Ordered runbook (L1): mint → write Doppler `prd_terraform` → verify present → merge `*.tf` (auto-apply propagates to `soleur/dev`+`prd`). `TF_VAR_ghcr_read_token` no default.
 - [ ] 1.3 Add `doppler_secret` for `GHCR_READ_TOKEN` (+ `GHCR_READ_USER`) in `apps/web-platform/infra/*.tf` (mirror github-app.tf), dev+prd.
-- [ ] 1.4 cloud-init `docker login ghcr.io` for fresh-boot t=0 (`/home/deploy/.docker/config.json`, deploy:deploy, 600, `--password-stdin`), before the first pull. Running-host login is the per-deploy one in Phase 3.
+- [ ] 1.4 cloud-init `docker login ghcr.io` for fresh-boot t=0 (`/home/deploy/.docker/config.json`, deploy:deploy, 600, `--password-stdin`), before the first pull. **HIGH: fetch token via `doppler secrets get` at boot (ambient DOPPLER_TOKEN), NEVER `templatefile` interpolation (Hetzner-metadata + log leak). `TF_VAR_*` is ONLY the doppler_secret publishing source.** Running-host login is the per-deploy one in Phase 3.
 
 ## Phase 2 — trusted_root.json (repo + cloud-init, NOT baked)
-- [ ] 2.1 Commit `apps/web-platform/infra/cosign-trusted-root.json` with provenance + one-line rotation-recipe comment (no refresh script — YAGNI).
+- [ ] 2.1 Commit `apps/web-platform/infra/cosign-trusted-root.json` with provenance + `sha256` + one-line rotation-recipe comment (no refresh script — YAGNI).
 - [ ] 2.2 Deliver via cloud-init `write_files` to a stable host path (e.g. `/opt/soleur/cosign-trusted-root.json`). Do NOT `COPY` into the deploy image (H1 circular trust — image is the artifact under verification).
+- [ ] 2.3 Add a CI staleness gate (parse root expiry/validFor, fail within N days) — HIGH; must precede the ENFORCE flip.
 
 ## Phase 3 — Rework cosign verify (ci-deploy.sh) — PIN MECHANISM (H2)
 - [ ] 3.1 Add ONE early scoped Doppler fetch before the pull (:909) exporting `GHCR_READ_TOKEN`/`GHCR_READ_USER` + `SENTRY_*` into the SCRIPT env (existing download at :626 runs at ~:993, after verify). Token out of argv/logs.
-- [ ] 3.2 Per-deploy `docker login ghcr.io -u $GHCR_READ_USER --password-stdin` BEFORE `docker pull` (:909, :1366) — private pull succeeds + refreshes config.json on rotation (M2).
-- [ ] 3.3 Replace cosign `docker run` with Design B: NO `--network host`; `-v config.json:ro` + `-v /opt/soleur/cosign-trusted-root.json:ro` + `--offline=true --new-bundle-format=false --trusted-root=…` + existing identity/issuer flags. Exact set per Phase 0 probe.
-- [ ] 3.4 Add `ghcr.io` to `cron-egress-allowlist.txt` (Design B — sandboxed container reaches GHCR).
-- [ ] 3.5 Fix stale comments (:34-35 header, :499-501 "public GHCR / no auth").
-- [ ] 3.6 Preserve WARN/ENFORCE semantics exactly; `IMAGE_VERIFY_MODE` default stays `warn`.
+- [ ] 3.2 Per-deploy `docker login ghcr.io -u $GHCR_READ_USER --password-stdin` BEFORE `docker pull` (:909, :1366) — private pull succeeds + refreshes config.json on rotation (M2). Reuse this config.json for the cosign mount; if a temp DOCKER_CONFIG is unavoidable, `mktemp -d 0700` + trap cleanup.
+- [ ] 3.3 Replace cosign `docker run` — **Design C preferred** (host-side signature prefetch + `cosign verify --network none`, no credential in container); **Design B fallback** (sandboxed, NO `--network host`; `-v config.json:ro` + `-v /opt/soleur/cosign-trusted-root.json:ro` + `--offline=true --new-bundle-format=false --trusted-root=…` + identity/issuer flags; add `ghcr.io` to `cron-egress-allowlist.txt`). Route D3 to infra-security. Exact flag set per Phase 0 probe.
+- [ ] 3.4 Fix stale comments (:34-35 header, :499-501 "public GHCR / no auth").
+- [ ] 3.5 Preserve WARN/ENFORCE semantics exactly; `IMAGE_VERIFY_MODE` default stays `warn`.
 
 ## Phase 4 — Observability
 - [ ] 4.1 SENTRY_*-before-verify is delivered by 3.1's early fetch → verify_result event reaches Sentry (soak-gate visibility). Assert ordering with a test.
-- [ ] 4.2 Add a loud, no-SSH failure event for the host pull (auth/denied) — load-bearing given the credential SPOF, not journald-only.
+- [ ] 4.2 Add a loud, no-SSH failure event for the host pull (auth/denied) — load-bearing given the credential SPOF, not journald-only. Scrub docker/cosign stderr before Sentry (auth-header leak, #7).
 - [ ] 4.3 Add a PROACTIVE credential-expiry alarm (M2) — reactive pull-failure fires too late.
 
 ## Phase 5 — C4 + ADR + tests
