@@ -114,11 +114,12 @@ const THRESHOLD_PANEL = ['architecture', 'spec-flow']
 // Named-panel composition (ADR-084 / #5985). DUPLICATE of
 // `../lib/named-panel.mjs` — the Workflow runtime has no import/filesystem
 // access, so the pure decision function is inlined here (self-contained
-// convention, like safeTitle/safeId). Keep this copy BYTE-IDENTICAL to the lib
-// module; the drift guard in test/plan-review-named-panel.test.ts checks the
-// wiring stays present. CPO Condition 1: activation is driven by an INDEPENDENT
-// content scan (the detect step's signals), never by trusting the plan's own
-// `## Domain Review` verdict.
+// convention, like safeTitle/safeId). Keep this copy LOGIC-IDENTICAL to the lib
+// module: the drift guard in test/plan-review-named-panel.test.ts normalizes
+// away comments/export/whitespace and asserts the two function bodies match, so
+// a logic edit to either copy fails CI. CPO Condition 1: activation is driven by
+// an INDEPENDENT content scan (the detect step's signals), never by trusting the
+// plan's own `## Domain Review` verdict.
 // ---------------------------------------------------------------------------
 const NAMED_LENSES = ['cpo', 'cmo', 'cto', 'ux-design-lead']
 function computeNamedPanel(signals) {
@@ -130,7 +131,10 @@ function computeNamedPanel(signals) {
     active.add('ux-design-lead')
     active.add('cpo')
   }
-  // Step 2 — fresh independent relevance read (NOT the verdict line).
+  // Step 2 — fresh independent relevance read (NOT the verdict line). Step 3
+  // (threshold bias) is applied UPSTREAM at the detect prompt — it nudges the
+  // fuzzy signals toward true when the threshold is declared, keeping this
+  // function a pure, deterministic mapping of signals→lenses (AC11/AC12).
   if (s.productSignal) active.add('cpo')
   if (s.marketingSignal) active.add('cmo')
   if (s.uxSignal) active.add('ux-design-lead')
@@ -209,10 +213,10 @@ You are a NAMED CEO/design/devex reviewer. TWO hard rules:
 2. **Set "decisionClass" on each finding.** Your findings touch user-visible / money / scope, so they DEFAULT to "taste" (surfaced to the operator, never silently auto-applied). Use "user-challenge" for any finding arguing the operator's STATED scope/direction should change (drop/merge/split/add). Reserve "mechanical" only for a clearly factual/typo/broken-link fix. On ambiguity, bias to the more-surfaced class.`
     : `
 
-Set "decisionClass": eng correctness/simplification findings are "mechanical" (auto-appliable) — EXCEPT a simplify-cut of operator-requested scope, which is "user-challenge".`
+Structured advisory only — do NOT use AskUserQuestion (this runs in a headless Task subagent that cannot answer). Set "decisionClass": eng correctness/simplification findings are "mechanical" (auto-appliable) — EXCEPT a simplify-cut of operator-requested scope, which is "user-challenge".`
   return `You are reviewing an IMPLEMENTATION PLAN (not code) through ONE lens: ${r.lens}.
 
-Read the plan at \`${planPath}\` in full (use your Read tool). Review the PLAN's design, scope, and approach — there is no diff and no code to run.
+Read the plan at \`${safePlan}\` in full (use your Read tool). Review the PLAN's design, scope, and approach — there is no diff and no code to run.
 
 Report ONLY findings within your lens. For each finding:
 - Assign severity P0 (plan-blocking) / P1 (must address) / P2 (should address) / P3 (nice-to-have).
@@ -232,7 +236,7 @@ function consolidatePrompt(reviews, thresholdFired) {
           `### ${r.key} (${r.agentType}) — verdict: ${r.verdict}\n` +
           (r.findings.length
             ? r.findings
-                .map((f) => `- [${f.id}] (${f.severity}, ${f.kind}) scope="${f.scope}" :: ${f.title} — ${f.description}${f.suggestedChange ? ` | change: ${f.suggestedChange}` : ''}`)
+                .map((f) => `- [${f.id}] (${f.severity}, ${f.kind}${f.decisionClass ? `, suggested-class:${f.decisionClass}` : ''}) scope="${f.scope}" :: ${f.title} — ${f.description}${f.suggestedChange ? ` | change: ${f.suggestedChange}` : ''}`)
                 .join('\n')
             : '- (no findings)'),
       )
@@ -333,7 +337,9 @@ const detect = await agent(
    - productSignal: product/scope/roadmap-fit call at stake?
    - marketingSignal: user-facing copy, or market/GTM/brand/messaging implications?
    - uxSignal: user-facing flows / visual surfaces / UX touched?
-   - devexSignal: code/infra/tooling/build edited (developer/operator experience affected)?`,
+   - devexSignal: code/infra/tooling/build edited (developer/operator experience affected)?
+
+   Threshold bias: if you set thresholdDeclared=true, resolve any BORDERLINE relevance signal toward true (stakes are high — bias to surfacing a named lens rather than skipping it). Do NOT fabricate a signal with no basis in the plan — a pure-infra plan still activates only devex even at the threshold.`,
   // Pinned 'sonnet': schema-constrained detection/scan is mechanical (ADR-053).
   { label: 'detect-threshold', phase: 'Load', schema: DETECT_SCHEMA, model: 'sonnet' },
 )

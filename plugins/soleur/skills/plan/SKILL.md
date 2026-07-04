@@ -671,7 +671,7 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 
 **After review completes**, present the consolidated feedback (agreements first, then disagreements), then apply by class:
 
-1. **Mechanical** findings → auto-apply to the plan file (both modes).
+1. **Mechanical** findings → auto-apply to the plan file (both modes). **Fail-closed default:** auto-apply *only* a decision **explicitly tagged `mechanical`**. Treat any decision that is **unclassified, ambiguous, or sourced from a named-panel (product/market/design/devex) finding** as **Taste** — surface it, never silently auto-apply. (The producer defaults named findings to Taste, but the consumer must not depend on producer-side tagging fidelity: an untagged decision on the prose path routes to surfacing, not to auto-apply.)
 2. **Taste / User-Challenge** findings →
    - *Operator-attached* (real TTY): present at the "Apply these changes?" gate below (Yes / Partially / Skip); a **User-Challenge** uses the 5-line frame (the operator's stated direction is the default).
    - *Headless* (reuse the mode predicate at [`plan/SKILL.md` §Product/UX Gate step 4b, ":330"] — `HEADLESS_MODE`, no-TTY, `/soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.

@@ -84,9 +84,39 @@ describe("plan-review named panel composition (pure, no live agents)", () => {
 
 describe("plan-review workflow keeps the named panel wired (drift guard)", () => {
   const src = readFileSync(WORKFLOW, "utf-8");
+  const LIB = resolve(PLUGIN_ROOT, "skills/plan-review/lib/named-panel.mjs");
+  const libSrc = readFileSync(LIB, "utf-8");
+
+  // Extract `NAMED_LENSES = [...]` + `function computeNamedPanel(...)` from a
+  // source file and normalize away comments, the `export` keyword, and
+  // whitespace — so the ONLY thing this compares is the activation logic. The
+  // Workflow runtime cannot import, so the workflow inlines a duplicate of the
+  // lib's decision function (self-contained convention). The lib copy is what
+  // the AC11/AC12 unit tests above exercise; the workflow copy is what actually
+  // runs. This guard fails if the two logic bodies diverge — the copy that runs
+  // must stay behaviorally identical to the copy that is tested.
+  const extractLogic = (source: string): string => {
+    const lenses = source.match(/NAMED_LENSES\s*=\s*\[[^\]]*\]/);
+    const fn = source.match(/function computeNamedPanel\(signals\)\s*\{[\s\S]*?\n\}/);
+    if (!lenses || !fn) return "";
+    const norm = (s: string) =>
+      s
+        .replace(/\/\/[^\n]*\n/g, "\n") // strip line comments
+        .replace(/\s+/g, " ")
+        .trim();
+    return `${norm(lenses[0])} || ${norm(fn[0])}`;
+  };
 
   test("workflow carries the computeNamedPanel duplicate", () => {
     expect(src).toContain("function computeNamedPanel(");
+  });
+
+  test("workflow copy is behaviorally identical to the lib copy (no logic drift)", () => {
+    const workflowLogic = extractLogic(src);
+    const libLogic = extractLogic(libSrc);
+    expect(workflowLogic).not.toBe(""); // both copies must be extractable
+    expect(libLogic).not.toBe("");
+    expect(workflowLogic).toBe(libLogic);
   });
 
   // The four named agents must each be referenced by agentType, or a lens is

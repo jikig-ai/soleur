@@ -5,11 +5,13 @@
 // to the set of named-panel lenses to spawn. Kept in an importable module so it
 // is testable WITHOUT spawning live agents (AC11/AC12) — the Workflow runtime
 // cannot import (no filesystem/import access), so `plan-review.workflow.js`
-// carries a byte-identical duplicate of `computeNamedPanel` per the
-// self-contained-workflow convention (keep the two copies in sync, like
-// safeTitle/safeId). The drift guard in
-// `plugins/soleur/test/plan-review-named-panel.test.ts` asserts the workflow
-// copy stays wired.
+// carries a LOGIC-IDENTICAL duplicate of `computeNamedPanel` per the
+// self-contained-workflow convention. The drift guard in
+// `plugins/soleur/test/plan-review-named-panel.test.ts` normalizes away
+// comments/export/whitespace and asserts the two function bodies match, so a
+// logic edit to either copy fails CI. (Step 3 of the plan's relevance gate —
+// threshold bias — is applied upstream at the detect prompt, not here, so this
+// stays a pure signals→lenses mapping.)
 //
 // CPO Condition 1 (correlated-failure fix): activation is driven by an
 // INDEPENDENT content scan, never by trusting the plan's own `## Domain Review`
