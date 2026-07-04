@@ -29,7 +29,11 @@ import {
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
 import { streamReplayBuffer } from "./stream-replay-buffer";
-import { notifyOfflineUser, type NotificationPayload } from "./notifications";
+import {
+  notifyOfflineUser,
+  notifyInboxItem,
+  type NotificationPayload,
+} from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import {
@@ -2382,6 +2386,24 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Mark as waiting_for_user instead of completed -- conversation
           // continues until explicit close or inactivity timeout.
           await updateConversationStatus(userId, conversationId, "waiting_for_user");
+
+          // task_completed inbox nudge (feat-severity-ranked-inbox #6007): a
+          // durable "your {leader} finished" item + push, targeted to the run's
+          // user. Only on a real completion (assistant output persisted). Title
+          // is the static leader title (server-generated — never agent output).
+          // Deep-linked to the conversation; source_ref carries ids only. Fire-
+          // and-forget (notifyInboxItem never throws + is self-mirroring).
+          if (assistantPersisted) {
+            void notifyInboxItem({
+              workspaceId: activeWorkspaceId,
+              userId,
+              severity: "info",
+              source: "task_completed",
+              title: `${leader.title} finished`,
+              sourceRef: { conversationId },
+              deepLinkPath: `/dashboard/chat/${conversationId}`,
+            });
+          }
 
           // In multi-leader mode, dispatchToLeaders sends a single session_ended
           // after all leaders finish — individual leaders must not send it or the

@@ -18,10 +18,10 @@ Derived from the finalized plan (post 3-reviewer pass). All schema decisions ref
 - [x] 1.7 `.down.sql`: `cron.unschedule` + drop RPC + table, `undefined_table` warn guard.
 
 ## Phase 2 — Emit + push (`notifyInboxItem`)
-- [ ] 2.1 Add `InboxItemNotificationPayload` (`type:'inbox_item'`) to `NotificationPayload` union in `server/notifications.ts`; sweep consumers (`cq-union-widening-grep-three-patterns`) + `tsc --noEmit`.
-- [ ] 2.2 `notifyInboxItem(opts)`: plain-insert + catch `23505` (ADR-035; not `ON CONFLICT DO NOTHING`); **dispatch push ONLY when a row was inserted**; route via existing `notifyOfflineUser`; extend `mirrorNotifyFailure` with `op=notify-inbox-action-required`.
-- [ ] 2.3 `public/sw.js`: give the `inbox_item` variant its own `tag` (`inbox-item-{id}`); confirm post-login redirect preserves the deep-link target.
-- [ ] 2.4 Wire the **`task_completed`** producer at the agent-run terminal path (trace from entry per `trace-callgraph-from-entrypoint`); `system` producer as needed. **No** `approval_required`/`autopilot_run` emit (deferred).
+- [x] 2.1 Add `InboxItemNotificationPayload` (`type:'inbox_item'`) to `NotificationPayload` union in `server/notifications.ts`; swept consumers (`cq-union-widening-grep-three-patterns` — only push/email switches; ws-client `m.type` is a different union) + `tsc --noEmit` clean.
+- [x] 2.2 `notifyInboxItem(opts)`: plain-insert + catch `23505` (ADR-035; not `ON CONFLICT DO NOTHING`); **dispatch push ONLY when a row was inserted**; route via existing `notifyOfflineUser` (targeted) or per-Owner broadcast; extended `mirrorNotifyFailure` with `op=notify-inbox-action-required`.
+- [x] 2.3 `public/sw.js`: `inbox_item` variant gets its own `tag` (`inbox-item-{id}`), keyed on `data.inboxItemId`; sw notificationclick already same-origin-validates the deep link.
+- [x] 2.4 Wired the **`task_completed`** producer at the agent-run terminal success path (`agent-runner.ts`, after `assistantPersisted` + waiting_for_user). **No** `approval_required`/`autopilot_run` emit (deferred to #4672/#4674).
 
 ## Phase 3 — Unified read path + shared severity module
 - [ ] 3.1 `lib/inbox-severity.ts` (name TBD): `deriveSeverity()` (statutory→action_required; non-statutory email→info; task_completed→info; system→info|action_required-if-blocking — ~6 lines) + the two-source merge (bounded fetch per source → deriveSeverity → stable sort → concat; statutory uncapped-pinned exempt from the NEEDS YOU cap). Single source of truth.

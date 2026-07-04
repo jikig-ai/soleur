@@ -59,6 +59,7 @@ vi.mock("@sentry/nextjs", () => ({
 // Import after mocks
 import {
   notifyOfflineUser,
+  notifyInboxItem,
   sendPushNotifications,
   sendEmailNotification,
 } from "../server/notifications";
@@ -521,6 +522,150 @@ describe("notifications", () => {
       expect(call.html).not.toMatch(/paused/i);
       // Apostrophes are HTML-entity-escaped at the sink (couldn&#39;t).
       expect(call.html).toMatch(/couldn(&#39;|')t (verify|check)/i);
+    });
+  });
+
+  describe("notifyInboxItem", () => {
+    // Route from() by table so the insert (inbox_item), the push-subscription
+    // read/update (push_subscriptions), and the broadcast owner lookup
+    // (workspace_members) each get the right chain shape.
+    function routeFrom(opts: {
+      insert?: { data: unknown; error: unknown };
+      subscriptions?: unknown[];
+      owners?: unknown[];
+      ownersError?: unknown;
+    }) {
+      mockFrom.mockImplementation((table: string) => {
+        if (table === "inbox_item") {
+          return {
+            insert: () => ({
+              select: () => ({
+                single: () =>
+                  opts.insert ?? { data: { id: "ii-1" }, error: null },
+              }),
+            }),
+          };
+        }
+        if (table === "push_subscriptions") {
+          return {
+            select: () => ({
+              eq: () => ({ data: opts.subscriptions ?? [], error: null }),
+            }),
+            update: () => ({ in: () => ({ error: null }) }),
+            delete: () => ({ eq: () => ({ error: null }) }),
+          };
+        }
+        if (table === "workspace_members") {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  data: opts.owners ?? [],
+                  error: opts.ownersError ?? null,
+                }),
+              }),
+            }),
+          };
+        }
+        throw new Error(`unexpected table ${table}`);
+      });
+    }
+
+    test("inserts the row once then dispatches a push (targeted)", async () => {
+      routeFrom({
+        subscriptions: [
+          { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+        ],
+      });
+      mockSendNotification.mockResolvedValue({});
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: "user-1",
+        severity: "info",
+        source: "task_completed",
+        title: "Chief Legal Officer finished",
+        sourceRef: { conversationId: "conv-9" },
+        deepLinkPath: "/dashboard/chat/conv-9",
+      });
+
+      // Push body carries the per-item tag key + the server-built deep link.
+      expect(mockSendNotification).toHaveBeenCalledTimes(1);
+      const body = mockSendNotification.mock.calls[0][1] as string;
+      expect(body).toContain('"inboxItemId":"ii-1"');
+      expect(body).toContain("/dashboard/chat/conv-9");
+      expect(mockResendSend).not.toHaveBeenCalled();
+    });
+
+    test("deduped insert (23505) dispatches NO push", async () => {
+      routeFrom({
+        insert: { data: null, error: { code: "23505", message: "dup" } },
+        subscriptions: [
+          { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+        ],
+      });
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: "user-1",
+        severity: "info",
+        source: "task_completed",
+        title: "Chief Legal Officer finished",
+        deepLinkPath: "/dashboard/chat/conv-9",
+      });
+
+      // Retry re-insert is a no-op → no re-push, no email.
+      expect(mockSendNotification).not.toHaveBeenCalled();
+      expect(mockResendSend).not.toHaveBeenCalled();
+    });
+
+    test("action_required insert failure mirrors to Sentry op=notify-inbox-action-required and pushes nothing", async () => {
+      routeFrom({
+        insert: { data: null, error: { code: "23502", message: "not null" } },
+      });
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: "user-1",
+        severity: "action_required",
+        source: "system",
+        title: "From Soleur: billing failed",
+        deepLinkPath: "/dashboard",
+      });
+
+      expect(mockSendNotification).not.toHaveBeenCalled();
+      // A non-Error supabase failure routes through captureMessage; the op tag
+      // is what the Sentry alert rule keys on.
+      const mirrored =
+        mockCaptureMessage.mock.calls.some(
+          (c) => (c[1] as { tags?: { op?: string } })?.tags?.op === "notify-inbox-action-required",
+        ) ||
+        mockCaptureException.mock.calls.some(
+          (c) => (c[1] as { tags?: { op?: string } })?.tags?.op === "notify-inbox-action-required",
+        );
+      expect(mirrored).toBe(true);
+    });
+
+    test("broadcast (userId null) dispatches to every workspace Owner", async () => {
+      routeFrom({
+        owners: [{ user_id: "owner-a" }, { user_id: "owner-b" }],
+        subscriptions: [
+          { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+        ],
+      });
+      mockSendNotification.mockResolvedValue({});
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: null,
+        severity: "info",
+        source: "system",
+        title: "From Soleur: update",
+        deepLinkPath: "/dashboard",
+      });
+
+      // One push per Owner (each Owner has one subscription in this fixture).
+      expect(mockSendNotification).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -86,6 +86,32 @@ export interface EmailTriageNotificationPayload {
   isStatutory: boolean;
 }
 
+/** Native inbox_item severity (mig 122 CHECK). Aligned with lib/inbox-severity. */
+export type InboxItemSeverity = "action_required" | "attention" | "info";
+
+/**
+ * Operational-inbox notification (feat-severity-ranked-inbox #6007). Emitted by
+ * `notifyInboxItem`, which FIRST inserts the durable inbox_item row and then
+ * dispatches this push/email variant. Every field is server-generated:
+ *   - `title` is built by the emit call-site from server-side identity (e.g. a
+ *     domain-leader title), NEVER raw agent output / email content — a
+ *     co-Owner-visible row must carry nothing the founder wouldn't want a
+ *     co-Owner to see. Still sanitized at each sink (defense-in-depth).
+ *   - `deepLinkPath` is a same-origin RELATIVE path built from `source_ref` ids
+ *     at emit (e.g. "/dashboard/chat/{id}") — never a stored URL, never user
+ *     content. Prefixed with appUrl() at the push/email sink; sw.js re-validates
+ *     same-origin on click.
+ */
+export interface InboxItemNotificationPayload {
+  type: "inbox_item";
+  /** inbox_item row uuid — drives the sw.js per-item tag; safe in the deep link. */
+  inboxItemId: string;
+  title: string;
+  /** action_required mirrors a missed dispatch to Sentry op=notify-inbox-action-required. */
+  severity: InboxItemSeverity;
+  deepLinkPath: string;
+}
+
 /**
  * The failure reasons that warrant an operator cost-breaker notification —
  * the SINGLE SOURCE OF TRUTH the handler's fire-guard, the payload union, and
@@ -144,7 +170,8 @@ export interface CostBreakerNotificationPayload {
 export type NotificationPayload =
   | ReviewGateNotificationPayload
   | EmailTriageNotificationPayload
-  | CostBreakerNotificationPayload;
+  | CostBreakerNotificationPayload
+  | InboxItemNotificationPayload;
 
 /**
  * Notifications that must not fail silently: the catches in notifyOfflineUser
@@ -161,15 +188,21 @@ function mirrorNotifyFailure(payload: NotificationPayload, err: unknown): void {
   const isCostBreaker = payload.type === "cost_breaker_tripped";
   const isStatutoryTriage =
     payload.type === "email_triage" && payload.isStatutory;
-  if (!isCostBreaker && !isStatutoryTriage) return;
+  // A missed action_required inbox dispatch is the exact "a decision that needs
+  // the founder, with no notice" failure this feature exists to prevent — never
+  // silent (plan Observability: op=notify-inbox-action-required).
+  const isActionRequiredInbox =
+    payload.type === "inbox_item" && payload.severity === "action_required";
+  if (!isCostBreaker && !isStatutoryTriage && !isActionRequiredInbox) return;
+  const tags = isCostBreaker
+    ? { feature: "cost-breaker", op: "notify-cost-breaker" }
+    : isStatutoryTriage
+      ? { feature: "email-triage", op: "statutory-notify-failed" }
+      : { feature: "inbox", op: "notify-inbox-action-required" };
   try {
     Sentry.captureException(
       err instanceof Error ? err : new Error(String(err)),
-      {
-        tags: isCostBreaker
-          ? { feature: "cost-breaker", op: "notify-cost-breaker" }
-          : { feature: "email-triage", op: "statutory-notify-failed" },
-      },
+      { tags },
     );
   } catch {
     // Observability must never become a second failure.
@@ -390,6 +423,23 @@ export async function sendPushNotifications(
       },
       icon: "/icons/icon-192x192.png",
     });
+  } else if (payload.type === "inbox_item") {
+    // Title is server-generated but sanitized at the sink (defense-in-depth,
+    // matching email_triage). Deep link is a server-generated relative path;
+    // sw.js re-validates same-origin on click. `inboxItemId` drives the
+    // per-item sw.js tag so inbox pushes never collapse into one another.
+    body = JSON.stringify({
+      title: sanitizeDisplayString(payload.title),
+      body:
+        payload.severity === "action_required"
+          ? "Something needs your decision."
+          : "New update in your Soleur inbox.",
+      data: {
+        inboxItemId: payload.inboxItemId,
+        url: `${appUrl()}${payload.deepLinkPath}`,
+      },
+      icon: "/icons/icon-192x192.png",
+    });
   } else {
     body = JSON.stringify({
       title: `${payload.agentName} needs your input`,
@@ -474,6 +524,10 @@ export async function sendEmailNotification(
   }
   if (payload.type === "cost_breaker_tripped") {
     await sendCostBreakerEmailNotification(email, payload);
+    return;
+  }
+  if (payload.type === "inbox_item") {
+    await sendInboxItemEmailNotification(email, payload);
     return;
   }
   const resend = getResend();
@@ -588,6 +642,163 @@ async function sendCostBreakerEmailNotification(
     mirrorNotifyFailure(payload, error);
   } else {
     log.info({ email, reason: payload.reason }, "Cost-breaker email notification sent");
+  }
+}
+
+/**
+ * Email fallback for the inbox_item variant (feat-severity-ranked-inbox). Title
+ * is server-generated but escaped at the sink (defense-in-depth). The CTA lands
+ * on the item's deep link (a server-generated same-origin path).
+ */
+async function sendInboxItemEmailNotification(
+  email: string,
+  payload: InboxItemNotificationPayload,
+): Promise<void> {
+  const resend = getResend();
+  const deepLink = `${appUrl()}${payload.deepLinkPath}`;
+  const safeTitle = sanitizeDisplayString(payload.title);
+  const isActionRequired = payload.severity === "action_required";
+  const heading = isActionRequired
+    ? "Something needs your decision"
+    : "New update in your Soleur inbox";
+
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [email],
+    subject: isActionRequired
+      ? "Something needs your decision — Soleur"
+      : "New update in your Soleur inbox — Soleur",
+    html: renderBrandedNotificationEmail({
+      heading,
+      bodyHtml: escapeHtml(safeTitle),
+      ctaLabel: "Open in Soleur",
+      deepLink,
+      footnoteHtml:
+        "You received this because it needs your attention in your Soleur inbox.",
+    }),
+  });
+
+  if (error) {
+    log.error(
+      { email, inboxItemId: payload.inboxItemId, err: error },
+      "Failed to send inbox-item email notification",
+    );
+    mirrorNotifyFailure(payload, error);
+  } else {
+    log.info({ email, inboxItemId: payload.inboxItemId }, "Inbox-item email notification sent");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Operational inbox emit (feat-severity-ranked-inbox #6007)
+// ---------------------------------------------------------------------------
+
+/**
+ * Insert an inbox_item row, then dispatch the push/email nudge. Fire-and-forget
+ * (never throws) — callers must not await it.
+ *
+ * Idempotent (ADR-035): plain-insert + catch 23505 rather than
+ * `ON CONFLICT DO NOTHING` (unreliable under supabase-js — returns data:null).
+ * A push is dispatched ONLY when a row was actually inserted, so an emit retry
+ * (same dedup_key) never re-pushes. Targeted rows (user_id set) dispatch to that
+ * one recipient; broadcast rows (user_id null) dispatch to every workspace Owner.
+ *
+ * Content-minimization (ADR-075): `title` must be server-generated — never raw
+ * agent output / email content. `sourceRef` carries ids ONLY; the deep link is
+ * built from those ids by the caller (never stored).
+ */
+export async function notifyInboxItem(opts: {
+  workspaceId: string;
+  /** null = broadcast to every workspace Owner; set = targeted to one recipient. */
+  userId: string | null;
+  severity: InboxItemSeverity;
+  source: "task_completed" | "system";
+  /** Server-generated + sanitized. NEVER raw agent output / email content. */
+  title: string;
+  /** ids only (e.g. { conversationId }). The deep link is built from these. */
+  sourceRef?: Record<string, string> | null;
+  /** Idempotency key (ADR-035). Omit for naturally-once emits. */
+  dedupKey?: string | null;
+  /** Same-origin relative deep-link path built from sourceRef ids. */
+  deepLinkPath: string;
+}): Promise<void> {
+  // action_required failures (insert OR dispatch) key the Sentry alert on this op.
+  const failOp =
+    opts.severity === "action_required"
+      ? "notify-inbox-action-required"
+      : "inbox-item-insert";
+  try {
+    const supabase = createServiceClient();
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from("inbox_item")
+      .insert({
+        workspace_id: opts.workspaceId,
+        user_id: opts.userId,
+        severity: opts.severity,
+        source: opts.source,
+        title: opts.title,
+        source_ref: opts.sourceRef ?? null,
+        dedup_key: opts.dedupKey ?? null,
+      })
+      .select("id")
+      .single();
+
+    if (insertErr) {
+      // 23505 = deduped (idempotent no-op) — expected, not a failure, no push.
+      if ((insertErr as { code?: string }).code === "23505") return;
+      reportSilentFallback(insertErr, {
+        feature: "inbox",
+        op: failOp,
+        message: "inbox_item insert failed",
+        extra: { workspaceId: opts.workspaceId, source: opts.source },
+      });
+      return;
+    }
+    if (!inserted) return;
+
+    const payload: InboxItemNotificationPayload = {
+      type: "inbox_item",
+      inboxItemId: (inserted as { id: string }).id,
+      title: opts.title,
+      severity: opts.severity,
+      deepLinkPath: opts.deepLinkPath,
+    };
+
+    if (opts.userId) {
+      // notifyOfflineUser mirrors its own dispatch failures via
+      // mirrorNotifyFailure (op=notify-inbox-action-required for action_required).
+      await notifyOfflineUser(opts.userId, payload);
+      return;
+    }
+
+    // Broadcast: dispatch to every Owner of the workspace.
+    const { data: owners, error: ownersErr } = await supabase
+      .from("workspace_members")
+      .select("user_id")
+      .eq("workspace_id", opts.workspaceId)
+      .eq("role", "owner");
+    if (ownersErr) {
+      reportSilentFallback(ownersErr, {
+        feature: "inbox",
+        op: failOp,
+        message: "inbox_item broadcast owner lookup failed",
+        extra: { workspaceId: opts.workspaceId },
+      });
+      return;
+    }
+    await Promise.allSettled(
+      (owners ?? []).map((o) =>
+        notifyOfflineUser((o as { user_id: string }).user_id, payload),
+      ),
+    );
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "inbox",
+      op: failOp,
+      message: "notifyInboxItem failed",
+      extra: { workspaceId: opts.workspaceId },
+    });
   }
 }
 
