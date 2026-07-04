@@ -48,6 +48,11 @@ END $$;
 -- 1. Table
 -- =====================================================================
 
+-- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f)) — notifying a workspace Owner
+-- of operational events in their own organization (task completions, system
+-- messages). Content-minimized (title + source_ref ids only; no special-category
+-- data, so no Art. 9 condition applies). Erasure: user_id CASCADE (targeted rows)
+-- + workspace CASCADE; retention: 90d sweep except un-acted action_required.
 CREATE TABLE IF NOT EXISTS public.inbox_item (
   id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   -- Operational data follows workspace lifecycle: CASCADE (NOT the mig-111
