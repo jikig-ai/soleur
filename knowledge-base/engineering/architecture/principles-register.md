@@ -23,6 +23,7 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-013 | Process-local state for runner sessions | ADR-027 | skill | NFR-019 |
 | AP-014 | Platform-loop / per-founder cohabitation boundary | ADR-033 | hook | NFR-014 |
 | AP-015 | Always-enforce-workspace (every user owns a guaranteed 1-member personal workspace; the owner-membership canary) | ADR-044, ADR-073 | advisory | NFR-014 |
+| AP-016 | GHCR read:packages credential — scoped, read-only, machine-account PAT is a DELIBERATE exception to `hr-github-app-auth-not-pat` for the private image-pull + cosign .sig fetch (security-sentinel: the App-key-on-host path is strictly worse for credential-at-rest) | ADR-085, ADR-082 (amendment) | advisory | NFR-014 |
 
 ## Enforcement Tiers
 

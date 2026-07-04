@@ -113,6 +113,26 @@ where web-2 actually boots and it is end-to-end testable.
 Precedents: `knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md`,
 `2026-06-10-release-digest-plan-review-catches.md`.
 
+**Amendment (2026-07-04, #6005): private-GHCR credential model + offline-verify mechanism → ADR-085.**
+Live validation found the shipped WARN verify **cannot pass on the real host**: the app +
+inngest-bootstrap GHCR packages flipped **PRIVATE**, so (a) the anonymous host `docker pull` AND
+(b) the cosign container's OCI-attached `.sig` fetch both fail `UNAUTHORIZED`; and (c) v3.1.1
+`cosign verify` has no `--new-bundle-format`, its `--offline` is deprecated, and even `--offline`
+still needs a registry round-trip (bare `--offline` without a pinned root reaches TUF → firewall-
+blocked → never passes). The full verify-invocation design (a `--network host` ephemeral verifier
+that keeps the container egress allowlist UNwidened; a pinned committed `trusted_root.json` mounted
+`:ro`, delivered out-of-image via the baked HOST-image host-scripts set + a running-host SSH
+provisioner, NEVER baked into the DEPLOY image) is recorded in **ADR-085** (this amendment owns the
+PULL + verify credential; ADR-085 owns the invocation shape). The credential is a scoped, read-only,
+machine-account `read:packages` **PAT** over both packages, recorded as a **deliberate, narrow
+exception to `hr-github-app-auth-not-pat`** (AP-016): security-sentinel affirmed it as the security-
+*superior* choice — the App-installation path would force the org-wide-**write** App private key onto
+the host at token-mint time (~2 orders of magnitude larger blast radius than a single-package
+**read** token). Counter-cost recorded: a ≤1yr PAT is a worse secret-at-rest than a 1h installation
+token and expires silently → a proactive expiry alarm + rotation follow-through are required
+(tracked with the WARN→ENFORCE flip). The ENFORCE flip stays OUT OF SCOPE, now additionally gated on
+the CI trusted-root staleness gate (`cosign-trusted-root-staleness.test.sh`).
+
 ## Alternatives Considered
 
 - **Item 4: verify by tag (`cosign verify …:v1.2.3` / run `:$TAG`).** Rejected: a tag is mutable
