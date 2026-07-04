@@ -11,7 +11,7 @@ views {
     include
       founder, emailSender, contributor,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
-      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, ghcr, betterstack
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, ghcr, betterstack, sigstore
 
     style element.tag == #external {
       color muted

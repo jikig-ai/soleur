@@ -243,6 +243,10 @@ model {
     #external
     description "External uptime/heartbeat monitoring (BetterStackHQ/better-uptime). Apex + inngest/git-data heartbeats, and a per-host origin absence detector that probes each web host's CF-proxied hostname (web-N.app.soleur.ai/health) directly, so a dead/never-booted host pages with per-host attribution the round-robin monitors cannot give (#5933 Item 1)."
   }
+  sigstore = system "Sigstore" {
+    #external
+    description "Keyless container-image signing/verification (cosign/Fulcio/Rekor). The release CI keyless-signs the pushed web app image digest; the host cosign-verifies the signature (offline, identity-pinned to the release workflow) before running the image — supply-chain authenticity for the shared host (#5933 Item 4)."
+  }
 
   // ======================================================================
   // Relationships — preserved 1:1 from the three Mermaid sources.
@@ -304,6 +308,8 @@ model {
   hetzner -> inngest "Hosts" { technology "systemd" }
   hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot (#5921)" { technology "Docker/GHCR" }
   betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
+  github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
+  hetzner -> sigstore "Verifies the image signature (cosign --offline, identity-pinned) before docker run (#5933 Item 4)" { technology "HTTPS (cosign)" }
   doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }
 
   // ---- C4 L2 — Multi-host /workspaces cluster (ADR-068, #5274) -----------

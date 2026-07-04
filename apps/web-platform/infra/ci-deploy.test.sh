@@ -155,6 +155,41 @@ if [[ "${1:-}" == "exec" ]]; then
   done
 fi
 
+# #5933 Item 4 image-verify handlers, BEFORE the mode case so they work in every
+# mode and the app-run failure arming (canary/prod) cannot misfire on them.
+#
+# cosign verify runs as `docker run --rm <cosign-image> verify --offline ...` —
+# detect the `verify` arg. Default: verify PASSES (exit 0). MOCK_COSIGN_VERIFY_FAIL
+# simulates a signature failure (WARN mode must still NOT block the deploy).
+if [[ "${1:-}" == "run" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "verify" ]]; then
+      if [[ "${MOCK_COSIGN_VERIFY_FAIL:-}" == "1" ]]; then
+        echo "Error: no matching signatures found" >&2
+        exit 1
+      fi
+      exit 0
+    fi
+  done
+fi
+# `docker inspect --format '{{index .RepoDigests 0}}' <img>` resolves the pulled
+# tag to its immutable digest. Return a synthetic digest ref unless the test arms
+# MOCK_INSPECT_NO_DIGEST (exercises the inspect_failed WARN fallback). Scoped to
+# the RepoDigests format so the inngest-case `-f '{{range .Config.Env}}'` inspect
+# is untouched.
+if [[ "${1:-}" == "inspect" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == *"RepoDigests"* ]]; then
+      if [[ "${MOCK_INSPECT_NO_DIGEST:-}" == "1" ]]; then
+        echo ""
+      else
+        echo "ghcr.io/jikig-ai/soleur-web-platform@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      fi
+      exit 0
+    fi
+  done
+fi
+
 case "$mode" in
   trace)
     # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
@@ -1152,6 +1187,52 @@ assert_doppler_success() {
 }
 
 assert_doppler_success
+
+# --- #5933 Item 4: image signature verify (WARN default; ENFORCE gate) ---------
+# WARN mode (default) must NEVER block a healthy deploy on a verify failure —
+# these two pass IDENTICALLY with or without the gate, so the ENFORCE test below
+# is what proves the gate is actually load-bearing (WARN and ENFORCE diverge on
+# the SAME MOCK_COSIGN_VERIFY_FAIL input).
+assert_verify_warn_does_not_block() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(export MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  if [[ "$actual_exit" -eq 0 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: WARN cosign verify FAIL does not block the deploy (#5933 Item 4)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: WARN cosign verify FAIL blocked the deploy (exit=$actual_exit)"; echo "        output: $output"
+  fi
+}
+assert_verify_warn_does_not_block
+
+assert_inspect_warn_does_not_block() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(export MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  if [[ "$actual_exit" -eq 0 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: WARN inspect_failed (no RepoDigest) does not block the deploy (#5933 Item 4)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: WARN inspect_failed blocked the deploy (exit=$actual_exit)"; echo "        output: $output"
+  fi
+}
+assert_inspect_warn_does_not_block
+
+# ENFORCE mode MUST block the SAME verify failure (proves the gate is load-bearing,
+# not vacuous) and keep the old container live via final_write_state 1.
+assert_verify_enforce_blocks() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit sf reason exitc
+  sf=$(mktemp)
+  output=$(export IMAGE_VERIFY_MODE=enforce MOCK_COSIGN_VERIFY_FAIL=1 CI_DEPLOY_STATE="$sf"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$sf" reason exitc
+  rm -f "$sf"
+  if [[ "$actual_exit" -ne 0 && "$reason" == "cosign_verify_failed" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: ENFORCE cosign verify FAIL blocks the deploy (reason=$reason — gate is load-bearing)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: ENFORCE verify fail did not block as expected (exit=$actual_exit reason=$reason)"; echo "        output: $output"
+  fi
+}
+assert_verify_enforce_blocks
 
 echo ""
 echo "--- AppArmor profile on docker run ---"

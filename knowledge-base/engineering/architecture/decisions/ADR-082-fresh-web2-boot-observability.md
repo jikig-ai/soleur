@@ -87,22 +87,44 @@ a **CF Load Balancer** with per-origin health monitors (auto-drain of a failed o
 by flipping its flag). There is nothing to drain until the round-robin exists, so this rides
 the cutover DNS rewire.
 
-### Item 4 — image digest pin + signature (design; DEFERRED to its own PR)
+### Item 4 — image signing + verify (design; split: running-host SHIPPED, fresh-host rides #5274)
 
-**Decision (own PR):** pin `var.image_name` from `:latest` to an immutable `@sha256:<digest>`
-(the `web-platform-release.yml` build emits the pushed digest → threads into a new
-`var.image_digest`), + a cosign verify step in `cloud-init.yml` before `docker pull`/`run`.
-The `host_scripts_content_hash` (`server.tf`) is a staleness/coherence control, NOT a
-supply-chain control — it hashes content and the same unpinned image runs the app container
-with full RCE, so digest-pin + signature is the honest supply-chain defense for both the app
-layers and the baked host scripts. Precedents:
-`knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md`,
-`2026-06-10-release-digest-plan-review-catches.md`. Deferred to a focused, security-reviewed
-PR — folding a release-pipeline + cosign change into the egress-probe PR would blur two
-review surfaces.
+**Decision:** cosign-**keyless-sign** the released image digest (`reusable-release.yml`,
+OCI-attached Rekor bundle) + cosign-**verify at every consumption point** before the image
+runs. The `host_scripts_content_hash` (`server.tf`) is a staleness/coherence control, NOT a
+supply-chain control — the same unpinned image runs the app container with full RCE, so
+signing + verify is the honest supply-chain defense.
+
+**Amendment (2026-07-04, #5933 PR 2/2): dual-path verify + scope split.** The `var.image_name`
+digest-pin only protects a FRESH boot (`ignore_changes=[user_data]`, `server.tf` — the cloud-init
+template change never reaches a *running* host). The running host (web-1, serving users today)
+pulls its image by semver tag via `ci-deploy.sh` and was unverified. So verify is extended to a
+**second consumption point** — the running-host deploy path (`ci-deploy.sh`) — as an amendment,
+NOT a new ADR (it is one supply-chain decision: verify the image wherever it runs). This PR ships
+the **running-host** half: signing in the release pipeline + `ci-deploy.sh` verify (SHA-pinned
+cosign container, `--offline` bundle so no sigstore egress is needed past the #5046 firewall;
+identity pinned to `reusable-release.yml@(refs/heads/main|refs/tags/v*)`; runs the VERIFIED
+DIGEST not the tag → no TOCTOU). Verify lands **WARN** (emits a discriminating `verify_result`
+Sentry event, never blocks); the **WARN→ENFORCE flip is a soak-gated fast-follow** after one
+signed release deploys clean. The **fresh-host** half (`cloud-init.yml` verify + `var.image_digest`
+pin, threaded via Doppler `TF_VAR_image_digest`, not committed tfvars) **rides the #5274 cutover**
+where web-2 actually boots and it is end-to-end testable.
+
+Precedents: `knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md`,
+`2026-06-10-release-digest-plan-review-catches.md`.
 
 ## Alternatives Considered
 
+- **Item 4: verify by tag (`cosign verify …:v1.2.3` / run `:$TAG`).** Rejected: a tag is mutable
+  and can be re-pointed between verify and run (TOCTOU). Chosen: resolve the pulled tag to its
+  immutable `@sha256` digest (`docker inspect RepoDigests`), verify that, and RUN that digest.
+- **Item 4: thread the release digest into TF via a committed `image-digest.auto.tfvars`.**
+  Rejected: the release workflow writing back to `main` risks a commit-loop + an apply-race
+  against the `apps/web-platform/infra/**` auto-apply. Chosen: Doppler `TF_VAR_image_digest`
+  (a non-secret public digest, no git write). Rides #5274 with the fresh-host pin.
+- **Item 4: loose cosign identity `reusable-release.yml@refs/(heads|tags)/.+`.** Rejected: it
+  accepts a signature minted by the same workflow on ANY intra-repo branch/tag push
+  (attacker-branch RCE that ENFORCE would trust). Chosen: `@(refs/heads/main|refs/tags/v[0-9].+)`.
 - **Ship all four items in one PR.** Rejected: Items 1 & 2 are blocked on #5887 / the deferred
   DNS rewire, and Item 4 is a cross-cutting supply-chain change. Item 3 is the only fully
   unblocked, inert-on-web-1, highest-severity deliverable.
