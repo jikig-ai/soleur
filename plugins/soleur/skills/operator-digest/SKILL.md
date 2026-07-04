@@ -62,6 +62,12 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
   - Money: emit **amounts and vendor names only.** Never echo the ledger's Notes column (it carries
     contact emails, IPs, and account detail).
   - Never copy a raw record, email address, IP, token, or log line into the digest. Summarize.
+- **L3 — velocity metrics are aggregate-only (the shipping-cadence and cost-trend metrics below).**
+  Report **company-aggregate** figures only — one merge-pace band, one rounded run-rate figure. One
+  operator plus autonomous agents means a per-contributor or per-author breakdown is meaningless noise,
+  so **never add an `author` field to the §1 `gh pr list --json` list.** Both metrics suppress to a
+  neutral hedge on any read doubt, and both are stated as a business consequence — never a raw count, a
+  percentage, or an up/down arrow as the signal.
 
 ## The four sections
 
@@ -82,6 +88,25 @@ Keep only PRs whose `mergedAt` is on or after `$SINCE`. Rewrite each meaningful 
 **business consequence** in plain language. Group related work. Drop pure chores/dependency bumps
 unless they matter to the owner. No PR numbers, no paths.
 
+**Shipping cadence (aggregate, comparison-framed).** Alongside the summary, judge how much your
+company shipped **this week** against **recent weeks (roughly the last month)** using the same
+`mergedAt` data — count only the *meaningful* merges (the same set you kept above; still drop pure
+chore/dependency bumps), a merge count and never a code-size measure. Fold one qualitative band into
+the prose — *clearly quieter than usual* / *about as much as a normal week* / *clearly busier than
+usual* — stated as a consequence ("Your company shipped about as much as a normal week."). **When in
+doubt, say "about the same."** Judge the band; never pin an exact ratio, a percentage, or an up/down
+arrow, and never use the words "velocity", "throughput", or "cadence" in the output.
+
+Degrade gracefully, and never alarm off a bad read:
+
+- With fewer than a few weeks of history, default to "about the same" (or a plain "still getting
+  started" line) — never a confident band.
+- If the §1 read FAILED (the ⚠️ warning above fired), OR the PR list hit the `--limit 300` cap across
+  the comparison window (a truncated read undercounts the prior weeks), OR this week reads suspiciously
+  empty, do **not** emit a definite band, and **never** emit the downward "quieter" band off a doubtful
+  read — render "about the same" or a one-line hedge instead. A silent undercount must never surface as
+  a confident "quieter than usual".
+
 ### 2. Money & vendors
 
 Source: changes to the expense ledger in the window.
@@ -92,6 +117,29 @@ git log --since="$SINCE" -p -- knowledge-base/operations/expenses.md
 
 Report **new costs, cost changes, and vendor changes** as amounts + vendor names only. "Sentry went
 from $29 to ~$40/mo." "No new vendors this week." Never reproduce the Notes column.
+
+**Cost trend (this week's direction + a coarse run-rate).** After the raw changes above, add framing:
+
+- **Direction (the primary, always-honest signal)** from the `git log -p` diff window: the real added
+  or changed *active* costs this week ("up ~$Y a month — added Resend Pro") or "no cost changes — spend
+  is holding steady." A row merely **recorded** in the diff at a non-active status (`deferred`,
+  `approved-not-billing`) is **not** a cost increase — do not report it as "cost up."
+- **Coarse run-rate anchor (only when the ledger reads cleanly).** `Read` the current
+  `knowledge-base/operations/expenses.md` and sum the **Recurring** table's Amount,
+  counting **only** rows whose `status` is `active` (and `accruing` only when it carries a real
+  actual). This is a **fail-safe allowlist**: every other status — `deferred`, `test-mode`, `free-tier`,
+  `approved-not-billing`, one-time `credit`, and any future/unknown status — is invisible to the
+  run-rate; an unrecognized status is excluded, never summed. Normalize known non-monthly rows (a
+  2-year `.ai` registration, annual-billed rows) to a monthly figure. **Suppress the anchor entirely**
+  if any counted row's billing cadence is ambiguous — a mis-read annual row is a 12–24× error, the
+  exact false alarm this digest exists to prevent. When clean, hard-round to one coarse aggregate
+  figure: "recurring spend is roughly $X a month, mostly hosting and tooling." Emit **one aggregate
+  figure only** — never a per-row Notes value; read the **Recurring** table only (the One-Time table's
+  registration and credit rows must never enter the run-rate).
+- If the `Read` of `expenses.md` **errors** (distinct from an empty ledger), suppress the anchor behind
+  the ⚠️ warning line — a failed read is NOT "spend holding steady."
+- **First run:** an empty ledger read → "first reading — no cost trend yet," mirroring the
+  first-digest continuity pattern.
 
 ### 3. What broke & whether it's fixed
 

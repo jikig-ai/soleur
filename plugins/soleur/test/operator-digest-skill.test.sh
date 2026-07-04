@@ -103,5 +103,44 @@ else
   pass=$((pass+1))
 fi
 
+# --- Velocity metrics (#5986): shipping cadence (§1) + cost trend (§2), aggregate-only ---
+# The metrics are prose instructions the LLM-as-script synthesizer executes at runtime; this
+# static gate asserts each load-bearing framing rule is present so a future edit cannot drop one.
+
+# Cadence: a qualitative shipping-cadence band folded into §1, compared to recent weeks,
+# defaulting to "about the same" on doubt. No exact multiplier/ratio (that would be false rigor).
+assert "cadence band present in §1"                          'cadence'
+assert "cadence compares to recent weeks / defaults typical" 'recent weeks|about the same|typical'
+
+# Cost trend: §2 emits a this-week direction line + a coarse run-rate anchor (suppressed on doubt).
+assert "cost trend: coarse run-rate anchor"                  'run-rate'
+assert "run-rate rendered as a coarse dollar figure"         'roughly \$|about \$'
+
+# Read-integrity suppression: a doubtful read must never become a confident metric.
+assert "cadence never emits a false 'quieter' on a doubtful read"    'never.{0,40}quieter'
+assert "run-rate anchor suppressed on ambiguous cadence / read error" 'suppress.{0,80}(anchor|ambiguous)|anchor.{0,80}suppress'
+
+# Run-rate status filter is a FAIL-SAFE ALLOWLIST (only active/accruing-with-actual), never a denylist.
+assert "run-rate counts ONLY active rows (allowlist)"        'only.{0,60}active'
+assert "run-rate allowlist also admits accruing-with-actual" 'accruing'
+
+# No per-contributor noise (the #5986 issue AC). Two guards:
+#  (a) command-anchored refute — no §1 --json field list may include an `author` field;
+#  (b) a company-aggregate guard-line exists.
+# (a) is anchored to the real `--json` command line(s) and strips comment lines. It is worded so
+# the guard-note prose ("never add an `author` field to the §1 `gh pr list --json` list", where
+# `author` precedes `--json`) cannot false-trip it — only `--json <fields>,author` (author AFTER
+# the field list) matches.
+if grep -E -- '--json' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -qiE -- '--json[[:space:]]*[a-zA-Z,]*author'; then
+  fail=$((fail+1)); echo "FAIL: a --json field list includes 'author' — re-introduces per-contributor noise (#5986 AC)" >&2
+else
+  pass=$((pass+1))
+fi
+assert "velocity metrics are company-aggregate only"         'company-aggregate|aggregate-only|aggregate only'
+
+# No vanity output: raw counts/percentages/arrows forbidden as the metric; consequence-framing required.
+assert "vanity guard: forbids raw counts / percentages / arrows" 'percentage|arrow|raw count'
+assert "vanity guard: mandates business-consequence framing"     'consequence'
+
 echo "=== operator-digest-skill: ${pass} passed, ${fail} failed ===" >&2
 [[ "$fail" == 0 ]]

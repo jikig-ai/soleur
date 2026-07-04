@@ -157,44 +157,44 @@ RED, then edit the SKILL.md prose GREEN.
 
 ### Phase 0 — Preconditions (verify, do not assume)
 
-- [ ] Confirm allowlist unchanged: `grep -o 'Bash([^)]*)' plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` shows no `git show`/`git cat-file` (drives the cost-trend design).
-- [ ] Confirm the §1 `gh pr list` `--json` field list has no `author` (structural per-contributor prevention): `grep -n 'json title,labels,mergedAt' plugins/soleur/skills/operator-digest/SKILL.md`.
-- [ ] Re-read the digest register + read-failure guardrail sections so the new prose reuses their exact framing.
+- [x] Confirm allowlist unchanged: `grep -o 'Bash([^)]*)' plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` shows no `git show`/`git cat-file` (drives the cost-trend design).
+- [x] Confirm the §1 `gh pr list` `--json` field list has no `author` (structural per-contributor prevention): `grep -n 'json title,labels,mergedAt' plugins/soleur/skills/operator-digest/SKILL.md`.
+- [x] Re-read the digest register + read-failure guardrail sections so the new prose reuses their exact framing.
 
 ### Phase 1 — RED: extend the contract test
 
 Edit `plugins/soleur/test/operator-digest-skill.test.sh`. Add assertions (they FAIL against the current SKILL.md):
 
-- [ ] **Cadence contract present** — SKILL.md instructs a shipping-cadence band folded into §1, compared to recent weeks, defaulting to typical on doubt (`assert` `cadence` + `recent weeks`/`typical`). Do NOT assert an exact multiplier (there is none — see the DHH/Simplicity reframe).
-- [ ] **Cost-trend contract present** — §2 emits a this-week cost-change direction line + a coarse run-rate anchor (`assert` `run-rate` + `roughly \$`/`about \$`).
-- [ ] **Read-integrity suppression** — the cadence band is suppressed on a §1 read failure / suspected silent undercount, and the run-rate anchor is suppressed on a §2 read failure or ambiguous billing cadence (`assert` prose tying both to the read-failure guardrail; extends "a failed read is NOT a quiet week").
-- [ ] **Run-rate allowlist (fail-safe status filter)** — the run-rate counts ONLY `active` (and `accruing`-with-real-actual) rows; every other status is invisible (`assert` the allowlist phrasing, e.g. `only.*active` + `accruing`; do NOT enumerate a denylist).
-- [ ] **No per-contributor (command-anchored refute — Kieran #1 fix).** The refute MUST anchor to the real §1 field-list line so it (a) catches an `author` field appended to the actual command and (b) does NOT false-match the guard-note prose. Use the command-anchored technique the existing `--search` guard uses (test lines 100–104): grep the `gh pr list … --json` command line(s), strip comment lines, and FAIL if `author` appears in the field list — e.g. match `--json[[:space:]]*[a-zA-Z,]*author`. Also `assert` a "company-aggregate only" guard line exists, worded so the substring `--json`→`author` does NOT appear in that order (phrase it "never add an `author` field to the §1 `--json` list").
-- [ ] **No vanity output (assert guard)** — `assert` the skill forbids emitting raw counts/percentages/arrows as the metric and mandates consequence-framing.
-- [ ] Run `bash plugins/soleur/test/operator-digest-skill.test.sh` → confirm the NEW assertions fail, the existing ones still pass. **Verify the command-anchored refute against BOTH the failing state (author appended) AND the GREEN guard-note prose — it must pass GREEN, not trip on the guard line.**
+- [x] **Cadence contract present** — SKILL.md instructs a shipping-cadence band folded into §1, compared to recent weeks, defaulting to typical on doubt (`assert` `cadence` + `recent weeks`/`typical`). Do NOT assert an exact multiplier (there is none — see the DHH/Simplicity reframe).
+- [x] **Cost-trend contract present** — §2 emits a this-week cost-change direction line + a coarse run-rate anchor (`assert` `run-rate` + `roughly \$`/`about \$`).
+- [x] **Read-integrity suppression** — the cadence band is suppressed on a §1 read failure / suspected silent undercount, and the run-rate anchor is suppressed on a §2 read failure or ambiguous billing cadence (`assert` prose tying both to the read-failure guardrail; extends "a failed read is NOT a quiet week").
+- [x] **Run-rate allowlist (fail-safe status filter)** — the run-rate counts ONLY `active` (and `accruing`-with-real-actual) rows; every other status is invisible (`assert` the allowlist phrasing, e.g. `only.*active` + `accruing`; do NOT enumerate a denylist).
+- [x] **No per-contributor (command-anchored refute — Kieran #1 fix).** The refute MUST anchor to the real §1 field-list line so it (a) catches an `author` field appended to the actual command and (b) does NOT false-match the guard-note prose. Use the command-anchored technique the existing `--search` guard uses (test lines 100–104): grep the `gh pr list … --json` command line(s), strip comment lines, and FAIL if `author` appears in the field list — e.g. match `--json[[:space:]]*[a-zA-Z,]*author`. Also `assert` a "company-aggregate only" guard line exists, worded so the substring `--json`→`author` does NOT appear in that order (phrase it "never add an `author` field to the §1 `--json` list").
+- [x] **No vanity output (assert guard)** — `assert` the skill forbids emitting raw counts/percentages/arrows as the metric and mandates consequence-framing.
+- [x] Run `bash plugins/soleur/test/operator-digest-skill.test.sh` → confirm the NEW assertions fail, the existing ones still pass. **Verify the command-anchored refute against BOTH the failing state (author appended) AND the GREEN guard-note prose — it must pass GREEN, not trip on the guard line.**
 
 ### Phase 2 — GREEN: enhance the SKILL.md prose
 
 Edit `plugins/soleur/skills/operator-digest/SKILL.md`. All additions are prose (the model computes at runtime from the existing allowed tools).
 
-- [ ] **§1 cadence fold-in.** Add a lead framing line to "What your company built":
+- [x] **§1 cadence fold-in.** Add a lead framing line to "What your company built":
   - Compare *this week's meaningful merges* (reuse the §1 `gh pr list` result already being read; **meaningful** = the same set §1 prose keeps, i.e. drop pure chore/dependency bumps — keeps the band consistent with the prose above it, per M1/M7) to **recent weeks (roughly the last month)** from the same `mergedAt` data, excluding the current week.
   - **Qualitative band, no arithmetic (DHH/Simplicity):** clearly quieter / about the same / clearly busier — the synthesizer judges it; **when in doubt, "about the same".** Do NOT pin exact multipliers or emit a percentage — precise ratios on a fuzzy "meaningful-merges" denominator are false rigor. Degrade gracefully: with fewer than a few weeks of history, default to "about the same" (or a plain "getting started" line), never a confident band (Kieran #2).
   - **Cap/undercount safety (H1/M2/M4):** if the §1 read failed (the existing warning fires), OR the PR list is truncated at the 300 cap across the comparison window, OR this-week reads suspiciously empty/near-zero — **do not emit a definite band**; render "about the same" or a one-line hedge. Never emit the *downward* "quieter" band off a doubtful read. Cadence is a merge-**count** comparison, never a code-size measure.
   - Render as a **consequence**, e.g. *"Your company shipped about as much as a normal week."* Never "velocity", "throughput", "cadence", a percentage, or an arrow in the output prose (R1).
-- [ ] **§2 cost-trend fold-in.** Add a lead framing line to "Money & vendors":
+- [x] **§2 cost-trend fold-in.** Add a lead framing line to "Money & vendors":
   - **Direction (primary signal):** from the existing `git log -p -- expenses.md` window — real added/changed active costs this week ("up ~$Y — added Resend Pro") or "no cost changes — spend is holding steady." A row merely being *recorded* as a non-active status (`deferred`/`approved-not-billing`) in the diff is **not** an increase (H3).
   - **Coarse run-rate anchor (only when clean):** `Read` the current `expenses.md`; sum the **Recurring** table Amount counting **only** rows whose `status` is `active` (and `accruing` only when it carries a real actual). **Fail-safe allowlist (Simplicity #1):** every other status — `deferred`, `test-mode`, `free-tier`, `approved-not-billing`, one-time `credit`, and any *future/unknown* status — is invisible to the run-rate; an unrecognized status is excluded, never summed. Normalize known non-monthly rows (the `.ai` domain 2-year registration; annual-billed rows named "…/mo annual" in Notes) to a monthly figure. **Suppress the anchor entirely** if any counted row's billing cadence is ambiguous (a mis-read annual row is a 12–24× error — Fable/DHH). When clean, hard-round to a coarse figure: *"recurring spend is roughly $X a month, mostly hosting and tooling."* Emit **one aggregate figure only** — never a per-row Notes value (L2); read the **Recurring** table only (One-Time carries the `credit −29` and a registration `140.00` that must not enter run-rate — Kieran).
   - **Read-failure fail-loud (Kieran #4):** if the `Read` of `expenses.md` *errors* (distinct from an empty ledger), suppress the anchor behind the existing ⚠️ warning line — a failed read is NOT "spend holding steady."
   - **First-run branch:** empty ledger read → "first reading — no cost trend yet," mirroring the existing "(this is the first digest)" pattern (M6).
-- [ ] **Guard notes.** Add a short "Velocity metrics (aggregate only)" note under Scope guardrails: company-aggregate only; **never add an `author` field to the §1 `gh pr list --json` list** (phrase it in exactly this word order so the test's guard-line assertion and the command-anchored refute do not collide — see Phase 1); both metrics suppressed to neutral on read doubt; consequence-framing only, no vanity vocabulary.
-- [ ] Run the contract test → all GREEN.
+- [x] **Guard notes.** Add a short "Velocity metrics (aggregate only)" note under Scope guardrails: company-aggregate only; **never add an `author` field to the §1 `gh pr list --json` list** (phrase it in exactly this word order so the test's guard-line assertion and the command-anchored refute do not collide — see Phase 1); both metrics suppressed to neutral on read doubt; consequence-framing only, no vanity vocabulary.
+- [x] Run the contract test → all GREEN.
 
 ### Phase 3 — Full-suite + docs
 
-- [ ] `bash plugins/soleur/test/operator-digest-skill.test.sh` and the sibling digest tests (`operator-digest-workflow.test.sh`, `digest-scrub.test.sh`, `operator-digest-provision.test.sh`) — all green.
-- [ ] `bun test plugins/soleur/test/components.test.ts` — the description is **unchanged** (metrics are content, not routing), so no word-budget bump. (Headroom checked: 2292/2327 = 35 words if a tweak were ever wanted; default: no change.)
-- [ ] No README component-count change (no new/removed component).
+- [x] `bash plugins/soleur/test/operator-digest-skill.test.sh` and the sibling digest tests (`operator-digest-workflow.test.sh`, `digest-scrub.test.sh`, `operator-digest-provision.test.sh`) — all green.
+- [x] `bun test plugins/soleur/test/components.test.ts` — the description is **unchanged** (metrics are content, not routing), so no word-budget bump. (Headroom checked: 2292/2327 = 35 words if a tweak were ever wanted; default: no change.)
+- [x] No README component-count change (no new/removed component).
 
 ### Phase 4 — Required dry-verify (the real correctness gate)
 
@@ -203,15 +203,15 @@ skill the paper dry-verify is the genuine validation, so it is a **required pre-
 step (AC9), not advisory.** Reason through synthetic weeks end-to-end against the
 final SKILL.md prose and confirm each verdict:
 
-- [ ] Normal week → "about the same"; deferred-row-in-diff → **no "cost up"** (H3).
-- [ ] Genuinely-quiet week vs partial/failed §1 read → must **differ**: quiet → "quieter"; partial-read → "about the same"/hedge (never "quieter").
-- [ ] 300-cap truncation across the comparison window → neutral band (not "busier").
-- [ ] **Annual-row case (Fable):** a ledger with a mix of monthly, annual (`.ai` 2-yr, Plausible "/mo annual"), and deferred rows → the coarse anchor lands in the right ballpark; if any counted row's cadence is ambiguous, the anchor is **suppressed**, not guessed.
-- [ ] §2 `expenses.md` read error → ⚠️ line, anchor suppressed (Kieran #4).
+- [x] Normal week → "about the same"; deferred-row-in-diff → **no "cost up"** (H3).
+- [x] Genuinely-quiet week vs partial/failed §1 read → must **differ**: quiet → "quieter"; partial-read → "about the same"/hedge (never "quieter").
+- [x] 300-cap truncation across the comparison window → neutral band (not "busier").
+- [x] **Annual-row case (Fable):** a ledger with a mix of monthly, annual (`.ai` 2-yr, Plausible "/mo annual"), and deferred rows → the coarse anchor lands in the right ballpark; if any counted row's cadence is ambiguous, the anchor is **suppressed**, not guessed.
+- [x] §2 `expenses.md` read error → ⚠️ line, anchor suppressed (Kieran #4).
 
 ### Phase 5 — Record the OQ3 resolution
 
-- [ ] Update the epic spec OQ3 entry (`knowledge-base/project/specs/feat-gstack-capability-adoption/spec.md`) to mark OQ3 **resolved** with a one-line pointer to this plan's resolution table. (Does NOT rewrite any deferral/strategy decision — records the answer only.)
+- [x] Update the epic spec OQ3 entry (`knowledge-base/project/specs/feat-gstack-capability-adoption/spec.md`) to mark OQ3 **resolved** with a one-line pointer to this plan's resolution table. (Does NOT rewrite any deferral/strategy decision — records the answer only.)
 
 ## Files to Edit
 
@@ -232,15 +232,15 @@ Note: AC1–AC6 are prose-presence checks — the honest mechanical ceiling for 
 LLM-as-script skill (they guard against a silent prose-drop on a future edit); they
 are NOT behavioral guarantees. The behavioral gate is AC9 (Phase 4 dry-verify).
 
-- [ ] **AC1 — cadence in digest.** SKILL.md instructs a §1 shipping-cadence band vs recent weeks, consequence-framed, default-typical-on-doubt (no exact multiplier). Verify: cadence assertion passes.
-- [ ] **AC2 — cost trend in digest.** SKILL.md §2 emits a this-week direction line + a coarse run-rate anchor (suppressed on doubt). Verify: cost-trend assertion passes.
-- [ ] **AC3 — no per-contributor noise (the issue AC).** The §1 `--json` field list contains no `author`, and a guard line forbids adding it. Verify: the **command-anchored** refute passes (catches `author` appended to the real field list; does not false-match the guard prose — Kieran #1); guard-line assertion passes.
-- [ ] **AC4 — read-integrity safe.** SKILL.md suppresses the cadence band (never the downward "quieter") on a §1 read failure/undercount AND suppresses the run-rate anchor on a §2 read failure or ambiguous billing cadence. Verify: read-integrity assertion passes.
-- [ ] **AC5 — run-rate allowlist (fail-safe).** SKILL.md counts ONLY `active`/`accruing`-with-actual rows toward the run-rate; every other/unknown status is invisible. Verify: allowlist assertion passes (no denylist enumeration).
-- [ ] **AC6 — no vanity output.** SKILL.md forbids raw counts/percentages/arrows as the metric and mandates business-consequence framing. Verify: vanity-guard assertion passes.
-- [ ] **AC7 — no regression.** All existing `operator-digest-skill.test.sh` assertions (four sources, no `--search`, no `gh issue create`, four-section fallback, prior-week continuity) still pass; sibling digest tests green; `components.test.ts` green (no description change).
-- [ ] **AC8 — OQ3 recorded.** The epic spec's OQ3 entry is marked resolved with a pointer to this plan.
-- [ ] **AC9 — dry-verify (behavioral gate).** Phase 4's synthetic-week walkthroughs all produce the correct verdict — the load-bearing correctness check for a skill with no runtime unit test.
+- [x] **AC1 — cadence in digest.** SKILL.md instructs a §1 shipping-cadence band vs recent weeks, consequence-framed, default-typical-on-doubt (no exact multiplier). Verify: cadence assertion passes.
+- [x] **AC2 — cost trend in digest.** SKILL.md §2 emits a this-week direction line + a coarse run-rate anchor (suppressed on doubt). Verify: cost-trend assertion passes.
+- [x] **AC3 — no per-contributor noise (the issue AC).** The §1 `--json` field list contains no `author`, and a guard line forbids adding it. Verify: the **command-anchored** refute passes (catches `author` appended to the real field list; does not false-match the guard prose — Kieran #1); guard-line assertion passes.
+- [x] **AC4 — read-integrity safe.** SKILL.md suppresses the cadence band (never the downward "quieter") on a §1 read failure/undercount AND suppresses the run-rate anchor on a §2 read failure or ambiguous billing cadence. Verify: read-integrity assertion passes.
+- [x] **AC5 — run-rate allowlist (fail-safe).** SKILL.md counts ONLY `active`/`accruing`-with-actual rows toward the run-rate; every other/unknown status is invisible. Verify: allowlist assertion passes (no denylist enumeration).
+- [x] **AC6 — no vanity output.** SKILL.md forbids raw counts/percentages/arrows as the metric and mandates business-consequence framing. Verify: vanity-guard assertion passes.
+- [x] **AC7 — no regression.** All existing `operator-digest-skill.test.sh` assertions (four sources, no `--search`, no `gh issue create`, four-section fallback, prior-week continuity) still pass; sibling digest tests green; `components.test.ts` green (no description change).
+- [x] **AC8 — OQ3 recorded.** The epic spec's OQ3 entry is marked resolved with a pointer to this plan.
+- [x] **AC9 — dry-verify (behavioral gate).** Phase 4's synthetic-week walkthroughs all produce the correct verdict — the load-bearing correctness check for a skill with no runtime unit test.
 
 ### Post-merge (operator)
 
@@ -362,7 +362,7 @@ ADR-057's containment analysis).
 | Persist a machine-readable state block (prior anchor $, prior PR counts) in the digest **issue body**, read next run via the already-allowed `gh issue list --json body` (Fable) | **Deferred, not rejected** — this genuinely un-defers month-over-month cost direction AND makes baseline undercount *detectable* (live read ≪ persisted baseline → suppress) WITHOUT any allowlist change (the plaintext `digest.md` is `rm`'d post-post, but the private issue body persists and `gh issue list --json body` is already how the continuity line reads prior digests). Deferred because the other three reviewers converged on keeping Wave-1 minimal and the hedge-on-doubt rule is an adequate H1 *safety* floor (worst case: "typical" instead of "quieter" — a hedge, never a false alarm); the state block is a precision improvement, not a safety necessity. | **Fold into the tracking issue** as the recommended mechanism. |
 | Per-contributor / human-vs-agent split | Rejected permanently — it is the AC's excluded "per-contributor noise"; also structurally impossible (query omits `author`). | — |
 
-**Deferral tracking issue (file at `/work` or ship time):** title "operator-digest:
+**Deferral tracking issue — filed #6022:** title "operator-digest:
 true month-over-month cost trend + undercount-resistant cadence baseline (persist a
 state block in the digest issue body)", body = the two deferred rows above (the
 `git show` non-option + Fable's `gh issue list --json body` state-block mechanism and
