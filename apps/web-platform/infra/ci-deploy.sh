@@ -547,14 +547,20 @@ pull_failure_event() {
 ghcr_prelude_and_login() {
   command -v doppler >/dev/null 2>&1 || { logger -t "$LOG_TAG" "PRELUDE: doppler unavailable — skipping GHCR login + SENTRY prefetch"; return 0; }
   [[ -n "${DOPPLER_TOKEN:-}" ]] || { logger -t "$LOG_TAG" "PRELUDE: DOPPLER_TOKEN unset — skipping GHCR login + SENTRY prefetch"; return 0; }
+  # Export only what downstream CHILDREN legitimately read from the env (SENTRY_* for
+  # the verify/pull telemetry curls; GHCR_READ_USER is a username, not a secret). The
+  # TOKEN is deliberately NOT exported — it reaches `docker login` via --password-stdin,
+  # so no child process ever gets it in its environment.
   local k
-  for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY GHCR_READ_USER GHCR_READ_TOKEN; do
+  for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY GHCR_READ_USER; do
     # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
     printf -v "$k" '%s' "$(doppler secrets get "$k" --plain --project soleur --config prd 2>/dev/null || true)"
     export "$k"
   done
-  if [[ -n "${GHCR_READ_USER:-}" && -n "${GHCR_READ_TOKEN:-}" ]]; then
-    if printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
+  local ghcr_token
+  ghcr_token="$(doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)"
+  if [[ -n "${GHCR_READ_USER:-}" && -n "$ghcr_token" ]]; then
+    if printf '%s' "$ghcr_token" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
     else
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED — private pull may fail-closed"
@@ -562,9 +568,9 @@ ghcr_prelude_and_login() {
   else
     logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present — skipping docker login (pre-provisioning?)"
   fi
-  # The token must not linger in the env passed to child processes. The mounted
-  # $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier reuses.
-  unset GHCR_READ_TOKEN
+  # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
+  # reuses; the non-exported token local goes out of scope when the function returns.
+  ghcr_token=""
 }
 
 # verify_image_signature <image:tag> — resolves the just-pulled image to its
