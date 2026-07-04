@@ -66,7 +66,10 @@ Ask questions **one at a time** to understand the user's intent. Avoid overwhelm
 5. **Be curious, not prescriptive**
    Follow the user's energy -- if they light up about an aspect, explore it
    deeper. If they seem decided, don't interrogate. The goal is collaborative
-   exploration, not an interview.
+   exploration, not an interview. Classify each candidate question via
+   [decision-principles.md](./references/decision-principles.md) before asking —
+   only user-legible Taste and User-Challenge decisions surface; Mechanical and
+   technical-taste calls are auto-answered.
 
    Old (prescriptive):
    > "For authentication, you should use JWT tokens with refresh tokens
