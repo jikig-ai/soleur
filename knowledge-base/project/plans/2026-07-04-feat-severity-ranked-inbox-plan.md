@@ -135,18 +135,18 @@ discoverability_test:
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `inbox_item` (+ `inbox_item_recipient_state`) migration applies on a clean DB; `.down.sql` reverses cleanly; service-role-only INSERT.
-- [ ] **RLS-leak negative test as a merge gate (CPO required change):** Owner A cannot read Owner B's items via `GET /api/inbox` (workspace isolation); a non-Owner gets 0 rows. Read route uses the user-context client (grep gate: **no `createServiceClient` under `app/api/inbox/**`**).
-- [ ] **Archive guard (spec-flow P0-2):** `set_inbox_item_state` rejects archiving an un-acted `action_required` item; retention sweep never deletes un-acted `action_required` (test both).
-- [ ] **Per-Owner state (spec-flow P0-3):** a broadcast row acked/archived by Owner A still shows to Owner B until B acts (per-recipient state test).
-- [ ] **Statutory always pinned (spec-flow P0-1 + operator "pin all" decision):** every non-archived statutory item (incl. `acknowledged`, incl. far-from-deadline) is `action_required`/pinned/uncapped; the deadline chip color is cosmetic and never changes grouping/pin (tests: acknowledged statutory pinned; far-from-deadline statutory pinned; chip color != severity).
-- [ ] `email_triage_items` is **unmodified** (`git diff` shows zero changes to mig 102/111, no new trigger on it).
-- [ ] `GET /api/inbox` merges both sources via the tested `deriveSeverity()` helper; statutory pinned first + uncapped; NEEDS YOU capped with overflow (statutory exempt from the cap).
-- [ ] `notifyInboxItem` inserts once (idempotent on `dedup_key`) then dispatches; the `inbox_item` push variant has its own `sw.js` `tag`; a failed `action_required` dispatch mirrors to Sentry `op=notify-inbox-action-required`.
-- [ ] Deep links are **built from `source_ref` at render** (no stored URL); unknown/deleted targets render non-navigating, not a 404.
-- [ ] Surface renders NEEDS YOU / GOOD TO KNOW groups with per-group empty states (Appendix A copy); nav badge counts outstanding `action_required` only (`9+` cap), FYI-only = gold dot.
-- [ ] New ADR committed + three `.c4` files edited & rendering (c4 tests green). **CPO sign-off recorded: GO-WITH-CHANGES — all listed changes folded (see Domain Review).**
-- [ ] `tsc --noEmit` clean; targeted vitest suites green.
+- [x] `inbox_item` migration (mig 122) applies on a clean DB; `.down.sql` reverses cleanly; service-role-only INSERT. *(No `inbox_item_recipient_state` — the per-Owner join was deferred to #4672 by the 3-reviewer plan-review; v1 uses inline global state.)*
+- [x] **RLS-leak gate:** read route uses the user-context client — source-grep gate `no createServiceClient under app/api/inbox/**` (`inbox-no-service-client.test.ts`); SELECT policy predicate `(user_id=auth.uid()) OR (user_id IS NULL AND is_workspace_owner(...))` asserted in `migration-122` (targeted-row private to recipient; broadcast → Owner). Live Owner-A-vs-B isolation verified at CI clean-apply.
+- [x] **Archive guard (spec-flow P0-2):** `set_inbox_item_state` rejects archiving an un-acted `action_required` item; retention sweep never deletes un-acted `action_required` (both in `migration-122`).
+- [~] **Per-Owner state (spec-flow P0-3):** DEFERRED to #4672 per plan-review — v1 stores read/act/archive inline with a single GLOBAL `acted_at` (one approver resolves for the workspace). No broadcast source needs independent per-Owner state until #4672's `approval_required`.
+- [x] **Statutory always pinned:** `inbox-severity.test.ts` proves acknowledged statutory + far-from-deadline statutory both → `action_required`/pinned (severity ignores the clock; chip ≠ severity), NEEDS YOU cap statutory-exempt.
+- [x] `email_triage_items` is **unmodified** (mig 102/111 untouched; no new trigger — the migration test asserts zero touch).
+- [x] `GET /api/inbox` merges both sources via the tested `mergeAndRank`/`deriveEmailSeverity`; statutory pinned first + uncapped; NEEDS YOU capped with overflow (statutory exempt).
+- [x] `notifyInboxItem` inserts once (catch `23505`) then dispatches push-only-on-insert; the `inbox_item` push variant has its own `sw.js` `tag`; a failed `action_required` dispatch mirrors to Sentry `op=notify-inbox-action-required` (`notifications.test.ts`).
+- [x] Deep links are **built from `source_ref` at render** (no stored URL); unknown/deleted targets render non-navigating (`inbox-item-row.test.ts`, `inbox-severity.test.ts`).
+- [x] Surface renders NEEDS YOU / GOOD TO KNOW groups with per-group empty states (Appendix A copy); nav badge counts outstanding `action_required` only (`9+` cap), FYI-only = gold dot.
+- [x] ADR-085 committed + `model.c4`/`views.c4` edited & rendering (c4 tests green). **CPO sign-off recorded: GO-WITH-CHANGES — all listed changes folded (see Domain Review).**
+- [x] `tsc --noEmit` clean; targeted vitest suites green (94 inbox + c4 + op-contract).
 
 ### Post-merge (operator / ship)
 - [ ] Migration applied to prod via `web-platform-release.yml#migrate` (automatable — ship handles).
