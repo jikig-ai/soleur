@@ -125,7 +125,10 @@ zero infra effect.
 pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving** host.
 
 ### Pre-flight
-1. Confirm a maintenance window is booked (safety margin, even for the zero-downtime path).
+1. **No maintenance window for the warm-standby.** Bringing web-2 up is purely additive with
+   **zero ingress impact** (web-2 joins no serving pool, ingress stays on web-1), so it needs no
+   booked window. A maintenance window + sign-off belong ONLY to the deferred reboot orchestrator
+   (steps 7–10), which power-cycles the drained web-1.
 2. Prerequisite bug is cleared: web-2 fresh-host `user_data` 32 KB cap (**#5921**) — fixed
    by **#5922** (merged 2026-07-03). Re-confirm a fresh `hcloud_server.web["web-2"]` plans
    cleanly.
@@ -136,21 +139,41 @@ pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving
    in-process terraform on the app host (learning `2026-06-02`,
    `hr-fresh-host-provisioning-reachable-from-terraform-apply`).
 
-### Blue-green sequence (reboot hits a non-serving host)
-5. **Provision web-2 in-group** — apply the create for `hcloud_server.web["web-2"]` +
-   its volume/attachment/network. Born into `web_spread`, no reboot.
-6. **Bring web-2 into rotation** — deploy the app to web-2, health-check, add it to the
-   ingress (Cloudflare LB / proxied A records per `dns.tf` + `firewall.tf` D1 rewire).
-7. **Drain web-1** — drop its router/connector weight so it stops taking new traffic;
-   let in-flight requests finish.
-8. **Attach web-1 to the placement group *while drained*** — this is the power-off reboot,
-   now against a non-serving host. No user impact.
-9. **Restore web-1** to rotation once healthy.
-10. **(If flipping the git-data store too)** follow the hardened cutover — fresh LUKS
-    volume, write-freeze two-pass rsync, set-identity verify (`git for-each-ref` diff +
+### Warm-standby bring-up (autonomous dispatch — additive, zero ingress impact)
+5. **Provision web-2 + deploy, via the autonomous dispatch.** Trigger
+   `gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby` — the
+   R2-serialized workflow applies the 6 additive resources (private network + subnet +
+   `hcloud_server_network.web[*]` + web-2 `/workspaces` volume + attachment; web-2's server
+   already exists in state, born into `web_spread`), asserts the plan-scoped destroy-guard
+   `reboot_updates=0`, then fans the deploy out to web-2 over the host-side private net. There
+   is no local command and no SSH.
+6. **Confirm web-2 accepted the deploy off-host.** The dispatch reads web-1's
+   `/hooks/deploy-status` `reason` (`reason=="ok"` vs `ok_peer_fanout_degraded`) — the reachable
+   web-2-accepted signal — and fails red on the degraded reason. The apply's created-resources
+   output is the attach proof; no private-IP curl, no SSH.
+
+<!-- lint-infra-ignore start
+     Steps 7–10 below are the DEFERRED reboot orchestrator — an Inngest-dispatched GHA
+     maintenance-window workflow, NOT a human runbook step. It legitimately reboots a DRAINED,
+     non-serving host; the actor is the orchestrator, so this region is wrapped per the
+     actor+imperative co-occurrence lint's carve-out (see hr-no-ssh-fallback-in-runbooks). -->
+### Deferred reboot orchestrator (blue-green — reboot hits a DRAINED, non-serving host)
+7. **§(c) gate — never flip weight on a shape-only PASS.** The orchestrator runs
+   `apps/web-platform/infra/lb-weight-gate.sh` (the fail-closed, SHAPE-ONLY §(c) check emitting
+   `requires_runtime_bind_probe=true`) AND its separate on-host **runtime-bind probe**
+   (`session-proxy` listener bound + `/internal/readyz` writable+populated, N≥2 consecutive
+   reads). Only both-green authorizes any weight change; the shape-only exit 0 alone never does.
+8. **Bring web-2 into the pool + weight 0→1** — add web-2 to the ingress (Cloudflare LB
+   `default_pool_ids` per `dns.tf` + `firewall.tf` D1 rewire) and shift its LB weight 0→1.
+9. **Drain web-1** — drop its LB weight so it stops taking new traffic; let in-flight requests
+   finish.
+10. **Attach web-1 to the placement group *while drained* → reboot → restore** — the power-off
+    reboot now hits a non-serving host (no user impact); restore web-1 to rotation once healthy.
+    **(If flipping the git-data store too)** follow the hardened cutover — fresh LUKS volume,
+    write-freeze two-pass rsync, set-identity verify (`git for-each-ref` diff +
     `git rev-list --all | sort | sha256sum`), coordinated flag flip — per plan §3.D +
-    `git-data-luks-cutover-5274.md`. Not strictly required to clear the wedge; ADR-068
-    sequences it with GA — decide before the window.
+    `git-data-luks-cutover-5274.md`. ADR-068 sequences it with GA.
+<!-- lint-infra-ignore end -->
 
 ### Verify (pull data yourself — no dashboard eyeballing)
 11. Both pipelines' next `main` run must be **success**.
