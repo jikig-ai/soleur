@@ -13,6 +13,49 @@ status: planned
 
 # ✨ feat(wave1): operator velocity metrics in operator-digest
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-04
+
+**Grounding cycle applied before deepen:** spec-flow-analyzer (surfaced H1–H4, M1–M7,
+R1–R2 design gaps), three plan-review agents (DHH, Kieran, code-simplicity), and a
+scoped `fable` advisor consult — all findings applied into the plan below.
+
+**Key improvements folded in from review:**
+
+1. **Kieran #1 (blocker):** the per-contributor `author` refute is now **command-anchored**
+   (greps the real `--json` field-list line, strips comments) so it catches `author`
+   appended to the query without false-matching the guard-note prose — the whole-file
+   refute would have failed GREEN.
+2. **Simplicity #1 (safety):** run-rate status filter is now a **fail-safe allowlist**
+   (`active`/`accruing`-with-actual only; unknown future statuses excluded), not a
+   fragile denylist that silently sums a forgotten status.
+3. **DHH + Simplicity:** dropped the exact `0.5×/1.5×` cadence multipliers — qualitative
+   band, "when in doubt, typical"; no false precision on a fuzzy denominator.
+4. **DHH + Fable:** the computed dollar anchor is downgraded to **coarse + suppress-on-
+   ambiguity** (a mis-read annual row is a 12–24× error); the this-week diff-direction
+   is the honest primary cost signal.
+5. **Kieran #2/#3/#4:** added edge cases — <4-weeks history, 300-cap truncation, §2
+   Read-failure fail-loud — to Phase 2 and Test Scenarios.
+6. **Fable:** the deferred month-over-month is enriched with the state-block-in-issue-body
+   mechanism (readable via the already-allowed `gh issue list --json body`), captured in
+   the tracking issue; hedge-on-doubt remains the H1 safety floor.
+7. Phase 4 dry-verify elevated to a **required behavioral gate (AC9)** — the real
+   correctness check for an LLM-as-script skill whose static test verifies words, not behavior.
+
+**Deepen-plan gate verifications (all pass):** User-Brand Impact present (threshold
+`single-user incident`, valid); Observability section present (5 fields, no placeholder,
+no `ssh` in `discoverability_test`) — note the mechanical trigger is actually a *skip*
+(edits touch `plugins/*/skills` + `plugins/*/test`, not `plugins/*/scripts` or `apps/*`);
+no PAT-shaped variables (4.8); no UI surface (4.9 skip); no network/SSH dependency (4.5
+skip); no downtime/cutover class (4.55 skip). Precedent-diff gate (4.4) N/A — no SQL/
+atomic-write/lock/RPC pattern; the relevant "precedent" is the skill's own read-failure
+guardrail, which the plan already mirrors for the new metrics. Citations verified live:
+#5986 OPEN, #5983 OPEN, #5984 CLOSED; ADR-057 present; all cited rule-IDs active; all
+cited learning files exist.
+
+---
+
 Wave 1 / FR3 (T3-12) of the **gstack-capability-adoption** epic (#5983,
 brainstorm `2026-07-04-gstack-capability-adoption-brainstorm.md`). Adapts gstack's
 `retro` capability into Soleur's operator-legible frame and **resolves OQ3** — which
